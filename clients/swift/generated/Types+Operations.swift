@@ -9670,6 +9670,16 @@ public enum Operations {
                 ///
                 /// - Remark: Generated from `#/paths/api/v1/audit/GET/query/actor`.
                 public var actor: Swift.String?
+                /// Only rows with this origin: `person`, `schedule`, `brain_import`, `brain_distil`,
+                /// `ai_session`, `handoff` or `system`; another value is a 400.
+                ///
+                /// - Remark: Generated from `#/paths/api/v1/audit/GET/query/origin`.
+                public var origin: Swift.String?
+                /// `true`: only rows with a known origin that is not a person ("nobody watching"); rows
+                /// from before origins are unknown and not in it. Not with `origin`.
+                ///
+                /// - Remark: Generated from `#/paths/api/v1/audit/GET/query/nobody_watching`.
+                public var nobodyWatching: Swift.Bool?
                 /// Creates a new `Query`.
                 ///
                 /// - Parameters:
@@ -9678,18 +9688,24 @@ public enum Operations {
                 ///   - kind: Only actions starting with this: `device.` or `setting.set`.
                 ///   - target: Only rows about this entity: its kind (`device`), or kind and id (`device:d_…`, or
                 ///   - actor: Only rows done by this kind of actor: `user` or `system`; another value is a 400.
+                ///   - origin: Only rows with this origin: `person`, `schedule`, `brain_import`, `brain_distil`,
+                ///   - nobodyWatching: `true`: only rows with a known origin that is not a person ("nobody watching"); rows
                 public init(
                     before: Swift.Int64? = nil,
                     limit: Swift.Int32? = nil,
                     kind: Swift.String? = nil,
                     target: Swift.String? = nil,
-                    actor: Swift.String? = nil
+                    actor: Swift.String? = nil,
+                    origin: Swift.String? = nil,
+                    nobodyWatching: Swift.Bool? = nil
                 ) {
                     self.before = before
                     self.limit = limit
                     self.kind = kind
                     self.target = target
                     self.actor = actor
+                    self.origin = origin
+                    self.nobodyWatching = nobodyWatching
                 }
             }
             public var query: Operations.ListAudit.Input.Query
@@ -9747,7 +9763,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Audit rows, newest first. A `target` id that is not a `d_…` device id or a number, or an unknown `actor`, is a 400
+            /// Audit rows, newest first. A `target` id that is not a `d_…` device id or a number, or an unknown `actor` or `origin`, is a 400
             ///
             /// - Remark: Generated from `#/paths//api/v1/audit/get(listAudit)/responses/200`.
             ///

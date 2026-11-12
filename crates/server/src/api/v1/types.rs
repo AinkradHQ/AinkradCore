@@ -178,7 +178,7 @@
 /// 58: no change to what a response carries: the published schema of every response type drops
 ///    `additionalProperties: false` (a client must ignore a field it does not know; the server still rejects
 ///    unknown request fields).
-pub const API_MINOR: u32 = 58;
+pub const API_MINOR: u32 = 59;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

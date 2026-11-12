@@ -1093,6 +1093,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AuditEntry/entity_ref`.
             public var entityRef: Swift.String?
+            /// What started it; absent on rows from before origins.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AuditEntry/origin`.
+            public var origin: Components.Schemas.EntryOrigin?
             /// - Remark: Generated from `#/components/schemas/AuditEntry/seq`.
             public var seq: Swift.Int64
             /// Creates a new `AuditEntry`.
@@ -1105,6 +1109,7 @@ extension Components {
             ///   - entityId: A numeric entity id; absent for a device, which is named by `entity_ref` only.
             ///   - entityKind:
             ///   - entityRef: The entity's public id: a device's opaque `d_…` id, else `entity_id` as text.
+            ///   - origin: What started it; absent on rows from before origins.
             ///   - seq:
             public init(
                 action: Swift.String,
@@ -1114,6 +1119,7 @@ extension Components {
                 entityId: Swift.Int64? = nil,
                 entityKind: Swift.String? = nil,
                 entityRef: Swift.String? = nil,
+                origin: Components.Schemas.EntryOrigin? = nil,
                 seq: Swift.Int64
             ) {
                 self.action = action
@@ -1123,6 +1129,7 @@ extension Components {
                 self.entityId = entityId
                 self.entityKind = entityKind
                 self.entityRef = entityRef
+                self.origin = origin
                 self.seq = seq
             }
             public enum CodingKeys: String, CodingKey {
@@ -1133,6 +1140,7 @@ extension Components {
                 case entityId = "entity_id"
                 case entityKind = "entity_kind"
                 case entityRef = "entity_ref"
+                case origin
                 case seq
             }
         }
@@ -2604,6 +2612,50 @@ extension Components {
             }
             public enum CodingKeys: String, CodingKey {
                 case elevatedUntil = "elevated_until"
+            }
+        }
+        /// What started an audited change, and the root of its chain. Absent on rows from before
+        /// origins (unknown).
+        ///
+        /// - Remark: Generated from `#/components/schemas/EntryOrigin`.
+        public struct EntryOrigin: Codable, Hashable, Sendable {
+            /// `person`, `schedule`, `brain_import`, `brain_distil`, `ai_session`, `handoff`, `system`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/EntryOrigin/kind`.
+            public var kind: Swift.String
+            /// The device (`d_…`), job (`owner/job`) or session (`as_…`) it names, when there is one.
+            ///
+            /// - Remark: Generated from `#/components/schemas/EntryOrigin/reference`.
+            public var reference: Swift.String?
+            /// The kind of the first link of the chain.
+            ///
+            /// - Remark: Generated from `#/components/schemas/EntryOrigin/root_kind`.
+            public var rootKind: Swift.String
+            /// - Remark: Generated from `#/components/schemas/EntryOrigin/root_reference`.
+            public var rootReference: Swift.String?
+            /// Creates a new `EntryOrigin`.
+            ///
+            /// - Parameters:
+            ///   - kind: `person`, `schedule`, `brain_import`, `brain_distil`, `ai_session`, `handoff`, `system`.
+            ///   - reference: The device (`d_…`), job (`owner/job`) or session (`as_…`) it names, when there is one.
+            ///   - rootKind: The kind of the first link of the chain.
+            ///   - rootReference:
+            public init(
+                kind: Swift.String,
+                reference: Swift.String? = nil,
+                rootKind: Swift.String,
+                rootReference: Swift.String? = nil
+            ) {
+                self.kind = kind
+                self.reference = reference
+                self.rootKind = rootKind
+                self.rootReference = rootReference
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case reference
+                case rootKind = "root_kind"
+                case rootReference = "root_reference"
             }
         }
         /// A JSON error: a stable `code` and a message for people.

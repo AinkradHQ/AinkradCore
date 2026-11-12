@@ -376,3 +376,49 @@ async fn audit_rows_name_devices_by_their_opaque_id() {
     assert!(!mine.is_empty());
     assert!(mine.iter().all(|p| p["entity_id"].is_null()));
 }
+
+/// E1: a request's rows start with its person (the device that signed it), and the audit list
+/// filters by origin and by "nobody watching".
+#[tokio::test]
+async fn a_requests_audit_rows_carry_its_person_and_the_list_filters_by_origin() {
+    let fx = fx().await;
+    let phone = fx.enroll("phone", &["read", "approve"]).await;
+    assert_eq!(
+        scopes(&fx, &fx.dev, &phone, &["read"]).await.0,
+        StatusCode::OK
+    );
+    // A row nobody asked for: the Core on its own, and one a schedule wrote.
+    let nobody = |action: &str| ainkrad_core::audit::NewAuditEvent {
+        actor: ainkrad_core::audit::AuditActor::System,
+        action: action.to_owned(),
+        entity: None,
+        details: "{}".to_owned(),
+    };
+    crate::store::kinds::allow(&fx.app.pool, &[], &["thing.done"]).await;
+    crate::store::audit::append_one(&fx.app.pool, &nobody("thing.done"))
+        .await
+        .unwrap();
+
+    let people = fx.ok("/api/v1/audit?origin=person").await;
+    let first = &people["items"].as_array().unwrap()[0];
+    assert_eq!(first["origin"]["kind"], "person", "{first}");
+    assert_eq!(first["origin"]["reference"], fx.dev.id.as_str(), "{first}");
+    assert_eq!(first["origin"]["root_kind"], "person");
+    for e in people["items"].as_array().unwrap() {
+        assert_eq!(e["origin"]["kind"], "person", "{e}");
+    }
+    let nobody_page = fx.ok("/api/v1/audit?nobody_watching=true").await;
+    let items = nobody_page["items"].as_array().unwrap();
+    assert!(
+        items.iter().any(|e| e["action"] == "thing.done"),
+        "{nobody_page}"
+    );
+    assert!(items.iter().all(|e| e["origin"]["kind"] != "person"));
+    for uri in [
+        "/api/v1/audit?origin=robot",
+        "/api/v1/audit?origin=person&nobody_watching=true",
+    ] {
+        let (status, _) = send(&fx.app, req(Method::GET, uri, Some(&fx.dev), None)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+    }
+}

@@ -83,6 +83,7 @@ src/main/kotlin/ainkrad/client/models/CostEvent.kt
 src/main/kotlin/ainkrad/client/models/DefaultConnection.kt
 src/main/kotlin/ainkrad/client/models/Device.kt
 src/main/kotlin/ainkrad/client/models/Elevation.kt
+src/main/kotlin/ainkrad/client/models/EntryOrigin.kt
 src/main/kotlin/ainkrad/client/models/ErrorBody.kt
 src/main/kotlin/ainkrad/client/models/Event.kt
 src/main/kotlin/ainkrad/client/models/EventActor.kt

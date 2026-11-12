@@ -1,7 +1,7 @@
 //! The audit log, newest first: every audited change, paged backwards, for the app's activity
 //! screen.
 
-use ainkrad_core::audit::{AuditActor, AuditSeq};
+use ainkrad_core::audit::{AuditActor, AuditOrigin, AuditSeq, OriginKind};
 use axum::Json;
 use axum::extract::{Query, State};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use utoipa::{IntoParams, ToSchema};
 use super::types::{Timestamp, ts};
 use super::{ApiError, ApiResult};
 use crate::api::App;
-use crate::store::audit;
+use crate::store::audit::{self, OriginFilter};
 
 /// Who acted, on an audited change.
 #[derive(Debug, Serialize, ToSchema)]
@@ -48,6 +48,36 @@ pub struct AuditQuery {
     pub target: Option<String>,
     /// Only rows done by this kind of actor: `user` or `system`; another value is a 400.
     pub actor: Option<String>,
+    /// Only rows with this origin: `person`, `schedule`, `brain_import`, `brain_distil`,
+    /// `ai_session`, `handoff` or `system`; another value is a 400.
+    pub origin: Option<String>,
+    /// `true`: only rows with a known origin that is not a person ("nobody watching"); rows
+    /// from before origins are unknown and not in it. Not with `origin`.
+    pub nobody_watching: Option<bool>,
+}
+
+/// What started an audited change, and the root of its chain. Absent on rows from before
+/// origins (unknown).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EntryOrigin {
+    /// `person`, `schedule`, `brain_import`, `brain_distil`, `ai_session`, `handoff`, `system`.
+    pub kind: String,
+    /// The device (`d_…`), job (`owner/job`) or session (`as_…`) it names, when there is one.
+    pub reference: Option<String>,
+    /// The kind of the first link of the chain.
+    pub root_kind: String,
+    pub root_reference: Option<String>,
+}
+
+impl From<AuditOrigin> for EntryOrigin {
+    fn from(o: AuditOrigin) -> Self {
+        Self {
+            kind: o.kind.as_str().to_owned(),
+            reference: o.reference,
+            root_kind: o.root_kind.as_str().to_owned(),
+            root_reference: o.root_reference,
+        }
+    }
 }
 
 /// One audited change.
@@ -65,6 +95,8 @@ pub struct AuditEntry {
     pub entity_ref: Option<String>,
     #[schema(value_type = Object)]
     pub details: Value,
+    /// What started it; absent on rows from before origins.
+    pub origin: Option<EntryOrigin>,
 }
 
 /// A page of the audit log, newest first. `next_before` continues with older rows, absent on
@@ -78,7 +110,7 @@ pub struct AuditPage {
 #[utoipa::path(get, path = "/api/v1/audit", operation_id = "listAudit", tag = "events",
     params(AuditQuery),
     responses((status = 200, description = "Audit rows, newest first. A `target` id that is \
-        not a `d_…` device id or a number, or an unknown `actor`, is a 400",
+        not a `d_…` device id or a number, or an unknown `actor` or `origin`, is a 400",
         body = AuditPage)))]
 pub async fn list(State(app): State<App>, Query(q): Query<AuditQuery>) -> ApiResult<AuditPage> {
     let limit = q.limit.unwrap_or(AUDIT_PAGE).clamp(1, AUDIT_PAGE);
@@ -101,13 +133,29 @@ pub async fn list(State(app): State<App>, Query(q): Query<AuditQuery>) -> ApiRes
         Some(a @ ("user" | "system")) => Some(a),
         Some(_) => return Err(ApiError::bad_request("actor is user or system")),
     };
+    let origin = match (
+        q.origin.as_deref().filter(|o| !o.is_empty()),
+        q.nobody_watching,
+    ) {
+        (Some(_), Some(true)) => {
+            return Err(ApiError::bad_request(
+                "origin and nobody_watching are exclusive",
+            ));
+        }
+        (Some(o), _) => OriginFilter::Is(
+            OriginKind::parse(o).ok_or_else(|| ApiError::bad_request("unknown origin"))?,
+        ),
+        (None, Some(true)) => OriginFilter::NobodyWatching,
+        (None, _) => OriginFilter::Any,
+    };
     let kind = q.kind.as_deref().filter(|k| !k.is_empty());
-    let rows = audit::page(
+    let rows = audit::page_by(
         &app.pool,
         q.before.map(AuditSeq),
         kind,
         target,
         actor,
+        origin,
         limit + 1,
     )
     .await?;
@@ -164,6 +212,7 @@ fn page_of(rows: Vec<ainkrad_core::audit::AuditEvent>, limit: u32) -> AuditPage 
             entity_ref: e.entity.as_ref().map(|x| x.id.to_string()),
             entity_id: e.entity.map(|x| x.id),
             details: serde_json::from_str(&e.details).unwrap_or(Value::Null),
+            origin: e.origin.map(Into::into),
         })
         .collect();
     let next_before = more.then(|| items.last().map(|e| e.seq)).flatten();
