@@ -306,28 +306,31 @@ async fn a_runner_cannot_write_an_audit_row_per_invented_session_name() {
     .await;
     tokio::time::sleep(Duration::from_millis(800)).await;
     let rows = f.uses().await;
-    assert_eq!(
-        rows.len() - before,
-        1 + 2,
-        "one per known call, one flood row per runner: {rows:?}"
-    );
-    let mut floods: Vec<(&str, u64)> = rows
+    // The window is wall-clock: a slow machine may spread the calls over several windows, each
+    // with its own exact row. So the contract is: one row per known call, the per-runner counts
+    // sum exactly, and the rows stay per window (a handful), never per invented name.
+    let (floods, plain): (Vec<_>, Vec<_>) = rows[before..]
         .iter()
-        .filter(|r| r.get("count").is_some())
-        .map(|r| (r["session"].as_str().unwrap(), r["count"].as_u64().unwrap()))
-        .collect();
-    floods.sort_unstable();
+        .partition(|r| r.get("count").is_some());
+    assert_eq!(plain.len(), 1, "one row per known call: {rows:?}");
+    assert!(floods.len() < 100, "a row per name? {} rows", floods.len());
     let (a, b) = (format!("runner:{RUNNER}"), format!("runner:{OTHER_RUNNER}"));
-    let mut want = vec![(a.as_str(), 800), (b.as_str(), 3)];
-    want.sort_unstable();
-    assert_eq!(floods, want);
-    let first = rows.iter().find(|r| r["session"] == a.as_str()).unwrap();
-    let ops = first["ops"].as_object().unwrap();
-    assert!(
-        ops.keys()
-            .all(|k| k == "unknown" || k == "github.get_issue"),
-        "{ops:?}"
-    );
+    let total = |who: &str| -> u64 {
+        floods
+            .iter()
+            .filter(|r| r["session"] == who)
+            .map(|r| r["count"].as_u64().unwrap())
+            .sum()
+    };
+    assert_eq!((total(&a), total(&b)), (800, 3), "{floods:?}");
+    for r in floods.iter().filter(|r| r["session"] == a.as_str()) {
+        let ops = r["ops"].as_object().unwrap();
+        assert!(
+            ops.keys()
+                .all(|k| k == "unknown" || k == "github.get_issue"),
+            "{ops:?}"
+        );
+    }
     let audit = f.audit_text().await;
     assert!(
         !audit.contains("as_invented") && !audit.contains("nope."),
