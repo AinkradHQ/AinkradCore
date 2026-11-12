@@ -761,6 +761,28 @@ mod pty {
         }
     }
 
+    /// A runner whose app was replaced under it (macOS: the bundle it started from is gone) names
+    /// the missing pty host instead of a bare ENOENT.
+    #[tokio::test]
+    async fn a_missing_pty_host_is_named_in_the_error() {
+        let base = tmp();
+        let terminals = base.join("state/terminals");
+        std::fs::create_dir_all(&terminals).unwrap();
+        let driver = Arc::new(PtyDriver::new(PtyConfig {
+            enabled: true,
+            capacity: 4,
+            host: base.join("gone/ainkrad-ptyhost"),
+            hide: None,
+            ..PtyConfig::new(terminals)
+        }));
+        let e = driver.open(&open_req("true")).await.unwrap_err();
+        assert!(
+            e.message.contains("gone/ainkrad-ptyhost") && e.message.contains("restart"),
+            "{}",
+            e.message
+        );
+    }
+
     /// KAN-416: shells a previous runner started with a weaker network are closed when a runner
     /// requiring a stronger one starts (they would otherwise be re-adopted and attached), shells
     /// of an equal or stronger network are left, and a runner that requires only the host
