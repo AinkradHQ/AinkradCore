@@ -186,7 +186,10 @@ async fn a_bad_request_a_refused_credential_or_a_gate_leaves_no_connection() {
     assert_eq!(r.0, StatusCode::BAD_REQUEST, "{}", r.1);
     // The GitHub App is not set up: no GitHub sign-in yet, its own error code (#206), not a crash.
     let app = json!({"kind": "github", "auth_method": "app_install", "installation_id": 7});
-    assert_eq!(code(&post(app).await), (409, "github_sign_in_needed".to_owned()));
+    assert_eq!(
+        code(&post(app).await),
+        (409, "github_sign_in_needed".to_owned())
+    );
     // A taken name: 409, before anything is asked of GitHub.
     assert_eq!(
         code(&post(body("main")).await),
