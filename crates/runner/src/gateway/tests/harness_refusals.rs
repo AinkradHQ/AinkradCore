@@ -35,7 +35,13 @@ fn the_slot_marks_a_gateway_session_and_a_slot_without_a_valid_port_is_an_error(
         std::path::Path::new("/s/gateway.sock"),
         std::path::Path::new("/r"),
     );
-    assert_eq!(gateway_port(&slot), Ok(Some(GW_PORT)));
+    // Linux: the fixed port inside the session's own network namespace. macOS has no network
+    // namespace, so each session gets its own free loopback port (#197): any valid port.
+    if cfg!(target_os = "macos") {
+        assert!(matches!(gateway_port(&slot), Ok(Some(p)) if p != 0));
+    } else {
+        assert_eq!(gateway_port(&slot), Ok(Some(GW_PORT)));
+    }
     assert_eq!(gateway_port(&env(&[("PATH", "/bin")])), Ok(None));
     // Any of the slot's variables marks the session; then the port must be valid.
     for slot in [

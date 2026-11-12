@@ -29,6 +29,8 @@ if command -v minisign >/dev/null; then
     rm -rf "$1"; mkdir -p "$1/in/ainkrad-core-installer-9.9.9"; : >"$1/in/ainkrad-core-installer-9.9.9/x"
     mkdir "$1/9.9.9"
     for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost; do printf '#!/bin/sh\necho %s\n' "$b" >"$1/9.9.9/$b-9.9.9-$T"; done
+    # every release carries the macOS runner zip (#196); sign.sh refuses a set without it
+    python3 -c 'import sys, zipfile; z = zipfile.ZipFile(sys.argv[1], "w"); [z.writestr(n, "#!/bin/sh\n") for n in ("ainkrad-runner", "ainkrad-ptyhost")]; z.close()' "$1/9.9.9/ainkrad-runner-9.9.9-macos-arm64.zip"
     tar -czf "$1/9.9.9/ainkrad-core-installer-9.9.9.tar.gz" -C "$1/in" ainkrad-core-installer-9.9.9
     cp "$GET" "$1/9.9.9/get.sh"
     bash "$ROOT/scripts/release/sign.sh" "$1/9.9.9" "$t/a.key" >/dev/null
