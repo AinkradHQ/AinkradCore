@@ -112,6 +112,7 @@ pub(crate) async fn close_run(app: &App, run: &str, rooms: usize) -> Result<(), 
         .bind(run)
         .execute(&mut *tx)
         .await?;
+    crate::sync::promote_cursor(&mut tx, run).await?;
     let counts = crate::imports::load_counts(app, run).await?;
     record(
         &mut tx,

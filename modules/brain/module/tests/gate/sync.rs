@@ -388,3 +388,75 @@ async fn a_full_run_can_take_the_core_sessions_and_a_read_device_sees_the_status
     let (s, _) = call(&fx, &reader, Method::POST, "/sync", Some(json!({}))).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn the_cursor_moves_only_on_commit_so_a_dropped_run_loses_nothing() {
+    let fx = fx().await;
+    session(
+        &fx,
+        "as_one",
+        Some(ALPHA),
+        "ended",
+        None,
+        &[("user", "alpha one")],
+    )
+    .await;
+    session(&fx, "as_two", None, "ended", None, &[("user", "stray two")]).await;
+    let cursor = |fx: &Fx| {
+        let pool = fx.app.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "SELECT cursor FROM brain_sources WHERE id = 'core_transcript'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let first = sync(&fx).await;
+    assert_eq!(first["found"], 2, "{first}");
+    assert_eq!(cursor(&fx).await, "{}", "staged is not taken");
+    // While the run is open its sessions are not collected again.
+    assert_eq!(sync(&fx).await["idle"], "nothing_new");
+    // Dropped without commit: the same sessions come back.
+    let r1 = first["run"].as_str().unwrap();
+    sqlx::query("UPDATE brain_import_runs SET state = 'abandoned' WHERE id = ?")
+        .bind(r1)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let second = sync(&fx).await;
+    assert_eq!(second["found"], 2, "{second}");
+    // An open run older than the 30-day staging lifetime no longer holds them either.
+    let r2 = second["run"].as_str().unwrap();
+    sqlx::query(
+        "UPDATE brain_import_runs SET started_at = '2026-01-01T00:00:00.000Z' WHERE id = ?",
+    )
+    .bind(r2)
+    .execute(&fx.app.pool)
+    .await
+    .unwrap();
+    let third = sync(&fx).await;
+    assert_eq!(third["found"], 2, "{third}");
+    // Commit it: the cursor moves and a rerun imports nothing.
+    let r3 = third["run"].as_str().unwrap();
+    let p = proposals(&fx, r3).await;
+    let alpha = by_name(&p, "Alpha")["id"].as_str().unwrap().to_owned();
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("/imports/{r3}/proposals/{alpha}"),
+        Some(json!({"state": "accepted"})),
+    )
+    .await;
+    ok(&fx, Method::POST, &format!("/imports/{r3}/commit"), None).await;
+    let c = cursor(&fx).await;
+    assert!(c.contains("as_one") && c.contains("as_two"), "{c}");
+    assert_eq!(sync(&fx).await["idle"], "nothing_new");
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM brain_run_cursors WHERE run = ?")
+        .bind(r3)
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+}

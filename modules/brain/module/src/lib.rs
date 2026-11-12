@@ -36,12 +36,20 @@ mod transcripts;
 
 pub const MODULE: &str = "brain";
 
-pub static MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "brain_0001",
-    up: include_str!("../migrations/0001_brain_0001.up.sql"),
-    down: include_str!("../migrations/0001_brain_0001.down.sql"),
-}];
+pub static MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "brain_0001",
+        up: include_str!("../migrations/0001_brain_0001.up.sql"),
+        down: include_str!("../migrations/0001_brain_0001.down.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "brain_run_cursors",
+        up: include_str!("../migrations/0002_brain_run_cursors.up.sql"),
+        down: include_str!("../migrations/0002_brain_run_cursors.down.sql"),
+    },
+];
 
 /// Employer and client rooms are discovered and reviewed in M1 but committed only after the import
 /// isolation suite and the `room_backup` job exist (plan §12 answer 2). The isolation suite is in;

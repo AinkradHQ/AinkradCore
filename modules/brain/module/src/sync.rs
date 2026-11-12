@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
 use ainkrad_core_server::jobs::{Done, Job, JobHandler, Run, Schedule};
+use ainkrad_core_server::scheduler::iso_of_unix;
 use ainkrad_core_server::store::{agents, begin_write};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
@@ -33,6 +34,8 @@ pub const SYNC_EVERY_SECS: u64 = 3600;
 /// AI sessions read per sync; the rest wait for the next one (the cursor is per session).
 const MAX_SESSIONS: usize = 200;
 const MAX_ITEMS: usize = 500;
+/// Staging lives this long (plan section 12); an older open run no longer holds its sessions.
+const STAGING_DAYS: i64 = 30;
 
 /// Set while a sync runs, so the schedule and "Sync now" never collect the same sessions twice.
 pub(crate) struct Busy<'a>(&'a AtomicBool);
@@ -225,6 +228,46 @@ struct Cursor {
     sessions: BTreeMap<String, i64>,
 }
 
+impl Cursor {
+    fn merge(&mut self, other: Cursor) {
+        for (id, seq) in other.sessions {
+            let e = self.sessions.entry(id).or_insert(0);
+            *e = (*e).max(seq);
+        }
+    }
+}
+
+/// A committed run moves its source's cursor to what the run took (called by `close_run`).
+pub(crate) async fn promote_cursor(
+    conn: &mut sqlx::SqliteConnection,
+    run: &str,
+) -> Result<(), sqlx::Error> {
+    let taken: Option<String> =
+        sqlx::query_scalar("SELECT cursor FROM brain_run_cursors WHERE run = ? AND source = ?")
+            .bind(run)
+            .bind(CORE_SOURCE)
+            .fetch_optional(&mut *conn)
+            .await?;
+    if let Some(taken) = taken {
+        let now: String = sqlx::query_scalar("SELECT cursor FROM brain_sources WHERE id = ?")
+            .bind(CORE_SOURCE)
+            .fetch_one(&mut *conn)
+            .await?;
+        let mut cursor: Cursor = serde_json::from_str(&now).unwrap_or_default();
+        cursor.merge(serde_json::from_str(&taken).unwrap_or_default());
+        sqlx::query("UPDATE brain_sources SET cursor = ? WHERE id = ?")
+            .bind(serde_json::to_string(&cursor).expect("cursor"))
+            .bind(CORE_SOURCE)
+            .execute(&mut *conn)
+            .await?;
+    }
+    sqlx::query("DELETE FROM brain_run_cursors WHERE run = ?")
+        .bind(run)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 /// New entries of every finished AI session since the cursor, as items, and the cursor after them.
 async fn collect(
     app: &App,
@@ -297,8 +340,22 @@ pub(crate) async fn sync_core(
         .fetch_one(&app.pool)
         .await?;
     let enabled = row.try_get::<i64, _>("enabled")? == 1;
-    let cursor: Cursor =
+    let mut cursor: Cursor =
         serde_json::from_str(&row.try_get::<String, _>("cursor")?).unwrap_or_default();
+    // Sessions already staged in a run that is still open are not taken again; an abandoned run
+    // and one older than the staging lifetime no longer count, so their sessions come back.
+    let cutoff = iso_of_unix(app.clock.unix() - STAGING_DAYS * 86_400);
+    let open: Vec<String> = sqlx::query_scalar(
+        "SELECT c.cursor FROM brain_run_cursors c JOIN brain_import_runs r ON r.id = c.run \
+         WHERE c.source = ? AND r.state IN ('collecting','discovering','review','committing') AND r.started_at > ?",
+    )
+    .bind(CORE_SOURCE)
+    .bind(&cutoff)
+    .fetch_all(&app.pool)
+    .await?;
+    for c in open {
+        cursor.merge(serde_json::from_str(&c).unwrap_or_default());
+    }
     let (items, next) = if enabled {
         collect(app, &cursor.sessions).await?
     } else {
@@ -340,9 +397,18 @@ pub(crate) async fn sync_core(
     if !chunk.is_empty() {
         stage_items(app, b, &run, &chunk).await?;
     }
-    // The cursor moves only once the items are staged: a failure above is retried, not lost.
-    sqlx::query("UPDATE brain_sources SET cursor = ?, last_run = ? WHERE id = ?")
-        .bind(serde_json::to_string(&Cursor { sessions: next }).expect("cursor"))
+    // The source's cursor moves only when the run is committed (`promote_cursor`); until then
+    // the run holds what it took.
+    sqlx::query(
+        "INSERT INTO brain_run_cursors (run, source, cursor) VALUES (?, ?, ?) \
+         ON CONFLICT(run, source) DO UPDATE SET cursor = excluded.cursor",
+    )
+    .bind(&run)
+    .bind(CORE_SOURCE)
+    .bind(serde_json::to_string(&Cursor { sessions: next }).expect("cursor"))
+    .execute(&app.pool)
+    .await?;
+    sqlx::query("UPDATE brain_sources SET last_run = ? WHERE id = ?")
         .bind(app.clock.now())
         .bind(CORE_SOURCE)
         .execute(&app.pool)
