@@ -140,7 +140,10 @@ impl Engine {
     }
 
     async fn work(&self, handler: &Arc<dyn JobHandler>, run: &Run) -> Result<(), String> {
-        let work = handler.run(run);
+        // Whatever the job writes to the diary starts with its schedule (E1).
+        let origin =
+            store::schedule_origin(&serde_json::json!({"owner": run.owner, "job": run.job}));
+        let work = crate::store::audit::origin::scope(origin, handler.run(run));
         tokio::pin!(work);
         let mut beat = tokio::time::interval(self.config.heartbeat);
         beat.tick().await;

@@ -408,11 +408,19 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
         return e.into_response();
     }
     let session = session.id;
+    // Everything this request writes to the diary starts with this device's person (E1).
+    let origin = ainkrad_core::audit::AuditOrigin::new(
+        ainkrad_core::audit::OriginKind::Person,
+        Some(v.device.id.clone()),
+    );
     parts.extensions.insert(Caller {
         device: v.device,
         session,
     });
     parts.extensions.insert(Client(addr));
-    next.run(Request::from_parts(parts, Body::from(v.body)))
-        .await
+    crate::store::audit::origin::scope(
+        origin,
+        next.run(Request::from_parts(parts, Body::from(v.body))),
+    )
+    .await
 }

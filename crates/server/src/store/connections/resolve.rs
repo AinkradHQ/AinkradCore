@@ -394,17 +394,31 @@ pub async fn record_use(
         "result": result, "code": code, "user": cx.user, "agent": cx.agent,
         "session": cx.session});
     let mut tx = crate::store::begin_write(pool).await?;
-    match connection {
-        Some(id) => audit(&mut tx, AuditActor::System, "connection.used", id, details).await?,
-        None => {
-            let event = ainkrad_core::audit::NewAuditEvent {
-                actor: AuditActor::System,
-                action: "connection.used".to_owned(),
-                entity: None,
-                details: details.to_string(),
-            };
-            crate::store::audit::append(&mut tx, &event).await?;
+    // A session's use of a connection starts with that session (E1).
+    let from_session = match cx.session {
+        Some(id) => crate::store::agents::session_origin(&mut tx, Ok(id)).await,
+        None => None,
+    };
+    let run = async {
+        match connection {
+            Some(id) => audit(&mut tx, AuditActor::System, "connection.used", id, details).await,
+            None => {
+                let event = ainkrad_core::audit::NewAuditEvent {
+                    actor: AuditActor::System,
+                    action: "connection.used".to_owned(),
+                    entity: None,
+                    details: details.to_string(),
+                };
+                crate::store::audit::append(&mut tx, &event)
+                    .await
+                    .map(drop)
+                    .map_err(Into::into)
+            }
         }
+    };
+    match from_session {
+        Some(o) => crate::store::audit::origin::scope(o, run).await?,
+        None => run.await?,
     }
     tx.commit().await?;
     Ok(())

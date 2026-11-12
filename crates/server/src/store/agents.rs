@@ -10,7 +10,7 @@
 //! - The client-facing actions (create, message, decision, cancel, kill, resume) are audited
 //!   by the API, naming the session, never its prompt, messages or secrets.
 
-use ainkrad_core::audit::{AuditActor, AuditEntity, NewAuditEvent};
+use ainkrad_core::audit::{AuditActor, AuditEntity, AuditOrigin, NewAuditEvent, OriginKind};
 use ainkrad_proto::runner::Tokens;
 use ainkrad_proto::v2::{AgentEvents, AgentState, TranscriptEntry};
 use serde::{Deserialize, Serialize};
@@ -230,6 +230,32 @@ async fn emit(conn: &mut SqliteConnection, kind: &str, payload: Value) -> Result
     events::append(conn, kind, &payload).await.map(drop)
 }
 
+/// What an AI session does starts with the session; its root is what started the session (the
+/// origin the Core stamped on its row, E1-3). `by` is its id (`as_…`) or its row number.
+pub async fn session_origin(
+    conn: &mut SqliteConnection,
+    by: Result<&str, i64>,
+) -> Option<AuditOrigin> {
+    let (id, root, root_ref): (String, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT id, origin_root, origin_root_ref FROM core_agent_sessions \
+         WHERE (?1 IS NOT NULL AND id = ?1) OR (?2 IS NOT NULL AND n = ?2)",
+    )
+    .bind(by.ok())
+    .bind(by.err())
+    .fetch_optional(conn)
+    .await
+    .ok()??;
+    let root_kind = root
+        .and_then(|k| OriginKind::parse(&k))
+        .unwrap_or(OriginKind::System);
+    Some(AuditOrigin {
+        kind: OriginKind::AiSession,
+        reference: Some(id),
+        root_kind,
+        root_reference: root_ref,
+    })
+}
+
 /// Audits `action` on the session (row `n`) by `by_device`, with `details`.
 pub async fn audit(
     conn: &mut SqliteConnection,
@@ -249,7 +275,14 @@ pub async fn audit(
         }),
         details: details.to_string(),
     };
-    super::audit::append(conn, &e).await.map(drop)
+    // Moved by the runner or the Core on its own (no person's request in force): the session
+    // is the origin. A person's stop keeps its person.
+    let ambient = super::audit::origin::current();
+    let origin = match ambient.kind {
+        OriginKind::System => session_origin(&mut *conn, Err(n)).await.unwrap_or(ambient),
+        _ => ambient,
+    };
+    super::audit::append_as(conn, &e, origin).await.map(drop)
 }
 
 /// Stores a new session as `starting`, audited `agent.created`, with its `agent.created` event.
@@ -299,6 +332,7 @@ pub(super) async fn create_in(
     now: &str,
 ) -> Result<String, sqlx::Error> {
     let id = crate::auth::crypto::random_id("as_");
+    let origin = super::audit::origin::current();
     // The account a gateway serves is the Core's own row behind the secret's name, nothing a caller
     // or a runner says; no such row leaves it NULL and the launch refuses the session.
     let gateway_secret = super::gateway::gateway_secret(new.secrets).map(|s| s.name.as_str());
@@ -311,11 +345,11 @@ pub(super) async fn create_in(
     let n: i64 = sqlx::query_scalar(
         "INSERT INTO core_agent_sessions (id, runner, harness, model, prompt, workspace, policy, \
          secrets, state, created_by, created_at, updated_at, owner_module, owner_ref, \
-         gateway_account_id, account_id, user_id) \
+         gateway_account_id, account_id, user_id, origin, origin_ref, origin_root, origin_root_ref) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, \
          (SELECT id FROM core_accounts WHERE secret_name = ?), \
          (SELECT id FROM core_accounts WHERE secret_name = ?), \
-         coalesce((SELECT user_id FROM core_devices WHERE id = ?), 1)) RETURNING n",
+         coalesce((SELECT user_id FROM core_devices WHERE id = ?), 1), ?, ?, ?, ?) RETURNING n",
     )
     .bind(&id)
     .bind(new.runner)
@@ -333,6 +367,11 @@ pub(super) async fn create_in(
     .bind(gateway_secret)
     .bind(account_secret)
     .bind(new.created_by)
+    // The Core stamps what started the session (E1-3); no caller or runner field reaches it.
+    .bind(origin.kind.as_str())
+    .bind(&origin.reference)
+    .bind(origin.root_kind.as_str())
+    .bind(&origin.root_reference)
     .fetch_one(&mut *tx)
     .await?;
     let names: Vec<&str> = new.secrets.iter().map(|s| s.name.as_str()).collect();

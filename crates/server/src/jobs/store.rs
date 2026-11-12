@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use ainkrad_core::audit::{AuditActor, AuditEntity, NewAuditEvent};
+use ainkrad_core::audit::{AuditActor, AuditEntity, AuditOrigin, NewAuditEvent, OriginKind};
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnection, SqlitePool};
 use sqlx::{Error, Row};
@@ -318,6 +318,7 @@ async fn note(
     job: i64,
     details: Value,
 ) -> Result<(), Error> {
+    let origin = schedule_origin(&details);
     let entry = NewAuditEvent {
         actor: AuditActor::System,
         action: action.to_owned(),
@@ -327,7 +328,16 @@ async fn note(
         }),
         details: details.to_string(),
     };
-    audit::append(conn, &entry).await.map(drop)
+    audit::append_as(conn, &entry, origin).await.map(drop)
+}
+
+/// The origin of a job's rows: the schedule, named `owner/job`.
+pub fn schedule_origin(details: &Value) -> AuditOrigin {
+    let name = |k| details.get(k).and_then(Value::as_str);
+    let reference = name("owner")
+        .zip(name("job"))
+        .map(|(o, j)| format!("{o}/{j}"));
+    AuditOrigin::new(OriginKind::Schedule, reference)
 }
 
 /// Queues a run for every occurrence that is due at `now` and moves each job to its next one,

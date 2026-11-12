@@ -337,6 +337,16 @@ async fn insert_successor(
     .bind(v.attempt + 1)
     .bind(&v.id)
     .bind(json!(skip).to_string())
+    .execute(&mut *conn)
+    .await?;
+    // The successor is the same work: it keeps the origin of the session it replaces (E1-3).
+    sqlx::query(
+        "UPDATE core_agent_sessions SET (origin, origin_ref, origin_root, origin_root_ref) = \
+         (SELECT origin, origin_ref, origin_root, origin_root_ref FROM core_agent_sessions \
+          WHERE id = ?1) WHERE id = ?2",
+    )
+    .bind(&v.id)
+    .bind(&id)
     .execute(conn)
     .await?;
     Ok(id)
