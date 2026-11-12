@@ -37,6 +37,7 @@ pub struct InboxRecord {
     /// The sources it came from, each a source stored in the same room.
     pub sources: Vec<SourceRef>,
     /// When it was distilled (RFC 3339).
+    #[schema(required = false)]
     pub distilled_at: String,
     /// The provider and account name the distilling AI session ran on; none for a record made by hand.
     pub distilled_by: Option<DistilledBy>,

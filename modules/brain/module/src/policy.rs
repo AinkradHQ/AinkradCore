@@ -81,10 +81,13 @@ pub struct PolicyView {
     /// Candidate kinds accepted without a review; empty (off) by default.
     pub auto_accept: Vec<String>,
     /// An auto-accepted candidate must cite at least this many sources (1 to 20; default 1).
+    #[schema(required = false)]
     pub min_sources: u32,
     /// The accounts the room's model policy lets distillation use (none for a local-only room).
+    #[schema(required = false)]
     pub accounts: Vec<PolicyAccount>,
     /// Local models a runner declares (none are declared yet).
+    #[schema(required = false)]
     pub local_models: Vec<String>,
     pub lease_hours: i64,
     pub review_days: i64,

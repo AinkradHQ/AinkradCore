@@ -2944,8 +2944,7 @@
           "status",
           "body",
           "tags",
-          "sources",
-          "distilled_at"
+          "sources"
         ],
         "type": "object"
       },
@@ -4564,9 +4563,6 @@
           "model",
           "allowed_providers",
           "auto_accept",
-          "min_sources",
-          "accounts",
-          "local_models",
           "lease_hours",
           "review_days"
         ],
@@ -6581,8 +6577,7 @@
           "kind",
           "enabled",
           "roots",
-          "cursor",
-          "items"
+          "cursor"
         ],
         "type": "object"
       },

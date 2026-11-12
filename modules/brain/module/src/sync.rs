@@ -67,6 +67,7 @@ pub struct SourceView {
     /// When the source last synced (RFC 3339).
     pub last_run: Option<String>,
     /// Items this source has delivered to the Brain so far.
+    #[schema(required = false)]
     pub items: i64,
     /// For a `runner-<id>` source: the runner now. None for any other source.
     pub runner: Option<RunnerNow>,
