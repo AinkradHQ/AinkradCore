@@ -935,15 +935,22 @@
           "auth.lockout",
           "auth.lockout_cleared",
           "auth.step_up",
+          "brain.distil.done",
+          "brain.distil.queued",
+          "brain.distil.rejected",
           "brain.import.committed",
           "brain.import.discovered",
           "brain.import.started",
+          "brain.inbox.decided",
           "brain.inbox.notice",
           "brain.room.created",
           "brain.room.opened",
+          "brain.room.policy",
           "brain.room.refused",
           "brain.rule.changed",
           "brain.rule.created",
+          "brain.session.claimed",
+          "brain.session.refused",
           "brain.source.changed",
           "budget.created",
           "budget.deleted",
@@ -1345,6 +1352,18 @@
         "required": [
           "routine_spki",
           "pop"
+        ],
+        "type": "object"
+      },
+      "ClaimRequest": {
+        "properties": {
+          "session": {
+            "description": "An AI session that has not started yet.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session"
         ],
         "type": "object"
       },
@@ -2119,6 +2138,42 @@
         ],
         "type": "object"
       },
+      "Decision": {
+        "properties": {
+          "action": {
+            "description": "`accept`, `edit` (change, then accept) or `reject`.",
+            "type": "string"
+          },
+          "body": {
+            "description": "`edit`: the new text, 1 to 2000 characters.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tags": {
+            "description": "`edit`: the new tags.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "type": {
+            "description": "`edit`: the new kind.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
       "DefaultConnection": {
         "properties": {
           "connection": {
@@ -2211,6 +2266,52 @@
         "required": [
           "id",
           "name",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "DistilView": {
+        "properties": {
+          "candidates": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "detail": {
+            "description": "Why it waits or failed: no chain, no runner, a refused claim naming the entry, a rejected answer.",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "room": {
+            "type": "string"
+          },
+          "session": {
+            "description": "The AI session doing the work, once started.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sources": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "description": "`queued`, `needs_local_model`, `waiting`, `running`, `done` or `failed`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "room",
+          "state",
+          "sources",
+          "candidates",
+          "detail",
           "created_at"
         ],
         "type": "object"
@@ -2747,6 +2848,77 @@
             "description": "Absent when no local runner is installed."
           }
         },
+        "type": "object"
+      },
+      "InboxPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/InboxRecord"
+            },
+            "type": "array"
+          },
+          "waiting": {
+            "description": "Candidates still waiting for a decision in the whole room.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "waiting"
+        ],
+        "type": "object"
+      },
+      "InboxRecord": {
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "decided_by": {
+            "description": "`auto`, or the device that decided; none while it waits.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "sources": {
+            "description": "Item ids of the sources it came from; each is a source in the same room.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "description": "`candidate`, `accepted` or `rejected`.",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "description": "`decision`, `fact`, `preference`, `rule`, `project-state`, `task` or `summary`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "status",
+          "body",
+          "tags",
+          "sources",
+          "created_at"
+        ],
         "type": "object"
       },
       "InstallToolBody": {
@@ -4234,6 +4406,28 @@
         ],
         "type": "object"
       },
+      "PolicyPatch": {
+        "properties": {
+          "auto_accept": {
+            "description": "Kinds to accept without a review: `fact`, `preference`, `summary`. An empty list turns it off.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "model": {
+            "description": "`cloud` or `local_only`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "PolicyResult": {
         "description": "The answer to a policy change.",
         "properties": {
@@ -4249,6 +4443,47 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "PolicyView": {
+        "properties": {
+          "allowed_providers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "auto_accept": {
+            "description": "Candidate kinds accepted without a review; empty (off) by default.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "lease_hours": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "model": {
+            "description": "`cloud` (the approved provider) or `local_only`.",
+            "type": "string"
+          },
+          "review_days": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "room": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "room",
+          "model",
+          "allowed_providers",
+          "auto_accept",
+          "lease_hours",
+          "review_days"
+        ],
         "type": "object"
       },
       "Pool": {
@@ -4778,6 +5013,27 @@
         },
         "required": [
           "request_id"
+        ],
+        "type": "object"
+      },
+      "RoomClaim": {
+        "properties": {
+          "entries": {
+            "description": "Chain entries checked.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "room": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "room",
+          "session",
+          "entries"
         ],
         "type": "object"
       },
@@ -16022,6 +16278,332 @@
         "x-ainkrad-scope": "read"
       }
     },
+    "/modules/brain/v1/rooms/{room}/claims": {
+      "post": {
+        "operationId": "brainClaimRoom",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomClaim"
+                }
+              }
+            },
+            "description": "The AI session works for the room: every entry of its fallback chain is inside the room's model policy (step-up; refusal `claim_refused` names the entry)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/distil": {
+      "post": {
+        "operationId": "brainDistil",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DistilView"
+                }
+              }
+            },
+            "description": "Queues the distillation of the room's new sources. A room set to local-only waits as `needs_local_model`; `nothing_new` (409) when every source was read"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/distils": {
+      "get": {
+        "operationId": "brainDistils",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DistilView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The room's distillations, newest first"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/inbox": {
+      "get": {
+        "operationId": "brainInbox",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`candidate` (default), `accepted`, `rejected`.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Candidate id to continue after.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxPage"
+                }
+              }
+            },
+            "description": "Candidate records of an open room, oldest first, with how many wait"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/inbox/{id}": {
+      "post": {
+        "operationId": "brainDecide",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Candidate id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Decision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxRecord"
+                }
+              }
+            },
+            "description": "The candidate after the decision; one already decided is a 409"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/modules/brain/v1/rooms/{room}/open": {
       "post": {
         "operationId": "brainOpenRoom",
@@ -16046,6 +16628,121 @@
               }
             },
             "description": "The room is open for its lease (step-up; audited as `brain.room.opened`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/policy": {
+      "get": {
+        "operationId": "brainRoomPolicy",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyView"
+                }
+              }
+            },
+            "description": "Which models may read the room and what is accepted without review"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "patch": {
+        "operationId": "brainPatchRoomPolicy",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicyPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyView"
+                }
+              }
+            },
+            "description": "The policy after the change (step-up; audited as `brain.room.policy`)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

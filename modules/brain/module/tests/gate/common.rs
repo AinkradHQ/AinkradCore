@@ -280,3 +280,116 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 pub fn init_log() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 }
+
+/// A committed personal/product room holding one source per `(title, text)`, not opened.
+pub async fn committed_room(fx: &Fx, texts: &[(&str, &str)]) -> String {
+    committed_room_named(fx, "Alpha", texts).await
+}
+
+/// As `committed_room`, for the project folder `name` (its texts must differ from every other room's).
+pub async fn committed_room_named(fx: &Fx, name: &str, texts: &[(&str, &str)]) -> String {
+    let run = start(fx).await;
+    let items = texts
+        .iter()
+        .enumerate()
+        .map(|(i, (t, x))| item(i as u32 + 1, &format!("/h/Projects/{name}/a"), t, x))
+        .collect();
+    send(fx, &run, items).await;
+    finish(fx, &run).await;
+    let id = proposals(fx, &run).await[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        fx,
+        Method::PATCH,
+        &format!("/imports/{run}/proposals/{id}"),
+        Some(json!({"state": "accepted"})),
+    )
+    .await;
+    ok(fx, Method::POST, &format!("/imports/{run}/commit"), None).await["rooms"][0]["room"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// A fallback chain of one pool per provider, in order.
+pub async fn make_chain(fx: &Fx, providers: &[&str]) -> i64 {
+    use ainkrad_core_server::api::v1::BY;
+    use ainkrad_core_server::store::chains::{self as ch, EntrySpec};
+    use ainkrad_core_server::store::pools;
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
+    let now = fx.app.clock.now();
+    let mut specs = vec![];
+    for (i, p) in providers.iter().enumerate() {
+        let pool = pools::create(&fx.app.pool, &format!("p{n}x{i}"), p, "d_x", BY, &now)
+            .await
+            .unwrap();
+        specs.push(EntrySpec {
+            pool: pool.id,
+            model: None,
+            harness: None,
+        });
+    }
+    ch::create(&fx.app.pool, 1, &format!("c{n}"), &specs, "d_x", BY, &now)
+        .await
+        .unwrap()
+        .id
+}
+
+/// Makes `chain` the one the distillation agent walks.
+pub async fn bind_distil_chain(fx: &Fx, chain: i64) {
+    ainkrad_core_server::store::chains::bind(
+        &fx.app.pool,
+        "brain-distil",
+        chain,
+        "d_x",
+        ainkrad_core_server::api::v1::BY,
+        &fx.app.clock.now(),
+    )
+    .await
+    .unwrap();
+}
+
+/// An AI session (not started) that walks a chain of one pool per provider, in order.
+pub async fn chain_session(fx: &Fx, providers: &[&str]) -> String {
+    use ainkrad_core_server::api::v1::BY;
+    use ainkrad_core_server::store::agents::NewSession;
+    use ainkrad_core_server::store::chains::{self as ch, Request};
+    let c = make_chain(fx, providers).await;
+    let now = fx.app.clock.now();
+    let policy = json!({"mode": "ask"});
+    let new = NewSession {
+        runner: &fx.admin.id,
+        harness: "",
+        model: None,
+        prompt: Some("SECRET SOURCE TEXT"),
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &fx.admin.id,
+    };
+    let req = Request {
+        user_id: 1,
+        chain: Some(c),
+        agent: None,
+    };
+    ch::create_session(&fx.app.pool, &new, None, None, req, BY, &now)
+        .await
+        .unwrap()
+        .id
+}
+
+/// The room's decrypted `canon.db`.
+pub async fn canon_pool(fx: &Fx, room: &str) -> sqlx::SqlitePool {
+    let key = key_of(fx).await;
+    brain_module::files::open_migrated(
+        &brain_module::files::room_path(&brain_module::files::root(&fx.app), room),
+        &key,
+        false,
+        brain_module::files::CANON,
+    )
+    .await
+    .unwrap()
+}

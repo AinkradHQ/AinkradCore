@@ -276,6 +276,8 @@ async fn collect(
     let now_ms = u64::try_from(app.clock.unix()).unwrap_or(0) * 1000;
     let (mut items, mut next, mut taken) = (vec![], done.clone(), 0);
     let mut before = None;
+    // A session that claimed a room is the Brain's own work, whoever created it.
+    let claimed = crate::claim::claimed_sessions(app).await?;
     'pages: loop {
         let page = agents::list(&app.pool, before, 200).await?;
         let Some(last) = page.last() else { break };
@@ -283,7 +285,11 @@ async fn collect(
         for s in &page {
             let from = done.get(&s.id).copied().unwrap_or(0);
             // A Brain-owned session is the Brain's own work: never read back in.
-            if s.live() || s.owner_module.as_deref() == Some(crate::MODULE) || s.last_seq <= from {
+            if s.live()
+                || s.owner_module.as_deref() == Some(crate::MODULE)
+                || claimed.contains(&s.id)
+                || s.last_seq <= from
+            {
                 continue;
             }
             if taken == MAX_SESSIONS {

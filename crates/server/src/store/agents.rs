@@ -596,6 +596,28 @@ pub async fn transcript(
         .collect()
 }
 
+/// Replaces what a session said, and its first message, with a placeholder (C-08): the Brain
+/// keeps the real text inside a room's file, so the Core's copy must not hold it. Entry numbers
+/// and the count stay, so a reader still replays without a gap.
+pub async fn seal(pool: &SqlitePool, id: &str) -> Result<u64, sqlx::Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let n = sqlx::query(
+        "UPDATE core_agent_transcript SET body = '{\"sealed\":true}' WHERE session = ?",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    sqlx::query(
+        "UPDATE core_agent_sessions SET prompt = NULL, title = 'Brain distillation' WHERE id = ?",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(n)
+}
+
 /// `state` as the runner reports it, as stored.
 pub fn runner_state(s: AgentState) -> &'static str {
     match s {
