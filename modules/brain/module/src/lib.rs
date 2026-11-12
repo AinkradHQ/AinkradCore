@@ -5,14 +5,16 @@
 //! Routes (`/modules/brain/v1`): status, import runs, review of proposed rooms, commit, rules and
 //! rooms. See `docs/Plans/2026-11-11-brain-phase1-import-plan.md` §5.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ainkrad_core::audit::NewAuditEvent;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY};
+use ainkrad_core_server::jobs::Job;
 use ainkrad_core_server::module::{Module, ModuleSetting, Zeroizing};
 use ainkrad_core_server::store::{Migration, audit, events};
-use axum::routing::{get, patch, post};
+use axum::routing::{get, patch, post, put};
 use axum::{Extension, Json, Router};
 use serde::Serialize;
 use serde_json::Value;
@@ -24,19 +26,30 @@ pub mod clean;
 mod commit;
 pub mod files;
 mod imports;
+mod index;
 pub mod key;
 mod review;
 pub mod rooms;
 mod rules_api;
+mod sync;
+mod transcripts;
 
 pub const MODULE: &str = "brain";
 
-pub static MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "brain_0001",
-    up: include_str!("../migrations/0001_brain_0001.up.sql"),
-    down: include_str!("../migrations/0001_brain_0001.down.sql"),
-}];
+pub static MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "brain_0001",
+        up: include_str!("../migrations/0001_brain_0001.up.sql"),
+        down: include_str!("../migrations/0001_brain_0001.down.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "brain_run_cursors",
+        up: include_str!("../migrations/0002_brain_run_cursors.up.sql"),
+        down: include_str!("../migrations/0002_brain_run_cursors.down.sql"),
+    },
+];
 
 /// Employer and client rooms are discovered and reviewed in M1 but committed only after the import
 /// isolation suite and the `room_backup` job exist (plan §12 answer 2). The isolation suite is in;
@@ -58,11 +71,15 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports/{run}/proposals/{p}/refuse"),
     ("PATCH", "/imports/{run}/items"),
     ("POST", "/rules"),
+    ("POST", "/sync"),
+    ("PUT", "/sources/{id}"),
 ];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/status", "read"),
     ("GET", "/imports/{run}", "read"),
     ("GET", "/rooms", "read"),
+    ("GET", "/sync", "read"),
+    ("GET", "/rooms/{room}/search", "read"),
 ];
 
 #[derive(Default)]
@@ -70,6 +87,7 @@ struct Inner {
     app: OnceLock<App>,
     key: Mutex<Option<Zeroizing<[u8; 32]>>>,
     rooms: rooms::Rooms,
+    syncing: AtomicBool,
 }
 
 /// The module. Cheap to clone: handlers reach it as an `Extension`.
@@ -215,7 +233,12 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         rules_api::create,
         rules_api::patch,
         rooms::list,
-        rooms::open
+        rooms::open,
+        sync::sources,
+        sync::put_source,
+        sync::status,
+        sync::sync_now,
+        index::search
     ),
     components(schemas(
         BrainStatus,
@@ -242,7 +265,16 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         rules_api::NewRule,
         rules_api::RulePatch,
         rooms::RoomView,
-        rooms::Opened
+        rooms::Opened,
+        sync::SourceView,
+        sync::SourcePut,
+        sync::SyncRequest,
+        sync::SyncResult,
+        sync::Routed,
+        sync::SyncStatus,
+        sync::SyncSource,
+        index::Hit,
+        index::Hits
     ))
 )]
 struct Doc;
@@ -279,6 +311,10 @@ impl Module for Brain {
             .route("/rules/{id}", patch(rules_api::patch))
             .route("/rooms", get(rooms::list))
             .route("/rooms/{room}/open", post(rooms::open))
+            .route("/rooms/{room}/search", get(index::search))
+            .route("/sources", get(sync::sources))
+            .route("/sources/{id}", put(sync::put_source))
+            .route("/sync", get(sync::status).post(sync::sync_now))
             .layer(Extension(self.clone()))
     }
 
@@ -287,7 +323,7 @@ impl Module for Brain {
     }
 
     fn event_kinds(&self) -> &'static [&'static str] {
-        &["brain.import", "brain.room", "brain.alarm"]
+        &["brain.import", "brain.room", "brain.alarm", "brain.inbox"]
     }
 
     /// Ids, names and counts only (Q-15), so a read-only device may see them.
@@ -305,7 +341,17 @@ impl Module for Brain {
             "brain.room.refused",
             "brain.rule.created",
             "brain.rule.changed",
+            "brain.source.changed",
+            "brain.inbox.notice",
         ]
+    }
+
+    fn query_names(&self) -> &'static [&'static str] {
+        &["q"]
+    }
+
+    fn jobs(&self) -> Vec<Job> {
+        vec![sync::job(self), index::job(self)]
     }
 
     fn scope(&self) -> &'static str {

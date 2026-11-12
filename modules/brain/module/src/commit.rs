@@ -87,7 +87,7 @@ pub(crate) async fn commit(
             result.held.push(id);
             continue;
         }
-        if let Some(made) = commit_room(&app, &key, &st, &run, r).await? {
+        if let Some(made) = commit_room(&app, &key, &st, &run, r, "user").await? {
             result.rooms.push(made);
         }
     }
@@ -98,33 +98,41 @@ pub(crate) async fn commit(
             .await?;
     st.close().await;
     if open == 0 {
-        let mut tx = begin_write(&app.pool).await?;
-        sqlx::query("UPDATE brain_import_runs SET state = 'committed', stage = 'committed', committed_at = ? WHERE id = ?")
-            .bind(app.clock.now())
-            .bind(&run)
-            .execute(&mut *tx)
-            .await?;
-        let counts = crate::imports::load_counts(&app, &run).await?;
-        record(
-            &mut tx,
-            "brain.import.committed",
-            json!({"run": run, "rooms": result.rooms.len()}),
-            None,
-        )
-        .await?;
-        crate::imports::record_progress(&mut tx, &run, "committed", &counts).await?;
-        tx.commit().await?;
+        close_run(&app, &run, result.rooms.len()).await?;
         result.state = "committed".to_owned();
     }
     Ok(Json(result))
 }
 
-async fn commit_room(
+/// The run is done: every accepted proposal is committed.
+pub(crate) async fn close_run(app: &App, run: &str, rooms: usize) -> Result<(), ApiError> {
+    let mut tx = begin_write(&app.pool).await?;
+    sqlx::query("UPDATE brain_import_runs SET state = 'committed', stage = 'committed', committed_at = ? WHERE id = ?")
+        .bind(app.clock.now())
+        .bind(run)
+        .execute(&mut *tx)
+        .await?;
+    crate::sync::promote_cursor(&mut tx, run).await?;
+    let counts = crate::imports::load_counts(app, run).await?;
+    record(
+        &mut tx,
+        "brain.import.committed",
+        json!({"run": run, "rooms": rooms}),
+        None,
+    )
+    .await?;
+    crate::imports::record_progress(&mut tx, run, "committed", &counts).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub(crate) async fn commit_room(
     app: &App,
     key: &[u8; 32],
     st: &SqlitePool,
     run: &str,
     p: &SqliteRow,
+    assigned_by: &str,
 ) -> Result<Option<RoomMade>, ApiError> {
     let (pid, name, kind): (String, String, String) =
         (p.try_get("id")?, p.try_get("name")?, p.try_get("kind")?);
@@ -197,7 +205,7 @@ async fn commit_room(
         let added = sqlx::query(
             "INSERT INTO sources (item_id, content_hash, source_kind, device, path, project_hint, author_kind, author_name, \
              title, text, links, started_at, ended_at, run, assigned_by, needed, pointer) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, ?) ON CONFLICT(content_hash) DO NOTHING",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(content_hash) DO NOTHING",
         )
         .bind(r.try_get::<String, _>("item_id")?)
         .bind(&hash)
@@ -213,6 +221,7 @@ async fn commit_room(
         .bind(r.try_get::<String, _>("started_at")?)
         .bind(r.try_get::<Option<String>, _>("ended_at")?)
         .bind(run)
+        .bind(assigned_by)
         .bind(i64::from(r.try_get::<Option<String>, _>("mark")?.as_deref() == Some("needed")))
         .bind(r.try_get::<i64, _>("pointer")?)
         .execute(&mut *ctx)

@@ -149,24 +149,33 @@ pub(crate) async fn start(
             "a kind of full or incremental and 1 to 30 source names",
         ));
     }
+    let run = start_run(&app, &b, &req.kind, &req.sources, Some(&me.device.id)).await?;
+    Ok(Json(RunId { run }))
+}
+
+/// A run row and its staging file; the file first, as a run row with no file would be a run
+/// nobody can finish. `owner` makes the brain key when none exists yet.
+pub(crate) async fn start_run(
+    app: &App,
+    b: &Brain,
+    kind: &str,
+    sources: &[String],
+    owner: Option<&str>,
+) -> Result<String, ApiError> {
     let run = rand_id("run-");
-    // The file first: a run row with no staging file would be a run nobody can finish.
-    staging_for(&app, &b, &run, true, Some(&me.device.id))
-        .await?
-        .close()
-        .await;
+    staging_for(app, b, &run, true, owner).await?.close().await;
     let mut tx = begin_write(&app.pool).await?;
     sqlx::query("INSERT INTO brain_import_runs (id, kind, state, sources, counts) VALUES (?, ?, 'collecting', ?, ?)")
         .bind(&run)
-        .bind(&req.kind)
-        .bind(json!(req.sources).to_string())
+        .bind(kind)
+        .bind(json!(sources).to_string())
         .bind(serde_json::to_string(&Counts::default()).expect("counts"))
         .execute(&mut *tx)
         .await?;
     record(
         &mut tx,
         "brain.import.started",
-        json!({"run": run, "kind": req.kind, "sources": req.sources}),
+        json!({"run": run, "kind": kind, "sources": sources}),
         Some((
             "brain.import",
             json!({"run": run, "stage": "collect", "counts": Counts::default()}),
@@ -174,7 +183,7 @@ pub(crate) async fn start(
     )
     .await?;
     tx.commit().await?;
-    Ok(Json(RunId { run }))
+    Ok(run)
 }
 
 async fn load_rules(app: &App) -> Result<Vec<Rule>, ApiError> {
@@ -221,13 +230,26 @@ pub(crate) async fn items(
             "a batch is at most 500 items and 1 MiB of text",
         ));
     }
-    let rules = load_rules(&app).await?;
-    let staging = staging(&app, &b, &run, false).await?;
-    let mut counts = load_counts(&app, &run).await?;
-    let mut results = Vec::with_capacity(batch.items.len());
+    Ok(Json(Replies {
+        results: stage_items(&app, &b, &run, &batch.items).await?,
+    }))
+}
+
+/// Validates, rule-checks, dedupes, cleans and stages `items` into the run's file, one reply each.
+/// The caller has checked the run is collecting and the batch bounds.
+pub(crate) async fn stage_items(
+    app: &App,
+    b: &Brain,
+    run: &str,
+    items: &[Item],
+) -> Result<Vec<ItemReply>, ApiError> {
+    let rules = load_rules(app).await?;
+    let staging = staging(app, b, run, false).await?;
+    let mut counts = load_counts(app, run).await?;
+    let mut results = Vec::with_capacity(items.len());
     let mut stx = staging.begin().await?;
     let mut seen_tx = begin_write(&app.pool).await?;
-    for item in &batch.items {
+    for item in items {
         counts.found += 1;
         let reply = |status: &str, detail: Option<String>| ItemReply {
             item_id: item.item_id.clone(),
@@ -246,7 +268,7 @@ pub(crate) async fn items(
             counts.refused += 1;
             sqlx::query("INSERT OR IGNORE INTO brain_seen (content_hash, room, run) VALUES (?, 'refused', ?)")
                 .bind(&item.content_hash)
-                .bind(&run)
+                .bind(run)
                 .execute(&mut *seen_tx)
                 .await?;
             sqlx::query("INSERT INTO skips (item_id, reason) VALUES (?, ?)")
@@ -311,11 +333,11 @@ pub(crate) async fn items(
         }
     }
     stx.commit().await?;
-    save_counts(&mut seen_tx, &run, &counts).await?;
-    record_progress(&mut seen_tx, &run, "collect", &counts).await?;
+    save_counts(&mut seen_tx, run, &counts).await?;
+    record_progress(&mut seen_tx, run, "collect", &counts).await?;
     seen_tx.commit().await?;
     staging.close().await;
-    Ok(Json(Replies { results }))
+    Ok(results)
 }
 
 pub(crate) async fn load_counts(app: &App, run: &str) -> Result<Counts, ApiError> {
@@ -379,7 +401,12 @@ pub(crate) async fn collected(
 }
 
 /// Records that `source` reported (a retry is harmless); true when every source of the run has.
-async fn mark_done(app: &App, run: &str, source: &str, all: &[String]) -> Result<bool, ApiError> {
+pub(crate) async fn mark_done(
+    app: &App,
+    run: &str,
+    source: &str,
+    all: &[String],
+) -> Result<bool, ApiError> {
     let mut tx = begin_write(&app.pool).await?;
     let done: String = sqlx::query_scalar("SELECT done FROM brain_import_runs WHERE id = ?")
         .bind(run)
