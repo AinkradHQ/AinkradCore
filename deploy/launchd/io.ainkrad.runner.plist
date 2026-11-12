@@ -5,7 +5,7 @@
 	<key>Label</key>
 	<string>io.ainkrad.runner</string>
 	<!-- Protocol v2 (E2-15). __HOME__ is filled in by deploy/launchd/install.sh, which also appends
-	     --enable-pty to ProgramArguments when asked. Terminals (pty) and exec.run are OFF unless a flag says so:
+	     --enable-agents, and --enable-pty to ProgramArguments when asked. Terminals (pty) and exec.run are OFF unless a flag says so:
 	     a terminal is a shell as THIS user, with everything this user can reach (no sandbox on this agent). -->
 	<key>ProgramArguments</key>
 	<array>
@@ -19,6 +19,12 @@
 		<key>PATH</key>
 		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 		<!-- Where the runner reports its log from (main.rs); same file as StandardErrorPath. -->
+		<!-- Agent sessions with the Core's accounts: the runner advertises egress-filter only with these two (the
+		     Seatbelt egress filter then lets sessions reach only these hosts). Same as deploy/install-linux.sh. -->
+		<key>AINKRAD_AGENT_NETWORK</key>
+		<string>filtered</string>
+		<key>AINKRAD_AGENT_EGRESS_HOSTS</key>
+		<string>api.anthropic.com</string>
 		<key>CITADEL_RUNNER_LOG</key>
 		<string>__HOME__/Library/Logs/AinkradRunner/runner.log</string>
 	</dict>
