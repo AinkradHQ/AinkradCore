@@ -310,19 +310,35 @@ pub fn with_account_floor(policy: serde_json::Value, holds: bool) -> serde_json:
     }
 }
 
-/// Why `runner` may not take a session holding a provider-account secret: real accounts are
-/// placed only on a Linux runner that proved its egress filter (never macOS, whose Seatbelt
-/// cannot filter egress; a runner that never said its OS is refused too).
-pub fn account_refusal(runner: &RunnerState) -> Option<String> {
-    if runner.os.as_deref() != Some("linux") {
-        return Some(format!(
-            "a session holding a provider-account secret needs a Linux runner, and this one is {}",
-            runner.os.as_deref().unwrap_or("of an unreported OS")
-        ));
+/// Why a `runner` of this OS may not take a session that holds an account at all: Linux is judged
+/// by the callers' own proofs; a macOS runner only when it advertises both proofs, the auth
+/// gateway and the egress filter (its Seatbelt rules, proven by start-up self-tests); any other OS,
+/// or one never reported, never.
+fn os_refusal(runner: &RunnerState, what: &str) -> Option<String> {
+    match runner.os.as_deref() {
+        Some("linux") => None,
+        Some("macos") => (!(serves_gateway(runner) && filters_egress(runner))).then(|| {
+            format!(
+                "a session {what} needs a macOS runner that passed both start-up proofs, the \
+                 auth gateway and the egress filter"
+            )
+        }),
+        other => Some(format!(
+            "a session {what} needs a Linux or macOS runner, and this one is {}",
+            other.unwrap_or("of an unreported OS")
+        )),
     }
-    (!filters_egress(runner)).then(|| {
-        "a session holding a provider-account secret needs a runner with a proven egress filter"
-            .to_owned()
+}
+
+/// Why `runner` may not take a session holding a provider-account secret: real accounts are
+/// placed only on a runner that proved its egress filter, and on macOS only when it also proved
+/// the auth gateway ([`os_refusal`]); a runner that never said its OS is refused.
+pub fn account_refusal(runner: &RunnerState) -> Option<String> {
+    os_refusal(runner, "holding a provider-account secret").or_else(|| {
+        (!filters_egress(runner)).then(|| {
+            "a session holding a provider-account secret needs a runner with a proven egress filter"
+                .to_owned()
+        })
     })
 }
 
@@ -355,17 +371,14 @@ fn serves_gateway(runner: &RunnerState) -> bool {
         })
 }
 
-/// Why `runner` may not take a session that needs the auth gateway: a Linux runner that lists
-/// the `gateway` command (fail closed: an old runner never sees a grant).
+/// Why `runner` may not take a session that needs the auth gateway: a runner that lists the
+/// `gateway` command (fail closed: an old runner never sees a grant), and on macOS also the proven
+/// egress filter ([`os_refusal`]).
 pub fn gateway_refusal(runner: &RunnerState) -> Option<String> {
-    if runner.os.as_deref() != Some("linux") {
-        return Some(format!(
-            "a session served by the auth gateway needs a Linux runner, and this one is {}",
-            runner.os.as_deref().unwrap_or("of an unreported OS")
-        ));
-    }
-    (!serves_gateway(runner)).then(|| {
-        "a session served by the auth gateway needs a runner that offers the gateway".to_owned()
+    os_refusal(runner, "served by the auth gateway").or_else(|| {
+        (!serves_gateway(runner)).then(|| {
+            "a session served by the auth gateway needs a runner that offers the gateway".to_owned()
+        })
     })
 }
 
