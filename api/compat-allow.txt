@@ -15,5 +15,6 @@ runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/prop
 # New runner ops go before the `#[serde(other)]` catch-all, which serde keeps last, so it moves down: the positional
 # comparison sees its old slot taken by a new op. No variant is removed (checked by op name); only positions shift.
 # Delete these two lines in the next change to api/ (the baseline will have the ops then).
-runner.schema.json: variant #16 removed at /$defs/Command/oneOf
-runner.schema.json: variant #15 removed at /$defs/Reply/oneOf
+# (history.read, E5-3: the catch-all moved from #20 to #21 and from #18 to #19.)
+runner.schema.json: variant #20 removed at /$defs/Command/oneOf
+runner.schema.json: variant #18 removed at /$defs/Reply/oneOf

@@ -10445,6 +10445,13 @@
             "description": "Agent sessions are offered. Refused (409 `policy_refused`, with the reason) when the\nrunner cannot run them: no process sandbox, no proven egress filter, or no agent tool installed.",
             "type": "boolean"
           },
+          "share_history": {
+            "description": "The runner lets the Brain read its Claude Code history (`--share-history`). Omitted: the\nrunner's current setting stays; `false` turns it off.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "terminals": {
             "description": "Terminals are offered on the runner.",
             "type": "boolean"
@@ -13089,7 +13096,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.56.0"
+    "version": "1.57.0"
   },
   "openapi": "3.1.0",
   "paths": {

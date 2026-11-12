@@ -57,6 +57,8 @@ pub enum Command {
     ToolsStatus(super::ToolsStatusReq),
     #[serde(rename = "plan.check")]
     PlanCheck(super::PlanCheck),
+    #[serde(rename = "history.read")]
+    HistoryRead(super::HistoryRead),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -80,6 +82,7 @@ impl Command {
             Self::GatewayTest(_) => super::OP_GATEWAY_TEST,
             Self::AgentTools(_) => super::OP_AGENT_TOOLS,
             Self::PlanCheck(_) => super::OP_PLAN_CHECK,
+            Self::HistoryRead(_) => super::OP_HISTORY_READ,
             Self::LoginStart(_) => super::OP_LOGIN_START,
             Self::LoginCode(_) => super::OP_LOGIN_CODE,
             Self::LoginCancel(_) => super::OP_LOGIN_CANCEL,
@@ -173,6 +176,9 @@ pub enum Reply {
     /// The answer to `plan.check`.
     #[serde(rename = "plan.check")]
     PlanCheck(super::PlanChecked),
+    /// The answer to `history.read`.
+    #[serde(rename = "history.read")]
+    HistoryRead(super::HistoryChunk),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

@@ -243,7 +243,7 @@ pub async fn pair_main(args: &[&str]) -> ExitCode {
 
 pub const CONNECT_USAGE: &str = "usage:
   ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec] [--enable-pty]
-                         [--enable-agents] [--terminal-sandbox=on|off]
+                         [--enable-agents] [--share-history] [--terminal-sandbox=on|off]
                          [--terminal-hide <path>]… [--terminal-user <account>]
                          [--terminal-network=host|none|filtered]
 
@@ -349,6 +349,8 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     let run_enabled = args.contains(&"--enable-exec");
     let pty_flag = args.contains(&"--enable-pty");
     let agents_flag = agents_enabled(args);
+    // Off unless asked: the Brain may then read this runner's harness history (`history.read`).
+    let share_history = args.contains(&"--share-history");
     let (pty_enabled, agents_enabled) = (pty_flag, agents_flag);
     let Some(terminal_sandbox) = terminal_sandbox(args) else {
         eprintln!("{CONNECT_USAGE}");
@@ -374,8 +376,10 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         .iter()
         .copied()
         .filter(|a| {
-            !matches!(*a, "--enable-exec" | "--enable-pty" | "--enable-agents")
-                && !a.starts_with("--terminal-sandbox=")
+            !matches!(
+                *a,
+                "--enable-exec" | "--enable-pty" | "--enable-agents" | "--share-history"
+            ) && !a.starts_with("--terminal-sandbox=")
                 && !a.starts_with("--terminal-network=")
         })
         .collect();
@@ -406,6 +410,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     let (pty_enabled, agents_enabled) =
         policy.map_or((pty_enabled, agents_enabled), |p| (p.terminals, p.agents));
     let agent_capacity = policy.map_or(2, |p| p.agent_capacity);
+    let share_history = policy.map_or(share_history, |p| p.share_history);
     // Agents a policy asked for must not keep the runner from starting when they cannot run.
     let agents_may_fail = agents_enabled && !agents_flag;
     let exec = Arc::new(super::ExecDriver::new(
@@ -512,9 +517,15 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         eprintln!("ainkrad-runner: WARNING: {m}");
         tracing::warn!("{m}");
     }
-    let agents = match agents_enabled
-        .then(|| agents(&state.0, core_url(&state), tls.clone(), agent_capacity))
-    {
+    let agents = match agents_enabled.then(|| {
+        agents(
+            &state.0,
+            core_url(&state),
+            tls.clone(),
+            agent_capacity,
+            share_history,
+        )
+    }) {
         None => None,
         Some(a) => match a.await {
             Ok(a) => Some(a),
@@ -536,6 +547,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             terminals: pty.is_some(),
             agents: agents.is_some(),
             agent_capacity,
+            share_history,
         },
         tools: super::tools::ToolsDriver::new(super::tools::HELPER_SOCKET),
         pty: pty.clone(),
@@ -668,6 +680,7 @@ async fn agents(
     core_url: Option<String>,
     tls: Option<Arc<rustls::ClientConfig>>,
     capacity: u32,
+    share_history: bool,
 ) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
     let mut executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
@@ -701,6 +714,10 @@ async fn agents(
     executor.check_roots(&home)?;
     let mut config = super::agent::AgentConfig::new(state.join("agents"), secrets.clone());
     config.capacity = capacity;
+    if share_history {
+        config.history_read = true;
+        config.history_root = Some(home.join(".claude").join("projects"));
+    }
     let mut found = std::collections::BTreeMap::new();
     for (name, version) in executor.probe(Duration::from_secs(10)).await {
         found.insert(name.clone(), version.clone());

@@ -6195,6 +6195,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/RunnerPolicyBody/agents`.
             public var agents: Swift.Bool
+            /// The runner lets the Brain read its Claude Code history (`--share-history`). Omitted: the
+            /// runner's current setting stays; `false` turns it off.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerPolicyBody/share_history`.
+            public var shareHistory: Swift.Bool?
             /// Terminals are offered on the runner.
             ///
             /// - Remark: Generated from `#/components/schemas/RunnerPolicyBody/terminals`.
@@ -6204,19 +6209,23 @@ extension Components {
             /// - Parameters:
             ///   - agentCapacity: How many agent sessions run at once, 1 to 8.
             ///   - agents: Agent sessions are offered. Refused (409 `policy_refused`, with the reason) when the
+            ///   - shareHistory: The runner lets the Brain read its Claude Code history (`--share-history`). Omitted: the
             ///   - terminals: Terminals are offered on the runner.
             public init(
                 agentCapacity: Swift.Int32,
                 agents: Swift.Bool,
+                shareHistory: Swift.Bool? = nil,
                 terminals: Swift.Bool
             ) {
                 self.agentCapacity = agentCapacity
                 self.agents = agents
+                self.shareHistory = shareHistory
                 self.terminals = terminals
             }
             public enum CodingKeys: String, CodingKey {
                 case agentCapacity = "agent_capacity"
                 case agents
+                case shareHistory = "share_history"
                 case terminals
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -6229,6 +6238,10 @@ extension Components {
                     Swift.Bool.self,
                     forKey: .agents
                 )
+                self.shareHistory = try container.decodeIfPresent(
+                    Swift.Bool.self,
+                    forKey: .shareHistory
+                )
                 self.terminals = try container.decode(
                     Swift.Bool.self,
                     forKey: .terminals
@@ -6236,6 +6249,7 @@ extension Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "agent_capacity",
                     "agents",
+                    "share_history",
                     "terminals"
                 ])
             }

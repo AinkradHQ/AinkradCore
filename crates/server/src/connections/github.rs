@@ -91,6 +91,7 @@ pub const GITHUB: Descriptor = Descriptor {
                 "github.list_prs",
                 "github.get_pr",
                 "github.list_pr_files",
+                "github.list_pr_reviews",
             ],
         },
         Capability {

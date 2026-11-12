@@ -180,6 +180,8 @@ fn offers(listed: &str, op: &str) -> bool {
         || (listed == CAP_GATEWAY && matches!(op, OP_AGENT_LIMIT | OP_GATEWAY_TEST))
         || (listed == ainkrad_proto::v2::CAP_TOOLS && op == ainkrad_proto::v2::OP_AGENT_TOOLS)
         || (listed == ainkrad_proto::v2::CAP_PLAN_CHECK && op == ainkrad_proto::v2::OP_PLAN_CHECK)
+        || (listed == ainkrad_proto::v2::CAP_HISTORY_READ
+            && op == ainkrad_proto::v2::OP_HISTORY_READ)
         || (listed == CAP_LOGIN && matches!(op, OP_LOGIN_START | OP_LOGIN_CODE | OP_LOGIN_CANCEL))
 }
 

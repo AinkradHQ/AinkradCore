@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::gateway::command;
-use super::{Core, Fake, quick};
+use super::{Core, Fake, quick, random32};
 
 fn control() -> DriverInfo {
     DriverInfo {
@@ -124,11 +124,13 @@ async fn a_policy_reaches_the_runner_is_audited_and_announced() {
         admin,
     } = up("rc-policy", true).await;
     let uri = format!("/api/v1/runners/{runner}/policy");
-    let want = json!({"terminals": true, "agents": false, "agent_capacity": 3});
+    let want =
+        json!({"terminals": true, "agents": false, "agent_capacity": 3, "share_history": true});
     let policy = RunnerPolicy {
         terminals: true,
         agents: false,
         agent_capacity: 3,
+        share_history: true,
     };
     let ((s, b), ()) = tokio::join!(
         call(&core, &admin, "PUT", &uri, Some(want.clone())),
@@ -154,6 +156,70 @@ async fn a_policy_reaches_the_runner_is_audited_and_announced() {
     let ev = events(&core, "runner.policy").await;
     assert_eq!(ev.len(), 1);
     assert_eq!(ev[0]["runner"], json!(runner));
+}
+
+#[tokio::test]
+async fn a_policy_without_share_history_keeps_the_runners_setting_and_false_turns_it_off() {
+    let mut core_fx = {
+        let core = Core::start("rc-share", quick()).await;
+        let dev = core.runner().await;
+        let mut fake = Fake::plain(&core, &dev).await;
+        // The runner reports it runs with sharing on.
+        fake.facts = Some(Box::new(RunnerFacts {
+            policy: Some(RunnerPolicy {
+                terminals: true,
+                agents: false,
+                agent_capacity: 3,
+                share_history: true,
+            }),
+            ..RunnerFacts::default()
+        }));
+        let auth = fake.hello(&dev, vec![control()], &random32()).await;
+        fake.prove(&dev, &auth, &NO_CHANNEL_BINDING, &core.app.auth.identity.fp)
+            .await;
+        fake.welcome().await;
+        let admin = core.device("device", &["read", "admin"]).await;
+        elevate(&core, &admin);
+        Fx {
+            runner: dev.id.clone(),
+            core,
+            fake,
+            admin,
+        }
+    };
+    let Fx {
+        core,
+        fake,
+        runner,
+        admin,
+    } = &mut core_fx;
+    let uri = format!("/api/v1/runners/{runner}/policy");
+    for (body, expect) in [
+        (
+            json!({"terminals": true, "agents": false, "agent_capacity": 4}),
+            true,
+        ),
+        (
+            json!({"terminals": true, "agents": false, "agent_capacity": 4, "share_history": false}),
+            false,
+        ),
+    ] {
+        let ((s, b), ()) = tokio::join!(call(core, admin, "PUT", &uri, Some(body)), async {
+            let (stream, cmd) = command(fake).await;
+            let Command::RunnerPolicy(p) = cmd else {
+                panic!("{cmd:?}")
+            };
+            assert_eq!(p.share_history, expect, "what the runner is told");
+            let applied = PolicyApplied {
+                policy: p,
+                restarting: true,
+            };
+            fake.send(stream, Body::Result(Reply::RunnerPolicy(applied)))
+                .await;
+        });
+        assert_eq!(s, 200, "{b}");
+        assert_eq!(b["policy"]["share_history"], json!(expect));
+    }
 }
 
 #[tokio::test]

@@ -39,7 +39,7 @@ pub(crate) fn render(body: &Value) -> Option<String> {
     (!text.is_empty()).then(|| format!("{who}: {text}"))
 }
 
-fn ulid(now_ms: u64) -> String {
+pub(crate) fn ulid(now_ms: u64) -> String {
     const A: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
     let mut r = [0u8; 16];
     getrandom::fill(&mut r).expect("the system random source");

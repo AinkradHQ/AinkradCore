@@ -21,11 +21,12 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use utoipa::ToSchema;
 
+use crate::collectors::{self, GITHUB_SOURCE, JIRA_SOURCE, RUNNER_PREFIX};
 use crate::commit::{close_run, commit_room};
 use crate::imports::{mark_done, run_state, stage_items, staging, start_run};
 use crate::review::{mixed, room_id};
 use crate::transcripts::{self, Meta};
-use crate::{Brain, ROOM_BACKUP_READY, record};
+use crate::{Brain, ROOM_BACKUP_READY, code, record};
 
 /// The one source the Core collects itself.
 pub const CORE_SOURCE: &str = "core_transcript";
@@ -65,6 +66,41 @@ pub struct SourceView {
     pub cursor: Value,
     /// When the source last synced (RFC 3339).
     pub last_run: Option<String>,
+    /// Items this source has delivered to the Brain so far.
+    #[schema(required = false)]
+    pub items: i64,
+    /// For a `runner-<id>` source: the runner now. None for any other source.
+    pub runner: Option<RunnerNow>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct RunnerNow {
+    pub online: bool,
+    /// The harness tools the runner offers for AI sessions (`claude`, `codex`, ...).
+    pub tools: Vec<String>,
+    /// The runner was started with `--share-history`, so it can answer a history read.
+    pub history_offered: bool,
+}
+
+/// The live state of a runner source's runner, from the hub.
+fn runner_now(app: &App, v: &SourceView) -> Option<RunnerNow> {
+    v.id.strip_prefix(RUNNER_PREFIX)?;
+    let all = app.hub.runners();
+    let r = all.get(&v.device);
+    let agent = r.and_then(|r| {
+        r.drivers
+            .iter()
+            .find(|d| d.name == ainkrad_proto::v2::AGENT_DRIVER)
+    });
+    Some(RunnerNow {
+        online: r.is_some_and(|r| r.online),
+        tools: agent.map_or_else(Vec::new, |d| d.slots.keys().cloned().collect()),
+        history_offered: agent.is_some_and(|d| {
+            d.commands
+                .iter()
+                .any(|c| c == ainkrad_proto::v2::CAP_HISTORY_READ)
+        }),
+    })
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -87,16 +123,28 @@ fn view(r: &sqlx::sqlite::SqliteRow) -> Result<SourceView, sqlx::Error> {
         roots: serde_json::from_str(&roots).unwrap_or_default(),
         cursor: serde_json::from_str(&cursor).unwrap_or(json!({})),
         last_run: r.try_get("last_run")?,
+        items: r.try_get("items")?,
+        runner: None,
     })
 }
 
+/// The Core's own collectors: AI session transcripts (on), then Jira and GitHub (off until the
+/// user switches them on).
 async fn ensure_core_source(app: &App) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT OR IGNORE INTO brain_sources (id, device, kind) VALUES (?, 'core', ?)")
-        .bind(CORE_SOURCE)
-        .bind(CORE_SOURCE)
-        .execute(&app.pool)
-        .await
-        .map(drop)
+    for (id, on) in [(CORE_SOURCE, 1), (JIRA_SOURCE, 0), (GITHUB_SOURCE, 0)] {
+        sqlx::query("INSERT OR IGNORE INTO brain_sources (id, device, kind, enabled) VALUES (?, 'core', ?, ?)")
+            .bind(id)
+            .bind(id)
+            .bind(on)
+            .execute(&app.pool)
+            .await?;
+    }
+    Ok(())
+}
+
+/// A source the Core collects itself: its device and kind are not the caller's to set.
+fn core_owned(id: &str) -> bool {
+    [CORE_SOURCE, JIRA_SOURCE, GITHUB_SOURCE].contains(&id) || id.starts_with(RUNNER_PREFIX)
 }
 
 #[utoipa::path(get, path = "/sources", operation_id = "brainSources", tag = "brain",
@@ -106,7 +154,11 @@ pub(crate) async fn sources(State(app): State<App>) -> ApiResult<Vec<SourceView>
     let rows = sqlx::query("SELECT * FROM brain_sources ORDER BY id")
         .fetch_all(&app.pool)
         .await?;
-    Ok(Json(rows.iter().map(view).collect::<Result<_, _>>()?))
+    let mut out = rows.iter().map(view).collect::<Result<Vec<_>, _>>()?;
+    for v in &mut out {
+        v.runner = runner_now(&app, v);
+    }
+    Ok(Json(out))
 }
 
 #[utoipa::path(put, path = "/sources/{id}", operation_id = "brainPutSource", tag = "brain",
@@ -139,14 +191,17 @@ pub(crate) async fn put_source(
         ));
     }
     // The Core's own collector is always the Core's: only its switch and cursor can change.
-    let (device, kind) = if id == CORE_SOURCE {
-        ("core".to_owned(), CORE_SOURCE.to_owned())
+    // A runner's history source belongs to that runner and reads Claude Code sessions.
+    let (device, kind) = if let Some(runner) = id.strip_prefix(RUNNER_PREFIX) {
+        (runner.to_owned(), "claude_code".to_owned())
+    } else if core_owned(&id) {
+        ("core".to_owned(), id.clone())
     } else {
         (req.device, req.kind)
     };
     let mut tx = begin_write(&app.pool).await?;
     sqlx::query(
-        "INSERT INTO brain_sources (id, device, kind, enabled, roots, cursor) VALUES (?, ?, ?, coalesce(?, 1), coalesce(?, '[]'), coalesce(?, '{}')) \
+        "INSERT INTO brain_sources (id, device, kind, enabled, roots, cursor) VALUES (?, ?, ?, coalesce(?, ?), coalesce(?, '[]'), coalesce(?, '{}')) \
          ON CONFLICT(id) DO UPDATE SET device = excluded.device, kind = excluded.kind, \
          enabled = coalesce(?, enabled), roots = coalesce(?, roots), cursor = coalesce(?, cursor)",
     )
@@ -154,6 +209,8 @@ pub(crate) async fn put_source(
     .bind(&device)
     .bind(&kind)
     .bind(req.enabled.map(i64::from))
+    // Reading a third party's data or a runner's history is opt-in: new rows start off.
+    .bind(i64::from(!core_owned(&id) || id == CORE_SOURCE))
     .bind(req.roots.as_ref().map(|r| json!(r).to_string()))
     .bind(&cursor)
     .bind(req.enabled.map(i64::from))
@@ -173,7 +230,9 @@ pub(crate) async fn put_source(
         .bind(&id)
         .fetch_one(&app.pool)
         .await?;
-    Ok(Json(view(&row)?))
+    let mut v = view(&row)?;
+    v.runner = runner_now(&app, &v);
+    Ok(Json(v))
 }
 
 #[derive(Default, Deserialize, ToSchema)]
@@ -181,6 +240,8 @@ pub struct SyncRequest {
     /// A full run that is collecting and lists `core_transcript`: take the Core's AI sessions into
     /// it instead of starting an incremental run.
     pub run: Option<String>,
+    /// Sync one source of the Core's: `core_transcript` (the default), `jira` or `github`.
+    pub source: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -237,27 +298,51 @@ impl Cursor {
     }
 }
 
-/// A committed run moves its source's cursor to what the run took (called by `close_run`).
+/// Merges what a run took into a source's cursor: numbers and text (ISO times) keep the larger,
+/// objects merge key by key. A cursor only ever moves forward.
+pub(crate) fn merge_cursor(now: &mut Value, taken: &Value) {
+    match (&mut *now, taken) {
+        (Value::Object(a), Value::Object(b)) => {
+            for (k, v) in b {
+                match a.get_mut(k) {
+                    Some(have) => merge_cursor(have, v),
+                    None => {
+                        a.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        (Value::Number(a), Value::Number(b)) if a.as_f64() < b.as_f64() => *now = taken.clone(),
+        (Value::String(a), Value::String(b)) if *a < *b => *now = taken.clone(),
+        _ => {}
+    }
+}
+
+/// A committed run moves each source's cursor to what the run took (called by `close_run`).
 pub(crate) async fn promote_cursor(
     conn: &mut sqlx::SqliteConnection,
     run: &str,
 ) -> Result<(), sqlx::Error> {
-    let taken: Option<String> =
-        sqlx::query_scalar("SELECT cursor FROM brain_run_cursors WHERE run = ? AND source = ?")
+    let taken: Vec<(String, String)> =
+        sqlx::query_as("SELECT source, cursor FROM brain_run_cursors WHERE run = ?")
             .bind(run)
-            .bind(CORE_SOURCE)
-            .fetch_optional(&mut *conn)
+            .fetch_all(&mut *conn)
             .await?;
-    if let Some(taken) = taken {
-        let now: String = sqlx::query_scalar("SELECT cursor FROM brain_sources WHERE id = ?")
-            .bind(CORE_SOURCE)
-            .fetch_one(&mut *conn)
-            .await?;
-        let mut cursor: Cursor = serde_json::from_str(&now).unwrap_or_default();
-        cursor.merge(serde_json::from_str(&taken).unwrap_or_default());
+    for (source, taken) in taken {
+        let now: Option<String> =
+            sqlx::query_scalar("SELECT cursor FROM brain_sources WHERE id = ?")
+                .bind(&source)
+                .fetch_optional(&mut *conn)
+                .await?;
+        let Some(now) = now else { continue };
+        let mut cursor: Value = serde_json::from_str(&now).unwrap_or(json!({}));
+        merge_cursor(
+            &mut cursor,
+            &serde_json::from_str(&taken).unwrap_or(json!({})),
+        );
         sqlx::query("UPDATE brain_sources SET cursor = ? WHERE id = ?")
-            .bind(serde_json::to_string(&cursor).expect("cursor"))
-            .bind(CORE_SOURCE)
+            .bind(cursor.to_string())
+            .bind(&source)
             .execute(&mut *conn)
             .await?;
     }
@@ -276,6 +361,8 @@ async fn collect(
     let now_ms = u64::try_from(app.clock.unix()).unwrap_or(0) * 1000;
     let (mut items, mut next, mut taken) = (vec![], done.clone(), 0);
     let mut before = None;
+    // A session that claimed a room is the Brain's own work, whoever created it.
+    let claimed = crate::claim::claimed_sessions(app).await?;
     'pages: loop {
         let page = agents::list(&app.pool, before, 200).await?;
         let Some(last) = page.last() else { break };
@@ -283,7 +370,11 @@ async fn collect(
         for s in &page {
             let from = done.get(&s.id).copied().unwrap_or(0);
             // A Brain-owned session is the Brain's own work: never read back in.
-            if s.live() || s.owner_module.as_deref() == Some(crate::MODULE) || s.last_seq <= from {
+            if s.live()
+                || s.owner_module.as_deref() == Some(crate::MODULE)
+                || claimed.contains(&s.id)
+                || s.last_seq <= from
+            {
                 continue;
             }
             if taken == MAX_SESSIONS {
@@ -373,15 +464,32 @@ pub(crate) async fn sync_core(
             "disabled"
         }));
     }
+    let cursor = serde_json::to_value(Cursor { sessions: next }).expect("cursor");
+    ingest(app, b, owner, into, CORE_SOURCE, items, cursor).await
+}
+
+/// Stages `items` of `source` into a new incremental run, or into `into`, a full run that is
+/// collecting and lists the source; holds what the collector took as the run's cursor for the
+/// source (the source's own cursor moves when the run is committed), marks the source done and,
+/// when it was the last, discovers rooms and routes what belongs to a known room.
+pub(crate) async fn ingest(
+    app: &App,
+    b: &Brain,
+    owner: Option<&str>,
+    into: Option<&str>,
+    source: &str,
+    items: Vec<Item>,
+    cursor: Value,
+) -> Result<SyncResult, ApiError> {
     let run = match into {
         Some(r) => {
             let (state, sources) = run_state(app, r).await?;
-            if state != "collecting" || !sources.iter().any(|s| s == CORE_SOURCE) {
-                return Err(ApiError::conflict("the run is not collecting AI sessions"));
+            if state != "collecting" || !sources.iter().any(|s| s == source) {
+                return Err(ApiError::conflict("the run is not collecting that source"));
             }
             r.to_owned()
         }
-        None => start_run(app, b, "incremental", &[CORE_SOURCE.to_owned()], owner).await?,
+        None => start_run(app, b, "incremental", &[source.to_owned()], owner).await?,
     };
     let (mut chunk, mut bytes) = (vec![], 0);
     for item in items {
@@ -404,17 +512,17 @@ pub(crate) async fn sync_core(
          ON CONFLICT(run, source) DO UPDATE SET cursor = excluded.cursor",
     )
     .bind(&run)
-    .bind(CORE_SOURCE)
-    .bind(serde_json::to_string(&Cursor { sessions: next }).expect("cursor"))
+    .bind(source)
+    .bind(cursor.to_string())
     .execute(&app.pool)
     .await?;
     sqlx::query("UPDATE brain_sources SET last_run = ? WHERE id = ?")
         .bind(app.clock.now())
-        .bind(CORE_SOURCE)
+        .bind(source)
         .execute(&app.pool)
         .await?;
     let (_, sources) = run_state(app, &run).await?;
-    let outcome = if mark_done(app, &run, CORE_SOURCE, &sources).await? {
+    let outcome = if mark_done(app, &run, source, &sources).await? {
         crate::review::discover(app, b, &run).await?
     } else {
         None
@@ -443,6 +551,73 @@ pub(crate) async fn sync_core(
         notice: o.unsorted + o.new_rooms > 0,
         idle: None,
     })
+}
+
+/// Takes the new Jira issues or GitHub pull requests (`source`) the connections let the owner read,
+/// into a new incremental run. Off until switched on; GitHub needs repositories in `roots`.
+pub(crate) async fn sync_connection(
+    app: &App,
+    b: &Brain,
+    owner: Option<&str>,
+    source: &str,
+) -> Result<SyncResult, ApiError> {
+    let Some(_busy) = Busy::take(&b.inner.syncing) else {
+        return Ok(SyncResult::idle("running"));
+    };
+    ensure_core_source(app).await?;
+    let row = sqlx::query("SELECT enabled, roots, cursor FROM brain_sources WHERE id = ?")
+        .bind(source)
+        .fetch_optional(&app.pool)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such source"))?;
+    if row.try_get::<i64, _>("enabled")? != 1 {
+        return Ok(SyncResult::idle("disabled"));
+    }
+    let roots: Vec<String> =
+        serde_json::from_str(&row.try_get::<String, _>("roots")?).unwrap_or_default();
+    if source == GITHUB_SOURCE && roots.is_empty() {
+        return Ok(SyncResult::idle("no_repositories"));
+    }
+    let mut cursor: Value =
+        serde_json::from_str(&row.try_get::<String, _>("cursor")?).unwrap_or(json!({}));
+    // What a run still open already holds is not taken again (as the transcript collector does).
+    let cutoff = iso_of_unix(app.clock.unix() - STAGING_DAYS * 86_400);
+    let open: Vec<String> = sqlx::query_scalar(
+        "SELECT c.cursor FROM brain_run_cursors c JOIN brain_import_runs r ON r.id = c.run \
+         WHERE c.source = ? AND r.state IN ('collecting','discovering','review','committing') AND r.started_at > ?",
+    )
+    .bind(source)
+    .bind(&cutoff)
+    .fetch_all(&app.pool)
+    .await?;
+    for c in open {
+        merge_cursor(&mut cursor, &serde_json::from_str(&c).unwrap_or(json!({})));
+    }
+    let fetch = b.fetcher(app, owner);
+    let now_ms = u64::try_from(app.clock.unix()).unwrap_or(0) * 1000;
+    let taken = match source {
+        JIRA_SOURCE => collectors::collect_jira(fetch.as_ref(), &roots, &cursor, now_ms).await,
+        GITHUB_SOURCE => collectors::collect_github(fetch.as_ref(), &roots, &cursor, now_ms).await,
+        _ => {
+            let runner = source.strip_prefix(RUNNER_PREFIX).unwrap_or(source);
+            let history = b.history_reader(app);
+            collectors::collect_runner(history.as_ref(), runner, &cursor, now_ms).await
+        }
+    };
+    let taken = match taken {
+        Ok(t) => t,
+        Err(e) if collectors::no_connection(&e) => return Ok(SyncResult::idle("no_connection")),
+        Err(e) => return Err(code(502, "connection_error", e)),
+    };
+    if taken.items.is_empty() {
+        sqlx::query("UPDATE brain_sources SET last_run = ? WHERE id = ?")
+            .bind(app.clock.now())
+            .bind(source)
+            .execute(&app.pool)
+            .await?;
+        return Ok(SyncResult::idle("nothing_new"));
+    }
+    ingest(app, b, owner, None, source, taken.items, taken.cursor).await
 }
 
 /// What the routing of an incremental run did.
@@ -569,9 +744,18 @@ pub(crate) async fn sync_now(
     Extension(me): Extension<Caller>,
     Json(req): Json<SyncRequest>,
 ) -> ApiResult<SyncResult> {
-    Ok(Json(
-        sync_core(&app, &b, Some(&me.device.id), req.run.as_deref()).await?,
-    ))
+    let owner = Some(me.device.id.as_str());
+    Ok(Json(match req.source.as_deref() {
+        None | Some(CORE_SOURCE) => sync_core(&app, &b, owner, req.run.as_deref()).await?,
+        Some(s) if s == JIRA_SOURCE || s == GITHUB_SOURCE || s.starts_with(RUNNER_PREFIX) => {
+            sync_connection(&app, &b, owner, s).await?
+        }
+        Some(_) => {
+            return Err(ApiError::bad_request(
+                "source is `core_transcript`, `jira`, `github` or `runner-<id>`",
+            ));
+        }
+    }))
 }
 
 struct SyncJob(Brain);
@@ -582,12 +766,40 @@ impl JobHandler for SyncJob {
             let Some(app) = self.0.inner.app.get() else {
                 return Err("the Core is still starting".to_owned());
             };
-            match sync_core(app, &self.0, None, None).await {
-                Ok(r) if r.run.is_none() => run.idle(),
-                Ok(_) => {}
-                // No brain key yet, or the brain is locked: nothing to do, not a failure.
-                Err(e) if e.status == axum::http::StatusCode::CONFLICT => run.idle(),
-                Err(e) => return Err(format!("{}: {}", e.code, e.message)),
+            let mut worked = false;
+            let mut all = vec![
+                CORE_SOURCE.to_owned(),
+                JIRA_SOURCE.to_owned(),
+                GITHUB_SOURCE.to_owned(),
+            ];
+            let runners: Vec<String> = sqlx::query_scalar(
+                "SELECT id FROM brain_sources WHERE enabled = 1 AND id LIKE 'runner-%' ORDER BY id",
+            )
+            .fetch_all(&app.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+            all.extend(runners);
+            for source in all.iter().map(String::as_str) {
+                let r = if source == CORE_SOURCE {
+                    sync_core(app, &self.0, None, None).await
+                } else {
+                    sync_connection(app, &self.0, None, source).await
+                };
+                match r {
+                    Ok(r) => worked |= r.run.is_some(),
+                    // No brain key yet, or the brain is locked: nothing to do, not a failure.
+                    Err(e) if e.status == axum::http::StatusCode::CONFLICT => {}
+                    // A broken connection must not stop the other sources.
+                    Err(e) => tracing::warn!(
+                        source,
+                        code = e.code,
+                        "brain sync of a source failed: {}",
+                        e.message
+                    ),
+                }
+            }
+            if !worked {
+                run.idle();
             }
             Ok(())
         })

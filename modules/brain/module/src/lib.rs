@@ -21,13 +21,19 @@ use serde_json::Value;
 use sqlx::SqliteConnection;
 use utoipa::{OpenApi, ToSchema};
 
+mod answer;
 pub mod cipher;
+mod claim;
 pub mod clean;
+pub mod collectors;
 mod commit;
+mod distil;
 pub mod files;
 mod imports;
+mod inbox;
 mod index;
 pub mod key;
+mod policy;
 mod review;
 pub mod rooms;
 mod rules_api;
@@ -49,6 +55,18 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0002_brain_run_cursors.up.sql"),
         down: include_str!("../migrations/0002_brain_run_cursors.down.sql"),
     },
+    Migration {
+        version: 3,
+        name: "brain_claims",
+        up: include_str!("../migrations/0003_brain_claims.up.sql"),
+        down: include_str!("../migrations/0003_brain_claims.down.sql"),
+    },
+    Migration {
+        version: 4,
+        name: "brain_ui",
+        up: include_str!("../migrations/0004_brain_ui.up.sql"),
+        down: include_str!("../migrations/0004_brain_ui.down.sql"),
+    },
 ];
 
 /// Employer and client rooms are discovered and reviewed in M1 but committed only after the import
@@ -60,6 +78,8 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports/{run}/commit"),
     ("PATCH", "/rules/{id}"),
     ("POST", "/rooms/{room}/open"),
+    ("POST", "/rooms/{room}/claims"),
+    ("PATCH", "/rooms/{room}/policy"),
 ];
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports"),
@@ -72,6 +92,8 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("PATCH", "/imports/{run}/items"),
     ("POST", "/rules"),
     ("POST", "/sync"),
+    ("POST", "/rooms/{room}/distil"),
+    ("POST", "/rooms/{room}/inbox/{id}"),
     ("PUT", "/sources/{id}"),
 ];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
@@ -80,6 +102,9 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/rooms", "read"),
     ("GET", "/sync", "read"),
     ("GET", "/rooms/{room}/search", "read"),
+    ("GET", "/rooms/{room}/policy", "read"),
+    ("GET", "/rooms/{room}/distils", "read"),
+    ("GET", "/rooms/{room}/inbox", "read"),
 ];
 
 #[derive(Default)]
@@ -88,6 +113,11 @@ struct Inner {
     key: Mutex<Option<Zeroizing<[u8; 32]>>>,
     rooms: rooms::Rooms,
     syncing: AtomicBool,
+    distilling: AtomicBool,
+    #[cfg(feature = "test-support")]
+    fetch: Mutex<Option<Arc<dyn collectors::Fetch>>>,
+    #[cfg(feature = "test-support")]
+    history: Mutex<Option<Arc<dyn collectors::RunnerHistory>>>,
 }
 
 /// The module. Cheap to clone: handlers reach it as an `Extension`.
@@ -149,6 +179,65 @@ impl Brain {
         })?;
         *self.inner.key.lock().unwrap_or_else(|e| e.into_inner()) = Some(Zeroizing::new(*k));
         Ok(k)
+    }
+
+    /// A build whose connection reads are `fetch` (canned data), never the Core's broker.
+    #[cfg(feature = "test-support")]
+    pub fn with_fetch(fetch: Arc<dyn collectors::Fetch>) -> Self {
+        let b = Self::default();
+        *b.inner.fetch.lock().unwrap_or_else(|e| e.into_inner()) = Some(fetch);
+        b
+    }
+
+    /// A build whose runner history reads are `history` (canned chunks), never the Core's hub.
+    #[cfg(feature = "test-support")]
+    pub fn with_history(history: Arc<dyn collectors::RunnerHistory>) -> Self {
+        let b = Self::default();
+        *b.inner.history.lock().unwrap_or_else(|e| e.into_inner()) = Some(history);
+        b
+    }
+
+    /// Where a runner's history is read: the Core's hub, or the test build's canned chunks.
+    pub(crate) fn history_reader(&self, app: &App) -> Arc<dyn collectors::RunnerHistory> {
+        #[cfg(feature = "test-support")]
+        if let Some(h) = self
+            .inner
+            .history
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            return h.clone();
+        }
+        Arc::new(collectors::LiveHistory { app: app.clone() })
+    }
+
+    /// Where connection reads go: the Core's broker for the owner (the device's user, else the
+    /// first user), or the test build's canned fetch.
+    pub(crate) fn fetcher(&self, app: &App, device: Option<&str>) -> Arc<dyn collectors::Fetch> {
+        #[cfg(feature = "test-support")]
+        if let Some(f) = self
+            .inner
+            .fetch
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            return f.clone();
+        }
+        Arc::new(collectors::Live {
+            app: app.clone(),
+            user: 1,
+            device: device.unwrap_or("brain").to_owned(),
+        })
+    }
+
+    /// Moves every open distillation one step (the `brain_distil` job does this every minute).
+    pub async fn distil_step(&self) -> Result<(), ApiError> {
+        match self.inner.app.get() {
+            Some(app) => distil::advance(app, self).await,
+            None => Ok(()),
+        }
     }
 
     pub fn rooms(&self) -> &rooms::Rooms {
@@ -238,7 +327,14 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         sync::put_source,
         sync::status,
         sync::sync_now,
-        index::search
+        index::search,
+        claim::claim_route,
+        inbox::list,
+        inbox::decide,
+        distil::start,
+        distil::list,
+        policy::get,
+        policy::patch
     ),
     components(schemas(
         BrainStatus,
@@ -268,13 +364,23 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         rooms::Opened,
         sync::SourceView,
         sync::SourcePut,
+        sync::RunnerNow,
         sync::SyncRequest,
         sync::SyncResult,
         sync::Routed,
         sync::SyncStatus,
         sync::SyncSource,
         index::Hit,
-        index::Hits
+        index::Hits,
+        claim::ClaimRequest,
+        claim::RoomClaim,
+        distil::DistilView,
+        inbox::InboxRecord,
+        inbox::InboxPage,
+        inbox::Decision,
+        policy::PolicyView,
+        policy::PolicyPatch,
+        policy::PolicyAccount
     ))
 )]
 struct Doc;
@@ -312,6 +418,15 @@ impl Module for Brain {
             .route("/rooms", get(rooms::list))
             .route("/rooms/{room}/open", post(rooms::open))
             .route("/rooms/{room}/search", get(index::search))
+            .route("/rooms/{room}/claims", post(claim::claim_route))
+            .route("/rooms/{room}/inbox", get(inbox::list))
+            .route("/rooms/{room}/inbox/{id}", post(inbox::decide))
+            .route("/rooms/{room}/distil", post(distil::start))
+            .route("/rooms/{room}/distils", get(distil::list))
+            .route(
+                "/rooms/{room}/policy",
+                get(policy::get).patch(policy::patch),
+            )
             .route("/sources", get(sync::sources))
             .route("/sources/{id}", put(sync::put_source))
             .route("/sync", get(sync::status).post(sync::sync_now))
@@ -343,6 +458,13 @@ impl Module for Brain {
             "brain.rule.changed",
             "brain.source.changed",
             "brain.inbox.notice",
+            "brain.session.claimed",
+            "brain.session.refused",
+            "brain.room.policy",
+            "brain.inbox.decided",
+            "brain.distil.queued",
+            "brain.distil.done",
+            "brain.distil.rejected",
         ]
     }
 
@@ -351,7 +473,7 @@ impl Module for Brain {
     }
 
     fn jobs(&self) -> Vec<Job> {
-        vec![sync::job(self), index::job(self)]
+        vec![sync::job(self), index::job(self), distil::job(self)]
     }
 
     fn scope(&self) -> &'static str {
