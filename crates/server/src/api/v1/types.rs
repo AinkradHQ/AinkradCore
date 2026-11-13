@@ -199,11 +199,15 @@
 ///
 /// 64: Code Mode dispatch (E2): the audit action `code_mode.call` and the settings `code_mode.*` (call, run, size and
 ///    concurrency limits). No route changed.
+<<<<<<< HEAD
 ///
 /// 65: Code Mode Brain operations (E4): the Brain routes `brainRoomAccess` / `brainPutRoomAccess` (who may see a room),
 ///    `brainAi*` (what an AI session reads and proposes), `InboxRecord.proposed_by`, the audit actions
 ///    `brain.room.access`, `brain.ai.proposed` and `brain.ai.refused`, and the Brain operations in the allow-list.
 pub const API_MINOR: u32 = 65;
+=======
+pub const API_MINOR: u32 = 64;
+>>>>>>> origin/feat/mcp-e2-dispatch
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

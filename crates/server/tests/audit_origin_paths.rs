@@ -35,6 +35,8 @@ const PATHS: &[(&str, How)] = &[
     ("health.rs", How::Background),
     ("hub/connect.rs", How::Background),
     ("jobs/store.rs", How::Explicit),
+    // Code Mode calls (E2): `append_as` with the session's `ai_session` origin, rooted in its creator.
+    ("ops_catalog/call.rs", How::Explicit),
     ("push.rs", How::Background),
     ("store/accounts.rs", How::Ambient),
     ("store/agents.rs", How::Session),
