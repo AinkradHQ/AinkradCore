@@ -204,11 +204,15 @@
 ///    `brainAi*` (what an AI session reads and proposes), `InboxRecord.proposed_by`, the audit actions
 ///    `brain.room.access`, `brain.ai.proposed` and `brain.ai.refused`, and the Brain operations in the allow-list.
 ///
-/// 66: Code Mode writes (E6): `write` and `risky` operations through `ainkrad.call` (a body goes in `args.body`;
+/// 66: Brain closest room. `SemanticView.closest` (`ClosestHint`, with
+///    `ClosestRunnerUp`): Unsorted items that look like they belong in an existing room, suggestions only; the
+///    audit row `brain.semantic.run` gains a `closest` count. Incremental runs now start the semantic step too.
+///
+/// 67: Code Mode writes (E6): `write` and `risky` operations through `ainkrad.call` (a body goes in `args.body`;
 ///    `repeat` and `key` make a write idempotent), the route `GET /agent-sessions/{id}/approvals`
 ///    (`listAgentApprovals`: the Code Mode writes the Core holds for a person), `decideAgentApproval` also resolving a
 ///    request id `cm_…`, and the settings `code_mode.approval_secs` and `code_mode.idempotency_secs`.
-pub const API_MINOR: u32 = 66;
+pub const API_MINOR: u32 = 67;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

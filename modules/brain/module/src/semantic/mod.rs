@@ -30,6 +30,9 @@ pub struct Thresholds {
     pub dup: f32,
     pub cluster: f32,
     pub merge: f32,
+    /// Closest room: the lowest score, and how far ahead of the runner-up it must be.
+    pub closest: f32,
+    pub margin: f32,
 }
 
 impl Thresholds {
@@ -40,16 +43,22 @@ impl Thresholds {
                 dup: 0.97,
                 cluster: 0.91,
                 merge: 0.95,
+                closest: 0.92,
+                margin: 0.04,
             },
             2 => Self {
                 dup: 0.93,
                 cluster: 0.85,
                 merge: 0.90,
+                closest: 0.88,
+                margin: 0.02,
             },
             _ => Self {
                 dup: DUP_THRESHOLD,
                 cluster: CLUSTER_THRESHOLD,
                 merge: MERGE_THRESHOLD,
+                closest: 0.90,
+                margin: 0.03,
             },
         }
     }
@@ -100,6 +109,8 @@ pub struct RunStats {
     pub model: String,
     pub items: usize,
     pub embedded: usize,
+    /// Closest-room suggestions made (set by the caller after the run).
+    pub closest: usize,
     pub duration_ms: u64,
 }
 
@@ -170,6 +181,7 @@ pub fn run(
             model,
             items: kept.len(),
             embedded: missing.len(),
+            closest: 0,
             duration_ms: t.elapsed().as_millis() as u64,
         },
     })
@@ -189,7 +201,7 @@ pub async fn audit(conn: &mut SqliteConnection, s: &RunStats) -> Result<(), sqlx
     crate::record(
         conn,
         "brain.semantic.run",
-        json!({"model": s.model, "items": s.items, "embedded": s.embedded, "duration_ms": s.duration_ms}),
+        json!({"model": s.model, "items": s.items, "embedded": s.embedded, "closest": s.closest, "duration_ms": s.duration_ms}),
         None,
     )
     .await

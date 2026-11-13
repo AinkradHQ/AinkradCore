@@ -1686,6 +1686,60 @@
         ],
         "type": "object"
       },
+      "ClosestHint": {
+        "description": "An Unsorted item that no rule placed but that looks like it belongs in a room: \"Looks like it\nbelongs in <room_name> (0.9x)\". To accept: when `in_review`, `PATCH /imports/{run}/items` with\n`proposal = room_id`; otherwise (a room committed earlier) split Unsorted with `item_ids = [item_id]`\nand `name = room_name`. AI suggestions are never accepted automatically, whatever the rules say.",
+        "properties": {
+          "in_review": {
+            "type": "boolean"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "room_id": {
+            "description": "A proposal id of this run when `in_review`, else the id of a room already committed.",
+            "type": "string"
+          },
+          "room_name": {
+            "type": "string"
+          },
+          "runner_up": {
+            "$ref": "#/components/schemas/ClosestRunnerUp"
+          },
+          "score": {
+            "description": "Cosine similarity to the room's centroid, 0 to 1.",
+            "format": "float",
+            "type": "number"
+          }
+        },
+        "required": [
+          "item_id",
+          "room_id",
+          "room_name",
+          "in_review",
+          "score"
+        ],
+        "type": "object"
+      },
+      "ClosestRunnerUp": {
+        "properties": {
+          "room_id": {
+            "type": "string"
+          },
+          "room_name": {
+            "type": "string"
+          },
+          "score": {
+            "format": "float",
+            "type": "number"
+          }
+        },
+        "required": [
+          "room_id",
+          "room_name",
+          "score"
+        ],
+        "type": "object"
+      },
       "Collected": {
         "properties": {
           "source": {
@@ -6589,6 +6643,13 @@
       },
       "SemanticView": {
         "properties": {
+          "closest": {
+            "description": "Unsorted items that look like they belong in an existing room. Never filed on their own.",
+            "items": {
+              "$ref": "#/components/schemas/ClosestHint"
+            },
+            "type": "array"
+          },
           "duplicates": {
             "items": {
               "$ref": "#/components/schemas/DuplicateHint"

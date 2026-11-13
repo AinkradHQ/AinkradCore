@@ -462,3 +462,186 @@ async fn the_shared_service_embeds_stores_and_finds_similar_and_a_pending_step_r
     assert_eq!(ready(&fx, &run).await["state"], "ready");
     assert_eq!(audits(&fx).await, runs_before + 1);
 }
+
+/// Alpha (angles 61..63) and Beta (80..82); Unsorted notes are the items under test.
+async fn closest_run(fx: &Fx, unsorted: &[(u32, u32)]) -> String {
+    let run = start(fx).await;
+    let mut items = vec![];
+    items.extend((1..=3).map(|n| at(n, "/u/Dev/Alpha", 60 + n)));
+    items.extend((10..=12).map(|n| at(n, "/u/Dev/Beta", 70 + n)));
+    items.extend(unsorted.iter().map(|(n, a)| at(*n, "", *a)));
+    send(fx, &run, items).await;
+    finish(fx, &run).await;
+    run
+}
+
+fn closest_of(v: &Value, n: u32) -> Option<&Value> {
+    let id = format!("01JD{n:022}");
+    v["closest"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["item_id"] == id)
+}
+
+#[tokio::test]
+async fn closest_room_a_clear_winner_is_suggested_a_tie_is_not_and_nothing_is_filed() {
+    let fx = fx_with(Brain::with_embedder(Arc::new(Fake::default())), 1).await;
+    // 62: on top of Alpha (Beta 19 degrees off). 72: 10 and 9 degrees from the two, a tie. 150: far from both.
+    let run = closest_run(&fx, &[(20, 62), (21, 72), (22, 150)]).await;
+    let v = ready(&fx, &run).await;
+    let c = closest_of(&v, 20).expect("a clear winner");
+    assert_eq!(c["room_name"], "Alpha");
+    assert_eq!(c["in_review"], true);
+    assert!(c["score"].as_f64().unwrap() > 0.99);
+    assert_eq!(c["runner_up"]["room_name"], "Beta");
+    assert!(closest_of(&v, 21).is_none(), "margin too small");
+    assert!(closest_of(&v, 22).is_none(), "score too low");
+    assert_eq!(v["closest"].as_array().unwrap().len(), 1);
+    // Suggestion only: the item is still in Unsorted, and one audit row per run carries the count.
+    let p = proposals(&fx, &run).await;
+    assert_eq!(by_name(&p, "Alpha")["item_count"], 3);
+    assert_eq!(audits(&fx).await, 1);
+    let n: i64 = sqlx::query_scalar("SELECT json_extract(details, '$.closest') FROM audit_events WHERE action = 'brain.semantic.run'")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    // Accept = the existing route: move the item into the room.
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("/imports/{run}/items"),
+        Some(json!({"ids": [c["item_id"]], "proposal": c["room_id"]})),
+    )
+    .await;
+    assert_eq!(
+        by_name(&proposals(&fx, &run).await, "Alpha")["item_count"],
+        4
+    );
+    assert!(
+        closest_of(&semantic(&fx, &run).await, 20).is_none(),
+        "spent"
+    );
+}
+
+#[tokio::test]
+async fn closest_room_skips_refused_items_and_refused_rooms() {
+    let fx = fx_with(Brain::with_embedder(Arc::new(Fake::default())), 1).await;
+    let run = closest_run(&fx, &[(20, 62), (22, 82)]).await;
+    let v = ready(&fx, &run).await;
+    assert!(closest_of(&v, 20).is_some() && closest_of(&v, 22).is_some());
+    // A refused room is never a target, at once.
+    let beta = by_name(&proposals(&fx, &run).await, "Beta")["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &fx,
+        Method::POST,
+        &format!("/imports/{run}/proposals/{beta}/refuse"),
+        None,
+    )
+    .await;
+    let v = semantic(&fx, &run).await;
+    assert!(closest_of(&v, 22).is_none());
+    // A refused item gets no suggestion after a re-sort, and the refused room stays out of it.
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("/imports/{run}/items"),
+        Some(json!({"ids": ["01JD0000000000000000000020"], "mark": "refused"})),
+    )
+    .await;
+    regroup(&fx, &run).await;
+    let v = ready(&fx, &run).await;
+    assert!(closest_of(&v, 20).is_none());
+    assert_eq!(
+        closest_of(&v, 22).unwrap()["room_name"],
+        "Alpha",
+        "never the refused Beta"
+    );
+}
+
+#[tokio::test]
+async fn closest_room_is_off_with_the_setting_off() {
+    let fx = fx_with(Brain::with_embedder(Arc::new(Fake::default())), 1).await;
+    set_setting(&fx, "semantic.enabled", "0").await;
+    let run = closest_run(&fx, &[(20, 62)]).await;
+    let v = semantic(&fx, &run).await;
+    assert_eq!(
+        (v["state"].as_str(), v["closest"].as_array().unwrap().len()),
+        (Some("off"), 0)
+    );
+}
+
+async fn centroid_n(fx: &Fx, room: &str) -> Option<i64> {
+    let key = key_of(fx).await;
+    let path = brain_module::files::vectors_path(&brain_module::files::root(&fx.app));
+    let p = brain_module::files::open_migrated(&path, &key, false, brain_module::files::VECTORS)
+        .await
+        .unwrap();
+    let n = sqlx::query_scalar("SELECT n FROM room_centroids WHERE room = ?")
+        .bind(room)
+        .fetch_optional(&p)
+        .await
+        .unwrap();
+    p.close().await;
+    n
+}
+
+#[tokio::test]
+async fn incremental_sync_suggests_a_committed_room_and_the_centroid_grows_with_the_room() {
+    use super::sync::session;
+    let fx = fx_with(Brain::with_embedder(Arc::new(Fake::default())), 1).await;
+    let room = committed_room(
+        &fx,
+        &[
+            ("a1", "alpha ang=60 "),
+            ("a2", "alpha ang=62 "),
+            ("a3", "alpha ang=64 "),
+        ],
+    )
+    .await;
+    assert_eq!(centroid_n(&fx, &room).await, Some(3));
+    // One session for the known room (routed by rule, joins the centroid), one stray that no rule places.
+    session(
+        &fx,
+        "as_alpha",
+        Some("/h/Projects/Alpha/a"),
+        "ended",
+        None,
+        &[("user", "more alpha ang=61 ")],
+    )
+    .await;
+    session(
+        &fx,
+        "as_stray",
+        None,
+        "ended",
+        None,
+        &[("user", "stray thought ang=62 ")],
+    )
+    .await;
+    let s = ok(&fx, Method::POST, "/sync", Some(json!({}))).await;
+    assert_eq!(s["unsorted"], 1, "{s}");
+    assert_eq!(
+        centroid_n(&fx, &room).await,
+        Some(4),
+        "the routed item joined the centroid"
+    );
+    let run = s["run"].as_str().unwrap();
+    let v = ready(&fx, run).await;
+    let c = &v["closest"][0];
+    assert_eq!(
+        (
+            c["room_id"].as_str(),
+            c["room_name"].as_str(),
+            c["in_review"].as_bool()
+        ),
+        (Some(room.as_str()), Some("Alpha"), Some(false)),
+        "{v}"
+    );
+    // Never filed: the item is still waiting in Unsorted for the person.
+    assert_eq!(s["routed"].as_array().unwrap().len(), 1);
+}
