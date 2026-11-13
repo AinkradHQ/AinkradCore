@@ -292,6 +292,8 @@ async fn invalid_arguments_never_reach_a_handler() {
         json!({"op": "getAgentSession"}),
         json!({"op": "getAgentSession", "args": {"id": "../audit"}}),
         json!({"op": "getAgentSession", "args": {"id": "a/b"}}),
+        json!({"op": "getAgentSession", "args": {"id": ".."}}),
+        json!({"op": "getAgentSession", "args": {"id": "."}}),
         json!({"op": "getAgentSession", "args": {"id": "x?y=1"}}),
         json!({"op": "getAgentSession", "args": {"id": 5}}),
         json!({"op": "getAgentSession", "args": {"id": "as_x", "extra": 1}}),

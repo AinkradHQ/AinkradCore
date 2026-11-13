@@ -46,7 +46,8 @@ pub fn target(op: &Op, args: &Value) -> Result<String, String> {
         }
         match p.location.as_str() {
             "path" => {
-                if text.is_empty() || !text.bytes().all(plain) {
+                // `.`/`..` are plain bytes but would name another route segment.
+                if text.is_empty() || text == "." || text == ".." || !text.bytes().all(plain) {
                     return Err(format!("{}: not a plain id", p.name));
                 }
                 path = path.replace(&format!("{{{}}}", p.name), &text);
