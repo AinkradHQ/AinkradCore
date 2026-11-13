@@ -35,6 +35,32 @@ pub struct SemanticView {
     pub rooms: Vec<RoomHint>,
     #[serde(default)]
     pub merges: Vec<MergeHint>,
+    /// Unsorted items that look like they belong in an existing room. Never filed on their own.
+    #[serde(default)]
+    pub closest: Vec<ClosestHint>,
+}
+
+/// An Unsorted item that no rule placed but that looks like it belongs in a room: "Looks like it
+/// belongs in <room_name> (0.9x)". To accept: when `in_review`, `PATCH /imports/{run}/items` with
+/// `proposal = room_id`; otherwise (a room committed earlier) split Unsorted with `item_ids = [item_id]`
+/// and `name = room_name`. AI suggestions are never accepted automatically, whatever the rules say.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ClosestHint {
+    pub item_id: String,
+    /// A proposal id of this run when `in_review`, else the id of a room already committed.
+    pub room_id: String,
+    pub room_name: String,
+    pub in_review: bool,
+    /// Cosine similarity to the room's centroid, 0 to 1.
+    pub score: f32,
+    pub runner_up: Option<ClosestRunnerUp>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ClosestRunnerUp {
+    pub room_id: String,
+    pub room_name: String,
+    pub score: f32,
 }
 
 /// Items that are nearly the same text. To accept: mark `item_ids` except `keep` as refused.
@@ -206,7 +232,54 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
     .bind(UNSORTED)
     .fetch_all(&st)
     .await?;
+    // Rooms an Unsorted item could be filed in: live proposals of this run, then rooms committed
+    // earlier (their centroids are stored). One employer per room; a mixed proposal is skipped.
+    let mut cand: Vec<Cand> = Vec::new();
+    for r in sqlx::query(
+        "SELECT id, name FROM proposals WHERE id != ? AND state NOT IN ('merged', 'refused', 'committed') ORDER BY id",
+    )
+    .bind(UNSORTED)
+    .fetch_all(&st)
+    .await?
+    {
+        let (id, name): (String, String) = (r.try_get("id")?, r.try_get("name")?);
+        let emp = crate::review::employers(&st, &id).await?;
+        if emp.len() <= 1 {
+            cand.push(Cand {
+                id,
+                name,
+                employer: emp.iter().next().map(|e| e.to_lowercase()),
+                in_review: true,
+                centroid: None,
+            });
+        }
+    }
     st.close().await;
+    let model = emb.model_id().to_owned();
+    let stored: HashMap<String, Vec<f32>> = crate::vectors::centroids(app, b, &model)
+        .await?
+        .into_iter()
+        .collect();
+    let in_run: HashSet<String> = cand
+        .iter()
+        .map(|c| crate::review::room_id(&c.name))
+        .collect();
+    for r in sqlx::query("SELECT id, name, kind FROM brain_rooms WHERE state = 'active'")
+        .fetch_all(&app.pool)
+        .await?
+    {
+        let (id, name, kind): (String, String, String) =
+            (r.try_get("id")?, r.try_get("name")?, r.try_get("kind")?);
+        if let (false, Some(c)) = (in_run.contains(&id), stored.get(&id)) {
+            cand.push(Cand {
+                employer: (kind == "employer").then(|| name.to_lowercase()),
+                id,
+                name,
+                in_review: false,
+                centroid: Some(c.clone()),
+            });
+        }
+    }
     let mut members: Vec<(String, Vec<String>)> = live.into_iter().map(|id| (id, vec![])).collect();
     for (item, room) in &owned {
         if let Some(m) = members.iter_mut().find(|m| Some(&m.0) == room.as_ref()) {
@@ -214,7 +287,6 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
         }
     }
     // Vectors of an earlier run or session come from the encrypted store, not the model.
-    let model = emb.model_id().to_owned();
     let all_hashes: Vec<String> = owned.iter().map(|(i, _)| i.content_hash.clone()).collect();
     b.fill_from_store(app, &model, &all_hashes).await?;
     let before: HashSet<String> = {
@@ -237,7 +309,8 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
         .unwrap_or(1);
     let th = Thresholds::for_strength(strength);
     let vectors = b.inner.sem.cache().clone();
-    let (sizes, sug) = {
+    let m2 = model.clone();
+    let (sizes, sug, closest) = {
         let sizes: HashMap<String, usize> =
             members.iter().map(|m| (m.0.clone(), m.1.len())).collect();
         let sug = tokio::task::spawn_blocking(move || {
@@ -256,13 +329,17 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
                 })
                 .collect();
             let mut cache = vectors.lock().unwrap_or_else(|e| e.into_inner());
-            semantic::run(emb.as_ref(), &mut cache, &inputs, &refs, th)
+            let sug = semantic::run(emb.as_ref(), &mut cache, &inputs, &refs, th)?;
+            let closest = closest_hints(&cache, &m2, &owned, cand, th);
+            Ok::<_, String>((sug, closest))
         })
         .await
         .map_err(|e| code(500, "semantic_failed", e.to_string()))?
         .map_err(|e| code(500, "semantic_failed", e))?;
-        (sizes, sug)
+        (sizes, sug.0, sug.1)
     };
+    let mut sug = sug;
+    sug.stats.closest = closest.len();
     let size = |n: &str| {
         sizes.get(n).copied().unwrap_or_else(|| {
             sug.rooms
@@ -314,6 +391,7 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
                 }
             })
             .collect(),
+        closest,
     };
     // Save what this step embedded; items refused meanwhile are skipped (their vectors are deleted).
     let fresh: Vec<(String, Vec<f32>)> = {
@@ -361,6 +439,82 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
         tx.commit().await?;
     }
     Ok(())
+}
+
+/// A room an Unsorted item could be filed in.
+struct Cand {
+    id: String,
+    name: String,
+    /// Lowercase employer of an employer's room.
+    employer: Option<String>,
+    in_review: bool,
+    /// Stored centroid of a committed room; `None` for a proposal (its members' mean is used).
+    centroid: Option<Vec<f32>>,
+}
+
+/// Closest room for each eligible Unsorted item (`room == None`), from vectors already in `cache`.
+fn closest_hints(
+    cache: &semantic::VectorCache,
+    model: &str,
+    owned: &[(Item, Option<String>)],
+    cand: Vec<Cand>,
+    th: Thresholds,
+) -> Vec<ClosestHint> {
+    use brain_model::semantic::{RoomVec, closest_room, eligible, normalized};
+    let mut sums: HashMap<&str, Vec<f32>> = HashMap::new();
+    for (item, room) in owned {
+        if let (Some(r), true, Some(v)) =
+            (room, eligible(item), cache.get(model, &item.content_hash))
+        {
+            let s = sums.entry(r.as_str()).or_insert_with(|| vec![0.0; v.len()]);
+            s.iter_mut().zip(v).for_each(|(a, b)| *a += b);
+        }
+    }
+    let review: HashSet<String> = cand
+        .iter()
+        .filter(|c| c.in_review)
+        .map(|c| c.id.clone())
+        .collect();
+    let rooms: Vec<RoomVec> = cand
+        .into_iter()
+        .filter_map(|c| {
+            let centroid = c
+                .centroid
+                .or_else(|| sums.remove(c.id.as_str()).map(normalized))?;
+            Some(RoomVec {
+                id: c.id,
+                name: c.name,
+                centroid,
+                employer: c.employer,
+            })
+        })
+        .collect();
+    owned
+        .iter()
+        .filter(|(i, room)| room.is_none() && eligible(i))
+        .filter_map(|(item, _)| {
+            let v = cache.get(model, &item.content_hash)?;
+            let emp = match brain_model::signals::extract(item).company {
+                Some((n, brain_model::signals::RoomKind::Employer)) => Some(n.to_lowercase()),
+                _ => None,
+            };
+            let c = closest_room(v, emp.as_deref(), &rooms, th.closest, th.margin)?;
+            Some(ClosestHint {
+                item_id: item.item_id.clone(),
+                in_review: review.contains(&c.room_id),
+                room_id: c.room_id,
+                room_name: c.room_name,
+                score: c.score,
+                runner_up: c
+                    .runner_up
+                    .map(|(room_id, room_name, score)| ClosestRunnerUp {
+                        room_id,
+                        room_name,
+                        score,
+                    }),
+            })
+        })
+        .collect()
 }
 
 /// `pending`, `ready` or `off`. A `pending` row nobody is working on (the Core restarted) is `off`.
@@ -453,6 +607,14 @@ async fn prune(st: &SqlitePool, v: &mut SemanticView) -> Result<(), ApiError> {
             .iter()
             .map(|r| Ok((r.try_get("id")?, (r.try_get("name")?, r.try_get("state")?))))
             .collect::<Result<_, sqlx::Error>>()?;
+    // A closest room that was merged away or refused no longer applies; the item must still be Unsorted.
+    v.closest.retain(|c| {
+        unsorted.contains(&c.item_id)
+            && (!c.in_review
+                || props
+                    .get(&c.room_id)
+                    .is_some_and(|(_, s)| s != "merged" && s != "refused" && s != "committed"))
+    });
     let rooms: HashSet<&str> = v.rooms.iter().map(|r| r.name.as_str()).collect();
     let name_of = |id: &str| match props.get(id) {
         Some((n, s)) if s != "merged" && s != "committed" => Some(Some(n.clone())),

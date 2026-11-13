@@ -658,6 +658,7 @@ pub(crate) async fn route_known(app: &App, b: &Brain, run: &str) -> Result<Outco
             .execute(&st)
             .await?;
         if let Some(made) = commit_room(app, &key, &st, run, p, "rule").await? {
+            crate::vectors::note_committed(app, b, &st, &made.room, &made.proposal).await;
             out.routed.push((made.room, made.sources));
         }
     }
