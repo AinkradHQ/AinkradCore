@@ -109,6 +109,23 @@ async fn ask(
     }
 }
 
+/// What a session's runner is told it may call: its granted connection tools (none when the
+/// `code_mode.hide_connection_tools` switch is on, read now so a change shows on the next poll)
+/// and the two Code Mode tools every session has.
+pub(super) async fn listed(
+    broker: &super::Broker,
+    env: &Env<'_>,
+    id: &str,
+) -> Result<Vec<ainkrad_proto::v2::ConnTool>, sqlx::Error> {
+    let mut t = broker.tools(env, id).await?;
+    if crate::ops_catalog::conn::hidden(env.pool).await {
+        t.clear();
+    }
+    t.push(crate::ops_catalog::search_tool());
+    t.push(crate::ops_catalog::call_tool());
+    Ok(t)
+}
+
 async fn run(app: &App, id: &str) {
     let cfg = app.agents.config.clone();
     let wait_ms = u64::try_from(cfg.read_wait.as_millis()).unwrap_or(u64::MAX);
@@ -133,18 +150,8 @@ async fn run(app: &App, id: &str) {
             sealer: app.secrets.as_ref(),
             now: &now,
         };
-        let want = match app.connections.tools(&env, id).await {
-            Ok(mut t) => {
-                // E5: the switch hides the old per-connection tools (default off).
-                let hide = crate::ops_catalog::conn::hidden(&app.pool).await;
-                if hide {
-                    t.clear();
-                }
-                // Code Mode (E1): every session can search the operation catalogue.
-                t.push(crate::ops_catalog::search_tool());
-                t.push(crate::ops_catalog::call_tool());
-                t
-            }
+        let want = match listed(&app.connections, &env, id).await {
+            Ok(t) => t,
             Err(e) => {
                 tracing::error!(session = id, error = %e, "listing a session's tools failed");
                 tokio::time::sleep(cfg.retry).await;

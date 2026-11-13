@@ -152,3 +152,42 @@ async fn the_hide_switch_is_off_by_default_and_follows_the_setting() {
             .contains("code_mode.hide_connection_tools")
     );
 }
+
+#[tokio::test]
+async fn the_switch_changes_the_tool_list_a_session_is_sent_on_the_next_poll() {
+    let f = fx().await;
+    let c = f.github("main", GH_TOKEN).await;
+    f.default(c.id).await;
+    f.member(c.id, &["read_repo"], &[]).await;
+    f.grant(c.id, ("agent", "bot"), &["read_repo"], &[]).await;
+    let s = f.session(&["read_repo"]).await;
+    let names = || async {
+        super::super::supervise::listed(&f.b, &f.env(), &s)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.name)
+            .collect::<Vec<_>>()
+    };
+    let set = |v: &'static str| {
+        crate::store::settings::set(
+            &f.j.pool,
+            Key::CodeModeHideConnTools,
+            Scope::Server,
+            v,
+            AuditActor::System,
+            NOW,
+        )
+    };
+    // Off (the default): the old tools stay, beside the two Code Mode tools (back-compat).
+    let n = names().await;
+    assert!(n.iter().any(|t| t == "github.get_issue"), "{n:?}");
+    assert!(n.iter().any(|t| t == "ainkrad.search"));
+    // On: only the two Code Mode tools, at the next listing.
+    set("1").await.unwrap();
+    let n = names().await;
+    assert_eq!(n.len(), 2, "{n:?}");
+    // Off again: the old list is back.
+    set("0").await.unwrap();
+    assert!(names().await.iter().any(|t| t == "github.get_issue"));
+}
