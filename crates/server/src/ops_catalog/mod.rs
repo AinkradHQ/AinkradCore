@@ -6,6 +6,7 @@
 mod args;
 mod build;
 mod call;
+pub(crate) mod conn;
 mod render;
 mod search;
 mod serve;

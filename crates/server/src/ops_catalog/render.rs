@@ -124,6 +124,12 @@ fn args(op: &Op, depth: u8) -> String {
 /// be (the nesting is cut until it is).
 pub fn render(op: &Op) -> String {
     let summary = op.summary.split_whitespace().collect::<Vec<_>>().join(" ");
+    // A connection op's id already starts with its group (`connections.github.get_issue`).
+    let name = if op.id.starts_with(&format!("{}.", op.group)) {
+        op.id.clone()
+    } else {
+        format!("{}.{}", op.group, op.id)
+    };
     let mut out = String::new();
     for depth in (1..=5).rev() {
         let ret = op
@@ -131,10 +137,8 @@ pub fn render(op: &Op) -> String {
             .as_ref()
             .map_or("void".to_owned(), |r| ts(r, depth));
         out = format!(
-            "/** {summary} [{}] */\nainkrad.{}.{}({}): {ret}",
+            "/** {summary} [{}] */\nainkrad.{name}({}): {ret}",
             op.risk.as_str(),
-            op.group,
-            op.id,
             args(op, depth)
         );
         if out.len() <= MAX_DEF {
