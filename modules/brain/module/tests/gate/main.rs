@@ -3,6 +3,7 @@
 
 mod ai;
 mod ai_semantic;
+mod backfill;
 mod claim;
 mod collectors;
 mod common;

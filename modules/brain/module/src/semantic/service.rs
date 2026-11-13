@@ -154,7 +154,7 @@ impl Brain {
             .map_err(|_| code(500, "semantic_failed", "the worker stopped"))?
     }
 
-    async fn embed_now(
+    pub(crate) async fn embed_now(
         &self,
         app: &ainkrad_core_server::api::App,
         e: Arc<dyn Embedder>,

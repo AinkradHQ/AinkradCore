@@ -14,9 +14,9 @@ use super::ai::{ALPHA, open_room, read, session};
 use super::common::*;
 
 #[derive(Default)]
-struct Fake {
-    seen: Mutex<Vec<String>>,
-    hold: AtomicBool,
+pub struct Fake {
+    pub seen: Mutex<Vec<String>>,
+    pub hold: AtomicBool,
 }
 
 impl Embedder for Fake {
