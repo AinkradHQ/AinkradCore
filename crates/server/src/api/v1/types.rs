@@ -207,7 +207,11 @@
 /// 66: Brain closest room. `SemanticView.closest` (`ClosestHint`, with
 ///    `ClosestRunnerUp`): Unsorted items that look like they belong in an existing room, suggestions only; the
 ///    audit row `brain.semantic.run` gains a `closest` count. Incremental runs now start the semantic step too.
-pub const API_MINOR: u32 = 66;
+///
+/// 68: Brain semantic search for AI sessions: `brainAiSearch` takes `mode` (`auto`, `keyword`, `meaning`) and answers
+///    `ranked_by`; opening a room queues the back-fill of its closest-room centroid (audit action
+///    `brain.room.centroid_backfilled`).
+pub const API_MINOR: u32 = 68;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
