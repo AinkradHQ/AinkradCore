@@ -196,7 +196,11 @@
 ///    `ProposalCard.semantic` (`pending`, `ready` or `off`), the Brain settings `brainSettings` / `brainSetSetting`
 ///    (`GET /settings`, `PUT /settings/{name}`: `semantic.enabled`, `semantic.threads`, `semantic.max_tokens`, `semantic.strength`), and the audit action
 ///    `brain.semantic.run`.
-pub const API_MINOR: u32 = 63;
+///
+/// 66 (64 is Code Mode E2, 65 is reserved for E4): Brain closest room. `SemanticView.closest` (`ClosestHint`, with
+///    `ClosestRunnerUp`): Unsorted items that look like they belong in an existing room, suggestions only; the
+///    audit row `brain.semantic.run` gains a `closest` count. Incremental runs now start the semantic step too.
+pub const API_MINOR: u32 = 66;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

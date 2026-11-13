@@ -224,7 +224,12 @@ pub(crate) async fn discover(
         .fetch_one(&app.pool)
         .await?;
     if kind == "incremental" {
-        return Ok(Some(crate::sync::route_known(app, b, run).await?));
+        let out = crate::sync::route_known(app, b, run).await?;
+        if out.unsorted > 0 {
+            // What waits in Unsorted gets its closest-room suggestions; nothing is filed by them.
+            crate::suggest::start(app, b, run).await;
+        }
+        return Ok(Some(out));
     }
     // Review opens now with the rule-based rooms; the local model's suggestions arrive when ready.
     crate::suggest::start(app, b, run).await;
@@ -240,7 +245,10 @@ async fn review_run(app: &App, b: &Brain, run: &str) -> Result<SqlitePool, ApiEr
     staging(app, b, run, false).await
 }
 
-async fn employers(st: &SqlitePool, id: &str) -> Result<BTreeSet<&'static str>, ApiError> {
+pub(crate) async fn employers(
+    st: &SqlitePool,
+    id: &str,
+) -> Result<BTreeSet<&'static str>, ApiError> {
     let rows = sqlx::query("SELECT * FROM items WHERE proposal = ?")
         .bind(id)
         .fetch_all(st)
