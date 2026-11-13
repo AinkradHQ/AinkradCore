@@ -161,6 +161,7 @@ The backup encryption key: make it OFFLINE, on a machine other than this host:
   paper): without it no backup can be restored, and with it anyone can read them."
   ask BACKUP_RECIPIENT "The age recipient (public key, age1...)."
   ask ENABLE_CITADEL "Enable the Citadel module? (default no) Needs the composed binary ainkrad-core-citadel beside the others; the unit then starts it with --enable-module citadel, and the module's data and migrations are handled by that binary. Off: nothing of Citadel is installed or mounted."
+  ask ENABLE_SEMANTIC "Fetch the local sorting model for the Brain import (default no)? About 490 MB, downloaded once from a pinned Hugging Face revision and checked against pinned SHA-256 sums; it runs on this host only. Off: Review sorts by rules alone."
   ask RUNNER "Also install a runner on this host (yes/no)? exec.run stays OFF unless you add --enable-exec to RUNNER_ARGS in /etc/ainkrad-runner/runner.env."
   if [ "$A_RUNNER" = yes ]; then
     ask RUNNER_PTY "Offer terminals on that runner (yes/no)? A client with the terminal scope and a live step-up gets a shell as the unprivileged ainkrad-runner user, inside the unit's sandbox."
@@ -277,14 +278,15 @@ harden() {
 
 install_core() {
   step "Core: user, binary, unit, home"
-  local out prev_env tls=$CORE_HOME/tls dry=()
+  local out prev_env tls=$CORE_HOME/tls dry=() sem=()
+  [ "$A_ENABLE_SEMANTIC" = yes ] && sem=(--semantic-model)
   [ "$DRY" = 1 ] && dry=(--dry-run)
   if [ "$GUIDED$DRY" = 10 ]; then
     out=''
-    ui_run "Creating the service account, the Core's home (keys, database) and its service" bash "$ROOT/deploy/install-core-linux.sh" --binary "$STAGE/ainkrad-core-server" ||
+    ui_run "Creating the service account, the Core's home (keys, database) and its service" bash "$ROOT/deploy/install-core-linux.sh" --binary "$STAGE/ainkrad-core-server" ${sem[@]+"${sem[@]}"} ||
       die "creating the Core's home failed"
   else
-    out=$(bash "$ROOT/deploy/install-core-linux.sh" --binary "$STAGE/ainkrad-core-server" ${dry[@]+"${dry[@]}"} | tee -a /dev/stderr) # -a: on Linux a plain tee reopens a redirected stderr file and truncates it
+    out=$(bash "$ROOT/deploy/install-core-linux.sh" --binary "$STAGE/ainkrad-core-server" ${sem[@]+"${sem[@]}"} ${dry[@]+"${dry[@]}"} | tee -a /dev/stderr) # -a: on Linux a plain tee reopens a redirected stderr file and truncates it
   fi
   # The signer's fingerprint, base64url(SHA-256(SPKI)) as `init` prints it, from the key itself (so a re-run has it).
   SIGNER=''

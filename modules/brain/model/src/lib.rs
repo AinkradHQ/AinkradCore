@@ -5,4 +5,5 @@
 pub mod group;
 pub mod item;
 pub mod rules;
+pub mod semantic;
 pub mod signals;
