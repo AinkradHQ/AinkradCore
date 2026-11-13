@@ -36,16 +36,47 @@ pub struct Envelope {
     pub logs: Vec<String>,
     pub calls: usize,
     pub ms: u64,
+    /// The calls that waited for a person, in order (E6.5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approvals: Vec<Approval>,
 }
 
-/// The longest one operation call waits (the relay's own bound is 120 s).
-const CALL_WAIT: Duration = Duration::from_secs(125);
+/// One call that waited for a person's approval, and how it ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Approval {
+    pub op: String,
+    /// The approval's request id (`cm_…`).
+    pub request: String,
+    /// `approved`, `denied`, `timed_out`, or the refusal code of a call approved but not run.
+    pub outcome: String,
+}
+
+impl Approval {
+    fn of(op: &str, request: String, answer: &Result<Value, Refusal>) -> Self {
+        let outcome = match answer {
+            Ok(_) => "approved",
+            Err(r) if r.code == "approval_denied" => "denied",
+            Err(r) if r.code == "approval_timeout" => "timed_out",
+            Err(r) => r.code.as_str(),
+        };
+        Self {
+            op: op.to_owned(),
+            request,
+            outcome: outcome.to_owned(),
+        }
+    }
+}
+
+/// What the Core is told a call still waits, less than the script so its answer arrives in time.
+const MARGIN: Duration = Duration::from_secs(1);
 
 /// Runs `req` against the socket at `sock`; the engine's host is one [`Client`].
 pub fn execute(sock: &str, req: &Request) -> Envelope {
     let started = Instant::now();
     let lim = req.limits.clamped();
-    let end = started + lim.time();
+    let end = started + lim.deadline();
+    let approvals = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = approvals.clone();
     let done = |run: engine::Run| {
         let (ok, value, error) = match run.result {
             Ok(v) => (true, Some(cap(&v, MAX_VALUE)), None),
@@ -58,6 +89,7 @@ pub fn execute(sock: &str, req: &Request) -> Envelope {
             logs: run.logs,
             calls: run.calls,
             ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            approvals: approvals.take(),
         }
     };
     if req.code.len() > MAX_CODE {
@@ -74,16 +106,22 @@ pub fn execute(sock: &str, req: &Request) -> Envelope {
     let mut client: Option<Result<Client, Refusal>> = None;
     let sock = sock.to_owned();
     let run = req.run.clone();
-    let host = move |op: &str, args: Value| {
+    let host = move |op: &str, args: Value, opts: Value| {
         // Connected on the first call: a script that makes none never touches the socket.
         let c = client.get_or_insert_with(|| Client::connect(&sock));
         let c = c.as_mut().map_err(|r| r.clone())?;
-        let wait = end.saturating_duration_since(Instant::now()).min(CALL_WAIT);
-        c.call(
-            CALL,
-            &serde_json::json!({"op": op, "args": args, "run": run}),
-            wait,
-        )
+        // A call may wait as long as the script has left (a person's approval), never longer.
+        let wait = end.saturating_duration_since(Instant::now());
+        let wait_ms = u64::try_from(wait.saturating_sub(MARGIN).as_millis()).unwrap_or(u64::MAX);
+        let mut body = serde_json::json!({"op": op, "args": args, "run": run, "wait_ms": wait_ms});
+        if let (Value::Object(o), Some(b)) = (opts, body.as_object_mut()) {
+            b.extend(o); // `key`, `repeat`: checked by the engine
+        }
+        let (answer, approval) = c.call_marked(CALL, &body, wait);
+        if let Some(request) = approval {
+            seen.borrow_mut().push(Approval::of(op, request, &answer));
+        }
+        answer
     };
     done(engine::run(&req.code, &lim, host))
 }

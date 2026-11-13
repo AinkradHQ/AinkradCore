@@ -164,6 +164,7 @@ async fn the_session_is_the_socket_never_the_body() {
     assert_eq!(for_a.calls[0].tool, "github.get_issue");
     let id = for_a.calls[0].id.clone();
     let answer = ToolResult {
+        approval: None,
         id,
         ok: true,
         result: Some(json!({"title": "x"})),
@@ -419,6 +420,7 @@ async fn the_whole_flow_runs_and_a_result_over_the_cap_is_a_plain_refusal() {
         assert_eq!(batch.calls[0].tc_seq, n);
         assert_eq!(batch.calls[0].args, json!({"repo": "o/r"}));
         let answer = ToolResult {
+            approval: None,
             id: batch.calls[0].id.clone(),
             ok: true,
             result: Some(result),

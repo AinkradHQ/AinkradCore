@@ -143,7 +143,11 @@ pub async fn handle(tools: &Tools, session: &str, body: &[u8]) -> Option<Vec<u8>
                 (Some(v), true) => v.clone(),
                 _ => json!({"code": r.code, "message": r.message}),
             };
-            Some(result(id, text(r.ok, &body)))
+            let mut answer = text(r.ok, &body);
+            if let Some(a) = &r.approval {
+                answer["_meta"] = json!({"approval": a});
+            }
+            Some(result(id, answer))
         }
         _ => Some(error(id, -32601, "method not found")),
     }
@@ -346,6 +350,7 @@ mod tests {
         assert_eq!(batch.calls[0].tool, "github.get_issue");
         assert_eq!(batch.calls[0].args["repo"], "o/r");
         let answer = ToolResult {
+            approval: None,
             id: batch.calls[0].id.clone(),
             ok: true,
             result: Some(json!({"title": "x"})),

@@ -55,21 +55,32 @@ pub(super) async fn run(app: &App, (runner, session): (&str, &str), call: &ToolC
         return deny("args_too_large", "arguments too large", None);
     }
     let a = &call.args;
-    let (Some(op_id), Ok(run_id), Ok(key), Ok(repeat)) = (
+    // `wait_ms`: how long the caller still waits (a script's time left, E6.5); an approval is
+    // never held past it.
+    let wait = match &a["wait_ms"] {
+        Value::Null => Ok(None),
+        v => v
+            .as_u64()
+            .map(|ms| Some(Duration::from_millis(ms)))
+            .ok_or(()),
+    };
+    let (Some(op_id), Ok(run_id), Ok(key), Ok(repeat), Ok(wait)) = (
         a["op"].as_str(),
         plain_id(&a["run"]),
         plain_id(&a["key"]),
         flag(&a["repeat"]),
+        wait,
     ) else {
         return deny(
             "bad_args",
-            "op is a string; run and key are short plain ids; repeat is true or false",
+            "op is a string; run and key are short plain ids; repeat is true or false; \
+             wait_ms is a whole number",
             None,
         );
     };
     if a.as_object().is_some_and(|m| {
         m.keys()
-            .any(|k| !["op", "args", "run", "key", "repeat"].contains(&k.as_str()))
+            .any(|k| !["op", "args", "run", "key", "repeat", "wait_ms"].contains(&k.as_str()))
     }) {
         return deny("bad_args", "unknown field", None);
     }
@@ -133,6 +144,7 @@ pub(super) async fn run(app: &App, (runner, session): (&str, &str), call: &ToolC
         run_id,
         target,
         body,
+        approval: wait.map_or(lim.approval, |w| w.min(lim.approval)),
     };
     if op.risk == Risk::Read {
         return send(app, op, &req, &lim, &method).await;
@@ -199,6 +211,8 @@ struct Req<'a> {
     run_id: Option<&'a str>,
     target: String,
     body: Option<Vec<u8>>,
+    /// How long a person may take: the setting, or less when the caller waits less.
+    approval: Duration,
 }
 
 /// The principal of `session` as it is NOW, its scopes holding the op's, and its route allowed to
@@ -252,7 +266,7 @@ async fn guarded(
     };
     let id = approval::new_id();
     let waiting = Waiting::new(&app.code_mode, &id);
-    let ttl = i64::try_from(lim.approval.as_secs()).unwrap_or(0);
+    let ttl = i64::try_from(req.approval.as_secs()).unwrap_or(0);
     let made = approval::create(
         app,
         (&id, req.session),
@@ -265,7 +279,7 @@ async fn guarded(
         return deny("unavailable", "try again", Some(op));
     }
     let asked = Instant::now();
-    let outcome = approval::wait(app, &waiting, (&id, req.session, req.runner), lim.approval).await;
+    let outcome = approval::wait(app, &waiting, (&id, req.session, req.runner), req.approval).await;
     drop(waiting);
     // The wait is not the script's time: its run window moves by as much.
     if let Some(run_id) = req.run_id {

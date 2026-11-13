@@ -60,6 +60,7 @@ async fn core(tools: Arc<Tools>, session: &'static str) {
                 _ => (false, json!({"code": "unknown_tool", "message": "no"})),
             };
             results.push(ToolResult {
+                approval: None,
                 id: c.id,
                 ok,
                 result: ok.then(|| body.clone()),
@@ -362,4 +363,175 @@ fn the_script_child_holds_under_bubblewrap() {
     .map(String::from)
     .into();
     sandbox_holds(&wrapper);
+}
+
+/// How the fake Core's person answers a risky call (E6.5).
+#[derive(Clone, Copy)]
+enum Person {
+    Approves,
+    Denies,
+    /// Never answers: the Core gives up at the call's `wait_ms`.
+    Away,
+}
+
+/// A fake Core whose `closeIssue` is risky: it waits for `person`, answers with the approval's
+/// request id, and records the arguments of every `ainkrad.call`.
+async fn approving_core(
+    tools: Arc<Tools>,
+    session: &'static str,
+    person: Person,
+    seen: Arc<std::sync::Mutex<Vec<Value>>>,
+) {
+    let list = vec![tool("ainkrad.search"), tool("ainkrad.call")];
+    let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel::<ToolResult>();
+    let (mut after, mut first, mut n) = (0, true, 0);
+    loop {
+        let mut results = Vec::new();
+        while let Ok(r) = done_rx.try_recv() {
+            results.push(r);
+        }
+        let poll = ToolsPoll {
+            session: session.to_owned(),
+            after,
+            wait_ms: Some(50),
+            results,
+            tools: first.then(|| list.clone()),
+        };
+        first = false;
+        for c in tools.poll(&poll, Duration::from_millis(100)).await.calls {
+            after = c.tc_seq;
+            seen.lock().unwrap().push(c.args.clone());
+            n += 1;
+            let request = format!("cm_{n}");
+            let tx = done_tx.clone();
+            tokio::spawn(async move {
+                let risky = c.args["op"] == "closeIssue";
+                let r = |ok: bool, code: Option<&str>| ToolResult {
+                    approval: risky.then(|| request.clone()),
+                    id: c.id.clone(),
+                    ok,
+                    result: ok.then(|| json!({"closed": true})),
+                    code: code.map(str::to_owned),
+                    message: code.map(|_| "no".to_owned()),
+                };
+                let answer = match (risky, person) {
+                    (false, _) | (true, Person::Approves) => r(true, None),
+                    (true, Person::Denies) => r(false, Some("approval_denied")),
+                    (true, Person::Away) => {
+                        let ms = c.args["wait_ms"].as_u64().unwrap_or(600_000);
+                        tokio::time::sleep(Duration::from_millis(ms)).await;
+                        r(false, Some("approval_timeout"))
+                    }
+                };
+                let _ = tx.send(answer);
+            });
+        }
+    }
+}
+
+const RISKY: &str = "let out; \
+    try { out = ainkrad.github.closeIssue({number: 1}, {key: 'k1'}) } \
+    catch (e) { out = [e instanceof ainkrad.ApprovalError, e.code] } \
+    return out";
+
+async fn listed(shim: &mut Shim) {
+    for i in 0..50 {
+        let l = shim.ask(1000 + i, "tools/list", json!({})).await;
+        if l.to_string().contains("ainkrad_run") {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("ainkrad_run was never listed");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_risky_call_waits_for_a_person_and_the_result_says_how_it_ended() {
+    for (tag, person, value, outcome) in [
+        ("appr", Person::Approves, r#"{"closed":true}"#, "approved"),
+        (
+            "deny",
+            Person::Denies,
+            r#"[true,"approval_denied"]"#,
+            "denied",
+        ),
+    ] {
+        let tools = Arc::new(Tools::default());
+        let sock = sock_path(tag);
+        let session: &'static str = if tag == "appr" { "as_p" } else { "as_d" };
+        let _front = start(&sock, tools.clone(), session).unwrap();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        tokio::spawn(approving_core(tools.clone(), session, person, seen.clone()));
+        let mut shim = Shim::start(&sock);
+        listed(&mut shim).await;
+        let (err, text) = shim.run(1, RISKY).await;
+        assert!(!err, "{text}");
+        assert!(text.starts_with(value), "{text}");
+        assert!(
+            text.contains(&format!("approvals: closeIssue {outcome} (cm_1)")),
+            "{text}"
+        );
+        let args = seen.lock().unwrap()[0].clone();
+        assert_eq!(args["key"], "k1", "{args}");
+        let w = args["wait_ms"].as_u64().unwrap();
+        assert!(
+            w > 500_000 && w <= 600_000,
+            "the default 10 min deadline: {w}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_approval_nobody_answers_ends_at_the_deadline_and_the_session_goes_on() {
+    use std::io::Write;
+    let tools = Arc::new(Tools::default());
+    let sock = sock_path("away");
+    let _front = start(&sock, tools.clone(), "as_w").unwrap();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    tokio::spawn(approving_core(
+        tools.clone(),
+        "as_w",
+        Person::Away,
+        seen.clone(),
+    ));
+    let mut shim = Shim::start(&sock);
+    listed(&mut shim).await;
+    // A script with a 3 s deadline (and a 1 s running-time cap the wait does not count against).
+    let s = sock.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        let req = json!({"code": RISKY, "run": "rw",
+            "limits": {"time_ms": 1_000, "deadline_ms": 3_000}});
+        let mut child = std::process::Command::new(exe())
+            .args(["__script", s.to_str().unwrap()])
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(req.to_string().as_bytes())
+            .unwrap();
+        let t = std::time::Instant::now();
+        let out = child.wait_with_output().unwrap();
+        (
+            serde_json::from_slice::<Value>(&out.stdout).unwrap(),
+            t.elapsed(),
+        )
+    })
+    .await
+    .unwrap();
+    let (v, took) = out;
+    assert_eq!(v["value"], r#"[true,"approval_timeout"]"#, "{v}");
+    assert_eq!(v["approvals"][0]["outcome"], "timed_out", "{v}");
+    assert!(took < Duration::from_secs(4), "{took:?}");
+    // Nothing is left waiting: the next script of the session runs at once.
+    let t = std::time::Instant::now();
+    let (err, text) = shim
+        .run(2, "return ainkrad.agents.listAgentSessions({})")
+        .await;
+    assert!(!err && text.starts_with(r#"{"closed":true}"#), "{text}");
+    assert!(t.elapsed() < Duration::from_secs(5));
 }

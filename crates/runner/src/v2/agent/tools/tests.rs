@@ -28,6 +28,7 @@ fn poll(after: u64, results: Vec<ToolResult>, tools: Option<Vec<ConnTool>>) -> T
 
 fn ok(id: &str) -> ToolResult {
     ToolResult {
+        approval: None,
         id: id.to_owned(),
         ok: true,
         result: Some(json!({"n": 1})),
@@ -441,4 +442,22 @@ async fn a_poll_in_flight_across_the_end_makes_no_state_and_ends_at_once() {
     );
     assert!(!t.holds("as_z"));
     assert!(t.list("as_z").is_empty());
+}
+
+#[test]
+fn only_ainkrad_call_waits_past_the_relay_bound_and_never_past_its_own() {
+    use super::{CALL_TIMEOUT, PARKED_CALL_TIMEOUT, relay_wait};
+    assert_eq!(
+        relay_wait("github.create_issue", &json!({"wait_ms": 600_000})),
+        CALL_TIMEOUT
+    );
+    assert_eq!(relay_wait("ainkrad.call", &json!({})), PARKED_CALL_TIMEOUT);
+    assert_eq!(
+        relay_wait("ainkrad.call", &json!({"wait_ms": 1_000})),
+        Duration::from_secs(121)
+    );
+    assert_eq!(
+        relay_wait("ainkrad.call", &json!({"wait_ms": u64::MAX})),
+        PARKED_CALL_TIMEOUT
+    );
 }

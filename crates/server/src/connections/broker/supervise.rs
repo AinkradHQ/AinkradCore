@@ -219,6 +219,7 @@ fn intake(app: App, runner: String, session: String, batch: ToolBatch) -> BoxFut
         }
         for c in skipped {
             let refusal = ToolResult {
+                approval: None,
                 id: c.id,
                 ok: false,
                 result: None,

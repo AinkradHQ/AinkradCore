@@ -53,6 +53,27 @@ impl Client {
     /// Calls the tool `name` (MCP spelling, `ainkrad_call`) and waits at most `wait` for the answer:
     /// the Core's result, or its refusal.
     pub fn call(&mut self, name: &str, args: &Value, wait: Duration) -> Result<Value, Refusal> {
+        self.call_marked(name, args, wait).0
+    }
+
+    /// [`Client::call`], with the request id of the person's approval the call waited for, if any.
+    pub fn call_marked(
+        &mut self,
+        name: &str,
+        args: &Value,
+        wait: Duration,
+    ) -> (Result<Value, Refusal>, Option<String>) {
+        match self.exchange(name, args, wait) {
+            Ok(v) => {
+                let approval = v["result"]["_meta"]["approval"].as_str().map(str::to_owned);
+                (unwrap(&v), approval)
+            }
+            Err(r) => (Err(r), None),
+        }
+    }
+
+    /// Sends one call and reads its answer line.
+    fn exchange(&mut self, name: &str, args: &Value, wait: Duration) -> Result<Value, Refusal> {
         let unavailable =
             |e: std::io::Error| Refusal::new("unavailable", &format!("tools socket: {e}"));
         if args.to_string().len() > MAX_ARGS_BYTES {
@@ -105,7 +126,7 @@ impl Client {
             if v["id"] != json!(id) {
                 continue; // a notification, or the answer of a call we no longer wait for
             }
-            return unwrap(&v);
+            return Ok(v);
         }
         Err(Refusal::new("protocol", "no answer among the messages"))
     }

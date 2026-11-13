@@ -1,4 +1,4 @@
-//! `ainkrad.call {op, args, run?, key?, repeat?}` (E2, E6): runs one allow-listed operation for an
+//! `ainkrad.call {op, args, run?, key?, repeat?, wait_ms?}` (E2, E6, E6.5): runs one allow-listed operation for an
 //! AI session through the existing client router, in process. A `write` runs inside the session's
 //! scopes at most once per key; a `risky` one also waits for a person (see `run`).
 //!
@@ -46,7 +46,8 @@ pub fn call_tool() -> ConnTool {
                 "args": {"type": "object"},
                 "run": {"type": "string", "maxLength": 64},
                 "key": {"type": "string", "maxLength": 64},
-                "repeat": {"type": "boolean"}
+                "repeat": {"type": "boolean"},
+                "wait_ms": {"type": "integer", "minimum": 0}
             },
             "required": ["op"],
             "additionalProperties": false
@@ -145,6 +146,7 @@ pub(super) fn deny(code: &'static str, msg: impl Into<String>, op: Option<&Op>) 
 
 fn refuse(id: String, code: &str, message: &str) -> ToolResult {
     ToolResult {
+        approval: None,
         id,
         ok: false,
         result: None,
@@ -221,8 +223,15 @@ pub async fn call_call(app: &App, runner: &str, session: &str, call: &ToolCall) 
             return refuse(id, "unavailable", "try again");
         }
     }
-    match done.outcome {
+    // The script is told which of its calls waited for a person (E6.5), never who answered.
+    let approval = done
+        .approval
+        .as_ref()
+        .and_then(|a| a["request"].as_str())
+        .map(str::to_owned);
+    let mut r = match done.outcome {
         Ok(result) => ToolResult {
+            approval: None,
             id,
             ok: true,
             result: Some(result),
@@ -230,7 +239,9 @@ pub async fn call_call(app: &App, runner: &str, session: &str, call: &ToolCall) 
             message: None,
         },
         Err((code, message)) => refuse(id, &code, &message),
-    }
+    };
+    r.approval = approval;
+    r
 }
 
 fn hex(b: &[u8]) -> String {

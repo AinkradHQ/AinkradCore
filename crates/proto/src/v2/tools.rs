@@ -92,6 +92,10 @@ pub struct ToolResult {
     pub code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// `ainkrad.call` only: the request id (`cm_…`) of the person's approval the call waited for,
+    /// whatever its answer (E6.5: a script's result says which calls were approved or denied).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<String>,
 }
 
 /// Core to runner: the poll.

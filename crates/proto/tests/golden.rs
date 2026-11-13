@@ -664,6 +664,7 @@ fn v2_agent_frames_are_pinned() {
             wait_ms: Some(20000),
             results: vec![
                 ToolResult {
+                    approval: None,
                     id: "c-1".to_owned(),
                     ok: true,
                     result: Some(json!({"number": 7})),
@@ -671,6 +672,7 @@ fn v2_agent_frames_are_pinned() {
                     message: None,
                 },
                 ToolResult {
+                    approval: None,
                     id: "c-2".to_owned(),
                     ok: false,
                     result: None,
