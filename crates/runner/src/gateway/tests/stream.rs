@@ -180,7 +180,7 @@ async fn failures_say_a_status_and_a_code_and_the_key_is_in_no_response_log_or_d
     let r = rig(Opts::anthropic(vec![Step::Send(echo(&k))])).await;
     let ok = raw(&r.sock, &request(LINE, &[], &model_body())).await;
     // Error bodies pass to the harness; the transcript redactor (below) is what masks them.
-    assert_eq!(status(&ok), 401);
+    assert_eq!(status(&ok), 401, "{}", String::from_utf8_lossy(&ok));
     keys.push(r.key.clone());
     all.push(("echoed body, 401", ok, true));
 
@@ -219,7 +219,11 @@ async fn failures_say_a_status_and_a_code_and_the_key_is_in_no_response_log_or_d
         let r = rig(Opts::anthropic(script)).await;
         let resp = raw(&r.sock, &request(LINE, &[], &model_body())).await;
         assert_eq!(status(&resp), 502, "{}", String::from_utf8_lossy(&resp));
-        assert!(body_of(&resp).contains(code));
+        assert!(
+            body_of(&resp).contains(code),
+            "{}",
+            String::from_utf8_lossy(&resp)
+        );
         keys.push(r.key.clone());
         all.push(("bad upstream", resp, false));
     }

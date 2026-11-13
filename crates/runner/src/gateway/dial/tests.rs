@@ -83,7 +83,14 @@ impl Connect for ToLocal {
             if self.fail.contains(&addr.ip()) {
                 return Err(io::ErrorKind::ConnectionRefused.into());
             }
-            TcpStream::connect(self.server).await
+            let tcp = TcpStream::connect(self.server).await?;
+            // A close sends a reset instead of leaving a TIME_WAIT socket behind: a busy machine's
+            // loopback tests would otherwise use up the ephemeral ports, and a later dial or bind
+            // in any test fails with "Can't assign requested address".
+            #[allow(deprecated)]
+            // tokio warns of a blocking drop for a non-zero linger; zero never blocks
+            tcp.set_linger(Some(Duration::ZERO))?;
+            Ok(tcp)
         })
     }
 }
