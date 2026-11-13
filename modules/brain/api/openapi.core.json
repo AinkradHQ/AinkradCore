@@ -944,6 +944,7 @@
           "brain.distil.rejected",
           "brain.import.committed",
           "brain.import.discovered",
+          "brain.import.regrouped",
           "brain.import.started",
           "brain.inbox.decided",
           "brain.inbox.notice",
@@ -3574,6 +3575,27 @@
         ],
         "type": "object"
       },
+      "MergeSuggestion": {
+        "properties": {
+          "into": {
+            "description": "The proposal id to merge into.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "`prefix` (one name starts the other) or `close` (a spelling within two edits).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "into",
+          "name",
+          "reason"
+        ],
+        "type": "object"
+      },
       "ModelPrice": {
         "properties": {
           "id": {
@@ -4782,6 +4804,10 @@
             "description": "`proposed`, `accepted`, `refused`, `merged`, `committed` or `held`.",
             "type": "string"
           },
+          "suggest_merge": {
+            "$ref": "#/components/schemas/MergeSuggestion",
+            "description": "A room this one looks like (only in the proposals list); merging is the user's call."
+          },
           "warnings": {
             "items": {
               "type": "string"
@@ -5094,6 +5120,34 @@
         },
         "required": [
           "lease"
+        ],
+        "type": "object"
+      },
+      "Regrouped": {
+        "properties": {
+          "dropped": {
+            "description": "Earlier proposals whose key is gone (merged away, split off or no longer produced).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kept": {
+            "description": "Proposals that kept the user's decisions (name, kind, config, state).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proposals": {
+            "description": "Proposals after the re-sort.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "proposals",
+          "kept",
+          "dropped"
         ],
         "type": "object"
       },
@@ -7452,7 +7506,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.60.0"
+    "version": "1.61.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16554,6 +16608,59 @@
               }
             },
             "description": "The new room"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/imports/{run}/regroup": {
+      "post": {
+        "operationId": "brainRegroup",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Regrouped"
+                }
+              }
+            },
+            "description": "The run was grouped again; decisions on rooms that survive are kept"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

@@ -46,6 +46,10 @@ pub const COMPANIES: &[(&str, &str, RoomKind)] = &[
 pub struct Signals {
     /// The project folder name, as written.
     pub project: Option<String>,
+    /// The project came from a `Projects/<P>` folder (a stronger spelling than a bare folder).
+    pub under_projects: bool,
+    /// The repo folder under `Projects/<P>/Repositories/<R>`.
+    pub repo: Option<String>,
     /// The GitHub org of a repo remote named in the hint.
     pub org: Option<String>,
     /// Tracker key prefixes (`KAN` of `KAN-476`), sorted, unique.
@@ -58,17 +62,131 @@ const NOT_TRACKERS: &[&str] = &[
     "UTF", "SHA", "ISO", "HTTP", "TLS", "AES", "RFC", "MD", "CVE", "TCP", "UDP", "IPV", "X", "GPT",
 ];
 
-fn path_project(path: &str) -> Option<String> {
-    let parts: Vec<&str> = path.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+/// Names that are never a project: generic folders, hidden folders, temp dirs, ids and hashes.
+const GENERIC: &[&str] = &[
+    "src",
+    "app",
+    "lib",
+    "test",
+    "tests",
+    "desktop",
+    "downloads",
+    "documents",
+    "developer",
+    "code",
+    "work",
+    "repos",
+    "projects",
+    "git",
+    "home",
+    "users",
+    "repositories",
+    "worktrees",
+];
+const TEMP: &[&str] = &["tmp", "temp", "scratchpad"];
+
+/// A UUID, a truncated UUID or a hex hash: 8+ hex digits (dashes ignored) with at least one digit.
+fn id_like(name: &str) -> bool {
+    let h: String = name.chars().filter(|c| *c != '-').collect();
+    h.len() >= 8
+        && h.chars().all(|c| c.is_ascii_hexdigit())
+        && h.chars().any(|c| c.is_ascii_digit())
+}
+
+pub fn is_junk(name: &str) -> bool {
+    let l = name.to_lowercase();
+    name.trim().is_empty()
+        || name.starts_with('.')
+        || name == "~"
+        || GENERIC.contains(&l.as_str())
+        || TEMP.contains(&l.as_str())
+        || id_like(name)
+}
+
+/// `AinkradCore-wt` is the worktree folder of `AinkradCore`.
+pub fn strip_wt(name: &str) -> &str {
+    match name.strip_suffix("-wt") {
+        Some(b) if !b.is_empty() => b,
+        _ => name,
+    }
+}
+
+/// Where a path points: the project, whether it came from a `Projects/<P>` folder and the repo
+/// under `Projects/<P>/Repositories/<R>`.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PathInfo {
+    pub project: Option<String>,
+    pub under_projects: bool,
+    pub repo: Option<String>,
+}
+
+pub fn path_info(path: &str) -> PathInfo {
+    let mut parts: Vec<&str> = path.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    let lower: Vec<String> = parts.iter().map(|p| p.to_lowercase()).collect();
+    // Temp dirs: no project at all.
+    let first = |i: usize| lower.get(i).map(String::as_str);
+    if lower.iter().any(|p| TEMP.contains(&p.as_str()))
+        || (first(0) == Some("var") && first(1) == Some("folders"))
+        || (first(0) == Some("private") && matches!(first(1), Some("tmp" | "var")))
+    {
+        return PathInfo::default();
+    }
+    // `.claude/worktrees/<x>`: the repo is above.
+    if let Some(i) =
+        (1..parts.len()).find(|&i| parts[i - 1] == ".claude" && lower[i] == "worktrees")
+    {
+        parts.truncate(i - 1);
+    }
     // `~/Home/Projects/<Project>/...` is the layout the rooms follow: the folder after `Projects`.
     if let Some(i) = parts
         .iter()
         .position(|p| p.eq_ignore_ascii_case("projects"))
         && let Some(p) = parts.get(i + 1)
+        && !is_junk(p)
     {
-        return Some((*p).to_owned());
+        let repo = (parts
+            .get(i + 2)
+            .is_some_and(|r| r.eq_ignore_ascii_case("repositories")))
+        .then(|| parts.get(i + 3))
+        .flatten()
+        .map(|r| strip_wt(r))
+        .filter(|r| !is_junk(r))
+        .map(str::to_owned);
+        return PathInfo {
+            project: Some(strip_wt(p).to_owned()),
+            under_projects: true,
+            repo,
+        };
     }
-    parts.last().map(|p| (*p).to_owned())
+    // The home folder and everything above it never name a project.
+    let start = if parts.first() == Some(&"~") {
+        1
+    } else if matches!(first(0), Some("users" | "home")) {
+        2
+    } else {
+        0
+    };
+    // A worktree folder (`X-wt/branch`) maps to `X`.
+    if let Some(w) = parts
+        .iter()
+        .skip(start)
+        .find(|p| p.len() > 3 && p.ends_with("-wt"))
+    {
+        let b = strip_wt(w);
+        return PathInfo {
+            project: (!is_junk(b)).then(|| b.to_owned()),
+            ..PathInfo::default()
+        };
+    }
+    PathInfo {
+        project: parts
+            .iter()
+            .skip(start)
+            .rev()
+            .find(|p| !is_junk(p))
+            .map(|p| (*p).to_owned()),
+        ..PathInfo::default()
+    }
 }
 
 /// `github.com/<org>/<repo>` or `git@github.com:<org>/<repo>` anywhere in `s`.
@@ -112,9 +230,10 @@ pub fn extract(item: &Item) -> Signals {
     if let Some((org, repo)) = github(hint) {
         s.org = Some(org);
         s.project = Some(repo);
-    } else if hint.contains(['/', '\\']) {
-        s.project = path_project(hint);
-    } else if !hint.trim().is_empty() {
+    } else if hint.contains(['/', '\\']) || hint.trim() == "~" {
+        let p = path_info(hint);
+        (s.project, s.under_projects, s.repo) = (p.project, p.under_projects, p.repo);
+    } else if !hint.trim().is_empty() && !is_junk(hint.trim()) {
         s.project = Some(hint.trim().to_owned());
     }
     let head: String = item.text.chars().take(2000).collect();
@@ -185,5 +304,29 @@ mod tests {
         let s = extract(&item("/Users/x/Home/Projects/Optimus/api", "t", "x"));
         assert_eq!(s.company, Some(("Optimus", RoomKind::Employer)));
         assert_eq!(extract(&item("/w/none", "t", "x")).company, None);
+    }
+
+    #[test]
+    fn junk_and_worktree_paths() {
+        let p = |h: &str| path_info(h).project;
+        assert_eq!(p("/tmp/x/A0"), None);
+        assert_eq!(p("/Users/someone"), None);
+        assert_eq!(
+            p("/Users/someone/5e26cc85-cb1d-4f00-9a00-000000000000"),
+            None
+        );
+        assert_eq!(
+            p("/Users/someone/Dev/Alpha-wt/foo").as_deref(),
+            Some("Alpha")
+        );
+        assert_eq!(
+            p("/Users/someone/Dev/Alpha/.claude/worktrees/x").as_deref(),
+            Some("Alpha")
+        );
+        let i = path_info("/Users/someone/Home/Projects/Alpha/Repositories/Core-wt/x");
+        assert_eq!(
+            (i.project.as_deref(), i.repo.as_deref()),
+            (Some("Alpha"), Some("Core"))
+        );
     }
 }

@@ -493,3 +493,120 @@ async fn import_isolation_room_a_is_never_readable_through_room_b_and_deprecated
     assert_eq!(r["results"][0]["status"], "refused");
     assert!(!everything_stored(&fx).await.contains("DEPRECATED_TEXT"));
 }
+
+fn many(from: u32, hint: &str, n: u32) -> Vec<serde_json::Value> {
+    (from..from + n)
+        .map(|i| item(i, hint, &format!("t{i}"), &format!("body {i}")))
+        .collect()
+}
+
+#[tokio::test]
+async fn junk_and_tiny_rooms_wait_in_unsorted_and_look_alikes_are_suggested() {
+    let fx = fx().await;
+    let run = start(&fx).await;
+    let mut items = many(1, "/u/Dev/Gadgetry", 3);
+    items.extend(many(10, "/u/Dev/Gadgetri", 3));
+    items.extend(many(20, "/u/Dev/Lonely", 2));
+    items.extend(many(30, "/tmp/x/A0", 3));
+    items.extend(many(40, "/Users/someone", 2));
+    send(&fx, &run, items).await;
+    finish(&fx, &run).await;
+    let p = proposals(&fx, &run).await;
+    let names: Vec<_> = p.iter().map(|x| x["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Gadgetri", "Gadgetry", "Unsorted"]);
+    assert_eq!(by_name(&p, "Unsorted")["item_count"], 7);
+    let hints: Vec<_> = p.iter().filter(|x| !x["suggest_merge"].is_null()).collect();
+    assert_eq!(
+        hints.len(),
+        1,
+        "only the smaller of the pair points at the other"
+    );
+    let h = &hints[0]["suggest_merge"];
+    assert_eq!(h["reason"], "close");
+    let other = if hints[0]["name"] == "Gadgetri" {
+        "Gadgetry"
+    } else {
+        "Gadgetri"
+    };
+    assert_eq!(
+        (h["name"].as_str(), h["into"].as_str()),
+        (Some(other), by_name(&p, other)["id"].as_str())
+    );
+}
+
+#[tokio::test]
+async fn regroup_keeps_decisions_on_rooms_that_survive_and_audits() {
+    let fx = fx().await;
+    let run = start(&fx).await;
+    let mut items = many(1, "/u/Dev/Alpha", 3);
+    items.extend(many(10, "/u/Dev/Beta", 3));
+    items.extend(many(20, "/u/Dev/Gamma", 3));
+    send(&fx, &run, items).await;
+    finish(&fx, &run).await;
+    let base = format!("/imports/{run}/proposals");
+    let p = proposals(&fx, &run).await;
+    let id = |n: &str| by_name(&p, n)["id"].as_str().unwrap().to_owned();
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("{base}/{}", id("Beta")),
+        Some(json!({"name": "Renamed"})),
+    )
+    .await;
+    ok(
+        &fx,
+        Method::POST,
+        &format!("{base}/{}/refuse", id("Gamma")),
+        None,
+    )
+    .await;
+    // A split-off room has no key of its own, so the re-sort drops it.
+    let first = ok(
+        &fx,
+        Method::GET,
+        &format!("{base}/{}/items", id("Alpha")),
+        None,
+    )
+    .await["items"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &fx,
+        Method::POST,
+        &format!("{base}/{}/split", id("Alpha")),
+        Some(json!({"item_ids": [first], "name": "Side"})),
+    )
+    .await;
+
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("{base}/{}", id("Alpha")),
+        Some(json!({"state": "accepted"})),
+    )
+    .await;
+
+    let r = ok(&fx, Method::POST, &format!("/imports/{run}/regroup"), None).await;
+    assert_eq!(
+        (
+            r["proposals"].as_u64(),
+            r["kept"].as_u64(),
+            r["dropped"].as_u64()
+        ),
+        (Some(3), Some(3), Some(1))
+    );
+    let p = proposals(&fx, &run).await;
+    assert_eq!(by_name(&p, "Alpha")["state"], "accepted");
+    assert_eq!(by_name(&p, "Alpha")["item_count"], 3);
+    assert_eq!(by_name(&p, "Renamed")["item_count"], 3);
+    assert_eq!(by_name(&p, "Gamma")["state"], "refused");
+    assert!(!p.iter().any(|x| x["name"] == "Side"));
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action = 'brain.import.regrouped'",
+    )
+    .fetch_one(&fx.app.pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 1);
+}

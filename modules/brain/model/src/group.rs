@@ -25,45 +25,112 @@ pub struct Proposal {
 }
 
 struct Acc {
-    name: String,
+    /// Original spellings: (times seen, times under a `Projects/` path).
+    names: BTreeMap<String, (usize, usize)>,
     items: Vec<usize>,
 }
 
+impl Acc {
+    /// The most frequent spelling; a tie goes to the one under a `Projects/` path.
+    fn name(&self) -> String {
+        self.names
+            .iter()
+            .max_by_key(|(n, (c, u))| (*c, *u, std::cmp::Reverse((*n).clone())))
+            .map(|(n, _)| n.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// Lowercase with every non-alphanumeric removed: `Workan.Space` == `WorkanSpace`.
+pub fn norm(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 fn group_key(s: &Signals) -> Option<(String, String)> {
-    if let Some(p) = &s.project {
-        return Some((p.to_lowercase(), p.clone()));
+    let by = |n: &str| Some((norm(n), n.to_owned())).filter(|(k, _)| !k.is_empty());
+    if let Some(p) = &s.project
+        && let Some(k) = by(p)
+    {
+        return Some(k);
     }
     if let Some((name, _)) = s.company {
-        return Some((name.to_lowercase(), name.to_owned()));
+        return by(name);
     }
     if let Some(o) = &s.org {
-        return Some((o.to_lowercase(), o.clone()));
+        return by(o);
     }
     s.trackers
         .first()
         .map(|t| (format!("tracker-{}", t.to_lowercase()), t.clone()))
 }
 
+/// A signal stronger than a folder name: a company, an org or a tracker key.
+fn strong(s: &Signals) -> bool {
+    s.company.is_some() || s.org.is_some() || !s.trackers.is_empty()
+}
+
+/// Repo folder -> project, from items under `Projects/<P>/Repositories/<R>`; a repo seen under
+/// two projects is ambiguous and left out.
+fn repo_index(sigs: &[Signals]) -> BTreeMap<String, Option<String>> {
+    let mut idx: BTreeMap<String, Option<String>> = BTreeMap::new();
+    for s in sigs {
+        if let (Some(r), Some(p), true) = (&s.repo, &s.project, s.under_projects) {
+            let e = idx.entry(norm(r)).or_insert_with(|| Some(p.clone()));
+            if e.as_deref().is_some_and(|x| norm(x) != norm(p)) {
+                *e = None;
+            }
+        }
+    }
+    idx
+}
+
 pub fn group(items: &[Item]) -> Vec<Proposal> {
     let sigs: Vec<Signals> = items.iter().map(extract).collect();
+    let repos = repo_index(&sigs);
     let mut groups: BTreeMap<String, Acc> = BTreeMap::new();
     let mut unsorted: Vec<usize> = Vec::new();
     for (i, s) in sigs.iter().enumerate() {
-        match group_key(s) {
-            Some((k, name)) => groups
-                .entry(k)
-                .or_insert(Acc {
-                    name,
-                    items: vec![],
-                })
-                .items
-                .push(i),
-            None => unsorted.push(i),
+        let Some((mut k, mut name)) = group_key(s) else {
+            unsorted.push(i);
+            continue;
+        };
+        let mut under = usize::from(s.under_projects);
+        // A repo folder run elsewhere joins its project (`OptimusBackend` -> `Optimus`).
+        if s.project.is_some()
+            && !s.under_projects
+            && let Some(Some(p)) = repos.get(&k)
+        {
+            (k, name, under) = (norm(p), p.clone(), 1);
         }
+        let acc = groups.entry(k).or_insert(Acc {
+            names: BTreeMap::new(),
+            items: vec![],
+        });
+        let n = acc.names.entry(name).or_default();
+        n.0 += 1;
+        n.1 += under;
+        acc.items.push(i);
     }
+    // Tiny rooms: under 3 items and nothing but a folder name to go on. A folder under `Projects/`
+    // is the user's own layout, so it stays a room even when small.
+    groups.retain(|_, acc| {
+        let keep = acc.items.len() >= 3
+            || acc
+                .items
+                .iter()
+                .any(|&i| strong(&sigs[i]) || sigs[i].under_projects);
+        if !keep {
+            unsorted.extend(&acc.items);
+        }
+        keep
+    });
     let mut out = Vec::new();
     let mut mixed_warning: Vec<String> = Vec::new();
     for (key, acc) in groups {
+        let name = acc.name();
         let mut employers: Vec<&str> = acc
             .items
             .iter()
@@ -77,13 +144,13 @@ pub fn group(items: &[Item]) -> Vec<Proposal> {
         employers.sort();
         employers.dedup();
         if employers.len() <= 1 {
-            out.push(build(&key, &acc.name, &acc.items, items, &sigs, vec![]));
+            out.push(build(&key, &name, &acc.items, items, &sigs, vec![]));
             continue;
         }
         // The employer guard: one proposal per employer, the rest to Unsorted.
         mixed_warning.push(format!(
             "'{}' mixed {} employers and was split",
-            acc.name,
+            name,
             employers.len()
         ));
         for e in &employers {
@@ -96,7 +163,7 @@ pub fn group(items: &[Item]) -> Vec<Proposal> {
             let k = format!("{key}-{}", e.to_lowercase());
             out.push(build(
                 &k,
-                &format!("{} ({e})", acc.name),
+                &format!("{name} ({e})"),
                 &part,
                 items,
                 &sigs,
@@ -198,6 +265,63 @@ fn build(
     }
 }
 
+/// One room that looks like another: `into` is the proposal to merge into.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suggestion {
+    pub into: String,
+    pub reason: &'static str,
+}
+
+fn edit_distance(a: &[char], b: &[char]) -> usize {
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            cur.push(
+                (prev[j] + usize::from(ca != cb))
+                    .min(prev[j + 1] + 1)
+                    .min(cur[j] + 1),
+            );
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
+fn similar(a: &str, b: &str) -> Option<&'static str> {
+    let (s, l) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    if s.len() >= 4 && l.starts_with(s) {
+        return Some("prefix");
+    }
+    let (ca, cb): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    (ca.len() >= 6 && cb.len() >= 6 && edit_distance(&ca, &cb) <= 2).then_some("close")
+}
+
+/// Merge hints for `(id, name, item count)` rooms: the smaller room points at the larger one it
+/// looks like (a name that is a prefix of the other, or within two edits). Never applied here.
+pub fn suggest_merges(rooms: &[(String, String, i64)]) -> BTreeMap<String, Suggestion> {
+    let keys: Vec<String> = rooms.iter().map(|r| norm(&r.1)).collect();
+    let mut out = BTreeMap::new();
+    for (i, a) in rooms.iter().enumerate() {
+        let best = rooms
+            .iter()
+            .enumerate()
+            .filter(|(j, b)| *j != i && !keys[*j].is_empty() && (b.2, &b.0) > (a.2, &a.0))
+            .filter_map(|(j, b)| similar(&keys[i], &keys[j]).map(|r| (b, r)))
+            .max_by_key(|(b, _)| (b.2, std::cmp::Reverse(b.1.clone())));
+        if let Some((b, reason)) = best {
+            out.insert(
+                a.0.clone(),
+                Suggestion {
+                    into: b.0.clone(),
+                    reason,
+                },
+            );
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +380,117 @@ mod tests {
         let un = p.iter().find(|p| p.key == UNSORTED).unwrap();
         assert_eq!(un.item_ids, vec![items[2].item_id.clone()]);
         assert!(!un.warnings.is_empty());
+    }
+
+    fn many(hint: &str, from: u32) -> Vec<Item> {
+        (from..from + 3)
+            .map(|n| it(n, hint, &format!("t{n}")))
+            .collect()
+    }
+
+    fn names(items: &[Item]) -> Vec<String> {
+        group(items).into_iter().map(|p| p.name).collect()
+    }
+
+    #[test]
+    fn junk_paths_go_to_unsorted() {
+        let mut items = vec![];
+        for (n, h) in [
+            "/Users/someone/3f2b8c1a-9d4e-4b7a-8c11-0e5d6f7a8b9c",
+            "/tmp/x/A0",
+            "/private/var/folders/ab/T/zz",
+            "/Users/someone",
+            "/home/someone",
+            "~",
+            "/Users/someone/.hidden",
+            "/Users/someone/Desktop",
+        ]
+        .iter()
+        .enumerate()
+        {
+            items.extend(many(h, n as u32 * 10));
+        }
+        assert_eq!(names(&items), vec!["Unsorted"]);
+    }
+
+    #[test]
+    fn walks_up_past_generic_folders() {
+        let items = many("/Users/someone/Herd/Gizmo/src/lib", 0);
+        assert_eq!(names(&items), vec!["Gizmo"]);
+    }
+
+    #[test]
+    fn worktrees_map_to_the_base_repo() {
+        let mut items = many("/Users/someone/Dev/Widget-wt/branch-a", 0);
+        items.extend(many("/Users/someone/Dev/Widget/.claude/worktrees/x", 10));
+        items.extend(many("/Users/someone/Dev/Widget", 20));
+        assert_eq!(names(&items), vec!["Widget"]);
+    }
+
+    #[test]
+    fn spellings_share_a_room_and_the_common_one_names_it() {
+        let mut items = many("/u/Dev/Workan.Space", 0);
+        items.extend(many("/u/Dev/WorkanSpace", 10));
+        items.push(it(30, "/u/Dev/WorkanSpace", "x"));
+        items.extend(many("/u/Dev/workan-space", 40));
+        let p = group(&items);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].name, "WorkanSpace");
+        assert_eq!(p[0].item_ids.len(), 10);
+    }
+
+    #[test]
+    fn repo_run_elsewhere_joins_its_project() {
+        let mut items = many(
+            "/Users/someone/Home/Projects/Acme/Repositories/AcmeBackend/src",
+            0,
+        );
+        items.extend(many("/Users/someone/Herd/AcmeBackend", 10));
+        let p = group(&items);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].name, "Acme");
+        assert_eq!(p[0].item_ids.len(), 6);
+    }
+
+    #[test]
+    fn tiny_rooms_go_to_unsorted_unless_strong() {
+        let items = vec![
+            it(1, "/u/Dev/Lonely", "a"),
+            it(2, "/u/Dev/Lonely", "b"),
+            it(3, "/u/Dev/Other", "KAN-5 thing"),
+        ];
+        let p = group(&items);
+        let n: Vec<_> = p.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(n, vec!["Other", "Unsorted"]);
+        assert_eq!(p[1].item_ids.len(), 2);
+    }
+
+    #[test]
+    fn suggestions_by_prefix_and_spelling() {
+        let r = |id: &str, name: &str, n: i64| (id.to_owned(), name.to_owned(), n);
+        let s = suggest_merges(&[
+            r("a", "Optimus", 9),
+            r("b", "OptimusApi", 2),
+            r("c", "Gadgetry", 5),
+            r("d", "Gadgetri", 3),
+            r("e", "Zed", 4),
+            r("f", "Zedd", 1),
+        ]);
+        assert_eq!(
+            s["b"],
+            Suggestion {
+                into: "a".into(),
+                reason: "prefix"
+            }
+        );
+        assert_eq!(
+            s["d"],
+            Suggestion {
+                into: "c".into(),
+                reason: "close"
+            }
+        );
+        assert!(!s.contains_key("a") && !s.contains_key("c"));
+        assert!(!s.contains_key("f"), "prefix needs 4 characters");
     }
 }
