@@ -196,7 +196,10 @@
 ///    `ProposalCard.semantic` (`pending`, `ready` or `off`), the Brain settings `brainSettings` / `brainSetSetting`
 ///    (`GET /settings`, `PUT /settings/{name}`: `semantic.enabled`, `semantic.threads`, `semantic.max_tokens`, `semantic.strength`), and the audit action
 ///    `brain.semantic.run`.
-pub const API_MINOR: u32 = 63;
+///
+/// 64: Code Mode dispatch (E2): the audit action `code_mode.call` and the settings `code_mode.*` (call, run, size and
+///    concurrency limits). No route changed.
+pub const API_MINOR: u32 = 64;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

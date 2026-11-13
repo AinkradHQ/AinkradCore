@@ -137,6 +137,7 @@ async fn run(app: &App, id: &str) {
             Ok(mut t) => {
                 // Code Mode (E1): every session can search the operation catalogue.
                 t.push(crate::ops_catalog::search_tool());
+                t.push(crate::ops_catalog::call_tool());
                 t
             }
             Err(e) => {
@@ -229,6 +230,11 @@ fn intake(app: App, runner: String, session: String, batch: ToolBatch) -> BoxFut
                 };
                 if call.tool == crate::ops_catalog::SEARCH {
                     let r = crate::ops_catalog::search_call(&app, &runner, &session, &call).await;
+                    push_result(&app, &runner, &session, (r, None), true);
+                    return;
+                }
+                if call.tool == crate::ops_catalog::CALL {
+                    let r = crate::ops_catalog::call_call(&app, &runner, &session, &call).await;
                     push_result(&app, &runner, &session, (r, None), true);
                     return;
                 }
