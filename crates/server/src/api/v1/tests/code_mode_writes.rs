@@ -99,6 +99,7 @@ async fn a_write_runs_inside_the_creators_scopes_and_leaves_origin_and_root() {
     }
     let d: Value = serde_json::from_str(&rows(&fx).await[0].4).unwrap();
     assert_eq!((d["risk"].as_str(), d["outcome"].as_str()), (Some("write"), Some("ok")));
+    assert!(d.get("project").is_some(), "the row names the session's project (null without one)");
     assert!(!d.to_string().contains("Plan"), "no argument in a row");
 
     // Without the scope the write never runs.
@@ -146,6 +147,14 @@ async fn a_risky_call_never_runs_without_an_approval_and_a_denial_is_a_plain_ref
     let list = fx.ok(&format!("/api/v1/agent-sessions/{}/approvals", s.id)).await;
     assert_eq!(list["approvals"][0]["id"], id.as_str());
     assert_eq!(list["approvals"][0]["risk"], "risky");
+    let input = &list["approvals"][0]["input"];
+    assert_eq!(input["args"]["body"]["title"], "Risky");
+    assert!(input["summary"].is_string() && input["reason"].is_string());
+    let ev: String = sqlx::query_scalar("SELECT payload FROM events WHERE kind = 'agent.approval_requested'")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert!(ev.contains("\"input\"") && ev.contains("\"reason\""), "{ev}");
     // The request event the phones are pushed for.
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM events WHERE kind = 'agent.approval_requested'")
         .fetch_one(&fx.app.pool)

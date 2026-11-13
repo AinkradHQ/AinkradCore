@@ -550,6 +550,7 @@ pub async fn approvals(
         approvals: held
             .into_iter()
             .map(|p| AgentApproval {
+                input: json!({"summary": p.summary, "args": p.args, "reason": p.reason}),
                 id: p.id,
                 tool: p.tool,
                 summary: p.summary,

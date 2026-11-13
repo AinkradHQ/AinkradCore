@@ -196,7 +196,8 @@ pub async fn call_call(app: &App, runner: &str, session: &str, call: &ToolCall) 
         );
     if audit {
         let (op, risk) = done.op.clone().unzip();
-        let details = json!({"session": session, "op": op, "risk": risk.map(Risk::as_str),
+        let project = super::session_project(&app.pool, session).await;
+        let details = json!({"session": session, "project": project, "op": op, "risk": risk.map(Risk::as_str),
             "outcome": if code.is_none() { "ok" } else if done.denied { "denied" } else { "error" },
             "code": code, "ms": ms, "approval": done.approval, "replayed": done.replayed,
             "args_sha256": hex(&Sha256::digest(call.args.to_string().as_bytes()))});

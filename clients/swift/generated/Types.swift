@@ -80,6 +80,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `PATCH /api/v1/agent-sessions/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/patch(titleAgentSession)`.
     func titleAgentSession(_ input: Operations.TitleAgentSession.Input) async throws -> Operations.TitleAgentSession.Output
+    /// - Remark: HTTP `GET /api/v1/agent-sessions/{id}/approvals`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/approvals/get(listAgentApprovals)`.
+    func listAgentApprovals(_ input: Operations.ListAgentApprovals.Input) async throws -> Operations.ListAgentApprovals.Output
     /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/approvals/{request}`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/approvals/{request}/post(decideAgentApproval)`.
     func decideAgentApproval(_ input: Operations.DecideAgentApproval.Input) async throws -> Operations.DecideAgentApproval.Output
@@ -744,6 +747,17 @@ extension APIProtocol {
             path: path,
             headers: headers,
             body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/agent-sessions/{id}/approvals`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/approvals/get(listAgentApprovals)`.
+    public func listAgentApprovals(
+        path: Operations.ListAgentApprovals.Input.Path,
+        headers: Operations.ListAgentApprovals.Input.Headers = .init()
+    ) async throws -> Operations.ListAgentApprovals.Output {
+        try await listAgentApprovals(Operations.ListAgentApprovals.Input(
+            path: path,
+            headers: headers
         ))
     }
     /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/approvals/{request}`.

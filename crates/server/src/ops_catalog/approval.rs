@@ -143,7 +143,9 @@ pub async fn create(
     .bind(now + ttl)
     .execute(&mut *tx)
     .await?;
-    let payload = json!({"session": session, "request": id, "tool": format!("ainkrad.{op}")});
+    let input = json!({"summary": summary, "args": shown(args), "reason": reason});
+    let payload = json!({"session": session, "request": id, "tool": format!("ainkrad.{op}"),
+        "input": input});
     crate::store::events::append(&mut tx, "agent.approval_requested", &payload).await?;
     tx.commit().await
 }

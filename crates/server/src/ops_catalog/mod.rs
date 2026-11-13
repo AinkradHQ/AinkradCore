@@ -49,6 +49,19 @@ pub fn exposed(path: &str) -> bool {
         .any(|p| path == *p || path.strip_prefix(p).is_some_and(|r| r.starts_with('/')))
 }
 
+/// The project of `session` for audit rows: its workspace's name, else its repo's folder name
+/// (`https://github.com/acme/Alpha.git` is `Alpha`). `None` when it has no workspace.
+pub async fn session_project(pool: &sqlx::SqlitePool, session: &str) -> Option<String> {
+    let w = crate::store::agents::get(pool, session).await.ok()??.workspace?;
+    let named = w["name"].as_str().filter(|n| !n.is_empty()).map(str::to_owned);
+    named.or_else(|| {
+        let repo = w["repo"].as_str()?.trim_end_matches('/');
+        let base = repo.rsplit(['/', ':']).next()?;
+        let base = base.strip_suffix(".git").unwrap_or(base);
+        (!base.is_empty()).then(|| base.chars().take(64).collect())
+    })
+}
+
 /// What an operation may do to the world; decides the approval it needs (E6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]

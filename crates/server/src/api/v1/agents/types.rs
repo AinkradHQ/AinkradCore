@@ -38,6 +38,9 @@ pub struct AgentApproval {
     pub summary: String,
     /// The arguments the AI session passed, with secrets redacted and long texts cut.
     pub args: Value,
+    /// `{summary, args, reason}` as one object, the shape of a harness approval's `input`, so a card
+    /// shows it without guessing.
+    pub input: Value,
     /// `risky`: the only class that waits for a person.
     pub risk: String,
     /// Why it needs a person, in a sentence.

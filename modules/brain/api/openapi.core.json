@@ -365,6 +365,71 @@
         ],
         "type": "object"
       },
+      "AgentApproval": {
+        "description": "A Code Mode write the Core holds until a person decides (plan E6).",
+        "properties": {
+          "args": {
+            "description": "The arguments the AI session passed, with secrets redacted and long texts cut."
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "After this the call is refused `approval_timeout`."
+          },
+          "id": {
+            "description": "`cm_…`: the request id for `decideAgentApproval`.",
+            "type": "string"
+          },
+          "input": {
+            "description": "`{summary, args, reason}` as one object, the shape of a harness approval's `input`, so a card\nshows it without guessing."
+          },
+          "reason": {
+            "description": "Why it needs a person, in a sentence.",
+            "type": "string"
+          },
+          "requested_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "risk": {
+            "description": "`risky`: the only class that waits for a person.",
+            "type": "string"
+          },
+          "summary": {
+            "description": "The operation in plain words.",
+            "type": "string"
+          },
+          "tool": {
+            "description": "`ainkrad.<operation>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tool",
+          "summary",
+          "args",
+          "input",
+          "risk",
+          "reason",
+          "requested_at",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "AgentApprovals": {
+        "description": "The approvals one session waits on, newest last.",
+        "properties": {
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/AgentApproval"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "approvals"
+        ],
+        "type": "object"
+      },
       "AgentDecision": {
         "properties": {
           "approved": {
@@ -7928,7 +7993,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.65.0"
+    "version": "1.66.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -9353,6 +9418,59 @@
         "x-ainkrad-scope": "agent"
       }
     },
+    "/api/v1/agent-sessions/{id}/approvals": {
+      "get": {
+        "operationId": "listAgentApprovals",
+        "parameters": [
+          {
+            "description": "The session's id, `as_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentApprovals"
+                }
+              }
+            },
+            "description": "The Code Mode writes of this session the Core holds for a person's approval now (request ids `cm_…`, decided with `decideAgentApproval`). A harness's own tool approvals are `approval_request` entries of the transcript instead. Newest last"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "agents"
+        ],
+        "x-ainkrad-scope": "agent"
+      }
+    },
     "/api/v1/agent-sessions/{id}/approvals/{request}": {
       "post": {
         "operationId": "decideAgentApproval",
@@ -9395,7 +9513,7 @@
                 }
               }
             },
-            "description": "The waiting tool call is allowed or denied, from any device with `approve` (audited as `agent.decided`). 502 `runner_failed` when no such request waits"
+            "description": "The waiting tool call is allowed or denied, from any device with `approve` (audited as `agent.decided`). 502 `runner_failed` when no such request waits. A request id starting `cm_` is a Code Mode write the Core holds for approval (see `listAgentApprovals`): 404 `not_found` when unknown, 409 `approval_closed` when it was decided, timed out or ended"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
