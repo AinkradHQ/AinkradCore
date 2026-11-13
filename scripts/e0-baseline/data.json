@@ -1,0 +1,842 @@
+{
+ "hits": [
+  {
+   "created": "2026-01-10",
+   "id": "rec_00",
+   "kind": "fact",
+   "score": 1.0,
+   "snippet": "Cursor scope pairing contract relay timeout inbox sandbox approval gateway harness socket connection approval idempotent gateway relay schema grant policy operation operation contract relay schema contract transcript relay.",
+   "title": "Origin transcript principal relay socket"
+  },
+  {
+   "created": "2026-02-11",
+   "id": "rec_01",
+   "kind": "decision",
+   "score": 0.96,
+   "snippet": "Origin cursor grant schema provider idempotent untrusted room scope contract schema operation claim pairing scope idempotent merge socket schema relay catalogue inbox retry untrusted cursor gateway search chain.",
+   "title": "Sandbox idempotent audit account harness"
+  },
+  {
+   "created": "2026-03-12",
+   "id": "rec_02",
+   "kind": "note",
+   "score": 0.92,
+   "snippet": "Record room review search connection approval schema provider queue retry pool release egress account module socket grant timeout harness brain index pool origin retry harness sandbox envelope socket.",
+   "title": "Contract filter pairing provider connection"
+  },
+  {
+   "created": "2026-04-13",
+   "id": "rec_03",
+   "kind": "fact",
+   "score": 0.88,
+   "snippet": "Contract filter socket approval budget limit review envelope socket relay release review provider principal schema untrusted egress account merge terminal envelope device session filter device brain catalogue grant.",
+   "title": "Pool review device module retry"
+  },
+  {
+   "created": "2026-05-14",
+   "id": "rec_04",
+   "kind": "note",
+   "score": 0.84,
+   "snippet": "Migration connection transcript transcript retry approval brain egress transcript idempotent budget audit gateway idempotent budget merge harness device untrusted terminal policy origin approval room origin policy envelope policy.",
+   "title": "Relay inbox search account audit"
+  },
+  {
+   "created": "2026-06-15",
+   "id": "rec_05",
+   "kind": "decision",
+   "score": 0.8,
+   "snippet": "Runner origin harness cursor pairing catalogue schema chain audit review timeout catalogue principal untrusted migration relay filter search untrusted idempotent transcript transcript transcript transcript scope limit operation transcript.",
+   "title": "Retry contract room token account"
+  },
+  {
+   "created": "2026-07-16",
+   "id": "rec_06",
+   "kind": "decision",
+   "score": 0.76,
+   "snippet": "Grant pool module relay scope runner schema origin cursor scope pairing catalogue session socket inbox catalogue terminal origin operation token device module pairing limit grant grant retry filter.",
+   "title": "Claim socket inbox egress brain"
+  },
+  {
+   "created": "2026-08-17",
+   "id": "rec_07",
+   "kind": "note",
+   "score": 0.72,
+   "snippet": "Migration pool migration token limit review brain queue session inbox queue pairing origin review cursor session index queue provider principal approval review token queue pairing brain device search.",
+   "title": "Limit provider approval origin scope"
+  },
+  {
+   "created": "2026-09-18",
+   "id": "rec_08",
+   "kind": "decision",
+   "score": 0.68,
+   "snippet": "Operation policy catalogue record index claim connection transcript migration policy claim queue retry device release session session record budget limit token claim review module device egress release device.",
+   "title": "Cursor cursor search timeout pool"
+  },
+  {
+   "created": "2026-01-10",
+   "id": "rec_09",
+   "kind": "fact",
+   "score": 0.64,
+   "snippet": "Claim pool inbox limit catalogue catalogue runner limit principal device principal approval envelope grant terminal record merge index claim limit room gateway record operation pool approval release transcript.",
+   "title": "Approval policy scope policy limit"
+  },
+  {
+   "created": "2026-02-11",
+   "id": "rec_10",
+   "kind": "note",
+   "score": 0.6,
+   "snippet": "Brain audit session origin contract filter principal origin catalogue module limit envelope device origin idempotent idempotent audit session runner release principal scope queue migration audit gateway claim inbox.",
+   "title": "Transcript migration approval release brain"
+  },
+  {
+   "created": "2026-03-12",
+   "id": "rec_11",
+   "kind": "decision",
+   "score": 0.56,
+   "snippet": "Index contract chain token cursor harness audit relay migration device filter envelope contract queue harness timeout audit cursor origin queue timeout session egress search room module runner search.",
+   "title": "Token inbox account timeout connection"
+  }
+ ],
+ "issues": {
+  "ABC-100": {
+   "fields": {
+    "assignee": {
+     "displayName": "Dana"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Limit sandbox sandbox socket room catalogue principal untrusted module transcript limit brain review egress transcript policy catalogue queue socket pairing pool queue inbox provider audit contract catalogue sandbox inbox brain."
+      },
+      {
+       "author": "Sam",
+       "body": "Pairing release filter pool schema filter terminal device chain runner pool contract limit pool policy session connection filter module sandbox operation origin release envelope origin budget terminal budget socket timeout."
+      },
+      {
+       "author": "Sam",
+       "body": "Token device schema schema queue contract audit review sandbox idempotent search scope claim search gateway operation schema operation scope pairing record account record record connection record origin untrusted socket provider."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-10T09:00:00.000+0000",
+    "description": "Pool socket egress runner envelope room release brain terminal account runner egress schema untrusted device schema claim limit approval cursor chain queue filter gateway cursor operation origin transcript module catalogue approval relay release untrusted pool module envelope provider schema schema harness pairing limit envelope principal audit provider pool queue operation session claim policy untrusted migration.\n\nEgress review approval origin envelope contract pairing idempotent contract harness pairing queue connection schema egress transcript token grant policy room claim idempotent migration grant policy token principal scope claim queue envelope token merge retry policy idempotent filter policy cursor schema review grant migration timeout contract schema approval harness untrusted socket egress audit timeout idempotent timeout.\n\nMerge index grant operation release timeout scope filter untrusted transcript cursor brain claim schema limit search approval audit pairing search catalogue relay transcript connection relay pairing sandbox runner review module inbox filter provider grant merge audit gateway approval catalogue claim schema grant release device brain pairing migration pool index migration untrusted runner token grant connection.\n\nPairing timeout migration queue device release retry sandbox module device scope device idempotent chain module grant sandbox untrusted connection token device claim review egress session contract egress grant record session retry grant socket token room origin idempotent account untrusted envelope terminal origin contract token cursor review index budget egress runner session pool origin retry timeout.",
+    "labels": [
+     "core",
+     "ux"
+    ],
+    "priority": {
+     "name": "Medium"
+    },
+    "status": {
+     "name": "To Do"
+    },
+    "summary": "Release pairing runner sandbox catalogue record timeout gateway"
+   },
+   "id": "10000",
+   "key": "ABC-100",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10000"
+  },
+  "ABC-101": {
+   "fields": {
+    "assignee": {
+     "displayName": "Dana"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Operation device terminal filter inbox chain record session scope envelope release runner socket principal transcript untrusted device relay policy schema terminal harness terminal envelope operation policy session token session token."
+      },
+      {
+       "author": "Sam",
+       "body": "Merge gateway connection policy device inbox chain index gateway principal budget provider retry inbox schema record brain limit search budget index audit provider account approval pool runner retry connection brain."
+      },
+      {
+       "author": "Sam",
+       "body": "Chain untrusted catalogue module egress inbox contract relay record inbox migration pairing sandbox search search egress room gateway audit provider untrusted session grant origin runner audit provider origin timeout migration."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-11T09:00:00.000+0000",
+    "description": "Record limit timeout pairing connection connection device origin audit inbox runner envelope filter transcript egress transcript schema search provider brain contract socket origin provider release provider token release schema idempotent envelope pool socket claim contract approval contract room provider contract device filter device search review gateway release socket retry chain room budget token cursor session.\n\nIndex brain operation budget connection merge session inbox relay transcript egress claim module account timeout principal scope claim connection release relay audit module relay approval socket schema pool release audit runner claim budget cursor principal runner operation chain session inbox chain chain migration session principal retry transcript catalogue untrusted pool room relay harness record sandbox.\n\nApproval operation catalogue pool search retry module transcript token filter runner session chain schema principal chain relay harness catalogue merge release pool brain approval session origin inbox origin queue search approval device pairing gateway device cursor untrusted contract idempotent origin envelope module schema pool policy migration catalogue token merge limit index sandbox search principal provider.\n\nPrincipal search idempotent merge filter idempotent budget pairing queue queue budget audit token runner idempotent limit scope principal search pairing origin operation policy transcript index approval session catalogue audit grant relay cursor timeout inbox idempotent search room token module pairing migration origin room migration search brain queue session device search merge connection egress retry inbox.",
+    "labels": [
+     "mcp",
+     "infra"
+    ],
+    "priority": {
+     "name": "Medium"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "summary": "Index pool migration pairing timeout operation connection device"
+   },
+   "id": "10001",
+   "key": "ABC-101",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10001"
+  },
+  "ABC-102": {
+   "fields": {
+    "assignee": {
+     "displayName": "Sam"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Untrusted audit pairing retry queue envelope connection catalogue pairing queue pool terminal token session idempotent claim runner schema token relay contract room provider merge cursor budget chain token connection token."
+      },
+      {
+       "author": "Sam",
+       "body": "Egress approval queue operation retry approval claim audit gateway record account catalogue search pairing sandbox merge egress terminal pairing sandbox merge index account harness gateway principal module token device connection."
+      },
+      {
+       "author": "Sam",
+       "body": "Terminal contract audit catalogue claim merge contract pairing socket envelope inbox pool socket approval index egress terminal transcript queue harness retry principal index record session scope contract schema filter filter."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-12T09:00:00.000+0000",
+    "description": "Sandbox contract connection claim record operation review runner sandbox audit timeout module policy schema gateway review scope release session relay chain socket grant grant retry audit queue gateway runner room policy untrusted cursor origin operation migration cursor timeout grant queue device retry socket device inbox policy release socket budget merge room runner token budget socket.\n\nSandbox claim timeout relay harness record idempotent pairing budget runner chain review sandbox principal filter cursor account idempotent pool review harness migration merge budget transcript gateway chain cursor harness terminal origin terminal index terminal harness origin operation runner connection module timeout token review catalogue release terminal connection claim envelope grant approval catalogue record sandbox merge.\n\nRelay transcript review idempotent chain untrusted principal egress idempotent envelope chain filter schema runner limit migration principal limit timeout pool contract cursor terminal connection operation record migration terminal device merge socket transcript queue budget catalogue envelope untrusted chain socket operation cursor envelope policy catalogue index token token limit release device queue contract limit schema policy.\n\nOrigin socket index queue pairing queue inbox queue brain pairing connection untrusted room origin envelope filter room operation principal sandbox chain terminal pairing gateway grant harness origin review token terminal scope pairing device envelope queue queue provider egress envelope approval budget transcript account egress review grant egress operation limit release room index queue origin runner.",
+    "labels": [
+     "ux",
+     "mcp"
+    ],
+    "priority": {
+     "name": "Medium"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "summary": "Device scope index brain filter untrusted transcript approval"
+   },
+   "id": "10002",
+   "key": "ABC-102",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10002"
+  },
+  "ABC-103": {
+   "fields": {
+    "assignee": {
+     "displayName": "Sam"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Account retry device session index record retry approval claim retry budget provider module contract cursor index approval claim audit limit budget search index policy contract provider sandbox contract module scope."
+      },
+      {
+       "author": "Sam",
+       "body": "Runner device claim origin envelope provider relay room pool device egress limit connection pool migration pairing room grant record provider socket release idempotent filter scope migration idempotent grant record brain."
+      },
+      {
+       "author": "Sam",
+       "body": "Module transcript filter sandbox sandbox sandbox timeout contract scope harness principal review audit harness schema device socket pairing release envelope release brain pairing brain envelope approval pool runner principal limit."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-13T09:00:00.000+0000",
+    "description": "Migration claim transcript cursor sandbox untrusted account idempotent pool search terminal search filter grant approval policy socket schema runner scope retry approval index inbox schema filter relay untrusted claim merge pool limit relay idempotent review migration harness contract audit harness relay operation origin chain pool claim queue runner room cursor budget queue token approval chain.\n\nTerminal token envelope provider idempotent transcript timeout harness untrusted relay provider provider connection terminal gateway cursor token provider claim audit relay inbox cursor principal pairing filter envelope retry merge contract origin pairing pool claim filter merge idempotent envelope relay release chain runner cursor socket harness schema chain sandbox budget policy record egress account claim merge.\n\nInbox contract catalogue filter transcript release egress inbox inbox relay room gateway operation grant relay audit socket module retry room runner release idempotent migration brain retry policy untrusted release untrusted migration account inbox cursor brain origin search merge inbox queue scope filter scope claim record approval relay harness policy envelope token merge egress untrusted gateway.\n\nOrigin relay review audit sandbox brain egress account index policy contract chain merge idempotent release origin provider token chain idempotent inbox origin envelope policy transcript sandbox chain terminal origin principal account policy principal cursor review approval claim filter origin release room gateway pool untrusted transcript grant sandbox device grant envelope inbox principal queue queue socket.",
+    "labels": [
+     "core",
+     "brain"
+    ],
+    "priority": {
+     "name": "High"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "summary": "Review gateway harness limit room socket egress transcript"
+   },
+   "id": "10003",
+   "key": "ABC-103",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10003"
+  },
+  "ABC-104": {
+   "fields": {
+    "assignee": {
+     "displayName": "Sam"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Budget room review egress harness envelope cursor connection grant inbox untrusted operation sandbox terminal room terminal budget pool origin pairing brain policy device catalogue transcript provider retry chain timeout record."
+      },
+      {
+       "author": "Sam",
+       "body": "Module claim brain transcript queue runner runner room scope connection filter schema envelope token migration device untrusted scope idempotent migration index timeout envelope terminal audit index token envelope harness socket."
+      },
+      {
+       "author": "Sam",
+       "body": "Timeout catalogue pool egress budget account pairing provider envelope merge operation untrusted terminal queue untrusted relay principal retry retry pairing review session relay untrusted grant idempotent terminal egress provider index."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-14T09:00:00.000+0000",
+    "description": "Chain filter connection brain schema cursor sandbox timeout token pairing claim account transcript idempotent inbox audit connection release cursor timeout connection scope runner scope relay retry record record review schema inbox review migration policy approval index brain origin token session gateway transcript catalogue queue grant account schema grant approval envelope contract inbox policy connection module.\n\nSearch record timeout merge relay connection socket module pool scope sandbox inbox catalogue search review room provider pool approval index filter contract room runner chain harness record harness sandbox approval record connection origin release timeout untrusted brain origin device search audit inbox claim policy untrusted pool merge socket runner record limit sandbox retry queue search.\n\nPool socket index module operation socket claim operation relay pairing record harness approval principal merge device contract brain retry untrusted search migration retry audit token review provider relay migration filter record untrusted contract brain gateway terminal operation record timeout provider migration contract cursor principal operation grant socket record record token index policy connection claim contract.\n\nFilter idempotent connection retry schema untrusted merge relay transcript envelope record transcript record operation untrusted search pool terminal transcript approval policy principal untrusted record pool envelope module gateway record provider runner provider retry module session grant limit harness harness module provider filter origin pool cursor inbox approval device transcript filter catalogue sandbox account pool approval.",
+    "labels": [
+     "infra",
+     "core"
+    ],
+    "priority": {
+     "name": "Medium"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "summary": "Provider origin token scope scope connection grant origin"
+   },
+   "id": "10004",
+   "key": "ABC-104",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10004"
+  },
+  "ABC-105": {
+   "fields": {
+    "assignee": {
+     "displayName": "Dana"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Review queue socket grant chain inbox runner filter operation index audit egress budget timeout relay egress contract idempotent module sandbox sandbox cursor filter grant limit policy account operation pool pool."
+      },
+      {
+       "author": "Sam",
+       "body": "Queue schema policy inbox idempotent record inbox account schema cursor merge session policy search room session timeout budget gateway pairing socket operation budget release approval contract grant transcript terminal timeout."
+      },
+      {
+       "author": "Sam",
+       "body": "Contract harness policy envelope relay pairing cursor pool envelope token socket principal limit schema audit gateway filter untrusted merge catalogue filter claim pool catalogue claim grant transcript brain account index."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-15T09:00:00.000+0000",
+    "description": "Claim contract schema timeout sandbox transcript room migration contract principal budget operation index connection account search cursor session harness idempotent harness principal approval untrusted operation terminal retry merge pairing review budget chain brain schema retry relay record cursor device audit claim queue relay brain provider migration queue brain untrusted provider relay contract provider terminal search.\n\nPairing review room budget provider limit claim catalogue chain egress transcript scope untrusted token pairing transcript chain terminal record limit budget grant inbox catalogue egress timeout harness operation brain search chain sandbox origin budget index cursor limit envelope idempotent envelope harness index socket budget transcript pairing merge transcript queue account operation grant token egress search.\n\nRunner sandbox cursor review schema provider device module pairing token connection socket idempotent scope index module untrusted harness merge grant provider brain principal room release operation migration review grant search transcript transcript record migration pool transcript transcript retry pool device room merge origin cursor migration queue harness envelope account audit inbox pool untrusted socket harness.\n\nSocket timeout runner schema envelope connection schema gateway transcript inbox schema release budget record untrusted record audit origin policy envelope index connection timeout grant account sandbox migration principal terminal account audit principal merge merge terminal catalogue budget merge socket search module module timeout budget module inbox policy provider scope pairing untrusted schema approval pairing session.",
+    "labels": [
+     "mcp",
+     "brain"
+    ],
+    "priority": {
+     "name": "High"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "summary": "Timeout origin release module migration filter sandbox chain"
+   },
+   "id": "10005",
+   "key": "ABC-105",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10005"
+  },
+  "ABC-106": {
+   "fields": {
+    "assignee": {
+     "displayName": "Dana"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Filter transcript envelope runner idempotent migration inbox session room timeout filter inbox grant merge principal migration inbox envelope gateway grant catalogue approval cursor queue device untrusted scope approval release connection."
+      },
+      {
+       "author": "Sam",
+       "body": "Scope approval pairing budget provider provider index account origin retry module schema pool search claim runner approval socket sandbox grant untrusted review search module inbox queue terminal filter harness catalogue."
+      },
+      {
+       "author": "Sam",
+       "body": "Schema principal inbox index release index record approval session relay merge release session envelope untrusted audit gateway relay room catalogue account egress token merge audit token record provider device session."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-16T09:00:00.000+0000",
+    "description": "Migration record session migration release catalogue release session socket device inbox harness runner principal release migration operation cursor token idempotent device operation brain schema operation chain device provider scope sandbox migration room review device harness session merge filter search scope pool scope origin pairing search limit retry approval pool record chain limit audit scope queue.\n\nSchema token timeout terminal inbox device token envelope session claim merge budget queue gateway search release release terminal brain gateway audit audit runner grant inbox release contract cursor terminal session runner record approval filter search sandbox inbox schema cursor socket chain pool catalogue idempotent filter retry search operation inbox runner connection inbox device terminal scope.\n\nScope contract audit claim egress filter schema contract operation untrusted merge egress index socket schema release release relay limit brain transcript principal untrusted merge connection merge principal limit review limit module origin grant retry module terminal socket review connection policy runner transcript schema record migration policy operation migration migration principal sandbox connection scope claim runner.\n\nSandbox filter relay transcript connection policy search untrusted sandbox idempotent operation schema harness token sandbox origin filter session limit index scope index merge scope room origin queue brain catalogue timeout chain scope timeout record terminal runner socket session idempotent principal approval timeout idempotent catalogue catalogue module record cursor socket merge relay envelope cursor catalogue account.",
+    "labels": [
+     "infra",
+     "mcp"
+    ],
+    "priority": {
+     "name": "Medium"
+    },
+    "status": {
+     "name": "To Do"
+    },
+    "summary": "Claim socket migration queue session egress search claim"
+   },
+   "id": "10006",
+   "key": "ABC-106",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10006"
+  },
+  "ABC-107": {
+   "fields": {
+    "assignee": {
+     "displayName": "Lee"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Transcript grant retry limit room policy gateway egress relay grant claim socket budget pairing egress limit connection pool idempotent relay socket timeout policy limit migration inbox schema catalogue terminal grant."
+      },
+      {
+       "author": "Sam",
+       "body": "Relay gateway queue relay connection queue brain timeout chain inbox scope approval limit token filter filter record release audit socket egress operation chain scope inbox budget envelope record pairing socket."
+      },
+      {
+       "author": "Sam",
+       "body": "Grant merge limit limit token room timeout runner operation principal timeout session principal limit untrusted migration sandbox cursor principal policy search retry envelope module audit principal pairing origin terminal chain."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-17T09:00:00.000+0000",
+    "description": "Runner harness cursor session pool policy cursor device pool runner search search search connection pool record approval cursor brain scope sandbox chain gateway operation pool pairing socket cursor grant filter brain inbox queue relay principal envelope cursor connection harness queue review search operation approval principal inbox inbox account index runner merge token gateway merge grant.\n\nRoom catalogue egress catalogue untrusted brain review migration account index transcript connection pool token session approval review inbox principal token catalogue principal principal migration contract origin principal socket module socket review transcript provider socket socket release socket cursor runner socket pairing socket origin idempotent grant release retry principal timeout review budget search egress room scope.\n\nToken provider transcript harness review review room egress release scope filter pool chain inbox session terminal record policy scope inbox device envelope pool budget catalogue runner claim socket approval brain record envelope envelope contract provider envelope token room sandbox origin limit scope relay terminal token principal approval schema contract policy relay socket account runner budget.\n\nAudit device pairing cursor release room audit pairing record migration token pairing pairing brain queue envelope grant connection record brain account index terminal index session policy principal claim policy index terminal pairing connection principal limit token runner relay scope envelope terminal pairing connection account session limit egress retry grant grant filter idempotent merge retry approval.",
+    "labels": [
+     "mcp",
+     "brain"
+    ],
+    "priority": {
+     "name": "Low"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "summary": "Chain terminal scope brain egress brain principal principal"
+   },
+   "id": "10007",
+   "key": "ABC-107",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10007"
+  },
+  "ABC-108": {
+   "fields": {
+    "assignee": {
+     "displayName": "Lee"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Brain transcript pairing grant operation search account idempotent principal inbox operation connection merge contract search claim pairing search provider principal token brain socket module filter envelope search contract sandbox claim."
+      },
+      {
+       "author": "Sam",
+       "body": "Runner module cursor harness release idempotent budget session socket runner room approval review connection runner room policy room token merge record connection session session grant approval approval claim origin limit."
+      },
+      {
+       "author": "Sam",
+       "body": "Pool socket queue device chain account harness migration limit token pool relay approval token brain token approval socket catalogue relay review token audit record release pool pool timeout retry origin."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-18T09:00:00.000+0000",
+    "description": "Inbox sandbox account egress audit claim provider migration chain contract claim socket transcript session untrusted brain runner pairing limit policy socket limit pairing timeout migration retry untrusted inbox catalogue inbox claim limit claim provider record filter budget policy index chain sandbox harness room pool harness envelope merge session schema pairing search brain connection runner origin.\n\nModule token module filter limit idempotent idempotent merge terminal audit token connection idempotent grant budget harness origin audit queue audit contract chain index relay brain policy gateway brain approval contract egress record harness token schema envelope policy origin migration budget merge harness scope relay gateway scope session account socket account index room audit harness socket.\n\nQueue terminal provider envelope principal merge timeout contract grant egress connection retry envelope queue contract untrusted pairing queue idempotent claim gateway socket contract token schema terminal room review token principal connection harness pairing queue token untrusted socket review migration relay catalogue untrusted limit inbox untrusted chain runner egress limit pool untrusted index merge principal room.\n\nFilter chain record policy gateway approval inbox cursor harness transcript audit migration policy pairing migration merge pairing terminal envelope retry search pairing audit policy operation inbox budget grant sandbox timeout audit transcript catalogue harness principal socket limit contract filter pool schema cursor device device merge index gateway chain room limit review session untrusted untrusted search.",
+    "labels": [
+     "core",
+     "ux"
+    ],
+    "priority": {
+     "name": "Low"
+    },
+    "status": {
+     "name": "To Do"
+    },
+    "summary": "Migration sandbox pairing envelope principal room review policy"
+   },
+   "id": "10008",
+   "key": "ABC-108",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10008"
+  },
+  "ABC-109": {
+   "fields": {
+    "assignee": {
+     "displayName": "Sam"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Timeout limit review origin catalogue chain chain room release migration pool untrusted claim envelope harness relay runner policy schema device runner record index token module sandbox sandbox chain policy chain."
+      },
+      {
+       "author": "Sam",
+       "body": "Budget pairing provider pairing catalogue device transcript terminal account grant policy runner untrusted harness index operation search schema index connection principal relay release brain index origin provider token timeout principal."
+      },
+      {
+       "author": "Sam",
+       "body": "Chain terminal gateway provider audit connection cursor merge pool envelope relay device room chain search audit migration untrusted cursor principal relay record idempotent filter pool limit record filter record migration."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-19T09:00:00.000+0000",
+    "description": "Provider socket limit scope socket contract origin claim record merge egress filter record policy catalogue approval envelope limit schema gateway audit runner claim contract inbox scope operation filter connection index token timeout gateway queue cursor pool release relay session policy release session policy timeout account inbox operation merge review filter catalogue claim room inbox provider.\n\nEnvelope token audit brain relay policy filter search pool merge merge untrusted review record provider transcript chain queue release provider relay search module chain approval account relay chain timeout connection origin room operation connection filter session claim chain grant record timeout merge queue pairing untrusted merge limit queue provider search socket scope envelope socket catalogue.\n\nTerminal gateway limit socket token envelope timeout policy egress chain limit merge harness search merge pairing cursor egress search release chain catalogue relay scope search filter approval operation budget audit sandbox idempotent audit socket filter untrusted catalogue sandbox provider envelope socket index envelope search pool gateway queue approval origin transcript review scope merge migration relay.\n\nSandbox account search envelope audit queue scope review socket chain brain cursor module harness brain connection room terminal index gateway merge pool pairing grant connection filter idempotent grant approval token migration release terminal limit policy room module account index filter transcript merge claim release record audit migration claim retry scope timeout pool connection session token.",
+    "labels": [
+     "core",
+     "brain"
+    ],
+    "priority": {
+     "name": "Medium"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "summary": "Claim module idempotent relay index origin review gateway"
+   },
+   "id": "10009",
+   "key": "ABC-109",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10009"
+  },
+  "ABC-110": {
+   "fields": {
+    "assignee": {
+     "displayName": "Dana"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Limit budget limit queue claim limit contract timeout origin timeout brain policy socket device review terminal socket transcript scope device release gateway pool device merge review transcript principal origin filter."
+      },
+      {
+       "author": "Sam",
+       "body": "Schema idempotent runner sandbox record release limit device timeout operation merge untrusted transcript gateway catalogue provider brain idempotent principal envelope migration migration runner untrusted origin operation pairing untrusted transcript record."
+      },
+      {
+       "author": "Sam",
+       "body": "Chain contract schema untrusted policy pool brain idempotent idempotent transcript principal room account grant audit session catalogue chain limit egress retry budget pairing queue session device idempotent cursor record chain."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-20T09:00:00.000+0000",
+    "description": "Socket catalogue socket retry migration relay claim filter operation transcript provider limit terminal provider operation operation schema limit chain device release provider migration device schema scope module contract queue socket limit egress harness runner envelope policy inbox inbox pairing cursor pairing envelope review grant principal schema sandbox filter contract schema gateway session merge audit gateway.\n\nApproval room queue account timeout record migration device scope policy record migration module relay policy pairing migration gateway brain terminal operation merge socket harness claim chain provider pool timeout release room retry cursor index timeout runner envelope origin module terminal idempotent record brain room session principal idempotent index grant schema pairing relay relay inbox timeout.\n\nSession timeout merge merge inbox timeout filter origin idempotent inbox origin origin operation egress session gateway audit module review token module budget policy harness inbox timeout operation filter relay approval search runner pool merge brain migration record connection cursor token policy queue room policy module room claim contract release release grant migration filter merge module.\n\nMerge inbox budget gateway timeout relay retry runner egress approval socket record idempotent untrusted harness origin chain filter brain operation inbox cursor pool harness search release connection claim policy brain harness device catalogue gateway provider provider brain operation inbox egress approval origin claim contract chain grant timeout account room harness limit egress search contract retry.",
+    "labels": [
+     "brain",
+     "mcp"
+    ],
+    "priority": {
+     "name": "High"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "summary": "Inbox release pool pairing connection socket scope grant"
+   },
+   "id": "10010",
+   "key": "ABC-110",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10010"
+  },
+  "ABC-111": {
+   "fields": {
+    "assignee": {
+     "displayName": "Lee"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Pairing inbox timeout timeout queue gateway search schema review principal index budget filter principal chain transcript untrusted review limit grant sandbox migration origin untrusted account relay module cursor migration migration."
+      },
+      {
+       "author": "Sam",
+       "body": "Audit device operation terminal connection token timeout sandbox egress limit session approval approval record sandbox inbox filter module limit merge approval release account pool module room audit principal index grant."
+      },
+      {
+       "author": "Sam",
+       "body": "Principal room timeout token pool brain brain policy limit record policy token token relay policy brain catalogue provider search socket operation terminal cursor catalogue egress inbox scope harness limit chain."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-21T09:00:00.000+0000",
+    "description": "Pairing operation cursor runner budget pool account retry brain review terminal session socket claim inbox relay migration audit origin provider policy policy relay gateway token grant release release scope origin idempotent idempotent approval search origin gateway claim sandbox migration retry release terminal gateway approval operation merge index room module audit provider sandbox approval relay brain.\n\nGrant sandbox session chain merge review operation brain grant filter brain scope room claim module device untrusted claim pairing grant gateway chain transcript harness token egress policy limit session untrusted merge room brain room origin record device operation migration principal relay egress queue catalogue untrusted sandbox record egress idempotent record schema runner egress egress session.\n\nModule operation pool envelope transcript timeout origin relay record idempotent queue origin retry room review terminal brain review principal runner timeout record review timeout runner pairing harness merge envelope claim schema terminal release envelope harness pool limit contract catalogue brain chain terminal claim budget inbox record envelope record catalogue runner contract review chain chain principal.\n\nIndex idempotent token catalogue pool brain schema cursor retry budget approval retry index sandbox origin gateway index approval schema harness account contract timeout gateway merge runner approval contract search audit scope terminal budget grant module gateway egress release token approval release egress principal pairing scope sandbox retry release provider inbox socket principal token budget record.",
+    "labels": [
+     "ux",
+     "core"
+    ],
+    "priority": {
+     "name": "High"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "summary": "Operation limit grant pool token terminal catalogue module"
+   },
+   "id": "10011",
+   "key": "ABC-111",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10011"
+  },
+  "ABC-112": {
+   "fields": {
+    "assignee": {
+     "displayName": "Dana"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Timeout search egress connection untrusted origin room provider gateway chain scope merge timeout gateway brain contract sandbox retry grant migration principal migration brain operation record relay account timeout sandbox pool."
+      },
+      {
+       "author": "Sam",
+       "body": "Relay scope queue migration migration merge claim timeout transcript brain policy envelope inbox gateway token envelope filter approval connection filter runner review policy envelope transcript scope claim harness approval cursor."
+      },
+      {
+       "author": "Sam",
+       "body": "Untrusted account pairing pool connection budget envelope envelope pool policy sandbox transcript harness review gateway socket origin approval socket relay cursor claim token operation scope terminal timeout untrusted retry token."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-22T09:00:00.000+0000",
+    "description": "Idempotent chain transcript brain audit limit limit retry budget schema pairing scope idempotent retry index contract pool brain pool scope pairing terminal grant audit retry contract account pool terminal schema idempotent room chain search session chain inbox filter grant account filter operation pairing schema search untrusted review pairing limit operation claim cursor envelope envelope room.\n\nPairing claim module claim provider account merge connection merge contract socket harness runner inbox idempotent socket inbox timeout timeout envelope grant index connection envelope grant untrusted account scope claim untrusted contract merge envelope runner budget relay gateway approval budget chain schema review runner timeout harness device merge contract cursor room runner schema claim room policy.\n\nScope inbox grant budget contract migration timeout chain untrusted terminal transcript review session socket module review gateway grant migration budget timeout origin gateway pairing envelope session session relay gateway catalogue cursor principal terminal brain pairing release pairing idempotent audit device pairing token cursor origin brain brain origin origin grant contract record grant brain provider timeout.\n\nSchema schema scope idempotent retry harness filter cursor index runner release relay connection gateway audit connection index runner connection device connection search approval limit contract terminal gateway pool limit index sandbox policy envelope relay egress timeout connection sandbox module room claim socket token approval search pool index approval pool principal approval gateway index provider socket.",
+    "labels": [
+     "infra",
+     "core"
+    ],
+    "priority": {
+     "name": "Medium"
+    },
+    "status": {
+     "name": "To Do"
+    },
+    "summary": "Untrusted relay migration terminal policy principal filter limit"
+   },
+   "id": "10012",
+   "key": "ABC-112",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10012"
+  },
+  "ABC-113": {
+   "fields": {
+    "assignee": {
+     "displayName": "Dana"
+    },
+    "comment": {
+     "comments": [
+      {
+       "author": "Sam",
+       "body": "Room terminal record runner migration pairing grant index chain pool audit untrusted sandbox catalogue merge claim inbox session contract untrusted schema catalogue policy account scope claim merge connection policy limit."
+      },
+      {
+       "author": "Sam",
+       "body": "Contract search schema chain grant sandbox schema chain queue principal module approval timeout filter grant connection inbox egress provider harness pairing runner policy grant pool transcript connection principal gateway connection."
+      },
+      {
+       "author": "Sam",
+       "body": "Pool contract connection terminal operation sandbox queue record idempotent provider budget limit search merge limit filter runner relay envelope terminal filter policy module catalogue room search module limit idempotent terminal."
+      }
+     ],
+     "total": 3
+    },
+    "created": "2026-10-23T09:00:00.000+0000",
+    "description": "Gateway audit envelope untrusted session review room contract release sandbox record merge record socket grant chain connection relay policy contract release budget device brain review pairing harness merge budget brain egress egress room runner audit approval cursor release gateway connection operation origin envelope token merge grant grant terminal approval envelope policy runner origin sandbox device.\n\nApproval provider contract chain migration record idempotent contract egress principal record schema cursor claim provider queue inbox limit release pool audit pairing device timeout idempotent contract policy catalogue budget envelope timeout audit timeout session harness gateway envelope module room sandbox cursor account budget grant search operation merge egress search pairing queue limit connection merge timeout.\n\nCursor terminal cursor account account transcript merge sandbox token limit chain release untrusted inbox release egress device merge provider filter pairing approval index pairing release principal inbox policy record gateway principal migration untrusted token operation pairing review session budget idempotent relay pool pairing harness sandbox gateway module queue envelope provider record policy pool pool limit.\n\nScope release record migration migration room retry scope pairing claim budget retry sandbox merge audit pool harness egress account harness origin chain origin principal room merge brain device budget relay untrusted connection pool sandbox room relay gateway gateway claim origin search record pairing timeout grant grant budget egress timeout transcript module token session transcript terminal.",
+    "labels": [
+     "core",
+     "ux"
+    ],
+    "priority": {
+     "name": "High"
+    },
+    "status": {
+     "name": "In Progress"
+    },
+    "summary": "Claim scope envelope retry schema egress account socket"
+   },
+   "id": "10013",
+   "key": "ABC-113",
+   "self": "https://acme.atlassian.net/rest/api/3/issue/10013"
+  }
+ },
+ "project": "ABC",
+ "records": {
+  "rec_00": {
+   "body": "Origin room origin limit catalogue release grant idempotent relay chain untrusted queue queue idempotent limit record search scope idempotent relay connection claim budget sandbox search scope timeout egress idempotent session index socket egress chain catalogue timeout module timeout claim review budget egress timeout cursor limit timeout connection review queue token idempotent claim egress audit harness grant transcript egress chain socket.\n\nEnvelope connection gateway socket inbox envelope provider record grant search origin merge principal envelope pairing origin token audit filter policy migration scope transcript retry brain envelope policy brain merge gateway timeout transcript pool harness claim device chain approval release pairing session pool idempotent filter egress merge session terminal pool queue catalogue account timeout socket grant record policy scope approval token.\n\nBudget sandbox search room budget index audit gateway untrusted token transcript origin cursor timeout schema retry review chain approval budget relay review room gateway socket budget session operation approval token approval module policy socket token grant filter runner pool idempotent harness budget catalogue audit sandbox queue merge connection grant brain token relay room claim provider operation provider queue index inbox.\n\nAccount egress timeout untrusted room budget device session token sandbox runner session release timeout idempotent claim timeout limit connection egress scope envelope principal gateway envelope retry cursor transcript timeout provider review inbox policy pool claim merge release operation audit transcript device relay audit runner socket operation migration token gateway brain relay approval envelope terminal timeout envelope account module connection review.\n\nAccount sandbox filter room brain budget egress runner token pairing pool idempotent chain connection sandbox provider inbox device room runner pool terminal approval limit budget timeout principal claim connection timeout search runner approval token approval origin transcript contract sandbox transcript session provider provider operation policy approval contract queue index origin envelope merge record module terminal index chain release retry origin.",
+   "created": "2026-01-10",
+   "id": "rec_00",
+   "kind": "fact",
+   "room": "room_core",
+   "score": 1.0,
+   "snippet": "Cursor scope pairing contract relay timeout inbox sandbox approval gateway harness socket connection approval idempotent gateway relay schema grant policy operation operation contract relay schema contract transcript relay.",
+   "sources": [
+    "ABC-100"
+   ],
+   "title": "Origin transcript principal relay socket"
+  },
+  "rec_01": {
+   "body": "Account release catalogue principal origin sandbox merge timeout operation gateway release review timeout audit queue index timeout schema session untrusted contract merge untrusted review principal policy approval session sandbox audit operation pairing scope terminal egress idempotent relay operation session operation cursor untrusted connection retry token runner filter socket migration timeout cursor approval envelope queue socket migration migration limit token socket.\n\nToken connection release index inbox policy migration principal filter retry terminal socket limit untrusted account search sandbox catalogue operation principal claim socket module origin pool token principal migration review provider catalogue schema audit runner limit relay retry budget untrusted scope review inbox untrusted retry account merge queue account filter filter filter search grant idempotent claim provider approval limit session account.\n\nFilter socket timeout egress budget terminal inbox inbox socket contract approval origin migration queue token pairing audit module operation timeout budget grant merge pairing policy retry retry transcript session brain runner retry untrusted egress transcript provider release origin harness device terminal chain grant pool runner chain index pool transcript grant claim merge runner migration account token pairing socket transcript terminal.\n\nContract socket pairing gateway index budget relay budget scope relay envelope account operation origin connection budget gateway timeout chain claim search pairing record gateway session index operation transcript idempotent idempotent inbox release approval relay release harness egress catalogue index audit principal account retry relay idempotent audit brain limit harness pool account provider token migration migration principal token transcript principal connection.\n\nProvider limit idempotent envelope transcript grant brain principal brain socket inbox timeout retry idempotent policy egress pool index egress gateway audit idempotent claim connection approval room pool idempotent approval chain connection pairing token schema claim session migration harness terminal harness migration queue inbox terminal budget pool index relay retry budget schema pairing audit untrusted timeout queue operation record inbox approval.",
+   "created": "2026-02-11",
+   "id": "rec_01",
+   "kind": "decision",
+   "room": "room_core",
+   "score": 0.96,
+   "snippet": "Origin cursor grant schema provider idempotent untrusted room scope contract schema operation claim pairing scope idempotent merge socket schema relay catalogue inbox retry untrusted cursor gateway search chain.",
+   "sources": [
+    "ABC-101"
+   ],
+   "title": "Sandbox idempotent audit account harness"
+  },
+  "rec_02": {
+   "body": "Budget connection terminal transcript principal egress gateway provider session audit sandbox gateway merge index limit contract retry runner socket transcript queue filter egress connection record scope policy origin origin queue untrusted scope release review principal index filter approval idempotent search sandbox runner record audit policy schema sandbox principal merge provider audit operation token queue operation gateway review index grant scope.\n\nSocket provider queue contract claim terminal token policy record module runner runner cursor provider filter budget chain principal connection limit queue connection idempotent connection session harness merge principal provider relay session claim retry untrusted principal harness approval token policy envelope gateway pairing policy retry sandbox review pool merge harness pairing untrusted transcript claim runner account migration timeout socket inbox retry.\n\nClaim provider search claim policy filter policy token index account scope catalogue retry catalogue room policy retry harness envelope relay module origin transcript relay inbox session module origin harness relay merge relay room transcript egress merge chain release grant approval brain pool claim room principal queue migration filter sandbox provider envelope release terminal pairing pool egress brain scope runner approval.\n\nBudget approval device harness grant idempotent index inbox terminal device search provider gateway approval relay merge limit claim pairing cursor egress claim chain pairing migration limit session operation harness connection operation search transcript sandbox terminal sandbox filter socket relay token claim migration socket module pool pairing budget pool catalogue sandbox token migration merge review chain budget provider runner release index.\n\nModule operation socket session policy scope limit merge filter search terminal record token gateway retry audit retry room runner migration provider review search origin module connection chain chain filter pairing record record module approval timeout claim transcript index brain connection harness socket principal sandbox limit idempotent cursor chain brain gateway scope socket token catalogue approval inbox scope harness retry merge.",
+   "created": "2026-03-12",
+   "id": "rec_02",
+   "kind": "note",
+   "room": "room_core",
+   "score": 0.92,
+   "snippet": "Record room review search connection approval schema provider queue retry pool release egress account module socket grant timeout harness brain index pool origin retry harness sandbox envelope socket.",
+   "sources": [
+    "ABC-102"
+   ],
+   "title": "Contract filter pairing provider connection"
+  },
+  "rec_03": {
+   "body": "Egress room policy audit harness filter catalogue untrusted connection migration cursor search envelope index grant search account account budget schema budget pairing token migration token claim egress connection room connection connection origin account contract claim chain socket transcript token connection timeout queue policy principal scope principal filter sandbox scope runner limit policy egress pairing sandbox account policy grant relay claim.\n\nModule contract claim socket pairing timeout room egress module token search search envelope runner scope operation module merge catalogue device inbox sandbox pairing pool origin sandbox inbox token sandbox module release principal inbox runner chain harness untrusted pairing room catalogue provider socket inbox sandbox record retry idempotent limit socket harness scope record transcript envelope idempotent origin operation cursor approval principal.\n\nBrain transcript review budget harness account envelope provider harness relay provider migration schema device harness harness session search pairing principal claim transcript release transcript inbox runner gateway brain gateway grant approval transcript schema pairing filter search brain audit runner relay idempotent origin principal transcript approval schema catalogue pairing migration timeout brain origin device account brain queue brain socket scope terminal.\n\nRetry index record claim provider audit sandbox limit chain relay module operation terminal approval merge catalogue review brain operation record policy catalogue transcript catalogue claim limit room schema inbox sandbox transcript queue brain terminal device grant origin connection release claim sandbox idempotent index untrusted sandbox envelope chain grant terminal module filter idempotent operation search provider principal harness provider contract connection.\n\nGateway terminal envelope pairing egress timeout egress room session runner catalogue retry filter connection egress index catalogue search filter room limit transcript scope socket audit device gateway pairing approval egress timeout timeout envelope sandbox sandbox operation audit approval release chain search release timeout approval relay index timeout terminal principal record audit session socket catalogue release review grant claim audit retry.",
+   "created": "2026-04-13",
+   "id": "rec_03",
+   "kind": "fact",
+   "room": "room_core",
+   "score": 0.88,
+   "snippet": "Contract filter socket approval budget limit review envelope socket relay release review provider principal schema untrusted egress account merge terminal envelope device session filter device brain catalogue grant.",
+   "sources": [
+    "ABC-103"
+   ],
+   "title": "Pool review device module retry"
+  },
+  "rec_04": {
+   "body": "Account record brain untrusted record release policy socket device catalogue index token brain chain catalogue budget filter origin token timeout limit inbox contract token catalogue timeout connection chain pairing sandbox claim room transcript brain operation budget untrusted chain terminal brain record record token grant search queue relay operation pairing egress idempotent queue contract review scope token cursor operation transcript migration.\n\nPairing token terminal pairing schema origin pairing pool index approval egress policy room catalogue migration relay account queue token provider operation contract envelope chain release runner migration sandbox policy origin account catalogue operation gateway harness timeout pairing relay audit retry policy catalogue principal sandbox session relay runner schema device provider scope queue device cursor policy harness contract provider contract audit.\n\nInbox pairing catalogue limit brain audit runner connection merge origin egress scope socket operation origin envelope record budget transcript token runner relay principal idempotent device module principal contract egress module queue release retry connection brain runner sandbox relay cursor session transcript room connection brain relay search scope runner catalogue idempotent envelope claim origin harness claim queue module principal timeout principal.\n\nPrincipal harness catalogue room timeout provider socket provider operation relay release record limit merge cursor runner terminal gateway migration filter approval migration principal egress room policy scope token policy principal sandbox grant pool migration review token merge relay budget operation idempotent untrusted gateway untrusted record queue token account principal inbox approval timeout runner brain token connection migration claim brain migration.\n\nChain claim terminal pool module connection terminal operation review envelope cursor limit limit queue review runner session gateway release policy schema provider record inbox transcript catalogue contract socket schema brain origin sandbox session grant scope catalogue brain device origin review session session sandbox audit review principal operation sandbox review socket migration sandbox socket contract index pairing claim cursor envelope socket.",
+   "created": "2026-05-14",
+   "id": "rec_04",
+   "kind": "note",
+   "room": "room_core",
+   "score": 0.84,
+   "snippet": "Migration connection transcript transcript retry approval brain egress transcript idempotent budget audit gateway idempotent budget merge harness device untrusted terminal policy origin approval room origin policy envelope policy.",
+   "sources": [
+    "ABC-104"
+   ],
+   "title": "Relay inbox search account audit"
+  },
+  "rec_05": {
+   "body": "Index merge terminal scope connection inbox inbox grant sandbox sandbox index operation approval index operation operation account limit scope audit scope record index principal inbox account chain pool gateway token session device token account relay merge index pairing chain search module timeout limit account catalogue migration session record harness session gateway queue search scope device limit merge relay cursor schema.\n\nInbox merge approval schema account brain gateway runner queue claim account index index relay runner device retry scope retry review record room retry contract device timeout token schema brain account inbox review policy retry brain grant operation search approval retry record review idempotent record scope operation chain device scope transcript transcript migration approval gateway principal session pairing inbox provider token.\n\nGateway cursor timeout brain terminal operation policy filter audit cursor module index review index module principal sandbox device contract chain queue origin egress envelope idempotent migration chain brain filter egress review search token contract policy audit pool filter principal review connection timeout claim budget provider index merge catalogue origin release origin connection release chain module queue device brain connection chain.\n\nClaim token release scope brain envelope scope claim terminal origin origin record provider release provider gateway budget claim scope operation scope budget inbox terminal filter sandbox runner transcript record gateway review policy timeout operation account filter session origin token module migration transcript runner migration connection gateway review schema contract migration principal harness policy envelope release principal search principal review contract.\n\nPolicy untrusted room principal grant filter gateway chain token operation review scope harness connection record transcript merge merge operation brain token gateway limit filter session catalogue harness queue untrusted envelope room principal chain search runner terminal retry scope sandbox token cursor inbox brain merge record claim queue device scope schema filter cursor inbox merge limit timeout session operation record pairing.",
+   "created": "2026-06-15",
+   "id": "rec_05",
+   "kind": "decision",
+   "room": "room_core",
+   "score": 0.8,
+   "snippet": "Runner origin harness cursor pairing catalogue schema chain audit review timeout catalogue principal untrusted migration relay filter search untrusted idempotent transcript transcript transcript transcript scope limit operation transcript.",
+   "sources": [
+    "ABC-105"
+   ],
+   "title": "Retry contract room token account"
+  },
+  "rec_06": {
+   "body": "Queue pool harness migration filter inbox untrusted room transcript timeout index grant release catalogue device operation relay token budget terminal transcript relay runner socket harness harness operation review untrusted device contract token scope policy provider migration transcript queue policy transcript filter inbox brain audit search socket operation claim limit principal idempotent release policy origin device envelope operation record harness filter.\n\nAccount index idempotent principal audit search limit device record policy budget merge terminal untrusted token gateway untrusted room limit runner release budget device connection principal provider chain limit retry gateway catalogue operation approval envelope pairing origin provider terminal relay approval schema chain record audit queue device operation contract runner envelope runner inbox socket principal account token module scope contract origin.\n\nPolicy room search egress device record origin inbox transcript record cursor brain catalogue review module record approval envelope idempotent record operation provider claim retry review inbox queue approval migration egress envelope grant idempotent grant token harness policy audit limit retry idempotent relay limit filter origin review retry connection retry brain cursor module migration runner brain chain filter review schema retry.\n\nEnvelope account filter pairing gateway harness untrusted socket room operation pairing operation principal session session catalogue sandbox untrusted migration pool scope timeout limit retry index origin sandbox inbox merge harness operation audit pool scope envelope pairing pool limit search queue idempotent search inbox account gateway pool gateway token idempotent relay account account device retry transcript pool timeout budget timeout device.\n\nInbox principal retry record grant pool claim chain merge provider audit contract operation approval record sandbox transcript release idempotent transcript cursor schema relay transcript provider scope runner sandbox claim limit module search envelope relay record timeout cursor catalogue terminal catalogue origin operation untrusted review review module untrusted approval inbox sandbox envelope operation filter operation index room scope envelope room sandbox.",
+   "created": "2026-07-16",
+   "id": "rec_06",
+   "kind": "decision",
+   "room": "room_core",
+   "score": 0.76,
+   "snippet": "Grant pool module relay scope runner schema origin cursor scope pairing catalogue session socket inbox catalogue terminal origin operation token device module pairing limit grant grant retry filter.",
+   "sources": [
+    "ABC-106"
+   ],
+   "title": "Claim socket inbox egress brain"
+  },
+  "rec_07": {
+   "body": "Harness search scope principal runner pairing audit record provider idempotent merge token provider room harness sandbox chain session gateway schema principal contract relay retry schema queue sandbox grant search harness schema review transcript egress socket runner untrusted terminal module contract envelope origin limit search harness idempotent scope approval principal limit inbox origin operation runner gateway runner runner untrusted envelope grant.\n\nApproval inbox grant audit limit session budget release schema connection egress release migration room relay pairing search migration merge review origin release index approval account operation idempotent merge retry filter envelope token relay merge sandbox runner relay runner principal untrusted catalogue approval terminal provider provider release module brain retry module relay chain pairing schema release egress limit untrusted brain origin.\n\nGrant pairing principal brain operation harness limit terminal search record egress budget record index schema pool account budget relay catalogue principal merge module pool module release runner origin module provider contract gateway connection terminal terminal untrusted terminal module search policy egress account review runner chain token budget gateway brain contract index record sandbox account origin schema origin budget idempotent untrusted.\n\nSearch retry device cursor approval cursor idempotent retry terminal claim record index release policy provider module relay untrusted transcript filter merge inbox token contract index runner record terminal filter cursor approval cursor device search socket policy transcript contract queue token queue chain limit timeout contract claim claim inbox claim approval room review account pairing schema schema device transcript search queue.\n\nOrigin connection sandbox retry pairing scope pairing operation filter record approval origin chain module session device budget queue module session scope sandbox inbox schema retry contract schema inbox token search budget gateway scope egress search contract module audit token sandbox pool claim room terminal approval session relay sandbox idempotent pairing merge filter retry socket module operation transcript grant merge approval.",
+   "created": "2026-08-17",
+   "id": "rec_07",
+   "kind": "note",
+   "room": "room_core",
+   "score": 0.72,
+   "snippet": "Migration pool migration token limit review brain queue session inbox queue pairing origin review cursor session index queue provider principal approval review token queue pairing brain device search.",
+   "sources": [
+    "ABC-107"
+   ],
+   "title": "Limit provider approval origin scope"
+  },
+  "rec_08": {
+   "body": "Token chain schema policy principal approval envelope timeout transcript room egress brain pairing connection release policy room sandbox token device relay idempotent session relay token record timeout merge migration principal index limit relay scope origin chain index runner claim untrusted migration provider contract contract egress index principal scope limit chain pairing token terminal grant pairing limit terminal brain egress connection.\n\nOrigin untrusted runner filter merge claim sandbox brain policy socket catalogue pairing migration audit search egress scope terminal session operation socket egress pool chain policy limit grant operation pairing origin pool policy migration relay room merge egress idempotent origin egress origin budget harness harness connection origin session budget schema account pool brain token retry scope chain filter limit grant origin.\n\nTimeout relay operation record envelope inbox idempotent limit account grant token index claim pairing gateway token connection connection scope terminal account harness brain relay release account origin operation session egress timeout pool timeout audit egress runner record queue account room pairing gateway sandbox harness inbox budget schema room audit room queue search policy merge room claim module approval approval module.\n\nRelease retry index budget room inbox audit catalogue envelope merge operation claim contract provider claim runner socket review release queue harness release relay queue device pool account operation retry approval runner harness index limit audit envelope budget connection room schema pairing sandbox brain review pairing schema module runner device queue egress queue socket grant device merge connection chain search merge.\n\nTerminal schema index relay account scope release retry egress timeout session queue cursor audit session connection approval policy catalogue room brain scope provider token idempotent session session scope review migration claim token session module operation schema filter queue connection review egress scope device scope merge room sandbox budget grant filter retry contract timeout index budget grant grant grant transcript audit.",
+   "created": "2026-09-18",
+   "id": "rec_08",
+   "kind": "decision",
+   "room": "room_core",
+   "score": 0.68,
+   "snippet": "Operation policy catalogue record index claim connection transcript migration policy claim queue retry device release session session record budget limit token claim review module device egress release device.",
+   "sources": [
+    "ABC-108"
+   ],
+   "title": "Cursor cursor search timeout pool"
+  },
+  "rec_09": {
+   "body": "Cursor contract policy policy origin envelope schema filter migration transcript brain session operation terminal review harness module module queue sandbox transcript relay search pairing pool transcript connection pool merge gateway schema chain transcript idempotent relay chain queue origin untrusted device connection gateway envelope operation runner pairing scope queue room socket chain gateway claim timeout envelope session policy audit harness transcript.\n\nSearch filter operation sandbox sandbox sandbox principal catalogue budget untrusted catalogue budget operation cursor sandbox catalogue scope token grant queue runner gateway connection sandbox account grant provider device principal brain grant relay module timeout budget approval filter contract cursor origin egress grant timeout audit account harness schema account budget connection migration approval migration cursor account filter catalogue review schema policy.\n\nPrincipal terminal claim idempotent merge pairing filter idempotent provider catalogue limit limit provider session connection pool policy claim timeout cursor terminal contract transcript runner device brain connection chain idempotent chain retry budget account inbox account relay search session brain idempotent socket module device egress envelope relay queue terminal egress device migration index scope queue policy untrusted migration origin harness pool.\n\nEnvelope device audit untrusted claim catalogue catalogue budget queue scope migration migration index limit budget record operation merge operation merge audit harness scope runner harness search idempotent contract grant retry transcript schema origin harness record budget catalogue module grant terminal egress review filter account release device account device transcript queue idempotent module terminal principal chain runner record migration retry terminal.\n\nEgress provider room cursor provider origin gateway schema terminal contract policy approval pool chain module connection chain inbox gateway runner session relay token schema retry provider cursor search provider cursor catalogue gateway queue queue release untrusted gateway terminal filter device sandbox module untrusted device egress runner untrusted socket queue policy scope harness pairing timeout transcript principal idempotent schema origin claim.",
+   "created": "2026-01-10",
+   "id": "rec_09",
+   "kind": "fact",
+   "room": "room_core",
+   "score": 0.64,
+   "snippet": "Claim pool inbox limit catalogue catalogue runner limit principal device principal approval envelope grant terminal record merge index claim limit room gateway record operation pool approval release transcript.",
+   "sources": [
+    "ABC-109"
+   ],
+   "title": "Approval policy scope policy limit"
+  },
+  "rec_10": {
+   "body": "Harness retry transcript egress search catalogue contract pool review queue migration approval brain pairing chain pairing socket provider timeout room grant principal account review pool timeout harness operation brain queue account timeout inbox timeout claim harness room relay operation schema module scope device schema operation operation release sandbox review harness runner record runner provider merge review idempotent runner provider transcript.\n\nScope contract runner envelope session claim room retry search idempotent schema budget principal cursor timeout origin schema claim harness module grant origin brain queue index timeout scope session scope socket brain queue retry filter catalogue gateway relay principal runner untrusted search contract chain origin merge connection device budget brain sandbox budget operation scope contract socket device claim egress catalogue terminal.\n\nSession relay policy transcript contract index sandbox egress relay catalogue connection connection policy sandbox brain contract room chain runner filter provider harness module token retry socket connection untrusted terminal untrusted merge contract policy harness provider transcript merge retry session record connection approval room brain device terminal room runner account transcript idempotent pairing grant pool cursor terminal pool transcript principal socket.\n\nGrant gateway device idempotent connection terminal claim filter account device connection gateway sandbox budget envelope session pool origin connection merge audit approval claim budget cursor record audit idempotent egress filter record connection brain pairing device inbox release transcript terminal operation contract inbox provider limit timeout inbox policy egress untrusted audit merge token module egress contract pairing cursor connection transcript module.\n\nTimeout inbox audit index grant untrusted timeout approval cursor budget migration search index terminal session envelope merge schema origin provider runner terminal merge approval review room search policy chain claim envelope scope socket idempotent pairing timeout index provider claim socket merge provider approval policy account audit merge transcript account device transcript filter search operation operation audit budget room session pairing.",
+   "created": "2026-02-11",
+   "id": "rec_10",
+   "kind": "note",
+   "room": "room_core",
+   "score": 0.6,
+   "snippet": "Brain audit session origin contract filter principal origin catalogue module limit envelope device origin idempotent idempotent audit session runner release principal scope queue migration audit gateway claim inbox.",
+   "sources": [
+    "ABC-110"
+   ],
+   "title": "Transcript migration approval release brain"
+  },
+  "rec_11": {
+   "body": "Untrusted envelope review device harness session envelope merge review filter connection transcript device operation scope room account grant budget module release policy merge untrusted sandbox transcript sandbox module brain gateway claim index provider origin terminal migration sandbox idempotent provider operation operation room schema policy schema retry merge queue token gateway envelope untrusted schema device runner grant index search principal account.\n\nSandbox contract module review relay connection untrusted grant sandbox record chain inbox search device migration approval harness review migration transcript migration catalogue policy budget queue approval device gateway egress pool review timeout migration review operation operation egress timeout relay untrusted review inbox gateway untrusted timeout search audit retry index claim sandbox review idempotent token room cursor brain search operation connection.\n\nCursor token connection relay brain device device harness approval claim operation provider audit audit untrusted merge retry envelope limit connection merge connection runner timeout review egress audit principal device review provider audit merge origin contract schema connection pool operation grant idempotent gateway index brain untrusted envelope origin module filter search transcript inbox grant review account runner pairing retry inbox sandbox.\n\nRelay budget provider claim grant review provider egress grant brain chain egress filter schema pairing account brain idempotent socket sandbox runner filter index retry approval migration merge pool migration schema token scope principal retry gateway retry claim record cursor chain runner device approval principal account operation catalogue release principal review token principal connection approval audit migration session session search transcript.\n\nOrigin account pairing room operation queue untrusted brain scope record release provider migration catalogue chain terminal room principal device chain policy pairing audit idempotent pairing token connection relay sandbox scope schema operation merge transcript relay inbox retry gateway retry release brain provider module contract operation approval origin review policy brain audit egress operation transcript approval sandbox egress limit claim inbox.",
+   "created": "2026-03-12",
+   "id": "rec_11",
+   "kind": "decision",
+   "room": "room_core",
+   "score": 0.56,
+   "snippet": "Index contract chain token cursor harness audit relay migration device filter envelope contract queue harness timeout audit cursor origin queue timeout session egress search room module runner search.",
+   "sources": [
+    "ABC-111"
+   ],
+   "title": "Token inbox account timeout connection"
+  }
+ },
+ "rooms": [
+  {
+   "id": "room_core",
+   "name": "Core",
+   "project": "ABC",
+   "records": 214
+  },
+  {
+   "id": "room_app",
+   "name": "App",
+   "project": "APP",
+   "records": 97
+  },
+  {
+   "id": "room_ops",
+   "name": "Operations",
+   "project": "OPS",
+   "records": 58
+  }
+ ],
+ "topic": "approvals"
+}
