@@ -82,7 +82,8 @@ connections only, and no third-party relay is ever used), on the UDP addresses o
 is transport only: a peer authenticates with the same signed device handshake as on any listener.
 The transport key is <db dir>/iroh.key (0600); iroh-id prints the endpoint id clients pin.
 --enable-module (off unless given) mounts a module this build carries at /modules/<id>/v1: its
-migrations run first, so a refused one stops the start. A plain build carries none.
+migrations run first, so a refused one stops the start. A plain build carries none; a release build
+carries the Brain and mounts it without the flag.
 openapi prints the client API's contract (api/openapi.json; `make contract`).
 device list shows every device (id, kind, name, status, fingerprint); device revoke stops one at
 once (its open sockets close within 2 s); the row stays listed. A device enrolls only by
@@ -106,6 +107,13 @@ pub(crate) const ADMIN: AuditActor = AuditActor::User(UserId(1));
 /// none; a composed binary (`modules/citadel/bin`) passes its modules. The dependency direction
 /// (no Core crate depends on `modules/`) is why the module is handed in, never named here.
 pub async fn run(available: Vec<Arc<dyn Module>>) -> ExitCode {
+    run_with_defaults(available, &[]).await
+}
+
+/// `run`, with the modules in `default_on` mounted by `serve` even without `--enable-module` (a
+/// release binary that carries a core feature, the Brain, so an unchanged unit still serves it).
+/// An id in `default_on` that the build does not carry stops the start, like `--enable-module`.
+pub async fn run_with_defaults(available: Vec<Arc<dyn Module>>, default_on: &[&str]) -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let seeded = match args.first() {
@@ -131,7 +139,9 @@ pub async fn run(available: Vec<Arc<dyn Module>>) -> ExitCode {
                     let flags = config.serve_flags(given);
                     let flags: Vec<&str> = flags.iter().map(String::as_str).collect();
                     match serve_flags(&flags) {
-                        Some(flags) => serve(&config.home().db(), flags, available).await,
+                        Some(flags) => {
+                            serve(&config.home().db(), flags, available, default_on).await
+                        }
                         None => {
                             eprintln!("{}", usage());
                             return ExitCode::from(2);
@@ -142,7 +152,7 @@ pub async fn run(available: Vec<Arc<dyn Module>>) -> ExitCode {
             }
         }
         ["serve", db, flags @ ..] => match serve_flags(flags) {
-            Some(flags) => serve(Path::new(db), flags, available).await,
+            Some(flags) => serve(Path::new(db), flags, available, default_on).await,
             None => {
                 eprintln!("{}", usage());
                 return ExitCode::from(2);
@@ -664,10 +674,14 @@ fn enabled(
 /// shuts down cleanly (`USAGE`).
 async fn serve(
     db: &Path,
-    flags: Serve,
+    mut flags: Serve,
     available: Vec<Arc<dyn Module>>,
+    default_on: &[&str],
 ) -> Result<(), Box<dyn std::error::Error>> {
     ainkrad_core_server::ops::logging::init(flags.log_json);
+    flags
+        .modules
+        .extend(default_on.iter().map(|id| (*id).to_owned()));
     // Flags first: a refused --listen never creates or migrates the database.
     let listen = listen(db, &flags)?;
     let modules = enabled(available, &flags.modules)?;

@@ -354,13 +354,15 @@ impl PtyDriver {
             scrollback_bytes: req.scrollback_bytes.map(|b| clamp(SCROLLBACK_BYTES, b)),
         };
         // No program asked for: the Ainkrad shell, so a terminal looks the same on every runner (N20).
-        if req.program.is_none()
-            && req.args.is_empty()
-            && let Some((zsh, dir)) = self.ainkrad_shell()
-        {
-            spec.program = Some(zsh);
-            spec.args = vec!["-l".to_owned()];
-            spec.env.insert("ZDOTDIR".to_owned(), dir);
+        if req.program.is_none() && req.args.is_empty() {
+            match self.ainkrad_shell() {
+                Ok((zsh, dir)) => {
+                    spec.program = Some(zsh);
+                    spec.args = vec!["-l".to_owned()];
+                    spec.env.insert("ZDOTDIR".to_owned(), dir);
+                }
+                Err(why) => tracing::warn!("{why}: starting the login shell"),
+            }
         }
         if let Some(b) = req.scrollback_budget {
             self.set_budget(b);
@@ -432,12 +434,11 @@ impl PtyDriver {
     }
 
     /// `zsh` and the profile dir when the Ainkrad shell can start here; otherwise (zsh missing, or
-    /// no profile installed) the login shell is used and the reason is logged.
-    fn ainkrad_shell(&self) -> Option<(String, String)> {
+    /// no profile installed) the reason, and the login shell is used.
+    fn ainkrad_shell(&self) -> Result<(String, String), &'static str> {
         let dir = &self.config.shell_dir;
         if !dir.join(".zshrc").is_file() {
-            tracing::warn!(dir = %dir.display(), "no Ainkrad shell profile here: starting the login shell");
-            return None;
+            return Err("no Ainkrad shell profile installed");
         }
         let path = self
             .config
@@ -457,11 +458,16 @@ impl PtyDriver {
             .find(|p| Path::new(p).is_file())
             .map(str::to_owned)
         });
-        let Some(zsh) = zsh else {
-            tracing::warn!("zsh is not installed here: starting the login shell");
-            return None;
-        };
-        Some((zsh, dir.to_string_lossy().into_owned()))
+        let zsh = zsh.ok_or("zsh is not installed")?;
+        Ok((zsh, dir.to_string_lossy().into_owned()))
+    }
+
+    /// What a terminal without a program starts here, for the runner's facts: the app shows it.
+    pub fn shell_status(&self) -> String {
+        match self.ainkrad_shell() {
+            Ok(_) => "Ainkrad zsh".to_owned(),
+            Err(why) => format!("login shell ({why})"),
+        }
     }
 
     /// Where the per-shell network records live: beside the terminals' dir, in the runner's
@@ -744,11 +750,35 @@ mod shell_tests {
         std::fs::set_permissions(&zsh, std::fs::Permissions::from_mode(0o755)).unwrap();
         let d = driver(&bin, shell.clone());
         // No profile yet: the login shell, as before.
-        assert_eq!(d.ainkrad_shell(), None);
+        assert_eq!(d.ainkrad_shell(), Err("no Ainkrad shell profile installed"));
+        assert_eq!(
+            d.shell_status(),
+            "login shell (no Ainkrad shell profile installed)"
+        );
         std::fs::write(shell.join(".zshrc"), "# profile\n").unwrap();
         let got = d.ainkrad_shell().expect("the profile and zsh are here");
         assert_eq!(got.0, zsh.to_string_lossy());
         assert_eq!(got.1, shell.to_string_lossy());
+        assert_eq!(d.shell_status(), "Ainkrad zsh");
+    }
+
+    #[test]
+    fn a_missing_zsh_falls_back_and_says_so() {
+        let (bin, shell) = dirs("nozsh");
+        std::fs::write(shell.join(".zshrc"), "# profile\n").unwrap();
+        let d = driver(&bin, shell);
+        // Only meaningful where no zsh sits at the fixed fallbacks (a CI box may have one).
+        if ![
+            "/usr/bin/zsh",
+            "/bin/zsh",
+            "/usr/local/bin/zsh",
+            "/opt/homebrew/bin/zsh",
+        ]
+        .iter()
+        .any(|p| Path::new(p).is_file())
+        {
+            assert_eq!(d.shell_status(), "login shell (zsh is not installed)");
+        }
     }
 
     #[test]

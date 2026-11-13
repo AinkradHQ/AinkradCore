@@ -189,3 +189,41 @@ fn the_committed_contract_is_current() {
         }
     }
 }
+
+/// A response schema must never carry `additionalProperties: false`: an older client would then refuse
+/// a body that a newer Core gave one more field. Checked on a fresh contract and on every committed one.
+#[test]
+fn no_response_schema_forbids_extra_properties() {
+    fn check(name: &str, spec: &Value) {
+        for n in forward::response_schemas(spec) {
+            assert!(
+                !spec
+                    .pointer(&n[1..])
+                    .unwrap()
+                    .to_string()
+                    .contains(r#""additionalProperties":false"#),
+                "{name}: response schema {n} has additionalProperties:false (drop it from the published contract)"
+            );
+        }
+        for item in spec["paths"].as_object().unwrap().values() {
+            for op in item.as_object().unwrap().values() {
+                assert!(
+                    !op["responses"]
+                        .to_string()
+                        .contains(r#""additionalProperties":false"#),
+                    "{name}: an inline response body has additionalProperties:false"
+                );
+            }
+        }
+    }
+    check("generated", &serde_json::from_str(&json_for(&[])).unwrap());
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for f in [
+        "api/openapi.json",
+        "modules/citadel/api/openapi.core.json",
+        "modules/brain/api/openapi.core.json",
+    ] {
+        let text = std::fs::read_to_string(root.join(f)).unwrap();
+        check(f, &serde_json::from_str(&text).unwrap());
+    }
+}

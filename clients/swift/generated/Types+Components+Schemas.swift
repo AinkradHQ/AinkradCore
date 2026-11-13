@@ -6285,31 +6285,6 @@ extension Components {
                 case shareHistory = "share_history"
                 case terminals
             }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.agentCapacity = try container.decode(
-                    Swift.Int32.self,
-                    forKey: .agentCapacity
-                )
-                self.agents = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .agents
-                )
-                self.shareHistory = try container.decodeIfPresent(
-                    Swift.Bool.self,
-                    forKey: .shareHistory
-                )
-                self.terminals = try container.decode(
-                    Swift.Bool.self,
-                    forKey: .terminals
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "agent_capacity",
-                    "agents",
-                    "share_history",
-                    "terminals"
-                ])
-            }
         }
         /// Who the runner process is.
         ///

@@ -12,9 +12,15 @@
 runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/TerminalExit/properties/op
 runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/properties/op
 
-# New runner ops go before the `#[serde(other)]` catch-all, which serde keeps last, so it moves down: the positional
-# comparison sees its old slot taken by a new op. No variant is removed (checked by op name); only positions shift.
-# Delete these two lines in the next change to api/ (the baseline will have the ops then).
-# (history.read, E5-3: the catch-all moved from #20 to #21 and from #18 to #19.)
-runner.schema.json: variant #20 removed at /$defs/Command/oneOf
-runner.schema.json: variant #18 removed at /$defs/Reply/oneOf
+# Forward-compatible responses: the published schema of every response type drops additionalProperties:false
+# (an older client must ignore a field a newer Core adds). Relaxing is wire-compatible; the server still rejects
+# unknown request fields. Delete these lines once the baseline tag has the open schemas.
+openapi.json: removed /components/schemas/RunnerPolicyBody/additionalProperties
+modules/brain/api/openapi.core.json: removed /components/schemas/RoomConfig/additionalProperties
+modules/brain/api/openapi.core.json: removed /components/schemas/RunnerPolicyBody/additionalProperties
+modules/citadel/api/openapi.core.json: removed /components/schemas/AccountLimitBody/additionalProperties
+modules/citadel/api/openapi.core.json: removed /components/schemas/DodRule/additionalProperties
+modules/citadel/api/openapi.core.json: removed /components/schemas/Environment/additionalProperties
+modules/citadel/api/openapi.core.json: removed /components/schemas/Profile/additionalProperties
+modules/citadel/api/openapi.core.json: removed /components/schemas/RoleModel/additionalProperties
+modules/citadel/api/openapi.core.json: removed /components/schemas/RunnerPolicyBody/additionalProperties
