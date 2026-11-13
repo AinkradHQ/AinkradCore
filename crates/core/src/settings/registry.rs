@@ -140,4 +140,9 @@ registry! {
     CodeModeMaxResultBytes "code_mode.max_result_bytes" Bytes 200_000, 1_024, 250_000, SO,
         "Code Mode: the most bytes of one operation's result returned to the session; a larger \
          one is cut and marked `truncated` with its full size. Read at each call.";
+    CodeModeHideConnTools "code_mode.hide_connection_tools" Count 0, 0, 1, SO,
+        "Code Mode: 1 hides the old per-connection tools (`github.get_issue`, ...) from every AI \
+         session's tool list, leaving only `ainkrad_search` and `ainkrad_run` (connection \
+         operations stay reachable as `connections.<kind>.<op>`); 0 (the default) lists both. \
+         Read at each tool-list poll.";
 }

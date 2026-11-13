@@ -102,10 +102,13 @@ pub async fn search_call(app: &App, runner: &str, session: &str, call: &ToolCall
     if call.args.to_string().len() > MAX_ARGS_BYTES {
         return refuse(id, "bad_args", "arguments too large");
     }
-    let Ok(scopes) = session_scopes(&app.pool, session).await else {
+    let Ok(mut scopes) = session_scopes(&app.pool, session).await else {
         return refuse(id, "unavailable", "try again");
     };
-    let answer = super::search(app.catalogue(), &scopes, query, limit);
+    // E5: this session's connection operations are searched beside the contract's.
+    scopes.push(super::conn::GROUP.to_owned());
+    let cat = super::conn::merged(app, session).await;
+    let answer = super::search(&cat, &scopes, query, limit);
     ToolResult {
         id,
         ok: true,

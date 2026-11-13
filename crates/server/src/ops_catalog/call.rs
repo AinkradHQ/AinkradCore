@@ -111,7 +111,7 @@ impl Limits {
 /// How a call ended: what the session gets, and what the audit row says.
 struct Done {
     op: Option<(String, Risk)>,
-    outcome: Result<Value, (&'static str, String)>,
+    outcome: Result<Value, (String, String)>,
     /// Refused before it ran: audited once per window, not per call.
     denied: bool,
 }
@@ -119,7 +119,7 @@ struct Done {
 fn deny(code: &'static str, msg: impl Into<String>, op: Option<&Op>) -> Done {
     Done {
         op: op.map(|o| (o.id.clone(), o.risk)),
-        outcome: Err((code, msg.into())),
+        outcome: Err((code.to_owned(), msg.into())),
         denied: true,
     }
 }
@@ -167,9 +167,9 @@ pub async fn call_call(app: &App, runner: &str, session: &str, call: &ToolCall) 
         return refuse(id, "unknown_session", "no live session of yours");
     };
     let started = Instant::now();
-    let done = origin::scope(origin.clone(), run(app, session, call)).await;
+    let done = origin::scope(origin.clone(), run(app, runner, session, call)).await;
     let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let code = done.outcome.as_ref().err().map(|e| e.0);
+    let code = done.outcome.as_ref().err().map(|e| e.0.as_str());
     let audit = !done.denied
         || app.auth.refusals.note(
             &format!("code_mode {session} {}", code.unwrap_or("")),
@@ -205,7 +205,7 @@ pub async fn call_call(app: &App, runner: &str, session: &str, call: &ToolCall) 
             code: None,
             message: None,
         },
-        Err((code, message)) => refuse(id, code, &message),
+        Err((code, message)) => refuse(id, &code, &message),
     }
 }
 
@@ -213,7 +213,7 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-async fn run(app: &App, session: &str, call: &ToolCall) -> Done {
+async fn run(app: &App, runner: &str, session: &str, call: &ToolCall) -> Done {
     let Ok(lim) = Limits::read(app).await else {
         return deny("unavailable", "try again", None);
     };
@@ -248,6 +248,10 @@ async fn run(app: &App, session: &str, call: &ToolCall) -> Done {
             .any(|k| !["op", "args", "run", "key"].contains(&k.as_str()))
     }) {
         return deny("bad_args", "unknown field", None);
+    }
+    // 3a. A connection operation (E5): the session's grants and the broker decide, not the scopes.
+    if op_id.starts_with(super::conn::PREFIX) {
+        return connection(app, runner, session, call, op_id, run_id, &lim).await;
     }
     // 3. The operation: in the catalogue, read-only in this epic.
     let Some(op) = app.catalogue().ops.get(op_id) else {
@@ -302,37 +306,13 @@ async fn run(app: &App, session: &str, call: &ToolCall) -> Done {
     if !names_ok {
         return deny("bad_args", "a query parameter is not allowed", Some(op));
     }
-    // 6. The script run's budget.
-    if let Some(run_id) = run_id {
-        let mut runs = state.runs.lock().unwrap_or_else(|e| e.into_inner());
-        let now = Instant::now();
-        if runs.len() > 1024 {
-            runs.retain(|_, (t, _)| now.duration_since(*t) < lim.run_wall);
-        }
-        let r = runs
-            .entry((session.to_owned(), run_id.to_owned()))
-            .or_insert((now, 0));
-        if now.duration_since(r.0) > lim.run_wall {
-            return deny("run_timeout", "this script ran out of time", Some(op));
-        }
-        if r.1 >= lim.run_calls {
-            return deny(
-                "too_many_calls",
-                "this script made too many calls",
-                Some(op),
-            );
-        }
-        r.1 += 1;
+    // 6. The script run's budget, 7. concurrency.
+    if let Err(d) = budget(state, &lim, session, run_id, Some(op)) {
+        return d;
     }
-    // 7. Concurrency.
-    let _flight = {
-        let mut m = state.inflight.lock().unwrap_or_else(|e| e.into_inner());
-        let n = m.entry(session.to_owned()).or_default();
-        if *n >= lim.concurrent {
-            return deny("busy", "too many calls running; wait for one", Some(op));
-        }
-        *n += 1;
-        Flight(state, session.to_owned())
+    let _flight = match flight(state, &lim, session, Some(op)) {
+        Ok(f) => f,
+        Err(d) => return d,
     };
     // 8. Through the router as the principal.
     let request = Request::builder()
@@ -354,9 +334,9 @@ async fn run(app: &App, session: &str, call: &ToolCall) -> Done {
     )
     .await;
     let op_ref = Some((op.id.clone(), op.risk));
-    let fail = |code, msg: &str| Done {
+    let fail = |code: &str, msg: &str| Done {
         op: op_ref.clone(),
-        outcome: Err((code, msg.to_owned())),
+        outcome: Err((code.to_owned(), msg.to_owned())),
         denied: false,
     };
     let Ok(Ok(response)) = sent else {
@@ -376,6 +356,114 @@ async fn run(app: &App, session: &str, call: &ToolCall) -> Done {
     }
     let (code, msg) = refusal(status, &body);
     fail(code, &msg)
+}
+
+/// The script run's call and time budget (`run_id` None: no run, no budget).
+fn budget(
+    state: &CallState,
+    lim: &Limits,
+    session: &str,
+    run_id: Option<&str>,
+    op: Option<&Op>,
+) -> Result<(), Done> {
+    let Some(run_id) = run_id else { return Ok(()) };
+    let mut runs = state.runs.lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    if runs.len() > 1024 {
+        runs.retain(|_, (t, _)| now.duration_since(*t) < lim.run_wall);
+    }
+    let r = runs
+        .entry((session.to_owned(), run_id.to_owned()))
+        .or_insert((now, 0));
+    if now.duration_since(r.0) > lim.run_wall {
+        return Err(deny("run_timeout", "this script ran out of time", op));
+    }
+    if r.1 >= lim.run_calls {
+        return Err(deny(
+            "too_many_calls",
+            "this script made too many calls",
+            op,
+        ));
+    }
+    r.1 += 1;
+    Ok(())
+}
+
+/// One in-flight slot of `session`, or `busy`.
+fn flight<'a>(
+    state: &'a CallState,
+    lim: &Limits,
+    session: &str,
+    op: Option<&Op>,
+) -> Result<Flight<'a>, Done> {
+    let mut m = state.inflight.lock().unwrap_or_else(|e| e.into_inner());
+    let n = m.entry(session.to_owned()).or_default();
+    if *n >= lim.concurrent {
+        return Err(deny("busy", "too many calls running; wait for one", op));
+    }
+    *n += 1;
+    Ok(Flight(state, session.to_owned()))
+}
+
+/// A `connections.<kind>.<op>` call (E5), through the broker.
+async fn connection(
+    app: &App,
+    runner: &str,
+    session: &str,
+    call: &ToolCall,
+    op_id: &str,
+    run_id: Option<&str>,
+    lim: &Limits,
+) -> Done {
+    use super::conn::{Ran, run as conn_run};
+    let state = &app.code_mode;
+    if let Err(d) = budget(state, lim, session, run_id, None) {
+        return d;
+    }
+    let _flight = match flight(state, lim, session, None) {
+        Ok(f) => f,
+        Err(d) => return d,
+    };
+    let now = app.clock.now();
+    let env = crate::connections::broker::Env {
+        pool: &app.pool,
+        sealer: app.secrets.as_ref(),
+        now: &now,
+    };
+    let sent = tokio::time::timeout(
+        lim.call_wall,
+        conn_run(
+            &app.connections,
+            &env,
+            runner,
+            session,
+            op_id,
+            &call.args["args"],
+            call,
+        ),
+    )
+    .await;
+    match sent {
+        Err(_) => deny("timeout", "the operation took too long", None),
+        Ok(Err(_)) => deny("unavailable", "try again", None),
+        Ok(Ok(Ran::Unknown)) => deny("unknown_op", "no such operation; use ainkrad.search", None),
+        Ok(Ok(Ran::NotRead(op))) => deny(
+            "not_available",
+            "this operation cannot be called yet",
+            Some(&op),
+        ),
+        Ok(Ok(Ran::Done(op, r))) => Done {
+            op: Some((op.id, op.risk)),
+            outcome: match (r.ok, r.result) {
+                (true, Some(v)) => Ok(cap(v, lim.max_result)),
+                _ => Err((
+                    r.code.unwrap_or_else(|| "refused".to_owned()),
+                    r.message.unwrap_or_default(),
+                )),
+            },
+            denied: false,
+        },
+    }
 }
 
 /// A stable refusal code for an API status, with the API's own code appended when it is a plain one.
