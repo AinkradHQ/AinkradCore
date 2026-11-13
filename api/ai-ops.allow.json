@@ -1,0 +1,9 @@
+{
+  "ops": [
+    {"op": "listAgentSessions", "risk": "read", "summary": "List AI sessions, newest first."},
+    {"op": "getAgentSession", "risk": "read", "summary": "Read one AI session: its state, harness, model and outcome."},
+    {"op": "getAgentTranscript", "risk": "read", "summary": "Read the transcript entries of an AI session after a sequence number."},
+    {"op": "listAudit", "risk": "read", "summary": "Read the audit log, filtered by action, target, actor or origin."},
+    {"op": "getCoreHealth", "risk": "read", "summary": "Read the Core's version, uptime, certificate end and newest backup."}
+  ]
+}

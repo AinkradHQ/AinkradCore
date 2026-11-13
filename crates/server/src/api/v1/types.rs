@@ -185,7 +185,7 @@
 ///
 /// 60: the audit origin (E1+E2): `AuditEntry.origin` (`EntryOrigin`: what started a row and the root of its chain) and
 ///    the audit list filters `origin` and `nobody_watching`.
-pub const API_MINOR: u32 = 60;
+pub const API_MINOR: u32 = 61;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

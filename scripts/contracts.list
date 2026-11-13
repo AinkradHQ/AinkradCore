@@ -8,6 +8,8 @@ api/openapi.json                        api-minor
 api/events.schema.json                  api-minor
 api/runner.schema.json                  api-minor
 modules/citadel/api/openapi.core.json   api-minor
+# the Code Mode allow-list: adding an operation a session can reach is an API change
+api/ai-ops.allow.json                   api-minor
 # every module contract: modules/<name>/api/*.json
 modules/*/api/*.json
 # the parked Citadel monolith's own API, a static copy that no generator touches: not gated today
