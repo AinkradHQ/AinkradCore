@@ -1,0 +1,1009 @@
+[
+ {
+  "description": "Read repositories, issues and pull requests: github.get_repo. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo"
+   ],
+   "type": "object"
+  },
+  "name": "github_get_repo"
+ },
+ {
+  "description": "Read repositories, issues and pull requests: github.list_branches. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo"
+   ],
+   "type": "object"
+  },
+  "name": "github_list_branches"
+ },
+ {
+  "description": "Read repositories, issues and pull requests: github.read_file. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "path": {
+     "description": "A file path inside the repository",
+     "type": "string"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "path"
+   ],
+   "type": "object"
+  },
+  "name": "github_read_file"
+ },
+ {
+  "description": "Read repositories, issues and pull requests: github.list_issues. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo"
+   ],
+   "type": "object"
+  },
+  "name": "github_list_issues"
+ },
+ {
+  "description": "Read repositories, issues and pull requests: github.get_issue. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "number": {
+     "description": "The issue or pull request number",
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "number"
+   ],
+   "type": "object"
+  },
+  "name": "github_get_issue"
+ },
+ {
+  "description": "Read repositories, issues and pull requests: github.list_issue_comments. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "number": {
+     "description": "The issue or pull request number",
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "number"
+   ],
+   "type": "object"
+  },
+  "name": "github_list_issue_comments"
+ },
+ {
+  "description": "Read repositories, issues and pull requests: github.list_prs. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo"
+   ],
+   "type": "object"
+  },
+  "name": "github_list_prs"
+ },
+ {
+  "description": "Read repositories, issues and pull requests: github.get_pr. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "number": {
+     "description": "The issue or pull request number",
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "number"
+   ],
+   "type": "object"
+  },
+  "name": "github_get_pr"
+ },
+ {
+  "description": "Read repositories, issues and pull requests: github.list_pr_files. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "number": {
+     "description": "The issue or pull request number",
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "number"
+   ],
+   "type": "object"
+  },
+  "name": "github_list_pr_files"
+ },
+ {
+  "description": "Read repositories, issues and pull requests: github.list_pr_reviews. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "number": {
+     "description": "The issue or pull request number",
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "number"
+   ],
+   "type": "object"
+  },
+  "name": "github_list_pr_reviews"
+ },
+ {
+  "description": "Create and edit issues and comment on them: github.create_issue. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "body": {
+     "description": "The JSON body GitHub's API takes for this operation",
+     "type": "object"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "body"
+   ],
+   "type": "object"
+  },
+  "name": "github_create_issue"
+ },
+ {
+  "description": "Create and edit issues and comment on them: github.update_issue. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "body": {
+     "description": "The JSON body GitHub's API takes for this operation",
+     "type": "object"
+    },
+    "number": {
+     "description": "The issue or pull request number",
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "number",
+    "body"
+   ],
+   "type": "object"
+  },
+  "name": "github_update_issue"
+ },
+ {
+  "description": "Create and edit issues and comment on them: github.comment_issue. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "body": {
+     "description": "The JSON body GitHub's API takes for this operation",
+     "type": "object"
+    },
+    "number": {
+     "description": "The issue or pull request number",
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "number",
+    "body"
+   ],
+   "type": "object"
+  },
+  "name": "github_comment_issue"
+ },
+ {
+  "description": "Open pull requests and comment on them: github.create_pr. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "body": {
+     "description": "The JSON body GitHub's API takes for this operation",
+     "type": "object"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "body"
+   ],
+   "type": "object"
+  },
+  "name": "github_create_pr"
+ },
+ {
+  "description": "Open pull requests and comment on them: github.update_pr. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "body": {
+     "description": "The JSON body GitHub's API takes for this operation",
+     "type": "object"
+    },
+    "number": {
+     "description": "The issue or pull request number",
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "number",
+    "body"
+   ],
+   "type": "object"
+  },
+  "name": "github_update_pr"
+ },
+ {
+  "description": "Open pull requests and comment on them: github.comment_pr. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "body": {
+     "description": "The JSON body GitHub's API takes for this operation",
+     "type": "object"
+    },
+    "number": {
+     "description": "The issue or pull request number",
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "number",
+    "body"
+   ],
+   "type": "object"
+  },
+  "name": "github_comment_pr"
+ },
+ {
+  "description": "Create branches and commit files: github.create_branch. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "body": {
+     "description": "The JSON body GitHub's API takes for this operation",
+     "type": "object"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "body"
+   ],
+   "type": "object"
+  },
+  "name": "github_create_branch"
+ },
+ {
+  "description": "Create branches and commit files: github.put_file. Arguments (an object): repo as owner/name, and as the operation needs number, path, query (an object of plain values) or body (an object). Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "body": {
+     "description": "The JSON body GitHub's API takes for this operation",
+     "type": "object"
+    },
+    "path": {
+     "description": "A file path inside the repository",
+     "type": "string"
+    },
+    "query": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "boolean"
+      ]
+     },
+     "description": "Query parameters: plain values (text, number, boolean), at most 16",
+     "type": "object"
+    },
+    "repo": {
+     "description": "The repository as owner/name",
+     "type": "string"
+    }
+   },
+   "required": [
+    "repo",
+    "path",
+    "body"
+   ],
+   "type": "object"
+  },
+  "name": "github_put_file"
+ },
+ {
+  "description": "Read issues and projects: jira.search_issues. Arguments (an object): the issue key, project key, text and ids this operation takes. Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "fields": {
+     "description": "Field names to return, like summary or customfield_10010",
+     "items": {
+      "type": "string"
+     },
+     "maxItems": 30,
+     "type": "array"
+    },
+    "jql": {
+     "description": "A JQL query",
+     "maxLength": 4000,
+     "minLength": 1,
+     "type": "string"
+    },
+    "max_results": {
+     "maximum": 100,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "next_page_token": {
+     "description": "The token a previous page gave",
+     "maxLength": 4000,
+     "minLength": 1,
+     "type": "string"
+    },
+    "order_by": {
+     "description": "Terms like \"created desc\"",
+     "items": {
+      "type": "string"
+     },
+     "maxItems": 5,
+     "type": "array"
+    },
+    "project": {
+     "description": "Limit the search to this project key",
+     "maxLength": 10,
+     "minLength": 1,
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "jira_search_issues"
+ },
+ {
+  "description": "Read issues and projects: jira.get_issue. Arguments (an object): the issue key, project key, text and ids this operation takes. Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "fields": {
+     "description": "Field names to return, like summary or customfield_10010",
+     "items": {
+      "type": "string"
+     },
+     "maxItems": 30,
+     "type": "array"
+    },
+    "key": {
+     "description": "The issue key, like ABC-12",
+     "maxLength": 32,
+     "minLength": 1,
+     "type": "string"
+    }
+   },
+   "required": [
+    "key"
+   ],
+   "type": "object"
+  },
+  "name": "jira_get_issue"
+ },
+ {
+  "description": "Read issues and projects: jira.list_transitions. Arguments (an object): the issue key, project key, text and ids this operation takes. Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "key": {
+     "description": "The issue key, like ABC-12",
+     "maxLength": 32,
+     "minLength": 1,
+     "type": "string"
+    }
+   },
+   "required": [
+    "key"
+   ],
+   "type": "object"
+  },
+  "name": "jira_list_transitions"
+ },
+ {
+  "description": "Read issues and projects: jira.list_projects. Arguments (an object): the issue key, project key, text and ids this operation takes. Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "max_results": {
+     "maximum": 50,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "start_at": {
+     "maximum": 1000000,
+     "minimum": 0,
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  },
+  "name": "jira_list_projects"
+ },
+ {
+  "description": "Create and edit issues, add comments: jira.create_issue. Arguments (an object): the issue key, project key, text and ids this operation takes. Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "description": {
+     "description": "The description, as plain text",
+     "maxLength": 30000,
+     "minLength": 1,
+     "type": "string"
+    },
+    "issue_type": {
+     "description": "The issue type's name, like Task",
+     "maxLength": 60,
+     "minLength": 1,
+     "type": "string"
+    },
+    "labels": {
+     "description": "Labels (no spaces)",
+     "items": {
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "maxItems": 20,
+     "type": "array"
+    },
+    "project": {
+     "description": "The project key, like ABC",
+     "maxLength": 10,
+     "minLength": 1,
+     "type": "string"
+    },
+    "summary": {
+     "description": "The summary",
+     "maxLength": 255,
+     "minLength": 1,
+     "type": "string"
+    }
+   },
+   "required": [
+    "project",
+    "summary",
+    "issue_type"
+   ],
+   "type": "object"
+  },
+  "name": "jira_create_issue"
+ },
+ {
+  "description": "Create and edit issues, add comments: jira.update_issue. Arguments (an object): the issue key, project key, text and ids this operation takes. Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "description": {
+     "description": "The new description, as plain text",
+     "maxLength": 30000,
+     "minLength": 1,
+     "type": "string"
+    },
+    "key": {
+     "description": "The issue key, like ABC-12",
+     "maxLength": 32,
+     "minLength": 1,
+     "type": "string"
+    },
+    "labels": {
+     "description": "Labels (no spaces)",
+     "items": {
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "maxItems": 20,
+     "type": "array"
+    },
+    "summary": {
+     "description": "The new summary",
+     "maxLength": 255,
+     "minLength": 1,
+     "type": "string"
+    }
+   },
+   "required": [
+    "key"
+   ],
+   "type": "object"
+  },
+  "name": "jira_update_issue"
+ },
+ {
+  "description": "Create and edit issues, add comments: jira.add_comment. Arguments (an object): the issue key, project key, text and ids this operation takes. Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "body": {
+     "description": "The comment, as plain text",
+     "maxLength": 30000,
+     "minLength": 1,
+     "type": "string"
+    },
+    "key": {
+     "description": "The issue key, like ABC-12",
+     "maxLength": 32,
+     "minLength": 1,
+     "type": "string"
+    }
+   },
+   "required": [
+    "key",
+    "body"
+   ],
+   "type": "object"
+  },
+  "name": "jira_add_comment"
+ },
+ {
+  "description": "Move issues through the workflow: jira.transition_issue. Arguments (an object): the issue key, project key, text and ids this operation takes. Any other name is refused.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "key": {
+     "description": "The issue key, like ABC-12",
+     "maxLength": 32,
+     "minLength": 1,
+     "type": "string"
+    },
+    "transition_id": {
+     "description": "The id list_transitions gave",
+     "pattern": "^[0-9]{1,10}$",
+     "type": "string"
+    }
+   },
+   "required": [
+    "key",
+    "transition_id"
+   ],
+   "type": "object"
+  },
+  "name": "jira_transition_issue"
+ },
+ {
+  "description": "List the Brain rooms this session may see.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "name": "brain_list_rooms"
+ },
+ {
+  "description": "Full-text search one Brain room. Returns ranked hits with a short snippet.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "kind": {
+     "description": "Limit hits to one record kind",
+     "enum": [
+      "decision",
+      "fact",
+      "note",
+      "task"
+     ],
+     "type": "string"
+    },
+    "limit": {
+     "maximum": 50,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "query": {
+     "description": "The search text",
+     "maxLength": 500,
+     "minLength": 1,
+     "type": "string"
+    },
+    "room": {
+     "description": "The room id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "room",
+    "query"
+   ],
+   "type": "object"
+  },
+  "name": "brain_search"
+ },
+ {
+  "description": "Read one Brain record in full.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "id": {
+     "description": "The record id",
+     "maxLength": 64,
+     "minLength": 1,
+     "type": "string"
+    },
+    "room": {
+     "description": "The room id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "room",
+    "id"
+   ],
+   "type": "object"
+  },
+  "name": "brain_read_record"
+ },
+ {
+  "description": "List the proposals waiting in a room's inbox.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "room": {
+     "description": "The room id",
+     "type": "string"
+    }
+   },
+   "required": [
+    "room"
+   ],
+   "type": "object"
+  },
+  "name": "brain_list_inbox"
+ },
+ {
+  "description": "Propose a new record to a room's inbox. A person accepts or refuses it.",
+  "inputSchema": {
+   "additionalProperties": false,
+   "properties": {
+    "body": {
+     "description": "The record body, as Markdown",
+     "maxLength": 30000,
+     "minLength": 1,
+     "type": "string"
+    },
+    "kind": {
+     "enum": [
+      "decision",
+      "fact",
+      "note",
+      "task"
+     ],
+     "type": "string"
+    },
+    "room": {
+     "description": "The room id",
+     "type": "string"
+    },
+    "sources": {
+     "description": "Ids or keys the record is based on",
+     "items": {
+      "type": "string"
+     },
+     "maxItems": 20,
+     "type": "array"
+    },
+    "title": {
+     "description": "The record title",
+     "maxLength": 255,
+     "minLength": 1,
+     "type": "string"
+    }
+   },
+   "required": [
+    "room",
+    "kind",
+    "title",
+    "body"
+   ],
+   "type": "object"
+  },
+  "name": "brain_propose"
+ }
+]
