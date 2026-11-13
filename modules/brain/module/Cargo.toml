@@ -24,7 +24,14 @@ sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio
 # bundles into SQLCipher (OpenSSL vendored, so macOS and Linux build the same). E0-1 proves it.
 libsqlite3-sys = { version = "0.37.0", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] }
 
+candle-core = { version = "0.11.1", optional = true }
+candle-nn = { version = "0.11.1", optional = true }
+candle-transformers = { version = "0.11.1", optional = true }
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"], optional = true }
+
 [features]
+# Local semantic help for sorting a small multilingual sentence model on candle, CPU only. Off by default.
+semantic = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers"]
 # A build that sets leases in seconds (A-3). Never compiled into a release binary.
 test-support = []
 
