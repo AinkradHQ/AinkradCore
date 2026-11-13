@@ -139,7 +139,9 @@ pub async fn run_with_defaults(available: Vec<Arc<dyn Module>>, default_on: &[&s
                     let flags = config.serve_flags(given);
                     let flags: Vec<&str> = flags.iter().map(String::as_str).collect();
                     match serve_flags(&flags) {
-                        Some(flags) => serve(&config.home().db(), flags, available, default_on).await,
+                        Some(flags) => {
+                            serve(&config.home().db(), flags, available, default_on).await
+                        }
                         None => {
                             eprintln!("{}", usage());
                             return ExitCode::from(2);
@@ -677,7 +679,9 @@ async fn serve(
     default_on: &[&str],
 ) -> Result<(), Box<dyn std::error::Error>> {
     ainkrad_core_server::ops::logging::init(flags.log_json);
-    flags.modules.extend(default_on.iter().map(|id| (*id).to_owned()));
+    flags
+        .modules
+        .extend(default_on.iter().map(|id| (*id).to_owned()));
     // Flags first: a refused --listen never creates or migrates the database.
     let listen = listen(db, &flags)?;
     let modules = enabled(available, &flags.modules)?;
