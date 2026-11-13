@@ -37,7 +37,10 @@ fn canonical(v: &Value) -> String {
                 .collect();
             format!("{{{}}}", parts.join(","))
         }
-        Value::Array(a) => format!("[{}]", a.iter().map(canonical).collect::<Vec<_>>().join(",")),
+        Value::Array(a) => format!(
+            "[{}]",
+            a.iter().map(canonical).collect::<Vec<_>>().join(",")
+        ),
         other => other.to_string(),
     }
 }
@@ -116,12 +119,13 @@ pub async fn begin(
         tx.commit().await?;
         return Ok(Begin::Fresh);
     }
-    let (was, result): (String, Option<String>) =
-        sqlx::query_as("SELECT op, result FROM core_code_mode_idem WHERE session = ? AND key_hash = ?")
-            .bind(session)
-            .bind(hash)
-            .fetch_one(&mut *tx)
-            .await?;
+    let (was, result): (String, Option<String>) = sqlx::query_as(
+        "SELECT op, result FROM core_code_mode_idem WHERE session = ? AND key_hash = ?",
+    )
+    .bind(session)
+    .bind(hash)
+    .fetch_one(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(if was != op {
         Begin::Conflict
@@ -177,11 +181,29 @@ mod tests {
 
     #[test]
     fn the_key_ignores_argument_order_and_is_never_the_arguments() {
-        let a = key_hash("as_1", "op", &json!({"a": 1, "b": {"x": [1, 2], "y": 2}}), None);
-        let b = key_hash("as_1", "op", &json!({"b": {"y": 2, "x": [1, 2]}, "a": 1}), None);
+        let a = key_hash(
+            "as_1",
+            "op",
+            &json!({"a": 1, "b": {"x": [1, 2], "y": 2}}),
+            None,
+        );
+        let b = key_hash(
+            "as_1",
+            "op",
+            &json!({"b": {"y": 2, "x": [1, 2]}, "a": 1}),
+            None,
+        );
         assert_eq!(a, b);
         assert_eq!(a.len(), 64);
-        assert_ne!(a, key_hash("as_2", "op", &json!({"a": 1, "b": {"x": [1, 2], "y": 2}}), None));
+        assert_ne!(
+            a,
+            key_hash(
+                "as_2",
+                "op",
+                &json!({"a": 1, "b": {"x": [1, 2], "y": 2}}),
+                None
+            )
+        );
         assert_ne!(a, key_hash("as_1", "op", &json!({"a": 2}), None));
         // A named key replaces the arguments.
         let k1 = key_hash("as_1", "op", &json!({"a": 1}), Some("k"));

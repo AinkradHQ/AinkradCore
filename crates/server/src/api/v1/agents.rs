@@ -608,7 +608,16 @@ pub async fn decide(
         }
         let details = json!({"request": request, "approved": b.approved});
         let kind = Some("agent.approval_decided");
-        store::action(&app.pool, &s, BY, "agent.decided", kind, details, &me.device.id).await?;
+        store::action(
+            &app.pool,
+            &s,
+            BY,
+            "agent.decided",
+            kind,
+            details,
+            &me.device.id,
+        )
+        .await?;
         return shown(&app, &me, &id).await;
     }
     let cmd = Command::AgentDecide(AgentDecide {

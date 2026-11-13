@@ -7,6 +7,7 @@ mod approval;
 mod args;
 mod build;
 mod call;
+pub(crate) mod conn;
 mod idem;
 mod render;
 mod run;
@@ -20,7 +21,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Deserialize;
 use serde_json::Value;
 
-pub use approval::{PREFIX as APPROVAL_PREFIX, Decided, Pending, decide as decide_approval, pending};
+pub use approval::{
+    Decided, PREFIX as APPROVAL_PREFIX, Pending, decide as decide_approval, pending,
+};
 pub use build::build;
 pub use call::{CALL, CallState, call_call, call_tool};
 pub use render::render;
@@ -52,8 +55,14 @@ pub fn exposed(path: &str) -> bool {
 /// The project of `session` for audit rows: its workspace's name, else its repo's folder name
 /// (`https://github.com/acme/Alpha.git` is `Alpha`). `None` when it has no workspace.
 pub async fn session_project(pool: &sqlx::SqlitePool, session: &str) -> Option<String> {
-    let w = crate::store::agents::get(pool, session).await.ok()??.workspace?;
-    let named = w["name"].as_str().filter(|n| !n.is_empty()).map(str::to_owned);
+    let w = crate::store::agents::get(pool, session)
+        .await
+        .ok()??
+        .workspace?;
+    let named = w["name"]
+        .as_str()
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned);
     named.or_else(|| {
         let repo = w["repo"].as_str()?.trim_end_matches('/');
         let base = repo.rsplit(['/', ':']).next()?;
@@ -187,7 +196,10 @@ pub fn check(spec: &Value, allow: &[Allowed]) -> Vec<String> {
             continue;
         };
         if hidden.contains(a.op.as_str()) {
-            bad.push(format!("{}: secrets and device/runner admin are not exposed", a.op));
+            bad.push(format!(
+                "{}: secrets and device/runner admin are not exposed",
+                a.op
+            ));
         }
         match (m.eq_ignore_ascii_case("get"), a.risk) {
             (false, None) => bad.push(format!("{}: a {m} needs a risk", a.op)),

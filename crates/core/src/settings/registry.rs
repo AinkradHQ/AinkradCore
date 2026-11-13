@@ -146,4 +146,9 @@ registry! {
     CodeModeIdemSecs "code_mode.idempotency_secs" Seconds 600, 10, 86_400, SO,
         "Code Mode: how long a write's result is remembered, so the same write sent again by \
          the same session returns the first result instead of running twice. Read at each call.";
+    CodeModeHideConnTools "code_mode.hide_connection_tools" Count 0, 0, 1, SO,
+        "Code Mode: 1 hides the old per-connection tools (`github.get_issue`, ...) from every AI \
+         session's tool list, leaving only `ainkrad_search` and `ainkrad_run` (connection \
+         operations stay reachable as `connections.<kind>.<op>`); 0 (the default) lists both. \
+         Read at each tool-list poll.";
 }

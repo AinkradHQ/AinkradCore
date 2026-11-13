@@ -73,6 +73,10 @@ pub(super) async fn run(app: &App, (runner, session): (&str, &str), call: &ToolC
     }) {
         return deny("bad_args", "unknown field", None);
     }
+    // 3a. A connection operation (E5): the session's grants and the broker decide, not the scopes.
+    if op_id.starts_with(super::conn::PREFIX) {
+        return super::call::connection(app, runner, session, call, op_id, run_id, &lim).await;
+    }
     // 3. The operation: in the catalogue, its method agreeing with its class.
     let Some(op) = app.catalogue().ops.get(op_id) else {
         return deny("unknown_op", "no such operation; use ainkrad.search", None);
@@ -164,7 +168,11 @@ pub(super) async fn run(app: &App, (runner, session): (&str, &str), call: &ToolC
             );
         }
         Ok(Begin::Conflict) => {
-            return deny("key_reused", "that key was used for another operation", Some(op));
+            return deny(
+                "key_reused",
+                "that key was used for another operation",
+                Some(op),
+            );
         }
         Err(_) => return deny("unavailable", "try again", Some(op)),
     }
@@ -177,7 +185,7 @@ pub(super) async fn run(app: &App, (runner, session): (&str, &str), call: &ToolC
                 tracing::error!(session, "recording a write's result failed");
             }
         }
-        Err(("timeout", _)) => {}
+        Err((code, _)) if code == "timeout" => {}
         Err(_) => idem::forget(&app.pool, session, &hash).await,
     }
     done.replayed = false;
@@ -269,7 +277,7 @@ async fn guarded(
     let marked = |by: Option<&str>| Some(json!({"request": id, "by": by}));
     let refused = |code: &'static str, msg: &str, by: Option<&str>| Done {
         op: Some((op.id.clone(), op.risk)),
-        outcome: Err((code, msg.to_owned())),
+        outcome: Err((code.to_owned(), msg.to_owned())),
         // A person's answer (or silence) is always audited, not once per window.
         denied: false,
         approval: marked(by),
@@ -292,7 +300,13 @@ async fn guarded(
     }
     match approval::consume(&app.pool, &id, req.session, hash).await {
         Ok(true) => {}
-        _ => return refused("approval_used", "this approval was already spent", Some(&by)),
+        _ => {
+            return refused(
+                "approval_used",
+                "this approval was already spent",
+                Some(&by),
+            );
+        }
     }
     let mut done = send(app, op, req, lim, method).await;
     done.approval = marked(Some(&by));
@@ -314,7 +328,13 @@ async fn send(app: &App, op: &Op, req: &Req<'_>, lim: &Limits, method: &Method) 
     };
     let principal = match session_principal(&app.pool, session).await {
         Ok(Some(p)) => p,
-        Ok(None) => return deny("creator_revoked", "this session may no longer call operations", Some(op)),
+        Ok(None) => {
+            return deny(
+                "creator_revoked",
+                "this session may no longer call operations",
+                Some(op),
+            );
+        }
         Err(_) => return deny("unavailable", "try again", Some(op)),
     };
     let mut request = Request::builder()
@@ -339,9 +359,9 @@ async fn send(app: &App, op: &Op, req: &Req<'_>, lim: &Limits, method: &Method) 
     )
     .await;
     drop(flight);
-    let fail = |code, msg: &str| Done {
+    let fail = |code: &str, msg: &str| Done {
         op: Some((op.id.clone(), op.risk)),
-        outcome: Err((code, msg.to_owned())),
+        outcome: Err((code.to_owned(), msg.to_owned())),
         denied: false,
         approval: None,
         replayed: false,
@@ -391,7 +411,7 @@ fn refusal(status: StatusCode, body: &Value) -> (&'static str, String) {
 }
 
 /// `v` as is, or a marker with the full size and a prefix when its JSON text is over `max`.
-fn cap(v: Value, max: usize) -> Value {
+pub(super) fn cap(v: Value, max: usize) -> Value {
     let text = v.to_string();
     if text.len() <= max {
         return v;
@@ -402,7 +422,6 @@ fn cap(v: Value, max: usize) -> Value {
     }
     json!({"truncated": true, "size": text.len(), "preview": &text[..cut]})
 }
-
 
 #[cfg(test)]
 mod tests {

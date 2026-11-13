@@ -77,7 +77,10 @@ fn value(schema: &Value, v: &Value, depth: u8) -> Result<(), &'static str> {
             }
         }
         Value::Array(a) => {
-            if schema["maxItems"].as_u64().is_some_and(|m| a.len() as u64 > m) {
+            if schema["maxItems"]
+                .as_u64()
+                .is_some_and(|m| a.len() as u64 > m)
+            {
                 return Err("too many items");
             }
             if schema["items"].is_object() {
