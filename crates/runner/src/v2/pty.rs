@@ -419,7 +419,19 @@ impl PtyDriver {
         }
         if let Err(e) = launch(&self.config.host, &self.config.dir, &id, &spec).await {
             let _ = std::fs::remove_file(self.net_dir().join(&id));
-            return Err(err(ErrorCode::SpawnFailed, e.to_string()));
+            // A bare "No such file or directory" hides the usual cause: the app that started this
+            // runner was replaced or deleted, so the pty host next to it is gone.
+            let host = &self.config.host;
+            let m = if e.kind() == std::io::ErrorKind::NotFound && !host.is_file() {
+                format!(
+                    "the terminal host {} is missing (the app this runner started from was replaced or moved); restart the runner",
+                    host.display()
+                )
+            } else {
+                e.to_string()
+            };
+            tracing::error!(host = %host.display(), error = %m, "could not start a terminal");
+            return Err(err(ErrorCode::SpawnFailed, m));
         }
         Ok(id)
     }

@@ -260,6 +260,8 @@ pub struct AttachQuery {
 }
 
 fn failed(e: &ainkrad_proto::v2::StreamError) -> ApiError {
+    // The API answer is generic on purpose; the runner's reason goes to the Core's log.
+    tracing::warn!(code = ?e.code, message = %e.message, "the runner failed a terminal");
     let status = match e.code {
         ainkrad_proto::v2::ErrorCode::Offline
         | ainkrad_proto::v2::ErrorCode::UnsupportedCommand => axum::http::StatusCode::CONFLICT,
