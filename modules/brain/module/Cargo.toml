@@ -15,7 +15,7 @@ serde_json = "1.0.154"
 sha2 = "0.10.9"
 getrandom = "0.4.3"
 tracing = "0.1"
-tokio = { version = "1.54.0", features = ["rt"] }
+tokio = { version = "1.54.0", features = ["rt", "sync"] }
 axum = "0.8.9"
 utoipa = "6.0.0"
 ainkrad-core = { path = "../../../crates/core" }
@@ -29,10 +29,11 @@ candle-core = { version = "0.11.1", optional = true }
 candle-nn = { version = "0.11.1", optional = true }
 candle-transformers = { version = "0.11.1", optional = true }
 tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"], optional = true }
+rayon = { version = "1.12", optional = true }
 
 [features]
 # Local semantic help for sorting a small multilingual sentence model on candle, CPU only. Off by default.
-semantic = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers"]
+semantic = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers", "dep:rayon"]
 # A build that sets leases in seconds (A-3). Never compiled into a release binary.
 test-support = []
 

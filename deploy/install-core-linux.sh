@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Installs the Ainkrad Core and its systemd unit (E1-14.5). Idempotent; never touches /etc/ainkrad/backup.env.
 #   install-core-linux.sh [--binary PATH] [--hostname NAME --acme-contact EMAIL] [--acme-directory URL]
-#                         [--backup-recipient age1...] [--semantic-model] [--start] [--dry-run]
+#                         [--backup-recipient age1...] [--semantic-model [--semantic-model-from DIR]] [--start] [--dry-run]
 # Creates the `ainkrad` user if missing, installs the binary and unit, inits the home /var/lib/ainkrad/core as
 # `ainkrad` when it does not exist (printing the backup signer's fingerprint once), and writes /etc/ainkrad/core.env
 # when --hostname is given (otherwise an existing one is kept). Starts only with --start.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-binary="$HERE/../target/release/ainkrad-core-server" hostname='' contact='' directory='' recipient='' semantic=0 start=0 dry=0
+binary="$HERE/../target/release/ainkrad-core-server" hostname='' contact='' directory='' recipient='' semantic=0 from='' start=0 dry=0
 while [ $# -gt 0 ]; do
   case $1 in
     --binary) binary=${2:?}; shift 2 ;;
@@ -17,6 +17,7 @@ while [ $# -gt 0 ]; do
     --acme-directory) directory=${2:?}; shift 2 ;;
     --backup-recipient) recipient=${2:?}; shift 2 ;;
     --semantic-model) semantic=1; shift ;;
+    --semantic-model-from) from=${2:?}; shift 2 ;;
     --start) start=1; shift ;;
     --dry-run) dry=1; shift ;;
     *) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
@@ -66,7 +67,9 @@ if [ "$semantic" = 1 ]; then
     got=$(sha256sum "$models/$name" 2>/dev/null | cut -d' ' -f1 || true)
     [ "$got" = "$sha" ] && { echo "$name: present, verified"; continue; }
     tmp=$(mktemp "$models/.$name.XXXXXX")
-    curl -fsSL "https://huggingface.co/intfloat/multilingual-e5-small/resolve/$rev/$name" -o "$tmp"
+    # A directory of already verified files (--semantic-model-from) is copied from; otherwise it is downloaded.
+    if [ -n "$from" ] && [ -f "$from/$name" ]; then cp "$from/$name" "$tmp"
+    else curl -fsSL "https://huggingface.co/intfloat/multilingual-e5-small/resolve/$rev/$name" -o "$tmp"; fi
     [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$sha" ] || { rm -f "$tmp"; echo "$name: SHA-256 does not match the pin" >&2; exit 1; }
     chown root:root "$tmp" && chmod 0644 "$tmp" && mv "$tmp" "$models/$name"
   done

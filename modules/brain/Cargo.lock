@@ -531,6 +531,7 @@ dependencies = [
  "candle-transformers",
  "getrandom 0.4.3",
  "libsqlite3-sys",
+ "rayon",
  "serde",
  "serde_json",
  "sha2 0.10.9",

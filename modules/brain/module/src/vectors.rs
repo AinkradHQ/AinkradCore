@@ -93,7 +93,12 @@ pub(crate) async fn forget_refused(app: &App, b: &Brain, st: &SqlitePool) {
             return Ok(());
         }
         {
-            let mut c = b.inner.vectors.lock().unwrap_or_else(|e| e.into_inner());
+            let mut c = b
+                .inner
+                .sem
+                .cache()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             hashes.iter().for_each(|h| c.forget(h));
         }
         let p = pool(app, b).await?;

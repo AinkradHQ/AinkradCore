@@ -112,6 +112,20 @@ const SETTINGS: &[ModuleSetting] = &[
         description: "Sorting suggestions from the local model (1 on, 0 off). Only has an effect when this Core has the model. Off: nothing is embedded and Review shows semantic: off.",
     },
     ModuleSetting {
+        name: "semantic.threads",
+        default: 1,
+        min: 1,
+        max: 2,
+        description: "Threads the local model may use (1 or 2). One keeps a small host responsive; two is faster. Applies from the next step.",
+    },
+    ModuleSetting {
+        name: "semantic.max_tokens",
+        default: 128,
+        min: 128,
+        max: 256,
+        description: "Tokens of each item the local model reads: 128 (about twice as fast) or 256 (reads more of long items); a value between counts as 256. Applies from the next step; vectors made at the other size are kept.",
+    },
+    ModuleSetting {
         name: "semantic.strength",
         default: 1,
         min: 0,
@@ -137,12 +151,9 @@ struct Inner {
     rooms: rooms::Rooms,
     syncing: AtomicBool,
     distilling: AtomicBool,
-    /// The local sentence model, when this build has it and its files verified; `None` leaves the
-    /// semantic step off and Review as it is without it.
-    embedder: Mutex<Option<Arc<dyn semantic::Embedder>>>,
-    /// Vectors by content hash, kept across runs.
-    vectors: Arc<Mutex<semantic::VectorCache>>,
-    /// Runs whose semantic step is working now.
+    /// The shared semantic service: model, vector store and background worker (`semantic::service`).
+    sem: semantic::service::Service,
+    /// Runs whose semantic step is queued or working.
     sem_running: Mutex<HashSet<String>>,
     #[cfg(feature = "test-support")]
     fetch: Mutex<Option<Arc<dyn collectors::Fetch>>>,
@@ -173,26 +184,22 @@ impl Brain {
     }
 
     pub fn set_embedder(&self, e: Arc<dyn semantic::Embedder>) {
-        *self
-            .inner
-            .embedder
-            .lock()
-            .unwrap_or_else(|x| x.into_inner()) = Some(e);
+        self.inner.sem.set_embedder(e);
     }
 
     /// Forgets the in-memory vectors, as a restart does (the stored ones stay).
     #[cfg(feature = "test-support")]
     pub fn drop_memory_vectors(&self) {
-        *self.inner.vectors.lock().unwrap_or_else(|x| x.into_inner()) =
-            semantic::VectorCache::default();
+        *self
+            .inner
+            .sem
+            .cache()
+            .lock()
+            .unwrap_or_else(|x| x.into_inner()) = semantic::VectorCache::default();
     }
 
     pub(crate) fn embedder(&self) -> Option<Arc<dyn semantic::Embedder>> {
-        self.inner
-            .embedder
-            .lock()
-            .unwrap_or_else(|x| x.into_inner())
-            .clone()
+        self.inner.sem.embedder()
     }
 
     /// The brain key, opened once and kept in this process's memory.
@@ -587,6 +594,11 @@ impl Module for Brain {
 
     fn attach(&self, app: &App) {
         let _ = self.inner.app.set(app.clone());
+        // A step that was queued when the Core stopped is queued again.
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let b = self.clone();
+            rt.spawn(async move { b.resume_semantic().await });
+        }
         #[cfg(feature = "semantic")]
         semantic::local::load_in_background(self);
     }

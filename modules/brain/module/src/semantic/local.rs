@@ -34,7 +34,8 @@ pub const FILES: [(&str, &str, u64); 3] = [
         470_641_600,
     ),
 ];
-const MAX_TOKENS: usize = 256;
+/// Tokens kept per item: 128 is about twice as fast as 256 for a little less of each long item.
+const DEFAULT_TOKENS: usize = 128;
 const BATCH: usize = 16;
 
 /// Where the installer puts the three files (root-owned, read-only to the Core).
@@ -53,11 +54,13 @@ pub fn load_in_background(b: &crate::Brain) {
         return;
     }
     let b = b.clone();
+    let rt2 = rt.clone();
     rt.spawn_blocking(move || match Local::load(&dir) {
         Ok(m) => {
             if b.embedder().is_none() {
                 b.set_embedder(std::sync::Arc::new(m));
                 tracing::info!("semantic sorting is on (local model loaded)");
+                rt2.spawn(async move { b.resume_semantic().await });
             }
         }
         Err(e) => {
@@ -72,42 +75,116 @@ pub fn url(file: &str) -> String {
 
 pub struct Local {
     model: BertModel,
-    tok: Tokenizer,
+    /// The tokenizer cut at 128 and at 256 tokens; `tokens` picks one per call.
+    tok: [Tokenizer; 2],
+    tokens: std::sync::atomic::AtomicUsize,
+    threads: std::sync::atomic::AtomicUsize,
+    /// A rayon pool of `threads` threads for the matrix work, rebuilt when the setting changes.
+    pool: std::sync::Mutex<Option<(usize, std::sync::Arc<rayon::ThreadPool>)>>,
 }
 
+fn hex(d: &[u8]) -> String {
+    d.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A small file, read whole and checked against its pin.
 fn verified(dir: &Path, i: usize) -> Result<Vec<u8>, String> {
     let (name, sha, _) = FILES[i];
     let bytes = std::fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
-    let got: String = Sha256::digest(&bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    if got != sha {
-        return Err(format!("{name}: SHA-256 does not match the pinned file"));
+    if hex(&Sha256::digest(&bytes)) != sha {
+        return Err(format!("{name}: SHA-256 does not match the pin"));
     }
     Ok(bytes)
+}
+
+/// The weights: hashed in chunks (never held whole), then read tensor by tensor from the file, so
+/// the peak is the tensors plus one of them rather than the file plus the tensors.
+fn weights(dir: &Path) -> Result<VarBuilder<'static>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let (name, sha, _) = FILES[2];
+    let path = dir.join(name);
+    let err = |e: std::io::Error| format!("{name}: {e}");
+    let mut f = std::fs::File::open(&path).map_err(err)?;
+    let (mut h, mut buf) = (Sha256::new(), vec![0u8; 1 << 20]);
+    loop {
+        let n = f.read(&mut buf).map_err(err)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    drop(buf);
+    if hex(&h.finalize()) != sha {
+        return Err(format!("{name}: SHA-256 does not match the pin"));
+    }
+    // safetensors: u64 LE header length, a JSON header, then the raw tensors.
+    f.seek(SeekFrom::Start(0)).map_err(err)?;
+    let mut len = [0u8; 8];
+    f.read_exact(&mut len).map_err(err)?;
+    let len = usize::try_from(u64::from_le_bytes(len)).map_err(|e| e.to_string())?;
+    if len > 16 << 20 {
+        return Err(format!("{name}: the header is too large"));
+    }
+    let mut head = vec![0u8; len];
+    f.read_exact(&mut head).map_err(err)?;
+    let head: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_slice(&head).map_err(|e| e.to_string())?;
+    let mut tensors = std::collections::HashMap::new();
+    for (k, v) in head.iter().filter(|(k, _)| *k != "__metadata__") {
+        let bad = || format!("{name}: tensor {k} is not in the expected form");
+        if v["dtype"] != "F32" {
+            return Err(bad());
+        }
+        let shape: Vec<usize> = v["shape"]
+            .as_array()
+            .ok_or_else(bad)?
+            .iter()
+            .map(|d| d.as_u64().map(|d| d as usize).ok_or_else(bad))
+            .collect::<Result<_, _>>()?;
+        let off = v["data_offsets"].as_array().ok_or_else(bad)?;
+        let (a, b) = (
+            off.first().and_then(|x| x.as_u64()).ok_or_else(bad)?,
+            off.get(1).and_then(|x| x.as_u64()).ok_or_else(bad)?,
+        );
+        let mut raw = vec![0u8; usize::try_from(b.saturating_sub(a)).map_err(|e| e.to_string())?];
+        f.seek(SeekFrom::Start(8 + len as u64 + a)).map_err(err)?;
+        f.read_exact(&mut raw).map_err(err)?;
+        let t = Tensor::from_raw_buffer(&raw, DType::F32, &shape, &Device::Cpu)
+            .map_err(|e| e.to_string())?;
+        tensors.insert(k.clone(), t);
+    }
+    Ok(VarBuilder::from_tensors(tensors, DType::F32, &Device::Cpu))
 }
 
 impl Local {
     pub fn load(dir: &Path) -> Result<Self, String> {
         let cfg: Config = serde_json::from_slice(&verified(dir, 0)?).map_err(|e| e.to_string())?;
-        let mut tok = Tokenizer::from_bytes(verified(dir, 1)?).map_err(|e| e.to_string())?;
-        tok.with_padding(Some(PaddingParams::default()));
-        tok.with_truncation(Some(TruncationParams {
-            max_length: MAX_TOKENS,
-            ..Default::default()
-        }))
-        .map_err(|e| e.to_string())?;
-        // No mmap (the crate forbids unsafe): the bytes are read, checked and copied once.
-        let vb = VarBuilder::from_buffered_safetensors(verified(dir, 2)?, DType::F32, &Device::Cpu)
+        let bytes = verified(dir, 1)?;
+        let cut = |max_length: usize| -> Result<Tokenizer, String> {
+            let mut t = Tokenizer::from_bytes(&bytes).map_err(|e| e.to_string())?;
+            t.with_padding(Some(PaddingParams::default()));
+            t.with_truncation(Some(TruncationParams {
+                max_length,
+                ..Default::default()
+            }))
             .map_err(|e| e.to_string())?;
-        let model = BertModel::load(vb, &cfg).map_err(|e| e.to_string())?;
-        Ok(Self { model, tok })
+            Ok(t)
+        };
+        let tok = [cut(128)?, cut(256)?];
+        let model = BertModel::load(weights(dir)?, &cfg).map_err(|e| e.to_string())?;
+        Ok(Self {
+            model,
+            tok,
+            tokens: DEFAULT_TOKENS.into(),
+            threads: 1.into(),
+            pool: std::sync::Mutex::new(None),
+        })
     }
 
     fn batch(&self, texts: &[&str]) -> candle_core::Result<Vec<Vec<f32>>> {
-        let enc = self
-            .tok
+        let tok =
+            &self.tok[usize::from(self.tokens.load(std::sync::atomic::Ordering::SeqCst) > 128)];
+        let enc = tok
             .encode_batch(texts.to_vec(), true)
             .map_err(|e| candle_core::Error::Msg(e.to_string()))?;
         let d = &Device::Cpu;
@@ -136,7 +213,35 @@ impl Embedder for Local {
         MODEL_ID
     }
 
+    fn set_max_tokens(&self, n: usize) {
+        self.tokens.store(n, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn set_threads(&self, n: usize) {
+        self.threads
+            .store(n.max(1), std::sync::atomic::Ordering::SeqCst);
+    }
+
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        let n = self.threads.load(std::sync::atomic::Ordering::SeqCst);
+        let pool = {
+            let mut g = self.pool.lock().unwrap_or_else(|e| e.into_inner());
+            if g.as_ref().is_none_or(|(have, _)| *have != n) {
+                let p = rayon::ThreadPoolBuilder::new()
+                    .num_threads(n)
+                    .build()
+                    .map_err(|e| e.to_string())?;
+                *g = Some((n, std::sync::Arc::new(p)));
+            }
+            g.as_ref().map(|(_, p)| p.clone()).expect("pool")
+        };
+        // Candle's matrix work uses the current rayon pool, so `install` bounds it to `n` threads.
+        pool.install(|| self.embed_inner(texts))
+    }
+}
+
+impl Local {
+    fn embed_inner(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         // Sorted by length so a batch pads little; the order is restored at the end.
         let mut order: Vec<usize> = (0..texts.len()).collect();
         order.sort_by_key(|&i| texts[i].len());

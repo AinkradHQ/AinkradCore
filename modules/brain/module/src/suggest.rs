@@ -92,22 +92,25 @@ pub(crate) async fn start(app: &App, b: &Brain, run: &str) {
             return;
         }
     };
-    let (app, b, run) = (app.clone(), b.clone(), run.to_owned());
+    let (app, run) = (app.clone(), run.to_owned());
+    let worker = b.clone();
     b.inner
         .sem_running
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(run.clone());
-    tokio::spawn(async move {
-        let r = work(&app, &b, &run, epoch).await;
-        b.inner
+    // One worker runs the steps of every run in turn (the shared semantic service's queue).
+    b.inner.sem.enqueue(async move {
+        let r = work(&app, &worker, &run, epoch).await;
+        worker
+            .inner
             .sem_running
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&run);
         if let Err(e) = r {
             tracing::warn!(run = %run, error = ?e, "the semantic step failed");
-            if let Ok(st) = staging(&app, &b, &run, false).await {
+            if let Ok(st) = staging(&app, &worker, &run, false).await {
                 let _ = sqlx::query("UPDATE semantic SET state = 'off' WHERE epoch = ?")
                     .bind(epoch)
                     .execute(&st)
@@ -116,6 +119,45 @@ pub(crate) async fn start(app: &App, b: &Brain, run: &str) {
             }
         }
     });
+}
+
+/// Queues again every run in review whose step was queued or running when the Core stopped. Its
+/// vectors are in the store, so it costs only what was not yet embedded.
+impl Brain {
+    pub async fn resume_semantic(&self) {
+        let (Some(app), Some(_)) = (self.inner.app.get(), self.embedder()) else {
+            return;
+        };
+        let runs: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM brain_import_runs WHERE state = 'review'")
+                .fetch_all(&app.pool)
+                .await
+                .unwrap_or_default();
+        for run in runs {
+            let busy = self
+                .inner
+                .sem_running
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&run);
+            if busy {
+                continue;
+            }
+            let Ok(st) = staging(app, self, &run, false).await else {
+                continue;
+            };
+            let state: Option<String> =
+                sqlx::query_scalar("SELECT state FROM semantic WHERE id = 1")
+                    .fetch_optional(&st)
+                    .await
+                    .ok()
+                    .flatten();
+            st.close().await;
+            if state.as_deref() == Some("pending") {
+                start(app, self, &run).await;
+            }
+        }
+    }
 }
 
 /// `module.brain.semantic.enabled`; on unless the person turned it off.
@@ -173,30 +215,28 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
     }
     // Vectors of an earlier run or session come from the encrypted store, not the model.
     let model = emb.model_id().to_owned();
-    let hashes: Vec<String> = {
-        let c = b.inner.vectors.lock().unwrap_or_else(|e| e.into_inner());
-        let mut seen = HashSet::new();
-        owned
+    let all_hashes: Vec<String> = owned.iter().map(|(i, _)| i.content_hash.clone()).collect();
+    b.fill_from_store(app, &model, &all_hashes).await?;
+    let before: HashSet<String> = {
+        let c = b
+            .inner
+            .sem
+            .cache()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        all_hashes
             .iter()
-            .map(|(i, _)| i.content_hash.clone())
-            .filter(|h| c.get(&model, h).is_none() && seen.insert(h.clone()))
+            .filter(|h| c.get(&model, h).is_some())
+            .cloned()
             .collect()
     };
-    let stored = crate::vectors::load(app, b, &model, &hashes).await?;
-    let loaded: HashSet<String> = stored.iter().map(|(h, _)| h.clone()).collect();
-    {
-        let mut c = b.inner.vectors.lock().unwrap_or_else(|e| e.into_inner());
-        for (h, v) in stored {
-            c.put(&model, &h, v);
-        }
-    }
-    let all_hashes: Vec<String> = owned.iter().map(|(i, _)| i.content_hash.clone()).collect();
+    b.apply_threads(app).await;
     let strength = ModuleSettings::of(b)
         .get(&app.pool, "semantic.strength")
         .await
         .unwrap_or(1);
     let th = Thresholds::for_strength(strength);
-    let vectors = b.inner.vectors.clone();
+    let vectors = b.inner.sem.cache().clone();
     let (sizes, sug) = {
         let sizes: HashMap<String, usize> =
             members.iter().map(|m| (m.0.clone(), m.1.len())).collect();
@@ -277,11 +317,16 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
     };
     // Save what this step embedded; items refused meanwhile are skipped (their vectors are deleted).
     let fresh: Vec<(String, Vec<f32>)> = {
-        let c = b.inner.vectors.lock().unwrap_or_else(|e| e.into_inner());
+        let c = b
+            .inner
+            .sem
+            .cache()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let mut seen = HashSet::new();
         all_hashes
             .iter()
-            .filter(|h| !loaded.contains(*h) && seen.insert(*h))
+            .filter(|h| !before.contains(*h) && seen.insert(*h))
             .filter_map(|h| c.get(&model, h).map(|v| (h.clone(), v.clone())))
             .collect()
     };

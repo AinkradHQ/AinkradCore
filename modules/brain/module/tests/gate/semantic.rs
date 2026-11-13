@@ -361,7 +361,15 @@ async fn the_enabled_setting_turns_the_step_off_without_a_rebuild() {
         .iter()
         .map(|s| s["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["semantic.enabled", "semantic.strength"]);
+    assert_eq!(
+        names,
+        [
+            "semantic.enabled",
+            "semantic.threads",
+            "semantic.max_tokens",
+            "semantic.strength"
+        ]
+    );
     assert_eq!(list[0]["value"], 1);
     let v = ok(
         &fx,
@@ -408,4 +416,49 @@ async fn the_enabled_setting_turns_the_step_off_without_a_rebuild() {
     // Off again: the step reports off at once and the next re-sort drops the old suggestions.
     set_setting(&fx, "semantic.enabled", "0").await;
     assert_eq!(semantic(&fx, &run).await["state"], "off");
+}
+
+#[tokio::test]
+async fn the_shared_service_embeds_stores_and_finds_similar_and_a_pending_step_resumes() {
+    let fake = Arc::new(Fake::default());
+    let fx = fx_with(Brain::with_embedder(fake.clone()), 1).await;
+    // Needs a brain key: a first run makes it.
+    let run = sample_run(&fx).await;
+    finish(&fx, &run).await;
+    ready(&fx, &run).await;
+    let before = fake.seen.lock().unwrap().len();
+
+    let items: Vec<(String, String)> = [("h-a", 0), ("h-b", 10), ("h-c", 90)]
+        .iter()
+        .map(|(h, a)| ((*h).to_owned(), format!("fresh text ang={a} ")))
+        .collect();
+    let v = fx.brain.embed_texts(&items).await.unwrap();
+    assert_eq!((v.len(), fake.seen.lock().unwrap().len()), (3, before + 3));
+    // A restart forgets memory; the vectors come back from the encrypted store, not the model.
+    fx.brain.drop_memory_vectors();
+    let hashes: Vec<String> = items.iter().map(|i| i.0.clone()).collect();
+    let got = fx.brain.vectors_for(&hashes).await.unwrap();
+    assert_eq!(
+        (got.len(), fake.seen.lock().unwrap().len()),
+        (3, before + 3)
+    );
+    let cands: Vec<(String, Vec<f32>)> = hashes.iter().cloned().zip(v.iter().cloned()).collect();
+    let top = brain_module::semantic::similar(&v[0], &cands, 2);
+    assert_eq!(
+        top.iter().map(|t| t.0.as_str()).collect::<Vec<_>>(),
+        ["h-a", "h-b"]
+    );
+    assert!(top[0].1 > top[1].1);
+
+    // A step that was pending when the Core stopped is queued again and finishes.
+    let st = staging_pool(&fx, &run).await;
+    sqlx::query("UPDATE semantic SET state = 'pending'")
+        .execute(&st)
+        .await
+        .unwrap();
+    st.close().await;
+    let runs_before = audits(&fx).await;
+    fx.brain.resume_semantic().await;
+    assert_eq!(ready(&fx, &run).await["state"], "ready");
+    assert_eq!(audits(&fx).await, runs_before + 1);
 }

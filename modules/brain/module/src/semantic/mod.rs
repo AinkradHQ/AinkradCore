@@ -18,6 +18,10 @@ use sqlx::SqliteConnection;
 pub trait Embedder: Send + Sync {
     fn model_id(&self) -> &str;
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String>;
+    /// How many threads `embed` may use (default one). A model that cannot limit itself ignores it.
+    fn set_threads(&self, _n: usize) {}
+    /// How many tokens of each item `embed` reads: 128 (default) or 256. A fake may ignore it.
+    fn set_max_tokens(&self, _n: usize) {}
 }
 
 /// The cut-offs a run uses: duplicates, topic rooms, merge hints. Higher means fewer suggestions.
@@ -190,6 +194,9 @@ pub async fn audit(conn: &mut SqliteConnection, s: &RunStats) -> Result<(), sqlx
     )
     .await
 }
+
+pub mod service;
+pub use service::similar;
 
 #[cfg(feature = "semantic")]
 pub mod local;
