@@ -178,7 +178,14 @@
 /// 58: no change to what a response carries: the published schema of every response type drops
 ///    `additionalProperties: false` (a client must ignore a field it does not know; the server still rejects
 ///    unknown request fields).
-pub const API_MINOR: u32 = 59;
+/// 59: the local terminal path: `grantLocalTerminal` (`POST /terminals/{id}/local`, `terminal`, destructive: the
+///    attach's step-up) answers a Core-signed, single-use grant for the runner host's Unix socket, and
+///    `releaseLocalTerminal` (`DELETE`, `terminal`) is its detach. A grant lasts a lease of 45 s and is renewed by
+///    asking again. `terminal.attached` / `.detached` events and audit rows carry `local`.
+///
+/// 60: the audit origin (E1+E2): `AuditEntry.origin` (`EntryOrigin`: what started a row and the root of its chain) and
+///    the audit list filters `origin` and `nobody_watching`.
+pub const API_MINOR: u32 = 60;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

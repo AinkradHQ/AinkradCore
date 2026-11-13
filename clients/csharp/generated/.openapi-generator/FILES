@@ -118,6 +118,7 @@ src/Ainkrad.Client/Model/LeasedSecret.cs
 src/Ainkrad.Client/Model/LimitCleared.cs
 src/Ainkrad.Client/Model/LimitSet.cs
 src/Ainkrad.Client/Model/LimitStanding.cs
+src/Ainkrad.Client/Model/LocalTerminalGrant.cs
 src/Ainkrad.Client/Model/Lockout.cs
 src/Ainkrad.Client/Model/LogLine.cs
 src/Ainkrad.Client/Model/LogPage.cs

@@ -13,6 +13,8 @@ export ZSH_COMPDUMP=$ZSH_CACHE_DIR/zcompdump-$ZSH_VERSION
 [[ -d $ZSH_CACHE_DIR/completions ]] || mkdir -p -- $ZSH_CACHE_DIR/completions 2>/dev/null
 # No self-update, and no gitstatusd download at the first prompt (the installer put the pinned binary in place).
 zstyle ':omz:update' mode disabled
+# The profile is root-owned: inside the sandbox's user namespace that owner shows as nobody, which compaudit would flag.
+export ZSH_DISABLE_COMPFIX=true
 export DISABLE_AUTO_UPDATE=true DISABLE_UPDATE_PROMPT=true GITSTATUS_AUTO_INSTALL=0
 ZSH_THEME=powerlevel10k/powerlevel10k
 plugins=(git zsh-autosuggestions zsh-syntax-highlighting)

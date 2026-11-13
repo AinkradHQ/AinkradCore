@@ -111,6 +111,7 @@ done
 { answers; echo ENABLE_CITADEL=maybe; } >"$t/citadelbad"
 bash "$HERE/../install.sh" --config "$t/citadelbad" --dry-run >/dev/null 2>&1 && { fail=$((fail + 1)); echo "FAIL: ENABLE_CITADEL=maybe accepted" >&2; } || pass=$((pass + 1))
 ok valid_yesno yes; no valid_yesno maybe; [ "$(default_of ENABLE_CITADEL)" = no ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: ENABLE_CITADEL default" >&2; }
+grep -q 'brain_selftest' "$HERE/../install.sh" && grep -qF '/modules/brain/v1/status' "$HERE/../install.sh" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: self-test lacks the brain check" >&2; }
 grep -q 'citadel_selftest' "$HERE/../install.sh" && grep -qF '/modules/citadel/v1/companies' "$HERE/../install.sh" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: self-test lacks the citadel check" >&2; }
 # Real credentials: on by default, the three gates set to 1 after the start (each only while at its default); no sets nothing.
 for k in secrets.mode secrets.provider_accounts secrets.connections; do

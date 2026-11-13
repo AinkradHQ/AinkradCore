@@ -44,6 +44,7 @@ mod command;
 mod control;
 mod gateway;
 mod history;
+pub mod local;
 mod login;
 mod plan_limit;
 mod subscription;

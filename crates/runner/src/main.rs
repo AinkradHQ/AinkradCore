@@ -108,6 +108,34 @@ fn parse(args: &[&str]) -> Option<Args> {
     Some(parsed)
 }
 
+/// macOS, run by our LaunchAgent (launchd sets `XPC_SERVICE_NAME` to the job label): output goes
+/// to `~/Library/Logs/Ainkrad/runner.log`, because a launchd plist cannot name the home folder and
+/// its output would otherwise be lost. Any other start (a shell, a test piping stderr) keeps stderr.
+/// The last log is kept as `runner.log.1` once this one passes 8 MiB at start.
+fn log_to_file() {
+    let by_our_agent =
+        std::env::var("XPC_SERVICE_NAME").is_ok_and(|label| label.starts_with("com.ainkrad."));
+    if !cfg!(target_os = "macos") || !by_our_agent || home().as_os_str().is_empty() {
+        return;
+    }
+    let dir = home().join("Library/Logs/Ainkrad");
+    let log = dir.join("runner.log");
+    if std::fs::metadata(&log).is_ok_and(|m| m.len() > 8 << 20) {
+        let _ = std::fs::rename(&log, dir.join("runner.log.1"));
+    }
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::create_dir_all(&dir).and_then(|()| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(&log)
+    });
+    if let Err(e) = file.and_then(|f| ainkrad_sys::redirect_output(&f)) {
+        eprintln!("ainkrad-runner: no log file: {e}");
+    }
+}
+
 fn home() -> PathBuf {
     std::env::var_os("HOME").map_or_else(PathBuf::new, PathBuf::from)
 }
@@ -200,6 +228,7 @@ async fn main() -> ExitCode {
         }
         ["pair", rest @ ..] => return ainkrad_runner::v2::cli::pair_main(rest).await,
         ["connect", rest @ ..] => {
+            log_to_file();
             tracing_subscriber::fmt()
                 .with_writer(std::io::stderr)
                 .init();

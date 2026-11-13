@@ -175,6 +175,10 @@ sh_dir=$ROOT/deploy/shell
   printf '%s' "$GITSTATUSD_SHA256_x86_64$GITSTATUSD_SHA256_aarch64" | grep -Eq '^[0-9a-f]{128}$' ) && ok || bad "deploy/shell/pins.sh does not pin every part to a full commit and a SHA-256"
 if command -v zsh >/dev/null; then zsh -n "$sh_dir/zshrc" && zsh -n "$sh_dir/p10k.zsh" && ok || bad "the Ainkrad shell profile is not valid zsh"; fi
 grep -qiE 'ahmed|melhalaby|/Users/|/home/|oh-my-zsh|@gmail' "$sh_dir/p10k.zsh" && bad "the p10k look holds a personal path, name or tool" || ok
+# the app's default terminal font is the system mono: no Nerd Font or powerline glyphs (private use area) in the profile
+python3 -c 'import sys; sys.exit(any(0xE000 <= ord(c) <= 0xF8FF for f in sys.argv[1:] for c in open(f, encoding="utf8").read()) or 0)' "$sh_dir/p10k.zsh" "$sh_dir/zshrc" && ! grep -qE 'nerdfont|\\uE0|\\uF[0-9A-F]{3}' "$sh_dir/p10k.zsh" && ok || bad "the Ainkrad shell profile needs a Nerd Font (private-use glyphs or nerdfont mode)"
+grep -q 'ZSH_DISABLE_COMPFIX=true' "$sh_dir/zshrc" && ok || bad "the profile does not silence compaudit for the root-owned profile in the sandbox"
+grep -q 'terminal shell' "$ROOT/crates/runner/src/v2/session.rs" && ok || bad "the runner's facts do not say which shell its terminals start"
 grep -q 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting)' "$sh_dir/zshrc" && grep -q 'zshrc.local' "$sh_dir/zshrc" && grep -q 'GITSTATUS_AUTO_INSTALL=0' "$sh_dir/zshrc" && ok || bad "the zshrc lacks the three plugins, ~/.zshrc.local or the no-download setting"
 tail -n 3 "$sh_dir/zshrc" | grep -q 'zshrc.local' && ok || bad "the home .zshrc.local is not sourced last"
 d2=$t/prefix2; mkdir -p "$d2"

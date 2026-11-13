@@ -1656,6 +1656,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/terminals/{id}/local": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["grantLocalTerminal"];
+        delete: operations["releaseLocalTerminal"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/terminals/{id}/signal": {
         parameters: {
             query?: never;
@@ -2950,6 +2966,22 @@ export interface components {
             warn_percent: number;
             /** Format: int64 */
             window_secs: number;
+        };
+        /** @description What the app needs to reach the host: present `grant` on `socket`. */
+        LocalTerminalGrant: {
+            expires_at: components["schemas"]["Timestamp"];
+            /** @description The Core-signed grant, single-use; sign the host's challenge with the device key and send both. */
+            grant: string;
+            /**
+             * Format: int64
+             * @description Seconds one authentication keeps the local connection open. Ask again before then.
+             */
+            lease_secs: number;
+            /** @description The runner the terminal lives on: a grant is for that runner's hosts only. */
+            runner: string;
+            /** @description The file name of the host's socket in the runner's terminal directory. */
+            socket: string;
+            terminal: string;
         };
         /** @description A key that is locked now. */
         Lockout: {
@@ -8532,6 +8564,62 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Terminal"];
                 };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    grantLocalTerminal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A signed grant for the host's local socket */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalTerminalGrant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    releaseLocalTerminal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The local attach was released */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];

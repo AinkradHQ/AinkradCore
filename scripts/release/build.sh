@@ -12,6 +12,9 @@ export SOURCE_DATE_EPOCH CITADEL_GIT_SHA
 image=${RUST_IMAGE:-rust:1.99.1}
 bins=(ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost)
 cmd="cargo build --profile dist --locked -p ainkrad-core-server -p ainkrad-runner -p ainkrad-ctl -p ainkrad-ptyhost"
+# The shipped Linux ainkrad-core-server is the Brain-carrying build (modules/brain/bin, its own workspace and target
+# dir), under the same name; the plain one is not built for Linux. macOS ships only runner + ptyhost, so it builds plain.
+lcmd="cargo build --profile dist --locked -p ainkrad-runner -p ainkrad-ctl -p ainkrad-ptyhost && CARGO_TARGET_DIR=\$CARGO_TARGET_DIR-brain cargo build --profile dist --locked --manifest-path modules/brain/Cargo.toml -p ainkrad-core-brain"
 mkdir -p "$out/$target"
 case $target in
 macos-arm64)
@@ -35,6 +38,6 @@ linux-*)
     -v ainkrad-core-cargo:/usr/local/cargo/registry -v "$vol:/cache" \
     -e CARGO_TARGET_DIR=/cache/dist-$tag -e SOURCE_DATE_EPOCH -e CITADEL_GIT_SHA -e CARGO_PROFILE_DIST_STRIP \
     -e RUSTFLAGS="--remap-path-prefix=/src=. --remap-path-prefix=/usr/local/cargo=/cargo --remap-path-prefix=/usr/local/rustup=/rustup" \
-    "$image" sh -c "rustup show >/dev/null && $cmd && for b in ${bins[*]}; do cp /cache/dist-$tag/dist/\$b /out/$target/\$b; done" ;;
+    "$image" sh -c "rustup show >/dev/null && $lcmd && for b in ainkrad-runner ainkradctl ainkrad-ptyhost; do cp /cache/dist-$tag/dist/\$b /out/$target/\$b; done && cp /cache/dist-$tag-brain/dist/ainkrad-core-brain /out/$target/ainkrad-core-server" ;;
 *) echo "unknown target $target" >&2; exit 2 ;;
 esac

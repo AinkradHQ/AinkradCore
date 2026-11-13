@@ -210,11 +210,20 @@ impl Session {
             .map(|a| a.own_logins())
             .unwrap_or_default();
         let active = self.control.as_ref().map(|c| c.active);
+        // The shell a terminal opens here (N20): the app shows it, so a login-shell fallback is not silent.
+        let shell = self
+            .pty
+            .as_ref()
+            .filter(|p| p.info().is_some())
+            .map(|p| p.shell_status());
         // Probing the host's tools runs a few short programs: off the async threads.
-        let facts =
+        let mut facts =
             tokio::task::spawn_blocking(move || super::facts::gather(&versions, active, own))
                 .await
                 .unwrap_or_default();
+        if let Some(s) = shell {
+            facts.tools.insert("terminal shell".to_owned(), s);
+        }
         let hello = RunnerHello {
             drivers: std::iter::once(self.exec.info())
                 .chain(pty_info)
@@ -237,6 +246,11 @@ impl Session {
             ..RunnerHello::default()
         };
         let (welcome, core_spki) = handshake(&mut sink, &mut source, link, hello).await?;
+        // The Core is proven: hosts may trust grants it signs (the local terminal path).
+        if let Some(pty) = &self.pty {
+            let runner = link.enrolment.lock().unwrap().device_id.clone();
+            pty.trust(&core_spki, &runner);
+        }
         if welcome.boot.is_none() || welcome.boot != self.core_boot {
             if self.core_boot.is_some() {
                 tracing::info!("the Core restarted: every held stream is gone");
