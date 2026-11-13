@@ -143,3 +143,17 @@ async fn a_silent_runner_is_degraded_then_dropped() {
         ["runner.connected", "runner.degraded", "runner.disconnected"]
     );
 }
+
+#[tokio::test]
+async fn a_graceful_stop_records_the_disconnect_before_the_pool_may_close() {
+    let core = Core::start("stop-disconnect", quick()).await;
+    let dev = core.runner().await;
+    let _fake = Fake::welcomed(&core, &dev, vec![exec_driver(&[OP_NOOP], 1)]).await;
+    core.app.closing.send_replace(true);
+    // What `serve` awaits before it closes the pool; no polling after it.
+    core.app.hub.drained(Duration::from_secs(10)).await;
+    assert_eq!(
+        kinds(&core).await,
+        ["runner.connected", "runner.disconnected"]
+    );
+}

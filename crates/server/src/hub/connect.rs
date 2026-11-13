@@ -121,6 +121,7 @@ async fn serve(
     binding: [u8; 32],
     revoked: impl Future<Output = ()> + Send + 'static,
 ) {
+    let _tracked = app.hub.track();
     let shake = handshake(&app, &mut socket, &device, &binding);
     let hello = match tokio::time::timeout(app.hub.config.handshake, shake).await {
         Ok(Ok(hello)) => hello,
