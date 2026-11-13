@@ -130,7 +130,8 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (30, "connection_apps"),
             (31, "pairing_invite"),
             (32, "secret_kinds_groups"),
-            (33, "live_sessions")
+            (33, "live_sessions"),
+            (34, "audit_origin")
         ]
     );
     let sum: Vec<u8> =

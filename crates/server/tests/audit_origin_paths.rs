@@ -78,8 +78,8 @@ fn writers(dir: &Path, src: &Path, out: &mut Vec<String>) {
             && !p.starts_with(src.join("store/audit"))
         {
             let text = std::fs::read_to_string(&p).unwrap();
-            // Only code above the file's test module counts.
-            let code = text.split("#[cfg(test)]").next().unwrap();
+            // Only code above an inline test module counts.
+            let code = text.split("#[cfg(test)]\nmod tests {").next().unwrap();
             if code.contains("NewAuditEvent {") || code.contains("audit::append") {
                 out.push(p.strip_prefix(src).unwrap().to_string_lossy().into_owned());
             }
