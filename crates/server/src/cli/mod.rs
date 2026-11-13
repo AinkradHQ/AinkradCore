@@ -882,6 +882,7 @@ async fn serve(
             .await
     });
     let (closing, pool) = (Arc::clone(&app.closing), app.pool.clone());
+    let hub = Arc::clone(&app.hub);
     let server = gateway.serve(router(app), Arc::clone(&closing), gateway::SHUTDOWN_GRACE);
     tokio::pin!(server);
     tokio::select! {
@@ -894,6 +895,9 @@ async fn serve(
             server.await?;
         }
     }
+    // Upgraded sockets outlive the server's drain: let each runner connection write its
+    // `runner.disconnected` before the pool closes.
+    hub.drained(std::time::Duration::from_secs(5)).await;
     drop(stop);
     ticking.await?;
     working.await?;

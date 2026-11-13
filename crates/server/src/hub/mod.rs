@@ -278,6 +278,8 @@ pub struct Hub {
     generations: AtomicU64,
     /// The next command stream id: odd, and never reused while the Core runs.
     streams: AtomicU64,
+    /// Runner connection tasks alive (handshake included); `drained` waits for zero.
+    live: tokio::sync::watch::Sender<usize>,
 }
 
 /// A dispatched command's frames: `output` (and a terminal's `control`), then one `result` or
@@ -334,6 +336,15 @@ fn err(code: ErrorCode, why: &str) -> StreamError {
     StreamError::new(code, why)
 }
 
+/// See [`Hub::track`].
+pub(crate) struct Tracked(Arc<Hub>);
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        self.0.live.send_modify(|n| *n -= 1);
+    }
+}
+
 impl Hub {
     pub fn new(config: HubConfig) -> Self {
         Self {
@@ -342,7 +353,21 @@ impl Hub {
             runners: Mutex::default(),
             generations: AtomicU64::new(1),
             streams: AtomicU64::new(1),
+            live: tokio::sync::watch::Sender::new(0),
         }
+    }
+
+    /// Held by a runner connection task for its whole life.
+    pub(crate) fn track(self: &Arc<Self>) -> Tracked {
+        self.live.send_modify(|n| *n += 1);
+        Tracked(Arc::clone(self))
+    }
+
+    /// Waits, up to `limit`, until every runner connection has closed and written its final
+    /// events: shutdown calls it before the pool closes.
+    pub async fn drained(&self, limit: Duration) {
+        let mut live = self.live.subscribe();
+        let _ = tokio::time::timeout(limit, live.wait_for(|n| *n == 0)).await;
     }
 
     /// Mint the agent capability after the API gate has verified both route scope and step-up.
