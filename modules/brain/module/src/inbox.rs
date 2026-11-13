@@ -45,6 +45,8 @@ pub struct InboxRecord {
     pub tool: Option<String>,
     /// `auto`, or the device that decided; none while it waits.
     pub decided_by: Option<String>,
+    /// The AI session that proposed it through Code Mode (`brain.propose`); none otherwise.
+    pub proposed_by: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -98,7 +100,7 @@ pub struct Decision {
     pub tags: Option<Vec<String>>,
 }
 
-async fn open_room(app: &App, b: &Brain, room: &str) -> Result<RoomAccess, ApiError> {
+pub(crate) async fn open_room(app: &App, b: &Brain, room: &str) -> Result<RoomAccess, ApiError> {
     let key = b.key(app).await?;
     b.rooms()
         .access(app, &key, room)
@@ -140,6 +142,9 @@ fn candidate(r: &sqlx::sqlite::SqliteRow) -> Result<(InboxRecord, Vec<String>), 
         distilled_by: by,
         tool: r.try_get("tool")?,
         decided_by: r.try_get("decided_by")?,
+        proposed_by: r
+            .try_get::<Option<String>, _>("distil")?
+            .and_then(|d| d.strip_prefix(crate::ai::PROPOSED).map(str::to_owned)),
     };
     Ok((rec, list("source_ids")?))
 }

@@ -85,13 +85,17 @@ pub(crate) async fn ensure(
 
 /// Every word quoted and ANDed: a query is words, never FTS5 syntax, so no input can be an error.
 fn match_expr(q: &str) -> Option<String> {
-    let words: Vec<String> = q
-        .split(|c: char| !c.is_alphanumeric())
+    let words: Vec<String> = words(q).iter().map(|w| format!("\"{w}\"")).collect();
+    (!words.is_empty()).then(|| words.join(" "))
+}
+
+/// The words of `q`: alphanumeric runs, at most `MAX_WORDS`.
+pub(crate) fn words(q: &str) -> Vec<String> {
+    q.split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
         .take(MAX_WORDS)
-        .map(|w| format!("\"{w}\""))
-        .collect();
-    (!words.is_empty()).then(|| words.join(" "))
+        .map(str::to_owned)
+        .collect()
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -116,6 +120,46 @@ pub struct Hit {
 #[derive(Serialize, ToSchema)]
 pub struct Hits {
     pub hits: Vec<Hit>,
+}
+
+/// The best `limit` hits of an open room for `expr`, each with its bm25 rank (lower is better).
+pub(crate) async fn fts(
+    app: &App,
+    key: &[u8; 32],
+    access: &crate::rooms::RoomAccess,
+    limit: u32,
+    expr: &str,
+) -> Result<Vec<(f64, Hit)>, ApiError> {
+    let file = files::index_path(&files::root(app), access.room());
+    ensure(access.pool(), &file, key).await?;
+    let index = files::open_migrated(&file, key, false, INDEX)
+        .await
+        .map_err(|e| code(500, "index_unavailable", e.to_string()))?;
+    let rows = sqlx::query(
+        "SELECT item_id, source_kind, title, started_at, snippet(fts, 4, '«', '»', '…', 16) AS snip, bm25(fts) AS rank \
+         FROM fts WHERE fts MATCH ? ORDER BY bm25(fts), item_id LIMIT ?",
+    )
+    .bind(expr)
+    .bind(limit)
+    .fetch_all(&index)
+    .await?;
+    let hits = rows
+        .iter()
+        .map(|r| {
+            Ok((
+                r.try_get("rank")?,
+                Hit {
+                    item_id: r.try_get("item_id")?,
+                    source_kind: r.try_get("source_kind")?,
+                    title: r.try_get("title")?,
+                    snippet: r.try_get("snip")?,
+                    started_at: r.try_get("started_at")?,
+                },
+            ))
+        })
+        .collect::<Result<_, sqlx::Error>>()?;
+    index.close().await;
+    Ok(hits)
 }
 
 #[utoipa::path(get, path = "/rooms/{room}/search", operation_id = "brainRoomSearch", tag = "brain",
@@ -147,32 +191,11 @@ pub(crate) async fn search(
                 code(500, "room_unavailable", "the room could not be opened")
             }
         })?;
-    let file = files::index_path(&files::root(&app), &room);
-    ensure(access.pool(), &file, &key).await?;
-    let index = files::open_migrated(&file, &key, false, INDEX)
-        .await
-        .map_err(|e| code(500, "index_unavailable", e.to_string()))?;
-    let rows = sqlx::query(
-        "SELECT item_id, source_kind, title, started_at, snippet(fts, 4, '«', '»', '…', 16) AS snip \
-         FROM fts WHERE fts MATCH ? ORDER BY bm25(fts), item_id LIMIT ?",
-    )
-    .bind(expr)
-    .bind(limit)
-    .fetch_all(&index)
-    .await?;
-    let hits = rows
-        .iter()
-        .map(|r| {
-            Ok(Hit {
-                item_id: r.try_get("item_id")?,
-                source_kind: r.try_get("source_kind")?,
-                title: r.try_get("title")?,
-                snippet: r.try_get("snip")?,
-                started_at: r.try_get("started_at")?,
-            })
-        })
-        .collect::<Result<_, sqlx::Error>>()?;
-    index.close().await;
+    let hits = fts(&app, &key, &access, limit, &expr)
+        .await?
+        .into_iter()
+        .map(|(_, h)| h)
+        .collect();
     access.pool().close().await;
     Ok(Json(Hits { hits }))
 }

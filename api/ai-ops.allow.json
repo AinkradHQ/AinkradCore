@@ -4,6 +4,12 @@
     {"op": "getAgentSession", "risk": "read", "summary": "Read one AI session: its state, harness, model and outcome."},
     {"op": "getAgentTranscript", "risk": "read", "summary": "Read the transcript entries of an AI session after a sequence number."},
     {"op": "listAudit", "risk": "read", "summary": "Read the audit log, filtered by action, target, actor or origin."},
-    {"op": "getCoreHealth", "risk": "read", "summary": "Read the Core's version, uptime, certificate end and newest backup."}
+    {"op": "getCoreHealth", "risk": "read", "summary": "Read the Core's version, uptime, certificate end and newest backup."},
+    {"op": "brainAiRooms", "risk": "read", "summary": "List the Brain rooms this AI session may see (its project's, or ones a room's access list names)."},
+    {"op": "brainAiSearch", "risk": "read", "summary": "Search the Brain across the rooms this AI session may see: accepted records first, then sources. Texts come back as outside data."},
+    {"op": "brainAiRecord", "risk": "read", "summary": "Read one accepted Brain record of a visible room, whole, as outside data."},
+    {"op": "brainAiDecisions", "risk": "read", "summary": "List accepted Brain decisions of the visible rooms, newest first."},
+    {"op": "brainAiProjectState", "risk": "read", "summary": "List accepted project state, open tasks and rules (landmines) of the visible rooms, newest first."},
+    {"op": "brainAiPropose", "risk": "write", "summary": "Propose a record to a visible room's Inbox. It waits there as a candidate; a person accepts or rejects it, nothing is added to the Brain."}
   ]
 }

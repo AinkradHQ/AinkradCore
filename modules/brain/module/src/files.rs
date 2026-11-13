@@ -134,11 +134,18 @@ pub fn vectors_path(root: &Path) -> PathBuf {
     root.join("vectors.db")
 }
 
-pub static VECTORS: &[FileMigration] = &[FileMigration {
-    version: 1,
-    name: "vectors_0001",
-    up: include_str!("../migrations/vectors_0001.sql"),
-}];
+pub static VECTORS: &[FileMigration] = &[
+    FileMigration {
+        version: 1,
+        name: "vectors_0001",
+        up: include_str!("../migrations/vectors_0001.sql"),
+    },
+    FileMigration {
+        version: 2,
+        name: "vectors_0002",
+        up: include_str!("../migrations/vectors_0002.sql"),
+    },
+];
 
 pub static INDEX: &[FileMigration] = &[FileMigration {
     version: 1,

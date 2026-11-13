@@ -88,6 +88,7 @@ pub(crate) async fn commit(
             continue;
         }
         if let Some(made) = commit_room(&app, &key, &st, &run, r, "user").await? {
+            crate::vectors::note_committed(&app, &b, &st, &made.room, &made.proposal).await;
             result.rooms.push(made);
         }
     }
