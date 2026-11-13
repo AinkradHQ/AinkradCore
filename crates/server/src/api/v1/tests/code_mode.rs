@@ -11,14 +11,14 @@ use super::*;
 use crate::ops_catalog::{call_call, session_scopes};
 use crate::store::agents::{self as store, NewSession};
 
-struct S {
-    id: String,
-    runner: String,
-    creator: String,
+pub(super) struct S {
+    pub id: String,
+    pub runner: String,
+    pub creator: String,
 }
 
 /// A session created by a new device holding `scopes`, started by that device's person.
-async fn session(fx: &Fx, scopes: &[&str]) -> S {
+pub(super) async fn session(fx: &Fx, scopes: &[&str]) -> S {
     let creator = fx.enroll("creator", scopes).await;
     let runner = super::secrets::runner(fx, "vm").await;
     let policy = json!({});
@@ -46,7 +46,7 @@ async fn session(fx: &Fx, scopes: &[&str]) -> S {
     }
 }
 
-async fn go(fx: &Fx, s: &S, args: Value) -> (bool, String) {
+pub(super) async fn go(fx: &Fx, s: &S, args: Value) -> (bool, String) {
     let call = ToolCall {
         tc_seq: 1,
         id: "c1".to_owned(),
@@ -57,7 +57,7 @@ async fn go(fx: &Fx, s: &S, args: Value) -> (bool, String) {
     (r.ok, r.code.unwrap_or_default())
 }
 
-async fn ok_result(fx: &Fx, s: &S, args: Value) -> Value {
+pub(super) async fn ok_result(fx: &Fx, s: &S, args: Value) -> Value {
     let call = ToolCall {
         tc_seq: 1,
         id: "c1".to_owned(),
@@ -69,7 +69,7 @@ async fn ok_result(fx: &Fx, s: &S, args: Value) -> Value {
     r.result.unwrap()
 }
 
-async fn sql(fx: &Fx, q: &'static str, bind: &str) {
+pub(super) async fn sql(fx: &Fx, q: &'static str, bind: &str) {
     sqlx::query(q)
         .bind(bind)
         .execute(&fx.app.pool)
@@ -77,7 +77,7 @@ async fn sql(fx: &Fx, q: &'static str, bind: &str) {
         .unwrap();
 }
 
-async fn rows(
+pub(super) async fn rows(
     fx: &Fx,
 ) -> Vec<(
     String,
@@ -95,7 +95,7 @@ async fn rows(
     .unwrap()
 }
 
-async fn set(fx: &Fx, key: Key, v: &str) {
+pub(super) async fn set(fx: &Fx, key: Key, v: &str) {
     crate::store::settings::set(
         &fx.app.pool,
         key,

@@ -100,6 +100,11 @@ pub fn build(spec: &Value, allow: &[Allowed]) -> Catalogue {
                 .push(format!("{}: not in the contract, left out", a.op));
             continue;
         };
+        if !super::exposed(path) {
+            cat.warnings
+                .push(format!("{}: a route no session reaches, left out", a.op));
+            continue;
+        }
         let w = &mut cat.warnings;
         let mut params = Vec::new();
         // Path-level parameters first; an operation's own of the same name and place wins.

@@ -27,6 +27,32 @@ pub struct AgentDecision {
     pub reply: Option<String>,
 }
 
+/// A Code Mode write the Core holds until a person decides (plan E6).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AgentApproval {
+    /// `cm_…`: the request id for `decideAgentApproval`.
+    pub id: String,
+    /// `ainkrad.<operation>`.
+    pub tool: String,
+    /// The operation in plain words.
+    pub summary: String,
+    /// The arguments the AI session passed, with secrets redacted and long texts cut.
+    pub args: Value,
+    /// `risky`: the only class that waits for a person.
+    pub risk: String,
+    /// Why it needs a person, in a sentence.
+    pub reason: String,
+    pub requested_at: super::super::types::Timestamp,
+    /// After this the call is refused `approval_timeout`.
+    pub expires_at: super::super::types::Timestamp,
+}
+
+/// The approvals one session waits on, newest last.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AgentApprovals {
+    pub approvals: Vec<AgentApproval>,
+}
+
 /// A new title for a session.
 #[derive(Deserialize, ToSchema)]
 pub struct AgentTitle {

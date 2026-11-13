@@ -228,7 +228,13 @@ fn the_whole_real_contract_builds_without_unresolved_refs() {
         "{:?}",
         c.warnings
     );
-    assert_eq!(c.ops.len(), every.len());
+    // Everything but the families no session reaches (secrets, devices, runners, sign-in).
+    let hidden = check(&spec, &every)
+        .iter()
+        .filter(|b| b.contains("not exposed"))
+        .count();
+    assert!(hidden > 20, "{hidden}");
+    assert_eq!(c.ops.len() + hidden, every.len());
 }
 
 fn cat() -> Catalogue {

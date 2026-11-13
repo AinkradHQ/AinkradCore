@@ -140,4 +140,10 @@ registry! {
     CodeModeMaxResultBytes "code_mode.max_result_bytes" Bytes 200_000, 1_024, 250_000, SO,
         "Code Mode: the most bytes of one operation's result returned to the session; a larger \
          one is cut and marked `truncated` with its full size. Read at each call.";
+    CodeModeApprovalSecs "code_mode.approval_secs" Seconds 100, 1, 110, SO,
+        "Code Mode: how long a risky operation waits for a person to approve it before it is \
+         refused `approval_timeout`. Kept under the relay's 120 s. Read at each call.";
+    CodeModeIdemSecs "code_mode.idempotency_secs" Seconds 600, 10, 86_400, SO,
+        "Code Mode: how long a write's result is remembered, so the same write sent again by \
+         the same session returns the first result instead of running twice. Read at each call.";
 }
