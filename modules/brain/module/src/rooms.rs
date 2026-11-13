@@ -82,7 +82,7 @@ impl Rooms {
         hours * 3600
     }
 
-    fn is_open(&self, room: &str, now: i64) -> bool {
+    pub(crate) fn is_open(&self, room: &str, now: i64) -> bool {
         self.open
             .lock()
             .unwrap_or_else(|e| e.into_inner())

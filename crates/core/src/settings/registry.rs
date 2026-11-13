@@ -119,4 +119,25 @@ registry! {
          minutes (1 at least: failover is turned off with scheduler.max_hops 0); beyond it a run of \
          that user ends instead of moving, and `alarm.raised` says so once a window. Read at each \
          move.";
+    CodeModeCallsPerMin "code_mode.calls_per_min" PerMinute 300, 1, 6_000, SO,
+        "Code Mode: the most `ainkrad.call` operations one AI session may make per minute; past \
+         it a call is refused `rate_limited`. Read at each call.";
+    CodeModeMaxRunCalls "code_mode.max_run_calls" Count 100, 1, 1_000, SO,
+        "Code Mode: the most operations one script run (calls sharing a `run` id) may make; the \
+         next is refused `too_many_calls`. Read at each call.";
+    CodeModeRunSecs "code_mode.run_secs" Seconds 60, 1, 110, SO,
+        "Code Mode: the wall time of one script run, counted from its first call; later calls of \
+         it are refused `run_timeout`. Kept under the relay's 120 s. Read at each call.";
+    CodeModeCallSecs "code_mode.call_secs" Seconds 30, 1, 110, SO,
+        "Code Mode: the longest one operation may take before it is refused `timeout`. Read at \
+         each call.";
+    CodeModeConcurrent "code_mode.concurrent" Count 4, 1, 16, SO,
+        "Code Mode: operations one AI session may have running at once; more are refused `busy`. \
+         Read at each call.";
+    CodeModeMaxArgsBytes "code_mode.max_args_bytes" Bytes 65_536, 256, 393_216, SO,
+        "Code Mode: the most bytes of one call's arguments (as JSON text); more is refused \
+         `args_too_large`. Read at each call.";
+    CodeModeMaxResultBytes "code_mode.max_result_bytes" Bytes 200_000, 1_024, 250_000, SO,
+        "Code Mode: the most bytes of one operation's result returned to the session; a larger \
+         one is cut and marked `truncated` with its full size. Read at each call.";
 }

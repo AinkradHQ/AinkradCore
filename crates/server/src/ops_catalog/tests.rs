@@ -173,7 +173,13 @@ fn a_big_type_is_cut_to_fit() {
 /// `--nocapture` to see the reviewed and unreviewed operations.
 #[test]
 fn the_committed_allow_list_matches_the_real_contract() {
-    let allow = allow_list().expect("api/ai-ops.allow.json reads");
+    // A module's operations are not in the core contract: the module's own gate test checks them
+    // against the live catalogue with the module mounted (brain: `ai.rs`).
+    let allow: Vec<Allowed> = allow_list()
+        .expect("api/ai-ops.allow.json reads")
+        .into_iter()
+        .filter(|a| !a.op.starts_with("brainAi"))
+        .collect();
     let spec: Value = serde_json::from_str(&crate::api::v1::spec::json()).unwrap();
     let bad = check(&spec, &allow);
     assert!(bad.is_empty(), "{bad:#?}");

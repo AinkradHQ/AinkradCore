@@ -22,6 +22,8 @@ use serde_json::Value;
 use sqlx::SqliteConnection;
 use utoipa::{OpenApi, ToSchema};
 
+mod access;
+mod ai;
 mod answer;
 pub mod cipher;
 mod claim;
@@ -71,6 +73,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0004_brain_ui.up.sql"),
         down: include_str!("../migrations/0004_brain_ui.down.sql"),
     },
+    Migration {
+        version: 5,
+        name: "brain_room_access",
+        up: include_str!("../migrations/0005_brain_room_access.up.sql"),
+        down: include_str!("../migrations/0005_brain_room_access.down.sql"),
+    },
 ];
 
 /// Employer and client rooms are discovered and reviewed in M1 but committed only after the import
@@ -84,6 +92,7 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/rooms/{room}/open"),
     ("POST", "/rooms/{room}/claims"),
     ("PATCH", "/rooms/{room}/policy"),
+    ("PUT", "/rooms/{room}/access"),
 ];
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports"),
@@ -101,6 +110,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/rooms/{room}/distil"),
     ("POST", "/rooms/{room}/inbox/{id}"),
     ("PUT", "/sources/{id}"),
+    ("POST", "/ai/rooms/{room}/propose"),
 ];
 /// `module.brain.semantic.strength`: how many sorting suggestions the local model makes.
 const SETTINGS: &[ModuleSetting] = &[
@@ -142,6 +152,15 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/rooms/{room}/policy", "read"),
     ("GET", "/rooms/{room}/distils", "read"),
     ("GET", "/rooms/{room}/inbox", "read"),
+    ("GET", "/rooms/{room}/access", "read"),
+    // Code Mode (E4): a session acts as its creator without `admin`, so these name the scopes a
+    // creator holds. They answer only a session's own calls (`ai::session_of`).
+    ("GET", "/ai/rooms", "read"),
+    ("GET", "/ai/search", "read"),
+    ("GET", "/ai/rooms/{room}/records/{id}", "read"),
+    ("GET", "/ai/decisions", "read"),
+    ("GET", "/ai/project-state", "read"),
+    ("POST", "/ai/rooms/{room}/propose", "agent"),
 ];
 
 #[derive(Default)]
@@ -412,7 +431,15 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         distil::start,
         distil::list,
         policy::get,
-        policy::patch
+        policy::patch,
+        access::get,
+        access::put,
+        ai::rooms,
+        ai::search,
+        ai::one,
+        ai::decisions,
+        ai::project_state,
+        ai::propose
     ),
     components(schemas(
         BrainStatus,
@@ -466,7 +493,15 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         inbox::Decision,
         policy::PolicyView,
         policy::PolicyPatch,
-        policy::PolicyAccount
+        policy::PolicyAccount,
+        access::RoomAccess,
+        ai::AiRoom,
+        ai::AiHit,
+        ai::AiHits,
+        ai::AiRecord,
+        ai::AiRecords,
+        ai::Propose,
+        ai::Proposed
     ))
 )]
 struct Doc;
@@ -517,6 +552,13 @@ impl Module for Brain {
                 "/rooms/{room}/policy",
                 get(policy::get).patch(policy::patch),
             )
+            .route("/rooms/{room}/access", get(access::get).put(access::put))
+            .route("/ai/rooms", get(ai::rooms))
+            .route("/ai/search", get(ai::search))
+            .route("/ai/rooms/{room}/records/{id}", get(ai::one))
+            .route("/ai/decisions", get(ai::decisions))
+            .route("/ai/project-state", get(ai::project_state))
+            .route("/ai/rooms/{room}/propose", post(ai::propose))
             .route("/sources", get(sync::sources))
             .route("/sources/{id}", put(sync::put_source))
             .route("/sync", get(sync::status).post(sync::sync_now))
@@ -557,11 +599,14 @@ impl Module for Brain {
             "brain.distil.queued",
             "brain.distil.done",
             "brain.distil.rejected",
+            "brain.room.access",
+            "brain.ai.proposed",
+            "brain.ai.refused",
         ]
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["q"]
+        &["q", "room"]
     }
 
     fn jobs(&self) -> Vec<Job> {

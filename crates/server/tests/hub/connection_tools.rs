@@ -144,7 +144,7 @@ async fn a_call_is_taken_once_answered_in_its_own_poll_and_names_no_connection()
         .collect();
     assert_eq!(
         (first.after, names),
-        (0, vec!["ainkrad.search"]),
+        (0, vec!["ainkrad.search", "ainkrad.call"]),
         "no grants: only the search"
     );
     let batch = ToolBatch {

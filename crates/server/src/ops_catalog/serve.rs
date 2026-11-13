@@ -3,7 +3,6 @@
 
 use ainkrad_proto::v2::{ConnTool, MAX_ARGS_BYTES, ToolCall, ToolResult};
 use serde_json::{Value, json};
-use sqlx::Row;
 
 use crate::api::App;
 use crate::store::connections::access;
@@ -40,21 +39,47 @@ fn refuse(id: String, code: &str, message: &str) -> ToolResult {
     }
 }
 
-/// The scopes of the device that created `session`, now (none if it is revoked or gone).
+/// A session's principal: its creator device with its scopes NARROWED, read now.
+pub struct Principal {
+    pub device: crate::store::gov::Device,
+    /// The device's current scopes without `admin`: a session is never granted it.
+    pub scopes: Vec<String>,
+}
+
+/// The principal of `session`: its creator device as it is NOW, or `None` when the session is
+/// unknown or the device is revoked, pending, locked or gone.
+pub async fn session_principal(
+    pool: &sqlx::SqlitePool,
+    session: &str,
+) -> Result<Option<Principal>, sqlx::Error> {
+    let by: Option<String> =
+        sqlx::query_scalar("SELECT created_by FROM core_agent_sessions WHERE id = ?")
+            .bind(session)
+            .fetch_optional(pool)
+            .await?;
+    let Some(by) = by else { return Ok(None) };
+    let Some(mut device) = crate::store::gov::get_device(pool, &by)
+        .await?
+        .filter(|d| d.usable())
+    else {
+        return Ok(None);
+    };
+    device.scopes.retain(|s| s != "admin");
+    Ok(Some(Principal {
+        scopes: device.scopes.clone(),
+        device,
+    }))
+}
+
+/// The scopes of the device that created `session`, now, never `admin` (none if it is revoked
+/// or gone).
 pub async fn session_scopes(
     pool: &sqlx::SqlitePool,
     session: &str,
 ) -> Result<Vec<String>, sqlx::Error> {
-    let row = sqlx::query(
-        "SELECT d.scopes FROM core_agent_sessions s JOIN core_devices d ON d.id = s.created_by \
-         WHERE s.id = ? AND d.status = 'active' AND d.revoked_at IS NULL",
-    )
-    .bind(session)
-    .fetch_optional(pool)
-    .await?;
-    let text: Option<String> = row.map(|r| r.try_get("scopes")).transpose()?;
-    Ok(text
-        .and_then(|t| serde_json::from_str(&t).ok())
+    Ok(session_principal(pool, session)
+        .await?
+        .map(|p| p.scopes)
         .unwrap_or_default())
 }
 
