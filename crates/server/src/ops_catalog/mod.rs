@@ -1,9 +1,11 @@
 //! The operation catalogue for Code Mode (plan `2026-11-13-ainkrad-code-mode-mcp-plan`, E1): the
 //! opt-in allow-list (`api/ai-ops.allow.json`), the catalogue built from the live OpenAPI
 //! document ([`build`]), a typed definition per operation ([`render`]) and the search a session
-//! asks for ([`search`], served by [`serve`]). Nothing here runs an operation: that is E2.
+//! asks for ([`search`], served by [`serve`]). `call` (E2) runs the read-only ones for a session.
 
+mod args;
 mod build;
+mod call;
 mod render;
 mod search;
 mod serve;
@@ -16,9 +18,10 @@ use serde::Deserialize;
 use serde_json::Value;
 
 pub use build::build;
+pub use call::{CALL, CallState, call_call, call_tool};
 pub use render::render;
 pub use search::search;
-pub use serve::{SEARCH, search_call, search_tool, session_scopes};
+pub use serve::{Principal, SEARCH, search_call, search_tool, session_principal, session_scopes};
 
 /// What an operation may do to the world; decides the approval it needs (E6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]

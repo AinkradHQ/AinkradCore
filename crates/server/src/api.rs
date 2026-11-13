@@ -92,6 +92,8 @@ pub struct App {
     pub tool_ops: Arc<v1::ToolOps>,
     /// The Code Mode operation catalogue, built on first use (the modules are set by then).
     pub ops: Arc<std::sync::OnceLock<crate::ops_catalog::Catalogue>>,
+    /// Code Mode's call windows, runs and in-flight counts (E2), in memory.
+    pub code_mode: Arc<crate::ops_catalog::CallState>,
 }
 
 /// Resolves once serve is stopping (`App::closing`).
@@ -135,6 +137,7 @@ impl App {
             host_helper: Arc::default(),
             tool_ops: Arc::default(),
             ops: Arc::default(),
+            code_mode: Arc::default(),
         }
     }
 
