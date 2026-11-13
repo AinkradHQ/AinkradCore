@@ -131,6 +131,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "chain.deleted",
     "chain.unbound",
     "chain.updated",
+    "code_mode.call",
     "connection.app_set",
     "connection.auth_failed",
     "connection.auth_inconclusive",

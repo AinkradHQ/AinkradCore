@@ -190,7 +190,10 @@
 ///
 /// 62: Brain import regroup: `brainRegroup` (`POST /imports/{run}/regroup`) and `ProposalCard.suggest_merge`
 ///    (`MergeSuggestion`), and the audit action `brain.import.regrouped`.
-pub const API_MINOR: u32 = 62;
+///
+/// 63: Code Mode dispatch (E2): the audit action `code_mode.call` and the settings `code_mode.*` (call, run, size and
+///    concurrency limits). No route changed.
+pub const API_MINOR: u32 = 63;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
