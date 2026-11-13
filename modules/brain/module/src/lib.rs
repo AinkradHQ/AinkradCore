@@ -8,7 +8,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use ainkrad_core::audit::NewAuditEvent;
+use ainkrad_core::audit::{NewAuditEvent, OriginKind};
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY};
 use ainkrad_core_server::jobs::Job;
@@ -252,16 +252,23 @@ pub(crate) async fn record(
     details: Value,
     event: Option<(&str, Value)>,
 ) -> Result<(), sqlx::Error> {
-    audit::append(
-        conn,
-        &NewAuditEvent {
-            actor: BY,
-            action: action.to_owned(),
-            entity: None,
-            details: details.to_string(),
-        },
-    )
-    .await?;
+    // E1: imports and distillation are their own origin; the root is whoever or whatever
+    // started the request or job.
+    let origin = match action {
+        a if a.starts_with("brain.import.") => Some(OriginKind::BrainImport),
+        a if a.starts_with("brain.distil.") => Some(OriginKind::BrainDistil),
+        _ => None,
+    };
+    let row = NewAuditEvent {
+        actor: BY,
+        action: action.to_owned(),
+        entity: None,
+        details: details.to_string(),
+    };
+    match origin {
+        Some(kind) => audit::append_as(conn, &row, audit::origin::derived(kind, None)).await?,
+        None => audit::append(conn, &row).await?,
+    };
     if let Some((kind, payload)) = event {
         events::append(conn, kind, &payload).await?;
     }

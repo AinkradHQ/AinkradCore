@@ -5,14 +5,16 @@
 //! the change it records. Rows are hash-chained (`chain`, E1-10.1).
 
 use ainkrad_core::audit::{
-    AuditActor, AuditEntity, AuditEvent, AuditFilter, AuditSeq, NewAuditEvent,
+    AuditActor, AuditEntity, AuditEvent, AuditFilter, AuditOrigin, AuditSeq, NewAuditEvent,
+    OriginKind,
 };
 use sqlx::sqlite::{SqliteConnection, SqlitePool, SqliteRow};
 use sqlx::{Error, Row};
 
 macro_rules! audit_columns {
     () => {
-        "seq, at, actor_kind, actor_id, action, entity_kind, entity_id, details"
+        "seq, at, actor_kind, actor_id, action, entity_kind, entity_id, details, origin, origin_ref, \
+         origin_root, origin_root_ref"
     };
 }
 
@@ -26,6 +28,19 @@ fn event(row: SqliteRow) -> Result<AuditEvent, Error> {
     })?;
     let entity_kind: Option<String> = row.try_get("entity_kind")?;
     let entity_id: Option<i64> = row.try_get("entity_id")?;
+    let origin = row
+        .try_get::<Option<String>, _>("origin")?
+        .and_then(|k| OriginKind::parse(&k))
+        .map(|kind| -> Result<AuditOrigin, Error> {
+            let root: Option<String> = row.try_get("origin_root")?;
+            Ok(AuditOrigin {
+                kind,
+                reference: row.try_get("origin_ref")?,
+                root_kind: root.and_then(|k| OriginKind::parse(&k)).unwrap_or(kind),
+                root_reference: row.try_get("origin_root_ref")?,
+            })
+        })
+        .transpose()?;
     Ok(AuditEvent {
         seq: AuditSeq(row.try_get("seq")?),
         at: row.try_get("at")?,
@@ -35,8 +50,11 @@ fn event(row: SqliteRow) -> Result<AuditEvent, Error> {
             .zip(entity_id)
             .map(|(kind, id)| AuditEntity { kind, id }),
         details: row.try_get("details")?,
+        origin,
     })
 }
+
+pub mod origin;
 
 /// The user every row belongs to until there are more (#18); part of the hashed row.
 const USER: i64 = 1;
@@ -47,6 +65,15 @@ const USER: i64 = 1;
 /// under the write gate; a racing writer outside the gate is refused by the chain trigger rather
 /// than forking the chain. The `audit` event comes with it, written by trigger.
 pub async fn append(conn: &mut SqliteConnection, e: &NewAuditEvent) -> Result<AuditEvent, Error> {
+    append_as(conn, e, origin::current()).await
+}
+
+/// [`append`] with an origin given outright (a module that knows better than the ambient one).
+pub async fn append_as(
+    conn: &mut SqliteConnection,
+    e: &NewAuditEvent,
+    origin: AuditOrigin,
+) -> Result<AuditEvent, Error> {
     let (actor_kind, actor_id) = e.actor.parts();
     let (at, seq, prev): (String, i64, Option<Vec<u8>>) = sqlx::query_as(
         "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), \
@@ -68,11 +95,16 @@ pub async fn append(conn: &mut SqliteConnection, e: &NewAuditEvent) -> Result<Au
         details: crate::store::redact::text(&e.details),
         prev_hash: None,
         hash: None,
+        origin: Some(origin.kind.as_str().to_owned()),
+        origin_ref: origin.reference.clone(),
+        origin_root: Some(origin.root_kind.as_str().to_owned()),
+        origin_root_ref: origin.root_reference.clone(),
     };
     let hash = chain::digest(&row, &chain::hex(&prev));
     sqlx::query(concat!(
         "INSERT INTO audit_events (seq, at, user_id, actor_kind, actor_id, action, entity_kind, \
-         entity_id, details, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ",
+         entity_id, details, prev_hash, hash, origin, origin_ref, origin_root, origin_root_ref) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ",
         audit_columns!()
     ))
     .bind(row.seq)
@@ -86,6 +118,10 @@ pub async fn append(conn: &mut SqliteConnection, e: &NewAuditEvent) -> Result<Au
     .bind(&row.details)
     .bind(prev)
     .bind(&hash[..])
+    .bind(&row.origin)
+    .bind(&row.origin_ref)
+    .bind(&row.origin_root)
+    .bind(&row.origin_root_ref)
     .fetch_one(&mut *conn)
     .await
     .map_err(|err| match &err {
@@ -146,6 +182,44 @@ pub async fn page(
     actor: Option<&str>,
     limit: u32,
 ) -> Result<Vec<AuditEvent>, Error> {
+    page_by(
+        pool,
+        before,
+        action_prefix,
+        entity,
+        actor,
+        OriginFilter::Any,
+        limit,
+    )
+    .await
+}
+
+/// Which origins a page keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OriginFilter {
+    Any,
+    /// Rows with this origin.
+    Is(OriginKind),
+    /// Rows with a known origin other than a person ("nobody watching"); rows from before
+    /// origins are unknown, so they are not in it.
+    NobodyWatching,
+}
+
+/// [`page`] narrowed by origin.
+pub async fn page_by(
+    pool: &SqlitePool,
+    before: Option<AuditSeq>,
+    action_prefix: Option<&str>,
+    entity: Option<(&str, Option<i64>)>,
+    actor: Option<&str>,
+    origin: OriginFilter,
+    limit: u32,
+) -> Result<Vec<AuditEvent>, Error> {
+    let (is, nobody) = match origin {
+        OriginFilter::Any => (None, false),
+        OriginFilter::Is(k) => (Some(k.as_str()), false),
+        OriginFilter::NobodyWatching => (None, true),
+    };
     sqlx::query(concat!(
         "SELECT ",
         audit_columns!(),
@@ -154,13 +228,17 @@ pub async fn page(
          AND (?3 IS NULL OR entity_kind = ?3) \
          AND (?4 IS NULL OR entity_id = ?4) \
          AND (?5 IS NULL OR actor_kind = ?5) \
-         ORDER BY seq DESC LIMIT ?6"
+         AND (?6 IS NULL OR origin = ?6) \
+         AND (?7 = 0 OR (origin IS NOT NULL AND origin <> 'person')) \
+         ORDER BY seq DESC LIMIT ?8"
     ))
     .bind(before.map(|s| s.0))
     .bind(action_prefix)
     .bind(entity.map(|(kind, _)| kind))
     .bind(entity.and_then(|(_, id)| id))
     .bind(actor)
+    .bind(is)
+    .bind(nobody)
     .bind(limit)
     .fetch_all(pool)
     .await?

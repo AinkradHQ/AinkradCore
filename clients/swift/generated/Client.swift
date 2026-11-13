@@ -7304,6 +7304,20 @@ public struct Client: APIProtocol {
                     name: "actor",
                     value: input.query.actor
                 )
+                try converter.setQueryItemAsURI(
+                    in: &request,
+                    style: .form,
+                    explode: true,
+                    name: "origin",
+                    value: input.query.origin
+                )
+                try converter.setQueryItemAsURI(
+                    in: &request,
+                    style: .form,
+                    explode: true,
+                    name: "nobody_watching",
+                    value: input.query.nobodyWatching
+                )
                 converter.setAcceptHeader(
                     in: &request.headerFields,
                     contentTypes: input.headers.accept

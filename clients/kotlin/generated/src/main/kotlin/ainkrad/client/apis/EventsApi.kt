@@ -113,10 +113,12 @@ import io.ktor.http.ParametersBuilder
          * @param kind Only actions starting with this: &#x60;device.&#x60; or &#x60;setting.set&#x60;. (optional)
          * @param target Only rows about this entity: its kind (&#x60;device&#x60;), or kind and id (&#x60;device:d_…&#x60;, or &#x60;&lt;kind&gt;:&lt;n&gt;&#x60; for a kind with numeric ids). (optional)
          * @param actor Only rows done by this kind of actor: &#x60;user&#x60; or &#x60;system&#x60;; another value is a 400. (optional)
+         * @param origin Only rows with this origin: &#x60;person&#x60;, &#x60;schedule&#x60;, &#x60;brain_import&#x60;, &#x60;brain_distil&#x60;, &#x60;ai_session&#x60;, &#x60;handoff&#x60; or &#x60;system&#x60;; another value is a 400. (optional)
+         * @param nobodyWatching &#x60;true&#x60;: only rows with a known origin that is not a person (\&quot;nobody watching\&quot;); rows from before origins are unknown and not in it. Not with &#x60;origin&#x60;. (optional)
          * @return AuditPage
         */
             @Suppress("UNCHECKED_CAST")
-        open suspend fun listAudit(before: kotlin.Long?, limit: kotlin.Int?, kind: kotlin.String?, target: kotlin.String?, actor: kotlin.String?): HttpResponse<AuditPage> {
+        open suspend fun listAudit(before: kotlin.Long?, limit: kotlin.Int?, kind: kotlin.String?, target: kotlin.String?, actor: kotlin.String?, origin: kotlin.String?, nobodyWatching: kotlin.Boolean?): HttpResponse<AuditPage> {
 
             val localVariableAuthNames = listOf<String>("device_signature")
 
@@ -129,6 +131,8 @@ import io.ktor.http.ParametersBuilder
             kind?.apply { localVariableQuery["kind"] = listOf("$kind") }
             target?.apply { localVariableQuery["target"] = listOf("$target") }
             actor?.apply { localVariableQuery["actor"] = listOf("$actor") }
+            origin?.apply { localVariableQuery["origin"] = listOf("$origin") }
+            nobodyWatching?.apply { localVariableQuery["nobody_watching"] = listOf("$nobodyWatching") }
 
             val localVariableHeaders = mutableMapOf<String, String>()
 

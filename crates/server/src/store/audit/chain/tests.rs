@@ -184,3 +184,94 @@ async fn rows_from_before_the_chain_are_counted_and_the_chain_starts_after_them(
     .await;
     assert_eq!(broken(&db.pool).await.seq, 5);
 }
+
+/// A chained row as written before origins: no origin columns, the ten-element hash.
+async fn legacy_row(pool: &SqlitePool) {
+    let (seq, prev): (i64, Vec<u8>) =
+        sqlx::query_as("SELECT seq + 1, hash FROM audit_events ORDER BY seq DESC LIMIT 1")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let row = ChainRow {
+        seq,
+        at: "2026-01-01T00:00:00.000Z".to_owned(),
+        user_id: 1,
+        actor_kind: "system".to_owned(),
+        actor_id: None,
+        action: "thing.done".to_owned(),
+        entity_kind: None,
+        entity_id: None,
+        details: "{}".to_owned(),
+        prev_hash: None,
+        hash: None,
+        origin: None,
+        origin_ref: None,
+        origin_root: None,
+        origin_root_ref: None,
+    };
+    let hash = digest(&row, &hex(&prev));
+    sqlx::query(
+        "INSERT INTO audit_events (seq, at, actor_kind, action, details, prev_hash, hash) \
+         VALUES (?, ?, 'system', 'thing.done', '{}', ?, ?)",
+    )
+    .bind(row.seq)
+    .bind(&row.at)
+    .bind(prev)
+    .bind(&hash[..])
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_chain_of_old_and_new_rows_verifies_and_an_origin_is_hashed() {
+    let db = db(2).await;
+    legacy_row(&db.pool).await;
+    append_one(&db.pool, &row(4)).await.unwrap();
+    let done = verify_db(&db.pool).await.unwrap().unwrap();
+    assert_eq!(done.rows, 4, "{done:?}");
+    let mut out = Vec::new();
+    export(&db.pool, &mut out).await.unwrap();
+    let text = String::from_utf8(out.clone()).unwrap();
+    let lines: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert!(
+        lines[2].get("origin").is_none(),
+        "an old row exports as it was"
+    );
+    assert_eq!(lines[3]["origin"], "system");
+    assert_eq!(verify_export(&out[..]).unwrap(), done);
+
+    // Stripping an origin, or giving an old row one, breaks that row's hash.
+    sql(&db.pool, "DROP TRIGGER audit_events_no_update").await;
+    sql(
+        &db.pool,
+        "UPDATE audit_events SET origin = NULL WHERE seq = 4",
+    )
+    .await;
+    assert_eq!(broken(&db.pool).await.seq, 4);
+    sql(
+        &db.pool,
+        "UPDATE audit_events SET origin = 'system' WHERE seq = 4",
+    )
+    .await;
+    sql(
+        &db.pool,
+        "UPDATE audit_events SET origin = 'person' WHERE seq = 3",
+    )
+    .await;
+    assert_eq!(broken(&db.pool).await.seq, 3);
+    sql(
+        &db.pool,
+        "UPDATE audit_events SET origin = NULL WHERE seq = 3",
+    )
+    .await;
+    sql(
+        &db.pool,
+        "UPDATE audit_events SET origin_root = 'person' WHERE seq = 4",
+    )
+    .await;
+    assert_eq!(broken(&db.pool).await.seq, 4);
+}

@@ -15,6 +15,7 @@
 
 package ainkrad.client.models
 
+import ainkrad.client.models.EntryOrigin
 import ainkrad.client.models.EventActor
 
 import kotlinx.serialization.Serializable
@@ -32,6 +33,7 @@ import kotlinx.serialization.Contextual
  * @param entityId A numeric entity id; absent for a device, which is named by `entity_ref` only.
  * @param entityKind 
  * @param entityRef The entity's public id: a device's opaque `d_…` id, else `entity_id` as text.
+ * @param origin What started it; absent on rows from before origins.
  */
 @Serializable
 
@@ -63,7 +65,11 @@ data class AuditEntry (
 
     /* The entity's public id: a device's opaque `d_…` id, else `entity_id` as text. */
     @SerialName(value = "entity_ref")
-    val entityRef: kotlin.String? = null
+    val entityRef: kotlin.String? = null,
+
+    /* What started it; absent on rows from before origins. */
+    @SerialName(value = "origin")
+    val origin: EntryOrigin? = null
 
 ) {
 

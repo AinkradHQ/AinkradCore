@@ -1,7 +1,8 @@
 //! The audit hash chain (E1-10.1) and its JSONL export (E1-10.3).
 //!
 //! A row's `hash` is the SHA-256 of its canonical form: the compact JSON array
-//! `[seq, at, user_id, actor_kind, actor_id, action, entity_kind, entity_id, details, prev_hash]`,
+//! `[seq, at, user_id, actor_kind, actor_id, action, entity_kind, entity_id, details, prev_hash]`
+//! (plus `[origin, origin_ref, origin_root, origin_root_ref]` as an eleventh element, only on rows that have an origin),
 //! where `details` is the stored text (never re-serialised, so key order cannot drift) and
 //! `prev_hash` the previous row's hash in lowercase hex (64 zeros for the first chained row).
 //!
@@ -35,6 +36,17 @@ pub struct ChainRow {
     /// Lowercase hex; absent on rows from before the chain.
     pub prev_hash: Option<String>,
     pub hash: Option<String>,
+    /// What started the row (E1): `None` before origins. Hashed only when set, as one more
+    /// array element, so rows from before still verify and an origin cannot be stripped or
+    /// added without breaking the row's hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_root_ref: Option<String>,
 }
 
 /// The `prev_hash` of the first chained row.
@@ -46,7 +58,7 @@ pub fn hex(bytes: &[u8]) -> String {
 
 /// The hash of `row` chained after `prev` (hex), as bytes.
 pub fn digest(row: &ChainRow, prev: &str) -> [u8; 32] {
-    let canonical = json!([
+    let mut canonical = json!([
         row.seq,
         row.at,
         row.user_id,
@@ -58,6 +70,14 @@ pub fn digest(row: &ChainRow, prev: &str) -> [u8; 32] {
         row.details,
         prev
     ]);
+    if row.origin.is_some() {
+        canonical.as_array_mut().expect("an array").push(json!([
+            row.origin,
+            row.origin_ref,
+            row.origin_root,
+            row.origin_root_ref
+        ]));
+    }
     Sha256::digest(canonical.to_string().as_bytes()).into()
 }
 
@@ -155,7 +175,8 @@ async fn each_row(
         let rows: Vec<ChainRow> = sqlx::query_as(
             "SELECT seq, at, user_id, actor_kind, actor_id, action, entity_kind, entity_id, \
              details, iif(prev_hash IS NULL, NULL, lower(hex(prev_hash))) AS prev_hash, \
-             iif(hash IS NULL, NULL, lower(hex(hash))) AS hash \
+             iif(hash IS NULL, NULL, lower(hex(hash))) AS hash, \
+             origin, origin_ref, origin_root, origin_root_ref \
              FROM audit_events WHERE seq > ? ORDER BY seq LIMIT ?",
         )
         .bind(after)

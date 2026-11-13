@@ -72,8 +72,20 @@ pub const BY: AuditActor = AuditActor::User(ADMIN);
 
 /// Query parameter names any `/api/v1` route may take; nothing else is let through.
 pub const QUERY: &[&str] = &[
-    "after", "limit", "before", "kind", "target", "actor", "session", "account", "subject",
-    "company", "run", "lines",
+    "after",
+    "limit",
+    "before",
+    "kind",
+    "target",
+    "actor",
+    "session",
+    "account",
+    "subject",
+    "company",
+    "run",
+    "lines",
+    "origin",
+    "nobody_watching",
 ];
 
 /// A page of a list: the cursor to continue after (its meaning is per route) and how many.

@@ -2231,6 +2231,8 @@ export interface components {
             entity_kind?: string | null;
             /** @description The entity's public id: a device's opaque `d_…` id, else `entity_id` as text. */
             entity_ref?: string | null;
+            /** @description What started it; absent on rows from before origins. */
+            origin?: components["schemas"]["EntryOrigin"];
             /** Format: int64 */
             seq: number;
         };
@@ -2634,6 +2636,19 @@ export interface components {
         Elevation: {
             /** @description Until when this session may call routes marked `x-ainkrad-destructive`. */
             elevated_until?: components["schemas"]["Timestamp"];
+        };
+        /**
+         * @description What started an audited change, and the root of its chain. Absent on rows from before
+         *     origins (unknown).
+         */
+        EntryOrigin: {
+            /** @description `person`, `schedule`, `brain_import`, `brain_distil`, `ai_session`, `handoff`, `system`. */
+            kind: string;
+            /** @description The device (`d_…`), job (`owner/job`) or session (`as_…`) it names, when there is one. */
+            reference?: string | null;
+            /** @description The kind of the first link of the chain. */
+            root_kind: string;
+            root_reference?: string | null;
         };
         /** @description A JSON error: a stable `code` and a message for people. */
         ErrorBody: {
@@ -5319,6 +5334,16 @@ export interface operations {
                 target?: string;
                 /** @description Only rows done by this kind of actor: `user` or `system`; another value is a 400. */
                 actor?: string;
+                /**
+                 * @description Only rows with this origin: `person`, `schedule`, `brain_import`, `brain_distil`,
+                 *     `ai_session`, `handoff` or `system`; another value is a 400.
+                 */
+                origin?: string;
+                /**
+                 * @description `true`: only rows with a known origin that is not a person ("nobody watching"); rows
+                 *     from before origins are unknown and not in it. Not with `origin`.
+                 */
+                nobody_watching?: boolean;
             };
             header?: never;
             path?: never;
@@ -5326,7 +5351,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Audit rows, newest first. A `target` id that is not a `d_…` device id or a number, or an unknown `actor`, is a 400 */
+            /** @description Audit rows, newest first. A `target` id that is not a `d_…` device id or a number, or an unknown `actor` or `origin`, is a 400 */
             200: {
                 headers: {
                     [name: string]: unknown;

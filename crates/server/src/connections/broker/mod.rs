@@ -272,10 +272,11 @@ impl Broker {
     ) -> ToolResult {
         let id = call.id.clone();
         match self.run_call(env, runner, session, call).await {
+            // E2-3: what a third party wrote reaches the session as data, inside the envelope.
             Ok(v) => ToolResult {
                 id,
                 ok: true,
-                result: Some(v),
+                result: Some(scrub::fence(v, &format!("connection {}", call.tool))),
                 code: None,
                 message: None,
             },

@@ -890,6 +890,10 @@
               "null"
             ]
           },
+          "origin": {
+            "$ref": "#/components/schemas/EntryOrigin",
+            "description": "What started it; absent on rows from before origins."
+          },
           "seq": {
             "format": "int64",
             "type": "integer"
@@ -2339,6 +2343,37 @@
             "description": "Until when this session may call routes marked `x-ainkrad-destructive`."
           }
         },
+        "type": "object"
+      },
+      "EntryOrigin": {
+        "description": "What started an audited change, and the root of its chain. Absent on rows from before\norigins (unknown).",
+        "properties": {
+          "kind": {
+            "description": "`person`, `schedule`, `brain_import`, `brain_distil`, `ai_session`, `handoff`, `system`.",
+            "type": "string"
+          },
+          "reference": {
+            "description": "The device (`d_…`), job (`owner/job`) or session (`as_…`) it names, when there is one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root_kind": {
+            "description": "The kind of the first link of the chain.",
+            "type": "string"
+          },
+          "root_reference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "root_kind"
+        ],
         "type": "object"
       },
       "ErrorBody": {
@@ -7417,7 +7452,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.59.0"
+    "version": "1.60.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -9382,6 +9417,24 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Only rows with this origin: `person`, `schedule`, `brain_import`, `brain_distil`,\n`ai_session`, `handoff` or `system`; another value is a 400.",
+            "in": "query",
+            "name": "origin",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`true`: only rows with a known origin that is not a person (\"nobody watching\"); rows\nfrom before origins are unknown and not in it. Not with `origin`.",
+            "in": "query",
+            "name": "nobody_watching",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -9393,7 +9446,7 @@
                 }
               }
             },
-            "description": "Audit rows, newest first. A `target` id that is not a `d_…` device id or a number, or an unknown `actor`, is a 400"
+            "description": "Audit rows, newest first. A `target` id that is not a `d_…` device id or a number, or an unknown `actor` or `origin`, is a 400"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

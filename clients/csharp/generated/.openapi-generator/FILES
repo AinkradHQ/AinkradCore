@@ -91,6 +91,7 @@ src/Ainkrad.Client/Model/CostEvent.cs
 src/Ainkrad.Client/Model/DefaultConnection.cs
 src/Ainkrad.Client/Model/Device.cs
 src/Ainkrad.Client/Model/Elevation.cs
+src/Ainkrad.Client/Model/EntryOrigin.cs
 src/Ainkrad.Client/Model/ErrorBody.cs
 src/Ainkrad.Client/Model/Event.cs
 src/Ainkrad.Client/Model/EventActor.cs

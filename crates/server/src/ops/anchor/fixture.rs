@@ -269,7 +269,8 @@ pub(super) async fn rebuild_from(h: &Home, seq: i64) {
     sql(&h.pool, "DROP TRIGGER audit_events_no_update").await;
     let mut rows: Vec<chain::ChainRow> = sqlx::query_as(
         "SELECT seq, at, user_id, actor_kind, actor_id, action, entity_kind, entity_id, details, \
-         NULL AS prev_hash, NULL AS hash FROM audit_events WHERE seq >= ? ORDER BY seq",
+         NULL AS prev_hash, NULL AS hash, origin, origin_ref, origin_root, origin_root_ref \
+         FROM audit_events WHERE seq >= ? ORDER BY seq",
     )
     .bind(seq)
     .fetch_all(&h.pool)

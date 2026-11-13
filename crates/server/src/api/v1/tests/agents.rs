@@ -771,3 +771,55 @@ async fn a_plain_session_needs_an_account_unless_the_runner_has_its_own_login() 
     // A harness that signs in with no account is never asked.
     assert!(no_account(&new("opencode"), false).is_none());
 }
+
+/// E1-3: the Core stamps a session with what started it; a runner or client body has no field
+/// for it. What the session then does reads `ai_session`, rooted in that origin.
+#[tokio::test]
+async fn a_session_keeps_the_origin_the_core_stamped_and_its_actions_read_ai_session() {
+    use ainkrad_core::audit::{AuditOrigin, OriginKind};
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let person = AuditOrigin::new(OriginKind::Person, Some(fx.dev.id.clone()));
+    let s = crate::store::audit::origin::scope(person, stored(&fx, &vm.id)).await;
+    let row: (String, String, String) = sqlx::query_as(
+        "SELECT origin, origin_ref, origin_root FROM core_agent_sessions WHERE id = ?",
+    )
+    .bind(&s.id)
+    .fetch_one(&fx.app.pool)
+    .await
+    .unwrap();
+    assert_eq!(row, ("person".into(), fx.dev.id.clone(), "person".into()));
+    let mut conn = fx.app.pool.acquire().await.unwrap();
+    let o = store::session_origin(&mut conn, Ok(&s.id)).await.unwrap();
+    assert_eq!(
+        (o.kind, o.reference.as_deref()),
+        (OriginKind::AiSession, Some(&*s.id))
+    );
+    assert_eq!(
+        (o.root_kind, o.root_reference.as_deref()),
+        (OriginKind::Person, Some(&*fx.dev.id))
+    );
+    assert!(
+        store::session_origin(&mut conn, Ok("as_nosuch"))
+            .await
+            .is_none()
+    );
+
+    // An unscoped create (the Core's own) is `system`; the body of a create has no origin field.
+    let s2 = stored(&fx, &vm.id).await;
+    let kind: String = sqlx::query_scalar("SELECT origin FROM core_agent_sessions WHERE id = ?")
+        .bind(&s2.id)
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(kind, "system");
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/agent-sessions",
+        json!({"runner": vm.id, "harness": "claude", "origin": "person"}),
+    )
+    .await;
+    assert_ne!(r.0, StatusCode::CREATED, "{}", r.1);
+}
