@@ -136,6 +136,18 @@ impl RunFiles {
             (None, Some(_)) => Some(super::cli::SKILL.trim_start().to_owned()),
             (text, None) => text.map(str::to_owned),
         };
+        // Code Mode (E3.6): a session with the tools socket is told how to use `ainkrad_search` and
+        // `ainkrad_run`. A runner built without the `quickjs` feature has neither, so says nothing.
+        #[cfg(feature = "quickjs")]
+        let told = match (told, tools) {
+            (Some(text), Some(_)) => Some(format!(
+                "{}{}",
+                text.trim_end(),
+                crate::v2::agent::script::NOTE
+            )),
+            (None, Some(_)) => Some(crate::v2::agent::script::NOTE.trim_start().to_owned()),
+            (told, None) => told,
+        };
         if let Some(text) = told {
             let path = files.dir.join("instructions.md");
             private_file(&path, text.as_bytes())?;

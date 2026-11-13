@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
 use crate::Spec;
-use crate::connections::{SLOT_FWD, SLOT_SOCK};
+use crate::connections::{SLOT_BIN, SLOT_FWD, SLOT_SOCK};
 
 /// Adds the slot's binds when the session has one. A half-set slot, a socket that is not there or
 /// not a socket, or a relative path refuses the sandbox: it is never run without what the harness's
@@ -43,6 +43,16 @@ pub(super) fn bind<'a>(
         ));
     }
     c.arg("--bind").arg(sock).arg(sock);
+    // The session's `ainkrad` CLI dir (a link to the shim, Code Mode), read-only, when it has one.
+    let bin = super::env(spec, SLOT_BIN);
+    if !bin.is_empty() {
+        if !Path::new(bin).is_absolute() || !Path::new(bin).is_dir() {
+            return Err(io::Error::other(
+                "the tools slot's bin dir is not a directory",
+            ));
+        }
+        c.arg("--ro-bind").arg(bin).arg(bin);
+    }
     if !bound.contains(&fwd) {
         c.arg("--ro-bind").arg(fwd).arg(fwd);
         bound.push(fwd);
