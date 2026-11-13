@@ -1,0 +1,489 @@
+//! Suggestions from sentence vectors (local semantic help). Pure functions over vectors: no model,
+//! no I/O. Every output is a SUGGESTION with a score; nothing here moves an item.
+//!
+//! The vectors come from a local embedder (the module's `semantic` feature). They must be unit
+//! length, so a dot product is the cosine.
+
+use std::collections::{HashMap, HashSet};
+
+use crate::item::Item;
+use crate::rules::restricted_path;
+
+/// How much of an item's text is embedded (bytes, cut on a char boundary).
+pub const EMBED_CHARS: usize = 1000;
+pub const DUP_THRESHOLD: f32 = 0.95;
+// e5 vectors are bunched: unrelated texts already score about 0.82-0.85 (measured on the real model), so the
+// cluster and merge cut-offs sit high. Tune on real Unsorted items before showing suggestions.
+pub const CLUSTER_THRESHOLD: f32 = 0.88;
+pub const MERGE_THRESHOLD: f32 = 0.93;
+pub const MIN_CLUSTER: usize = 3;
+
+/// Refused (restricted path) items are never embedded. The caller also drops private ones it knows of.
+pub fn eligible(item: &Item) -> bool {
+    !restricted_path(&item.origin.path)
+}
+
+/// The text one item is embedded as: title, then the start of the text.
+pub fn embed_text(item: &Item) -> String {
+    let mut end = item.text.len().min(EMBED_CHARS);
+    while !item.text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n{}", item.title, &item.text[..end])
+}
+
+pub fn dot(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+pub fn normalized(mut v: Vec<f32>) -> Vec<f32> {
+    let n = dot(&v, &v).sqrt();
+    if n > 0.0 {
+        v.iter_mut().for_each(|x| *x /= n);
+    }
+    v
+}
+
+/// What the engine needs of an item. `room` is `None` for Unsorted.
+#[derive(Debug, Clone)]
+pub struct Entry<'a> {
+    pub item: &'a Item,
+    pub room: Option<&'a str>,
+    pub vector: &'a [f32],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DuplicateGroup {
+    /// The newest item, by `started_at`.
+    pub keep: String,
+    pub duplicates: Vec<String>,
+    /// The lowest pair similarity inside the group.
+    pub score: f32,
+    pub reason: String,
+}
+
+/// Items whose vectors are at least `threshold` alike (union of pairs). Items with the same
+/// `content_hash` are not listed: exact duplicates are the existing hash rule's.
+pub fn duplicates(entries: &[Entry], threshold: f32) -> Vec<DuplicateGroup> {
+    let n = entries.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(p: &mut [usize], i: usize) -> usize {
+        let mut r = i;
+        while p[r] != r {
+            r = p[r];
+        }
+        let mut c = i;
+        while p[c] != r {
+            (p[c], c) = (r, p[c]);
+        }
+        r
+    }
+    let mut low: HashMap<usize, f32> = HashMap::new();
+    let mut pairs = vec![];
+    for i in 0..n {
+        for j in i + 1..n {
+            if entries[i].item.content_hash == entries[j].item.content_hash {
+                continue;
+            }
+            let s = dot(entries[i].vector, entries[j].vector);
+            if s >= threshold {
+                pairs.push((i, j, s));
+                let (a, b) = (find(&mut parent, i), find(&mut parent, j));
+                parent[a] = b;
+            }
+        }
+    }
+    for (i, _, s) in &pairs {
+        let r = find(&mut parent, *i);
+        let e = low.entry(r).or_insert(1.0);
+        *e = e.min(*s);
+    }
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in pairs
+        .iter()
+        .flat_map(|(i, j, _)| [*i, *j])
+        .collect::<HashSet<_>>()
+    {
+        groups.entry(find(&mut parent, i)).or_default().push(i);
+    }
+    let mut out: Vec<DuplicateGroup> = groups
+        .into_iter()
+        .map(|(root, mut m)| {
+            // RFC 3339 UTC strings sort by time; ties break on id so the output is stable.
+            m.sort_by(|&a, &b| {
+                let (x, y) = (entries[a].item, entries[b].item);
+                y.started_at.cmp(&x.started_at).then(x.item_id.cmp(&y.item_id))
+            });
+            let score = low[&root];
+            DuplicateGroup {
+                keep: entries[m[0]].item.item_id.clone(),
+                duplicates: m[1..].iter().map(|&i| entries[i].item.item_id.clone()).collect(),
+                score,
+                reason: format!(
+                    "these {} items look like duplicates (similarity at least {:.2}); keep the newest",
+                    m.len(),
+                    score
+                ),
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| a.keep.cmp(&b.keep));
+    out
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SuggestedRoom {
+    pub name: String,
+    pub keywords: Vec<String>,
+    pub item_ids: Vec<String>,
+    /// Mean similarity of the members to the centroid.
+    pub score: f32,
+    pub centroid: Vec<f32>,
+}
+
+struct Cluster {
+    members: Vec<usize>,
+    sum: Vec<f32>,
+}
+
+impl Cluster {
+    fn centroid(&self) -> Vec<f32> {
+        normalized(self.sum.clone())
+    }
+}
+
+/// Average-linkage-by-centroid agglomeration of the Unsorted entries (`room == None`), stopping
+/// when the best pair of centroids is under `threshold`; clusters under `min_size` are dropped.
+/// ponytail: O(n^2) memory and about O(n^2) time on one thread; fine for a few thousand Unsorted
+/// items. Past that, cap the input or move to an approximate-neighbour index.
+pub fn suggest_rooms(entries: &[Entry], threshold: f32, min_size: usize) -> Vec<SuggestedRoom> {
+    let pool: Vec<usize> = (0..entries.len())
+        .filter(|&i| entries[i].room.is_none())
+        .collect();
+    let mut cl: Vec<Option<Cluster>> = pool
+        .iter()
+        .map(|&i| {
+            Some(Cluster {
+                members: vec![i],
+                sum: entries[i].vector.to_vec(),
+            })
+        })
+        .collect();
+    let sim = |a: &Cluster, b: &Cluster| dot(&a.centroid(), &b.centroid());
+    loop {
+        let mut best: Option<(usize, usize, f32)> = None;
+        for (i, a) in cl.iter().enumerate() {
+            let Some(a) = a else { continue };
+            for (j, b) in cl.iter().enumerate().skip(i + 1) {
+                let Some(b) = b else { continue };
+                let s = sim(a, b);
+                if s >= threshold && best.is_none_or(|(_, _, t)| s > t) {
+                    best = Some((i, j, s));
+                }
+            }
+        }
+        let Some((i, j, _)) = best else { break };
+        let b = cl[j].take().expect("live");
+        let a = cl[i].as_mut().expect("live");
+        a.members.extend(b.members);
+        a.sum.iter_mut().zip(&b.sum).for_each(|(x, y)| *x += y);
+    }
+    let docs: Vec<Vec<String>> = entries
+        .iter()
+        .map(|e| tokens(&embed_text(e.item)))
+        .collect();
+    let mut df: HashMap<&str, usize> = HashMap::new();
+    for d in &docs {
+        for w in d.iter().collect::<HashSet<_>>() {
+            *df.entry(w.as_str()).or_default() += 1;
+        }
+    }
+    let mut out: Vec<SuggestedRoom> = cl
+        .into_iter()
+        .flatten()
+        .filter(|c| c.members.len() >= min_size)
+        .map(|c| {
+            let centroid = c.centroid();
+            let score = c
+                .members
+                .iter()
+                .map(|&m| dot(entries[m].vector, &centroid))
+                .sum::<f32>()
+                / c.members.len() as f32;
+            let keywords = keywords(&c.members, &docs, &df, entries.len());
+            let mut item_ids: Vec<String> = c
+                .members
+                .iter()
+                .map(|&m| entries[m].item.item_id.clone())
+                .collect();
+            item_ids.sort();
+            SuggestedRoom {
+                name: if keywords.is_empty() {
+                    "Untitled topic".into()
+                } else {
+                    title_case(&keywords)
+                },
+                keywords,
+                item_ids,
+                score,
+                centroid,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.item_ids
+            .len()
+            .cmp(&a.item_ids.len())
+            .then(a.name.cmp(&b.name))
+    });
+    out
+}
+
+fn title_case(k: &[String]) -> String {
+    k.iter()
+        .take(3)
+        .map(|w| {
+            let mut c = w.chars();
+            c.next()
+                .map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+const STOP: &[&str] = &[
+    "the", "and", "for", "with", "that", "this", "from", "are", "was", "not", "you", "have", "has",
+    "but", "can", "will", "all", "its", "into", "use", "used", "using", "then", "when", "what",
+    "there", "here", "also", "about", "should", "would", "could", "your", "our", "they", "them",
+];
+
+/// Lowercase alphanumeric words of 3+ chars (Arabic letters count), stop words dropped.
+pub fn tokens(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 3 && !w.chars().all(|c| c.is_ascii_digit()))
+        .map(str::to_lowercase)
+        .filter(|w| !STOP.contains(&w.as_str()))
+        .collect()
+}
+
+/// Top 3 words by tf-idf: frequency inside the cluster against how many corpus items hold the word.
+fn keywords(
+    members: &[usize],
+    docs: &[Vec<String>],
+    df: &HashMap<&str, usize>,
+    n: usize,
+) -> Vec<String> {
+    let mut tf: HashMap<&str, f32> = HashMap::new();
+    for &m in members {
+        for w in docs[m].iter().collect::<HashSet<_>>() {
+            *tf.entry(w.as_str()).or_default() += 1.0;
+        }
+    }
+    let mut scored: Vec<(&str, f32)> = tf
+        .into_iter()
+        .map(|(w, f)| (w, f * ((1.0 + n as f32) / (1.0 + df[w] as f32)).ln()))
+        .collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
+    scored
+        .into_iter()
+        .take(3)
+        .map(|(w, _)| w.to_owned())
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergeSuggestion {
+    pub a: String,
+    pub b: String,
+    pub score: f32,
+    pub reason: String,
+}
+
+/// Pairs of proposals (name, centroid) that are very close: "these two look like one topic".
+pub fn merge_suggestions(proposals: &[(&str, &[f32])], threshold: f32) -> Vec<MergeSuggestion> {
+    let mut out = vec![];
+    for i in 0..proposals.len() {
+        for j in i + 1..proposals.len() {
+            let s = dot(proposals[i].1, proposals[j].1);
+            if s >= threshold {
+                out.push(MergeSuggestion {
+                    a: proposals[i].0.to_owned(),
+                    b: proposals[j].0.to_owned(),
+                    score: s,
+                    reason: format!(
+                        "\"{}\" and \"{}\" cover very similar content (similarity {:.2}); consider one room",
+                        proposals[i].0, proposals[j].0, s
+                    ),
+                });
+            }
+        }
+    }
+    out.sort_by(|x, y| y.score.total_cmp(&x.score));
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::item::{Author, AuthorKind, Origin, SourceKind, hash_of};
+
+    fn item(id: &str, title: &str, text: &str, at: &str, path: &str) -> Item {
+        Item {
+            item_id: id.into(),
+            source_kind: SourceKind::Doc,
+            content_hash: hash_of(text),
+            origin: Origin {
+                device: "d".into(),
+                path: path.into(),
+                range: None,
+            },
+            project_hint: None,
+            author: Author {
+                kind: AuthorKind::Person,
+                name: "p".into(),
+            },
+            title: title.into(),
+            text: text.into(),
+            links: vec![],
+            started_at: at.into(),
+            ended_at: None,
+        }
+    }
+
+    /// A unit vector along axis `k` with a little `wobble` toward axis `k + 1`.
+    fn v(k: usize, wobble: f32) -> Vec<f32> {
+        let mut x = vec![0.0; 6];
+        x[k] = 1.0;
+        x[k + 1] = wobble;
+        normalized(x)
+    }
+
+    #[test]
+    fn restricted_items_are_not_eligible() {
+        assert!(!eligible(&item(
+            "a",
+            "t",
+            "x",
+            "2026-01-01T00:00:00Z",
+            "/h/.env"
+        )));
+        assert!(eligible(&item(
+            "a",
+            "t",
+            "x",
+            "2026-01-01T00:00:00Z",
+            "/h/notes.md"
+        )));
+    }
+
+    #[test]
+    fn embed_text_cuts_on_a_char_boundary() {
+        let it = item("a", "T", &"ب".repeat(900), "2026-01-01T00:00:00Z", "/n.md");
+        let t = embed_text(&it);
+        assert!(t.len() <= 1002 && t.starts_with("T\n"));
+    }
+
+    #[test]
+    fn duplicates_keep_the_newest_and_skip_exact_hashes() {
+        let a = item("a", "t", "one", "2026-01-01T00:00:00Z", "/a");
+        let b = item("b", "t", "two", "2026-03-01T00:00:00Z", "/b");
+        let c = item("c", "t", "three", "2026-02-01T00:00:00Z", "/c");
+        let d = item("d", "t", "four", "2026-02-01T00:00:00Z", "/d");
+        let e = item("e", "t", "one", "2026-04-01T00:00:00Z", "/e"); // same hash as a: never paired with it
+        let (v0, v1, v2, v4) = (v(0, 0.01), v(0, 0.02), v(2, 0.0), v(4, 0.0));
+        let es = vec![
+            Entry {
+                item: &a,
+                room: None,
+                vector: &v0,
+            },
+            Entry {
+                item: &b,
+                room: None,
+                vector: &v1,
+            },
+            Entry {
+                item: &c,
+                room: None,
+                vector: &v0,
+            },
+            Entry {
+                item: &d,
+                room: None,
+                vector: &v2,
+            },
+            Entry {
+                item: &e,
+                room: None,
+                vector: &v4,
+            },
+        ];
+        let g = duplicates(&es, DUP_THRESHOLD);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].keep, "b");
+        assert_eq!(g[0].duplicates, vec!["c", "a"]);
+        assert!(g[0].score >= DUP_THRESHOLD);
+    }
+
+    #[test]
+    fn clusters_unsorted_items_and_names_them() {
+        let docs = [
+            ("invoice customer payment", 0),
+            ("customer invoice reminder", 0),
+            ("payment invoice overdue", 0),
+            ("kubernetes deploy rollout", 2),
+            ("deploy rollout kubernetes pods", 2),
+            ("rollout deploy cluster", 2),
+            ("lonely poem", 4),
+        ];
+        let items: Vec<Item> = docs
+            .iter()
+            .enumerate()
+            .map(|(i, (t, _))| item(&format!("i{i}"), t, t, "2026-01-01T00:00:00Z", "/x"))
+            .collect();
+        let vecs: Vec<Vec<f32>> = docs
+            .iter()
+            .enumerate()
+            .map(|(i, (_, k))| v(*k, 0.02 * i as f32))
+            .collect();
+        let mut es: Vec<Entry> = items
+            .iter()
+            .zip(&vecs)
+            .map(|(item, vector)| Entry {
+                item,
+                room: None,
+                vector,
+            })
+            .collect();
+        es[6].room = Some("already"); // sorted items are never clustered
+        let rooms = suggest_rooms(&es, CLUSTER_THRESHOLD, MIN_CLUSTER);
+        assert_eq!(rooms.len(), 2);
+        assert!(rooms.iter().all(|r| r.item_ids.len() == 3));
+        let names: Vec<&str> = rooms.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.iter().any(|n| n.contains("Invoice")), "{names:?}");
+        assert!(
+            names
+                .iter()
+                .any(|n| n.contains("Deploy") || n.contains("Rollout")),
+            "{names:?}"
+        );
+        // min size drops a pair
+        assert!(suggest_rooms(&es, CLUSTER_THRESHOLD, 4).is_empty());
+    }
+
+    #[test]
+    fn merge_suggestions_name_the_pair() {
+        let (a, b, c) = (v(0, 0.0), v(0, 0.05), v(2, 0.0));
+        let m = merge_suggestions(
+            &[("Billing", &a), ("Invoices", &b), ("Ops", &c)],
+            MERGE_THRESHOLD,
+        );
+        assert_eq!(m.len(), 1);
+        assert!(m[0].reason.contains("Billing") && m[0].reason.contains("Invoices"));
+    }
+
+    #[test]
+    fn arabic_words_are_tokens() {
+        assert_eq!(tokens("الخادم الجديد 2026 the"), vec!["الخادم", "الجديد"]);
+    }
+}

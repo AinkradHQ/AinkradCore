@@ -37,6 +37,7 @@ mod policy;
 mod review;
 pub mod rooms;
 mod rules_api;
+pub mod semantic;
 mod sync;
 mod transcripts;
 
@@ -467,6 +468,7 @@ impl Module for Brain {
             "brain.room.created",
             "brain.room.opened",
             "brain.room.refused",
+            "brain.semantic.run",
             "brain.rule.created",
             "brain.rule.changed",
             "brain.source.changed",
