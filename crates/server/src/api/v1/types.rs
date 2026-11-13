@@ -203,7 +203,11 @@
 /// 65: Code Mode Brain operations (E4): the Brain routes `brainRoomAccess` / `brainPutRoomAccess` (who may see a room),
 ///    `brainAi*` (what an AI session reads and proposes), `InboxRecord.proposed_by`, the audit actions
 ///    `brain.room.access`, `brain.ai.proposed` and `brain.ai.refused`, and the Brain operations in the allow-list.
-pub const API_MINOR: u32 = 65;
+///
+/// 66: Brain closest room. `SemanticView.closest` (`ClosestHint`, with
+///    `ClosestRunnerUp`): Unsorted items that look like they belong in an existing room, suggestions only; the
+///    audit row `brain.semantic.run` gains a `closest` count. Incremental runs now start the semantic step too.
+pub const API_MINOR: u32 = 66;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

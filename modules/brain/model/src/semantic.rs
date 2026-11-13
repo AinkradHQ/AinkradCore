@@ -322,6 +322,56 @@ pub fn merge_suggestions(proposals: &[(&str, &[f32])], threshold: f32) -> Vec<Me
     out
 }
 
+/// A room an Unsorted item could be filed in: the mean of its items' vectors (unit length).
+#[derive(Debug, Clone)]
+pub struct RoomVec {
+    pub id: String,
+    pub name: String,
+    pub centroid: Vec<f32>,
+    /// The employer this room belongs to, lowercase, when it is an employer's room.
+    pub employer: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Close {
+    pub room_id: String,
+    pub room_name: String,
+    pub score: f32,
+    pub runner_up: Option<(String, String, f32)>,
+}
+
+/// The room closest to an item that no rule placed, or `None` when it is not clear: the best score must
+/// reach `min_score` and lead the runner-up by `margin`. The employer guard: an item that names an
+/// employer is never compared with another employer's room. Suggestion only; nothing moves.
+pub fn closest_room(
+    vector: &[f32],
+    item_employer: Option<&str>,
+    rooms: &[RoomVec],
+    min_score: f32,
+    margin: f32,
+) -> Option<Close> {
+    let mut scored: Vec<(&RoomVec, f32)> = rooms
+        .iter()
+        .filter(|r| match (&r.employer, item_employer) {
+            (Some(re), Some(ie)) => re == ie,
+            _ => true,
+        })
+        .map(|r| (r, dot(vector, &r.centroid)))
+        .collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let (best, score) = *scored.first()?;
+    let second = scored.get(1);
+    if score < min_score || second.is_some_and(|s| score - s.1 < margin) {
+        return None;
+    }
+    Some(Close {
+        room_id: best.id.clone(),
+        room_name: best.name.clone(),
+        score,
+        runner_up: second.map(|(r, s)| (r.id.clone(), r.name.clone(), *s)),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,5 +535,35 @@ mod tests {
     #[test]
     fn arabic_words_are_tokens() {
         assert_eq!(tokens("الخادم الجديد 2026 the"), vec!["الخادم", "الجديد"]);
+    }
+
+    #[test]
+    fn closest_room_needs_score_margin_and_the_employer_guard() {
+        let room = |id: &str, c: [f32; 2], e: Option<&str>| RoomVec {
+            id: id.into(),
+            name: id.into(),
+            centroid: normalized(c.to_vec()),
+            employer: e.map(str::to_owned),
+        };
+        let rooms = [
+            room("a", [1.0, 0.0], Some("acme")),
+            room("b", [0.0, 1.0], None),
+        ];
+        let v = normalized(vec![1.0, 0.1]);
+        let c = closest_room(&v, None, &rooms, 0.9, 0.1).unwrap();
+        assert_eq!(c.room_id, "a");
+        assert_eq!(c.runner_up.unwrap().0, "b");
+        assert!(
+            closest_room(&v, None, &rooms, 0.999, 0.1).is_none(),
+            "low score"
+        );
+        assert!(
+            closest_room(&normalized(vec![1.0, 1.0]), None, &rooms, 0.5, 0.1).is_none(),
+            "tie"
+        );
+        assert!(
+            closest_room(&v, Some("other"), &rooms, 0.9, 0.1).is_none(),
+            "guard drops the acme room"
+        );
     }
 }
