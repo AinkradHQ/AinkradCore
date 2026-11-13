@@ -1,0 +1,72 @@
+{
+  "ops": [
+    "brainAiDecisions",
+    "brainAiProjectState",
+    "brainAiPropose",
+    "brainAiRecord",
+    "brainAiRooms",
+    "brainAiSearch",
+    "getAgentSession",
+    "getAgentTranscript",
+    "getCoreHealth",
+    "listAgentSessions",
+    "listAudit"
+  ],
+  "search_answer": {
+    "defs": [
+      {
+        "def": "/** Read one accepted Brain record of a visible room, whole, as outside data. [read] */\nainkrad.brain.brainAiRecord(args: { room: string; id: string }): { created_at: string; id: string; room: string; sources: string[]; text: string; truncated: boolean; type: string }",
+        "group": "brain",
+        "op": "brainAiRecord",
+        "risk": "read"
+      },
+      {
+        "def": "/** List accepted Brain decisions of the visible rooms, newest first. [read] */\nainkrad.brain.brainAiDecisions(args: { room?: string; limit?: number }): { records: ({ created_at: string; id: string; room: string; sources: string[]; text: string; truncated: boolean; type: string })[]; rooms_closed: number }",
+        "group": "brain",
+        "op": "brainAiDecisions",
+        "risk": "read"
+      },
+      {
+        "def": "/** List the Brain rooms this AI session may see (its project's, or ones a room's access list names). [read] */\nainkrad.brain.brainAiRooms(): ({ id: string; kind: string; name: string; open: boolean })[]",
+        "group": "brain",
+        "op": "brainAiRooms",
+        "risk": "read"
+      },
+      {
+        "def": "/** Search the Brain across the rooms this AI session may see: accepted records first, then sources. Texts come back as outside data. [read] */\nainkrad.brain.brainAiSearch(args: { q: string; room?: string; limit?: number }): { hits: ({ id: string; kind: string; room: string; started_at: string; text: string })[]; rooms_closed: number; rooms_searched: number }",
+        "group": "brain",
+        "op": "brainAiSearch",
+        "risk": "read"
+      },
+      {
+        "def": "/** List accepted project state, open tasks and rules (landmines) of the visible rooms, newest first. [read] */\nainkrad.brain.brainAiProjectState(args: { room?: string; limit?: number }): { records: ({ created_at: string; id: string; room: string; sources: string[]; text: string; truncated: boolean; type: string })[]; rooms_closed: number }",
+        "group": "brain",
+        "op": "brainAiProjectState",
+        "risk": "read"
+      }
+    ]
+  },
+  "search_tool": {
+    "description": "Search the operations of Ainkrad (sessions, audit, health and more) by words. Returns typed definitions of the best matches.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "maximum": 20,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "query": {
+          "maxLength": 200,
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "ainkrad.search",
+    "write": false
+  }
+}
