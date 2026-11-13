@@ -2,6 +2,7 @@
 //! the migration guard and the registries are the Core's own code. Every item here is synthetic.
 
 mod ai;
+mod ai_semantic;
 mod claim;
 mod collectors;
 mod common;

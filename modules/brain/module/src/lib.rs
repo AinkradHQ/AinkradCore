@@ -24,6 +24,7 @@ use utoipa::{OpenApi, ToSchema};
 
 mod access;
 mod ai;
+mod ai_semantic;
 mod answer;
 pub mod cipher;
 mod claim;

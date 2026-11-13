@@ -108,6 +108,37 @@ impl Brain {
             .collect())
     }
 
+    /// The query's vector, or `None` when the worker does not answer within `wait` or the model is off.
+    /// Not stored: a question is never kept.
+    pub(crate) async fn embed_query(
+        &self,
+        text: &str,
+        wait: std::time::Duration,
+    ) -> Option<Vec<f32>> {
+        let e = self.embedder()?;
+        let app = self.inner.app.get()?.clone();
+        let (b, text) = (self.clone(), vec![text.to_owned()]);
+        let (tx, rx) = oneshot::channel();
+        self.inner.sem.enqueue(async move {
+            b.apply_threads(&app).await;
+            let r = tokio::task::spawn_blocking(move || e.embed(&text)).await;
+            let _ = tx.send(r.ok().and_then(Result::ok).and_then(|mut v| v.pop()));
+        });
+        let v = tokio::time::timeout(wait, rx).await.ok()?.ok()??;
+        Some(super::normalized(v))
+    }
+
+    /// Queues `(content hash, text)` pairs to be embedded and stored later; returns at once.
+    pub(crate) fn queue_embed(&self, items: Vec<(String, String)>) {
+        let (Some(app), Some(e)) = (self.inner.app.get(), self.embedder()) else {
+            return;
+        };
+        let (b, app) = (self.clone(), app.clone());
+        self.inner.sem.enqueue(async move {
+            let _ = b.embed_now(&app, e, &items).await;
+        });
+    }
+
     /// Vectors for `(content hash, text)` pairs, in order: from memory, then the encrypted store,
     /// then the model (on the background worker, and saved). Nothing leaves this machine.
     pub async fn embed_texts(&self, items: &[(String, String)]) -> Result<Vec<Vec<f32>>, ApiError> {

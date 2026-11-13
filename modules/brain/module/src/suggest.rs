@@ -161,7 +161,7 @@ impl Brain {
 }
 
 /// `module.brain.semantic.enabled`; on unless the person turned it off.
-async fn enabled(app: &App, b: &Brain) -> bool {
+pub(crate) async fn enabled(app: &App, b: &Brain) -> bool {
     ModuleSettings::of(b)
         .get(&app.pool, "semantic.enabled")
         .await

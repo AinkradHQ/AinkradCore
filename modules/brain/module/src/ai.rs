@@ -35,7 +35,7 @@ const DEFAULT_LIMIT: u32 = 10;
 const MAX_LIMIT: u32 = 25;
 const MAX_BODY: usize = 2000;
 /// A list shows this much of a record; `brain.record` has all of it.
-const LIST_BODY: usize = 400;
+pub(crate) const LIST_BODY: usize = 400;
 /// Candidates one session may propose into one room.
 /// ponytail: per room file, not a session-wide counter; a control-plane table if that is needed.
 const PROPOSE_CAP: i64 = 20;
@@ -156,9 +156,12 @@ pub struct AiSearchQuery {
     pub room: Option<String>,
     /// At most this many hits (default 10, most 25).
     pub limit: Option<u32>,
+    /// `auto` (default: keywords and meaning when the local model is on), `keyword` or `meaning`
+    /// (meaning only; keywords when the model is off or slow).
+    pub mode: Option<String>,
 }
 
-#[derive(Serialize, ToSchema)]
+#[derive(Clone, Serialize, ToSchema)]
 pub struct AiHit {
     pub room: String,
     /// `record` (an accepted record, listed first) or `source`.
@@ -176,9 +179,11 @@ pub struct AiHits {
     pub rooms_searched: usize,
     /// Visible rooms that were closed and so not searched.
     pub rooms_closed: usize,
+    /// `keyword`, `meaning` or `both`: how these hits were ranked.
+    pub ranked_by: String,
 }
 
-fn cut(s: &str, n: usize) -> (String, bool) {
+pub(crate) fn cut(s: &str, n: usize) -> (String, bool) {
     let t = s.trim();
     if t.chars().count() <= n {
         return (t.to_owned(), false);
@@ -196,6 +201,10 @@ pub(crate) async fn search(
     Query(q): Query<AiSearchQuery>,
 ) -> ApiResult<AiHits> {
     let session = session_of(&me)?;
+    let mode = q.mode.as_deref().unwrap_or("auto");
+    if !["auto", "keyword", "meaning"].contains(&mode) {
+        return Err(ApiError::bad_request("mode is auto, keyword or meaning"));
+    }
     let ws = words(&q.q);
     if ws.is_empty() {
         return Err(ApiError::bad_request("q needs at least one word"));
@@ -240,8 +249,21 @@ pub(crate) async fn search(
             ));
         }
     }
+    let meaning = if mode == "keyword" {
+        None
+    } else {
+        crate::ai_semantic::rank(&app, &b, &q.q, &open, limit as usize).await
+    };
     for (_, a) in &open {
         a.pool().close().await;
+    }
+    if let (Some(m), "meaning") = (&meaning, mode) {
+        return Ok(Json(AiHits {
+            hits: m.clone(),
+            rooms_searched: open.len(),
+            rooms_closed: closed,
+            ranked_by: "meaning".to_owned(),
+        }));
     }
     recs.sort_by(|x, y| y.0.cmp(&x.0));
     srcs.sort_by(|x, y| x.0.total_cmp(&y.0));
@@ -258,10 +280,15 @@ pub(crate) async fn search(
         .collect();
     hits.extend(srcs.into_iter().map(|(_, h)| h));
     hits.truncate(limit as usize);
+    let ranked_by = if meaning.is_some() { "both" } else { "keyword" };
+    if let Some(m) = meaning {
+        hits = crate::ai_semantic::fuse(hits, m, limit as usize);
+    }
     Ok(Json(AiHits {
         hits,
         rooms_searched: open.len(),
         rooms_closed: closed,
+        ranked_by: ranked_by.to_owned(),
     }))
 }
 
@@ -280,7 +307,7 @@ pub struct AiRecord {
     pub truncated: bool,
 }
 
-fn record_of(
+pub(crate) fn record_of(
     room: &str,
     r: &sqlx::sqlite::SqliteRow,
     max_body: usize,
