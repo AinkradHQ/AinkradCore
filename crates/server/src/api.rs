@@ -90,6 +90,8 @@ pub struct App {
     pub host_helper: Arc<crate::host::Client>,
     /// Tool installs on runners, in flight and the last ones (`v1::runner_control`).
     pub tool_ops: Arc<v1::ToolOps>,
+    /// The Code Mode operation catalogue, built on first use (the modules are set by then).
+    pub ops: Arc<std::sync::OnceLock<crate::ops_catalog::Catalogue>>,
 }
 
 /// Resolves once serve is stopping (`App::closing`).
@@ -132,7 +134,14 @@ impl App {
             conn_pace: Arc::default(),
             host_helper: Arc::default(),
             tool_ops: Arc::default(),
+            ops: Arc::default(),
         }
+    }
+
+    /// The Code Mode operation catalogue (E1), built from this Core's contract on first use.
+    pub fn catalogue(&self) -> &crate::ops_catalog::Catalogue {
+        self.ops
+            .get_or_init(|| crate::ops_catalog::Catalogue::live(&self.modules))
     }
 }
 

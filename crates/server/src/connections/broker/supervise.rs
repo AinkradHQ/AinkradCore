@@ -134,7 +134,11 @@ async fn run(app: &App, id: &str) {
             now: &now,
         };
         let want = match app.connections.tools(&env, id).await {
-            Ok(t) => t,
+            Ok(mut t) => {
+                // Code Mode (E1): every session can search the operation catalogue.
+                t.push(crate::ops_catalog::search_tool());
+                t
+            }
             Err(e) => {
                 tracing::error!(session = id, error = %e, "listing a session's tools failed");
                 tokio::time::sleep(cfg.retry).await;
@@ -223,6 +227,11 @@ fn intake(app: App, runner: String, session: String, batch: ToolBatch) -> BoxFut
                     sealer: app.secrets.as_ref(),
                     now: &now,
                 };
+                if call.tool == crate::ops_catalog::SEARCH {
+                    let r = crate::ops_catalog::search_call(&app, &runner, &session, &call).await;
+                    push_result(&app, &runner, &session, (r, None), true);
+                    return;
+                }
                 let result = app.connections.handle(&env, &runner, &session, &call).await;
                 let op = app
                     .connections

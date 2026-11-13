@@ -186,9 +186,11 @@
 /// 60: the audit origin (E1+E2): `AuditEntry.origin` (`EntryOrigin`: what started a row and the root of its chain) and
 ///    the audit list filters `origin` and `nobody_watching`.
 ///
-/// 61: Brain import regroup: `brainRegroup` (`POST /imports/{run}/regroup`) and `ProposalCard.suggest_merge`
+/// 61: Code Mode E1 (the MCP tool catalogue).
+///
+/// 62: Brain import regroup: `brainRegroup` (`POST /imports/{run}/regroup`) and `ProposalCard.suggest_merge`
 ///    (`MergeSuggestion`), and the audit action `brain.import.regrouped`.
-pub const API_MINOR: u32 = 61;
+pub const API_MINOR: u32 = 62;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

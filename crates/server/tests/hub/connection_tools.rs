@@ -134,10 +134,18 @@ async fn a_call_is_taken_once_answered_in_its_own_poll_and_names_no_connection()
     let Command::AgentTools(first) = cmd else {
         panic!("expected agent.tools, got {cmd:?}")
     };
+    // No grants: no connection tools, only the Code Mode search every session has (E1.4).
+    let names: Vec<&str> = first
+        .tools
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect();
     assert_eq!(
-        (first.after, first.tools.as_deref()),
-        (0, Some(&[][..])),
-        "no grants: no tools"
+        (first.after, names),
+        (0, vec!["ainkrad.search"]),
+        "no grants: only the search"
     );
     let batch = ToolBatch {
         session: w.session.clone(),
