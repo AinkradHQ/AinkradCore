@@ -188,7 +188,12 @@
 ///
 /// 61: Brain import regroup: `brainRegroup` (`POST /imports/{run}/regroup`) and `ProposalCard.suggest_merge`
 ///    (`MergeSuggestion`), and the audit action `brain.import.regrouped`.
-pub const API_MINOR: u32 = 61;
+///
+/// 62: Brain import semantic suggestions (local model, off without it): `brainSemantic`
+///    (`GET /imports/{run}/semantic`: `SemanticView` with duplicate groups, suggested rooms and merge hints),
+///    `ProposalCard.semantic` (`pending`, `ready` or `off`), the module setting `semantic.strength`, and the audit
+///    action `brain.semantic.run`.
+pub const API_MINOR: u32 = 62;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

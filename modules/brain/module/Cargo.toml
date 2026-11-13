@@ -15,6 +15,7 @@ serde_json = "1.0.154"
 sha2 = "0.10.9"
 getrandom = "0.4.3"
 tracing = "0.1"
+tokio = { version = "1.54.0", features = ["rt"] }
 axum = "0.8.9"
 utoipa = "6.0.0"
 ainkrad-core = { path = "../../../crates/core" }

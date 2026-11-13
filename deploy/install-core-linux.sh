@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Installs the Ainkrad Core and its systemd unit (E1-14.5). Idempotent; never touches /etc/ainkrad/backup.env.
 #   install-core-linux.sh [--binary PATH] [--hostname NAME --acme-contact EMAIL] [--acme-directory URL]
-#                         [--backup-recipient age1...] [--start] [--dry-run]
+#                         [--backup-recipient age1...] [--semantic-model] [--start] [--dry-run]
 # Creates the `ainkrad` user if missing, installs the binary and unit, inits the home /var/lib/ainkrad/core as
 # `ainkrad` when it does not exist (printing the backup signer's fingerprint once), and writes /etc/ainkrad/core.env
 # when --hostname is given (otherwise an existing one is kept). Starts only with --start.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-binary="$HERE/../target/release/ainkrad-core-server" hostname='' contact='' directory='' recipient='' start=0 dry=0
+binary="$HERE/../target/release/ainkrad-core-server" hostname='' contact='' directory='' recipient='' semantic=0 start=0 dry=0
 while [ $# -gt 0 ]; do
   case $1 in
     --binary) binary=${2:?}; shift 2 ;;
@@ -16,6 +16,7 @@ while [ $# -gt 0 ]; do
     --acme-contact) contact=${2:?}; shift 2 ;;
     --acme-directory) directory=${2:?}; shift 2 ;;
     --backup-recipient) recipient=${2:?}; shift 2 ;;
+    --semantic-model) semantic=1; shift ;;
     --start) start=1; shift ;;
     --dry-run) dry=1; shift ;;
     *) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
@@ -51,6 +52,24 @@ if [ -e "$home/config.toml" ]; then
   echo "home $home exists: kept"
 else
   run runuser -u ainkrad -- /usr/local/bin/ainkrad-core-server init "$home"
+fi
+if [ "$semantic" = 1 ]; then
+  # The Brain's local sorting model (multilingual-e5-small, MIT), pinned by revision and SHA-256. Root-owned and
+  # read-only: the Core loads it only when every file verifies (a swapped or truncated file leaves the step off).
+  rev=614241f622f53c4eeff9890bdc4f31cfecc418b3 models=$home/models/e5-small
+  run install -d -m 0755 -o root -g root "$home/models" "$models"
+  for f in config.json:69137736cab8b8903a07fe8afaafdda25aac55415a12a55d1bffa9f581abf959 \
+    tokenizer.json:0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39 \
+    model.safetensors:1a55775f53449dac10a2bcbc312469fac40b96d53198c407081a831f81c98477; do
+    name=${f%%:*} sha=${f##*:}
+    if [ "$dry" = 1 ]; then printf '+ fetch %s (sha256 %s) into %s\n' "$name" "$sha" "$models"; continue; fi
+    got=$(sha256sum "$models/$name" 2>/dev/null | cut -d' ' -f1 || true)
+    [ "$got" = "$sha" ] && { echo "$name: present, verified"; continue; }
+    tmp=$(mktemp "$models/.$name.XXXXXX")
+    curl -fsSL "https://huggingface.co/intfloat/multilingual-e5-small/resolve/$rev/$name" -o "$tmp"
+    [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$sha" ] || { rm -f "$tmp"; echo "$name: SHA-256 does not match the pin" >&2; exit 1; }
+    chown root:root "$tmp" && chmod 0644 "$tmp" && mv "$tmp" "$models/$name"
+  done
 fi
 run systemctl daemon-reload
 if [ "$start" = 1 ]; then

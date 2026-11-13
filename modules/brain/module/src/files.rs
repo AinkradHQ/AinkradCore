@@ -130,17 +130,34 @@ pub fn index_path(root: &Path, room: &str) -> PathBuf {
     root.join("rooms").join(room).join("index.db")
 }
 
+pub fn vectors_path(root: &Path) -> PathBuf {
+    root.join("vectors.db")
+}
+
+pub static VECTORS: &[FileMigration] = &[FileMigration {
+    version: 1,
+    name: "vectors_0001",
+    up: include_str!("../migrations/vectors_0001.sql"),
+}];
+
 pub static INDEX: &[FileMigration] = &[FileMigration {
     version: 1,
     name: "index_0001",
     up: include_str!("../migrations/index_0001.sql"),
 }];
 
-pub static STAGING: &[FileMigration] = &[FileMigration {
-    version: 1,
-    name: "staging_0001",
-    up: include_str!("../migrations/staging_0001.sql"),
-}];
+pub static STAGING: &[FileMigration] = &[
+    FileMigration {
+        version: 1,
+        name: "staging_0001",
+        up: include_str!("../migrations/staging_0001.sql"),
+    },
+    FileMigration {
+        version: 2,
+        name: "staging_0002",
+        up: include_str!("../migrations/staging_0002.sql"),
+    },
+];
 
 pub static CANON: &[FileMigration] = &[
     FileMigration {

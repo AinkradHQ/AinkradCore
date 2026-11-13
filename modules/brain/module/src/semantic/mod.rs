@@ -6,18 +6,49 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use brain_model::item::Item;
+pub use brain_model::semantic::MIN_CLUSTER;
 use brain_model::semantic::{
-    CLUSTER_THRESHOLD, DUP_THRESHOLD, DuplicateGroup, Entry, MERGE_THRESHOLD, MIN_CLUSTER,
-    MergeSuggestion, SuggestedRoom, duplicates, eligible, embed_text, merge_suggestions,
-    normalized, suggest_rooms,
+    CLUSTER_THRESHOLD, DUP_THRESHOLD, DuplicateGroup, Entry, MERGE_THRESHOLD, MergeSuggestion,
+    SuggestedRoom, duplicates, eligible, embed_text, merge_suggestions, normalized, suggest_rooms,
 };
 use serde_json::json;
 use sqlx::SqliteConnection;
 
 /// A local sentence embedder. Returns one unit vector per text, in order.
-pub trait Embedder {
+pub trait Embedder: Send + Sync {
     fn model_id(&self) -> &str;
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String>;
+}
+
+/// The cut-offs a run uses: duplicates, topic rooms, merge hints. Higher means fewer suggestions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Thresholds {
+    pub dup: f32,
+    pub cluster: f32,
+    pub merge: f32,
+}
+
+impl Thresholds {
+    /// `semantic.strength`: 0 low (few, sure suggestions), 1 normal (the engine's defaults), 2 high (more).
+    pub fn for_strength(strength: i64) -> Self {
+        match strength {
+            0 => Self {
+                dup: 0.97,
+                cluster: 0.91,
+                merge: 0.95,
+            },
+            2 => Self {
+                dup: 0.93,
+                cluster: 0.85,
+                merge: 0.90,
+            },
+            _ => Self {
+                dup: DUP_THRESHOLD,
+                cluster: CLUSTER_THRESHOLD,
+                merge: MERGE_THRESHOLD,
+            },
+        }
+    }
 }
 
 /// Vectors by `content_hash`, so an unchanged item is embedded once.
@@ -25,6 +56,19 @@ pub trait Embedder {
 /// re-embedding the corpus per run becomes slow.
 #[derive(Default)]
 pub struct VectorCache(HashMap<(String, String), Vec<f32>>);
+
+impl VectorCache {
+    pub fn get(&self, model: &str, hash: &str) -> Option<&Vec<f32>> {
+        self.0.get(&(model.to_owned(), hash.to_owned()))
+    }
+    pub fn put(&mut self, model: &str, hash: &str, v: Vec<f32>) {
+        self.0.insert((model.to_owned(), hash.to_owned()), v);
+    }
+    /// Drops an item's vector under every model.
+    pub fn forget(&mut self, hash: &str) {
+        self.0.retain(|k, _| k.1 != hash);
+    }
+}
 
 pub struct Input<'a> {
     pub item: &'a Item,
@@ -61,6 +105,7 @@ pub fn run(
     cache: &mut VectorCache,
     inputs: &[Input],
     proposals: &[ProposalRef],
+    th: Thresholds,
 ) -> Result<Suggestions, String> {
     let t = Instant::now();
     let model = embedder.model_id().to_owned();
@@ -99,7 +144,7 @@ pub fn run(
             vector: &cache.0[&(model.clone(), i.item.content_hash.clone())],
         })
         .collect();
-    let rooms = suggest_rooms(&entries, CLUSTER_THRESHOLD, MIN_CLUSTER);
+    let rooms = suggest_rooms(&entries, th.cluster, MIN_CLUSTER);
     let by_id: HashMap<&str, &[f32]> = entries
         .iter()
         .map(|e| (e.item.item_id.as_str(), e.vector))
@@ -114,8 +159,8 @@ pub fn run(
         .map(|(n, c)| (n.as_str(), c.as_slice()))
         .collect();
     Ok(Suggestions {
-        duplicates: duplicates(&entries, DUP_THRESHOLD),
-        merges: merge_suggestions(&refs, MERGE_THRESHOLD),
+        duplicates: duplicates(&entries, th.dup),
+        merges: merge_suggestions(&refs, th.merge),
         rooms,
         stats: RunStats {
             model,
@@ -153,16 +198,16 @@ pub mod local;
 mod tests {
     use super::*;
     use brain_model::item::{Author, AuthorKind, Origin, SourceKind, hash_of};
-    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Fake embedder: a vector per topic word, so tests need no model.
-    struct Fake(Cell<usize>);
+    struct Fake(AtomicUsize);
     impl Embedder for Fake {
         fn model_id(&self) -> &str {
             "fake"
         }
         fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
-            self.0.set(self.0.get() + texts.len());
+            self.0.fetch_add(texts.len(), Ordering::SeqCst);
             Ok(texts
                 .iter()
                 .map(|t| {
@@ -215,14 +260,18 @@ mod tests {
             item("d", "deploy x", "/d.md"),
         ];
         let inputs: Vec<Input> = its.iter().map(|item| Input { item, room: None }).collect();
-        let f = Fake(Cell::new(0));
+        let f = Fake(AtomicUsize::new(0));
         let mut cache = VectorCache::default();
-        let s = run(&f, &mut cache, &inputs, &[]).unwrap();
-        assert_eq!(f.0.get(), 4, "the refused item is never embedded");
+        let s = run(&f, &mut cache, &inputs, &[], Thresholds::for_strength(1)).unwrap();
+        assert_eq!(
+            f.0.load(Ordering::SeqCst),
+            4,
+            "the refused item is never embedded"
+        );
         assert_eq!(s.stats.items, 4);
         assert_eq!(s.rooms.len(), 1);
         assert!(!s.rooms[0].item_ids.contains(&"secret".to_owned()));
-        run(&f, &mut cache, &inputs, &[]).unwrap();
-        assert_eq!(f.0.get(), 4, "the second run is all cache");
+        run(&f, &mut cache, &inputs, &[], Thresholds::for_strength(1)).unwrap();
+        assert_eq!(f.0.load(Ordering::SeqCst), 4, "the second run is all cache");
     }
 }

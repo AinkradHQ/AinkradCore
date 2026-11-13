@@ -37,6 +37,35 @@ pub const FILES: [(&str, &str, u64); 3] = [
 const MAX_TOKENS: usize = 256;
 const BATCH: usize = 16;
 
+/// Where the installer puts the three files (root-owned, read-only to the Core).
+pub const DEFAULT_DIR: &str = "/var/lib/ainkrad/core/models/e5-small";
+
+/// Loads the model off the request path and hands it to the Brain when every file verifies.
+/// A missing directory is normal (the installer's opt-in was not taken): the semantic step stays off.
+pub fn load_in_background(b: &crate::Brain) {
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    let dir = std::env::var_os("AINKRAD_BRAIN_MODEL_DIR")
+        .map_or_else(|| std::path::PathBuf::from(DEFAULT_DIR), Into::into);
+    if !dir.is_dir() {
+        tracing::info!("semantic sorting is off: no model directory");
+        return;
+    }
+    let b = b.clone();
+    rt.spawn_blocking(move || match Local::load(&dir) {
+        Ok(m) => {
+            if b.embedder().is_none() {
+                b.set_embedder(std::sync::Arc::new(m));
+                tracing::info!("semantic sorting is on (local model loaded)");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "semantic sorting is off: the model files did not verify")
+        }
+    });
+}
+
 pub fn url(file: &str) -> String {
     format!("https://huggingface.co/intfloat/multilingual-e5-small/resolve/{REV}/{file}")
 }
