@@ -71,7 +71,8 @@ async fn room_of(app: &App, session: &str, room: &str) -> Result<Visible, ApiErr
         record(
             &mut tx,
             "brain.ai.refused",
-            json!({"session": session, "room": room.chars().take(64).collect::<String>()}),
+            json!({"session": session, "room": room.chars().take(64).collect::<String>(),
+                "project": ainkrad_core_server::ops_catalog::session_project(&app.pool, session).await}),
             None,
         )
         .await?;
@@ -481,7 +482,8 @@ pub(crate) async fn propose(
     record(
         &mut ctl,
         "brain.ai.proposed",
-        json!({"room": v.id, "record": id, "session": session, "type": req.kind}),
+        json!({"room": v.id, "record": id, "session": session, "type": req.kind,
+            "project": ainkrad_core_server::ops_catalog::session_project(&app.pool, &session).await}),
         Some((
             "brain.inbox",
             json!({"room": v.id, "op": "proposed", "waiting": waiting}),

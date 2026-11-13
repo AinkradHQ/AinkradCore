@@ -420,6 +420,10 @@ pub fn router(app: App) -> Router {
             post(agents::message),
         )
         .route(
+            "/api/v1/agent-sessions/{id}/approvals",
+            get(agents::approvals),
+        )
+        .route(
             "/api/v1/agent-sessions/{id}/approvals/{request}",
             post(agents::decide),
         )

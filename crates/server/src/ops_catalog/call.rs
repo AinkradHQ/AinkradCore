@@ -1,5 +1,6 @@
-//! `ainkrad.call {op, args, run?, key?}` (E2): runs one allow-listed, read-only operation for an
-//! AI session through the existing client router, in process.
+//! `ainkrad.call {op, args, run?, key?, repeat?}` (E2, E6): runs one allow-listed operation for an
+//! AI session through the existing client router, in process. A `write` runs inside the session's
+//! scopes at most once per key; a `risky` one also waits for a person (see `run`).
 //!
 //! **The principal.** A session has no device key. Its call acts as its CREATOR device, read from
 //! the store on EVERY call, with scopes = that device's current scopes minus `admin` (never
@@ -22,15 +23,11 @@ use ainkrad_core::audit::{AuditActor, NewAuditEvent};
 use ainkrad_core::ids::UserId;
 use ainkrad_core::settings::{Key, Scope};
 use ainkrad_proto::v2::{ConnTool, ToolCall, ToolResult};
-use axum::body::{Body, to_bytes};
-use axum::http::{Method, Request, StatusCode, header};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tower::ServiceExt;
 
-use super::{Op, Risk, args, session_principal};
+use super::{Op, Risk};
 use crate::api::App;
-use crate::api::v1::{Caller, Client};
 use crate::store::audit::origin;
 use crate::store::connections::access;
 
@@ -48,7 +45,8 @@ pub fn call_tool() -> ConnTool {
                 "op": {"type": "string", "maxLength": 64},
                 "args": {"type": "object"},
                 "run": {"type": "string", "maxLength": 64},
-                "key": {"type": "string", "maxLength": 64}
+                "key": {"type": "string", "maxLength": 64},
+                "repeat": {"type": "boolean"}
             },
             "required": ["op"],
             "additionalProperties": false
@@ -65,9 +63,20 @@ pub struct CallState {
     pub(crate) runs: Mutex<HashMap<(String, String), (Instant, usize)>>,
     /// Calls running now, per session.
     pub(crate) inflight: Mutex<HashMap<String, usize>>,
+    /// Risky calls parked for a person, by request id; the decision wakes them (E6.2).
+    pub(crate) waiting: Mutex<HashMap<String, std::sync::Arc<tokio::sync::Notify>>>,
+    /// Writes running now, `(session, key hash)`: tells a retry "busy" from "outcome unknown".
+    pub(crate) idem: Mutex<std::collections::HashSet<(String, String)>>,
 }
 
-struct Flight<'a>(&'a CallState, String);
+pub(super) struct Flight<'a>(&'a CallState, String);
+
+impl<'a> Flight<'a> {
+    /// A place already taken in `inflight`, given back when this is dropped.
+    pub fn new(state: &'a CallState, session: &str) -> Self {
+        Self(state, session.to_owned())
+    }
+}
 
 impl Drop for Flight<'_> {
     fn drop(&mut self) {
@@ -81,18 +90,20 @@ impl Drop for Flight<'_> {
     }
 }
 
-struct Limits {
-    per_min: usize,
-    run_calls: usize,
-    run_wall: Duration,
-    call_wall: Duration,
-    concurrent: usize,
-    max_args: usize,
-    max_result: usize,
+pub(super) struct Limits {
+    pub per_min: usize,
+    pub run_calls: usize,
+    pub run_wall: Duration,
+    pub call_wall: Duration,
+    pub concurrent: usize,
+    pub max_args: usize,
+    pub max_result: usize,
+    pub approval: Duration,
+    pub idem_window: i64,
 }
 
 impl Limits {
-    async fn read(app: &App) -> Result<Self, sqlx::Error> {
+    pub async fn read(app: &App) -> Result<Self, sqlx::Error> {
         let v = |k| async move { crate::store::settings::value(&app.pool, k, Scope::Server).await };
         let n = |x: i64| usize::try_from(x).unwrap_or(0);
         let s = |x: i64| Duration::from_secs(u64::try_from(x).unwrap_or(0));
@@ -104,23 +115,31 @@ impl Limits {
             concurrent: n(v(Key::CodeModeConcurrent).await?),
             max_args: n(v(Key::CodeModeMaxArgsBytes).await?),
             max_result: n(v(Key::CodeModeMaxResultBytes).await?),
+            approval: s(v(Key::CodeModeApprovalSecs).await?),
+            idem_window: v(Key::CodeModeIdemSecs).await?,
         })
     }
 }
 
 /// How a call ended: what the session gets, and what the audit row says.
-struct Done {
-    op: Option<(String, Risk)>,
-    outcome: Result<Value, (String, String)>,
+pub(super) struct Done {
+    pub op: Option<(String, Risk)>,
+    pub outcome: Result<Value, (String, String)>,
     /// Refused before it ran: audited once per window, not per call.
-    denied: bool,
+    pub denied: bool,
+    /// The Core-held approval of a risky call: its request id, and who allowed it once decided.
+    pub approval: Option<Value>,
+    /// The first result of a write sent again, not a new run.
+    pub replayed: bool,
 }
 
-fn deny(code: &'static str, msg: impl Into<String>, op: Option<&Op>) -> Done {
+pub(super) fn deny(code: &'static str, msg: impl Into<String>, op: Option<&Op>) -> Done {
     Done {
         op: op.map(|o| (o.id.clone(), o.risk)),
         outcome: Err((code.to_owned(), msg.into())),
         denied: true,
+        approval: None,
+        replayed: false,
     }
 }
 
@@ -135,7 +154,7 @@ fn refuse(id: String, code: &str, message: &str) -> ToolResult {
 }
 
 /// A run id or key: `[A-Za-z0-9_.-]`, 1..=64.
-fn plain_id(v: &Value) -> Result<Option<&str>, ()> {
+pub(super) fn plain_id(v: &Value) -> Result<Option<&str>, ()> {
     match v {
         Value::Null => Ok(None),
         Value::String(s)
@@ -167,7 +186,11 @@ pub async fn call_call(app: &App, runner: &str, session: &str, call: &ToolCall) 
         return refuse(id, "unknown_session", "no live session of yours");
     };
     let started = Instant::now();
-    let done = origin::scope(origin.clone(), run(app, runner, session, call)).await;
+    let done = origin::scope(
+        origin.clone(),
+        super::run::run(app, (runner, session), call),
+    )
+    .await;
     let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let code = done.outcome.as_ref().err().map(|e| e.0.as_str());
     let audit = !done.denied
@@ -177,9 +200,10 @@ pub async fn call_call(app: &App, runner: &str, session: &str, call: &ToolCall) 
         );
     if audit {
         let (op, risk) = done.op.clone().unzip();
-        let details = json!({"session": session, "op": op, "risk": risk.map(Risk::as_str),
+        let project = super::session_project(&app.pool, session).await;
+        let details = json!({"session": session, "project": project, "op": op, "risk": risk.map(Risk::as_str),
             "outcome": if code.is_none() { "ok" } else if done.denied { "denied" } else { "error" },
-            "code": code, "ms": ms,
+            "code": code, "ms": ms, "approval": done.approval, "replayed": done.replayed,
             "args_sha256": hex(&Sha256::digest(call.args.to_string().as_bytes()))});
         let event = NewAuditEvent {
             actor: AuditActor::User(UserId(acc.user)),
@@ -213,153 +237,8 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-async fn run(app: &App, runner: &str, session: &str, call: &ToolCall) -> Done {
-    let Ok(lim) = Limits::read(app).await else {
-        return deny("unavailable", "try again", None);
-    };
-    let state = &app.code_mode;
-    // 1. The session's rate: every call counts, refused or not.
-    {
-        let mut all = state.rate.lock().unwrap_or_else(|e| e.into_inner());
-        let w = all.entry(session.to_owned()).or_default();
-        let now = Instant::now();
-        w.retain(|t| now.duration_since(*t) < Duration::from_secs(60));
-        if w.len() >= lim.per_min {
-            return deny("rate_limited", "too many calls this minute", None);
-        }
-        w.push(now);
-    }
-    // 2. Shape and size.
-    if call.args.to_string().len() > lim.max_args {
-        return deny("args_too_large", "arguments too large", None);
-    }
-    let a = &call.args;
-    let (Some(op_id), Ok(run_id), Ok(_key)) =
-        (a["op"].as_str(), plain_id(&a["run"]), plain_id(&a["key"]))
-    else {
-        return deny(
-            "bad_args",
-            "op is a string; run and key are short plain ids",
-            None,
-        );
-    };
-    if a.as_object().is_some_and(|m| {
-        m.keys()
-            .any(|k| !["op", "args", "run", "key"].contains(&k.as_str()))
-    }) {
-        return deny("bad_args", "unknown field", None);
-    }
-    // 3a. A connection operation (E5): the session's grants and the broker decide, not the scopes.
-    if op_id.starts_with(super::conn::PREFIX) {
-        return connection(app, runner, session, call, op_id, run_id, &lim).await;
-    }
-    // 3. The operation: in the catalogue, read-only in this epic.
-    let Some(op) = app.catalogue().ops.get(op_id) else {
-        return deny("unknown_op", "no such operation; use ainkrad.search", None);
-    };
-    if op.risk != Risk::Read || op.method != "GET" {
-        return deny(
-            "not_available",
-            "this operation cannot be called yet",
-            Some(op),
-        );
-    }
-    // 4. The principal, now: the creator's current scopes, never admin; the op's scope among them.
-    let principal = match session_principal(&app.pool, session).await {
-        Ok(Some(p)) => p,
-        Ok(None) => {
-            return deny(
-                "creator_revoked",
-                "this session may no longer call operations",
-                Some(op),
-            );
-        }
-        Err(_) => return deny("unavailable", "try again", Some(op)),
-    };
-    let method = Method::GET;
-    let gate_scope = crate::api::v1::scopes::required(&method, &op.path, &app.modules);
-    if gate_scope != Some(op.scope.as_str()) || !principal.scopes.contains(&op.scope) {
-        return deny(
-            "forbidden_scope",
-            "this session's scopes do not allow that",
-            Some(op),
-        );
-    }
-    if crate::api::v1::scopes::destructive(&method, &op.path, &app.modules) {
-        return deny(
-            "not_available",
-            "this operation cannot be called yet",
-            Some(op),
-        );
-    }
-    // 5. The arguments, before anything runs.
-    let target = match args::target(op, &a["args"]) {
-        Ok(t) => t,
-        Err(why) => return deny("bad_args", why, Some(op)),
-    };
-    let query = target.split_once('?').map_or("", |(_, q)| q);
-    let path = target.split('?').next().unwrap_or("");
-    let names_ok = query.split('&').filter(|p| !p.is_empty()).all(|p| {
-        let n = p.split('=').next().unwrap_or(p);
-        crate::api::v1::QUERY.contains(&n)
-    }) || crate::api::v1::scopes::module_query_ok(&app.modules, path, query);
-    if !names_ok {
-        return deny("bad_args", "a query parameter is not allowed", Some(op));
-    }
-    // 6. The script run's budget, 7. concurrency.
-    if let Err(d) = budget(state, &lim, session, run_id, Some(op)) {
-        return d;
-    }
-    let _flight = match flight(state, &lim, session, Some(op)) {
-        Ok(f) => f,
-        Err(d) => return d,
-    };
-    // 8. Through the router as the principal.
-    let request = Request::builder()
-        .method(method)
-        .uri(&target)
-        .header(header::HOST, &app.host)
-        .extension(Caller {
-            device: principal.device,
-            session: format!("code_mode:{session}"),
-        })
-        .extension(Client("code_mode".to_owned()))
-        .body(Body::empty());
-    let Ok(request) = request else {
-        return deny("bad_args", "not a valid target", Some(op));
-    };
-    let sent = tokio::time::timeout(
-        lim.call_wall,
-        crate::api::v1::router(app.clone()).oneshot(request),
-    )
-    .await;
-    let op_ref = Some((op.id.clone(), op.risk));
-    let fail = |code: &str, msg: &str| Done {
-        op: op_ref.clone(),
-        outcome: Err((code.to_owned(), msg.to_owned())),
-        denied: false,
-    };
-    let Ok(Ok(response)) = sent else {
-        return fail("timeout", "the operation took too long");
-    };
-    let status = response.status();
-    let Ok(bytes) = to_bytes(response.into_body(), 4 << 20).await else {
-        return fail("result_too_large", "the result is too large to return");
-    };
-    let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-    if status.is_success() {
-        return Done {
-            op: op_ref,
-            outcome: Ok(cap(body, lim.max_result)),
-            denied: false,
-        };
-    }
-    let (code, msg) = refusal(status, &body);
-    fail(code, &msg)
-}
-
 /// The script run's call and time budget (`run_id` None: no run, no budget).
-fn budget(
+pub(super) fn budget(
     state: &CallState,
     lim: &Limits,
     session: &str,
@@ -390,7 +269,7 @@ fn budget(
 }
 
 /// One in-flight slot of `session`, or `busy`.
-fn flight<'a>(
+pub(super) fn flight<'a>(
     state: &'a CallState,
     lim: &Limits,
     session: &str,
@@ -402,11 +281,11 @@ fn flight<'a>(
         return Err(deny("busy", "too many calls running; wait for one", op));
     }
     *n += 1;
-    Ok(Flight(state, session.to_owned()))
+    Ok(Flight::new(state, session))
 }
 
 /// A `connections.<kind>.<op>` call (E5), through the broker.
-async fn connection(
+pub(super) async fn connection(
     app: &App,
     runner: &str,
     session: &str,
@@ -455,68 +334,22 @@ async fn connection(
         Ok(Ok(Ran::Done(op, r))) => Done {
             op: Some((op.id, op.risk)),
             outcome: match (r.ok, r.result) {
-                (true, Some(v)) => Ok(cap(v, lim.max_result)),
+                (true, Some(v)) => Ok(super::run::cap(v, lim.max_result)),
                 _ => Err((
                     r.code.unwrap_or_else(|| "refused".to_owned()),
                     r.message.unwrap_or_default(),
                 )),
             },
             denied: false,
+            approval: None,
+            replayed: false,
         },
     }
-}
-
-/// A stable refusal code for an API status, with the API's own code appended when it is a plain one.
-fn refusal(status: StatusCode, body: &Value) -> (&'static str, String) {
-    let code = match status.as_u16() {
-        400 | 422 => "bad_args",
-        401 | 403 => "forbidden_scope",
-        404 => "not_found",
-        409 => "conflict",
-        429 => "rate_limited",
-        500.. => "upstream_error",
-        _ => "refused",
-    };
-    let api = body["code"]
-        .as_str()
-        .filter(|c| c.len() <= 48 && c.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'));
-    (
-        code,
-        api.map_or_else(
-            || format!("refused ({})", status.as_u16()),
-            |c| format!("refused: {c}"),
-        ),
-    )
-}
-
-/// `v` as is, or a marker with the full size and a prefix when its JSON text is over `max`.
-fn cap(v: Value, max: usize) -> Value {
-    let text = v.to_string();
-    if text.len() <= max {
-        return v;
-    }
-    let mut cut = max.saturating_sub(256);
-    while !text.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    json!({"truncated": true, "size": text.len(), "preview": &text[..cut]})
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_result_over_the_cap_is_cut_and_marked_with_its_full_size() {
-        let big = json!({"text": "é".repeat(5_000)});
-        let size = big.to_string().len();
-        let cut = cap(big, 1_024);
-        assert_eq!(cut["truncated"], true);
-        assert_eq!(cut["size"], size);
-        assert!(cut.to_string().len() <= 2_048);
-        let small = json!({"a": 1});
-        assert_eq!(cap(small.clone(), 1_024), small);
-    }
 
     #[test]
     fn run_and_key_ids_are_short_and_plain() {

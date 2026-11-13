@@ -41,6 +41,8 @@ src/main/kotlin/ainkrad/client/models/AccountPlanWindow.kt
 src/main/kotlin/ainkrad/client/models/AccountSpend.kt
 src/main/kotlin/ainkrad/client/models/AccountTested.kt
 src/main/kotlin/ainkrad/client/models/AccountsDeleted.kt
+src/main/kotlin/ainkrad/client/models/AgentApproval.kt
+src/main/kotlin/ainkrad/client/models/AgentApprovals.kt
 src/main/kotlin/ainkrad/client/models/AgentDecision.kt
 src/main/kotlin/ainkrad/client/models/AgentMessage.kt
 src/main/kotlin/ainkrad/client/models/AgentSecret.kt

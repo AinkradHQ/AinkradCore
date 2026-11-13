@@ -3,26 +3,73 @@
 //! document ([`build`]), a typed definition per operation ([`render`]) and the search a session
 //! asks for ([`search`], served by [`serve`]). `call` (E2) runs the read-only ones for a session.
 
+mod approval;
 mod args;
 mod build;
 mod call;
 pub(crate) mod conn;
+mod idem;
 mod render;
+mod run;
 mod search;
 mod serve;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 use serde_json::Value;
 
+pub use approval::{
+    Decided, PREFIX as APPROVAL_PREFIX, Pending, decide as decide_approval, pending,
+};
 pub use build::build;
 pub use call::{CALL, CallState, call_call, call_tool};
 pub use render::render;
 pub use search::search;
 pub use serve::{Principal, SEARCH, search_call, search_tool, session_principal, session_scopes};
+
+/// Route families a session never reaches, whatever the allow-list says (Q5): secrets and their
+/// leases, device pairing and admin, runner admin, sign-in and step-up. The catalogue builder
+/// leaves them out and the gate test reports them as "not exposed".
+pub const NOT_EXPOSED: &[&str] = &[
+    "/api/v1/secrets",
+    "/api/v1/secret-groups",
+    "/api/v1/secret-leases",
+    "/api/v1/devices",
+    "/api/v1/pairings",
+    "/api/v1/runners",
+    "/api/v1/auth",
+    "/api/v1/handshake",
+    "/handshake",
+];
+
+/// Whether `path` may be an operation of a session at all.
+pub fn exposed(path: &str) -> bool {
+    !NOT_EXPOSED
+        .iter()
+        .any(|p| path == *p || path.strip_prefix(p).is_some_and(|r| r.starts_with('/')))
+}
+
+/// The project of `session` for audit rows: its workspace's name, else its repo's folder name
+/// (`https://github.com/acme/Alpha.git` is `Alpha`). `None` when it has no workspace.
+pub async fn session_project(pool: &sqlx::SqlitePool, session: &str) -> Option<String> {
+    let w = crate::store::agents::get(pool, session)
+        .await
+        .ok()??
+        .workspace?;
+    let named = w["name"]
+        .as_str()
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned);
+    named.or_else(|| {
+        let repo = w["repo"].as_str()?.trim_end_matches('/');
+        let base = repo.rsplit(['/', ':']).next()?;
+        let base = base.strip_suffix(".git").unwrap_or(base);
+        (!base.is_empty()).then(|| base.chars().take(64).collect())
+    })
+}
 
 /// What an operation may do to the world; decides the approval it needs (E6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
@@ -122,14 +169,19 @@ impl Catalogue {
     }
 }
 
-/// Problems with `allow` against `spec`: an op the contract does not have, a non-GET without a
+/// Problems with `allow` against `spec`: an op the contract does not have, one of the
+/// [`NOT_EXPOSED`] routes, a non-GET without a
 /// risk, a GET marked `write`/`risky`, a non-GET marked `read`, a repeat. Empty means reviewed.
 pub fn check(spec: &Value, allow: &[Allowed]) -> Vec<String> {
     let mut methods: BTreeMap<&str, &str> = BTreeMap::new();
-    for item in spec["paths"].as_object().into_iter().flatten() {
-        for (m, op) in item.1.as_object().into_iter().flatten() {
+    let mut hidden: BTreeSet<&str> = BTreeSet::new();
+    for (path, item) in spec["paths"].as_object().into_iter().flatten() {
+        for (m, op) in item.as_object().into_iter().flatten() {
             if let Some(id) = op["operationId"].as_str() {
                 methods.insert(id, m);
+                if !exposed(path) {
+                    hidden.insert(id);
+                }
             }
         }
     }
@@ -143,6 +195,12 @@ pub fn check(spec: &Value, allow: &[Allowed]) -> Vec<String> {
             bad.push(format!("{}: not in the contract", a.op));
             continue;
         };
+        if hidden.contains(a.op.as_str()) {
+            bad.push(format!(
+                "{}: secrets and device/runner admin are not exposed",
+                a.op
+            ));
+        }
         match (m.eq_ignore_ascii_case("get"), a.risk) {
             (false, None) => bad.push(format!("{}: a {m} needs a risk", a.op)),
             (false, Some(Risk::Read)) => bad.push(format!("{}: a {m} is not read", a.op)),

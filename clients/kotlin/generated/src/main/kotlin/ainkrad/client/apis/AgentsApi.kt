@@ -15,6 +15,7 @@
 
 package ainkrad.client.apis
 
+import ainkrad.client.models.AgentApprovals
 import ainkrad.client.models.AgentDecision
 import ainkrad.client.models.AgentMessage
 import ainkrad.client.models.AgentSession
@@ -271,6 +272,40 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.POST,
             "/api/v1/agent-sessions/{id}/kill".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/agent-sessions/{id}/approvals
+        * 
+        * 
+         * @param id The session&#39;s id, &#x60;as_…&#x60; 
+         * @return AgentApprovals
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun listAgentApprovals(id: kotlin.String): HttpResponse<AgentApprovals> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/agent-sessions/{id}/approvals".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
