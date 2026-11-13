@@ -358,6 +358,11 @@ pub async fn bind_distil_chain(fx: &Fx, chain: i64) {
 
 /// An AI session (not started) that walks a chain of one pool per provider, in order.
 pub async fn chain_session(fx: &Fx, providers: &[&str]) -> String {
+    chain_session_in(fx, providers, None).await
+}
+
+/// As `chain_session`, working in `workspace` (a repo, as a session of a project has).
+pub async fn chain_session_in(fx: &Fx, providers: &[&str], workspace: Option<&Value>) -> String {
     use ainkrad_core_server::api::v1::BY;
     use ainkrad_core_server::store::agents::NewSession;
     use ainkrad_core_server::store::chains::{self as ch, Request};
@@ -369,7 +374,7 @@ pub async fn chain_session(fx: &Fx, providers: &[&str]) -> String {
         harness: "",
         model: None,
         prompt: Some("SECRET SOURCE TEXT"),
-        workspace: None,
+        workspace,
         policy: &policy,
         secrets: &[],
         created_by: &fx.admin.id,
