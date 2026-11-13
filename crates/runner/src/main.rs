@@ -108,15 +108,14 @@ fn parse(args: &[&str]) -> Option<Args> {
     Some(parsed)
 }
 
-/// macOS, run by launchd (stderr is no terminal): output goes to `~/Library/Logs/Ainkrad/runner.log`,
-/// because a launchd plist cannot name the home folder and its output would otherwise be lost.
+/// macOS, run by our LaunchAgent (launchd sets `XPC_SERVICE_NAME` to the job label): output goes
+/// to `~/Library/Logs/Ainkrad/runner.log`, because a launchd plist cannot name the home folder and
+/// its output would otherwise be lost. Any other start (a shell, a test piping stderr) keeps stderr.
 /// The last log is kept as `runner.log.1` once this one passes 8 MiB at start.
 fn log_to_file() {
-    use std::io::IsTerminal;
-    if !cfg!(target_os = "macos")
-        || std::io::stderr().is_terminal()
-        || home().as_os_str().is_empty()
-    {
+    let by_our_agent =
+        std::env::var("XPC_SERVICE_NAME").is_ok_and(|label| label.starts_with("com.ainkrad."));
+    if !cfg!(target_os = "macos") || !by_our_agent || home().as_os_str().is_empty() {
         return;
     }
     let dir = home().join("Library/Logs/Ainkrad");
