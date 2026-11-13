@@ -179,6 +179,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/terminals/{id}", "read"),
     ("POST", "/api/v1/terminals", "terminal"),
     ("GET", "/api/v1/terminals/{id}/ws", "terminal"),
+    ("POST", "/api/v1/terminals/{id}/local", "terminal"),
+    ("DELETE", "/api/v1/terminals/{id}/local", "terminal"),
     ("POST", "/api/v1/terminals/{id}/signal", "terminal"),
     ("DELETE", "/api/v1/terminals/{id}", "terminal"),
     ("GET", "/api/v1/agent-sessions", "agent"),
@@ -294,6 +296,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     // Opening or attaching a terminal is a shell on the runner (spec §8, E2-01).
     ("POST", "/api/v1/terminals"),
     ("GET", "/api/v1/terminals/{id}/ws"),
+    // The local path is an attach whose bytes bypass the Core: the same step-up.
+    ("POST", "/api/v1/terminals/{id}/local"),
     // Signalling or closing one acts on a live shell, so it needs the same step-up.
     // The gate lets INT, TSTP and CONT through without one (Ctrl-C, Ctrl-Z, fg: `gate::plain_signal`).
     ("POST", "/api/v1/terminals/{id}/signal"),

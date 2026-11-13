@@ -3676,6 +3676,63 @@ extension Components {
                 case windowSecs = "window_secs"
             }
         }
+        /// What the app needs to reach the host: present `grant` on `socket`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/LocalTerminalGrant`.
+        public struct LocalTerminalGrant: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/LocalTerminalGrant/expires_at`.
+            public var expiresAt: Components.Schemas.Timestamp
+            /// The Core-signed grant, single-use; sign the host's challenge with the device key and send both.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LocalTerminalGrant/grant`.
+            public var grant: Swift.String
+            /// Seconds one authentication keeps the local connection open. Ask again before then.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LocalTerminalGrant/lease_secs`.
+            public var leaseSecs: Swift.Int64
+            /// The runner the terminal lives on: a grant is for that runner's hosts only.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LocalTerminalGrant/runner`.
+            public var runner: Swift.String
+            /// The file name of the host's socket in the runner's terminal directory.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LocalTerminalGrant/socket`.
+            public var socket: Swift.String
+            /// - Remark: Generated from `#/components/schemas/LocalTerminalGrant/terminal`.
+            public var terminal: Swift.String
+            /// Creates a new `LocalTerminalGrant`.
+            ///
+            /// - Parameters:
+            ///   - expiresAt:
+            ///   - grant: The Core-signed grant, single-use; sign the host's challenge with the device key and send both.
+            ///   - leaseSecs: Seconds one authentication keeps the local connection open. Ask again before then.
+            ///   - runner: The runner the terminal lives on: a grant is for that runner's hosts only.
+            ///   - socket: The file name of the host's socket in the runner's terminal directory.
+            ///   - terminal:
+            public init(
+                expiresAt: Components.Schemas.Timestamp,
+                grant: Swift.String,
+                leaseSecs: Swift.Int64,
+                runner: Swift.String,
+                socket: Swift.String,
+                terminal: Swift.String
+            ) {
+                self.expiresAt = expiresAt
+                self.grant = grant
+                self.leaseSecs = leaseSecs
+                self.runner = runner
+                self.socket = socket
+                self.terminal = terminal
+            }
+            public enum CodingKeys: String, CodingKey {
+                case expiresAt = "expires_at"
+                case grant
+                case leaseSecs = "lease_secs"
+                case runner
+                case socket
+                case terminal
+            }
+        }
         /// A key that is locked now.
         ///
         /// - Remark: Generated from `#/components/schemas/Lockout`.

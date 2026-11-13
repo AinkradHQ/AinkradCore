@@ -60,6 +60,8 @@ fn every_state_changing_privileged_route_is_destructive_or_excepted() {
         // An AI session's title only (#195): a label the session's owner sees; it starts,
         // stops, sends and grants nothing.
         ("PATCH", "/api/v1/agent-sessions/{id}"),
+        // The local terminal path's detach: it ends the caller's own lease and grants nothing.
+        ("DELETE", "/api/v1/terminals/{id}/local"),
     ];
     for (m, t, scope) in ROUTES {
         let privileged = !matches!(*scope, "read" | "runner");

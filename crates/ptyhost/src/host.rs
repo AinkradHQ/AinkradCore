@@ -27,6 +27,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
+use crate::local::{self, MAX_LEASE, Replay, Trust, Verified};
 use crate::pty::{Exit, Pty, Spawned, Spec, hang_up};
 use crate::screen::{Ring, Screen};
 use crate::store::{self, DiskRing};
@@ -97,6 +98,11 @@ pub fn socket_path(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{id}.sock"))
 }
 
+/// The grant-checked socket for the app on the same machine (`crate::local`).
+pub fn local_socket_path(dir: &Path, id: &str) -> PathBuf {
+    dir.join(format!("{id}.local.sock"))
+}
+
 pub fn record_path(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{id}.json"))
 }
@@ -148,6 +154,22 @@ struct Client {
     attached: bool,
     /// The exit was sent to this client: it gets it once.
     told: bool,
+    /// Set for a connection on the local socket.
+    local: Option<LocalConn>,
+}
+
+/// Local connections have ids with this bit set, so a late message of one dropped is never
+/// taken for the runner's.
+const LOCAL: u64 = 1 << 63;
+/// A local connection must authenticate within this long.
+const AUTH_WITHIN: Duration = Duration::from_secs(10);
+
+struct LocalConn {
+    challenge: String,
+    born: Instant,
+    verified: Option<Verified>,
+    /// When the last authentication's lease ends.
+    until: Option<Instant>,
 }
 
 struct State {
@@ -167,6 +189,8 @@ struct State {
     input: mpsc::Sender<Vec<u8>>,
     exit_rx: watch::Receiver<Option<Exit>>,
     closing: bool,
+    trust: Option<Trust>,
+    replay: Replay,
 }
 
 impl State {
@@ -241,8 +265,121 @@ impl State {
         }
     }
 
+    /// A local connection's message: `true` when it may go on to the ordinary handling. Only
+    /// `Auth` is taken before a grant passed; afterwards only what a viewer needs. Close, ack,
+    /// signal, shed and trust are the runner's and the Core's (so that they stay audited).
+    fn gate(&mut self, client: u64, m: &ToHost) -> bool {
+        let Some(c) = self.clients.get(&client) else {
+            return false;
+        };
+        let authed = c.local.as_ref().is_some_and(|l| l.verified.is_some());
+        match m {
+            ToHost::Auth { grant, sig } => {
+                if let Err(why) = self.authenticate(client, grant, sig) {
+                    self.send(
+                        client,
+                        FromHost::Error {
+                            message: why.why().to_owned(),
+                        },
+                    );
+                    // Dropped after the error is flushed: the queue still drains.
+                    self.clients.remove(&client);
+                }
+                false
+            }
+            ToHost::Attach { .. }
+            | ToHost::Input { .. }
+            | ToHost::Resize { .. }
+            | ToHost::Snapshot
+            | ToHost::Unknown
+                if authed =>
+            {
+                true
+            }
+            _ => {
+                let why = if authed {
+                    "not allowed on the local socket"
+                } else {
+                    "authenticate first"
+                };
+                self.send(
+                    client,
+                    FromHost::Error {
+                        message: why.to_owned(),
+                    },
+                );
+                if !authed {
+                    self.clients.remove(&client);
+                }
+                false
+            }
+        }
+    }
+
+    fn authenticate(&mut self, client: u64, grant: &str, sig: &str) -> Result<(), local::Refusal> {
+        use local::Refusal;
+        let now = unix_secs();
+        let Some(l) = self.clients.get(&client).and_then(|c| c.local.as_ref()) else {
+            return Err(Refusal::Malformed);
+        };
+        let v = local::verify_grant(self.trust.as_ref(), &self.cfg.id, grant, now)?;
+        // A renewal is the same device: the key that opened the connection keeps it.
+        if l.verified
+            .as_ref()
+            .is_some_and(|old| old.device_spki != v.device_spki)
+        {
+            return Err(Refusal::BadProof);
+        }
+        local::verify_proof(&v, &l.challenge, sig)?;
+        // Consumed only now: a bad proof does not burn a grant someone else holds.
+        if !self.replay.take(&v.grant.nonce, v.grant.exp, now) {
+            return Err(Refusal::Replayed);
+        }
+        let lease = Duration::from_secs(v.grant.lease.clamp(1, MAX_LEASE));
+        let first = l.verified.is_none();
+        let challenge = random_hex().map_err(|_| Refusal::Malformed)?;
+        let hello = self.info();
+        let c = self.clients.get_mut(&client).expect("checked above");
+        let l = c.local.as_mut().expect("a local client");
+        l.verified = Some(v);
+        l.until = Some(Instant::now() + lease);
+        l.challenge.clone_from(&challenge);
+        let lease_ms = u64::try_from(lease.as_millis()).unwrap_or(u64::MAX);
+        self.send(
+            client,
+            FromHost::Authed {
+                lease_ms,
+                challenge,
+            },
+        );
+        if first {
+            self.send(
+                client,
+                FromHost::Hello {
+                    protocol: HOST_PROTOCOL,
+                    info: hello,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Drops local connections whose lease ended, or that never authenticated.
+    fn expire_local(&mut self) {
+        let now = Instant::now();
+        self.clients.retain(|_, c| {
+            c.local.as_ref().is_none_or(|l| match l.until {
+                Some(u) => now < u,
+                None => now.duration_since(l.born) < AUTH_WITHIN,
+            })
+        });
+    }
+
     /// One client message; `true` when the host is done.
     fn handle(&mut self, client: u64, m: ToHost) -> bool {
+        if client & LOCAL != 0 && !self.gate(client, &m) {
+            return false;
+        }
         let refuse = |why: &str| FromHost::Error {
             message: why.to_owned(),
         };
@@ -326,6 +463,15 @@ impl State {
                     return true;
                 }
             }
+            ToHost::Trust { core_spki, runner } => {
+                use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+                self.trust = URL_SAFE_NO_PAD
+                    .decode(core_spki)
+                    .ok()
+                    .map(|core_spki| Trust { core_spki, runner });
+            }
+            // Only the local socket takes a grant; the runner's socket never needs one.
+            ToHost::Auth { .. } => {}
             ToHost::Shed => {
                 if let Some(d) = self.disk.as_mut()
                     && d.shed().is_err()
@@ -338,6 +484,12 @@ impl State {
         }
         false
     }
+}
+
+fn unix_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
 fn now_ms() -> u64 {
@@ -365,7 +517,7 @@ fn serve_client(
     stream: UnixStream,
     id: u64,
     allow_uid: u32,
-    hello: FromHost,
+    first: FromHost,
     queue: usize,
     events: mpsc::UnboundedSender<Event>,
 ) -> Option<mpsc::Sender<FromHost>> {
@@ -375,7 +527,7 @@ fn serve_client(
     }
     let (rd, mut wr) = stream.into_split();
     let (tx, mut rx) = mpsc::channel::<FromHost>(queue);
-    let _ = tx.try_send(hello);
+    let _ = tx.try_send(first);
     tokio::spawn(async move {
         while let Some(m) = rx.recv().await {
             let mut line = serde_json::to_vec(&m).expect("a message serializes");
@@ -445,6 +597,13 @@ pub async fn serve(
     let _ = std::fs::remove_file(&sock);
     let listener = UnixListener::bind(&sock)?;
     std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600))?;
+    // The app's socket: same directory, same mode, and nothing is served on it without a grant.
+    // Failing to bind it only means no local path: the terminal opens without.
+    let local_sock = local_socket_path(&cfg.dir, &cfg.id);
+    let _ = std::fs::remove_file(&local_sock);
+    let local_listener = UnixListener::bind(&local_sock).ok().inspect(|_| {
+        let _ = std::fs::set_permissions(&local_sock, std::fs::Permissions::from_mode(0o600));
+    });
 
     let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(64);
     let mut reader = spawned.reader;
@@ -493,6 +652,8 @@ pub async fn serve(
         input,
         exit_rx: spawned.exit.clone(),
         closing: false,
+        trust: None,
+        replay: Replay::default(),
         pty: spawned.pty,
         cfg,
     };
@@ -513,6 +674,8 @@ pub async fn serve(
     let mut drain_until: Option<Instant> = None;
     let mut released = false;
     let mut next_client = 0u64;
+    let mut next_local = LOCAL;
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
     loop {
         let now = Instant::now();
         // The exit is known and the output had DRAIN to arrive: let the master see EOF.
@@ -567,10 +730,33 @@ pub async fn serve(
                     if let Some(tx) = serve_client(stream, next_client, st.cfg.allow_uid, hello,
                         st.cfg.client_queue, events_tx.clone())
                     {
-                        st.clients.insert(next_client, Client { tx, attached: false, told: false });
+                        st.clients.insert(next_client, Client { tx, attached: false, told: false, local: None });
                     }
                 }
             }
+            accepted = async {
+                match &local_listener {
+                    Some(l) => l.accept().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Ok((stream, _)) = accepted {
+                    next_local += 1;
+                    let challenge = random_hex()?;
+                    let first = FromHost::Challenge { nonce: challenge.clone() };
+                    if let Some(tx) = serve_client(stream, next_local, st.cfg.allow_uid, first,
+                        st.cfg.client_queue, events_tx.clone())
+                    {
+                        st.clients.insert(next_local, Client {
+                            tx,
+                            attached: false,
+                            told: false,
+                            local: Some(LocalConn { challenge, born: Instant::now(), verified: None, until: None }),
+                        });
+                    }
+                }
+            }
+            _ = tick.tick() => st.expire_local(),
             Some(ev) = events.recv() => match ev {
                 Event::Gone(id) => drop(st.clients.remove(&id)),
                 Event::Msg(id, m) => {
@@ -583,6 +769,7 @@ pub async fn serve(
     }
     let _ = std::fs::remove_file(&record);
     let _ = std::fs::remove_file(&sock);
+    let _ = std::fs::remove_file(&local_sock);
     // The terminal is over and its exit was read: its scrollback goes with it.
     if let Some(d) = st.disk.take() {
         d.destroy();

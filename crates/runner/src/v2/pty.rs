@@ -101,6 +101,9 @@ pub struct PtyDriver {
     /// Per terminal: the clients attached now and when one last attached, typed or left. A
     /// watch stream (the Core's exit monitor) is not a client and is not counted.
     clients: Mutex<HashMap<String, (u32, u64)>>,
+    /// The Core key (SPKI) the last connection proved, and this runner's device id: told to every
+    /// host it connects to, so the host's local socket can check the Core's grants.
+    trust: Mutex<Option<(Vec<u8>, String)>>,
 }
 
 fn now_ms() -> u64 {
@@ -192,7 +195,13 @@ impl PtyDriver {
             config,
             budget: AtomicU64::new(SCROLLBACK_BUDGET.2),
             clients: Mutex::default(),
+            trust: Mutex::default(),
         }
+    }
+
+    /// Remembers the Core this runner is connected to (proven by its handshake).
+    pub fn trust(&self, core_spki: &[u8], runner: &str) {
+        *self.trust.lock().unwrap() = Some((core_spki.to_vec(), runner.to_owned()));
     }
 
     /// Sets the scrollback disk budget (clamped to its bounds).
@@ -543,9 +552,21 @@ impl PtyDriver {
         &self,
         terminal: &str,
     ) -> Result<(HostInfo, HostReader, HostWriter), StreamError> {
-        connect(&self.config.dir, terminal)
+        let (info, rd, mut wr) = connect(&self.config.dir, terminal)
             .await
-            .map_err(|_| err(ErrorCode::InvalidArgs, "no such terminal on this runner"))
+            .map_err(|_| err(ErrorCode::InvalidArgs, "no such terminal on this runner"))?;
+        let trust = self.trust.lock().unwrap().clone();
+        if let Some((spki, runner)) = trust {
+            use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+            // An older host skips the message: it has no local socket, and the app falls back.
+            let _ = wr
+                .send(&ToHost::Trust {
+                    core_spki: URL_SAFE_NO_PAD.encode(spki),
+                    runner,
+                })
+                .await;
+        }
+        Ok((info, rd, wr))
     }
 
     /// Hangs `terminal` up and answers its exit once the host reports it.
