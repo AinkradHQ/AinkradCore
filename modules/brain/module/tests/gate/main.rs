@@ -12,4 +12,5 @@ mod keys;
 mod review;
 mod rooms;
 mod runner_history;
+mod semantic;
 mod sync;

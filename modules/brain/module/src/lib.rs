@@ -5,6 +5,7 @@
 //! Routes (`/modules/brain/v1`): status, import runs, review of proposed rooms, commit, rules and
 //! rooms. See `docs/Plans/2026-11-11-brain-phase1-import-plan.md` §5.
 
+use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -39,8 +40,11 @@ mod policy;
 mod review;
 pub mod rooms;
 mod rules_api;
+pub mod semantic;
+mod suggest;
 mod sync;
 mod transcripts;
+mod vectors;
 
 pub const MODULE: &str = "brain";
 
@@ -100,12 +104,44 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports/{run}/proposals/{p}/refuse"),
     ("PATCH", "/imports/{run}/items"),
     ("POST", "/imports/{run}/regroup"),
+    ("PUT", "/settings/{name}"),
     ("POST", "/rules"),
     ("POST", "/sync"),
     ("POST", "/rooms/{room}/distil"),
     ("POST", "/rooms/{room}/inbox/{id}"),
     ("PUT", "/sources/{id}"),
     ("POST", "/ai/rooms/{room}/propose"),
+];
+/// `module.brain.semantic.strength`: how many sorting suggestions the local model makes.
+const SETTINGS: &[ModuleSetting] = &[
+    ModuleSetting {
+        name: "semantic.enabled",
+        default: 1,
+        min: 0,
+        max: 1,
+        description: "Sorting suggestions from the local model (1 on, 0 off). Only has an effect when this Core has the model. Off: nothing is embedded and Review shows semantic: off.",
+    },
+    ModuleSetting {
+        name: "semantic.threads",
+        default: 1,
+        min: 1,
+        max: 2,
+        description: "Threads the local model may use (1 or 2). One keeps a small host responsive; two is faster. Applies from the next step.",
+    },
+    ModuleSetting {
+        name: "semantic.max_tokens",
+        default: 128,
+        min: 128,
+        max: 256,
+        description: "Tokens of each item the local model reads: 128 (about twice as fast) or 256 (reads more of long items); a value between counts as 256. Applies from the next step; vectors made at the other size are kept.",
+    },
+    ModuleSetting {
+        name: "semantic.strength",
+        default: 1,
+        min: 0,
+        max: 2,
+        description: "Sorting suggestions from the local model: 0 low (few, sure), 1 normal, 2 high (more, less sure). Applies from the next re-sort.",
+    },
 ];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/status", "read"),
@@ -134,6 +170,10 @@ struct Inner {
     rooms: rooms::Rooms,
     syncing: AtomicBool,
     distilling: AtomicBool,
+    /// The shared semantic service: model, vector store and background worker (`semantic::service`).
+    sem: semantic::service::Service,
+    /// Runs whose semantic step is queued or working.
+    sem_running: Mutex<HashSet<String>>,
     #[cfg(feature = "test-support")]
     fetch: Mutex<Option<Arc<dyn collectors::Fetch>>>,
     #[cfg(feature = "test-support")]
@@ -153,6 +193,32 @@ impl Brain {
         let b = Self::default();
         b.inner.rooms.set_lease_override(secs);
         b
+    }
+
+    /// A build whose semantic step uses `e` (the Core's loads the local model; tests pass a fake).
+    pub fn with_embedder(e: Arc<dyn semantic::Embedder>) -> Self {
+        let b = Self::default();
+        b.set_embedder(e);
+        b
+    }
+
+    pub fn set_embedder(&self, e: Arc<dyn semantic::Embedder>) {
+        self.inner.sem.set_embedder(e);
+    }
+
+    /// Forgets the in-memory vectors, as a restart does (the stored ones stay).
+    #[cfg(feature = "test-support")]
+    pub fn drop_memory_vectors(&self) {
+        *self
+            .inner
+            .sem
+            .cache()
+            .lock()
+            .unwrap_or_else(|x| x.into_inner()) = semantic::VectorCache::default();
+    }
+
+    pub(crate) fn embedder(&self) -> Option<Arc<dyn semantic::Embedder>> {
+        self.inner.sem.embedder()
     }
 
     /// The brain key, opened once and kept in this process's memory.
@@ -344,6 +410,9 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         review::split,
         review::refuse,
         review::regroup,
+        suggest::get,
+        suggest::settings,
+        suggest::put_setting,
         review::patch_items,
         commit::commit,
         rules_api::list,
@@ -385,6 +454,12 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         review::ProposalCard,
         review::MergeSuggestion,
         review::Regrouped,
+        suggest::SemanticView,
+        suggest::DuplicateHint,
+        suggest::RoomHint,
+        suggest::MergeHint,
+        suggest::BrainSetting,
+        suggest::BrainSettingBody,
         review::ProposalPatch,
         review::ItemRow,
         review::ItemPage,
@@ -459,6 +534,9 @@ impl Module for Brain {
             .route("/imports/{run}/proposals/{p}/split", post(review::split))
             .route("/imports/{run}/proposals/{p}/refuse", post(review::refuse))
             .route("/imports/{run}/regroup", post(review::regroup))
+            .route("/imports/{run}/semantic", get(suggest::get))
+            .route("/settings", get(suggest::settings))
+            .route("/settings/{name}", put(suggest::put_setting))
             .route("/imports/{run}/commit", post(commit::commit))
             .route("/rules", get(rules_api::list).post(rules_api::create))
             .route("/rules/{id}", patch(rules_api::patch))
@@ -509,6 +587,7 @@ impl Module for Brain {
             "brain.room.created",
             "brain.room.opened",
             "brain.room.refused",
+            "brain.semantic.run",
             "brain.rule.created",
             "brain.rule.changed",
             "brain.source.changed",
@@ -555,11 +634,18 @@ impl Module for Brain {
     }
 
     fn settings(&self) -> &'static [ModuleSetting] {
-        &[]
+        SETTINGS
     }
 
     fn attach(&self, app: &App) {
         let _ = self.inner.app.set(app.clone());
+        // A step that was queued when the Core stopped is queued again.
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let b = self.clone();
+            rt.spawn(async move { b.resume_semantic().await });
+        }
+        #[cfg(feature = "semantic")]
+        semantic::local::load_in_background(self);
     }
 }
 

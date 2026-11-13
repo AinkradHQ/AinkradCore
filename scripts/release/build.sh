@@ -11,10 +11,12 @@ cd "$(dirname "$0")/../.."
 export SOURCE_DATE_EPOCH CITADEL_GIT_SHA
 image=${RUST_IMAGE:-rust:1.99.1}
 bins=(ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost)
-cmd="cargo build --profile dist --locked -p ainkrad-core-server -p ainkrad-runner -p ainkrad-ctl -p ainkrad-ptyhost"
+# Code Mode (`ainkrad_run`, the `ainkrad` CLI) is a runner feature that ships only when asked: RUNNER_FEATURES=quickjs.
+feat=${RUNNER_FEATURES:+--features ainkrad-runner/$RUNNER_FEATURES}
+cmd="cargo build --profile dist --locked -p ainkrad-core-server -p ainkrad-runner -p ainkrad-ctl -p ainkrad-ptyhost $feat"
 # The shipped Linux ainkrad-core-server is the Brain-carrying build (modules/brain/bin, its own workspace and target
 # dir), under the same name; the plain one is not built for Linux. macOS ships only runner + ptyhost, so it builds plain.
-lcmd="cargo build --profile dist --locked -p ainkrad-runner -p ainkrad-ctl -p ainkrad-ptyhost && CARGO_TARGET_DIR=\$CARGO_TARGET_DIR-brain cargo build --profile dist --locked --manifest-path modules/brain/Cargo.toml -p ainkrad-core-brain"
+lcmd="cargo build --profile dist --locked -p ainkrad-runner -p ainkrad-ctl -p ainkrad-ptyhost $feat && CARGO_TARGET_DIR=\$CARGO_TARGET_DIR-brain cargo build --profile dist --locked --manifest-path modules/brain/Cargo.toml -p ainkrad-core-brain"
 mkdir -p "$out/$target"
 case $target in
 macos-arm64)

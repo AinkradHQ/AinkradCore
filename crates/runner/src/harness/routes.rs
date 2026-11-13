@@ -330,6 +330,32 @@ impl HarnessExecutor {
             }
             env.push(("PATH".to_owned(), path));
         }
+        // Code Mode's `ainkrad` CLI (E3.5): a link to the shim, first on `PATH`, and the session's
+        // socket path (not a secret) in the environment. A failure leaves the session without the CLI.
+        #[cfg(feature = "quickjs")]
+        if let Some((sock, exe)) = &tools {
+            match crate::v2::agent::script::install_bin(&files.dir, std::path::Path::new(exe)) {
+                Ok(bin) => {
+                    let mut path = std::ffi::OsString::from(&bin);
+                    let rest = ainkrad_harness::last_env(&env, "PATH")
+                        .cloned()
+                        .or_else(|| std::env::var_os("PATH"));
+                    if let Some(rest) = rest {
+                        path.push(":");
+                        path.push(rest);
+                    }
+                    env.push(("PATH".to_owned(), path));
+                    env.push((
+                        ainkrad_harness::connections::SLOT_BIN.to_owned(),
+                        bin.into(),
+                    ));
+                    env.push((crate::v2::agent::script::SOCK_ENV.to_owned(), sock.into()));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "the ainkrad CLI is unavailable for this session")
+                }
+            }
+        }
         let default_model = HARNESSES
             .iter()
             .find(|(name, _)| *name == job.harness)

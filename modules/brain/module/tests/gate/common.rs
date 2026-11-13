@@ -235,6 +235,10 @@ pub async fn everything_stored(fx: &Fx) -> String {
     let root = brain_module::files::root(&fx.app);
     let mut out = String::new();
     for entry in walk(&root) {
+        // The vectors file holds no text (and is checked in the semantic tests).
+        if entry.ends_with("vectors.db") {
+            continue;
+        }
         let pool = brain_module::files::open_migrated(
             &entry,
             &key,

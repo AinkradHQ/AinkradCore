@@ -191,13 +191,19 @@
 /// 62: Brain import regroup: `brainRegroup` (`POST /imports/{run}/regroup`) and `ProposalCard.suggest_merge`
 ///    (`MergeSuggestion`), and the audit action `brain.import.regrouped`.
 ///
-/// 63: Code Mode dispatch (E2): the audit action `code_mode.call` and the settings `code_mode.*` (call, run, size and
+/// 63: Brain import semantic suggestions (local model, off without it): `brainSemantic`
+///    (`GET /imports/{run}/semantic`: `SemanticView` with duplicate groups, suggested rooms and merge hints),
+///    `ProposalCard.semantic` (`pending`, `ready` or `off`), the Brain settings `brainSettings` / `brainSetSetting`
+///    (`GET /settings`, `PUT /settings/{name}`: `semantic.enabled`, `semantic.threads`, `semantic.max_tokens`, `semantic.strength`), and the audit action
+///    `brain.semantic.run`.
+///
+/// 64: Code Mode dispatch (E2): the audit action `code_mode.call` and the settings `code_mode.*` (call, run, size and
 ///    concurrency limits). No route changed.
 ///
-/// 64: Code Mode Brain operations (E4): the Brain routes `brainRoomAccess` / `brainPutRoomAccess` (who may see a room),
+/// 65: Code Mode Brain operations (E4): the Brain routes `brainRoomAccess` / `brainPutRoomAccess` (who may see a room),
 ///    `brainAi*` (what an AI session reads and proposes), `InboxRecord.proposed_by`, the audit actions
 ///    `brain.room.access`, `brain.ai.proposed` and `brain.ai.refused`, and the Brain operations in the allow-list.
-pub const API_MINOR: u32 = 64;
+pub const API_MINOR: u32 = 65;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

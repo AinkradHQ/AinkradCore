@@ -17,6 +17,8 @@ use super::Tools;
 /// the shim adds beside it (`ainkrad_run`, served by E3).
 const SEARCH: &str = "ainkrad.search";
 const RUN: &str = "ainkrad.run";
+/// Listed by the Core for the runner's own use, never shown to the harness.
+const HIDDEN: [&str; 2] = ["ainkrad.call", "ainkrad.schema"];
 
 /// The most bytes of tool entries one `tools/list` answer carries.
 pub const MAX_LIST_BYTES: usize = 256 * 1024;
@@ -90,7 +92,12 @@ pub async fn handle(tools: &Tools, session: &str, body: &[u8]) -> Option<Vec<u8>
                     "properties": {"code": {"type": "string"}}, "required": ["code"],
                     "additionalProperties": false})),
             });
-            for t in all.into_iter().chain(run) {
+            // The Core's internal tools (`ainkrad.call`, `ainkrad.schema`) are for the script engine
+            // and the CLI, not for the harness's own list.
+            let shown = all
+                .into_iter()
+                .filter(|t| !HIDDEN.contains(&t.name.as_str()));
+            for t in shown.chain(run) {
                 let schema = t
                     .input_schema
                     .clone()

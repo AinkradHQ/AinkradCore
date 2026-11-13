@@ -810,145 +810,6 @@
         },
         "type": "object"
       },
-      "AiHit": {
-        "properties": {
-          "id": {
-            "description": "The record id, or the source's item id.",
-            "type": "string"
-          },
-          "kind": {
-            "description": "`record` (an accepted record, listed first) or `source`.",
-            "type": "string"
-          },
-          "room": {
-            "type": "string"
-          },
-          "started_at": {
-            "type": "string"
-          },
-          "text": {
-            "description": "The match, inside the outside-text envelope.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "room",
-          "kind",
-          "id",
-          "started_at",
-          "text"
-        ],
-        "type": "object"
-      },
-      "AiHits": {
-        "properties": {
-          "hits": {
-            "items": {
-              "$ref": "#/components/schemas/AiHit"
-            },
-            "type": "array"
-          },
-          "rooms_closed": {
-            "description": "Visible rooms that were closed and so not searched.",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "rooms_searched": {
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "hits",
-          "rooms_searched",
-          "rooms_closed"
-        ],
-        "type": "object"
-      },
-      "AiRecord": {
-        "properties": {
-          "created_at": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "room": {
-            "type": "string"
-          },
-          "sources": {
-            "description": "Item ids of the sources it came from.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "text": {
-            "description": "Its tags and body, inside the outside-text envelope; a list cuts a long body.",
-            "type": "string"
-          },
-          "truncated": {
-            "type": "boolean"
-          },
-          "type": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "room",
-          "type",
-          "created_at",
-          "sources",
-          "text",
-          "truncated"
-        ],
-        "type": "object"
-      },
-      "AiRecords": {
-        "properties": {
-          "records": {
-            "items": {
-              "$ref": "#/components/schemas/AiRecord"
-            },
-            "type": "array"
-          },
-          "rooms_closed": {
-            "description": "Visible rooms that were closed and so not read.",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "records",
-          "rooms_closed"
-        ],
-        "type": "object"
-      },
-      "AiRoom": {
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "open": {
-            "description": "Whether the room's lease is live: only an open room can be searched or read.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "kind",
-          "open"
-        ],
-        "type": "object"
-      },
       "ApiVersion": {
         "description": "The contract a server speaks: `/api/<major>` and its additions so far.",
         "properties": {
@@ -1078,8 +939,6 @@
           "auth.lockout",
           "auth.lockout_cleared",
           "auth.step_up",
-          "brain.ai.proposed",
-          "brain.ai.refused",
           "brain.distil.done",
           "brain.distil.queued",
           "brain.distil.rejected",
@@ -1089,13 +948,13 @@
           "brain.import.started",
           "brain.inbox.decided",
           "brain.inbox.notice",
-          "brain.room.access",
           "brain.room.created",
           "brain.room.opened",
           "brain.room.policy",
           "brain.room.refused",
           "brain.rule.changed",
           "brain.rule.created",
+          "brain.semantic.run",
           "brain.session.claimed",
           "brain.session.refused",
           "brain.source.changed",
@@ -1112,7 +971,6 @@
           "chain.deleted",
           "chain.unbound",
           "chain.updated",
-          "code_mode.call",
           "connection.app_set",
           "connection.auth_failed",
           "connection.auth_inconclusive",
@@ -1257,6 +1115,54 @@
           "agent",
           "provider",
           "pool_id"
+        ],
+        "type": "object"
+      },
+      "BrainSetting": {
+        "properties": {
+          "default": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "description": {
+            "type": "string"
+          },
+          "max": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "min": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "description": "`semantic.enabled` or `semantic.strength`.",
+            "type": "string"
+          },
+          "value": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "default",
+          "min",
+          "max",
+          "description"
+        ],
+        "type": "object"
+      },
+      "BrainSettingBody": {
+        "properties": {
+          "value": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "value"
         ],
         "type": "object"
       },
@@ -2480,6 +2386,37 @@
         ],
         "type": "object"
       },
+      "DuplicateHint": {
+        "description": "Items that are nearly the same text. To accept: mark `item_ids` except `keep` as refused.",
+        "properties": {
+          "item_ids": {
+            "description": "Every item of the group, `keep` included.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "keep": {
+            "description": "The newest of the group.",
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "score": {
+            "description": "The lowest similarity inside the group, 0 to 1.",
+            "format": "float",
+            "type": "number"
+          }
+        },
+        "required": [
+          "keep",
+          "item_ids",
+          "score",
+          "reason"
+        ],
+        "type": "object"
+      },
       "Elevation": {
         "properties": {
           "elevated_until": {
@@ -3087,13 +3024,6 @@
           },
           "id": {
             "type": "string"
-          },
-          "proposed_by": {
-            "description": "The AI session that proposed it through Code Mode (`brain.propose`); none otherwise.",
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "sources": {
             "description": "The sources it came from, each a source stored in the same room.",
@@ -3711,6 +3641,44 @@
         "required": [
           "device",
           "versions"
+        ],
+        "type": "object"
+      },
+      "MergeHint": {
+        "description": "Two rooms that look like one topic; `from` is the smaller. To accept: merge `from` into `to`.",
+        "properties": {
+          "from": {
+            "description": "A proposal id, or the `name` of a suggested room.",
+            "type": "string"
+          },
+          "from_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "score": {
+            "format": "float",
+            "type": "number"
+          },
+          "to": {
+            "type": "string"
+          },
+          "to_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "score",
+          "reason"
         ],
         "type": "object"
       },
@@ -4944,6 +4912,13 @@
             },
             "type": "array"
           },
+          "semantic": {
+            "description": "The local model's sorting step for this run: `pending`, `ready` or `off` (only in the\nproposals list; the suggestions are at `/imports/{run}/semantic`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "signals": {
             "items": {
               "type": "string"
@@ -5004,63 +4979,6 @@
             ]
           }
         },
-        "type": "object"
-      },
-      "Propose": {
-        "additionalProperties": false,
-        "properties": {
-          "body": {
-            "description": "One self-contained statement, 1 to 2000 characters.",
-            "type": "string"
-          },
-          "sources": {
-            "description": "Item ids of sources in the same room (at most 20).",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "tags": {
-            "description": "At most 8 tags of 1 to 40 characters.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "type": {
-            "description": "`decision`, `fact`, `preference`, `rule`, `project-state`, `task` or `summary`.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "body"
-        ],
-        "type": "object"
-      },
-      "Proposed": {
-        "properties": {
-          "duplicate": {
-            "description": "The same statement was already in the room: nothing was added.",
-            "type": "boolean"
-          },
-          "id": {
-            "type": "string"
-          },
-          "room": {
-            "type": "string"
-          },
-          "status": {
-            "description": "Always `candidate`: a person decides in the Inbox.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "room",
-          "id",
-          "status",
-          "duplicate"
-        ],
         "type": "object"
       },
       "Provider": {
@@ -5432,38 +5350,6 @@
         ],
         "type": "object"
       },
-      "RoomAccess": {
-        "properties": {
-          "project": {
-            "description": "Project keys (a repo folder, a workspace name or a Citadel key) that may see the room.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "room": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "runner": {
-            "description": "Runner ids whose AI sessions may see the room.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "session": {
-            "description": "AI session ids that may see the room.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          }
-        },
-        "type": "object"
-      },
       "RoomClaim": {
         "properties": {
           "entries": {
@@ -5521,6 +5407,37 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "RoomHint": {
+        "description": "A topic found among the Unsorted items. To accept: split Unsorted with these `item_ids` and `name`.",
+        "properties": {
+          "item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "score": {
+            "format": "float",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "keywords",
+          "item_ids",
+          "score"
+        ],
         "type": "object"
       },
       "RoomMade": {
@@ -6364,6 +6281,33 @@
           "created_at",
           "updated_at"
         ],
+        "type": "object"
+      },
+      "SemanticView": {
+        "properties": {
+          "duplicates": {
+            "items": {
+              "$ref": "#/components/schemas/DuplicateHint"
+            },
+            "type": "array"
+          },
+          "merges": {
+            "items": {
+              "$ref": "#/components/schemas/MergeHint"
+            },
+            "type": "array"
+          },
+          "rooms": {
+            "items": {
+              "$ref": "#/components/schemas/RoomHint"
+            },
+            "type": "array"
+          },
+          "state": {
+            "description": "`pending` (working now), `ready` or `off` (no local model, or the step failed).",
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "SessionGrant": {
@@ -7745,7 +7689,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.64.0"
+    "version": "1.63.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16113,377 +16057,6 @@
         ]
       }
     },
-    "/modules/brain/v1/ai/decisions": {
-      "get": {
-        "operationId": "brainAiDecisions",
-        "parameters": [
-          {
-            "description": "One room; none reads every visible, open room.",
-            "in": "query",
-            "name": "room",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "At most this many (default 10, most 25).",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "int32",
-              "minimum": 0,
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AiRecords"
-                }
-              }
-            },
-            "description": "Accepted decisions of the rooms this AI session may see, newest first, as outside data"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "brain"
-        ],
-        "x-ainkrad-scope": "read"
-      }
-    },
-    "/modules/brain/v1/ai/project-state": {
-      "get": {
-        "operationId": "brainAiProjectState",
-        "parameters": [
-          {
-            "description": "One room; none reads every visible, open room.",
-            "in": "query",
-            "name": "room",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "At most this many (default 10, most 25).",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "int32",
-              "minimum": 0,
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AiRecords"
-                }
-              }
-            },
-            "description": "Accepted project-state records, tasks (open threads) and rules (landmines) of the rooms this AI session may see, newest first, as outside data"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "brain"
-        ],
-        "x-ainkrad-scope": "read"
-      }
-    },
-    "/modules/brain/v1/ai/rooms": {
-      "get": {
-        "operationId": "brainAiRooms",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/AiRoom"
-                  },
-                  "type": "array"
-                }
-              }
-            },
-            "description": "The rooms this AI session may see (its project's, or ones the room's access list names), within each room's model policy"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "brain"
-        ],
-        "x-ainkrad-scope": "read"
-      }
-    },
-    "/modules/brain/v1/ai/rooms/{room}/propose": {
-      "post": {
-        "operationId": "brainAiPropose",
-        "parameters": [
-          {
-            "description": "Room id",
-            "in": "path",
-            "name": "room",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Propose"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Proposed"
-                }
-              }
-            },
-            "description": "The proposal waits in the room's Inbox as a candidate (never accepted automatically; a repeat of the same statement is `duplicate`; 20 per session per room)"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "brain"
-        ],
-        "x-ainkrad-scope": "agent"
-      }
-    },
-    "/modules/brain/v1/ai/rooms/{room}/records/{id}": {
-      "get": {
-        "operationId": "brainAiRecord",
-        "parameters": [
-          {
-            "description": "Room id",
-            "in": "path",
-            "name": "room",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Record id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AiRecord"
-                }
-              }
-            },
-            "description": "One accepted record of a room this AI session may see, whole, as outside data; a candidate or rejected one is a 404"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "brain"
-        ],
-        "x-ainkrad-scope": "read"
-      }
-    },
-    "/modules/brain/v1/ai/search": {
-      "get": {
-        "operationId": "brainAiSearch",
-        "parameters": [
-          {
-            "description": "Words to find; all must appear.",
-            "in": "query",
-            "name": "q",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "One room to search; none searches every visible, open room.",
-            "in": "query",
-            "name": "room",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "At most this many hits (default 10, most 25).",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "int32",
-              "minimum": 0,
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AiHits"
-                }
-              }
-            },
-            "description": "Hits across the rooms this AI session may see: accepted records first, then sources best first. Every text is wrapped as outside data."
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "brain"
-        ],
-        "x-ainkrad-scope": "read"
-      }
-    },
     "/modules/brain/v1/imports": {
       "post": {
         "operationId": "brainStartImport",
@@ -17300,6 +16873,59 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/modules/brain/v1/imports/{run}/semantic": {
+      "get": {
+        "operationId": "brainSemantic",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SemanticView"
+                }
+              }
+            },
+            "description": "The local model's sorting suggestions; only what still applies to the rooms as they are now"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/modules/brain/v1/rooms": {
       "get": {
         "operationId": "brainRooms",
@@ -17343,121 +16969,6 @@
           "brain"
         ],
         "x-ainkrad-scope": "read"
-      }
-    },
-    "/modules/brain/v1/rooms/{room}/access": {
-      "get": {
-        "operationId": "brainRoomAccess",
-        "parameters": [
-          {
-            "description": "Room id",
-            "in": "path",
-            "name": "room",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RoomAccess"
-                }
-              }
-            },
-            "description": "Who besides the matching project may see the room through Code Mode (empty: project match only)"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "brain"
-        ],
-        "x-ainkrad-scope": "read"
-      },
-      "put": {
-        "operationId": "brainPutRoomAccess",
-        "parameters": [
-          {
-            "description": "Room id",
-            "in": "path",
-            "name": "room",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RoomAccess"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RoomAccess"
-                }
-              }
-            },
-            "description": "The access list after the change; a list left out stays as it was (step-up; audited as `brain.room.access`)"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "brain"
-        ],
-        "x-ainkrad-destructive": true,
-        "x-ainkrad-scope": "admin"
       }
     },
     "/modules/brain/v1/rooms/{room}/claims": {
@@ -18185,6 +17696,114 @@
           "brain"
         ],
         "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/settings": {
+      "get": {
+        "operationId": "brainSettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BrainSetting"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The Brain's tunables with value, default and bounds: `semantic.enabled` (0 or 1) and `semantic.strength` (0 low, 1 normal, 2 high)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/settings/{name}": {
+      "put": {
+        "operationId": "brainSetSetting",
+        "parameters": [
+          {
+            "description": "A name from `GET /settings`",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrainSettingBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrainSetting"
+                }
+              }
+            },
+            "description": "Set (audited as `setting.set`); 404 for an unknown name, 400 out of bounds. Applies from the next re-sort"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
         "x-ainkrad-scope": "admin"
       }
     },

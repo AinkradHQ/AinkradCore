@@ -17,6 +17,8 @@ pub const SERVER: &str = "ainkrad-connections";
 /// The slot's variables (the runner sets them for a session whose sandbox is given the socket).
 pub const SLOT_SOCK: &str = "AINKRAD_SANDBOX_TOOLS_SOCK";
 pub const SLOT_FWD: &str = "AINKRAD_SANDBOX_TOOLS_FWD";
+/// Optional: a directory holding the `ainkrad` CLI link (Code Mode), bound read-only.
+pub const SLOT_BIN: &str = "AINKRAD_SANDBOX_TOOLS_BIN";
 
 /// How long a harness waits for one tool call: above the runner's own 120 s bound on a call, so a
 /// call that outlives the wait is ended by the runner (`outcome_unknown` for a write) and not by
