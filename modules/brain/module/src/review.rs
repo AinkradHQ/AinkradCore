@@ -82,6 +82,9 @@ pub struct ProposalCard {
     pub room: Option<String>,
     /// A room this one looks like (only in the proposals list); merging is the user's call.
     pub suggest_merge: Option<MergeSuggestion>,
+    /// The local model's sorting step for this run: `pending`, `ready` or `off` (only in the
+    /// proposals list; the suggestions are at `/imports/{run}/semantic`).
+    pub semantic: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -223,6 +226,8 @@ pub(crate) async fn discover(
     if kind == "incremental" {
         return Ok(Some(crate::sync::route_known(app, b, run).await?));
     }
+    // Review opens now with the rule-based rooms; the local model's suggestions arrive when ready.
+    crate::suggest::start(app, b, run).await;
     Ok(None)
 }
 
@@ -291,6 +296,7 @@ async fn card(st: &SqlitePool, r: &SqliteRow) -> Result<ProposalCard, ApiError> 
         config: parse(&cfg),
         room: r.try_get("room")?,
         suggest_merge: None,
+        semantic: None,
         id,
     })
 }
@@ -314,7 +320,11 @@ pub(crate) async fn proposals(
     for r in &rows {
         out.push(card(&st, r).await?);
     }
+    let sem = crate::suggest::status(&app, &st, &b, &run).await?;
     st.close().await;
+    for c in &mut out {
+        c.semantic = Some(sem.clone());
+    }
     // Hints only among rooms still in play; Unsorted and refused rooms are neither source nor target.
     let live: Vec<(String, String, i64)> = out
         .iter()
@@ -644,6 +654,7 @@ pub(crate) async fn refuse(
         }
         tx.commit().await?;
     }
+    crate::vectors::forget_refused(&app, &b, &st).await;
     let out = card(&st, &row_again(&st, &p).await?).await?;
     st.close().await;
     Ok(Json(out))
@@ -726,6 +737,9 @@ pub(crate) async fn patch_items(
         changed += 1;
     }
     tx.commit().await?;
+    if req.mark.as_deref() == Some("refused") {
+        crate::vectors::forget_refused(&app, &b, &st).await;
+    }
     st.close().await;
     Ok(Json(Changed { changed }))
 }
@@ -839,5 +853,6 @@ pub(crate) async fn regroup(
     )
     .await?;
     tx.commit().await?;
+    crate::suggest::start(&app, &b, &run).await;
     Ok(Json(out))
 }
