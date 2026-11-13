@@ -219,7 +219,17 @@ fn uninstall_launchd(unload: bool) -> ExitCode {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // Run under the name `ainkrad` (a link to this executable): the CLI.
+    if cfg!(feature = "quickjs")
+        && std::env::args_os().next().is_some_and(|a| {
+            std::path::Path::new(&a)
+                .file_name()
+                .is_some_and(|n| n == "ainkrad")
+        })
+    {
+        args.insert(0, "ainkrad".to_owned());
+    }
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["--version" | "-V"] => {
@@ -244,9 +254,20 @@ async fn main() -> ExitCode {
             return ainkrad_runner::mcp_bridge::forward_main(port, sock, true).await;
         }
         // The harness's MCP server for the connection tools (C4b): stdio to the session's socket.
+        // With Code Mode the shim also runs `ainkrad_run` scripts, in a child process.
+        #[cfg(feature = "quickjs")]
+        ["mcp-stdio", sock] => {
+            return ainkrad_runner::v2::agent::script::shim::stdio_main(sock).await;
+        }
+        #[cfg(not(feature = "quickjs"))]
         ["mcp-stdio", sock] => {
             return ainkrad_runner::v2::agent::tools::sock::stdio_main(sock).await;
         }
+        // One script (spawned by the shim, inside the sandbox) and the `ainkrad` CLI.
+        #[cfg(feature = "quickjs")]
+        ["__script", sock] => return ainkrad_runner::v2::agent::script::child::script_main(sock),
+        #[cfg(feature = "quickjs")]
+        ["ainkrad", rest @ ..] => return ainkrad_runner::v2::agent::script::cli::main(rest),
         ["install-launchd", rest @ ..] => return install_launchd(rest),
         ["uninstall-launchd"] => return uninstall_launchd(false),
         ["uninstall-launchd", "--unload"] => return uninstall_launchd(true),

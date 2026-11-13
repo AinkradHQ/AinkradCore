@@ -7,7 +7,14 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Code Mode (`ainkrad_run` and the `ainkrad` CLI): a QuickJS script engine in the runner executable.
+# Off by default; a release ships it deliberately (`--features quickjs`).
+quickjs = ["dep:rquickjs"]
+
 [dependencies]
+# default-features off: no module loader, no `std`/`os` JS modules, no futures/parallel. Bundled C QuickJS.
+rquickjs = { version = "0.14.0", default-features = false, optional = true }
 # A file an agent publishes by path (E15.12) travels to the server base64-encoded.
 base64 = "0.22.1"
 ainkrad-harness = { path = "../harness" }
