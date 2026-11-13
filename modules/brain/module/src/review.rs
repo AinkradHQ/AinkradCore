@@ -9,7 +9,7 @@ use ainkrad_core_server::api::v1::{ApiError, ApiResult, Paging};
 use ainkrad_core_server::store::begin_write;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
-use brain_model::group::{UNSORTED, group};
+use brain_model::group::{UNSORTED, group, suggest_merges};
 use brain_model::item::{Author, AuthorKind, Item, Origin, SourceKind};
 use brain_model::signals::{RoomKind, extract};
 use serde::{Deserialize, Serialize};
@@ -80,6 +80,17 @@ pub struct ProposalCard {
     pub sample_titles: Vec<String>,
     pub config: RoomConfig,
     pub room: Option<String>,
+    /// A room this one looks like (only in the proposals list); merging is the user's call.
+    pub suggest_merge: Option<MergeSuggestion>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct MergeSuggestion {
+    /// The proposal id to merge into.
+    pub into: String,
+    pub name: String,
+    /// `prefix` (one name starts the other) or `close` (a spelling within two edits).
+    pub reason: String,
 }
 
 fn slug(s: &str) -> String {
@@ -279,6 +290,7 @@ async fn card(st: &SqlitePool, r: &SqliteRow) -> Result<ProposalCard, ApiError> 
         sample_titles: titles,
         config: parse(&cfg),
         room: r.try_get("room")?,
+        suggest_merge: None,
         id,
     })
 }
@@ -303,6 +315,23 @@ pub(crate) async fn proposals(
         out.push(card(&st, r).await?);
     }
     st.close().await;
+    // Hints only among rooms still in play; Unsorted and refused rooms are neither source nor target.
+    let live: Vec<(String, String, i64)> = out
+        .iter()
+        .filter(|c| c.id != UNSORTED && c.state != "refused" && c.state != "committed")
+        .map(|c| (c.id.clone(), c.name.clone(), c.item_count))
+        .collect();
+    let hints = suggest_merges(&live);
+    for c in &mut out {
+        c.suggest_merge = hints.get(&c.id).and_then(|h| {
+            let t = live.iter().find(|l| l.0 == h.into)?;
+            Some(MergeSuggestion {
+                into: h.into.clone(),
+                name: t.1.clone(),
+                reason: h.reason.to_owned(),
+            })
+        });
+    }
     Ok(Json(out))
 }
 
@@ -708,4 +737,107 @@ async fn one_tx(tx: &mut sqlx::SqliteConnection, id: &str) -> Result<String, Api
             .fetch_one(tx)
             .await?,
     )
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct Regrouped {
+    /// Proposals after the re-sort.
+    pub proposals: u64,
+    /// Proposals that kept the user's decisions (name, kind, config, state).
+    pub kept: u64,
+    /// Earlier proposals whose key is gone (merged away, split off or no longer produced).
+    pub dropped: u64,
+}
+
+#[utoipa::path(post, path = "/imports/{run}/regroup", operation_id = "brainRegroup", tag = "brain",
+    params(("run" = String, Path, description = "Run id")),
+    responses((status = 200, description = "The run was grouped again; decisions on rooms that survive are kept", body = Regrouped)))]
+pub(crate) async fn regroup(
+    State(app): State<App>,
+    Extension(b): Extension<Brain>,
+    Path(run): Path<String>,
+) -> ApiResult<Regrouped> {
+    let st = review_run(&app, &b, &run).await?;
+    let rows = sqlx::query("SELECT * FROM items ORDER BY started_at, item_id")
+        .fetch_all(&st)
+        .await?;
+    let items: Vec<Item> = rows.iter().map(item_of).collect::<Result<_, _>>()?;
+    let fresh = group(&items);
+    let old = sqlx::query("SELECT * FROM proposals")
+        .fetch_all(&st)
+        .await?;
+    if old.iter().any(|r| {
+        r.try_get::<String, _>("state")
+            .is_ok_and(|s| s == "committed")
+    }) {
+        return Err(ApiError::conflict("a room of this run is already imported"));
+    }
+    let (mut kept, mut tx) = (0u64, st.begin().await?);
+    sqlx::query("UPDATE items SET proposal = NULL")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM proposals")
+        .execute(&mut *tx)
+        .await?;
+    for p in &fresh {
+        let id = proposal_id(&p.key);
+        let prev = old
+            .iter()
+            .find(|r| r.try_get::<String, _>("id").is_ok_and(|x| x == id));
+        // Only the user's own decisions survive; a room merged away is a new question.
+        let prev = prev.filter(|r| {
+            r.try_get::<String, _>("state")
+                .is_ok_and(|s| matches!(s.as_str(), "proposed" | "accepted" | "refused" | "held"))
+        });
+        kept += u64::from(prev.is_some());
+        let (name, kind, config, state): (String, String, String, String) = match prev {
+            Some(r) => (
+                r.try_get("name")?,
+                r.try_get("kind")?,
+                r.try_get("config")?,
+                r.try_get("state")?,
+            ),
+            None => (
+                p.name.clone(),
+                p.kind_guess.as_str().to_owned(),
+                "{}".to_owned(),
+                "proposed".to_owned(),
+            ),
+        };
+        sqlx::query("INSERT INTO proposals (id, name, kind_guess, kind, signals, warnings, config, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+            .bind(&id)
+            .bind(name)
+            .bind(p.kind_guess.as_str())
+            .bind(kind)
+            .bind(json!(p.signals).to_string())
+            .bind(json!(p.warnings).to_string())
+            .bind(config)
+            .bind(state)
+            .execute(&mut *tx)
+            .await?;
+        for item_id in &p.item_ids {
+            sqlx::query("UPDATE items SET proposal = ? WHERE item_id = ?")
+                .bind(&id)
+                .bind(item_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    tx.commit().await?;
+    st.close().await;
+    let out = Regrouped {
+        proposals: fresh.len() as u64,
+        kept,
+        dropped: (old.len() as u64).saturating_sub(kept),
+    };
+    let mut tx = begin_write(&app.pool).await?;
+    record(
+        &mut tx,
+        "brain.import.regrouped",
+        json!({"run": run, "proposals": out.proposals, "kept": out.kept, "dropped": out.dropped}),
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(out))
 }

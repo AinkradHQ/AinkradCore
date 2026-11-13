@@ -90,6 +90,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports/{run}/proposals/{p}/split"),
     ("POST", "/imports/{run}/proposals/{p}/refuse"),
     ("PATCH", "/imports/{run}/items"),
+    ("POST", "/imports/{run}/regroup"),
     ("POST", "/rules"),
     ("POST", "/sync"),
     ("POST", "/rooms/{room}/distil"),
@@ -323,6 +324,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         review::merge,
         review::split,
         review::refuse,
+        review::regroup,
         review::patch_items,
         commit::commit,
         rules_api::list,
@@ -354,6 +356,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         imports::RunView,
         imports::Counts,
         review::ProposalCard,
+        review::MergeSuggestion,
+        review::Regrouped,
         review::ProposalPatch,
         review::ItemRow,
         review::ItemPage,
@@ -419,6 +423,7 @@ impl Module for Brain {
             .route("/imports/{run}/proposals/{p}/merge", post(review::merge))
             .route("/imports/{run}/proposals/{p}/split", post(review::split))
             .route("/imports/{run}/proposals/{p}/refuse", post(review::refuse))
+            .route("/imports/{run}/regroup", post(review::regroup))
             .route("/imports/{run}/commit", post(commit::commit))
             .route("/rules", get(rules_api::list).post(rules_api::create))
             .route("/rules/{id}", patch(rules_api::patch))
@@ -457,6 +462,7 @@ impl Module for Brain {
         &[
             "brain.import.started",
             "brain.import.discovered",
+            "brain.import.regrouped",
             "brain.import.committed",
             "brain.room.created",
             "brain.room.opened",
