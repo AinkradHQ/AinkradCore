@@ -20,9 +20,11 @@ impl Brain {
     pub(crate) fn queue_backfill(&self, app: &App, room: &str) {
         let (b, app, room) = (self.clone(), app.clone(), room.to_owned());
         let sem: &Service = &self.inner.sem;
-        sem.enqueue(async move { if let Err(e) = backfill(&app, &b, &room).await {
+        sem.enqueue(async move {
+            if let Err(e) = backfill(&app, &b, &room).await {
                 tracing::warn!(error = ?e, "a room's centroid could not be backfilled");
-            } });
+            }
+        });
     }
 }
 

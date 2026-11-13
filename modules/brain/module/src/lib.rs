@@ -609,7 +609,7 @@ impl Module for Brain {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["q", "room"]
+        &["q", "room", "mode"]
     }
 
     fn jobs(&self) -> Vec<Job> {

@@ -89,6 +89,8 @@ async fn meaning_ranks_a_paraphrase_that_keywords_miss_and_never_reads_hidden_ro
     let (fx, _alpha, s) = setup(Brain::with_embedder(fake.clone())).await;
     // A room the session cannot see, with text that would match best.
     let beta = committed_room_named(&fx, "Beta", &[("Secret", "hidden ang=20 ")]).await;
+    // Committing Beta embedded it (centroids); what matters is what searching reads from now on.
+    fake.seen.lock().unwrap().clear();
     // Keywords alone miss the paraphrase; the first meaning search queues the vectors.
     assert!(
         search(&fx, &s, "keyword").await["hits"]
