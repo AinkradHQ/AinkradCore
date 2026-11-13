@@ -135,6 +135,11 @@ async fn run(app: &App, id: &str) {
         };
         let want = match app.connections.tools(&env, id).await {
             Ok(mut t) => {
+                // E5: the switch hides the old per-connection tools (default off).
+                let hide = crate::ops_catalog::conn::hidden(&app.pool).await;
+                if hide {
+                    t.clear();
+                }
                 // Code Mode (E1): every session can search the operation catalogue.
                 t.push(crate::ops_catalog::search_tool());
                 t.push(crate::ops_catalog::call_tool());
