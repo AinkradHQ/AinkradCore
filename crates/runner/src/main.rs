@@ -226,6 +226,31 @@ async fn main() -> ExitCode {
             println!("ainkrad-runner {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
+        // E3.1 spike: run stdin as a script, no ambient authority. Feature-gated, not a shipped surface.
+        #[cfg(feature = "quickjs")]
+        ["__quickjs-eval"] => {
+            use std::io::Read;
+            let mut code = String::new();
+            std::io::stdin().read_to_string(&mut code).ok();
+            let lim = ainkrad_runner::quickjs_spike::Limits {
+                memory: 64 << 20,
+                stack: 512 << 10,
+                time: Duration::from_secs(5),
+            };
+            let r = ainkrad_runner::quickjs_spike::run(&code, &lim, |n, a| {
+                format!("{{\"op\":{n:?},\"args\":{a}}}")
+            });
+            return match r {
+                Ok(v) => {
+                    println!("{v}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         ["pair", rest @ ..] => return ainkrad_runner::v2::cli::pair_main(rest).await,
         ["connect", rest @ ..] => {
             log_to_file();
