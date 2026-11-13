@@ -28,6 +28,7 @@ const PATHS: &[(&str, How)] = &[
     ("api/v1/stepup.rs", How::Request),
     ("api/v1/system.rs", How::Request),
     ("api/v1/terminals.rs", How::Request),
+    ("api/v1/terminals/local.rs", How::Request),
     ("api/v1/trace.rs", How::Request),
     ("auth/identity.rs", How::Background),
     ("cli/admin/bootstrap.rs", How::Background),
