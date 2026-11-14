@@ -7812,12 +7812,22 @@
             },
             "type": "array"
           },
+          "item_titles": {
+            "description": "The titles of `item_ids`, in the same order (in the list of changes only).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "kind": {
             "description": "`duplicate` (`item_ids` merged into the kept item `to`), `merge` (room `from` merged into room\n`to`), `fold` (tiny room `from` folded into room `to`, or into `unsorted`) or `move` (Unsorted\nitem moved into room `to`).",
             "type": "string"
           },
           "score": {
-            "description": "The similarity that made the change, 0 to 1 (0 for a junk room folded into Unsorted).",
+            "description": "The similarity that made the change, 0 to 1 (0 for a junk room folded into Unsorted, 1 for\ntwo rooms merged because their names are one name).",
             "format": "float",
             "type": "number"
           },
@@ -7826,6 +7836,13 @@
             "type": "string"
           },
           "to_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to_title": {
+            "description": "For `duplicate`: the kept item's title (its room is `to_name`).",
             "type": [
               "string",
               "null"

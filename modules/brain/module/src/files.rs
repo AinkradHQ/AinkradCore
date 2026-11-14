@@ -164,6 +164,11 @@ pub static STAGING: &[FileMigration] = &[
         name: "staging_0002",
         up: include_str!("../migrations/staging_0002.sql"),
     },
+    FileMigration {
+        version: 3,
+        name: "staging_0003",
+        up: include_str!("../migrations/staging_0003.sql"),
+    },
 ];
 
 pub static CANON: &[FileMigration] = &[

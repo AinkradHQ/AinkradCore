@@ -83,6 +83,17 @@ async fn audits(fx: &Fx) -> i64 {
         .unwrap()
 }
 
+/// Undoes the AI tidy, so the suggestions are seen as the step made them; the restored view.
+async fn undo(fx: &Fx, run: &str) -> Value {
+    ok(
+        fx,
+        Method::POST,
+        &format!("/imports/{run}/semantic/undo"),
+        None,
+    )
+    .await
+}
+
 async fn regroup(fx: &Fx, run: &str) {
     ok(fx, Method::POST, &format!("/imports/{run}/regroup"), None).await;
 }
@@ -131,6 +142,10 @@ async fn pending_then_ready_with_suggestions_that_apply_through_the_existing_rou
     fake.hold.store(false, Ordering::SeqCst);
     let v = ready(&fx, &run).await;
     assert_eq!(v["state"], "ready");
+    // The AI tidy applied the strong ones by itself; undone, the suggestions are offered again.
+    assert_eq!(v["ai_tidy"]["state"], "applied");
+    let v = undo(&fx, &run).await;
+    assert_eq!(v["state"], "ready");
     let p = proposals(&fx, &run).await;
     assert!(p.iter().all(|c| c["semantic"] == "ready"));
 
@@ -162,7 +177,7 @@ async fn pending_then_ready_with_suggestions_that_apply_through_the_existing_rou
     assert!(m["score"].as_f64().unwrap() > 0.93 && !m["reason"].as_str().unwrap().is_empty());
     assert_eq!(audits(&fx).await, 1);
 
-    // Accepting the room = split Unsorted; nothing applied by itself, and the hint is spent after.
+    // Accepting the room = split Unsorted; the hint is spent after.
     let new = ok(
         &fx,
         Method::POST,
@@ -240,7 +255,12 @@ async fn the_strength_setting_moves_the_cut_offs() {
     // 16 degrees apart: cos 0.961, a duplicate pair at normal and high but not at low (0.97).
     send(&fx, &run, vec![at(1, "", 0), at(2, "", 16), at(3, "", 120)]).await;
     finish(&fx, &run).await;
-    let dups = |v: &Value| v["duplicates"].as_array().unwrap().len();
+    // The near-copies the AI tidy merged by itself.
+    let dups = |v: &Value| {
+        v["ai_tidy"]["summary"]["duplicates_merged"]
+            .as_u64()
+            .unwrap_or(0)
+    };
     assert_eq!(dups(&ready(&fx, &run).await), 1, "normal is the default");
 
     let set = |v: &'static str| {
@@ -489,7 +509,8 @@ async fn closest_room_a_clear_winner_is_suggested_a_tie_is_not_and_nothing_is_fi
     let fx = fx_with(Brain::with_embedder(Arc::new(Fake::default())), 1).await;
     // 62: on top of Alpha (Beta 19 degrees off). 72: 10 and 9 degrees from the two, a tie. 150: far from both.
     let run = closest_run(&fx, &[(20, 62), (21, 72), (22, 150)]).await;
-    let v = ready(&fx, &run).await;
+    ready(&fx, &run).await;
+    let v = undo(&fx, &run).await;
     let c = closest_of(&v, 20).expect("a clear winner");
     assert_eq!(c["room_name"], "Alpha");
     assert_eq!(c["in_review"], true);
@@ -498,7 +519,7 @@ async fn closest_room_a_clear_winner_is_suggested_a_tie_is_not_and_nothing_is_fi
     assert!(closest_of(&v, 21).is_none(), "margin too small");
     assert!(closest_of(&v, 22).is_none(), "score too low");
     assert_eq!(v["closest"].as_array().unwrap().len(), 1);
-    // Suggestion only: the item is still in Unsorted, and one audit row per run carries the count.
+    // Undone, the item is in Unsorted again; one audit row per run carries the count.
     let p = proposals(&fx, &run).await;
     assert_eq!(by_name(&p, "Alpha")["item_count"], 3);
     assert_eq!(audits(&fx).await, 1);
@@ -529,7 +550,8 @@ async fn closest_room_a_clear_winner_is_suggested_a_tie_is_not_and_nothing_is_fi
 async fn closest_room_skips_refused_items_and_refused_rooms() {
     let fx = fx_with(Brain::with_embedder(Arc::new(Fake::default())), 1).await;
     let run = closest_run(&fx, &[(20, 62), (22, 82)]).await;
-    let v = ready(&fx, &run).await;
+    ready(&fx, &run).await;
+    let v = undo(&fx, &run).await;
     assert!(closest_of(&v, 20).is_some() && closest_of(&v, 22).is_some());
     // A refused room is never a target, at once.
     let beta = by_name(&proposals(&fx, &run).await, "Beta")["id"]
@@ -554,7 +576,8 @@ async fn closest_room_skips_refused_items_and_refused_rooms() {
     )
     .await;
     regroup(&fx, &run).await;
-    let v = ready(&fx, &run).await;
+    ready(&fx, &run).await;
+    let v = undo(&fx, &run).await;
     assert!(closest_of(&v, 20).is_none());
     assert_eq!(
         closest_of(&v, 22).unwrap()["room_name"],

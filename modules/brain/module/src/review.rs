@@ -329,6 +329,7 @@ pub(crate) async fn proposals(
         out.push(card(&st, r).await?);
     }
     let sem = crate::suggest::status(&app, &st, &b, &run).await?;
+    let tidied = crate::tidy::applied(&st).await?;
     st.close().await;
     for c in &mut out {
         c.semantic = Some(sem.clone());
@@ -339,7 +340,12 @@ pub(crate) async fn proposals(
         .filter(|c| c.id != UNSORTED && c.state != "refused" && c.state != "committed")
         .map(|c| (c.id.clone(), c.name.clone(), c.item_count))
         .collect();
-    let hints = suggest_merges(&live);
+    // After the AI tidy, strong name hints are applied and weak ones are not a question.
+    let hints = if tidied {
+        Default::default()
+    } else {
+        suggest_merges(&live)
+    };
     for c in &mut out {
         c.suggest_merge = hints.get(&c.id).and_then(|h| {
             let t = live.iter().find(|l| l.0 == h.into)?;
@@ -795,6 +801,8 @@ pub(crate) async fn regroup(
         return Err(ApiError::conflict("a room of this run is already imported"));
     }
     let (mut kept, mut tx) = (0u64, st.begin().await?);
+    // The last AI tidy's near-copies are items again; the new step tidies afresh.
+    crate::tidy::forget(&mut tx).await?;
     sqlx::query("UPDATE items SET proposal = NULL")
         .execute(&mut *tx)
         .await?;

@@ -47,7 +47,10 @@ async fn an_ai_proposal_through_the_dispatcher_waits_in_the_inbox_and_a_retry_ad
     let items = inbox["items"].as_array().unwrap();
     assert_eq!(items.len(), 1, "{inbox}");
     assert_eq!(
-        (items[0]["status"].as_str(), items[0]["proposed_by"].as_str()),
+        (
+            items[0]["status"].as_str(),
+            items[0]["proposed_by"].as_str()
+        ),
         (Some("candidate"), Some(s.as_str()))
     );
     // Never in the Brain: no accepted record exists for a read to find.
@@ -73,7 +76,15 @@ async fn an_ai_proposal_through_the_dispatcher_waits_in_the_inbox_and_a_retry_ad
     .unwrap();
     assert_eq!(rows.len(), 3, "{rows:?}");
     for (origin, oref, details) in &rows {
-        assert_eq!((origin.as_str(), oref.as_deref()), ("ai_session", Some(s.as_str())));
-        assert!(details.contains("\"project\":\"Alpha\"") && details.contains("\"risk\":\"write\"") && !details.contains("SQLite"), "{details}");
+        assert_eq!(
+            (origin.as_str(), oref.as_deref()),
+            ("ai_session", Some(s.as_str()))
+        );
+        assert!(
+            details.contains("\"project\":\"Alpha\"")
+                && details.contains("\"risk\":\"write\"")
+                && !details.contains("SQLite"),
+            "{details}"
+        );
     }
 }
