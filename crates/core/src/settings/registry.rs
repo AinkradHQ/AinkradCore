@@ -140,7 +140,7 @@ registry! {
     CodeModeMaxResultBytes "code_mode.max_result_bytes" Bytes 200_000, 1_024, 250_000, SO,
         "Code Mode: the most bytes of one operation's result returned to the session; a larger \
          one is cut and marked `truncated` with its full size. Read at each call.";
-    CodeModeApprovalSecs "code_mode.approval_secs" Seconds 100, 1, 600, SO,
+    CodeModeApprovalSecs "code_mode.approval_secs" Seconds 300, 1, 600, SO,
         "Code Mode: how long a risky operation waits for a person to approve it before it is \
          refused `approval_timeout`; never past the script's own 10 min deadline (the runner \
          relays `ainkrad.call` for up to 12 min). Read at each call.";
