@@ -20,7 +20,7 @@ fn ws(repo: &str) -> Value {
 }
 
 /// A session working in `repo`, walking one pool per provider.
-pub(super) async fn session(fx: &Fx, repo: &str, providers: &[&str]) -> String {
+pub async fn session(fx: &Fx, repo: &str, providers: &[&str]) -> String {
     chain_session_in(fx, providers, Some(&ws(repo))).await
 }
 
@@ -40,7 +40,7 @@ pub(super) async fn op(fx: &Fx, s: &str, op: &str, args: Value) -> (bool, Value,
     )
 }
 
-async fn read(fx: &Fx, s: &str, o: &str, args: Value) -> Value {
+pub async fn read(fx: &Fx, s: &str, o: &str, args: Value) -> Value {
     let (ok, v, code) = op(fx, s, o, args).await;
     assert!(ok, "{o}: {code}");
     v
@@ -84,7 +84,7 @@ async fn as_session(
     )
 }
 
-pub(super) async fn open_room(fx: &Fx, room: &str) {
+pub async fn open_room(fx: &Fx, room: &str) {
     ok(fx, Method::POST, &format!("/rooms/{room}/open"), None).await;
 }
 
@@ -114,7 +114,7 @@ async fn ids(fx: &Fx, s: &str) -> Vec<String> {
         .collect()
 }
 
-pub(super) const ALPHA: &str = "https://github.com/acme/Alpha.git";
+pub const ALPHA: &str = "https://github.com/acme/Alpha.git";
 
 #[tokio::test]
 async fn a_session_sees_only_the_rooms_its_project_matches() {

@@ -24,7 +24,9 @@ use utoipa::{OpenApi, ToSchema};
 
 mod access;
 mod ai;
+mod ai_semantic;
 mod answer;
+mod backfill;
 pub mod cipher;
 mod claim;
 pub mod clean;
@@ -588,6 +590,7 @@ impl Module for Brain {
             "brain.room.opened",
             "brain.room.refused",
             "brain.semantic.run",
+            "brain.room.centroid_backfilled",
             "brain.rule.created",
             "brain.rule.changed",
             "brain.source.changed",
@@ -606,7 +609,7 @@ impl Module for Brain {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["q", "room"]
+        &["q", "room", "mode"]
     }
 
     fn jobs(&self) -> Vec<Job> {

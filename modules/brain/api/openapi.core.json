@@ -913,6 +913,13 @@
             },
             "type": "array"
           },
+          "ranked_by": {
+            "description": "`keyword`, `meaning` or `both`: how these hits were ranked. Always set; optional in the schema\nonly because it joined the contract after 1.0 (a new field may not be required).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "rooms_closed": {
             "description": "Visible rooms that were closed and so not searched.",
             "minimum": 0,
@@ -1155,6 +1162,7 @@
           "brain.inbox.decided",
           "brain.inbox.notice",
           "brain.room.access",
+          "brain.room.centroid_backfilled",
           "brain.room.created",
           "brain.room.opened",
           "brain.room.policy",
@@ -8054,7 +8062,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.67.0"
+    "version": "1.68.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16804,6 +16812,15 @@
               "format": "int32",
               "minimum": 0,
               "type": "integer"
+            }
+          },
+          {
+            "description": "`auto` (default: keywords and meaning when the local model is on), `keyword` or `meaning`\n(meaning only; keywords when the model is off or slow).",
+            "in": "query",
+            "name": "mode",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],

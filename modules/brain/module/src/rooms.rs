@@ -239,6 +239,7 @@ pub(crate) async fn open(
     )
     .await?;
     tx.commit().await?;
+    b.queue_backfill(&app, &room);
     Ok(Json(Opened {
         room,
         open_until: iso_of_unix(until),
