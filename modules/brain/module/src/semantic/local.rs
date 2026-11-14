@@ -117,8 +117,20 @@ fn weights(dir: &Path) -> Result<VarBuilder<'static>, String> {
     if hex(&h.finalize()) != sha {
         return Err(format!("{name}: SHA-256 does not match the pin"));
     }
-    // safetensors: u64 LE header length, a JSON header, then the raw tensors.
     f.seek(SeekFrom::Start(0)).map_err(err)?;
+    let tensors = tensors(&mut f, name)?;
+    Ok(VarBuilder::from_tensors(tensors, DType::F32, &Device::Cpu))
+}
+
+/// safetensors: u64 LE header length, a JSON header, then the raw tensors. Every tensor must be F32,
+/// except `*position_ids`: an I64 buffer the checkpoint carries but `BertModel` never reads (it builds
+/// the position ids itself), so it is skipped rather than refused.
+fn tensors<R: std::io::Read + std::io::Seek>(
+    f: &mut R,
+    name: &str,
+) -> Result<std::collections::HashMap<String, Tensor>, String> {
+    use std::io::SeekFrom;
+    let err = |e: std::io::Error| format!("{name}: {e}");
     let mut len = [0u8; 8];
     f.read_exact(&mut len).map_err(err)?;
     let len = usize::try_from(u64::from_le_bytes(len)).map_err(|e| e.to_string())?;
@@ -132,6 +144,9 @@ fn weights(dir: &Path) -> Result<VarBuilder<'static>, String> {
     let mut tensors = std::collections::HashMap::new();
     for (k, v) in head.iter().filter(|(k, _)| *k != "__metadata__") {
         let bad = || format!("{name}: tensor {k} is not in the expected form");
+        if k.ends_with("position_ids") {
+            continue;
+        }
         if v["dtype"] != "F32" {
             return Err(bad());
         }
@@ -153,7 +168,7 @@ fn weights(dir: &Path) -> Result<VarBuilder<'static>, String> {
             .map_err(|e| e.to_string())?;
         tensors.insert(k.clone(), t);
     }
-    Ok(VarBuilder::from_tensors(tensors, DType::F32, &Device::Cpu))
+    Ok(tensors)
 }
 
 impl Local {
@@ -267,12 +282,53 @@ impl Local {
 mod tests {
     use super::*;
 
+    /// A tiny safetensors file shaped like the real checkpoint: an I64 `position_ids` plus F32 tensors.
+    fn file(extra: &str) -> Vec<u8> {
+        let head = format!(
+            r#"{{"__metadata__":{{"format":"pt"}},"embeddings.position_ids":{{"dtype":"I64","shape":[1,2],"data_offsets":[0,16]}},"w":{{"dtype":"F32","shape":[2],"data_offsets":[16,24]}}{extra}}}"#
+        );
+        let mut b = (head.len() as u64).to_le_bytes().to_vec();
+        b.extend(head.as_bytes());
+        b.extend([0i64, 1].iter().flat_map(|x| x.to_le_bytes()));
+        b.extend([1.5f32, -2.0].iter().flat_map(|x| x.to_le_bytes()));
+        b.extend([0u8; 8]);
+        b
+    }
+
+    /// The real e5-small file stores `embeddings.position_ids` as I64; it must load (skipped), not refuse.
+    #[test]
+    fn skips_the_i64_position_ids_and_keeps_the_rest_strict() {
+        let t = tensors(&mut std::io::Cursor::new(file("")), "m").unwrap();
+        assert_eq!(t.len(), 1);
+        assert!(!t.contains_key("embeddings.position_ids"));
+        assert_eq!(t["w"].to_vec1::<f32>().unwrap(), [1.5, -2.0]);
+        // Any other non-F32 tensor is still refused.
+        let e = tensors(
+            &mut std::io::Cursor::new(file(
+                r#","x":{"dtype":"I64","shape":[1],"data_offsets":[24,32]}"#,
+            )),
+            "m",
+        )
+        .unwrap_err();
+        assert!(e.contains("tensor x is not in the expected form"), "{e}");
+        // Offsets past the end are still caught.
+        let e = tensors(
+            &mut std::io::Cursor::new(file(
+                r#","y":{"dtype":"F32","shape":[2],"data_offsets":[24,40]}"#,
+            )),
+            "m",
+        );
+        assert!(e.is_err());
+    }
+
     /// Needs the three pinned files: `AINKRAD_E5_DIR=<dir> cargo test -p brain-module --features semantic -- --ignored`.
     #[test]
     #[ignore]
     fn real_model_ranks_by_meaning_across_languages() {
         let dir = std::env::var("AINKRAD_E5_DIR").expect("AINKRAD_E5_DIR");
+        let t0 = std::time::Instant::now();
         let m = Local::load(Path::new(&dir)).unwrap();
+        println!("loaded in {:?}", t0.elapsed());
         let t = |s: &str| s.to_owned();
         let v = m
             .embed(&[
@@ -285,6 +341,7 @@ mod tests {
             .into_iter()
             .map(brain_model::semantic::normalized)
             .collect::<Vec<_>>();
+        assert!(v.iter().all(|x| x.len() == 384));
         let s = |a: usize, b: usize| brain_model::semantic::dot(&v[a], &v[b]);
         println!(
             "en-en {:.3} en-ar {:.3} en-ops {:.3} ar-ops {:.3}",
