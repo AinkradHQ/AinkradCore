@@ -35,13 +35,17 @@ impl Logs {
     }
 }
 
-fn logging(logs: &Logs) -> tracing::subscriber::DefaultGuard {
+fn logging(logs: &Logs) -> (tracing::Dispatch, tracing::subscriber::DefaultGuard) {
     let writer = logs.clone();
     let sub = tracing_subscriber::fmt()
         .with_writer(move || writer.clone())
         .with_max_level(tracing::Level::TRACE)
         .finish();
-    tracing::subscriber::set_default(sub)
+    // With one live dispatcher, tracing-core caches each callsite's interest from whichever
+    // thread hits it first; a parallel test with no subscriber would cache `never` and drop our
+    // lines. A second registered dispatcher makes the cache ask every live one instead.
+    let second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    (second, tracing::subscriber::set_default(sub))
 }
 
 #[tokio::test]

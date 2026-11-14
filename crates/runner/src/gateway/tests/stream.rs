@@ -157,6 +157,10 @@ impl<'a> MakeWriter<'a> for Logs {
 #[tokio::test]
 async fn failures_say_a_status_and_a_code_and_the_key_is_in_no_response_log_or_debug() {
     let logs = Logs::default();
+    // With one live dispatcher, tracing-core caches each callsite's interest from whichever
+    // thread hits it first; a parallel test with no subscriber would cache `never` and drop our
+    // lines. A second registered dispatcher makes the cache ask every live one instead.
+    let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     let _guard = tracing::subscriber::set_default(
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::TRACE)

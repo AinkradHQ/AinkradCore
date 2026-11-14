@@ -27,6 +27,10 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
 #[tokio::test]
 async fn the_token_and_the_code_are_in_no_log_error_or_debug() {
     let sink = Sink::default();
+    // With one live dispatcher, tracing-core caches each callsite's interest from whichever
+    // thread hits it first; a parallel test with no subscriber would cache `never` and drop our
+    // lines. A second registered dispatcher makes the cache ask every live one instead.
+    let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     let _g = tracing::subscriber::set_default(
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::TRACE)
