@@ -208,6 +208,11 @@
 ///    `ClosestRunnerUp`): Unsorted items that look like they belong in an existing room, suggestions only; the
 ///    audit row `brain.semantic.run` gains a `closest` count. Incremental runs now start the semantic step too.
 ///
+/// 67: Code Mode writes (E6): `write` and `risky` operations through `ainkrad.call` (a body goes in `args.body`;
+///    `repeat` and `key` make a write idempotent), the route `GET /agent-sessions/{id}/approvals`
+///    (`listAgentApprovals`: the Code Mode writes the Core holds for a person), `decideAgentApproval` also resolving a
+///    request id `cm_…`, and the settings `code_mode.approval_secs` and `code_mode.idempotency_secs`.
+///
 /// 68: Brain semantic search for AI sessions: `brainAiSearch` takes `mode` (`auto`, `keyword`, `meaning`) and answers
 ///    `ranked_by`; opening a room queues the back-fill of its closest-room centroid (audit action
 ///    `brain.room.centroid_backfilled`).

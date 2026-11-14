@@ -209,4 +209,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0034_audit_origin.up.sql"),
         down: include_str!("../../../migrations/0034_audit_origin.down.sql"),
     },
+    Migration {
+        version: 35,
+        name: "code_mode_writes",
+        up: include_str!("../../../migrations/0035_code_mode_writes.up.sql"),
+        down: include_str!("../../../migrations/0035_code_mode_writes.down.sql"),
+    },
 ];

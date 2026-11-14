@@ -412,6 +412,107 @@ extension Components {
                 case deleted
             }
         }
+        /// A Code Mode write the Core holds until a person decides (plan E6).
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentApproval`.
+        public struct AgentApproval: Codable, Hashable, Sendable {
+            /// The arguments the AI session passed, with secrets redacted and long texts cut.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentApproval/args`.
+            public var args: OpenAPIRuntime.OpenAPIValueContainer
+            /// After this the call is refused `approval_timeout`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentApproval/expires_at`.
+            public var expiresAt: Components.Schemas.Timestamp
+            /// `cm_…`: the request id for `decideAgentApproval`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentApproval/id`.
+            public var id: Swift.String
+            /// `{summary, args, reason}` as one object, the shape of a harness approval's `input`, so a card
+            /// shows it without guessing.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentApproval/input`.
+            public var input: OpenAPIRuntime.OpenAPIValueContainer
+            /// Why it needs a person, in a sentence.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentApproval/reason`.
+            public var reason: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AgentApproval/requested_at`.
+            public var requestedAt: Components.Schemas.Timestamp
+            /// `risky`: the only class that waits for a person.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentApproval/risk`.
+            public var risk: Swift.String
+            /// The operation in plain words.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentApproval/summary`.
+            public var summary: Swift.String
+            /// `ainkrad.<operation>`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentApproval/tool`.
+            public var tool: Swift.String
+            /// Creates a new `AgentApproval`.
+            ///
+            /// - Parameters:
+            ///   - args: The arguments the AI session passed, with secrets redacted and long texts cut.
+            ///   - expiresAt: After this the call is refused `approval_timeout`.
+            ///   - id: `cm_…`: the request id for `decideAgentApproval`.
+            ///   - input: `{summary, args, reason}` as one object, the shape of a harness approval's `input`, so a card
+            ///   - reason: Why it needs a person, in a sentence.
+            ///   - requestedAt:
+            ///   - risk: `risky`: the only class that waits for a person.
+            ///   - summary: The operation in plain words.
+            ///   - tool: `ainkrad.<operation>`.
+            public init(
+                args: OpenAPIRuntime.OpenAPIValueContainer,
+                expiresAt: Components.Schemas.Timestamp,
+                id: Swift.String,
+                input: OpenAPIRuntime.OpenAPIValueContainer,
+                reason: Swift.String,
+                requestedAt: Components.Schemas.Timestamp,
+                risk: Swift.String,
+                summary: Swift.String,
+                tool: Swift.String
+            ) {
+                self.args = args
+                self.expiresAt = expiresAt
+                self.id = id
+                self.input = input
+                self.reason = reason
+                self.requestedAt = requestedAt
+                self.risk = risk
+                self.summary = summary
+                self.tool = tool
+            }
+            public enum CodingKeys: String, CodingKey {
+                case args
+                case expiresAt = "expires_at"
+                case id
+                case input
+                case reason
+                case requestedAt = "requested_at"
+                case risk
+                case summary
+                case tool
+            }
+        }
+        /// The approvals one session waits on, newest last.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentApprovals`.
+        public struct AgentApprovals: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentApprovals/approvals`.
+            public var approvals: [Components.Schemas.AgentApproval]
+            /// Creates a new `AgentApprovals`.
+            ///
+            /// - Parameters:
+            ///   - approvals:
+            public init(approvals: [Components.Schemas.AgentApproval]) {
+                self.approvals = approvals
+            }
+            public enum CodingKeys: String, CodingKey {
+                case approvals
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/AgentDecision`.
         public struct AgentDecision: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/AgentDecision/approved`.

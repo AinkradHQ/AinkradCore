@@ -25,7 +25,7 @@ pub async fn session(fx: &Fx, repo: &str, providers: &[&str]) -> String {
 }
 
 /// A Code Mode dispatcher call (the E2 path: catalogue, scope gate, audit).
-async fn op(fx: &Fx, s: &str, op: &str, args: Value) -> (bool, Value, String) {
+pub(super) async fn op(fx: &Fx, s: &str, op: &str, args: Value) -> (bool, Value, String) {
     let call = ToolCall {
         tc_seq: 1,
         id: "c1".to_owned(),
@@ -46,8 +46,8 @@ pub async fn read(fx: &Fx, s: &str, o: &str, args: Value) -> Value {
     v
 }
 
-/// The Brain route as the session's synthetic caller, writes included (the dispatcher refuses
-/// writes until E6; this is the handler itself).
+/// The Brain route as the session's synthetic caller, writes included (the handler itself, without
+/// the dispatcher's idempotency and audit row).
 async fn as_session(
     fx: &Fx,
     s: &str,
@@ -580,10 +580,6 @@ async fn a_proposal_waits_in_the_inbox_and_is_never_accepted() {
             "{st}"
         );
     }
-    // Writes stay behind the dispatcher until E6.
-    let (ok_, _, code) = op(&fx, &s, "brainAiPropose", json!({"room": room})).await;
-    assert!(!ok_ && code == "not_available");
-
     // A person's decision still works on it, and the session cap holds.
     for n in 0..19 {
         let (st, _) = as_session(

@@ -292,6 +292,22 @@ export interface paths {
         patch: operations["titleAgentSession"];
         trace?: never;
     };
+    "/api/v1/agent-sessions/{id}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAgentApprovals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent-sessions/{id}/approvals/{request}": {
         parameters: {
             query?: never;
@@ -1998,6 +2014,33 @@ export interface components {
         };
         AccountsDeleted: {
             deleted: boolean;
+        };
+        /** @description A Code Mode write the Core holds until a person decides (plan E6). */
+        AgentApproval: {
+            /** @description The arguments the AI session passed, with secrets redacted and long texts cut. */
+            args: unknown;
+            /** @description After this the call is refused `approval_timeout`. */
+            expires_at: components["schemas"]["Timestamp"];
+            /** @description `cm_…`: the request id for `decideAgentApproval`. */
+            id: string;
+            /**
+             * @description `{summary, args, reason}` as one object, the shape of a harness approval's `input`, so a card
+             *     shows it without guessing.
+             */
+            input: unknown;
+            /** @description Why it needs a person, in a sentence. */
+            reason: string;
+            requested_at: components["schemas"]["Timestamp"];
+            /** @description `risky`: the only class that waits for a person. */
+            risk: string;
+            /** @description The operation in plain words. */
+            summary: string;
+            /** @description `ainkrad.<operation>`. */
+            tool: string;
+        };
+        /** @description The approvals one session waits on, newest last. */
+        AgentApprovals: {
+            approvals: components["schemas"]["AgentApproval"][];
         };
         AgentDecision: {
             approved: boolean;
@@ -5061,6 +5104,36 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    listAgentApprovals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Code Mode writes of this session the Core holds for a person's approval now (request ids `cm_…`, decided with `decideAgentApproval`). A harness's own tool approvals are `approval_request` entries of the transcript instead. Newest last */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentApprovals"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     decideAgentApproval: {
         parameters: {
             query?: never;
@@ -5079,7 +5152,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The waiting tool call is allowed or denied, from any device with `approve` (audited as `agent.decided`). 502 `runner_failed` when no such request waits */
+            /** @description The waiting tool call is allowed or denied, from any device with `approve` (audited as `agent.decided`). 502 `runner_failed` when no such request waits. A request id starting `cm_` is a Code Mode write the Core holds for approval (see `listAgentApprovals`): 404 `not_found` when unknown, 409 `approval_closed` when it was decided, timed out or ended */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -188,6 +188,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/agent-sessions/{id}", "agent"),
     ("GET", "/api/v1/agent-sessions/{id}/transcript", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/messages", "agent"),
+    ("GET", "/api/v1/agent-sessions/{id}/approvals", "agent"),
     (
         "POST",
         "/api/v1/agent-sessions/{id}/approvals/{request}",

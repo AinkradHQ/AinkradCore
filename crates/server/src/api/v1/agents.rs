@@ -530,6 +530,40 @@ fn request_ok(r: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':'))
 }
 
+#[utoipa::path(get, path = "/api/v1/agent-sessions/{id}/approvals",
+    operation_id = "listAgentApprovals", tag = "agents",
+    params(("id" = String, Path, description = "The session's id, `as_…`")),
+    responses((status = 200, description = "The Code Mode writes of this session the Core holds \
+        for a person's approval now (request ids `cm_…`, decided with `decideAgentApproval`). A \
+        harness's own tool approvals are `approval_request` entries of the transcript instead. \
+        Newest last", body = AgentApprovals)))]
+pub async fn approvals(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<AgentApprovals> {
+    let s = one(&app, &me, &id).await?;
+    owns_secrets(&s, &me)?;
+    let held = crate::ops_catalog::pending(&app, &s.id).await?;
+    let at = |secs: i64| ts(&crate::scheduler::iso_of_unix(secs));
+    Ok(Json(AgentApprovals {
+        approvals: held
+            .into_iter()
+            .map(|p| AgentApproval {
+                input: json!({"summary": p.summary, "args": p.args, "reason": p.reason}),
+                id: p.id,
+                tool: p.tool,
+                summary: p.summary,
+                args: p.args,
+                risk: "risky".to_owned(),
+                reason: p.reason,
+                requested_at: at(p.created_at),
+                expires_at: at(p.expires_at),
+            })
+            .collect(),
+    }))
+}
+
 #[utoipa::path(post, path = "/api/v1/agent-sessions/{id}/approvals/{request}",
     operation_id = "decideAgentApproval", tag = "agents",
     params(("id" = String, Path, description = "The session's id, `as_…`"),
@@ -537,7 +571,9 @@ fn request_ok(r: &str) -> bool {
     request_body = AgentDecision,
     responses((status = 200, description = "The waiting tool call is allowed or denied, from any \
         device with `approve` (audited as `agent.decided`). 502 `runner_failed` when no such \
-        request waits", body = AgentSession)))]
+        request waits. A request id starting `cm_` is a Code Mode write the Core holds for \
+        approval (see `listAgentApprovals`): 404 `not_found` when unknown, 409 `approval_closed` \
+        when it was decided, timed out or ended", body = AgentSession)))]
 pub async fn decide(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -549,6 +585,41 @@ pub async fn decide(
         return Err(ApiError::not_found("no such tool request"));
     }
     let b: AgentDecision = parse(&body)?;
+    if request.starts_with(crate::ops_catalog::APPROVAL_PREFIX) {
+        // A Code Mode call the Core itself holds (not a harness's tool call): resolved here, the
+        // runner has nothing to answer. The gate already asked for `approve` and a live step-up.
+        not_a_modules(&s)?;
+        owns_secrets(&s, &me)?;
+        let found =
+            crate::ops_catalog::decide_approval(&app, &s.id, &request, b.approved, &me.device.id)
+                .await?;
+        match found {
+            crate::ops_catalog::Decided::Done => {}
+            crate::ops_catalog::Decided::Unknown => {
+                return Err(ApiError::not_found("no such tool request"));
+            }
+            crate::ops_catalog::Decided::Closed => {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "approval_closed",
+                    "that approval was decided, expired or ended already",
+                ));
+            }
+        }
+        let details = json!({"request": request, "approved": b.approved});
+        let kind = Some("agent.approval_decided");
+        store::action(
+            &app.pool,
+            &s,
+            BY,
+            "agent.decided",
+            kind,
+            details,
+            &me.device.id,
+        )
+        .await?;
+        return shown(&app, &me, &id).await;
+    }
     let cmd = Command::AgentDecide(AgentDecide {
         session: s.id.clone(),
         request: request.clone(),
