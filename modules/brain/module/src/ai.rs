@@ -180,8 +180,9 @@ pub struct AiHits {
     pub rooms_searched: usize,
     /// Visible rooms that were closed and so not searched.
     pub rooms_closed: usize,
-    /// `keyword`, `meaning` or `both`: how these hits were ranked.
-    pub ranked_by: String,
+    /// `keyword`, `meaning` or `both`: how these hits were ranked. Always set; optional in the schema
+    /// only because it joined the contract after 1.0 (a new field may not be required).
+    pub ranked_by: Option<String>,
 }
 
 pub(crate) fn cut(s: &str, n: usize) -> (String, bool) {
@@ -263,7 +264,7 @@ pub(crate) async fn search(
             hits: m.clone(),
             rooms_searched: open.len(),
             rooms_closed: closed,
-            ranked_by: "meaning".to_owned(),
+            ranked_by: Some("meaning".to_owned()),
         }));
     }
     recs.sort_by(|x, y| y.0.cmp(&x.0));
@@ -289,7 +290,7 @@ pub(crate) async fn search(
         hits,
         rooms_searched: open.len(),
         rooms_closed: closed,
-        ranked_by: ranked_by.to_owned(),
+        ranked_by: Some(ranked_by.to_owned()),
     }))
 }
 

@@ -914,8 +914,11 @@
             "type": "array"
           },
           "ranked_by": {
-            "description": "`keyword`, `meaning` or `both`: how these hits were ranked.",
-            "type": "string"
+            "description": "`keyword`, `meaning` or `both`: how these hits were ranked. Always set; optional in the schema\nonly because it joined the contract after 1.0 (a new field may not be required).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "rooms_closed": {
             "description": "Visible rooms that were closed and so not searched.",
@@ -930,8 +933,7 @@
         "required": [
           "hits",
           "rooms_searched",
-          "rooms_closed",
-          "ranked_by"
+          "rooms_closed"
         ],
         "type": "object"
       },
