@@ -154,8 +154,9 @@ impl Cluster {
 
 /// Average-linkage-by-centroid agglomeration of the Unsorted entries (`room == None`), stopping
 /// when the best pair of centroids is under `threshold`; clusters under `min_size` are dropped.
-/// ponytail: O(n^2) memory and about O(n^2) time on one thread; fine for a few thousand Unsorted
-/// items. Past that, cap the input or move to an approximate-neighbour index.
+/// Each cluster keeps its unit centroid and its most similar neighbour, so a merge rescans only the
+/// rows it touched: about O(n^2) dot products in all, where re-scoring every pair after every merge
+/// was O(n^3) (an import with ~1,000 Unsorted transcripts ran for over ten minutes).
 pub fn suggest_rooms(entries: &[Entry], threshold: f32, min_size: usize) -> Vec<SuggestedRoom> {
     let pool: Vec<usize> = (0..entries.len())
         .filter(|&i| entries[i].room.is_none())
@@ -169,16 +170,29 @@ pub fn suggest_rooms(entries: &[Entry], threshold: f32, min_size: usize) -> Vec<
             })
         })
         .collect();
-    let sim = |a: &Cluster, b: &Cluster| dot(&a.centroid(), &b.centroid());
+    let mut cen: Vec<Vec<f32>> = cl.iter().flatten().map(Cluster::centroid).collect();
+    // The live cluster most like `i` (ties to the lower index) and its score.
+    let nearest = |i: usize, cl: &[Option<Cluster>], cen: &[Vec<f32>]| {
+        let mut best: Option<(usize, f32)> = None;
+        for j in (0..cl.len()).filter(|&j| j != i && cl[j].is_some()) {
+            let s = dot(&cen[i], &cen[j]);
+            if best.is_none_or(|(_, t)| s > t) {
+                best = Some((j, s));
+            }
+        }
+        best
+    };
+    let mut near: Vec<Option<(usize, f32)>> =
+        (0..cl.len()).map(|i| nearest(i, &cl, &cen)).collect();
     loop {
         let mut best: Option<(usize, usize, f32)> = None;
-        for (i, a) in cl.iter().enumerate() {
-            let Some(a) = a else { continue };
-            for (j, b) in cl.iter().enumerate().skip(i + 1) {
-                let Some(b) = b else { continue };
-                let s = sim(a, b);
-                if s >= threshold && best.is_none_or(|(_, _, t)| s > t) {
-                    best = Some((i, j, s));
+        for (i, n) in near.iter().enumerate() {
+            if let (true, Some((j, s))) = (cl[i].is_some(), *n) {
+                let (a, b) = (i.min(j), i.max(j));
+                if s >= threshold
+                    && best.is_none_or(|(x, y, t)| s > t || (s == t && (a, b) < (x, y)))
+                {
+                    best = Some((a, b, s));
                 }
             }
         }
@@ -187,6 +201,18 @@ pub fn suggest_rooms(entries: &[Entry], threshold: f32, min_size: usize) -> Vec<
         let a = cl[i].as_mut().expect("live");
         a.members.extend(b.members);
         a.sum.iter_mut().zip(&b.sum).for_each(|(x, y)| *x += y);
+        cen[i] = a.centroid();
+        near[j] = None;
+        near[i] = nearest(i, &cl, &cen);
+        for k in (0..cl.len()).filter(|&k| k != i && cl[k].is_some()) {
+            let s = dot(&cen[k], &cen[i]);
+            near[k] = match near[k] {
+                // Its neighbour changed or is gone and the new cluster is no closer: look again.
+                Some((m, t)) if (m == i || m == j) && s < t => nearest(k, &cl, &cen),
+                Some((m, t)) if m != i && m != j && s <= t => Some((m, t)),
+                _ => Some((i, s)),
+            };
+        }
     }
     let docs: Vec<Vec<String>> = entries
         .iter()
@@ -519,6 +545,104 @@ mod tests {
         );
         // min size drops a pair
         assert!(suggest_rooms(&es, CLUSTER_THRESHOLD, 4).is_empty());
+    }
+
+    /// The old agglomeration, re-scoring every pair after every merge: the reference.
+    fn naive_rooms(vs: &[Vec<f32>], threshold: f32) -> Vec<Vec<usize>> {
+        let mut cl: Vec<Option<(Vec<usize>, Vec<f32>)>> = vs
+            .iter()
+            .enumerate()
+            .map(|(i, v)| Some((vec![i], v.clone())))
+            .collect();
+        loop {
+            let mut best: Option<(usize, usize, f32)> = None;
+            for i in 0..cl.len() {
+                for j in i + 1..cl.len() {
+                    if let (Some(a), Some(b)) = (&cl[i], &cl[j]) {
+                        let s = dot(&normalized(a.1.clone()), &normalized(b.1.clone()));
+                        if s >= threshold && best.is_none_or(|(_, _, t)| s > t) {
+                            best = Some((i, j, s));
+                        }
+                    }
+                }
+            }
+            let Some((i, j, _)) = best else { break };
+            let b = cl[j].take().unwrap();
+            let a = cl[i].as_mut().unwrap();
+            a.0.extend(b.0);
+            a.1.iter_mut().zip(&b.1).for_each(|(x, y)| *x += y);
+        }
+        let mut out: Vec<Vec<usize>> = cl.into_iter().flatten().map(|c| c.0).collect();
+        out.iter_mut().for_each(|m| m.sort_unstable());
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn agglomeration_matches_the_naive_one() {
+        let mut seed = 7u64;
+        let mut r = move || {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            ((seed >> 33) as f32 / (1u64 << 31) as f32) - 0.5
+        };
+        // Bunched like e5 vectors: a shared direction, a few topics and noise.
+        let centers: Vec<Vec<f32>> = (0..5).map(|_| (0..12).map(|_| r()).collect()).collect();
+        let vs: Vec<Vec<f32>> = (0..150)
+            .map(|i| {
+                normalized(
+                    (0..12)
+                        .map(|d| 2.0 + centers[i % 5][d] + 0.4 * r())
+                        .collect(),
+                )
+            })
+            .collect();
+        let items: Vec<Item> = (0..vs.len())
+            .map(|i| {
+                item(
+                    &format!("i{i:03}"),
+                    "t",
+                    &format!("x{i}"),
+                    "2026-01-01T00:00:00Z",
+                    "/x",
+                )
+            })
+            .collect();
+        let es: Vec<Entry> = items
+            .iter()
+            .zip(&vs)
+            .map(|(item, vector)| Entry {
+                item,
+                room: None,
+                vector,
+            })
+            .collect();
+        // Cut-offs from the pair scores themselves: most pairs, some, few.
+        let mut all: Vec<f32> = (0..vs.len())
+            .flat_map(|i| (i + 1..vs.len()).map(move |j| (i, j)))
+            .map(|(i, j)| dot(&vs[i], &vs[j]))
+            .collect();
+        all.sort_by(f32::total_cmp);
+        for q in [0.5, 0.8, 0.95] {
+            let th = all[(all.len() as f64 * q) as usize];
+            let want: Vec<Vec<usize>> = naive_rooms(&vs, th)
+                .into_iter()
+                .filter(|m| m.len() >= 2)
+                .collect();
+            let mut got: Vec<Vec<usize>> = suggest_rooms(&es, th, 2)
+                .into_iter()
+                .map(|r| {
+                    r.item_ids
+                        .iter()
+                        .map(|id| id[1..].parse().unwrap())
+                        .collect()
+                })
+                .collect();
+            got.iter_mut()
+                .for_each(|m: &mut Vec<usize>| m.sort_unstable());
+            got.sort();
+            assert!(want.len() > 1, "threshold {th} merges something");
+            assert_eq!(got, want, "threshold {th}");
+        }
     }
 
     #[test]

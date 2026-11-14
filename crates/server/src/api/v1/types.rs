@@ -219,7 +219,10 @@
 ///
 /// 69: Code Mode script approvals (E6.5): `ToolResult.approval` in the runner contract carries the request id of
 ///    the approval an `ainkrad.call` waited for; `ainkrad.call` takes `wait_ms`.
-pub const API_MINOR: u32 = 69;
+///
+/// 70: Brain Review progress. `SemanticView.progress` (`SemanticProgress`, optional): while the semantic step is
+///    `pending`, how many of its items the local model has read (`done` of `total`).
+pub const API_MINOR: u32 = 70;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

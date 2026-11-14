@@ -38,7 +38,21 @@ pub struct SemanticView {
     /// Unsorted items that look like they belong in an existing room. Never filed on their own.
     #[serde(default)]
     pub closest: Vec<ClosestHint>,
+    /// While `pending`: how far the local model is ("Local AI: 1,240 of 2,980 items"). Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<SemanticProgress>,
 }
+
+/// Items of this step the local model has read so far, of `total` to read (stored ones count as read).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SemanticProgress {
+    pub done: u64,
+    pub total: u64,
+}
+
+/// Items embedded per step of the worker: each batch is stored before the next, so a stopped step
+/// resumes where it was, and the App sees progress.
+const CHUNK: usize = 64;
 
 /// An Unsorted item that no rule placed but that looks like it belongs in a room: "Looks like it
 /// belongs in <room_name> (0.9x)". To accept: when `in_review`, `PATCH /imports/{run}/items` with
@@ -124,7 +138,7 @@ pub(crate) async fn start(app: &App, b: &Brain, run: &str) {
         .sem_running
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(run.clone());
+        .insert(run.clone(), (0, 0));
     // One worker runs the steps of every run in turn (the shared semantic service's queue).
     b.inner.sem.enqueue(async move {
         let r = work(&app, &worker, &run, epoch).await;
@@ -165,7 +179,7 @@ impl Brain {
                 .sem_running
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .contains(&run);
+                .contains_key(&run);
             if busy {
                 continue;
             }
@@ -224,7 +238,10 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
         let room = r
             .try_get::<Option<String>, _>("proposal")?
             .filter(|p| p != UNSORTED);
-        owned.push((item_of(r)?, room));
+        let mut item = item_of(r)?;
+        // Only the head is read below (the embedded text, the signals): a transcript can be megabytes.
+        cut(&mut item.text, 4 * brain_model::semantic::EMBED_CHARS);
+        owned.push((item, room));
     }
     let live: Vec<String> = sqlx::query_scalar(
         "SELECT id FROM proposals WHERE id != ? AND state NOT IN ('merged', 'refused')",
@@ -302,7 +319,36 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
             .cloned()
             .collect()
     };
-    b.apply_threads(app).await;
+    // Embed what is missing in batches, each stored as it is made: progress survives a restart and
+    // the App can show it. `semantic::run` below then finds every vector in memory.
+    let mut seen = HashSet::new();
+    let wanted: Vec<&Item> = owned
+        .iter()
+        .map(|(i, _)| i)
+        .filter(|i| brain_model::semantic::eligible(i) && seen.insert(i.content_hash.as_str()))
+        .collect();
+    let todo: Vec<(String, String)> = wanted
+        .iter()
+        .filter(|i| !before.contains(&i.content_hash))
+        .map(|i| (i.content_hash.clone(), brain_model::semantic::embed_text(i)))
+        .collect();
+    let (total, stored) = (wanted.len(), wanted.len() - todo.len());
+    let progress = |done: usize| {
+        if let Some(p) = b
+            .inner
+            .sem_running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(run)
+        {
+            *p = (stored + done, total);
+        }
+    };
+    progress(0);
+    for (n, chunk) in todo.chunks(CHUNK).enumerate() {
+        b.embed_now(app, emb.clone(), chunk).await?;
+        progress(n * CHUNK + chunk.len());
+    }
     let strength = ModuleSettings::of(b)
         .get(&app.pool, "semantic.strength")
         .await
@@ -340,6 +386,7 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
     };
     let mut sug = sug;
     sug.stats.closest = closest.len();
+    sug.stats.embedded = todo.len();
     let size = |n: &str| {
         sizes.get(n).copied().unwrap_or_else(|| {
             sug.rooms
@@ -392,39 +439,11 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
             })
             .collect(),
         closest,
+        progress: None,
     };
-    // Save what this step embedded; items refused meanwhile are skipped (their vectors are deleted).
-    let fresh: Vec<(String, Vec<f32>)> = {
-        let c = b
-            .inner
-            .sem
-            .cache()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let mut seen = HashSet::new();
-        all_hashes
-            .iter()
-            .filter(|h| !before.contains(*h) && seen.insert(*h))
-            .filter_map(|h| c.get(&model, h).map(|v| (h.clone(), v.clone())))
-            .collect()
-    };
+    // Items refused while this step ran: their stored vectors go again.
     let st = staging(app, b, run, false).await?;
-    let still: HashSet<String> =
-        sqlx::query_scalar("SELECT content_hash FROM items WHERE mark IS NOT 'refused'")
-            .fetch_all(&st)
-            .await?
-            .into_iter()
-            .collect();
-    crate::vectors::save(
-        app,
-        b,
-        &model,
-        &fresh
-            .into_iter()
-            .filter(|(h, _)| still.contains(h))
-            .collect::<Vec<_>>(),
-    )
-    .await?;
+    crate::vectors::forget_refused(app, b, &st).await;
     let done = sqlx::query("UPDATE semantic SET state = 'ready', body = ? WHERE epoch = ?")
         .bind(serde_json::to_string(&view).expect("suggestions"))
         .bind(epoch)
@@ -439,6 +458,17 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
         tx.commit().await?;
     }
     Ok(())
+}
+
+/// Cuts `s` to at most `max` bytes, on a char boundary.
+fn cut(s: &mut String, max: usize) {
+    if s.len() > max {
+        let mut end = max;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+    }
 }
 
 /// A room an Unsorted item could be filed in.
@@ -537,7 +567,7 @@ pub(crate) async fn status(
                 .sem_running
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .contains(run) =>
+                .contains_key(run) =>
         {
             "pending"
         }
@@ -561,6 +591,18 @@ pub(crate) async fn get(
         state: state.clone(),
         ..Default::default()
     };
+    if state == "pending" {
+        v.progress = b
+            .inner
+            .sem_running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&run)
+            .map(|&(done, total)| SemanticProgress {
+                done: done as u64,
+                total: total as u64,
+            });
+    }
     if state == "ready" {
         let body: String = sqlx::query_scalar("SELECT body FROM semantic WHERE id = 1")
             .fetch_one(&st)
