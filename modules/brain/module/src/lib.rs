@@ -5,7 +5,7 @@
 //! Routes (`/modules/brain/v1`): status, import runs, review of proposed rooms, commit, rules and
 //! rooms. See `docs/Plans/2026-11-11-brain-phase1-import-plan.md` §5.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -174,8 +174,8 @@ struct Inner {
     distilling: AtomicBool,
     /// The shared semantic service: model, vector store and background worker (`semantic::service`).
     sem: semantic::service::Service,
-    /// Runs whose semantic step is queued or working.
-    sem_running: Mutex<HashSet<String>>,
+    /// Runs whose semantic step is queued or working, with (items embedded, items to embed).
+    sem_running: Mutex<HashMap<String, (usize, usize)>>,
     #[cfg(feature = "test-support")]
     fetch: Mutex<Option<Arc<dyn collectors::Fetch>>>,
     #[cfg(feature = "test-support")]

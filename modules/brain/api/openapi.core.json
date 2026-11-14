@@ -6649,6 +6649,26 @@
         ],
         "type": "object"
       },
+      "SemanticProgress": {
+        "description": "Items of this step the local model has read so far, of `total` to read (stored ones count as read).",
+        "properties": {
+          "done": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "done",
+          "total"
+        ],
+        "type": "object"
+      },
       "SemanticView": {
         "properties": {
           "closest": {
@@ -6669,6 +6689,10 @@
               "$ref": "#/components/schemas/MergeHint"
             },
             "type": "array"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/SemanticProgress",
+            "description": "While `pending`: how far the local model is (\"Local AI: 1,240 of 2,980 items\"). Absent otherwise."
           },
           "rooms": {
             "items": {
@@ -8062,7 +8086,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.69.0"
+    "version": "1.70.0"
   },
   "openapi": "3.1.0",
   "paths": {

@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::item::Item;
+use crate::item::{Item, SourceKind};
 use crate::signals::{RoomKind, Signals, extract};
 
 pub const UNSORTED: &str = "unsorted";
@@ -49,7 +49,7 @@ pub fn norm(s: &str) -> String {
         .collect()
 }
 
-fn group_key(s: &Signals) -> Option<(String, String)> {
+fn group_key(item: &Item, s: &Signals) -> Option<(String, String)> {
     let by = |n: &str| Some((norm(n), n.to_owned())).filter(|(k, _)| !k.is_empty());
     if let Some(p) = &s.project
         && let Some(k) = by(p)
@@ -62,14 +62,24 @@ fn group_key(s: &Signals) -> Option<(String, String)> {
     if let Some(o) = &s.org {
         return by(o);
     }
+    // A key in the title or hint (`KAN-9 Fix login`) wins over one only mentioned in the text.
+    let named = |t: &str| {
+        let k = format!("{t}-");
+        item.title.contains(&k) || item.project_hint.as_deref().is_some_and(|h| h.contains(&k))
+    };
     s.trackers
-        .first()
+        .iter()
+        .max_by_key(|t| (named(t), std::cmp::Reverse(*t)))
         .map(|t| (format!("tracker-{}", t.to_lowercase()), t.clone()))
 }
 
-/// A signal stronger than a folder name: a company, an org or a tracker key.
-fn strong(s: &Signals) -> bool {
-    s.company.is_some() || s.org.is_some() || !s.trackers.is_empty()
+/// A signal stronger than a folder name: a company, an org, or the item's own tracker key (a Jira
+/// issue). A key only mentioned in a text (`API-2`, `A0-1`, `AI-5`) may be a word, so it is as weak
+/// as a folder name: its room needs three items like any other.
+fn strong(item: &Item, s: &Signals) -> bool {
+    s.company.is_some()
+        || s.org.is_some()
+        || (item.source_kind == SourceKind::Jira && !s.trackers.is_empty())
 }
 
 /// Repo folder -> project, from items under `Projects/<P>/Repositories/<R>`; a repo seen under
@@ -93,7 +103,7 @@ pub fn group(items: &[Item]) -> Vec<Proposal> {
     let mut groups: BTreeMap<String, Acc> = BTreeMap::new();
     let mut unsorted: Vec<usize> = Vec::new();
     for (i, s) in sigs.iter().enumerate() {
-        let Some((mut k, mut name)) = group_key(s) else {
+        let Some((mut k, mut name)) = group_key(&items[i], s) else {
             unsorted.push(i);
             continue;
         };
@@ -114,14 +124,14 @@ pub fn group(items: &[Item]) -> Vec<Proposal> {
         n.1 += under;
         acc.items.push(i);
     }
-    // Tiny rooms: under 3 items and nothing but a folder name to go on. A folder under `Projects/`
-    // is the user's own layout, so it stays a room even when small.
+    // Tiny rooms: under 3 items and nothing but a folder name or a mentioned key to go on. A folder
+    // under `Projects/` is the user's own layout, so it stays a room even when small.
     groups.retain(|_, acc| {
         let keep = acc.items.len() >= 3
             || acc
                 .items
                 .iter()
-                .any(|&i| strong(&sigs[i]) || sigs[i].under_projects);
+                .any(|&i| strong(&items[i], &sigs[i]) || sigs[i].under_projects);
         if !keep {
             unsorted.extend(&acc.items);
         }
@@ -454,15 +464,46 @@ mod tests {
 
     #[test]
     fn tiny_rooms_go_to_unsorted_unless_strong() {
+        let mut issue = it(3, "", "KAN-5 thing");
+        issue.source_kind = SourceKind::Jira;
         let items = vec![
             it(1, "/u/Dev/Lonely", "a"),
             it(2, "/u/Dev/Lonely", "b"),
-            it(3, "/u/Dev/Other", "KAN-5 thing"),
+            issue,
+            it(4, "/u/Dev/Other", "KAN-6 mentioned"),
         ];
         let p = group(&items);
         let n: Vec<_> = p.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(n, vec!["Other", "Unsorted"]);
-        assert_eq!(p[1].item_ids.len(), 2);
+        assert_eq!(n, vec!["KAN", "Unsorted"]);
+        assert_eq!(p[1].item_ids.len(), 3);
+    }
+
+    /// The junk rooms of a real import: short uppercase words followed by a dash and a digit in one
+    /// transcript each. They never name a room; a key several items mention still does.
+    #[test]
+    fn short_uppercase_words_never_make_a_room() {
+        let junk = ["A0", "A690", "AD", "ADMIN", "AI", "AL", "API"];
+        let mut items: Vec<Item> = junk
+            .iter()
+            .enumerate()
+            .map(|(n, w)| {
+                let mut i = it(n as u32, "~", "a session");
+                i.text = format!("we talked about {w}-1 and more");
+                i
+            })
+            .collect();
+        items.extend(many("/u/Home/Projects/Alpha/x", 20));
+        // A real short key in three items, one of them also naming a junk word: all three go to it.
+        for n in 30..33 {
+            let mut i = it(n, "~", &format!("KAN-{n} work"));
+            i.text = "see AD-2 too".into();
+            items.push(i);
+        }
+        let p = group(&items);
+        let n: Vec<_> = p.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(n, vec!["Alpha", "KAN", "Unsorted"]);
+        assert_eq!(p[1].item_ids.len(), 3);
+        assert_eq!(p[2].item_ids.len(), junk.len());
     }
 
     #[test]
