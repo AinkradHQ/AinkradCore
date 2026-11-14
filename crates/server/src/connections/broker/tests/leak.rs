@@ -107,6 +107,10 @@ async fn no_credential_is_in_any_message_audit_row_log_or_debug_text() {
         .with_writer(move || writer.clone())
         .with_max_level(tracing::Level::TRACE)
         .finish();
+    // With one live dispatcher, tracing-core caches each callsite's interest from whichever
+    // thread hits it first; a parallel test with no subscriber would cache `never` and drop our
+    // lines. A second registered dispatcher makes the cache ask every live one instead.
+    let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     let _guard = tracing::subscriber::set_default(sub);
     let f = fx().await;
     let g = f.github("main", GH_TOKEN).await;
