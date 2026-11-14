@@ -36,6 +36,23 @@ pub const MAX_HELD_TOTAL: usize = 16 * 1024 * 1024;
 
 /// A call the Core never answers ends here.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(120);
+/// The Core's `ainkrad.call` only (E6.5): a risky operation is parked while a person decides
+/// (`code_mode.approval_secs`, at most 600 s) and then runs (`code_mode.call_secs`, at most 110 s).
+/// A script's call says how long it still waits (`wait_ms`), and that bounds the relay too.
+pub const PARKED_CALL_TIMEOUT: Duration = Duration::from_secs(720);
+/// What the Core may still need after a person answers: the operation itself and a margin.
+const AFTER_APPROVAL: Duration = Duration::from_secs(120);
+
+/// How long the relay waits for `tool` called with `args`: [`CALL_TIMEOUT`], or for
+/// `ainkrad.call` its own bound.
+pub fn relay_wait(tool: &str, args: &Value) -> Duration {
+    if tool != "ainkrad.call" {
+        return CALL_TIMEOUT;
+    }
+    args["wait_ms"].as_u64().map_or(PARKED_CALL_TIMEOUT, |ms| {
+        (Duration::from_millis(ms) + AFTER_APPROVAL).min(PARKED_CALL_TIMEOUT)
+    })
+}
 
 struct One {
     tools: Vec<ConnTool>,
@@ -133,6 +150,7 @@ impl Drop for Waiting<'_> {
 
 fn refusal(id: &str, code: &str, message: &str) -> ToolResult {
     ToolResult {
+        approval: None,
         id: id.to_owned(),
         ok: false,
         result: None,
@@ -270,7 +288,8 @@ impl Tools {
     }
 
     pub async fn call(&self, session: &str, tool: &str, args: Value) -> ToolResult {
-        self.call_within(session, tool, args, CALL_TIMEOUT).await
+        let wait = relay_wait(tool, &args);
+        self.call_within(session, tool, args, wait).await
     }
 
     /// Makes the state of `session` (its socket is open): the Core's polls find it from now on.

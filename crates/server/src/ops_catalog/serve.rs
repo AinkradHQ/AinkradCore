@@ -31,6 +31,7 @@ pub fn search_tool() -> ConnTool {
 
 fn refuse(id: String, code: &str, message: &str) -> ToolResult {
     ToolResult {
+        approval: None,
         id,
         ok: false,
         result: None,
@@ -110,6 +111,7 @@ pub async fn search_call(app: &App, runner: &str, session: &str, call: &ToolCall
     let cat = super::conn::merged(app, session).await;
     let answer = super::search(&cat, &scopes, query, limit);
     ToolResult {
+        approval: None,
         id,
         ok: true,
         result: Some(answer),

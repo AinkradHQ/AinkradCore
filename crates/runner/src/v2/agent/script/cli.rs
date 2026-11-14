@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! ainkrad search <words...>            ainkrad schema [op]
-//! ainkrad <group> <op> [--json '{..}' | --json -] [--key K]
+//! ainkrad <group> <op> [--json '{..}' | --json -] [--key K] [--repeat]
 //! ```
 //! Exit codes: 0 ok, 1 the CLI or socket failed, 2 refused, 3 approval denied or timed out,
 //! 4 a limit (rate, size, call count, time). A refusal is `{"error":{"code","message"}}` on stderr.
@@ -16,10 +16,12 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use super::super::tools::PARKED_CALL_TIMEOUT;
 use super::client::{Client, Refusal};
 use super::{CALL, MAX_CALL_ARGS, SCHEMA, SEARCH, SOCK_ENV};
 
-const WAIT: Duration = Duration::from_secs(125);
+/// A risky operation may wait for a person: the relay's own bound for `ainkrad.call`, and a margin.
+const WAIT: Duration = PARKED_CALL_TIMEOUT.saturating_add(Duration::from_secs(5));
 
 /// The exit code for a refusal code.
 pub fn exit_for(code: &str) -> u8 {
@@ -39,12 +41,13 @@ fn fail(code: &str, message: &str) -> (u8, String, String) {
 
 /// Runs one command line; returns the exit code, stdout and stderr text.
 pub fn exec(args: &[&str], sock: Option<&str>, stdin: &mut dyn Read) -> (u8, String, String) {
-    let (mut words, mut json_arg, mut key) = (Vec::new(), None, None);
+    let (mut words, mut json_arg, mut key, mut repeat) = (Vec::new(), None, None, false);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match *a {
             "--json" => json_arg = it.next().map(|s| (*s).to_owned()),
             "--key" => key = it.next().map(|s| (*s).to_owned()),
+            "--repeat" => repeat = true,
             w => words.push(w),
         }
     }
@@ -72,13 +75,16 @@ pub fn exec(args: &[&str], sock: Option<&str>, stdin: &mut dyn Read) -> (u8, Str
             if let Some(k) = key {
                 b["key"] = json!(k);
             }
+            if repeat {
+                b["repeat"] = json!(true);
+            }
             (CALL, b)
         }
         _ => {
             return (
                 1,
                 String::new(),
-                "usage: ainkrad search <words> | ainkrad schema [op] | ainkrad <group> <op> [--json '{..}'|-] [--key K]\n"
+                "usage: ainkrad search <words> | ainkrad schema [op] | ainkrad <group> <op> [--json '{..}'|-] [--key K] [--repeat]\n"
                     .to_owned(),
             );
         }

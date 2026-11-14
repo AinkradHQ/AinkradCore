@@ -274,6 +274,7 @@ impl Broker {
         match self.run_call(env, runner, session, call).await {
             // E2-3: what a third party wrote reaches the session as data, inside the envelope.
             Ok(v) => ToolResult {
+                approval: None,
                 id,
                 ok: true,
                 result: Some(scrub::fence(v, &format!("connection {}", call.tool))),
@@ -281,6 +282,7 @@ impl Broker {
                 message: None,
             },
             Err(f) => ToolResult {
+                approval: None,
                 id,
                 ok: false,
                 result: None,

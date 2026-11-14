@@ -3456,6 +3456,13 @@
     "ToolResult": {
       "description": "Core to runner: how call `id` ended. Either `result`, or a plain `code` and a fixed `message`.",
       "properties": {
+        "approval": {
+          "description": "`ainkrad.call` only: the request id (`cm_…`) of the person's approval the call waited for,\nwhatever its answer (E6.5: a script's result says which calls were approved or denied).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "code": {
           "description": "A refusal or upstream class (`not_granted`, `rate_limited`, `not_found`, ...).",
           "type": [

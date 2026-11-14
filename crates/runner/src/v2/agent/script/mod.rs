@@ -9,7 +9,8 @@
 //!
 //! Wire (plan P2): a script call is `tools/call ainkrad_call {op, args, run, key?}` on the socket
 //! (the Core's `ainkrad.call`, named with `.` as `_` like every tool; hidden from the harness's own
-//! `tools/list`, the socket is the credential either way).
+//! `tools/list`, the socket is the credential either way). A script's call also carries
+//! `repeat?` and `wait_ms` (its time left: the Core holds an approval no longer than that).
 
 use std::time::Duration;
 
@@ -47,8 +48,11 @@ pub struct Limits {
     pub memory: usize,
     /// Bytes of JS stack (deep recursion ends with a plain error).
     pub stack: usize,
-    /// Wall time for the whole script, operation waits included.
+    /// The script's own running time; time spent waiting on an operation (a person's approval
+    /// above all) is not counted (E6.5).
     pub time_ms: u64,
+    /// Wall time for the whole script, every wait included.
+    pub deadline_ms: u64,
     /// Operation calls.
     pub calls: usize,
 }
@@ -59,6 +63,7 @@ impl Default for Limits {
             memory: 64 << 20,
             stack: 512 << 10,
             time_ms: 60_000,
+            deadline_ms: 600_000,
             calls: 100,
         }
     }
@@ -69,6 +74,7 @@ impl Limits {
         memory: 256 << 20,
         stack: 1 << 20,
         time_ms: 600_000,
+        deadline_ms: 600_000,
         calls: 1000,
     };
 
@@ -78,12 +84,17 @@ impl Limits {
             memory: self.memory.min(c.memory),
             stack: self.stack.min(c.stack),
             time_ms: self.time_ms.min(c.time_ms),
+            deadline_ms: self.deadline_ms.min(c.deadline_ms),
             calls: self.calls.min(c.calls),
         }
     }
 
     pub fn time(&self) -> Duration {
         Duration::from_millis(self.time_ms)
+    }
+
+    pub fn deadline(&self) -> Duration {
+        Duration::from_millis(self.deadline_ms)
     }
 }
 
@@ -117,7 +128,10 @@ first with a few words: it returns typed definitions such as \
 keeps what it needs in variables, and `return`s only the small answer you want. Example:\n\n\
 ```js\nconst l = ainkrad.agents.listAgentSessions({ limit: 20 });\n\
 return l.items.filter(s => s.state === 'running').map(s => s.id);\n```\n\n\
-A refused call throws an Error with a `code`; `try/catch` it. There is no network, file or process \
+A refused call throws an Error with a `code`; `try/catch` it. A risky operation waits for a person \
+to approve it; a denial throws `ainkrad.ApprovalError` (`code` `approval_denied` or \
+`approval_timeout`). A write takes options as a second argument: `{ key: 'k1' }` makes it run at \
+most once per key, `{ repeat: true }` runs it again. There is no network, file or process \
 access in a script, and it has a time and call budget. Use `console.log` sparingly. From a shell, \
 `ainkrad search <words>`, `ainkrad schema <op>` and `ainkrad <group> <op> --json '{...}'` do the same, \
 with JSON in and out.\n";

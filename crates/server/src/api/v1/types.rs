@@ -216,7 +216,10 @@
 /// 68: Brain semantic search for AI sessions: `brainAiSearch` takes `mode` (`auto`, `keyword`, `meaning`) and answers
 ///    `ranked_by`; opening a room queues the back-fill of its closest-room centroid (audit action
 ///    `brain.room.centroid_backfilled`).
-pub const API_MINOR: u32 = 68;
+///
+/// 69: Code Mode script approvals (E6.5): `ToolResult.approval` in the runner contract carries the request id of
+///    the approval an `ainkrad.call` waited for; `ainkrad.call` takes `wait_ms`.
+pub const API_MINOR: u32 = 69;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

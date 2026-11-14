@@ -363,6 +363,46 @@ async fn an_unanswered_approval_expires_and_nothing_runs() {
 }
 
 #[tokio::test]
+async fn a_scripts_time_left_bounds_its_approval_and_the_answer_names_it() {
+    let fx = fx().await;
+    ops(&fx, &[("titleAgentSession", Risk::Risky)]);
+    // The setting allows 10 min; the script has 300 ms left.
+    set(&fx, Key::CodeModeApprovalSecs, "600").await;
+    let s = session(&fx, &["read", "agent"]).await;
+    let mut args = rename(&s, "Late");
+    args["wait_ms"] = json!(300);
+    let started = std::time::Instant::now();
+    let r = call_call(&fx.app, &s.runner, &s.id, &call(args)).await;
+    assert_eq!(r.code.as_deref(), Some("approval_timeout"));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(
+        r.approval.as_deref().is_some_and(|a| a.starts_with("cm_")),
+        "{r:?}"
+    );
+    assert_eq!(title(&fx, &s).await, Value::Null);
+    // An approved call names its approval too; a call that waited for nobody names none.
+    let approver = fx.enroll("approver", &["read", "agent", "approve"]).await;
+    let (app, runner, id) = (fx.app.clone(), s.runner.clone(), s.id.clone());
+    let args = rename(&s, "Now");
+    let h = tokio::spawn(async move { call_call(&app, &runner, &id, &call(args)).await });
+    let req_id = parked(&fx, &s).await;
+    assert_eq!(
+        decide(&fx, &approver, &s, &req_id, true).await.0,
+        StatusCode::OK
+    );
+    let r = tokio::time::timeout(Duration::from_secs(10), h)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(r.ok, "{r:?}");
+    assert_eq!(r.approval.as_deref(), Some(req_id.as_str()));
+    let mut bad = rename(&s, "x");
+    bad["wait_ms"] = json!("soon");
+    let r = call_call(&fx.app, &s.runner, &s.id, &call(bad)).await;
+    assert_eq!((r.code.as_deref(), r.approval), (Some("bad_args"), None));
+}
+
+#[tokio::test]
 async fn a_session_that_ends_while_parked_is_refused_and_audited() {
     let fx = fx().await;
     ops(&fx, &[("titleAgentSession", Risk::Risky)]);

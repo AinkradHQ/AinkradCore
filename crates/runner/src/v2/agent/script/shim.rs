@@ -45,11 +45,19 @@ fn run_id() -> String {
 /// The text the harness reads for a finished script, and whether it is an error.
 pub fn reply_text(e: &Envelope) -> (bool, String) {
     let footer = format!("[{} calls, {} ms]", e.calls, e.ms);
-    let console = if e.logs.is_empty() {
+    let mut console = if e.logs.is_empty() {
         String::new()
     } else {
         format!("\nconsole:\n{}", e.logs.join("\n"))
     };
+    if !e.approvals.is_empty() {
+        let each: Vec<String> = e
+            .approvals
+            .iter()
+            .map(|a| format!("{} {} ({})", a.op, a.outcome, a.request))
+            .collect();
+        console.push_str(&format!("\napprovals: {}", each.join("; ")));
+    }
     if e.ok {
         let v = e.value.as_deref().unwrap_or("null");
         return (true, format!("{v}{console}\n{footer}"));
@@ -118,7 +126,7 @@ pub async fn run_script_with(
         let status = child.wait().await;
         (buf, status)
     };
-    let Ok((buf, status)) = tokio::time::timeout(limits.clamped().time() + grace, work).await
+    let Ok((buf, status)) = tokio::time::timeout(limits.clamped().deadline() + grace, work).await
     else {
         // `work` is dropped with the child, which `kill_on_drop` ends.
         return (

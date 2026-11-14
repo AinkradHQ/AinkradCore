@@ -54,12 +54,13 @@ fn lim() -> Limits {
         memory: 16 << 20,
         stack: 256 << 10,
         time_ms: 500,
+        deadline_ms: 5_000,
         calls: 5,
     }
 }
 
 fn go(code: &str) -> Run {
-    engine::run(code, &lim(), |n, a| Ok(json!({"op": n, "args": a})))
+    engine::run(code, &lim(), |n, a, _| Ok(json!({"op": n, "args": a})))
 }
 
 fn value(code: &str) -> String {
@@ -157,10 +158,10 @@ fn errors_carry_a_line_and_a_refusal_is_a_catchable_error() {
     let r = engine::run(
         "try { ainkrad.g.op({}) } catch (e) { return [e.code, e.message] }",
         &lim(),
-        |_, _| Err(Refusal::new("not_granted", "no")),
+        |_, _, _| Err(Refusal::new("not_granted", "no")),
     );
     assert_eq!(r.result.unwrap(), r#"["not_granted","no"]"#);
-    let e = engine::run("ainkrad.g.op({})", &lim(), |_, _| {
+    let e = engine::run("ainkrad.g.op({})", &lim(), |_, _, _| {
         Err(Refusal::new("rate_limited", "slow"))
     })
     .result
@@ -173,7 +174,7 @@ fn the_call_budget_and_argument_size_are_enforced_before_the_host() {
     let r = engine::run(
         "const out = []; for (let i = 0; i < 9; i++) { try { ainkrad.g.op({i}) } catch (e) { out.push(e.code) } } return out",
         &lim(),
-        |_, _| Ok(json!(1)),
+        |_, _, _| Ok(json!(1)),
     );
     assert_eq!(
         r.result.unwrap(),
@@ -185,7 +186,7 @@ fn the_call_budget_and_argument_size_are_enforced_before_the_host() {
         "try {{ ainkrad.g.op({{s: 'x'.repeat({})}}) }} catch (e) {{ return e.code }}",
         super::MAX_CALL_ARGS + 1
     );
-    let r = engine::run(&big, &lim(), move |_, _| {
+    let r = engine::run(&big, &lim(), move |_, _, _| {
         h.set(h.get() + 1);
         Ok(json!(1))
     });
@@ -227,6 +228,7 @@ fn Envelope_ok(v: &str) -> super::child::Envelope {
         logs: vec!["hi".into()],
         calls: 2,
         ms: 7,
+        approvals: vec![],
     }
 }
 
@@ -406,7 +408,7 @@ async fn a_crashing_or_hanging_engine_child_is_an_error_not_a_dead_shim() {
     assert!(!ok);
     let hang = fake_engine("sleep 30");
     let limits = Limits {
-        time_ms: 100,
+        deadline_ms: 100,
         ..Limits::default()
     };
     let t = Instant::now();
@@ -451,4 +453,98 @@ fn replies_say_value_console_cost_and_errors_carry_line_and_code() {
     assert_eq!(cap("abc", 10), "abc");
     assert!(cap("abcdef", 3).starts_with("abc... [truncated: 3 of 6"));
     assert!(cap("ééé", 3).starts_with('é'), "never cuts a character");
+}
+
+#[test]
+fn waiting_on_an_operation_is_not_script_time_but_the_deadline_holds() {
+    let slow = |_: &str, _: Value, _: Value| {
+        std::thread::sleep(Duration::from_millis(700));
+        Ok(json!(1))
+    };
+    // 700 ms in the host, a 500 ms running-time cap: the wait is not the script's time.
+    let r = engine::run("ainkrad.g.op({}); return 2", &lim(), slow);
+    assert_eq!(r.result.unwrap(), "2");
+    // The wall deadline counts everything: past it, the next instruction stops the script.
+    let tight = Limits {
+        deadline_ms: 600,
+        ..lim()
+    };
+    let r = engine::run("ainkrad.g.op({}); while (true) {}", &tight, slow);
+    assert!(r.result.unwrap_err().message.contains("time limit"));
+}
+
+#[test]
+fn a_denial_is_a_typed_catchable_error_and_options_pass_through() {
+    let r = engine::run(
+        "try { ainkrad.g.op({}) } catch (e) { return [e instanceof ainkrad.ApprovalError, e.name, e.code] }",
+        &lim(),
+        |_, _, _| Err(Refusal::new("approval_denied", "a person denied this")),
+    );
+    assert_eq!(
+        r.result.unwrap(),
+        r#"[true,"ApprovalError","approval_denied"]"#
+    );
+    let r = engine::run(
+        "try { ainkrad.g.op({}) } catch (e) { return e instanceof ainkrad.ApprovalError }",
+        &lim(),
+        |_, _, _| Err(Refusal::new("not_granted", "no")),
+    );
+    assert_eq!(r.result.unwrap(), "false");
+    let r = engine::run(
+        "return ainkrad.g.op({}, {key: 'k1', repeat: true})",
+        &lim(),
+        |_, _, o| Ok(o),
+    );
+    assert_eq!(r.result.unwrap(), r#"{"key":"k1","repeat":true}"#);
+    for bad in ["{key: 5}", "{repeat: 'yes'}", "{other: 1}", "5"] {
+        let r = engine::run(
+            &format!("try {{ ainkrad.g.op({{}}, {bad}) }} catch (e) {{ return e.code }}"),
+            &lim(),
+            |_, _, _| Ok(json!(1)),
+        );
+        assert_eq!(r.result.unwrap(), "\"bad_args\"", "{bad}");
+    }
+}
+
+#[test]
+fn a_script_call_tells_the_core_its_time_left_and_its_options() {
+    let core = fake_core(|_, a| {
+        let w = a["wait_ms"].as_u64().unwrap();
+        assert!(w > 1_000 && w < 5_000, "{w}");
+        assert_eq!((&a["key"], &a["repeat"]), (&json!("k"), &json!(true)));
+        Ok(json!("done"))
+    });
+    let req = Request {
+        code: "return ainkrad.g.op({}, {key: 'k', repeat: true})".to_owned(),
+        run: "r3".to_owned(),
+        limits: Limits {
+            deadline_ms: 5_000,
+            ..Limits::default()
+        },
+    };
+    let e = execute(&core, &req);
+    assert_eq!(e.value.as_deref(), Some("\"done\""), "{:?}", e.error);
+    assert!(e.approvals.is_empty());
+}
+
+#[test]
+fn replies_list_the_calls_that_waited_for_a_person() {
+    let mut e = Envelope_ok("1");
+    e.approvals = vec![
+        super::child::Approval {
+            op: "closeIssue".into(),
+            request: "cm_1".into(),
+            outcome: "approved".into(),
+        },
+        super::child::Approval {
+            op: "deleteNote".into(),
+            request: "cm_2".into(),
+            outcome: "denied".into(),
+        },
+    ];
+    let (_, t) = reply_text(&e);
+    assert!(
+        t.contains("approvals: closeIssue approved (cm_1); deleteNote denied (cm_2)"),
+        "{t}"
+    );
 }

@@ -193,6 +193,7 @@ async fn a_call_runs_end_to_end_from_inside_the_sandbox_with_or_without_a_networ
                 for c in batch.calls {
                     after = after.max(c.tc_seq);
                     results.push(ToolResult {
+                        approval: None,
                         id: c.id,
                         ok: true,
                         result: Some(json!({"echo": c.args})),
