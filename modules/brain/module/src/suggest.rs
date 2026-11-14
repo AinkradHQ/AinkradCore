@@ -41,6 +41,10 @@ pub struct SemanticView {
     /// While `pending`: how far the local model is ("Local AI: 1,240 of 2,980 items"). Absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<SemanticProgress>,
+    /// When `ready`: what the local model changed by itself in the proposal (duplicates merged,
+    /// rooms merged or folded, items moved), with the link to the list of changes. Absent before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_tidy: Option<crate::tidy::AiTidy>,
 }
 
 /// Items of this step the local model has read so far, of `total` to read (stored ones count as read).
@@ -440,6 +444,7 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
             .collect(),
         closest,
         progress: None,
+        ai_tidy: None,
     };
     // Items refused while this step ran: their stored vectors go again.
     let st = staging(app, b, run, false).await?;

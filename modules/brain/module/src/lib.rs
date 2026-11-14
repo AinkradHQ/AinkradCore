@@ -45,6 +45,7 @@ mod rules_api;
 pub mod semantic;
 mod suggest;
 mod sync;
+mod tidy;
 mod transcripts;
 mod vectors;
 
@@ -106,6 +107,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports/{run}/proposals/{p}/refuse"),
     ("PATCH", "/imports/{run}/items"),
     ("POST", "/imports/{run}/regroup"),
+    ("POST", "/imports/{run}/semantic/undo"),
     ("PUT", "/settings/{name}"),
     ("POST", "/rules"),
     ("POST", "/sync"),
@@ -413,6 +415,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         review::refuse,
         review::regroup,
         suggest::get,
+        tidy::changes,
+        tidy::undo,
         suggest::settings,
         suggest::put_setting,
         review::patch_items,
@@ -460,6 +464,10 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         suggest::DuplicateHint,
         suggest::RoomHint,
         suggest::MergeHint,
+        tidy::AiTidy,
+        tidy::TidySummary,
+        tidy::TidyChange,
+        tidy::TidyChanges,
         suggest::BrainSetting,
         suggest::BrainSettingBody,
         review::ProposalPatch,
@@ -537,6 +545,8 @@ impl Module for Brain {
             .route("/imports/{run}/proposals/{p}/refuse", post(review::refuse))
             .route("/imports/{run}/regroup", post(review::regroup))
             .route("/imports/{run}/semantic", get(suggest::get))
+            .route("/imports/{run}/semantic/changes", get(tidy::changes))
+            .route("/imports/{run}/semantic/undo", post(tidy::undo))
             .route("/settings", get(suggest::settings))
             .route("/settings/{name}", put(suggest::put_setting))
             .route("/imports/{run}/commit", post(commit::commit))

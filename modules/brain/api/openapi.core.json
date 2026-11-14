@@ -1021,6 +1021,23 @@
         ],
         "type": "object"
       },
+      "AiTidy": {
+        "description": "The AI tidy of this run's proposal: what the local model changed by itself.",
+        "properties": {
+          "changes_url": {
+            "description": "The list of changes: `GET` it for \"See changes\".",
+            "type": "string"
+          },
+          "state": {
+            "description": "`applied` (the proposal is tidied) or `undone` (restored as it was before; the next re-sort\nmay tidy again).",
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/TidySummary"
+          }
+        },
+        "type": "object"
+      },
       "ApiVersion": {
         "description": "The contract a server speaks: `/api/<major>` and its additions so far.",
         "properties": {
@@ -6671,6 +6688,10 @@
       },
       "SemanticView": {
         "properties": {
+          "ai_tidy": {
+            "$ref": "#/components/schemas/AiTidy",
+            "description": "When `ready`: what the local model changed by itself in the proposal (duplicates merged,\nrooms merged or folded, items moved), with the link to the list of changes. Absent before."
+          },
           "closest": {
             "description": "Unsorted items that look like they belong in an existing room. Never filed on their own.",
             "items": {
@@ -7768,6 +7789,106 @@
           }
         ]
       },
+      "TidyChange": {
+        "description": "One change of the tidy.",
+        "properties": {
+          "from": {
+            "description": "A proposal id; absent for `duplicate`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "from_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "item_ids": {
+            "description": "The items this change moved or merged.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "description": "`duplicate` (`item_ids` merged into the kept item `to`), `merge` (room `from` merged into room\n`to`), `fold` (tiny room `from` folded into room `to`, or into `unsorted`) or `move` (Unsorted\nitem moved into room `to`).",
+            "type": "string"
+          },
+          "score": {
+            "description": "The similarity that made the change, 0 to 1 (0 for a junk room folded into Unsorted).",
+            "format": "float",
+            "type": "number"
+          },
+          "to": {
+            "description": "The kept item id for `duplicate`, else a proposal id (`unsorted` for a fold with no clear room).",
+            "type": "string"
+          },
+          "to_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TidyChanges": {
+        "properties": {
+          "ai_tidy": {
+            "$ref": "#/components/schemas/AiTidy"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/TidyChange"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "TidySummary": {
+        "description": "Counts of one tidy: \"12 duplicates merged, 9 rooms folded, 35 → 18 rooms\".",
+        "properties": {
+          "duplicates_merged": {
+            "description": "Items marked as merged into a newer near-copy.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "items_moved": {
+            "description": "Unsorted items moved into the room they clearly belong in.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rooms_after": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rooms_before": {
+            "description": "Rooms (Unsorted not counted) before and after the tidy.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rooms_folded": {
+            "description": "Tiny or junk rooms folded into the closest room, or into Unsorted.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rooms_merged": {
+            "description": "Rooms merged into a larger room that looks like the same topic.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "Timestamp": {
         "description": "RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a\nclient's date parser never meets a second one (E0.4).",
         "format": "date-time",
@@ -8086,7 +8207,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.70.0"
+    "version": "1.71.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -17727,6 +17848,112 @@
               }
             },
             "description": "The local model's sorting suggestions; only what still applies to the rooms as they are now"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/imports/{run}/semantic/changes": {
+      "get": {
+        "operationId": "brainTidyChanges",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TidyChanges"
+                }
+              }
+            },
+            "description": "What the AI tidy changed in this run's proposal (empty when it made no changes)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/imports/{run}/semantic/undo": {
+      "post": {
+        "operationId": "brainUndoTidy",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SemanticView"
+                }
+              }
+            },
+            "description": "The proposal is restored exactly as it was before the AI tidy; `ai_tidy.state` is `undone`. 409 when there is no applied tidy"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
