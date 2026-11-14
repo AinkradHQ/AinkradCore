@@ -300,6 +300,25 @@ pub async fn committed_room_named(fx: &Fx, name: &str, texts: &[(&str, &str)]) -
         .collect();
     send(fx, &run, items).await;
     finish(fx, &run).await;
+    // With a local model the AI tidy may fold a small room: wait for it and undo it, so the room
+    // is committed as the folder made it.
+    for _ in 0..600 {
+        let v = ok(fx, Method::GET, &format!("/imports/{run}/semantic"), None).await;
+        if v["state"] == "pending" {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            continue;
+        }
+        if v["ai_tidy"]["state"] == "applied" {
+            ok(
+                fx,
+                Method::POST,
+                &format!("/imports/{run}/semantic/undo"),
+                None,
+            )
+            .await;
+        }
+        break;
+    }
     let id = proposals(fx, &run).await[0]["id"]
         .as_str()
         .unwrap()

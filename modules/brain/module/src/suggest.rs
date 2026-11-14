@@ -41,6 +41,10 @@ pub struct SemanticView {
     /// While `pending`: how far the local model is ("Local AI: 1,240 of 2,980 items"). Absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<SemanticProgress>,
+    /// When `ready`: what the local model changed by itself in the proposal (duplicates merged,
+    /// rooms merged or folded, items moved), with the link to the list of changes. Absent before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_tidy: Option<crate::tidy::AiTidy>,
 }
 
 /// Items of this step the local model has read so far, of `total` to read (stored ones count as read).
@@ -272,6 +276,12 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
         }
     }
     st.close().await;
+    // The tidy below works on the rooms of this run, with the employer each one belongs to.
+    let employers: HashMap<String, Option<String>> = cand
+        .iter()
+        .filter(|c| c.in_review)
+        .map(|c| (c.id.clone(), c.employer.clone()))
+        .collect();
     let model = emb.model_id().to_owned();
     let stored: HashMap<String, Vec<f32>> = crate::vectors::centroids(app, b, &model)
         .await?
@@ -356,6 +366,10 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
     let th = Thresholds::for_strength(strength);
     let vectors = b.inner.sem.cache().clone();
     let m2 = model.clone();
+    let id_hash: Vec<(String, String)> = owned
+        .iter()
+        .map(|(i, _)| (i.item_id.clone(), i.content_hash.clone()))
+        .collect();
     let (sizes, sug, closest) = {
         let sizes: HashMap<String, usize> =
             members.iter().map(|m| (m.0.clone(), m.1.len())).collect();
@@ -383,6 +397,18 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
         .map_err(|e| code(500, "semantic_failed", e.to_string()))?
         .map_err(|e| code(500, "semantic_failed", e))?;
         (sizes, sug.0, sug.1)
+    };
+    let vecs: HashMap<String, Vec<f32>> = {
+        let c = b
+            .inner
+            .sem
+            .cache()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        id_hash
+            .into_iter()
+            .filter_map(|(id, h)| Some((id, c.get(&model, &h)?.clone())))
+            .collect()
     };
     let mut sug = sug;
     sug.stats.closest = closest.len();
@@ -440,16 +466,28 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
             .collect(),
         closest,
         progress: None,
+        ai_tidy: None,
     };
     // Items refused while this step ran: their stored vectors go again.
     let st = staging(app, b, run, false).await?;
     crate::vectors::forget_refused(app, b, &st).await;
+    // Ready and tidied in one transaction: the App never sees a ready step without its tidy.
+    let mut tx = st.begin().await?;
     let done = sqlx::query("UPDATE semantic SET state = 'ready', body = ? WHERE epoch = ?")
         .bind(serde_json::to_string(&view).expect("suggestions"))
         .bind(epoch)
-        .execute(&st)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
+    if done == 1 {
+        let hints = crate::tidy::Hints {
+            duplicates: &view.duplicates,
+            merges: &view.merges,
+            closest: &view.closest,
+        };
+        crate::tidy::apply(&mut tx, &employers, &vecs, &hints, th).await?;
+    }
+    tx.commit().await?;
     st.close().await;
     // A newer step (a re-sort) owns the row now: this one is stale and leaves no trace.
     if done == 1 {
@@ -610,6 +648,7 @@ pub(crate) async fn get(
         v = serde_json::from_str(&body).unwrap_or(v);
         v.state = state;
         prune(&st, &mut v).await?;
+        v.ai_tidy = crate::tidy::view(&st, &run).await?;
     }
     st.close().await;
     Ok(Json(v))

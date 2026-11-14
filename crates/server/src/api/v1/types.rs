@@ -222,7 +222,12 @@
 ///
 /// 70: Brain Review progress. `SemanticView.progress` (`SemanticProgress`, optional): while the semantic step is
 ///    `pending`, how many of its items the local model has read (`done` of `total`).
-pub const API_MINOR: u32 = 70;
+///
+/// 71: Brain AI tidy. `SemanticView.ai_tidy` (`AiTidy` with `TidySummary`, optional): when the semantic step is
+///    `ready`, what the local model changed by itself in the Review proposal; the routes
+///    `GET /imports/{run}/semantic/changes` (`brainTidyChanges`, `TidyChanges` of `TidyChange`) and
+///    `POST /imports/{run}/semantic/undo` (`brainUndoTidy`).
+pub const API_MINOR: u32 = 71;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
