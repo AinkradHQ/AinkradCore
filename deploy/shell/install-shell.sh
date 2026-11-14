@@ -41,7 +41,9 @@ if [ "$dry" = 1 ]; then
 fi
 [ "$(id -u)" = 0 ] || [ "${AINKRAD_SHELL_NOT_ROOT:-}" = 1 ] || { echo "install-shell: run as root" >&2; exit 1; }
 
-mkdir -p "$(dirname "$dest")"
+# The parent must be world-readable: under a strict umask (077, the Core install path) mkdir -p made it 0700 and the
+# runner user could not read the profile, so its terminals fell back to the login shell.
+mkdir -p "$(dirname "$dest")" && chmod 0755 "$(dirname "$dest")"
 w=$(mktemp -d "$(dirname "$dest")/.ainkrad-shell.XXXXXX")
 trap 'rm -rf "$w"' EXIT
 fetch() { # fetch URL FILE SUM FROMNAME: the archive, checked
