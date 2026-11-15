@@ -227,7 +227,13 @@
 ///    `ready`, what the local model changed by itself in the Review proposal; the routes
 ///    `GET /imports/{run}/semantic/changes` (`brainTidyChanges`, `TidyChanges` of `TidyChange`) and
 ///    `POST /imports/{run}/semantic/undo` (`brainUndoTidy`).
-pub const API_MINOR: u32 = 71;
+///
+/// 72: Brain "same project as" and a tidy that can decline. `POST /imports/{run}/proposals/{p}/same-project`
+///    (`brainSameProject`, body `MergeInto`, answers `ProposalCard`) merges a room into another and keeps the
+///    alias for later imports and re-sorts; `GET /aliases` (`brainAliases`, `RoomAlias`) and
+///    `DELETE /aliases/{from}` (`brainRemoveAlias`). `AiTidy.state` may be `declined` (the AI was not
+///    confident; nothing changed). Audit actions `brain.alias.set` and `brain.alias.removed`.
+pub const API_MINOR: u32 = 72;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
