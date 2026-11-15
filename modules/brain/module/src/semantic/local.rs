@@ -14,7 +14,10 @@ use tokenizers::{PaddingParams, Tokenizer, TruncationParams};
 
 use super::Embedder;
 
-pub const MODEL_ID: &str = "intfloat/multilingual-e5-small@614241f";
+/// The key stored vectors are kept under: the model and revision, and `+t2` for the text it reads
+/// (since 0.8.3 an item's boilerplate is removed before embedding). A new key drops the stored
+/// vectors of the old one; committed rooms rebuild their centroid when opened (the backfill).
+pub const MODEL_ID: &str = "intfloat/multilingual-e5-small@614241f+t2";
 const REV: &str = "614241f622f53c4eeff9890bdc4f31cfecc418b3";
 /// (file, SHA-256, bytes). Fetch each from `https://huggingface.co/intfloat/multilingual-e5-small/resolve/<REV>/<file>`.
 pub const FILES: [(&str, &str, u64); 3] = [
@@ -434,6 +437,7 @@ mod tests {
             .map(|(item, room)| Input {
                 item,
                 room: room.as_deref(),
+                sketch: None,
             })
             .collect();
         let mut members: std::collections::BTreeMap<&str, Vec<String>> = Default::default();

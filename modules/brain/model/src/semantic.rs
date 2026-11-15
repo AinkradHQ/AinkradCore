@@ -50,6 +50,134 @@ pub struct Entry<'a> {
     pub item: &'a Item,
     pub room: Option<&'a str>,
     pub vector: &'a [f32],
+    /// The [`sketch`] of the item's whole text (boilerplate removed); `None` sketches `item.text`.
+    pub sketch: Option<&'a [u64]>,
+}
+
+/// A line in at least this many items (and in 2% of them) is boilerplate: a shared preamble, a
+/// template, injected instructions. Two or three copies of one note are not.
+pub const BOILER_MIN: usize = 10;
+/// Boilerplate is learned from the first this-many bytes of each item, where a preamble lives.
+pub const BOILER_HEAD: usize = 64 * 1024;
+/// At most this many items (evenly spread) are read to learn it.
+const BOILER_SAMPLE: usize = 1000;
+
+fn hash64(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+fn head(s: &str, max: usize) -> &str {
+    let mut end = s.len().min(max);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// Lines that repeat across many items of one run. Removed before an item is embedded or compared,
+/// so two sessions that open with the same long instructions look like what they did, not alike.
+#[derive(Debug, Default, Clone)]
+pub struct Boilerplate(HashSet<u64>);
+
+impl Boilerplate {
+    /// Learns from `(title, text)` of the run's items: a title counts as one more line.
+    pub fn learn<'a>(docs: &[(&'a str, &'a str)]) -> Self {
+        let step = docs.len().div_ceil(BOILER_SAMPLE).max(1);
+        let mut n = 0usize;
+        let mut count: HashMap<u64, usize> = HashMap::new();
+        for (title, text) in docs.iter().step_by(step) {
+            n += 1;
+            let lines: HashSet<u64> = std::iter::once(*title)
+                .chain(head(text, BOILER_HEAD).lines())
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(hash64)
+                .collect();
+            for l in lines {
+                *count.entry(l).or_default() += 1;
+            }
+        }
+        let min = BOILER_MIN.max(n / 50);
+        Self(
+            count
+                .into_iter()
+                .filter(|(_, c)| *c >= min)
+                .map(|(l, _)| l)
+                .collect(),
+        )
+    }
+
+    pub fn is_boiler(&self, line: &str) -> bool {
+        self.0.contains(&hash64(line.trim()))
+    }
+
+    /// `text` without boilerplate lines, blank lines and `<system-reminder>` blocks (instructions a
+    /// harness injects into a transcript, never the person's own words).
+    pub fn strip(&self, text: &str) -> String {
+        let mut rest = text;
+        let mut kept = String::with_capacity(text.len());
+        while let Some(a) = rest.find("<system-reminder>") {
+            kept.push_str(&rest[..a]);
+            match rest[a..].find("</system-reminder>") {
+                Some(b) => rest = &rest[a + b + "</system-reminder>".len()..],
+                None => rest = "",
+            }
+        }
+        kept.push_str(rest);
+        kept.lines()
+            .filter(|l| !l.trim().is_empty() && !self.is_boiler(l))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// How many of the smallest shingle hashes a [`sketch`] keeps.
+const SKETCH: usize = 64;
+/// Two texts this alike (estimated Jaccard of their word 3-shingles) are near-copies.
+pub const SAME_TEXT: f32 = 0.7;
+
+/// A bottom-k MinHash of a whole text's word 3-shingles: sorted, at most [`SKETCH`] values.
+pub fn sketch(text: &str) -> Vec<u64> {
+    let w: Vec<&str> = text.split_whitespace().collect();
+    let mut hs: Vec<u64> = if w.len() < 3 {
+        if w.is_empty() {
+            vec![]
+        } else {
+            vec![hash64(&w.join(" "))]
+        }
+    } else {
+        w.windows(3).map(|s| hash64(&s.join(" "))).collect()
+    };
+    hs.sort_unstable();
+    hs.dedup();
+    hs.truncate(SKETCH);
+    hs
+}
+
+/// The estimated Jaccard similarity of two [`sketch`]es (0 when either is empty).
+pub fn resemblance(a: &[u64], b: &[u64]) -> f32 {
+    let (mut i, mut j, mut seen, mut both) = (0, 0, 0usize, 0usize);
+    while seen < SKETCH && (i < a.len() || j < b.len()) {
+        match (a.get(i), b.get(j)) {
+            (Some(x), Some(y)) if x == y => {
+                both += 1;
+                i += 1;
+                j += 1;
+            }
+            (Some(x), Some(y)) if x < y => i += 1,
+            (Some(_), None) => i += 1,
+            _ => j += 1,
+        }
+        seen += 1;
+    }
+    if seen == 0 {
+        0.0
+    } else {
+        both as f32 / seen as f32
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,10 +190,17 @@ pub struct DuplicateGroup {
     pub reason: String,
 }
 
-/// Items whose vectors are at least `threshold` alike (union of pairs). Items with the same
-/// `content_hash` are not listed: exact duplicates are the existing hash rule's.
+/// Items whose vectors are at least `threshold` alike (union of pairs) AND whose whole texts are
+/// near-copies ([`SAME_TEXT`]): a vector reads only an item's head, so two different sessions that
+/// open alike are never duplicates. Items with the same `content_hash` are not listed: exact
+/// duplicates are the existing hash rule's.
 pub fn duplicates(entries: &[Entry], threshold: f32) -> Vec<DuplicateGroup> {
     let n = entries.len();
+    let own: Vec<Option<Vec<u64>>> = entries
+        .iter()
+        .map(|e| e.sketch.is_none().then(|| sketch(&e.item.text)))
+        .collect();
+    let sk = |i: usize| entries[i].sketch.or(own[i].as_deref()).unwrap_or(&[]);
     let mut parent: Vec<usize> = (0..n).collect();
     fn find(p: &mut [usize], i: usize) -> usize {
         let mut r = i;
@@ -86,7 +221,7 @@ pub fn duplicates(entries: &[Entry], threshold: f32) -> Vec<DuplicateGroup> {
                 continue;
             }
             let s = dot(entries[i].vector, entries[j].vector);
-            if s >= threshold {
+            if s >= threshold && resemblance(sk(i), sk(j)) >= SAME_TEXT {
                 pairs.push((i, j, s));
                 let (a, b) = (find(&mut parent, i), find(&mut parent, j));
                 parent[a] = b;
@@ -461,37 +596,44 @@ mod tests {
 
     #[test]
     fn duplicates_keep_the_newest_and_skip_exact_hashes() {
-        let a = item("a", "t", "one", "2026-01-01T00:00:00Z", "/a");
-        let b = item("b", "t", "two", "2026-03-01T00:00:00Z", "/b");
-        let c = item("c", "t", "three", "2026-02-01T00:00:00Z", "/c");
-        let d = item("d", "t", "four", "2026-02-01T00:00:00Z", "/d");
-        let e = item("e", "t", "one", "2026-04-01T00:00:00Z", "/e"); // same hash as a: never paired with it
+        let body = "the plan for the spring garden beds with seeds compost water and a fence around the north side";
+        let t = |w: &str| format!("{body} {w}");
+        let a = item("a", "t", &t("one"), "2026-01-01T00:00:00Z", "/a");
+        let b = item("b", "t", &t("two"), "2026-03-01T00:00:00Z", "/b");
+        let c = item("c", "t", &t("three"), "2026-02-01T00:00:00Z", "/c");
+        let d = item("d", "t", &t("four"), "2026-02-01T00:00:00Z", "/d");
+        let e = item("e", "t", &t("one"), "2026-04-01T00:00:00Z", "/e"); // same hash as a: never paired with it
         let (v0, v1, v2, v4) = (v(0, 0.01), v(0, 0.02), v(2, 0.0), v(4, 0.0));
         let es = vec![
             Entry {
                 item: &a,
                 room: None,
                 vector: &v0,
+                sketch: None,
             },
             Entry {
                 item: &b,
                 room: None,
                 vector: &v1,
+                sketch: None,
             },
             Entry {
                 item: &c,
                 room: None,
                 vector: &v0,
+                sketch: None,
             },
             Entry {
                 item: &d,
                 room: None,
                 vector: &v2,
+                sketch: None,
             },
             Entry {
                 item: &e,
                 room: None,
                 vector: &v4,
+                sketch: None,
             },
         ];
         let g = duplicates(&es, DUP_THRESHOLD);
@@ -499,6 +641,45 @@ mod tests {
         assert_eq!(g[0].keep, "b");
         assert_eq!(g[0].duplicates, vec!["c", "a"]);
         assert!(g[0].score >= DUP_THRESHOLD);
+    }
+
+    #[test]
+    fn a_shared_preamble_is_boilerplate_and_never_makes_two_texts_alike() {
+        let pre: String = (0..60)
+            .map(|i| format!("Rule {i}: always follow the house style for every change.\n"))
+            .collect();
+        let texts: Vec<String> = (0..40)
+            .map(|i| format!("{pre}User: task {i} is about subject{i} and only subject{i} today"))
+            .collect();
+        let docs: Vec<(&str, &str)> = texts
+            .iter()
+            .map(|t| {
+                (
+                    "Rule 0: always follow the house style for every change.",
+                    t.as_str(),
+                )
+            })
+            .collect();
+        let bp = Boilerplate::learn(&docs);
+        assert!(bp.is_boiler("Rule 0: always follow the house style for every change."));
+        assert_eq!(
+            bp.strip(&texts[3]),
+            "User: task 3 is about subject3 and only subject3 today"
+        );
+        let raw = resemblance(&sketch(&texts[1]), &sketch(&texts[2]));
+        assert!(raw >= SAME_TEXT, "the preamble alone looks alike: {raw}");
+        let s = resemblance(&sketch(&bp.strip(&texts[1])), &sketch(&bp.strip(&texts[2])));
+        assert!(s < 0.2, "stripped, they are different work: {s}");
+        // A few copies of one note are not boilerplate.
+        let few: Vec<(&str, &str)> = texts[..5].iter().map(|t| ("t", t.as_str())).collect();
+        assert!(
+            !Boilerplate::learn(&few)
+                .is_boiler("Rule 0: always follow the house style for every change.")
+        );
+        assert_eq!(
+            Boilerplate::default().strip("a\n<system-reminder>\nrules\n</system-reminder>\nb"),
+            "a\nb"
+        );
     }
 
     #[test]
@@ -529,6 +710,7 @@ mod tests {
                 item,
                 room: None,
                 vector,
+                sketch: None,
             })
             .collect();
         es[6].room = Some("already"); // sorted items are never clustered
@@ -614,6 +796,7 @@ mod tests {
                 item,
                 room: None,
                 vector,
+                sketch: None,
             })
             .collect();
         // Cut-offs from the pair scores themselves: most pairs, some, few.

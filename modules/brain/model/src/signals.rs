@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::item::Item;
+use crate::item::{Item, SourceKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -189,6 +189,35 @@ pub fn path_info(path: &str) -> PathInfo {
     }
 }
 
+/// A Claude Code project folder name is its working directory with every `/` (and `.`) as `-`
+/// (`-Users-x-Home-Projects-Optimus`): never a project name. The project is the decoded path's.
+pub fn decode_dashed(name: &str) -> Option<PathInfo> {
+    let t = name.trim_start_matches('-');
+    let l = t.to_lowercase();
+    if !["users-", "home-", "private-", "var-", "tmp-", "volumes-"]
+        .iter()
+        .any(|p| l.starts_with(p))
+    {
+        return None;
+    }
+    Some(path_info(&format!("/{}", t.replace('-', "/"))))
+}
+
+/// Folders whose children are projects: `~/Home/Projects/<P>`, a vault's `WorkShop/<P>`.
+const CONTAINERS: &[&str] = &["projects", "workshop"];
+
+/// The project of a collected file, from its own path: the DEEPEST folder right under a container
+/// folder (`~/Vault/WorkShop/Optimus/plan.md` is `Optimus`, never `Vault`), and the path from that
+/// folder down (the only part a company may be read from). The file name itself is never one.
+pub fn file_project(path: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = path.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    let dirs = parts.len().saturating_sub(1);
+    (1..dirs)
+        .rev()
+        .find(|&i| CONTAINERS.contains(&parts[i - 1].to_lowercase().as_str()) && !is_junk(parts[i]))
+        .map(|i| (strip_wt(parts[i]).to_owned(), parts[i..].join("/")))
+}
+
 /// `github.com/<org>/<repo>` or `git@github.com:<org>/<repo>` anywhere in `s`.
 fn github(s: &str) -> Option<(String, String)> {
     let at = s.find("github.com")? + "github.com".len();
@@ -236,6 +265,23 @@ pub fn extract(item: &Item) -> Signals {
     } else if !hint.trim().is_empty() && !is_junk(hint.trim()) {
         s.project = Some(hint.trim().to_owned());
     }
+    if let Some(p) = s.project.clone()
+        && let Some(d) = decode_dashed(&p)
+    {
+        (s.project, s.under_projects, s.repo) = (d.project, d.under_projects, d.repo);
+    }
+    // A note in a big tree (a vault holding every project) belongs to its own project folder, and
+    // the tree's top folder name says nothing about it.
+    let mut path = item.origin.path.clone();
+    if s.project.is_none()
+        && matches!(
+            item.source_kind,
+            SourceKind::Doc | SourceKind::Vault | SourceKind::AgentsMd
+        )
+        && let Some((p, below)) = file_project(&item.origin.path)
+    {
+        (s.project, s.under_projects, path) = (Some(p), true, below);
+    }
     let head: String = item.text.chars().take(2000).collect();
     for t in [hint, &item.title, &head] {
         tracker_prefixes(t, &mut s.trackers);
@@ -244,7 +290,7 @@ pub fn extract(item: &Item) -> Signals {
     s.trackers.dedup();
     let hay = format!(
         "{hint} {} {} {}",
-        item.origin.path,
+        path,
         s.org.as_deref().unwrap_or(""),
         item.title
     )
@@ -304,6 +350,71 @@ mod tests {
         let s = extract(&item("/Users/x/Home/Projects/Optimus/api", "t", "x"));
         assert_eq!(s.company, Some(("Optimus", RoomKind::Employer)));
         assert_eq!(extract(&item("/w/none", "t", "x")).company, None);
+    }
+
+    #[test]
+    fn a_dash_encoded_session_folder_is_decoded_never_a_room_name() {
+        let p = |h: &str| {
+            let s = extract(&item(h, "t", "x"));
+            (s.project, s.repo)
+        };
+        assert_eq!(
+            p("-Users-someone-Home-Projects-Kestrel"),
+            (Some("Kestrel".to_owned()), None)
+        );
+        assert_eq!(
+            p("Users-someone-Home-Projects-Kestrel-Repositories-KestrelApi"),
+            (Some("Kestrel".to_owned()), Some("KestrelApi".to_owned()))
+        );
+        assert_eq!(
+            p("/Users/someone/.claude/projects/-Users-someone-Home-Projects-Kestrel/s.jsonl").0,
+            Some("Kestrel".to_owned())
+        );
+        assert_eq!(p("-Users-someone").0, None, "the home folder is no project");
+        assert_eq!(
+            p("lark-home-cloud").0.as_deref(),
+            Some("lark-home-cloud"),
+            "a real name stays"
+        );
+    }
+
+    #[test]
+    fn a_vault_note_belongs_to_its_deepest_project_folder() {
+        let note = |path: &str| {
+            let mut i = fixture("x");
+            i.project_hint = None;
+            i.source_kind = SourceKind::Vault;
+            i.origin.path = path.to_owned();
+            extract(&i)
+        };
+        let s = note("/Users/x/Ainkrad/WorkShop/Optimus/Plans/q3.md");
+        assert_eq!(s.project.as_deref(), Some("Optimus"));
+        assert_eq!(s.company, Some(("Optimus", RoomKind::Employer)));
+        let s = note("/Users/x/Ainkrad/WorkShop/Workan.Space/notes.md");
+        assert_eq!(s.project.as_deref(), Some("Workan.Space"));
+        assert_eq!(
+            s.company,
+            Some(("Workan.Space", RoomKind::Product)),
+            "not the vault's own name"
+        );
+        let s = note("/Users/x/Ainkrad/WorkShop/Bramble/notes.md");
+        assert_eq!((s.project.as_deref(), s.company), (Some("Bramble"), None));
+        assert_eq!(
+            note("/Users/x/Home/Projects/Bramble/Docs/Projects/Kestrel/a.md")
+                .project
+                .as_deref(),
+            Some("Kestrel"),
+            "the deepest"
+        );
+        // Outside any project folder: as before (the tree's name may still be a company).
+        let s = note("/Users/x/Ainkrad/Daily/2026-11-01.md");
+        assert_eq!(s.project, None);
+        assert_eq!(s.company, Some(("Ainkrad", RoomKind::Product)));
+        assert_eq!(
+            note("/Users/x/Ainkrad/WorkShop/readme.md").project,
+            None,
+            "a file is no folder"
+        );
     }
 
     #[test]

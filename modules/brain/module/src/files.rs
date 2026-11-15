@@ -169,7 +169,22 @@ pub static STAGING: &[FileMigration] = &[
         name: "staging_0003",
         up: include_str!("../migrations/staging_0003.sql"),
     },
+    FileMigration {
+        version: 4,
+        name: "staging_0004",
+        up: include_str!("../migrations/staging_0004.sql"),
+    },
 ];
+
+pub fn aliases_path(root: &Path) -> PathBuf {
+    root.join("aliases.db")
+}
+
+pub static ALIASES: &[FileMigration] = &[FileMigration {
+    version: 1,
+    name: "aliases_0001",
+    up: include_str!("../migrations/aliases_0001.sql"),
+}];
 
 pub static CANON: &[FileMigration] = &[
     FileMigration {

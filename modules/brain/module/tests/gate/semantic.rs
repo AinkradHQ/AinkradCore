@@ -57,9 +57,14 @@ fn at(n: u32, hint: &str, angle: u32) -> Value {
         n,
         hint,
         &format!("note {n}"),
-        &format!("text {n} ang={angle} "),
+        // One shared body: these notes differ by their angle, so the vectors alone decide which are
+        // near-copies (the whole-text check passes for any two).
+        &format!("text {n} ang={angle} {BODY}"),
     )
 }
+
+const BODY: &str = "a note about the weekly plan with the same long body every time so that two notes \
+    differ only in their first words and the whole text check sees them as one note";
 
 async fn semantic(fx: &Fx, run: &str) -> Value {
     ok(fx, Method::GET, &format!("/imports/{run}/semantic"), None).await

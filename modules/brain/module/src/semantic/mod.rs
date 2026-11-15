@@ -87,6 +87,8 @@ pub struct Input<'a> {
     pub item: &'a Item,
     /// The room the item is in, `None` for Unsorted.
     pub room: Option<&'a str>,
+    /// The [`brain_model::semantic::sketch`] of its whole text; `None` sketches `item.text`.
+    pub sketch: Option<&'a [u64]>,
 }
 
 /// Deterministic proposals to compare for merging: name and member item ids.
@@ -157,6 +159,7 @@ pub fn run(
             item: i.item,
             room: i.room,
             vector: &cache.0[&(model.clone(), i.item.content_hash.clone())],
+            sketch: i.sketch,
         })
         .collect();
     let rooms = suggest_rooms(&entries, th.cluster, MIN_CLUSTER);
@@ -278,7 +281,14 @@ mod tests {
             item("secret", "invoice key", "/home/.env"),
             item("d", "deploy x", "/d.md"),
         ];
-        let inputs: Vec<Input> = its.iter().map(|item| Input { item, room: None }).collect();
+        let inputs: Vec<Input> = its
+            .iter()
+            .map(|item| Input {
+                item,
+                room: None,
+                sketch: None,
+            })
+            .collect();
         let f = Fake(AtomicUsize::new(0));
         let mut cache = VectorCache::default();
         let s = run(&f, &mut cache, &inputs, &[], Thresholds::for_strength(1)).unwrap();

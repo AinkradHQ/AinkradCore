@@ -9,7 +9,7 @@ use ainkrad_core_server::api::v1::{ApiError, ApiResult, Paging};
 use ainkrad_core_server::store::begin_write;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
-use brain_model::group::{UNSORTED, group, suggest_merges};
+use brain_model::group::{UNSORTED, group_with, suggest_merges};
 use brain_model::item::{Author, AuthorKind, Item, Origin, SourceKind};
 use brain_model::signals::{RoomKind, extract};
 use serde::{Deserialize, Serialize};
@@ -180,8 +180,10 @@ pub(crate) async fn discover(
         .fetch_all(&st)
         .await?;
     let items: Vec<Item> = rows.iter().map(item_of).collect::<Result<_, _>>()?;
-    let proposals = group(&items);
+    let aliases = crate::aliases::load(app, b).await?;
+    let proposals = group_with(&items, &aliases);
     let mut stx = st.begin().await?;
+    crate::aliases::into_run(&mut stx, &aliases).await?;
     for p in &proposals {
         let id = proposal_id(&p.key);
         sqlx::query("INSERT INTO proposals (id, name, kind_guess, kind, signals, warnings) VALUES (?, ?, ?, ?, ?, ?)")
@@ -245,10 +247,9 @@ async fn review_run(app: &App, b: &Brain, run: &str) -> Result<SqlitePool, ApiEr
     staging(app, b, run, false).await
 }
 
-pub(crate) async fn employers(
-    st: &SqlitePool,
-    id: &str,
-) -> Result<BTreeSet<&'static str>, ApiError> {
+/// The employers of a proposal's items, each as the person's "same project as" aliases name it.
+pub(crate) async fn employers(st: &SqlitePool, id: &str) -> Result<BTreeSet<String>, ApiError> {
+    let aliases = crate::aliases::of_run(st).await?;
     let rows = sqlx::query("SELECT * FROM items WHERE proposal = ?")
         .bind(id)
         .fetch_all(st)
@@ -256,7 +257,7 @@ pub(crate) async fn employers(
     let mut out = BTreeSet::new();
     for r in &rows {
         if let Some((n, RoomKind::Employer)) = extract(&item_of(r)?).company {
-            out.insert(n);
+            out.insert(brain_model::group::canonical(&aliases, n).to_owned());
         }
     }
     Ok(out)
@@ -536,17 +537,28 @@ pub(crate) async fn merge(
     Json(req): Json<MergeInto>,
 ) -> ApiResult<ProposalCard> {
     let st = review_run(&app, &b, &run).await?;
-    if req.into == p || req.into == UNSORTED {
+    let out = merge_in(&st, &p, &req.into).await?;
+    st.close().await;
+    Ok(Json(out))
+}
+
+/// Merges proposal `p` into `into` (both editable) and answers `into`'s card.
+pub(crate) async fn merge_in(
+    st: &SqlitePool,
+    p: &str,
+    into: &str,
+) -> Result<ProposalCard, ApiError> {
+    if into == p || into == UNSORTED {
         return Err(ApiError::bad_request(
             "merge into another room, not into itself or Unsorted",
         ));
     }
-    editable(&one(&st, &p).await?.try_get::<String, _>("state")?)?;
-    editable(&one(&st, &req.into).await?.try_get::<String, _>("state")?)?;
+    editable(&one(st, p).await?.try_get::<String, _>("state")?)?;
+    editable(&one(st, into).await?.try_get::<String, _>("state")?)?;
     let mut tx = st.begin().await?;
     sqlx::query("UPDATE items SET proposal = ? WHERE proposal = ?")
-        .bind(&req.into)
-        .bind(&p)
+        .bind(into)
+        .bind(p)
         .execute(&mut *tx)
         .await?;
     if p == UNSORTED {
@@ -556,7 +568,7 @@ pub(crate) async fn merge(
             .await?;
     } else {
         sqlx::query("UPDATE proposals SET state = 'merged' WHERE id = ?")
-            .bind(&p)
+            .bind(p)
             .execute(&mut *tx)
             .await?;
     }
@@ -564,13 +576,11 @@ pub(crate) async fn merge(
     sqlx::query(
         "UPDATE proposals SET state = 'proposed' WHERE id = ? AND state IN ('accepted','held')",
     )
-    .bind(&req.into)
+    .bind(into)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    let out = card(&st, &one(&st, &req.into).await?).await?;
-    st.close().await;
-    Ok(Json(out))
+    card(st, &one(st, into).await?).await
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -790,7 +800,8 @@ pub(crate) async fn regroup(
         .fetch_all(&st)
         .await?;
     let items: Vec<Item> = rows.iter().map(item_of).collect::<Result<_, _>>()?;
-    let fresh = group(&items);
+    let aliases = crate::aliases::load(&app, &b).await?;
+    let fresh = group_with(&items, &aliases);
     let old = sqlx::query("SELECT * FROM proposals")
         .fetch_all(&st)
         .await?;
@@ -803,6 +814,7 @@ pub(crate) async fn regroup(
     let (mut kept, mut tx) = (0u64, st.begin().await?);
     // The last AI tidy's near-copies are items again; the new step tidies afresh.
     crate::tidy::forget(&mut tx).await?;
+    crate::aliases::into_run(&mut tx, &aliases).await?;
     sqlx::query("UPDATE items SET proposal = NULL")
         .execute(&mut *tx)
         .await?;
