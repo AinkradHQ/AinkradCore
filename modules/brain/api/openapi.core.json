@@ -1778,6 +1778,29 @@
         ],
         "type": "object"
       },
+      "CommitKeep": {
+        "description": "The Review's one decision (API minor 73): the rooms to import; every other room is refused.",
+        "properties": {
+          "keep": {
+            "description": "The proposals to import. Every other open proposal is refused (its items wiped, their hashes\nkept so they never come back), Unsorted aside. A room imported already may be named again.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "keep_unsorted": {
+            "description": "Unsorted's items wait in \"No room yet\" (true, the default) or are refused and deleted (false).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "keep"
+        ],
+        "type": "object"
+      },
       "CommitResult": {
         "properties": {
           "held": {
@@ -8242,7 +8265,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.72.0"
+    "version": "1.73.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -17326,6 +17349,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommitKeep"
+              }
+            }
+          },
+          "description": "Optional (API minor 73): import exactly `keep` and refuse every other room in the same call. Without a body the accepted rooms are imported"
+        },
         "responses": {
           "200": {
             "content": {

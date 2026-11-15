@@ -197,39 +197,51 @@ pub(crate) async fn note_committed(
 }
 
 /// Deletes the vectors of the items in staging `st` that are refused (the item or its room), from
-/// disk and memory. A failure is logged, never fatal: the next step simply finds nothing to reuse.
+/// memory at once and from disk in the background, so a refusal answers in milliseconds on a big
+/// run. A failure is logged, never fatal: the next step simply finds nothing to reuse.
 pub(crate) async fn forget_refused(app: &App, b: &Brain, st: &SqlitePool) {
-    let r: Result<(), ApiError> = async {
-        let hashes: Vec<String> = sqlx::query_scalar(
-            "SELECT content_hash FROM items WHERE mark = 'refused' \
-             OR proposal IN (SELECT id FROM proposals WHERE state = 'refused')",
-        )
-        .fetch_all(st)
-        .await?;
-        if hashes.is_empty() {
-            return Ok(());
-        }
-        {
-            let mut c = b
-                .inner
-                .sem
-                .cache()
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            hashes.iter().for_each(|h| c.forget(h));
-        }
-        let p = pool(app, b).await?;
-        for h in &hashes {
-            sqlx::query("DELETE FROM vectors WHERE content_hash = ?")
-                .bind(h)
-                .execute(&p)
-                .await?;
-        }
-        p.close().await;
-        Ok(())
-    }
+    let hashes: Result<Vec<String>, sqlx::Error> = sqlx::query_scalar(
+        "SELECT content_hash FROM items WHERE mark = 'refused' \
+         OR proposal IN (SELECT id FROM proposals WHERE state = 'refused')",
+    )
+    .fetch_all(st)
     .await;
-    if let Err(e) = r {
-        tracing::warn!(error = ?e, "stored vectors of refused items could not be deleted");
+    let hashes = match hashes {
+        Ok(h) if !h.is_empty() => h,
+        Ok(_) => return,
+        Err(e) => {
+            tracing::warn!(error = ?e, "refused items could not be read");
+            return;
+        }
+    };
+    {
+        let mut c = b
+            .inner
+            .sem
+            .cache()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        hashes.iter().for_each(|h| c.forget(h));
     }
+    let (app, b) = (app.clone(), b.clone());
+    tokio::spawn(async move {
+        if let Err(e) = delete(&app, &b, &hashes).await {
+            tracing::warn!(error = ?e, "stored vectors of refused items could not be deleted");
+        }
+    });
+}
+
+/// One transaction; `content_hash` is indexed (vectors_0003), so this is one lookup per hash.
+async fn delete(app: &App, b: &Brain, hashes: &[String]) -> Result<(), ApiError> {
+    let p = pool(app, b).await?;
+    let mut tx = p.begin().await?;
+    for h in hashes {
+        sqlx::query("DELETE FROM vectors WHERE content_hash = ?")
+            .bind(h)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    p.close().await;
+    Ok(())
 }

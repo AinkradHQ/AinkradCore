@@ -233,7 +233,11 @@
 ///    alias for later imports and re-sorts; `GET /aliases` (`brainAliases`, `RoomAlias`) and
 ///    `DELETE /aliases/{from}` (`brainRemoveAlias`). `AiTidy.state` may be `declined` (the AI was not
 ///    confident; nothing changed). Audit actions `brain.alias.set` and `brain.alias.removed`.
-pub const API_MINOR: u32 = 72;
+///
+/// 73: Brain Review decides in one call. `POST /imports/{run}/commit` takes an optional body `CommitKeep`
+///    (`keep`: the proposal ids to import, `keep_unsorted`: optional, default true): every other open room is
+///    refused and wiped in the same call. Without a body the accepted rooms are imported as before.
+pub const API_MINOR: u32 = 73;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

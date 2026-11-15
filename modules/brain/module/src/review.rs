@@ -131,7 +131,7 @@ pub(crate) fn room_id(name: &str) -> String {
     )
 }
 
-fn parse<T: serde::de::DeserializeOwned + Default>(s: &str) -> T {
+pub(crate) fn parse<T: serde::de::DeserializeOwned + Default>(s: &str) -> T {
     serde_json::from_str(s).unwrap_or_default()
 }
 
@@ -250,10 +250,17 @@ async fn review_run(app: &App, b: &Brain, run: &str) -> Result<SqlitePool, ApiEr
 /// The employers of a proposal's items, each as the person's "same project as" aliases name it.
 pub(crate) async fn employers(st: &SqlitePool, id: &str) -> Result<BTreeSet<String>, ApiError> {
     let aliases = crate::aliases::of_run(st).await?;
-    let rows = sqlx::query("SELECT * FROM items WHERE proposal = ?")
-        .bind(id)
-        .fetch_all(st)
-        .await?;
+    // The employer comes from the folder, path and title. Only columns stored before `text` are
+    // read, so SQLite never walks a text's overflow pages: reading 8,000 texts to draw the room
+    // list took seconds.
+    let rows = sqlx::query(
+        "SELECT item_id, source_kind, content_hash, device, path, project_hint, author_kind, \
+         author_name, title, '' AS text, '[]' AS links, '' AS started_at, NULL AS ended_at \
+         FROM items WHERE proposal = ?",
+    )
+    .bind(id)
+    .fetch_all(st)
+    .await?;
     let mut out = BTreeSet::new();
     for r in &rows {
         if let Some((n, RoomKind::Employer)) = extract(&item_of(r)?).company {
@@ -665,23 +672,29 @@ pub(crate) async fn refuse(
         .await?;
     // Unsorted holds items with no folder in common, so refusing it writes no rule.
     if p != UNSORTED {
-        let mut tx = begin_write(&app.pool).await?;
-        for f in signals.iter().filter_map(|s| s.strip_prefix("folder:")) {
-            sqlx::query(
-                "INSERT OR IGNORE INTO brain_rules (kind, pattern, action, origin, enabled, reason) \
-                 VALUES ('project', ?, 'refuse', 'user', 0, ?)",
-            )
-            .bind(f)
-            .bind(format!("draft:{run}"))
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
+        draft_rules(&app, &run, &signals).await?;
     }
     crate::vectors::forget_refused(&app, &b, &st).await;
     let out = card(&st, &row_again(&st, &p).await?).await?;
     st.close().await;
     Ok(Json(out))
+}
+
+/// A draft "refuse" rule per folder of a refused room, enabled when the run is committed.
+pub(crate) async fn draft_rules(app: &App, run: &str, signals: &[String]) -> Result<(), ApiError> {
+    let mut tx = begin_write(&app.pool).await?;
+    for f in signals.iter().filter_map(|s| s.strip_prefix("folder:")) {
+        sqlx::query(
+            "INSERT OR IGNORE INTO brain_rules (kind, pattern, action, origin, enabled, reason) \
+             VALUES ('project', ?, 'refuse', 'user', 0, ?)",
+        )
+        .bind(f)
+        .bind(format!("draft:{run}"))
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 async fn row_again(st: &SqlitePool, id: &str) -> Result<SqliteRow, ApiError> {
