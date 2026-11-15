@@ -527,3 +527,78 @@ async fn a_near_copy_the_tidy_merged_is_not_imported() {
         "the merged copy stays out"
     );
 }
+
+/// A repo room next to its project merges into it (and shows in See changes, and undoes); a session
+/// whose folder is Claude Code's dash-encoded one lands in the project, never in a room of that name.
+#[tokio::test]
+async fn a_repo_room_joins_its_project_and_an_encoded_folder_is_decoded() {
+    let fx = fx_with(Brain::with_embedder(Arc::new(Words)), 1).await;
+    let run = start(&fx).await;
+    let mut items: Vec<Value> = (1..=15)
+        .map(|i| {
+            item(
+                i,
+                "/u/Home/Projects/Kestrel/a",
+                &format!("k{i}"),
+                &words(i as usize, 20),
+            )
+        })
+        .collect();
+    items.extend((16..=17).map(|i| {
+        item(
+            i,
+            "/u/Home/Projects/kestrelbackend",
+            &format!("b{i}"),
+            &words(i as usize, 20),
+        )
+    }));
+    items.push(item(
+        18,
+        "-Users-someone-Home-Projects-Kestrel",
+        "enc",
+        &words(18, 20),
+    ));
+    send(&fx, &run, items).await;
+    finish(&fx, &run).await;
+    let names: Vec<String> = proposals(&fx, &run)
+        .await
+        .iter()
+        .map(|p| p["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(!names.iter().any(|n| n.contains("Users")), "{names:?}");
+    let v = ready(&fx, &run).await;
+    assert_eq!(v["ai_tidy"]["summary"]["rooms_merged"], 1, "{v}");
+    let p = proposals(&fx, &run).await;
+    assert_eq!(p.len(), 1, "{p:?}");
+    assert_eq!(by_name(&p, "Kestrel")["item_count"], 18);
+    let c = ok(
+        &fx,
+        Method::GET,
+        &format!("/imports/{run}/semantic/changes"),
+        None,
+    )
+    .await;
+    let m = c["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["kind"] == "merge")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (m["from_name"].as_str(), m["to_name"].as_str()),
+        (Some("kestrelbackend"), Some("Kestrel"))
+    );
+    ok(
+        &fx,
+        Method::POST,
+        &format!("/imports/{run}/semantic/undo"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        proposals(&fx, &run).await.len(),
+        2,
+        "undone: the repo room is back"
+    );
+}

@@ -189,6 +189,20 @@ pub fn path_info(path: &str) -> PathInfo {
     }
 }
 
+/// A Claude Code project folder name is its working directory with every `/` (and `.`) as `-`
+/// (`-Users-x-Home-Projects-Optimus`): never a project name. The project is the decoded path's.
+pub fn decode_dashed(name: &str) -> Option<PathInfo> {
+    let t = name.trim_start_matches('-');
+    let l = t.to_lowercase();
+    if !["users-", "home-", "private-", "var-", "tmp-", "volumes-"]
+        .iter()
+        .any(|p| l.starts_with(p))
+    {
+        return None;
+    }
+    Some(path_info(&format!("/{}", t.replace('-', "/"))))
+}
+
 /// Folders whose children are projects: `~/Home/Projects/<P>`, a vault's `WorkShop/<P>`.
 const CONTAINERS: &[&str] = &["projects", "workshop"];
 
@@ -250,6 +264,11 @@ pub fn extract(item: &Item) -> Signals {
         (s.project, s.under_projects, s.repo) = (p.project, p.under_projects, p.repo);
     } else if !hint.trim().is_empty() && !is_junk(hint.trim()) {
         s.project = Some(hint.trim().to_owned());
+    }
+    if let Some(p) = s.project.clone()
+        && let Some(d) = decode_dashed(&p)
+    {
+        (s.project, s.under_projects, s.repo) = (d.project, d.under_projects, d.repo);
     }
     // A note in a big tree (a vault holding every project) belongs to its own project folder, and
     // the tree's top folder name says nothing about it.
@@ -331,6 +350,32 @@ mod tests {
         let s = extract(&item("/Users/x/Home/Projects/Optimus/api", "t", "x"));
         assert_eq!(s.company, Some(("Optimus", RoomKind::Employer)));
         assert_eq!(extract(&item("/w/none", "t", "x")).company, None);
+    }
+
+    #[test]
+    fn a_dash_encoded_session_folder_is_decoded_never_a_room_name() {
+        let p = |h: &str| {
+            let s = extract(&item(h, "t", "x"));
+            (s.project, s.repo)
+        };
+        assert_eq!(
+            p("-Users-someone-Home-Projects-Kestrel"),
+            (Some("Kestrel".to_owned()), None)
+        );
+        assert_eq!(
+            p("Users-someone-Home-Projects-Kestrel-Repositories-KestrelApi"),
+            (Some("Kestrel".to_owned()), Some("KestrelApi".to_owned()))
+        );
+        assert_eq!(
+            p("/Users/someone/.claude/projects/-Users-someone-Home-Projects-Kestrel/s.jsonl").0,
+            Some("Kestrel".to_owned())
+        );
+        assert_eq!(p("-Users-someone").0, None, "the home folder is no project");
+        assert_eq!(
+            p("lark-home-cloud").0.as_deref(),
+            Some("lark-home-cloud"),
+            "a real name stays"
+        );
     }
 
     #[test]

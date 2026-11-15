@@ -7916,7 +7916,7 @@
             "type": "integer"
           },
           "rooms_merged": {
-            "description": "Rooms merged into a larger room that looks like the same topic.",
+            "description": "Rooms merged into another: one name spelled two ways (case, spacing, punctuation, plural), or\na small repo room into the project it is named after (`KestrelBackend` into `Kestrel`).",
             "format": "int64",
             "minimum": 0,
             "type": "integer"

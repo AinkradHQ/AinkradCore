@@ -44,7 +44,8 @@ pub struct TidySummary {
     /// Items marked as merged into a newer near-copy.
     #[serde(default)]
     pub duplicates_merged: u64,
-    /// Rooms merged into a larger room that looks like the same topic.
+    /// Rooms merged into another: one name spelled two ways (case, spacing, punctuation, plural), or
+    /// a small repo room into the project it is named after (`KestrelBackend` into `Kestrel`).
     #[serde(default)]
     pub rooms_merged: u64,
     /// Tiny or junk rooms folded into the closest room, or into Unsorted.

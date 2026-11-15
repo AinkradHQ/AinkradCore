@@ -25,8 +25,8 @@ pub(crate) struct Hints<'a> {
     pub closest: &'a [ClosestHint],
 }
 
-/// Merges the smaller of rooms `a` and `b` into the larger (ties: `a` into `b`), unless they are one
-/// room already, either is gone or they belong to two employers.
+/// Merges the smaller of rooms `a` and `b` into the larger (ties: `a` into `b`; `directed`: always
+/// `a` into `b`), unless they are one room already, either is gone or they belong to two employers.
 fn merge_rooms(
     live: &mut BTreeMap<String, RoomIn>,
     alias: &mut HashMap<String, String>,
@@ -34,6 +34,7 @@ fn merge_rooms(
     a: String,
     b: String,
     score: f32,
+    directed: bool,
 ) {
     let (Some(ra), Some(rb)) = (live.get(&a), live.get(&b)) else {
         return;
@@ -41,7 +42,7 @@ fn merge_rooms(
     if a == b || matches!((&ra.employer, &rb.employer), (Some(x), Some(y)) if x != y) {
         return;
     }
-    let (small, big) = if ra.items.len() <= rb.items.len() {
+    let (small, big) = if directed || ra.items.len() <= rb.items.len() {
         (a, b)
     } else {
         (b, a)
@@ -89,6 +90,97 @@ fn name_pair(live: &BTreeMap<String, RoomIn>) -> Option<(String, String)> {
         }
     }
     None
+}
+
+/// A room this small may be one of a bigger room's repos.
+const REPO_MAX: usize = 30;
+/// Prefixes a repo name puts before its project's (`FE-Workan.space`).
+const REPO_PREFIXES: &[&str] = &["fe", "be", "api", "web", "app"];
+/// Words a repo name puts after its project's (`OptimusBackend`, `tree-cp`).
+const REPO_WORDS: &[&str] = &[
+    "backend",
+    "frontend",
+    "api",
+    "web",
+    "app",
+    "mob",
+    "mobile",
+    "cp",
+    "admin",
+    "dashboard",
+    "server",
+    "client",
+    "site",
+    "fe",
+    "be",
+    "ios",
+    "android",
+];
+
+/// The rest of `small` after `big`'s name, normalized, when `small` (a repo prefix like `FE-`
+/// dropped) starts with `big`'s name followed by a word boundary (the end, a separator, a
+/// lower-to-upper case step) or by a known repo word (`optimusbackend`). `big`'s name is 3+ letters.
+fn after_project(small: &str, big: &str) -> Option<String> {
+    let mut s = small;
+    for p in REPO_PREFIXES {
+        if let (Some(head), Some(sep)) = (s.get(..p.len()), s.as_bytes().get(p.len()))
+            && head.eq_ignore_ascii_case(p)
+            && matches!(sep, b'-' | b'_' | b'.' | b' ')
+        {
+            s = &s[p.len() + 1..];
+            break;
+        }
+    }
+    let want = brain_model::group::norm(big);
+    if want.chars().count() < 3 {
+        return None;
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let (mut got, mut i) = (String::new(), 0);
+    while i < chars.len() && got.len() < want.len() {
+        if chars[i].is_alphanumeric() {
+            got.extend(chars[i].to_lowercase());
+        }
+        i += 1;
+    }
+    if got != want {
+        return None;
+    }
+    let rest = brain_model::group::norm(&chars[i..].iter().collect::<String>());
+    let boundary = i == chars.len()
+        || !chars[i].is_alphanumeric()
+        || (chars[i].is_uppercase() && chars[i - 1].is_lowercase());
+    (boundary || REPO_WORDS.contains(&rest.as_str())).then_some(rest)
+}
+
+/// The next (repo room, project room) pair: a room of at most `REPO_MAX` items named after a room
+/// with at least five times its items, or after any room when the rest is a known repo word
+/// (`tree-app` next to `tree`). Never across two employers. Smallest repo first, then the longest
+/// project name.
+fn repo_pair(live: &BTreeMap<String, RoomIn>) -> Option<(String, String)> {
+    let mut best: Option<(usize, String, usize, String)> = None;
+    for s in live.values().filter(|r| r.items.len() <= REPO_MAX) {
+        for b in live.values().filter(|b| b.id != s.id) {
+            let Some(rest) = after_project(&s.name, &b.name) else {
+                continue;
+            };
+            let clash = matches!((&s.employer, &b.employer), (Some(x), Some(y)) if x != y);
+            let big = b.items.len() >= 5 * s.items.len().max(1);
+            if clash || !(big || REPO_WORDS.contains(&rest.as_str())) {
+                continue;
+            }
+            let key = (
+                s.items.len(),
+                s.id.clone(),
+                usize::MAX - b.name.len(),
+                b.id.clone(),
+            );
+            if best.as_ref().is_none_or(|x| key < *x) {
+                best = Some(key);
+            }
+        }
+    }
+    best.map(|(_, s, _, b)| (s, b))
 }
 
 /// A name with no word of three letters or more (`AI-5`, `A0`, `x`): not a topic.
@@ -162,7 +254,11 @@ pub(crate) fn plan(
     // (b) Names that are one name: a plural, a case, spacing or punctuation variant ("Pricing
     // experiment" / "Pricing experiments"). Weaker name likenesses are left to the person.
     while let Some((a, b)) = name_pair(&live) {
-        merge_rooms(&mut live, &mut alias, &mut out, a, b, 1.0);
+        merge_rooms(&mut live, &mut alias, &mut out, a, b, 1.0, false);
+    }
+    // (b2) A project's repo rooms ("OptimusBackend", "FE-Workan.space", "tree-app"): into the project.
+    while let Some((a, b)) = repo_pair(&live) {
+        merge_rooms(&mut live, &mut alias, &mut out, a, b, 1.0, true);
     }
 
     // (c) Junk-named rooms (`AI-5`): into the closest real room when it is clear, else Unsorted. A
@@ -320,6 +416,62 @@ mod tests {
             "a near spelling is not one name"
         );
         assert!(!same_name("Ops", "Shops"));
+    }
+
+    #[test]
+    fn a_projects_small_repo_rooms_merge_into_it() {
+        let many = |n: usize| (0..n).map(|i| format!("i{i}")).collect::<Vec<_>>();
+        let r = |id: &str, name: &str, n: usize, emp: Option<&str>| RoomIn {
+            id: id.into(),
+            name: name.into(),
+            employer: emp.map(str::to_owned),
+            items: many(n).into_iter().map(|i| format!("{id}-{i}")).collect(),
+        };
+        let rooms = vec![
+            r("p-k", "Kestrel", 100, Some("acme")),
+            r("p-kb", "kestrelbackend", 5, Some("acme")),
+            r("p-kx", "KestrelPortal", 5, Some("other")),
+            r("p-b", "BrambleSpace", 200, None),
+            r("p-fb", "FE-Bramble.space", 1, None),
+            r("p-l", "LARK", 300, None),
+            r("p-lc", "lark-home-cloud", 5, None),
+            r("p-t", "tree", 22, None),
+            r("p-tc", "tree-cp", 26, None),
+            r("p-ta", "tree-app", 11, None),
+            r("p-tz", "treehouse", 4, None),
+            r("p-big", "Larkspur", 40, None),
+        ];
+        let h = Hints {
+            duplicates: &[],
+            closest: &[],
+        };
+        let ch = plan(rooms, &[], &HashMap::new(), &h, Thresholds::for_strength(1));
+        let got: Vec<(&str, &str)> = ch
+            .iter()
+            .map(|c| (c.from.as_deref().unwrap(), c.to.as_str()))
+            .collect();
+        assert!(ch.iter().all(|c| c.kind == "merge"));
+        assert_eq!(
+            got,
+            [
+                ("p-fb", "p-b"),
+                ("p-kb", "p-k"),
+                ("p-lc", "p-l"),
+                ("p-ta", "p-t"),
+                ("p-tc", "p-t"),
+            ],
+            "KestrelPortal is another employer's; treehouse has no boundary; Larkspur is too big"
+        );
+        assert_eq!(
+            after_project("OptimusPrime", "Optimus").as_deref(),
+            Some("prime")
+        );
+        assert_eq!(after_project("optimusprime", "Optimus"), None);
+        assert_eq!(
+            after_project("Ops-x", "Op"),
+            None,
+            "a project name of 3+ letters"
+        );
     }
 
     #[test]
