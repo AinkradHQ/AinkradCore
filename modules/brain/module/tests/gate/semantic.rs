@@ -361,7 +361,16 @@ async fn vectors_survive_a_restart_a_new_model_drops_them_and_a_refusal_deletes(
         Some(json!({"ids": [format!("01JD{:022}", 1)], "mark": "refused"})),
     )
     .await;
-    assert_eq!(stored(&fx).await, vec![("fake-angles".to_owned(), 2)]);
+    // From disk in the background, so the refusal answers at once.
+    let mut left = stored(&fx).await;
+    for _ in 0..200 {
+        if left == vec![("fake-angles".to_owned(), 2)] {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        left = stored(&fx).await;
+    }
+    assert_eq!(left, vec![("fake-angles".to_owned(), 2)]);
 
     // A new model id: the old vectors are not used and are dropped; the two live items are embedded again.
     fake.other.store(true, Ordering::SeqCst);

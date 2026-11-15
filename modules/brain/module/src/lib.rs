@@ -492,6 +492,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         review::ItemsPatch,
         review::Changed,
         review::RoomConfig,
+        commit::CommitKeep,
         commit::CommitResult,
         commit::RoomMade,
         rules_api::RuleView,

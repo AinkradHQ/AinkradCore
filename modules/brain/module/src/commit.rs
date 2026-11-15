@@ -7,9 +7,11 @@
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult};
 use ainkrad_core_server::store::begin_write;
+use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
-use serde::Serialize;
+use brain_model::group::UNSORTED;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Row, SqlitePool};
@@ -17,7 +19,7 @@ use utoipa::ToSchema;
 
 use crate::files::{self, CANON};
 use crate::imports::run_state;
-use crate::review::{RoomConfig, mixed, room_id};
+use crate::review::{RoomConfig, draft_rules, mixed, parse, room_id};
 use crate::{Brain, ROOM_BACKUP_READY, code, record};
 
 #[derive(Serialize, ToSchema)]
@@ -41,20 +43,44 @@ pub struct CommitResult {
     pub state: String,
 }
 
+/// The Review's one decision (API minor 73): the rooms to import; every other room is refused.
+#[derive(Deserialize, ToSchema)]
+pub struct CommitKeep {
+    /// The proposals to import. Every other open proposal is refused (its items wiped, their hashes
+    /// kept so they never come back), Unsorted aside. A room imported already may be named again.
+    pub keep: Vec<String>,
+    /// Unsorted's items wait in "No room yet" (true, the default) or are refused and deleted (false).
+    #[serde(default)]
+    pub keep_unsorted: Option<bool>,
+}
+
 #[utoipa::path(post, path = "/imports/{run}/commit", operation_id = "brainCommit", tag = "brain",
     params(("run" = String, Path, description = "Run id")),
+    request_body(content = Option<CommitKeep>, description = "Optional (API minor 73): import exactly `keep` and refuse every other room in the same call. Without a body the accepted rooms are imported"),
     responses((status = 200, description = "Import accepted rooms (step-up; audited as `brain.room.created` per room)", body = CommitResult)))]
 pub(crate) async fn commit(
     State(app): State<App>,
     Extension(b): Extension<Brain>,
     Path(run): Path<String>,
+    body: Bytes,
 ) -> ApiResult<CommitResult> {
+    let keep: Option<CommitKeep> = if body.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::from_slice(&body)
+                .map_err(|_| ApiError::bad_request("a body of keep and keep_unsorted"))?,
+        )
+    };
     let (state, _) = run_state(&app, &run).await?;
     if state != "review" {
         return Err(ApiError::conflict("the run is not in review"));
     }
     let key = b.key(&app).await?;
     let st = crate::imports::staging(&app, &b, &run, false).await?;
+    if let Some(k) = &keep {
+        decide(&app, &b, &st, &run, k).await?;
+    }
     let accepted =
         sqlx::query("SELECT * FROM proposals WHERE state IN ('accepted','held') ORDER BY id")
             .fetch_all(&st)
@@ -103,6 +129,73 @@ pub(crate) async fn commit(
         result.state = "committed".to_owned();
     }
     Ok(Json(result))
+}
+
+/// `keep` accepted, every other open room refused, in one staging transaction. Checked before any
+/// write: an unknown or merged id, Unsorted in `keep`, or a kept room that mixes two employers.
+/// Idempotent: a resumed call finds the same states (a committed room stays committed).
+async fn decide(
+    app: &App,
+    b: &Brain,
+    st: &SqlitePool,
+    run: &str,
+    k: &CommitKeep,
+) -> Result<(), ApiError> {
+    let rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT id, state, signals FROM proposals")
+            .fetch_all(st)
+            .await?;
+    let state_of = |id: &str| rows.iter().find(|r| r.0 == id).map(|r| r.1.as_str());
+    for id in &k.keep {
+        if id == UNSORTED || matches!(state_of(id), None | Some("merged")) {
+            return Err(ApiError::bad_request(
+                "keep names a room that is not in this run",
+            ));
+        }
+        if state_of(id) != Some("committed") && mixed(st, id).await? {
+            return Err(code(
+                409,
+                "mixed_employers",
+                "a kept room mixes two employers",
+            ));
+        }
+    }
+    let mut refused: Vec<&(String, String, String)> = vec![];
+    let mut tx = st.begin().await?;
+    for r in &rows {
+        let (id, state) = (r.0.as_str(), r.1.as_str());
+        if matches!(state, "merged" | "committed") {
+            continue;
+        }
+        let to = if id == UNSORTED {
+            if k.keep_unsorted.unwrap_or(true) {
+                "proposed"
+            } else {
+                "refused"
+            }
+        } else if k.keep.iter().any(|x| x == id) {
+            // A held room waits for its backup as it did.
+            if state == "held" { "held" } else { "accepted" }
+        } else {
+            "refused"
+        };
+        if to != state {
+            sqlx::query("UPDATE proposals SET state = ? WHERE id = ?")
+                .bind(to)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            if to == "refused" && id != UNSORTED {
+                refused.push(r);
+            }
+        }
+    }
+    tx.commit().await?;
+    for r in refused {
+        draft_rules(app, run, &parse::<Vec<String>>(&r.2)).await?;
+    }
+    crate::vectors::forget_refused(app, b, st).await;
+    Ok(())
 }
 
 /// The run is done: every accepted proposal is committed.

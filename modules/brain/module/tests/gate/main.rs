@@ -8,6 +8,7 @@ mod backfill;
 mod claim;
 mod collectors;
 mod common;
+mod decide;
 mod distil;
 mod index;
 mod intake;

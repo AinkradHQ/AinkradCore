@@ -18,9 +18,9 @@ use super::common::*;
 const DIM: usize = 512;
 
 #[derive(Default)]
-struct Topics {
+pub(super) struct Topics {
     seen: Mutex<Vec<String>>,
-    hold: AtomicBool,
+    pub(super) hold: AtomicBool,
 }
 
 fn num(t: &str, key: &str) -> Option<usize> {
@@ -55,7 +55,7 @@ impl Embedder for Topics {
 }
 
 /// Item `n` in folder `hint` ("" for Unsorted) about topic `k`, variant `var`.
-fn it(n: u32, hint: &str, k: usize, var: usize) -> Value {
+pub(super) fn it(n: u32, hint: &str, k: usize, var: usize) -> Value {
     item(
         n,
         hint,
@@ -78,7 +78,7 @@ async fn semantic(fx: &Fx, run: &str) -> Value {
     ok(fx, Method::GET, &format!("/imports/{run}/semantic"), None).await
 }
 
-async fn ready(fx: &Fx, run: &str) -> Value {
+pub(super) async fn ready(fx: &Fx, run: &str) -> Value {
     for _ in 0..600 {
         let v = semantic(fx, run).await;
         if v["state"] != "pending" {
@@ -99,7 +99,7 @@ async fn rooms(fx: &Fx, run: &str) -> usize {
 }
 
 /// The proposal as stored: every item's room and mark and every proposal row.
-async fn dump(fx: &Fx, run: &str) -> String {
+pub(super) async fn dump(fx: &Fx, run: &str) -> String {
     let st = staging_pool(fx, run).await;
     let items: Vec<(String, Option<String>, Option<String>)> =
         sqlx::query_as("SELECT item_id, proposal, mark FROM items ORDER BY item_id")
@@ -119,7 +119,7 @@ async fn dump(fx: &Fx, run: &str) -> String {
 /// Alpha and Beta (one topic, 3 items each), Gamma (4 items, one a near-copy of another), Tiny
 /// (1 item of Gamma's topic), Lonely (1 item of a topic no room has), Delta (3 items) and an
 /// Unsorted item of Delta's topic.
-async fn sample(fx: &Fx) -> String {
+pub(super) async fn sample(fx: &Fx) -> String {
     let run = start(fx).await;
     let mut items = vec![];
     items.extend((1..=3).map(|n| it(n, "/u/Dev/Alpha", 1, n as usize)));

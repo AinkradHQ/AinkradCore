@@ -145,6 +145,11 @@ pub static VECTORS: &[FileMigration] = &[
         name: "vectors_0002",
         up: include_str!("../migrations/vectors_0002.sql"),
     },
+    FileMigration {
+        version: 3,
+        name: "vectors_0003",
+        up: include_str!("../migrations/vectors_0003.sql"),
+    },
 ];
 
 pub static INDEX: &[FileMigration] = &[FileMigration {
@@ -173,6 +178,11 @@ pub static STAGING: &[FileMigration] = &[
         version: 4,
         name: "staging_0004",
         up: include_str!("../migrations/staging_0004.sql"),
+    },
+    FileMigration {
+        version: 5,
+        name: "staging_0005",
+        up: include_str!("../migrations/staging_0005.sql"),
     },
 ];
 
