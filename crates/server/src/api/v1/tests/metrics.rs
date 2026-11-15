@@ -78,3 +78,68 @@ async fn metrics_are_prometheus_text_with_no_names_or_ids() {
     let (_, again) = text(&fx.app, Some(&fx.dev)).await;
     assert!(again.contains("class=\"2xx\"} 1"), "{again}");
 }
+
+#[derive(Clone, Default)]
+struct Logs(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Logs {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Every error answer is logged with its method and path, never its query (a search's words):
+/// the refusals of the gates and a module's unknown route (axum's 404, no `ApiError`) alike.
+#[tokio::test]
+async fn every_error_answer_is_logged_with_its_path_never_its_query() {
+    let logs = Logs::default();
+    let writer = logs.clone();
+    let sub = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .finish();
+    // See `pairing_invite`: a second dispatcher keeps the callsite cache asking ours.
+    let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    let _guard = tracing::subscriber::set_default(sub);
+    let fx = fx().await;
+    for (path, status) in [
+        // No such route: denied by default before routing.
+        ("/api/v1/nothing/r1", StatusCode::FORBIDDEN),
+        // A refused query name: the gate answers before any route.
+        ("/api/v1/devices?secretword=1", StatusCode::BAD_REQUEST),
+    ] {
+        let res = router(fx.app.clone())
+            .oneshot(req(Method::GET, path, Some(&fx.dev), None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), status, "{path}");
+    }
+    let (s, _) = text(&fx.app, Some(&fx.dev)).await;
+    assert_eq!(s, StatusCode::OK);
+    let logged = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    let lines: Vec<&str> = logged
+        .lines()
+        .filter(|l| l.contains("answered with an error"))
+        .collect();
+    let line = lines[0];
+    assert!(
+        line.contains("path=\"/api/v1/nothing/r1\"") && line.contains("status=403"),
+        "{line}"
+    );
+    assert!(line.contains("GET"), "{line}");
+    assert!(
+        lines[1].contains("path=\"/api/v1/devices\"") && lines[1].contains("status=400"),
+        "{logged}"
+    );
+    assert!(!logged.contains("secretword"), "{logged}");
+    assert!(
+        !logged.contains("/api/v1/metrics status"),
+        "a 200 is not logged: {logged}"
+    );
+}

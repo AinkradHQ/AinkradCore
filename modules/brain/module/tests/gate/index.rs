@@ -205,3 +205,48 @@ async fn search_input_is_words_never_syntax_and_the_index_follows_new_sources() 
         "K8s"
     );
 }
+
+/// The Items tab before any distillation: the newest sources, newest first, with no records yet.
+#[tokio::test]
+async fn latest_lists_the_newest_sources_and_says_nothing_is_distilled() {
+    let fx = fx().await;
+    let room = room_of(&fx, DOCS).await;
+    let v = ok(
+        &fx,
+        Method::GET,
+        &format!("/rooms/{room}/latest?limit=2"),
+        None,
+    )
+    .await;
+    assert_eq!(v["records"], 0, "{v}");
+    let items = v["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{v}");
+    // `item(n)` starts on day 1 + n: the last DOCS item is the newest.
+    assert_eq!(items[0]["title"], DOCS[DOCS.len() - 1].0, "{v}");
+    assert_eq!(items[1]["title"], DOCS[DOCS.len() - 2].0, "{v}");
+    assert_eq!(items[0]["type"], "source");
+    assert_eq!(items[0]["source_kind"], "claude_code");
+    assert!(
+        items[0]["started_at"].as_str() > items[1]["started_at"].as_str(),
+        "{v}"
+    );
+    let all = ok(&fx, Method::GET, &format!("/rooms/{room}/latest"), None).await;
+    assert_eq!(all["items"].as_array().unwrap().len(), DOCS.len());
+    // A closed room and an unknown one answer as search does.
+    let closed =
+        committed_room_named(&fx, "Beta", &[("Other", "a different room's only note")]).await;
+    let (s, v) = call(
+        &fx,
+        &fx.admin,
+        Method::GET,
+        &format!("/rooms/{closed}/latest"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (s, &v["code"]),
+        (StatusCode::CONFLICT, &json!("room_closed"))
+    );
+    let (s, _) = call(&fx, &fx.admin, Method::GET, "/rooms/nope/latest", None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}

@@ -163,6 +163,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/rooms", "read"),
     ("GET", "/sync", "read"),
     ("GET", "/rooms/{room}/search", "read"),
+    ("GET", "/rooms/{room}/latest", "read"),
     ("GET", "/rooms/{room}/policy", "read"),
     ("GET", "/rooms/{room}/distils", "read"),
     ("GET", "/rooms/{room}/inbox", "read"),
@@ -444,6 +445,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         sync::status,
         sync::sync_now,
         index::search,
+        index::latest,
         claim::claim_route,
         inbox::list,
         inbox::decide,
@@ -510,6 +512,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         sync::SyncSource,
         index::Hit,
         index::Hits,
+        index::Latest,
+        index::LatestItem,
         claim::ClaimRequest,
         claim::RoomClaim,
         distil::DistilView,
@@ -576,6 +580,7 @@ impl Module for Brain {
             .route("/rooms", get(rooms::list))
             .route("/rooms/{room}/open", post(rooms::open))
             .route("/rooms/{room}/search", get(index::search))
+            .route("/rooms/{room}/latest", get(index::latest))
             .route("/rooms/{room}/claims", post(claim::claim_route))
             .route("/rooms/{room}/inbox", get(inbox::list))
             .route("/rooms/{room}/inbox/{id}", post(inbox::decide))
