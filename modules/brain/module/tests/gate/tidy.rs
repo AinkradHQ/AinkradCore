@@ -1,9 +1,9 @@
 //! The AI tidy of Review with a fake embedder: a text `topic=K var=V` is the unit vector
 //! `cos20° · e_K + sin20° · e_(32+V)`. Two items of one topic score 0.88 (not near-copies), the same
-//! `(K, V)` scores 1 (a near-copy), two 3-item rooms of one topic score 0.96 (one topic), other
-//! topics 0. Every name and text here is made up.
+//! `(K, V)` scores 1 and shares its text but the last words (a near-copy), two 3-item rooms of one
+//! topic score 0.96 (one topic, still two rooms), other topics 0. Every name and text here is made
+//! up.
 
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -60,7 +60,13 @@ fn it(n: u32, hint: &str, k: usize, var: usize) -> Value {
         n,
         hint,
         &format!("note {n}"),
-        &format!("text {n} topic={k} var={var} "),
+        &format!(
+            "topic={k} var={var} {} item {n}",
+            (0..20)
+                .map(|w| format!("v{var}w{w}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
     )
 }
 
@@ -136,7 +142,7 @@ async fn sample(fx: &Fx) -> String {
 }
 
 #[tokio::test]
-async fn the_tidy_merges_copies_and_rooms_folds_tiny_ones_and_moves_unsorted_items() {
+async fn the_tidy_merges_copies_and_one_name_moves_unsorted_items_and_keeps_every_project() {
     let fake = Arc::new(Topics::default());
     let fx = fx_with(Brain::with_embedder(fake.clone()), 1).await;
     let run = sample(&fx).await;
@@ -146,17 +152,16 @@ async fn the_tidy_merges_copies_and_rooms_folds_tiny_ones_and_moves_unsorted_ite
     assert_eq!(t["state"], "applied", "{v}");
     assert_eq!(
         t["summary"],
-        json!({"duplicates_merged": 1, "rooms_merged": 2, "rooms_folded": 2, "items_moved": 1,
-               "rooms_before": 8, "rooms_after": 4})
+        json!({"duplicates_merged": 1, "rooms_merged": 1, "rooms_folded": 0, "items_moved": 1,
+               "rooms_before": 8, "rooms_after": 7})
     );
     assert_eq!(
         t["changes_url"],
         format!("/modules/brain/v1/imports/{run}/semantic/changes")
     );
-    // What the Review list shows: four rooms where there were eight, and no "Merge?" question.
+    // What the Review list shows: one room fewer (the plural), every named project kept.
     let p = proposals(&fx, &run).await;
-    assert_eq!(rooms(&fx, &run).await, 4);
-    assert!(p.iter().all(|c| c["suggest_merge"].is_null()), "{p:?}");
+    assert_eq!(rooms(&fx, &run).await, 7);
     let pricing: i64 = p
         .iter()
         .filter(|c| c["name"].as_str().unwrap().starts_with("Pricing"))
@@ -168,21 +173,17 @@ async fn the_tidy_merges_copies_and_rooms_folds_tiny_ones_and_moves_unsorted_ite
         4,
         "with the Unsorted item"
     );
-    let gamma = by_name(&p, "Gamma");
-    assert_eq!(
-        gamma["item_count"], 5,
-        "Gamma, its kept copy and Tiny's item"
-    );
-    let ab: i64 = ["Alpha", "Beta"]
-        .iter()
-        .filter_map(|n| p.iter().find(|x| x["name"] == *n))
-        .map(|x| x["item_count"].as_i64().unwrap())
-        .sum();
-    assert_eq!(ab, 6, "Alpha and Beta are one room");
-    // The applied suggestions are no longer offered as decisions.
+    assert_eq!(by_name(&p, "Gamma")["item_count"], 4, "with its kept copy");
+    // Two projects whose items read alike stay two; a tiny named project stays too.
+    assert_eq!(by_name(&p, "Alpha")["item_count"], 3);
+    assert_eq!(by_name(&p, "Beta")["item_count"], 3);
+    assert_eq!(by_name(&p, "Tiny")["item_count"], 1);
+    assert_eq!(by_name(&p, "Lonely")["item_count"], 1);
+    // The applied suggestions are no longer offered as decisions; "these read alike" stays a
+    // question for the person.
     assert_eq!(v["duplicates"], json!([]));
-    assert_eq!(v["merges"], json!([]));
     assert_eq!(v["closest"], json!([]));
+    assert!(!v["merges"].as_array().unwrap().is_empty(), "{v}");
 
     // See changes: each change with its items, rooms and score.
     let c = ok(
@@ -194,37 +195,22 @@ async fn the_tidy_merges_copies_and_rooms_folds_tiny_ones_and_moves_unsorted_ite
     .await;
     let ch = c["changes"].as_array().unwrap();
     let kinds: Vec<&str> = ch.iter().map(|x| x["kind"].as_str().unwrap()).collect();
-    assert_eq!(
-        kinds,
-        ["duplicate", "merge", "merge", "fold", "fold", "move"]
-    );
-    assert_eq!(ch[2]["score"], 1.0, "a merge by name");
+    assert_eq!(kinds, ["duplicate", "merge", "move"]);
+    assert_eq!(ch[1]["score"], 1.0, "a merge by name");
     // Titles come with each change; a near-copy names the kept item and its room.
     assert_eq!(ch[0]["item_titles"], json!(["note 9"]));
     assert_eq!(
         (ch[0]["to_title"].as_str(), ch[0]["to_name"].as_str()),
         (Some("note 10"), Some("Gamma"))
     );
-    assert_eq!(ch[5]["item_titles"], json!(["note 13"]));
+    assert_eq!(ch[2]["item_titles"], json!(["note 13"]));
     assert_eq!(
         (ch[0]["to"].as_str(), &ch[0]["item_ids"]),
         (Some(id(10).as_str()), &json!([id(9)]))
     );
     assert!(ch[0]["score"].as_f64().unwrap() > 0.99);
-    let fold_to: BTreeMap<String, String> = ch
-        .iter()
-        .filter(|x| x["kind"] == "fold")
-        .map(|x| {
-            (
-                x["from_name"].as_str().unwrap().to_owned(),
-                x["to_name"].as_str().unwrap().to_owned(),
-            )
-        })
-        .collect();
-    assert_eq!(fold_to["Tiny"], "Gamma");
-    assert_eq!(fold_to["Lonely"], "Unsorted");
-    assert_eq!(ch[5]["item_ids"], json!([id(13)]));
-    assert_eq!(c["ai_tidy"]["summary"]["rooms_after"], 4);
+    assert_eq!(ch[2]["item_ids"], json!([id(13)]));
+    assert_eq!(c["ai_tidy"]["summary"]["rooms_after"], 7);
     // Nothing reached the Brain: no room, nothing committed.
     let made: i64 = sqlx::query_scalar("SELECT count(*) FROM brain_rooms")
         .fetch_one(&fx.app.pool)
@@ -276,13 +262,13 @@ async fn undo_restores_the_proposal_exactly_and_a_re_sort_tidies_again() {
     ok(&fx, Method::POST, &format!("/imports/{run}/regroup"), None).await;
     let v = ready(&fx, &run).await;
     assert_eq!(v["ai_tidy"]["state"], "applied");
-    assert_eq!(v["ai_tidy"]["summary"]["rooms_after"], 4);
+    assert_eq!(v["ai_tidy"]["summary"]["rooms_after"], 7);
     assert_eq!(v["ai_tidy"]["summary"]["duplicates_merged"], 1);
     // A second re-sort over an applied tidy: its near-copy is an item again first, so it is found again.
     ok(&fx, Method::POST, &format!("/imports/{run}/regroup"), None).await;
     let v = ready(&fx, &run).await;
     assert_eq!(v["ai_tidy"]["summary"]["duplicates_merged"], 1);
-    assert_eq!(rooms(&fx, &run).await, 4);
+    assert_eq!(rooms(&fx, &run).await, 7);
 }
 
 #[tokio::test]
@@ -319,7 +305,7 @@ async fn a_committed_room_is_never_read_or_filled_by_the_tidy() {
 }
 
 #[tokio::test]
-async fn thirty_five_rooms_with_near_copies_come_out_fewer() {
+async fn thirty_five_named_rooms_stay_thirty_five_and_lose_their_near_copies() {
     let fake = Arc::new(Topics::default());
     let fx = fx_with(Brain::with_embedder(fake.clone()), 1).await;
     let run = start(&fx).await;
@@ -398,7 +384,10 @@ async fn thirty_five_rooms_with_near_copies_come_out_fewer() {
     let after = rooms(&fx, &run).await;
     println!("35-room import: {s}, Review shows {after} rooms");
     assert_eq!(s["rooms_before"], 35);
-    assert!(after < 35, "{s}");
+    assert_eq!(
+        after, 35,
+        "rooms of one topic are still different projects: {s}"
+    );
     assert_eq!(s["rooms_after"].as_u64().unwrap() as usize, after);
     assert!(s["duplicates_merged"].as_u64().unwrap() > 0);
     assert!(v["duplicates"].as_array().unwrap().is_empty());

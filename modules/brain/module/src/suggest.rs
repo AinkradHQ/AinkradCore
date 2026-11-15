@@ -15,6 +15,7 @@ use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use brain_model::group::UNSORTED;
 use brain_model::item::Item;
+use brain_model::semantic::{Boilerplate, sketch};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use utoipa::ToSchema;
@@ -234,19 +235,28 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
         .fetch_all(&st)
         .await?;
     // Items the user already refused are never embedded; Unsorted items have no room.
-    let mut owned: Vec<(Item, Option<String>)> = Vec::new();
+    let mut kept = Vec::new();
     for r in &rows {
-        if r.try_get::<Option<String>, _>("mark")?.as_deref() == Some("refused") {
-            continue;
+        if r.try_get::<Option<String>, _>("mark")?.as_deref() != Some("refused") {
+            kept.push(r);
         }
+    }
+    let docs: Vec<(&str, &str)> = kept
+        .iter()
+        .map(|r| Ok((r.try_get("title")?, r.try_get("text")?)))
+        .collect::<Result<_, sqlx::Error>>()?;
+    let bp = Boilerplate::learn(&docs);
+    let mut owned: Vec<(Item, Option<String>)> = Vec::new();
+    let mut sketches: Vec<Vec<u64>> = Vec::new();
+    for r in kept {
         let room = r
             .try_get::<Option<String>, _>("proposal")?
             .filter(|p| p != UNSORTED);
-        let mut item = item_of(r)?;
-        // Only the head is read below (the embedded text, the signals): a transcript can be megabytes.
-        cut(&mut item.text, 4 * brain_model::semantic::EMBED_CHARS);
+        let (item, sk) = distinctive(item_of(r)?, &bp);
         owned.push((item, room));
+        sketches.push(sk);
     }
+    let aliases = crate::aliases::of_run(&st).await?;
     let live: Vec<String> = sqlx::query_scalar(
         "SELECT id FROM proposals WHERE id != ? AND state NOT IN ('merged', 'refused')",
     )
@@ -376,9 +386,11 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
         let sug = tokio::task::spawn_blocking(move || {
             let inputs: Vec<Input> = owned
                 .iter()
-                .map(|(item, room)| Input {
+                .zip(&sketches)
+                .map(|((item, room), sk)| Input {
                     item,
                     room: room.as_deref(),
+                    sketch: Some(sk),
                 })
                 .collect();
             let refs: Vec<ProposalRef> = members
@@ -390,7 +402,7 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
                 .collect();
             let mut cache = vectors.lock().unwrap_or_else(|e| e.into_inner());
             let sug = semantic::run(emb.as_ref(), &mut cache, &inputs, &refs, th)?;
-            let closest = closest_hints(&cache, &m2, &owned, cand, th);
+            let closest = closest_hints(&cache, &m2, &owned, cand, th, &aliases);
             Ok::<_, String>((sug, closest))
         })
         .await
@@ -423,18 +435,7 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
     };
     let view = SemanticView {
         state: "ready".into(),
-        duplicates: sug
-            .duplicates
-            .iter()
-            .map(|d| DuplicateHint {
-                keep: d.keep.clone(),
-                item_ids: std::iter::once(d.keep.clone())
-                    .chain(d.duplicates.iter().cloned())
-                    .collect(),
-                score: d.score,
-                reason: d.reason.clone(),
-            })
-            .collect(),
+        duplicates: dup_hints(&sug.duplicates),
         rooms: sug
             .rooms
             .iter()
@@ -482,7 +483,6 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
     if done == 1 {
         let hints = crate::tidy::Hints {
             duplicates: &view.duplicates,
-            merges: &view.merges,
             closest: &view.closest,
         };
         crate::tidy::apply(&mut tx, &employers, &vecs, &hints, th).await?;
@@ -498,6 +498,21 @@ async fn work(app: &App, b: &Brain, run: &str, epoch: i64) -> Result<(), ApiErro
     Ok(())
 }
 
+/// The item as the local model reads it, and the sketch its near-copies are confirmed on: the
+/// run's boilerplate (a shared preamble, injected instructions) removed from the whole text, then
+/// only the head kept (a transcript can be megabytes). A title that is boilerplate (the first line
+/// of the same instructions) is dropped. `content_hash` stays the item's own.
+/// ponytail: vectors are cached by content hash, and a later run with other boilerplate reuses them.
+pub(crate) fn distinctive(mut item: Item, bp: &Boilerplate) -> (Item, Vec<u64>) {
+    item.text = bp.strip(&item.text);
+    let sk = sketch(&item.text);
+    cut(&mut item.text, 4 * brain_model::semantic::EMBED_CHARS);
+    if bp.is_boiler(&item.title) {
+        item.title.clear();
+    }
+    (item, sk)
+}
+
 /// Cuts `s` to at most `max` bytes, on a char boundary.
 fn cut(s: &mut String, max: usize) {
     if s.len() > max {
@@ -509,24 +524,38 @@ fn cut(s: &mut String, max: usize) {
     }
 }
 
+pub(crate) fn dup_hints(d: &[brain_model::semantic::DuplicateGroup]) -> Vec<DuplicateHint> {
+    d.iter()
+        .map(|d| DuplicateHint {
+            keep: d.keep.clone(),
+            item_ids: std::iter::once(d.keep.clone())
+                .chain(d.duplicates.iter().cloned())
+                .collect(),
+            score: d.score,
+            reason: d.reason.clone(),
+        })
+        .collect()
+}
+
 /// A room an Unsorted item could be filed in.
-struct Cand {
-    id: String,
-    name: String,
+pub(crate) struct Cand {
+    pub id: String,
+    pub name: String,
     /// Lowercase employer of an employer's room.
-    employer: Option<String>,
-    in_review: bool,
+    pub employer: Option<String>,
+    pub in_review: bool,
     /// Stored centroid of a committed room; `None` for a proposal (its members' mean is used).
-    centroid: Option<Vec<f32>>,
+    pub centroid: Option<Vec<f32>>,
 }
 
 /// Closest room for each eligible Unsorted item (`room == None`), from vectors already in `cache`.
-fn closest_hints(
+pub(crate) fn closest_hints(
     cache: &semantic::VectorCache,
     model: &str,
     owned: &[(Item, Option<String>)],
     cand: Vec<Cand>,
     th: Thresholds,
+    aliases: &brain_model::group::Aliases,
 ) -> Vec<ClosestHint> {
     use brain_model::semantic::{RoomVec, closest_room, eligible, normalized};
     let mut sums: HashMap<&str, Vec<f32>> = HashMap::new();
@@ -563,7 +592,9 @@ fn closest_hints(
         .filter_map(|(item, _)| {
             let v = cache.get(model, &item.content_hash)?;
             let emp = match brain_model::signals::extract(item).company {
-                Some((n, brain_model::signals::RoomKind::Employer)) => Some(n.to_lowercase()),
+                Some((n, brain_model::signals::RoomKind::Employer)) => {
+                    Some(brain_model::group::canonical(aliases, n).to_lowercase())
+                }
                 _ => None,
             };
             let c = closest_room(v, emp.as_deref(), &rooms, th.closest, th.margin)?;

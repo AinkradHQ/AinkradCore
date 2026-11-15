@@ -25,6 +25,7 @@ use utoipa::{OpenApi, ToSchema};
 mod access;
 mod ai;
 mod ai_semantic;
+mod aliases;
 mod answer;
 mod backfill;
 pub mod cipher;
@@ -39,6 +40,7 @@ mod inbox;
 mod index;
 pub mod key;
 mod policy;
+pub mod propose;
 mod review;
 pub mod rooms;
 mod rules_api;
@@ -46,6 +48,7 @@ pub mod semantic;
 mod suggest;
 mod sync;
 mod tidy;
+pub use tidy::{TidyChange, TidySummary};
 mod transcripts;
 mod vectors;
 
@@ -82,6 +85,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0005_brain_room_access.up.sql"),
         down: include_str!("../migrations/0005_brain_room_access.down.sql"),
     },
+    Migration {
+        version: 6,
+        name: "brain_seen_item",
+        up: include_str!("../migrations/0006_brain_seen_item.up.sql"),
+        down: include_str!("../migrations/0006_brain_seen_item.down.sql"),
+    },
 ];
 
 /// Employer and client rooms are discovered and reviewed in M1 but committed only after the import
@@ -107,6 +116,8 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports/{run}/proposals/{p}/refuse"),
     ("PATCH", "/imports/{run}/items"),
     ("POST", "/imports/{run}/regroup"),
+    ("POST", "/imports/{run}/proposals/{p}/same-project"),
+    ("DELETE", "/aliases/{from}"),
     ("POST", "/imports/{run}/semantic/undo"),
     ("PUT", "/settings/{name}"),
     ("POST", "/rules"),
@@ -414,6 +425,9 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         review::split,
         review::refuse,
         review::regroup,
+        aliases::same_project,
+        aliases::list,
+        aliases::remove,
         suggest::get,
         tidy::changes,
         tidy::undo,
@@ -460,6 +474,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         review::ProposalCard,
         review::MergeSuggestion,
         review::Regrouped,
+        aliases::RoomAlias,
         suggest::SemanticView,
         suggest::DuplicateHint,
         suggest::RoomHint,
@@ -544,6 +559,12 @@ impl Module for Brain {
             .route("/imports/{run}/proposals/{p}/split", post(review::split))
             .route("/imports/{run}/proposals/{p}/refuse", post(review::refuse))
             .route("/imports/{run}/regroup", post(review::regroup))
+            .route(
+                "/imports/{run}/proposals/{p}/same-project",
+                post(aliases::same_project),
+            )
+            .route("/aliases", get(aliases::list))
+            .route("/aliases/{from}", axum::routing::delete(aliases::remove))
             .route("/imports/{run}/semantic", get(suggest::get))
             .route("/imports/{run}/semantic/changes", get(tidy::changes))
             .route("/imports/{run}/semantic/undo", post(tidy::undo))
@@ -615,6 +636,8 @@ impl Module for Brain {
             "brain.room.access",
             "brain.ai.proposed",
             "brain.ai.refused",
+            "brain.alias.set",
+            "brain.alias.removed",
         ]
     }
 

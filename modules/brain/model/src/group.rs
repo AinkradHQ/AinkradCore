@@ -98,7 +98,32 @@ fn repo_index(sigs: &[Signals]) -> BTreeMap<String, Option<String>> {
 }
 
 pub fn group(items: &[Item]) -> Vec<Proposal> {
-    let sigs: Vec<Signals> = items.iter().map(extract).collect();
+    group_with(items, &BTreeMap::new())
+}
+
+/// "Same project as": `norm(name)` of a room the person said is another project's -> that project's
+/// name. Both its rooms and its employer are the target's.
+pub type Aliases = BTreeMap<String, String>;
+
+/// The name `n` stands for under `aliases` (itself when none).
+pub fn canonical<'a>(aliases: &'a Aliases, n: &'a str) -> &'a str {
+    aliases.get(&norm(n)).map_or(n, String::as_str)
+}
+
+/// [`group`], with the person's "same project as" aliases applied first.
+pub fn group_with(items: &[Item], aliases: &Aliases) -> Vec<Proposal> {
+    let mut sigs: Vec<Signals> = items.iter().map(extract).collect();
+    // An aliased employer is the target's employer, so the guard does not split them again.
+    for s in &mut sigs {
+        if let Some((n, k)) = s.company
+            && let Some(to) = aliases.get(&norm(n))
+        {
+            s.company = crate::signals::COMPANIES
+                .iter()
+                .find(|c| norm(c.1) == norm(to))
+                .map_or(Some((n, k)), |c| Some((c.1, k)));
+        }
+    }
     let repos = repo_index(&sigs);
     let mut groups: BTreeMap<String, Acc> = BTreeMap::new();
     let mut unsorted: Vec<usize> = Vec::new();
@@ -107,6 +132,9 @@ pub fn group(items: &[Item]) -> Vec<Proposal> {
             unsorted.push(i);
             continue;
         };
+        if let Some(to) = aliases.get(&k) {
+            (k, name) = (norm(to), to.clone());
+        }
         let mut under = usize::from(s.under_projects);
         // A repo folder run elsewhere joins its project (`OptimusBackend` -> `Optimus`).
         if s.project.is_some()
@@ -343,6 +371,24 @@ mod tests {
         i.project_hint = Some(hint.to_owned());
         i.title = title.to_owned();
         i
+    }
+
+    #[test]
+    fn an_alias_makes_two_employers_one_room() {
+        let mut items: Vec<Item> = (0..3)
+            .map(|n| it(n, "/u/Home/Projects/dvxmotive/Repositories/api", "t"))
+            .collect();
+        items.extend((3..6).map(|n| it(n, "/u/Home/Projects/AutomotiveAi", "t")));
+        assert_eq!(group(&items).len(), 2);
+        let a: Aliases = [("dvxmotive".to_owned(), "AutomotiveAi".to_owned())].into();
+        let g = group_with(&items, &a);
+        assert_eq!(g.len(), 1, "{g:?}");
+        assert_eq!(
+            (g[0].name.as_str(), g[0].item_ids.len()),
+            ("AutomotiveAi", 6)
+        );
+        assert!(g[0].warnings.is_empty());
+        assert_eq!(canonical(&a, "DVXMotive"), "AutomotiveAi");
     }
 
     #[test]

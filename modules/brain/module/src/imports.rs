@@ -293,6 +293,14 @@ pub(crate) async fn stage_items(
             results.push(reply("duplicate", None));
             continue;
         }
+        // The same item sent again with new text (a resumed collect, the file changed since): it
+        // replaces the staged one in place, never a second row.
+        let again = sqlx::query("DELETE FROM items WHERE item_id = ?")
+            .bind(&item.item_id)
+            .execute(&mut *stx)
+            .await?
+            .rows_affected()
+            > 0;
         let c = clean::clean(item);
         sqlx::query(
             "INSERT INTO items (item_id, content_hash, source_kind, device, path, project_hint, author_kind, \
@@ -321,12 +329,14 @@ pub(crate) async fn stage_items(
             sqlx::Error::Database(ref d) if d.is_unique_violation() => ApiError::conflict("an item id was sent twice"),
             e => e.into(),
         })?;
-        counts.stored += 1;
-        sqlx::query("UPDATE brain_sources SET items = items + 1 WHERE device = ? AND kind = ?")
-            .bind(&item.origin.device)
-            .bind(item.source_kind.as_str())
-            .execute(&mut *seen_tx)
-            .await?;
+        if !again {
+            counts.stored += 1;
+            sqlx::query("UPDATE brain_sources SET items = items + 1 WHERE device = ? AND kind = ?")
+                .bind(&item.origin.device)
+                .bind(item.source_kind.as_str())
+                .execute(&mut *seen_tx)
+                .await?;
+        }
         if c.pointer {
             counts.pointers += 1;
         }

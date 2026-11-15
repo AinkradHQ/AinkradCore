@@ -20,13 +20,15 @@ use crate::suggest::SemanticView;
 use crate::{Brain, code};
 
 mod plan;
-pub(crate) use plan::{Hints, RoomIn, plan};
+pub(crate) use plan::{Hints, RoomIn, confident, plan};
 
 /// The AI tidy of this run's proposal: what the local model changed by itself.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AiTidy {
-    /// `applied` (the proposal is tidied) or `undone` (restored as it was before; the next re-sort
-    /// may tidy again).
+    /// `applied` (the proposal is tidied), `undone` (restored as it was before; the next re-sort
+    /// may tidy again) or `declined`: the AI was not confident. Its tidy would have changed too much
+    /// (more than 30% of the items as near-copies, or fewer than a third of the rooms left; `summary`
+    /// says how much), so nothing was changed and the proposal is as the rules made it.
     #[serde(default)]
     pub state: String,
     #[serde(default)]
@@ -193,7 +195,7 @@ pub(crate) async fn undo(
     crate::suggest::get(State(app), Extension(b), Path(run)).await
 }
 
-fn summary(changes: &[TidyChange], before: u64, after: u64) -> TidySummary {
+pub(crate) fn summary(changes: &[TidyChange], before: u64, after: u64) -> TidySummary {
     let n = |k: &'static str| changes.iter().filter(move |c| c.kind == k);
     TidySummary {
         duplicates_merged: n("duplicate").map(|c| c.item_ids.len() as u64).sum(),
@@ -286,7 +288,22 @@ pub(crate) async fn apply(
     .fetch_optional(&mut *tx)
     .await?;
     let mut before = room_count(tx).await?;
+    let considered = rooms.iter().map(|r| r.items.len()).sum::<usize>() + unsorted.len();
     let new = plan(rooms, &unsorted, vecs, h, th);
+    if !confident(&new, considered, before as usize) {
+        if prior.is_none() {
+            let gone = new
+                .iter()
+                .filter(|c| c.kind == "merge" || c.kind == "fold")
+                .count() as u64;
+            let s = summary(&new, before, before.saturating_sub(gone));
+            sqlx::query("INSERT OR REPLACE INTO tidy (id, state, summary, changes, snapshot) VALUES (1, 'declined', ?, '[]', '{}')")
+                .bind(serde_json::to_string(&s).expect("summary"))
+                .execute(&mut *tx)
+                .await?;
+        }
+        return Ok(());
+    }
     let mut changes: Vec<TidyChange> = vec![];
     let mut snapshot = serde_json::to_string(&Snapshot { items, proposals }).expect("snapshot");
     if let Some((s, c, snap)) = prior {

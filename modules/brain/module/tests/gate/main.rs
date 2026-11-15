@@ -16,5 +16,6 @@ mod review;
 mod rooms;
 mod runner_history;
 mod semantic;
+mod sorting;
 mod sync;
 mod tidy;

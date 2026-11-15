@@ -235,8 +235,9 @@ pub async fn everything_stored(fx: &Fx) -> String {
     let root = brain_module::files::root(&fx.app);
     let mut out = String::new();
     for entry in walk(&root) {
-        // The vectors file holds no text (and is checked in the semantic tests).
-        if entry.ends_with("vectors.db") {
+        // The vectors file holds no text (and is checked in the semantic tests), the aliases file
+        // only room names.
+        if entry.ends_with("vectors.db") || entry.ends_with("aliases.db") {
             continue;
         }
         let pool = brain_module::files::open_migrated(
@@ -296,7 +297,16 @@ pub async fn committed_room_named(fx: &Fx, name: &str, texts: &[(&str, &str)]) -
     let items = texts
         .iter()
         .enumerate()
-        .map(|(i, (t, x))| item(i as u32 + 1, &format!("/h/Projects/{name}/a"), t, x))
+        // An item id is a source's stable key: each room's items are other sources.
+        .map(|(i, (t, x))| {
+            let seed = name.bytes().map(u32::from).sum::<u32>() % 1000;
+            item(
+                1000 * seed + i as u32 + 1,
+                &format!("/h/Projects/{name}/a"),
+                t,
+                x,
+            )
+        })
         .collect();
     send(fx, &run, items).await;
     finish(fx, &run).await;

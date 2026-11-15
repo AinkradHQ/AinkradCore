@@ -1,8 +1,8 @@
 //! Commit (E2-4): "Import accepted rooms". Creates each accepted room, writes its cleaned items as
 //! `sources` into the room's encrypted `canon.db` with an op-log and outbox row, records hashes in
-//! `brain_seen`, turns refused rooms into rules and closes the run. Idempotent per room: a crash
-//! mid-commit is resumed by committing again, and `sources.content_hash` is unique, so nothing is
-//! written twice.
+//! `brain_seen`, turns refused rooms into rules and closes the run. Idempotent: a crash mid-commit
+//! is resumed by committing again, text already in any room is never written again, and an item
+//! (by its stable id) imported again with new text is updated in its room, never copied.
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult};
@@ -191,67 +191,122 @@ pub(crate) async fn commit_room(
     }
     tx.commit().await?;
     // 2. The sources, in the room's own file, with their op-log and outbox rows in one transaction.
-    let canon = files::open_migrated(
-        &files::room_path(&files::root(app), &room),
-        key,
-        true,
-        CANON,
-    )
-    .await
-    .map_err(|e| code(500, "room_unavailable", e.to_string()))?;
-    let mut ctx = canon.begin().await?;
-    let mut written = 0;
+    // Never twice: text already stored in any room is skipped (another run, a resumed commit, a
+    // re-sort between two imports), and an item imported before with other text is updated in
+    // place, in the room it already lives in (unless the stored text is the newer one).
+    let mut by_room: std::collections::BTreeMap<String, Vec<&SqliteRow>> = Default::default();
+    by_room.insert(room.clone(), vec![]);
     for r in &items {
-        let hash: String = r.try_get("content_hash")?;
-        let added = sqlx::query(
-            "INSERT INTO sources (item_id, content_hash, source_kind, device, path, project_hint, author_kind, author_name, \
-             title, text, links, started_at, ended_at, run, assigned_by, needed, pointer) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(content_hash) DO NOTHING",
+        let (id, hash): (String, String) = (r.try_get("item_id")?, r.try_get("content_hash")?);
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT room FROM brain_seen WHERE content_hash = ? AND room != 'refused' LIMIT 1",
         )
-        .bind(r.try_get::<String, _>("item_id")?)
         .bind(&hash)
-        .bind(r.try_get::<String, _>("source_kind")?)
-        .bind(r.try_get::<String, _>("device")?)
-        .bind(r.try_get::<String, _>("path")?)
-        .bind(r.try_get::<Option<String>, _>("project_hint")?)
-        .bind(r.try_get::<String, _>("author_kind")?)
-        .bind(r.try_get::<String, _>("author_name")?)
-        .bind(r.try_get::<String, _>("title")?)
-        .bind(r.try_get::<String, _>("text")?)
-        .bind(r.try_get::<String, _>("links")?)
-        .bind(r.try_get::<String, _>("started_at")?)
-        .bind(r.try_get::<Option<String>, _>("ended_at")?)
-        .bind(run)
-        .bind(assigned_by)
-        .bind(i64::from(r.try_get::<Option<String>, _>("mark")?.as_deref() == Some("needed")))
-        .bind(r.try_get::<i64, _>("pointer")?)
-        .execute(&mut *ctx)
-        .await?
-        .rows_affected();
-        if added == 1 {
-            written += 1;
-            let seq: i64 = sqlx::query_scalar(
-                "INSERT INTO op_log (op, ref, at) VALUES ('source.add', ?, ?) RETURNING seq",
-            )
-            .bind(r.try_get::<String, _>("item_id")?)
-            .bind(&now)
-            .fetch_one(&mut *ctx)
-            .await?;
-            sqlx::query("INSERT INTO outbox (op_seq) VALUES (?)")
-                .bind(seq)
-                .execute(&mut *ctx)
-                .await?;
+        .fetch_optional(&app.pool)
+        .await?;
+        if stored.is_some() {
+            continue;
         }
+        let home: Option<String> = sqlx::query_scalar(
+            "SELECT room FROM brain_seen WHERE item_id = ? AND room != 'refused' ORDER BY rowid DESC LIMIT 1",
+        )
+        .bind(&id)
+        .fetch_optional(&app.pool)
+        .await?;
+        by_room
+            .entry(home.unwrap_or_else(|| room.clone()))
+            .or_default()
+            .push(r);
     }
-    ctx.commit().await?;
-    canon.close().await;
-    // 3. Hashes (never text) into the control plane, then the proposal is closed.
-    let mut tx = begin_write(&app.pool).await?;
-    for r in &items {
-        sqlx::query("INSERT OR IGNORE INTO brain_seen (content_hash, room, run) VALUES (?, ?, ?)")
-            .bind(r.try_get::<String, _>("content_hash")?)
-            .bind(&room)
+    let mut written = 0;
+    let mut placed: Vec<(String, String, String)> = vec![];
+    for (to, rows) in &by_room {
+        let canon =
+            files::open_migrated(&files::room_path(&files::root(app), to), key, true, CANON)
+                .await
+                .map_err(|e| code(500, "room_unavailable", e.to_string()))?;
+        let mut ctx = canon.begin().await?;
+        for r in rows {
+            let (id, hash): (String, String) = (r.try_get("item_id")?, r.try_get("content_hash")?);
+            let had: bool =
+                sqlx::query_scalar("SELECT count(*) > 0 FROM sources WHERE item_id = ?")
+                    .bind(&id)
+                    .fetch_one(&mut *ctx)
+                    .await?;
+            let changed = sqlx::query(
+                "INSERT INTO sources (item_id, content_hash, source_kind, device, path, project_hint, author_kind, author_name, \
+                 title, text, links, started_at, ended_at, run, assigned_by, needed, pointer) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(item_id) DO UPDATE SET content_hash = excluded.content_hash, path = excluded.path, \
+                 project_hint = excluded.project_hint, title = excluded.title, text = excluded.text, links = excluded.links, \
+                 started_at = excluded.started_at, ended_at = excluded.ended_at, run = excluded.run, \
+                 pointer = excluded.pointer, distilled = NULL \
+                 WHERE content_hash != excluded.content_hash AND excluded.started_at >= started_at \
+                 ON CONFLICT(content_hash) DO NOTHING",
+            )
+            .bind(&id)
+            .bind(&hash)
+            .bind(r.try_get::<String, _>("source_kind")?)
+            .bind(r.try_get::<String, _>("device")?)
+            .bind(r.try_get::<String, _>("path")?)
+            .bind(r.try_get::<Option<String>, _>("project_hint")?)
+            .bind(r.try_get::<String, _>("author_kind")?)
+            .bind(r.try_get::<String, _>("author_name")?)
+            .bind(r.try_get::<String, _>("title")?)
+            .bind(r.try_get::<String, _>("text")?)
+            .bind(r.try_get::<String, _>("links")?)
+            .bind(r.try_get::<String, _>("started_at")?)
+            .bind(r.try_get::<Option<String>, _>("ended_at")?)
             .bind(run)
+            .bind(assigned_by)
+            .bind(i64::from(r.try_get::<Option<String>, _>("mark")?.as_deref() == Some("needed")))
+            .bind(r.try_get::<i64, _>("pointer")?)
+            .execute(&mut *ctx)
+            .await?
+            .rows_affected();
+            if changed == 1 {
+                written += 1;
+                let seq: i64 = sqlx::query_scalar(
+                    "INSERT INTO op_log (op, ref, at) VALUES (?, ?, ?) RETURNING seq",
+                )
+                .bind(if had { "source.update" } else { "source.add" })
+                .bind(&id)
+                .bind(&now)
+                .fetch_one(&mut *ctx)
+                .await?;
+                sqlx::query("INSERT INTO outbox (op_seq) VALUES (?)")
+                    .bind(seq)
+                    .execute(&mut *ctx)
+                    .await?;
+            }
+            // What the room holds now (this text, or a newer one kept over an older run's).
+            let now_hash: Option<String> =
+                sqlx::query_scalar("SELECT content_hash FROM sources WHERE item_id = ?")
+                    .bind(&id)
+                    .fetch_optional(&mut *ctx)
+                    .await?;
+            if let Some(h) = now_hash {
+                placed.push((h, to.clone(), id));
+            }
+        }
+        ctx.commit().await?;
+        canon.close().await;
+    }
+    // 3. Hashes and item ids (never text) into the control plane, then the proposal is closed. An
+    // updated item's older hash in its room goes, so the room counts it once.
+    let mut tx = begin_write(&app.pool).await?;
+    for (hash, to, id) in &placed {
+        sqlx::query("DELETE FROM brain_seen WHERE item_id = ? AND room = ? AND content_hash != ?")
+            .bind(id)
+            .bind(to)
+            .bind(hash)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT OR IGNORE INTO brain_seen (content_hash, room, run, item_id) VALUES (?, ?, ?, ?)")
+            .bind(hash)
+            .bind(to)
+            .bind(run)
+            .bind(id)
             .execute(&mut *tx)
             .await?;
     }
