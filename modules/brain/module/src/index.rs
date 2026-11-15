@@ -15,7 +15,6 @@ use sqlx::{Row, SqlitePool};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::files::{self, CANON, INDEX};
-use crate::rooms::AccessError;
 use crate::{Brain, code};
 
 /// How often the `brain_index` job looks for a room whose index is behind.
@@ -175,22 +174,7 @@ pub(crate) async fn search(
         match_expr(&q.q).ok_or_else(|| ApiError::bad_request("q needs at least one word"))?;
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let key = b.key(&app).await?;
-    let access = b
-        .rooms()
-        .access(&app, &key, &room)
-        .await
-        .map_err(|e| match e {
-            AccessError::Unknown => ApiError::not_found("no such room"),
-            AccessError::Closed => code(409, "room_closed", "open the room first"),
-            AccessError::Newer => code(
-                409,
-                "room_file_newer",
-                "the room file was written by a newer version",
-            ),
-            AccessError::Unavailable => {
-                code(500, "room_unavailable", "the room could not be opened")
-            }
-        })?;
+    let access = crate::inbox::open_room(&app, &b, &room).await?;
     let hits = fts(&app, &key, &access, limit, &expr)
         .await?
         .into_iter()
@@ -198,6 +182,68 @@ pub(crate) async fn search(
         .collect();
     access.pool().close().await;
     Ok(Json(Hits { hits }))
+}
+
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct LatestQuery {
+    /// At most this many items (default 20, most 100).
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct LatestItem {
+    pub item_id: String,
+    /// `source`: an imported item, not a distilled record.
+    #[serde(rename = "type")]
+    #[schema(rename = "type")]
+    pub kind: String,
+    pub source_kind: String,
+    pub title: String,
+    pub started_at: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct Latest {
+    pub items: Vec<LatestItem>,
+    /// Records in the room, any status. 0 while nothing was distilled: the items are only imported.
+    pub records: i64,
+}
+
+#[utoipa::path(get, path = "/rooms/{room}/latest", operation_id = "brainRoomLatest", tag = "brain",
+    params(("room" = String, Path, description = "Room id"), LatestQuery),
+    responses((status = 200, description = "An open room's newest sources, newest first, and its record count", body = Latest)))]
+pub(crate) async fn latest(
+    State(app): State<App>,
+    Extension(b): Extension<Brain>,
+    UrlPath(room): UrlPath<String>,
+    Query(q): Query<LatestQuery>,
+) -> ApiResult<Latest> {
+    let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let access = crate::inbox::open_room(&app, &b, &room).await?;
+    let rows = sqlx::query(
+        "SELECT item_id, source_kind, title, started_at FROM sources ORDER BY started_at DESC, item_id DESC LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(access.pool())
+    .await?;
+    let records: i64 = sqlx::query_scalar("SELECT count(*) FROM records")
+        .fetch_one(access.pool())
+        .await?;
+    access.pool().close().await;
+    let items = rows
+        .iter()
+        .map(|r| {
+            Ok(LatestItem {
+                item_id: r.try_get("item_id")?,
+                kind: "source".to_owned(),
+                source_kind: r.try_get("source_kind")?,
+                title: r.try_get("title")?,
+                started_at: r.try_get("started_at")?,
+            })
+        })
+        .collect::<Result<_, sqlx::Error>>()?;
+    Ok(Json(Latest { items, records }))
 }
 
 struct IndexJob(Brain);

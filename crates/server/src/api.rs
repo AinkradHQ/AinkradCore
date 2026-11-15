@@ -185,14 +185,22 @@ pub fn router(app: App) -> Router {
         ))
 }
 
-/// Counts each response by status class for `/api/v1/metrics`.
+/// Counts each response by status class for `/api/v1/metrics`, and logs every 4xx and 5xx with
+/// its method and path: a route that does not exist (404) or a refused query answers without an
+/// `ApiError`, so this is the one place that sees them all. The query is never logged: it can hold
+/// search words.
 async fn count_responses(
     axum::extract::State(health): axum::extract::State<Arc<crate::health::Health>>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    let (method, path) = (request.method().clone(), request.uri().path().to_owned());
     let response = next.run(request).await;
-    health.count_response(response.status().as_u16());
+    let status = response.status();
+    health.count_response(status.as_u16());
+    if status.is_client_error() || status.is_server_error() {
+        tracing::warn!(%method, path, status = status.as_u16(), "answered with an error");
+    }
     response
 }
 
