@@ -13,6 +13,7 @@ mod distil;
 mod index;
 mod intake;
 mod keys;
+mod query;
 mod review;
 mod rooms;
 mod runner_history;
