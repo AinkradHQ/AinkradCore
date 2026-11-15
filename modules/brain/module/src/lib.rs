@@ -93,10 +93,9 @@ pub static MIGRATIONS: &[Migration] = &[
     },
 ];
 
-/// Employer and client rooms are discovered and reviewed in M1 but committed only after the import
-/// isolation suite and the `room_backup` job exist (plan §12 answer 2). The isolation suite is in;
-/// the backup job (C-10) is not, so this stays false and such proposals wait as `held`.
-pub const ROOM_BACKUP_READY: bool = false;
+/// Employer and client rooms commit like any other room. Ahmed, 2026-11-15: "no need to hold the import bcz of backup".
+/// The per-room backup job (C-10) is still to come; this switch no longer waits for it.
+pub const ROOM_BACKUP_READY: bool = true;
 
 const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports/{run}/commit"),

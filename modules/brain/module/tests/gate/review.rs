@@ -209,7 +209,7 @@ async fn refusing_a_room_writes_a_draft_rule_that_commit_turns_on() {
 }
 
 #[tokio::test]
-async fn commit_needs_a_step_up_writes_personal_rooms_and_holds_employer_rooms() {
+async fn commit_needs_a_step_up_and_writes_personal_and_employer_rooms() {
     let fx = fx().await;
     let run = sample_run(&fx).await;
     let p = proposals(&fx, &run).await;
@@ -236,30 +236,27 @@ async fn commit_needs_a_step_up_writes_personal_rooms_and_holds_employer_rooms()
         (StatusCode::FORBIDDEN, &json!("step_up_required"))
     );
     let r = ok(&fx, Method::POST, &format!("/imports/{run}/commit"), None).await;
-    assert_eq!(r["rooms"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        (
-            r["rooms"][0]["name"].as_str(),
-            r["rooms"][0]["sources"].as_i64()
-        ),
-        (Some("Alpha"), Some(2))
-    );
-    assert_eq!(
-        r["held"].as_array().unwrap().len(),
-        1,
-        "the employer room waits for room_backup"
-    );
-    assert_eq!(r["state"], "review");
+    // Employer rooms commit like any other room (no backup hold since 2026-11-15).
+    let mut names: Vec<(&str, i64)> = r["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| (m["name"].as_str().unwrap(), m["sources"].as_i64().unwrap()))
+        .collect();
+    names.sort();
+    assert_eq!(names.len(), 2);
+    assert_eq!(names[0], ("Alpha", 2));
+    assert_eq!(names[1].0, "Optimus");
+    assert!(r["held"].as_array().unwrap().is_empty(), "nothing is held");
     let rooms = ok(&fx, Method::GET, "/rooms", None).await;
-    assert_eq!(rooms.as_array().unwrap().len(), 1);
-    assert_eq!(rooms[0]["sources"], 2);
-    // One audit row and one event for the room.
+    assert_eq!(rooms.as_array().unwrap().len(), 2);
+    // One audit row and one event per room.
     let created: i64 =
         sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action = 'brain.room.created'")
             .fetch_one(&fx.app.pool)
             .await
             .unwrap();
-    assert_eq!(created, 1);
+    assert_eq!(created, 2);
     // No text in the control plane or the audit trail.
     let audit: Vec<(String,)> = sqlx::query_as("SELECT details FROM audit_events")
         .fetch_all(&fx.app.pool)
