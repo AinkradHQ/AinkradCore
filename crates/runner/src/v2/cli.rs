@@ -500,6 +500,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             readonly: super::termbox::readonly_paths(&host),
             user: terminal_user.clone(),
             net: net.clone(),
+            sessions: Some(state.0.join("agents")),
             ..super::PtyConfig::new(state.0.join("terminals"))
         }));
         d.spawn_budget_loop();

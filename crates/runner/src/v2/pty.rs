@@ -65,6 +65,10 @@ pub struct PtyConfig {
     /// The Ainkrad shell profile (N20): a read-only zsh configuration installed with the runner.
     /// A terminal with no program of its own starts `zsh -l` with `ZDOTDIR` set to it.
     pub shell_dir: PathBuf,
+    /// Where the agent driver records its sessions (`<state>/agents/<session>/meta.json`): a
+    /// terminal for a session (`PtyOpen::session`) starts only in the folder recorded there.
+    /// `None`: such a terminal is refused.
+    pub sessions: Option<PathBuf>,
 }
 
 /// Where the runner installers put the Ainkrad shell profile.
@@ -90,6 +94,7 @@ impl PtyConfig {
             user: None,
             net: super::termbox::Net::Host,
             shell_dir: PathBuf::from(SHELL_DIR),
+            sessions: None,
         }
     }
 }
@@ -335,6 +340,15 @@ impl PtyDriver {
         if req.program.as_deref() == Some("") {
             return Err(invalid("program is empty"));
         }
+        // A session's folder lies in the state the sandbox hides: it is let in only for a
+        // terminal the Core opened for that session, in the folder this runner recorded for it.
+        let reveal = match &req.session {
+            Some(s) => Some(
+                self.session_folder(s, req.cwd.as_deref())
+                    .map_err(|m| invalid(&m))?,
+            ),
+            None => None,
+        };
         let live = scan(&self.config.dir).await.len();
         if live >= self.config.capacity as usize {
             let cap = self.config.capacity;
@@ -394,23 +408,46 @@ impl PtyDriver {
                 .or(home)
                 .filter(|c| c.starts_with('/'))
                 .unwrap_or_else(|| "/".to_owned());
-            let (mut launcher, mut args) = match &self.config.hide {
-                Some(hide) => super::termbox::wrap_net(
+            let wrap = |program: &str, args: &[String], cwd: &str| match &self.config.hide {
+                Some(hide) => super::termbox::wrap_in(
                     hide,
                     &self.config.readonly,
-                    &program,
-                    &spec.args,
-                    &cwd,
+                    program,
+                    args,
+                    cwd,
                     &self.config.net,
+                    reveal.as_deref(),
                 )
-                .map_err(|e| invalid(&e))?,
-                None => (program, spec.args.clone()),
+                .map_err(|e| invalid(&e)),
+                None => Ok((program.to_owned(), args.to_vec())),
             };
+            let (mut launcher, mut args) = wrap(&program, &spec.args, &cwd)?;
             if let Some(user) = &self.config.user {
                 if !super::termbox::valid_user(user) || !launcher.starts_with('/') {
                     return Err(invalid(
                         "a terminal user needs an account name and an absolute program",
                     ));
+                }
+                if let Some(f) = &reveal {
+                    // Tried as that user, in the same sandbox: a folder it cannot enter would
+                    // give a shell that cannot even tell where it is.
+                    let f = f.to_string_lossy().into_owned();
+                    let test = ["-d", &f, "-a", "-r", &f, "-a", "-x", &f].map(str::to_owned);
+                    let (p, a) = wrap("/usr/bin/test", &test, "/")?;
+                    let (p, a) = super::termbox::as_user(user, p, a);
+                    let reached = tokio::process::Command::new(p)
+                        .args(a)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .await
+                        .is_ok_and(|s| s.success());
+                    if !reached {
+                        return Err(invalid(&format!(
+                            "the session's folder cannot be reached by the terminal user {user}"
+                        )));
+                    }
                 }
                 (launcher, args) = super::termbox::as_user(user, launcher, args);
             }
@@ -443,6 +480,23 @@ impl PtyDriver {
             return Err(err(ErrorCode::SpawnFailed, m));
         }
         Ok(id)
+    }
+
+    /// The folder this runner recorded for `session`, when it is `cwd`; otherwise why not.
+    fn session_folder(&self, session: &str, cwd: Option<&str>) -> Result<PathBuf, String> {
+        let dir = (self.config.sessions.as_ref())
+            .filter(|_| ainkrad_proto::v2::valid_session_id(session))
+            .ok_or("this runner has no such AI session")?;
+        let meta = std::fs::read(dir.join(session).join("meta.json"))
+            .map_err(|_| "this runner has no such AI session")?;
+        let folder = serde_json::from_slice::<serde_json::Value>(&meta)
+            .ok()
+            .and_then(|m| m["folder"].as_str().map(PathBuf::from))
+            .ok_or("this runner has recorded no folder for the session")?;
+        if cwd.map(Path::new) != Some(folder.as_path()) {
+            return Err("cwd is not the folder this runner recorded for the session".to_owned());
+        }
+        Ok(folder)
     }
 
     /// `zsh` and the profile dir when the Ainkrad shell can start here; otherwise (zsh missing, or

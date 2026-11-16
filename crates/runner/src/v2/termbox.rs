@@ -214,6 +214,22 @@ pub fn wrap_net(
     cwd: &str,
     net: &Net,
 ) -> Result<(String, Vec<String>), String> {
+    wrap_in(hidden, readonly, program, args, cwd, net, None)
+}
+
+/// [`wrap_net`], with `reveal` (an AI session's folder, which the runner checked is one it
+/// recorded) readable and writable although it lies in a hidden path. Only that folder comes back:
+/// its hidden parents stay unreadable (macOS lets the shell stat them, which git needs), and a
+/// folder that holds a hidden path is refused, since revealing it would un-hide that path too.
+pub fn wrap_in(
+    hidden: &[PathBuf],
+    readonly: &[PathBuf],
+    program: &str,
+    args: &[String],
+    cwd: &str,
+    net: &Net,
+    reveal: Option<&Path>,
+) -> Result<(String, Vec<String>), String> {
     if !program.starts_with('/') {
         // A bare name [`resolve`] could not find: say that, not a rule it did not break.
         let bare = !program.is_empty() && !program.contains('/') && !program.starts_with('-');
@@ -236,6 +252,20 @@ pub fn wrap_net(
         false,
     )?);
     let readonly = canonical(readonly, false)?;
+    let reveal = reveal
+        .map(|f| {
+            f.canonicalize()
+                .map_err(|e| format!("{}: {e}", f.display()))
+        })
+        .transpose()?;
+    let holds = |paths: &[PathBuf]| match &reveal {
+        Some(f) if paths.iter().any(|h| h.starts_with(f)) => Err(format!(
+            "{}: holds a path the terminal sandbox hides; it is not revealed",
+            f.display()
+        )),
+        _ => Ok(()),
+    };
+    holds(&hidden)?;
     let mut out: Vec<String> = Vec::new();
     let launcher = if cfg!(target_os = "macos") {
         // Everything is allowed but the hidden paths (files and unix sockets alike), writes to
@@ -260,6 +290,20 @@ pub fn wrap_net(
             profile.push_str(&format!(
                 "(deny file-read* file-write* (subpath \"{q}\"))\n(deny network-outbound (remote unix-socket (subpath \"{q}\")))\n"
             ));
+        }
+        if let Some(f) = &reveal {
+            // The last matching rule wins: the folder is open again, and its parents can be
+            // stat'ed (not listed or read): git walks up them looking for a repository.
+            profile.push_str(&format!(
+                "(allow file-read* file-write* (subpath \"{}\"))\n",
+                quote(f)
+            ));
+            for a in f.ancestors().skip(1) {
+                profile.push_str(&format!(
+                    "(allow file-read-metadata (literal \"{}\"))\n",
+                    quote(a)
+                ));
+            }
         }
         for p in &readonly {
             profile.push_str(&format!("(deny file-write* (subpath \"{}\"))\n", quote(p)));
@@ -316,6 +360,7 @@ pub fn wrap_net(
         }
         tmpfs.sort_by_key(|p| p.components().count());
         tmpfs.dedup();
+        holds(&tmpfs)?;
         for p in &tmpfs {
             let p = p.to_string_lossy().into_owned();
             if Path::new(&p).is_dir() {
@@ -323,6 +368,12 @@ pub fn wrap_net(
             } else {
                 out.extend(["--ro-bind".to_owned(), "/dev/null".to_owned(), p]);
             }
+        }
+        if let Some(f) = &reveal {
+            // Bound back from the host over the emptied state (bubblewrap creates the mount
+            // point in the tmpfs); after every tmpfs, before the read-only binds.
+            let f = f.to_string_lossy().into_owned();
+            out.extend(["--bind".to_owned(), f.clone(), f]);
         }
         for p in &readonly {
             let p = p.to_string_lossy().into_owned();
@@ -740,6 +791,70 @@ mod tests {
         if Path::new("/var/lib/ainkrad").exists() && cfg!(target_os = "linux") {
             assert!(args.iter().any(|a| a == "/var/lib/ainkrad"), "{args:?}");
         }
+    }
+
+    /// A session's folder comes back over the hidden state after every hiding rule and before the
+    /// read-only ones; a folder that would bring a hidden path back with it is refused.
+    #[test]
+    fn a_revealed_folder_follows_the_hiding_and_never_holds_a_hidden_path() {
+        let base = std::env::temp_dir().join(format!("apr-tbr-{}", std::process::id()));
+        let (state, ro) = (base.join("state"), base.join("ro"));
+        let folder = state.join("work/session-x");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::create_dir_all(&ro).unwrap();
+        let go = |reveal: &Path| {
+            wrap_in(
+                std::slice::from_ref(&state),
+                std::slice::from_ref(&ro),
+                "/bin/sh",
+                &[],
+                "/",
+                &Net::Host,
+                Some(reveal),
+            )
+            .map(|(_, a)| a)
+        };
+        let (f, st, r) = (
+            folder
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            state.canonicalize().unwrap().to_string_lossy().into_owned(),
+            ro.canonicalize().unwrap().to_string_lossy().into_owned(),
+        );
+        let a = go(&folder).unwrap();
+        if cfg!(target_os = "macos") {
+            let p = &a[1];
+            let at = |x: &str| p.find(x).unwrap_or_else(|| panic!("{x} in {p}"));
+            let deny = at(&format!("(deny file-read* file-write* (subpath \"{st}\"))"));
+            let allow = at(&format!("(allow file-read* file-write* (subpath \"{f}\"))"));
+            let parent = at(&format!("(allow file-read-metadata (literal \"{st}\"))"));
+            let readonly = at(&format!("(deny file-write* (subpath \"{r}\"))"));
+            assert!(deny < allow && allow < parent && parent < readonly, "{p}");
+            assert!(!p.contains(&format!(
+                "(allow file-read* file-write* (subpath \"{st}\"))"
+            )));
+        } else {
+            let at = |x: &[&str]| a.windows(x.len()).position(|w| w == x).expect("in argv");
+            let tmpfs = at(&["--tmpfs", &st]);
+            let bind = at(&["--bind", &f, &f]);
+            let readonly = at(&["--ro-bind", &r, &r]);
+            assert!(tmpfs < bind && bind < readonly, "{a:?}");
+        }
+        // The state itself, or a folder holding it, would un-hide all of it.
+        for whole in [&state, &base] {
+            assert!(go(whole).unwrap_err().contains("hides"), "{whole:?}");
+        }
+        // No reveal: the argv is what it was.
+        assert!(
+            !wrap(std::slice::from_ref(&state), &[], "/bin/sh", &[], "/")
+                .unwrap()
+                .1
+                .iter()
+                .any(|x| x.contains("(allow file-read* file-write*"))
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

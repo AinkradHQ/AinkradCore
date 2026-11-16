@@ -372,6 +372,7 @@ fn v2_terminal_frames_are_pinned() {
             program: None,
             args: vec![],
             cwd: Some("/home/example".to_owned()),
+            session: None,
             env: BTreeMap::from([("LANG".to_owned(), "en_US.UTF-8".to_owned())]),
             env_pass: vec!["PATH".to_owned()],
             size,
