@@ -39,6 +39,8 @@ mod imports;
 mod inbox;
 mod index;
 pub mod key;
+mod overview;
+mod overview_write;
 mod policy;
 pub mod propose;
 mod review;
@@ -91,6 +93,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0006_brain_seen_item.up.sql"),
         down: include_str!("../migrations/0006_brain_seen_item.down.sql"),
     },
+    Migration {
+        version: 7,
+        name: "brain_overview",
+        up: include_str!("../migrations/0007_brain_overview.up.sql"),
+        down: include_str!("../migrations/0007_brain_overview.down.sql"),
+    },
 ];
 
 /// Employer and client rooms commit like any other room. Ahmed, 2026-11-15: "no need to hold the import bcz of backup".
@@ -122,6 +130,9 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/rules"),
     ("POST", "/sync"),
     ("POST", "/rooms/{room}/distil"),
+    ("POST", "/rooms/{room}/overview/write"),
+    ("POST", "/overview/write-all"),
+    ("PATCH", "/rooms/{room}/overview/instructions"),
     ("POST", "/rooms/{room}/inbox/{id}"),
     ("PUT", "/sources/{id}"),
     ("POST", "/ai/rooms/{room}/propose"),
@@ -167,6 +178,8 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/rooms/{room}/policy", "read"),
     ("GET", "/rooms/{room}/distils", "read"),
     ("GET", "/rooms/{room}/inbox", "read"),
+    ("GET", "/rooms/{room}/overview", "read"),
+    ("GET", "/overview/progress", "read"),
     ("GET", "/rooms/{room}/access", "read"),
     // Code Mode (E4): a session acts as its creator without `admin`, so these name the scopes a
     // creator holds. They answer only a session's own calls (`ai::session_of`).
@@ -185,6 +198,7 @@ struct Inner {
     rooms: rooms::Rooms,
     syncing: AtomicBool,
     distilling: AtomicBool,
+    overviewing: AtomicBool,
     /// The shared semantic service: model, vector store and background worker (`semantic::service`).
     sem: semantic::service::Service,
     /// Runs whose semantic step is queued or working, with (items embedded, items to embed).
@@ -341,6 +355,14 @@ impl Brain {
         }
     }
 
+    /// Moves the Overview write queue one step (the `brain_overview` job does this every minute).
+    pub async fn overview_step(&self) -> Result<(), ApiError> {
+        match self.inner.app.get() {
+            Some(app) => overview::advance(app, self).await,
+            None => Ok(()),
+        }
+    }
+
     pub fn rooms(&self) -> &rooms::Rooms {
         &self.inner.rooms
     }
@@ -451,6 +473,11 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         inbox::decide,
         distil::start,
         distil::list,
+        overview::get,
+        overview::write,
+        overview::write_all,
+        overview::progress_route,
+        overview::instructions,
         policy::get,
         policy::patch,
         access::get,
@@ -517,6 +544,13 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         claim::ClaimRequest,
         claim::RoomClaim,
         distil::DistilView,
+        overview::OverviewView,
+        overview::Progress,
+        overview::InstructionsPatch,
+        overview_write::Overview,
+        overview_write::Facts,
+        overview_write::Rules,
+        overview_write::Rule,
         inbox::InboxRecord,
         inbox::InboxPage,
         inbox::Decision,
@@ -586,6 +620,14 @@ impl Module for Brain {
             .route("/rooms/{room}/inbox/{id}", post(inbox::decide))
             .route("/rooms/{room}/distil", post(distil::start))
             .route("/rooms/{room}/distils", get(distil::list))
+            .route("/rooms/{room}/overview", get(overview::get))
+            .route("/rooms/{room}/overview/write", post(overview::write))
+            .route(
+                "/rooms/{room}/overview/instructions",
+                patch(overview::instructions),
+            )
+            .route("/overview/write-all", post(overview::write_all))
+            .route("/overview/progress", get(overview::progress_route))
             .route(
                 "/rooms/{room}/policy",
                 get(policy::get).patch(policy::patch),
@@ -638,6 +680,10 @@ impl Module for Brain {
             "brain.distil.queued",
             "brain.distil.done",
             "brain.distil.rejected",
+            "brain.overview.queued",
+            "brain.overview.written",
+            "brain.overview.failed",
+            "brain.overview.instructions",
             "brain.room.access",
             "brain.ai.proposed",
             "brain.ai.refused",
@@ -651,7 +697,12 @@ impl Module for Brain {
     }
 
     fn jobs(&self) -> Vec<Job> {
-        vec![sync::job(self), index::job(self), distil::job(self)]
+        vec![
+            sync::job(self),
+            index::job(self),
+            distil::job(self),
+            overview::job(self),
+        ]
     }
 
     fn scope(&self) -> &'static str {

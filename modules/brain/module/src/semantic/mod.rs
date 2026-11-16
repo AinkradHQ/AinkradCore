@@ -210,6 +210,7 @@ pub async fn audit(conn: &mut SqliteConnection, s: &RunStats) -> Result<(), sqlx
     .await
 }
 
+pub mod pick;
 pub mod service;
 pub use service::similar;
 
