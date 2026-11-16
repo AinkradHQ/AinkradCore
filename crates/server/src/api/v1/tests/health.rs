@@ -70,6 +70,7 @@ async fn feed(g: &G, reports: Vec<GatewayReport>, now: &str) {
         outcome: None,
         gateway: reports,
         plan_limit: None,
+        folder: None,
     };
     store::apply(&g.fx.app.pool, &g.session.id, &ev, now)
         .await

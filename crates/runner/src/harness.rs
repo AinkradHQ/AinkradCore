@@ -488,6 +488,10 @@ impl Executor for HarnessExecutor {
         self.workspaces.recover_sessions(adopted);
     }
 
+    fn work_dir(&self, job: &Job) -> Option<PathBuf> {
+        Some(self.cwd(job))
+    }
+
     fn control(&self, run: i64, control: crate::Control) {
         self.inbox(run).put(control);
     }

@@ -301,6 +301,7 @@ async fn snapshot(s: &S, id: &str, claimed: &str, p: PlanLimit, secs: i64) {
         outcome: None,
         gateway: vec![],
         plan_limit: Some(p),
+        folder: None,
     };
     store::apply(&s.fx.app.pool, id, &ev, &at(secs))
         .await
@@ -401,6 +402,7 @@ async fn a_gateway_sessions_harness_signals_are_ignored() {
         outcome: None,
         gateway: vec![],
         plan_limit: Some(plan("rejected", 1.0, Some(unix_secs(NOW).unwrap() + 60))),
+        folder: None,
     };
     store::apply(&g.fx.app.pool, &g.session.id, &ev, &at(0))
         .await

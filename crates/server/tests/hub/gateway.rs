@@ -179,6 +179,7 @@ pub(super) fn events(session: &str, state: AgentState, gateway: Vec<GatewayRepor
         outcome: None,
         gateway,
         plan_limit: None,
+        folder: None,
     }
 }
 

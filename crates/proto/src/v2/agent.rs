@@ -423,6 +423,11 @@ pub struct AgentEvents {
     /// forge the harness's own output), so it is a hint: cool an account from it, never disable one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_limit: Option<super::PlanLimit>,
+    /// The absolute path, on the runner, of the folder the session's harness works in (its
+    /// worktree under the runner's work root, or its scratch dir there), once it has started. A
+    /// worktree is moved away when its run ends, so after the end it may no longer exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 #[cfg(test)]

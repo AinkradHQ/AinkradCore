@@ -125,6 +125,11 @@ pub struct AgentSession {
     pub policy: Option<String>,
     /// Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`).
     pub plan: Option<bool>,
+    /// The absolute path of the folder its harness works in, on its runner (`runner`): its
+    /// worktree under the runner's work root, or its scratch dir there. Absent until the runner
+    /// reports it after the start. A worktree is moved away when its run ends, so an ended
+    /// session's folder may no longer exist.
+    pub folder: Option<String>,
 }
 
 impl From<Session> for AgentSession {
@@ -140,6 +145,7 @@ impl From<Session> for AgentSession {
                 .filter(|_| s.state == "running")
                 .map(|t| ts(&crate::scheduler::iso_of_unix(t))),
             title: s.title,
+            folder: s.folder,
             workspace: s.workspace,
             id: s.id,
             runner: s.runner,

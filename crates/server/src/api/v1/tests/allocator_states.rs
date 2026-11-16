@@ -398,6 +398,7 @@ async fn a_subscription_session_is_metered_to_the_account_the_pick_wrote() {
         outcome: None,
         gateway: vec![],
         plan_limit: None,
+        folder: None,
     };
     crate::store::agents::apply(&w.fx.app.pool, &s.id, &ev, NOW)
         .await

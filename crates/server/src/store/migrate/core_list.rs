@@ -215,4 +215,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0035_code_mode_writes.up.sql"),
         down: include_str!("../../../migrations/0035_code_mode_writes.down.sql"),
     },
+    Migration {
+        version: 36,
+        name: "session_folder",
+        up: include_str!("../../../migrations/0036_session_folder.up.sql"),
+        down: include_str!("../../../migrations/0036_session_folder.down.sql"),
+    },
 ];

@@ -55,6 +55,7 @@ mod tests {
             outcome: None,
             gateway: vec![],
             plan_limit,
+            folder: None,
         }
     }
 
