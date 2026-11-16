@@ -175,7 +175,12 @@ use super::{
         agents::resume,
         agents::wake,
     ),
-    components(schemas(types::ErrorBody, events::Event))
+    components(schemas(
+        types::ErrorBody,
+        events::Event,
+        agents::AgentEdit,
+        agents::AgentEditChange
+    ))
 )]
 struct ApiDoc;
 

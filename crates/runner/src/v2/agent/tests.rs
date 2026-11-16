@@ -36,7 +36,8 @@ struct Seen {
 }
 
 /// A harness that runs `sh -c <script>` with the run's own variables: each stdout line is a
-/// `line` event; a line `APPROVAL` asks for a tool approval and reports the answer. A non-zero
+/// `line` event, a line `EVENT <json>` that event; a line `APPROVAL` asks for a tool approval and
+/// reports the answer. A non-zero
 /// exit fails with its last line as the reason.
 #[derive(Clone)]
 struct Script {
@@ -106,9 +107,11 @@ impl Executor for Script {
                     .await;
                 continue;
             }
-            let _ = reports
-                .send(Report::Event(json!({"type": "line", "text": line})))
-                .await;
+            let event = match line.strip_prefix("EVENT ") {
+                Some(e) => serde_json::from_str(e).unwrap(),
+                None => json!({"type": "line", "text": line}),
+            };
+            let _ = reports.send(Report::Event(event)).await;
             last = line;
         }
         let _ = reports
@@ -528,6 +531,44 @@ async fn an_approval_and_a_message_round_trip() {
     );
     assert!(all.iter().any(|b| b["type"] == "message"));
     assert_eq!(ev.outcome, Some(Outcome::Succeeded));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A sub-agent's start and an approval's request are the `at` of their entries: when the runner
+/// took them, not when the session started.
+#[tokio::test]
+async fn a_sub_agent_and_an_approval_carry_their_own_times() {
+    let (root, config) = dirs("times");
+    let task = r#"{"type":"tool_use","id":"t0","name":"Task","input":{"description":"look"}}"#;
+    let s = script(&format!(
+        "sleep 1; echo 'EVENT {task}'; sleep 1; echo APPROVAL"
+    ));
+    let d = Arc::new(AgentDriver::new(config, s).unwrap());
+    let begun = now_ms();
+    d.start(start("as_a", "fake")).unwrap();
+    let mut entries: Vec<TranscriptEntry> = Vec::new();
+    while !types(&entries).contains(&"approval_request".to_owned()) {
+        let after = entries.last().map_or(0, |e| e.seq);
+        let read = AgentRead {
+            gw_after: 0,
+            session: "as_a".into(),
+            after,
+            wait_ms: Some(2000),
+        };
+        entries.extend(d.read(&read).await.unwrap().entries);
+    }
+    let at = |t: &str| entries.iter().find(|e| e.body["type"] == t).unwrap().at;
+    let (sub, ask) = (at("tool_use"), at("approval_request"));
+    assert!(
+        sub >= begun + 900 && ask >= sub + 900,
+        "{begun} {sub} {ask}"
+    );
+    d.stop(AgentStop {
+        session: "as_a".into(),
+        kill: true,
+        turn: false,
+    })
+    .unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
 

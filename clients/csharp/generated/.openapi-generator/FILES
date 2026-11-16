@@ -52,6 +52,8 @@ src/Ainkrad.Client/Model/AccountsDeleted.cs
 src/Ainkrad.Client/Model/AgentApproval.cs
 src/Ainkrad.Client/Model/AgentApprovals.cs
 src/Ainkrad.Client/Model/AgentDecision.cs
+src/Ainkrad.Client/Model/AgentEdit.cs
+src/Ainkrad.Client/Model/AgentEditChange.cs
 src/Ainkrad.Client/Model/AgentMessage.cs
 src/Ainkrad.Client/Model/AgentModeChange.cs
 src/Ainkrad.Client/Model/AgentSecret.cs

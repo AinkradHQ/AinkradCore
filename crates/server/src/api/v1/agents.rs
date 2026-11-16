@@ -30,6 +30,8 @@ pub(in crate::api::v1) mod sched;
 mod types;
 use sched::{AgentWaiting, create_named, listed, page, shown};
 use types::*;
+// Schemas only the spec lists (no route returns them whole).
+pub(super) use types::{AgentEdit, AgentEditChange};
 
 const MAX_MESSAGE: usize = 16 * 1024;
 

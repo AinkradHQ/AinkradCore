@@ -96,12 +96,36 @@ pub struct AgentWake {
 pub struct AgentTranscriptEntry {
     /// From 1, by one: replay from any `seq` with `after`.
     pub seq: u64,
-    /// Unix milliseconds, on the runner.
+    /// Unix milliseconds, on the runner: when it took the event. A `tool_use`'s is when the call
+    /// started (a sub-agent's `Task` or `Agent` included), an `approval_request`'s when the
+    /// approval was asked.
     pub at_ms: i64,
     /// A harness event, or the session's own (`started`, `message`, `approval_request`,
-    /// `approval_decided`, `interrupted`, `gap`, `ended`), redacted.
+    /// `approval_decided`, `interrupted`, `gap`, `ended`), redacted. A file edit's `tool_use` also
+    /// carries `edit` (`AgentEdit`).
     #[schema(value_type = Object)]
     pub body: Value,
+}
+
+/// The `edit` of a file edit's `tool_use` entry (Claude's Edit, MultiEdit, Write and NotebookEdit,
+/// Codex's fileChange, OpenCode's edit, multiedit and write): what each change took out and put
+/// in, the same shape for every harness. The texts are at most 64 KiB in all; past that they are
+/// cut at a line end, `truncated` is set, and the entry's `input` keeps only its small fields.
+#[allow(dead_code)] // documents a transcript body field; the runner writes it
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AgentEdit {
+    pub changes: Vec<AgentEditChange>,
+    pub truncated: bool,
+}
+
+/// One change of an `AgentEdit`. A new file's `old` is empty, a deleted one's `new`. From a
+/// unified diff (Codex), the lines before and after with the hunk headers left out.
+#[allow(dead_code)] // documents a transcript body field; the runner writes it
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AgentEditChange {
+    pub path: String,
+    pub old: String,
+    pub new: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]

@@ -2063,6 +2063,25 @@ export interface components {
             /** @description Told to the agent; a denial's reason. */
             reply?: string | null;
         };
+        /**
+         * @description The `edit` of a file edit's `tool_use` entry (Claude's Edit, MultiEdit, Write and NotebookEdit,
+         *     Codex's fileChange, OpenCode's edit, multiedit and write): what each change took out and put
+         *     in, the same shape for every harness. The texts are at most 64 KiB in all; past that they are
+         *     cut at a line end, `truncated` is set, and the entry's `input` keeps only its small fields.
+         */
+        AgentEdit: {
+            changes: components["schemas"]["AgentEditChange"][];
+            truncated: boolean;
+        };
+        /**
+         * @description One change of an `AgentEdit`. A new file's `old` is empty, a deleted one's `new`. From a
+         *     unified diff (Codex), the lines before and after with the hunk headers left out.
+         */
+        AgentEditChange: {
+            new: string;
+            old: string;
+            path: string;
+        };
         AgentMessage: {
             text: string;
         };
@@ -2223,12 +2242,15 @@ export interface components {
         AgentTranscriptEntry: {
             /**
              * Format: int64
-             * @description Unix milliseconds, on the runner.
+             * @description Unix milliseconds, on the runner: when it took the event. A `tool_use`'s is when the call
+             *     started (a sub-agent's `Task` or `Agent` included), an `approval_request`'s when the
+             *     approval was asked.
              */
             at_ms: number;
             /**
              * @description A harness event, or the session's own (`started`, `message`, `approval_request`,
-             *     `approval_decided`, `interrupted`, `gap`, `ended`), redacted.
+             *     `approval_decided`, `interrupted`, `gap`, `ended`), redacted. A file edit's `tool_use` also
+             *     carries `edit` (`AgentEdit`).
              */
             body: Record<string, never>;
             /**

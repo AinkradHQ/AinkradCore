@@ -538,6 +538,66 @@ extension Components {
                 case reply
             }
         }
+        /// The `edit` of a file edit's `tool_use` entry (Claude's Edit, MultiEdit, Write and NotebookEdit,
+        /// Codex's fileChange, OpenCode's edit, multiedit and write): what each change took out and put
+        /// in, the same shape for every harness. The texts are at most 64 KiB in all; past that they are
+        /// cut at a line end, `truncated` is set, and the entry's `input` keeps only its small fields.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentEdit`.
+        public struct AgentEdit: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentEdit/changes`.
+            public var changes: [Components.Schemas.AgentEditChange]
+            /// - Remark: Generated from `#/components/schemas/AgentEdit/truncated`.
+            public var truncated: Swift.Bool
+            /// Creates a new `AgentEdit`.
+            ///
+            /// - Parameters:
+            ///   - changes:
+            ///   - truncated:
+            public init(
+                changes: [Components.Schemas.AgentEditChange],
+                truncated: Swift.Bool
+            ) {
+                self.changes = changes
+                self.truncated = truncated
+            }
+            public enum CodingKeys: String, CodingKey {
+                case changes
+                case truncated
+            }
+        }
+        /// One change of an `AgentEdit`. A new file's `old` is empty, a deleted one's `new`. From a
+        /// unified diff (Codex), the lines before and after with the hunk headers left out.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentEditChange`.
+        public struct AgentEditChange: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentEditChange/new`.
+            public var new: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AgentEditChange/old`.
+            public var old: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AgentEditChange/path`.
+            public var path: Swift.String
+            /// Creates a new `AgentEditChange`.
+            ///
+            /// - Parameters:
+            ///   - new:
+            ///   - old:
+            ///   - path:
+            public init(
+                new: Swift.String,
+                old: Swift.String,
+                path: Swift.String
+            ) {
+                self.new = new
+                self.old = old
+                self.path = path
+            }
+            public enum CodingKeys: String, CodingKey {
+                case new
+                case old
+                case path
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/AgentMessage`.
         public struct AgentMessage: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/AgentMessage/text`.
@@ -975,12 +1035,15 @@ extension Components {
         }
         /// - Remark: Generated from `#/components/schemas/AgentTranscriptEntry`.
         public struct AgentTranscriptEntry: Codable, Hashable, Sendable {
-            /// Unix milliseconds, on the runner.
+            /// Unix milliseconds, on the runner: when it took the event. A `tool_use`'s is when the call
+            /// started (a sub-agent's `Task` or `Agent` included), an `approval_request`'s when the
+            /// approval was asked.
             ///
             /// - Remark: Generated from `#/components/schemas/AgentTranscriptEntry/at_ms`.
             public var atMs: Swift.Int64
             /// A harness event, or the session's own (`started`, `message`, `approval_request`,
-            /// `approval_decided`, `interrupted`, `gap`, `ended`), redacted.
+            /// `approval_decided`, `interrupted`, `gap`, `ended`), redacted. A file edit's `tool_use` also
+            /// carries `edit` (`AgentEdit`).
             ///
             /// - Remark: Generated from `#/components/schemas/AgentTranscriptEntry/body`.
             public var body: OpenAPIRuntime.OpenAPIObjectContainer
@@ -991,7 +1054,7 @@ extension Components {
             /// Creates a new `AgentTranscriptEntry`.
             ///
             /// - Parameters:
-            ///   - atMs: Unix milliseconds, on the runner.
+            ///   - atMs: Unix milliseconds, on the runner: when it took the event. A `tool_use`'s is when the call
             ///   - body: A harness event, or the session's own (`started`, `message`, `approval_request`,
             ///   - seq: From 1, by one: replay from any `seq` with `after`.
             public init(

@@ -389,7 +389,7 @@ impl HarnessExecutor {
                 HarnessEvent::ToolResult { .. } => tools.result(&event, turn.tool_output),
                 _ => {
                     tools.started(&event);
-                    serde_json::to_value(&event).expect("events serialise")
+                    super::tools::event(&event)
                 }
             }))
             .await;
@@ -555,7 +555,7 @@ impl HarnessExecutor {
                     if let HarnessEvent::SessionStarted { id } = &event {
                         *session = Some(id.clone());
                     }
-                    let event = serde_json::to_value(&event).expect("events serialise");
+                    let event = super::tools::event(&event);
                     let _ = reports.send(Report::Event(event)).await;
                 }
             }
