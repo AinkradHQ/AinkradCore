@@ -198,6 +198,39 @@ async fn decide(
     Ok(())
 }
 
+/// Rooms an import held for a room backup, before that hold was dropped (`ROOM_BACKUP_READY`,
+/// 0.8.5): the person accepted them at the time, so they are imported now as their commit would
+/// be today. Only `held` rooms move; a run's undecided rooms and its state stay as they are. A
+/// room that mixes two employers stays held. The number of rooms imported.
+pub(crate) async fn release_held(app: &App, b: &Brain) -> Result<usize, ApiError> {
+    let runs: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM brain_import_runs WHERE state = 'review' ORDER BY id")
+            .fetch_all(&app.pool)
+            .await?;
+    let mut made = 0;
+    for run in runs {
+        let st = crate::imports::staging(app, b, &run, false).await?;
+        let held = sqlx::query("SELECT * FROM proposals WHERE state = 'held' ORDER BY id")
+            .fetch_all(&st)
+            .await?;
+        if !held.is_empty() {
+            let key = b.key(app).await?;
+            for r in &held {
+                let id: String = r.try_get("id")?;
+                if mixed(&st, &id).await? {
+                    continue;
+                }
+                if let Some(m) = commit_room(app, &key, &st, &run, r, "user").await? {
+                    crate::vectors::note_committed(app, b, &st, &m.room, &m.proposal).await;
+                    made += 1;
+                }
+            }
+        }
+        st.close().await;
+    }
+    Ok(made)
+}
+
 /// The run is done: every accepted proposal is committed.
 pub(crate) async fn close_run(app: &App, run: &str, rooms: usize) -> Result<(), ApiError> {
     let mut tx = begin_write(&app.pool).await?;
