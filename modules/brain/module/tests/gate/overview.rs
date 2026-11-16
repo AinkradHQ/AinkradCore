@@ -62,14 +62,13 @@ async fn ended(fx: &Fx, room: &str, answer: &str, attempt: i64) {
     .await;
     assert_eq!(st, StatusCode::OK, "{v}");
     for (seq, body) in [
-        (
-            1,
-            json!({"type": "user", "message": {"role": "user", "content": "x"}}),
-        ),
+        (1, json!({"type": "message", "text": "x"})),
+        // The Core's stored shape: the model's words come as text blocks, often a line first.
         (
             2,
-            json!({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": answer}]}}),
+            json!({"type": "assistant_text", "text": "Here is the answer."}),
         ),
+        (3, json!({"type": "assistant_text", "text": answer})),
     ] {
         sqlx::query("INSERT INTO core_agent_transcript (session, user_id, seq, at, body) VALUES (?, 1, ?, 0, ?)")
             .bind(&session)

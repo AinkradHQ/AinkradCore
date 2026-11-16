@@ -406,21 +406,23 @@ async fn give_back(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError>
 
 /// The model's answer: the last thing the assistant said in the session.
 pub(crate) async fn answer_of(app: &App, session: &str) -> Result<Option<String>, sqlx::Error> {
-    let (mut after, mut last) = (0, None);
+    // Every text block the model wrote after the last message it was sent: one answer often comes
+    // as several blocks (a line of prose, then the JSON).
+    let (mut after, mut parts) = (0, Vec::<String>::new());
     loop {
         let page =
             ainkrad_core_server::store::agents::transcript(&app.pool, session, after, 500).await?;
         let Some(end) = page.last() else { break };
         after = i64::try_from(end.seq).unwrap_or(i64::MAX);
-        for e in &page {
-            if let Some(t) =
-                render(&e.body).and_then(|t| t.strip_prefix("Assistant: ").map(str::to_owned))
-            {
-                last = Some(t);
+        for t in page.iter().filter_map(|e| render(&e.body)) {
+            if let Some(a) = t.strip_prefix("Assistant: ") {
+                parts.push(a.to_owned());
+            } else {
+                parts.clear();
             }
         }
     }
-    Ok(last)
+    Ok((!parts.is_empty()).then(|| parts.join("\n")))
 }
 
 async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {

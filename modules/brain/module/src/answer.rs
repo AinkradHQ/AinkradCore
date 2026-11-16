@@ -75,14 +75,25 @@ pub fn build_prompt(room: &str, sources: &[Source]) -> String {
 /// The answer as candidates, or why it is rejected. A fenced block is unwrapped; anything else
 /// around the JSON, an unknown field, a bad kind, an empty or oversize body, or a source id that
 /// is not in `known` rejects the whole answer.
-pub fn parse_output(out: &str, known: &HashSet<String>) -> Result<Vec<Candidate>, String> {
+/// The JSON object in a model's answer: the whole text, a fenced block, or, when the model wrote
+/// words around it, the span from the first `{` to the last `}`.
+pub(crate) fn json_body(out: &str) -> &str {
     let t = out.trim();
-    let t = t
+    if let Some(f) = t
         .strip_prefix("```json")
         .or_else(|| t.strip_prefix("```"))
         .and_then(|r| r.trim_end().strip_suffix("```"))
-        .unwrap_or(t)
-        .trim();
+    {
+        return f.trim();
+    }
+    match (t.find('{'), t.rfind('}')) {
+        (Some(a), Some(b)) if a < b => &t[a..=b],
+        _ => t,
+    }
+}
+
+pub fn parse_output(out: &str, known: &HashSet<String>) -> Result<Vec<Candidate>, String> {
+    let t = json_body(out);
     let parsed: Output =
         serde_json::from_str(t).map_err(|e| format!("not the output shape: {e}"))?;
     if parsed.candidates.len() > MAX_CANDIDATES {
@@ -122,6 +133,19 @@ pub fn parse_output(out: &str, known: &HashSet<String>) -> Result<Vec<Candidate>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_json_is_found_inside_words_and_fences() {
+        let j = r#"{"a": 1}"#;
+        for out in [
+            j.to_owned(),
+            format!("```json\n{j}\n```"),
+            format!("Here is the answer.\n{j}"),
+            format!("Here is the answer.\n```json\n{j}\n```\nDone."),
+        ] {
+            assert_eq!(super::json_body(&out), j, "{out}");
+        }
+    }
+
     use serde_json::json;
 
     use super::*;
@@ -180,6 +204,9 @@ mod tests {
         assert_eq!(c[0].sources, ["i1", "i2"]);
         let fenced = format!("```json\n{}\n```", ok_json());
         assert_eq!(parse_output(&fenced, &known()).unwrap(), c);
+        // Words around the JSON are the model being polite, not a bad answer.
+        let wordy = format!("Here you go: {}", ok_json());
+        assert_eq!(parse_output(&wordy, &known()).unwrap(), c);
         assert!(
             parse_output("{\"candidates\":[]}", &known())
                 .unwrap()
@@ -192,7 +219,6 @@ mod tests {
         let k = known();
         let bad = [
             "I think you should use SQLite".to_owned(),
-            format!("Here you go: {}", ok_json()),
             ok_json().replace("decision", "opinion"),
             ok_json().replace("\"Use SQLite.\"", "\"\""),
             ok_json().replace("[\"i1\",\"i2\"]", "[]"),

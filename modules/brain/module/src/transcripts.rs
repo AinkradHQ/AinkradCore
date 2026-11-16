@@ -9,7 +9,20 @@ use serde_json::Value;
 const PART_BYTES: usize = MAX_TEXT - 4096;
 
 /// Text of one harness event as `User: ...` or `Assistant: ...`; none for anything else.
+///
+/// Two shapes: the Core's own stored entries (`{"type":"assistant_text","text":…}` for the model,
+/// `{"type":"message","text":…}` for what was sent), which is what `core_agent_transcript` holds,
+/// and a harness's native log lines (`message.role` / `content` blocks), as imported files have.
 pub(crate) fn render(body: &Value) -> Option<String> {
+    let core = match body["type"].as_str() {
+        Some("assistant_text") => Some("Assistant"),
+        Some("message") => Some("User"),
+        _ => None,
+    };
+    if let Some(who) = core {
+        let text = body["text"].as_str()?.trim();
+        return (!text.is_empty()).then(|| format!("{who}: {text}"));
+    }
     let role = body["message"]["role"]
         .as_str()
         .or_else(|| body["role"].as_str())
