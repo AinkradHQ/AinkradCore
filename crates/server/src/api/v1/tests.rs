@@ -72,6 +72,7 @@ mod failover_props;
 mod failover_races;
 mod failover_review;
 mod failover_table;
+mod folder;
 mod gateway_ceiling;
 mod gateway_epoch;
 mod gateway_limits;

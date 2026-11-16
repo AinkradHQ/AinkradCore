@@ -659,6 +659,13 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/failover_of`.
             public var failoverOf: Swift.String?
+            /// The absolute path of the folder its harness works in, on its runner (`runner`): its
+            /// worktree under the runner's work root, or its scratch dir there. Absent until the runner
+            /// reports it after the start. A worktree is moved away when its run ends, so an ended
+            /// session's folder may no longer exist.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/folder`.
+            public var folder: Swift.String?
             /// - Remark: Generated from `#/components/schemas/AgentSession/harness`.
             public var harness: Swift.String
             /// The harness's own session id, what a resume continues.
@@ -770,6 +777,7 @@ extension Components {
             ///   - failedOverTo: The attempt that replaced this one.
             ///   - failoverClass: Why the run was moved off this attempt (`rate_limited`, `quota`, `auth`, `budget_pool`, …).
             ///   - failoverOf: The attempt this one replaced.
+            ///   - folder: The absolute path of the folder its harness works in, on its runner (`runner`): its
             ///   - harness:
             ///   - harnessSession: The harness's own session id, what a resume continues.
             ///   - id: `as_…`.
@@ -807,6 +815,7 @@ extension Components {
                 failedOverTo: Swift.String? = nil,
                 failoverClass: Swift.String? = nil,
                 failoverOf: Swift.String? = nil,
+                folder: Swift.String? = nil,
                 harness: Swift.String,
                 harnessSession: Swift.String? = nil,
                 id: Swift.String,
@@ -844,6 +853,7 @@ extension Components {
                 self.failedOverTo = failedOverTo
                 self.failoverClass = failoverClass
                 self.failoverOf = failoverOf
+                self.folder = folder
                 self.harness = harness
                 self.harnessSession = harnessSession
                 self.id = id
@@ -882,6 +892,7 @@ extension Components {
                 case failedOverTo = "failed_over_to"
                 case failoverClass = "failover_class"
                 case failoverOf = "failover_of"
+                case folder
                 case harness
                 case harnessSession = "harness_session"
                 case id

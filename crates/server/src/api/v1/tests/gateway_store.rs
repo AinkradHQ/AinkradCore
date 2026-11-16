@@ -96,6 +96,7 @@ fn events(g: &G, reports: Vec<GatewayReport>, entries: Vec<TranscriptEntry>) -> 
         outcome: None,
         gateway: reports,
         plan_limit: None,
+        folder: None,
     }
 }
 

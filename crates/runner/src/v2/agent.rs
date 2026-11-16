@@ -196,6 +196,7 @@ trait Harness: Send + Sync {
         helper: Option<&'a std::path::Path>,
     ) -> Fut<'a, Result<PathBuf, String>>;
     fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()>;
+    fn work_dir(&self, job: &Job) -> Option<PathBuf>;
 }
 
 impl<E: Executor> Harness for E {
@@ -239,6 +240,9 @@ impl<E: Executor> Harness for E {
     fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()> {
         Box::pin(Executor::cleanup_agent_workspace(self, session, generation))
     }
+    fn work_dir(&self, job: &Job) -> Option<PathBuf> {
+        Executor::work_dir(self, job)
+    }
 }
 
 /// What survives the process, in `<dir>/<session>/meta.json`.
@@ -264,6 +268,9 @@ struct Meta {
     /// The harness's latest plan-limit event, when the driver reports them.
     #[serde(default)]
     plan_limit: Option<ainkrad_proto::v2::PlanLimit>,
+    /// The folder its harness works in (`AgentEvents::folder`), from its latest start.
+    #[serde(default)]
+    folder: Option<String>,
 }
 
 struct Live {
@@ -536,6 +543,7 @@ impl AgentDriver {
                 epoch: 0,
                 gw_acked: 0,
                 plan_limit: None,
+                folder: None,
             },
             run,
             entries: VecDeque::new(),
@@ -714,10 +722,17 @@ impl AgentDriver {
         }
         let entry = json!({"type": "started", "harness": req.harness, "resumed": resumed,
                            "sandbox": self.sandbox.name()});
+        // A path that is not UTF-8 is not reported rather than reported mangled.
+        let folder = (self.harness.work_dir(&job))
+            .and_then(|p| p.to_str().map(str::to_owned))
+            .filter(|p| p.starts_with('/'));
         self.with(&session, |live, cfg, s| {
             live.redactor = redactor;
             if started.is_some() {
                 live.meta.harness_session = started;
+            }
+            if folder.is_some() {
+                live.meta.folder = folder;
             }
             push(cfg, s, live, entry);
         });
@@ -1228,6 +1243,7 @@ fn events(session: &str, live: &Live, after: u64) -> AgentEvents {
         },
         gateway: live.reports.batch(),
         plan_limit: live.meta.plan_limit.clone(),
+        folder: live.meta.folder.clone(),
     }
 }
 

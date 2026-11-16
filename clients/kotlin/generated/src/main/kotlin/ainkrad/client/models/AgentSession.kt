@@ -44,6 +44,7 @@ import kotlinx.serialization.Contextual
  * @param failedOverTo The attempt that replaced this one.
  * @param failoverClass Why the run was moved off this attempt (`rate_limited`, `quota`, `auth`, `budget_pool`, …). An ended run's last attempt says in `outcome.failover` (`{result, why, reasons}`) why it could not move on. Admin only.
  * @param failoverOf The attempt this one replaced.
+ * @param folder The absolute path of the folder its harness works in, on its runner (`runner`): its worktree under the runner's work root, or its scratch dir there. Absent until the runner reports it after the start. A worktree is moved away when its run ends, so an ended session's folder may no longer exist.
  * @param harnessSession The harness's own session id, what a resume continues.
  * @param idleSince RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param index Its row: page `listAgentSessions` with `before`.
@@ -136,6 +137,10 @@ data class AgentSession (
     /* The attempt this one replaced. */
     @SerialName(value = "failover_of")
     val failoverOf: kotlin.String? = null,
+
+    /* The absolute path of the folder its harness works in, on its runner (`runner`): its worktree under the runner's work root, or its scratch dir there. Absent until the runner reports it after the start. A worktree is moved away when its run ends, so an ended session's folder may no longer exist. */
+    @SerialName(value = "folder")
+    val folder: kotlin.String? = null,
 
     /* The harness's own session id, what a resume continues. */
     @SerialName(value = "harness_session")

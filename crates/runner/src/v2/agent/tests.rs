@@ -142,6 +142,10 @@ impl Executor for Script {
             None => drop(seen.env.remove(&run)),
         }
     }
+
+    fn work_dir(&self, job: &Job) -> Option<PathBuf> {
+        Some(PathBuf::from(format!("/work/session-{}", job.context_ref)))
+    }
 }
 
 pub(super) fn dirs(name: &str) -> (TestDir, AgentConfig) {
@@ -392,6 +396,27 @@ async fn slots_split_the_capacity_per_harness() {
         })
         .unwrap();
     }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_started_session_reports_its_folder_and_a_new_driver_still_knows_it() {
+    let (root, config) = dirs("folder");
+    let d = Arc::new(AgentDriver::new(config.clone(), script("echo hi")).unwrap());
+    let first = d.start(start("as_f", "fake")).unwrap();
+    assert_eq!(first.folder, None, "not known before the harness starts");
+    let (_, ev) = drain(&d, "as_f").await;
+    assert_eq!(ev.folder.as_deref(), Some("/work/session-as_f"));
+    drop(d);
+    let again = AgentDriver::new(config, script("true")).unwrap();
+    let read = AgentRead {
+        gw_after: 0,
+        session: "as_f".into(),
+        after: 0,
+        wait_ms: None,
+    };
+    let ev = again.read(&read).await.unwrap();
+    assert_eq!(ev.folder.as_deref(), Some("/work/session-as_f"));
     let _ = std::fs::remove_dir_all(root);
 }
 

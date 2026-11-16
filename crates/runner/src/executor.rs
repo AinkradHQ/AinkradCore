@@ -214,6 +214,12 @@ pub trait Executor: Send + Sync + 'static {
 
     fn recover_agent_workspaces(&self, _adopted: &[String]) {}
 
+    /// The absolute folder a started job's harness works in, when it runs in one.
+    fn work_dir(&self, job: &Job) -> Option<PathBuf> {
+        let _ = job;
+        None
+    }
+
     /// The issues whose worktrees it holds (E3.7), listed in every `Ready`.
     fn workspaces(&self) -> Vec<i64> {
         vec![]

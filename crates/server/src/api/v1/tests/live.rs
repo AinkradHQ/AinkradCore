@@ -53,6 +53,7 @@ fn answer(s: &store::Session, state: AgentState, seq: u64, body: Value) -> Agent
         outcome: None,
         gateway: vec![],
         plan_limit: None,
+        folder: None,
     }
 }
 

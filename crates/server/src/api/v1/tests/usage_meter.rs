@@ -113,6 +113,7 @@ fn events(id: &str, usage: Tokens, entries: Vec<TranscriptEntry>) -> AgentEvents
         outcome: None,
         gateway: vec![],
         plan_limit: None,
+        folder: None,
     }
 }
 

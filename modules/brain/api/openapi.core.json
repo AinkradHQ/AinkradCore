@@ -578,6 +578,13 @@
               "null"
             ]
           },
+          "folder": {
+            "description": "The absolute path of the folder its harness works in, on its runner (`runner`): its\nworktree under the runner's work root, or its scratch dir there. Absent until the runner\nreports it after the start. A worktree is moved away when its run ends, so an ended\nsession's folder may no longer exist.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "harness": {
             "type": "string"
           },
@@ -8555,7 +8562,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.75.0"
+    "version": "1.76.0"
   },
   "openapi": "3.1.0",
   "paths": {

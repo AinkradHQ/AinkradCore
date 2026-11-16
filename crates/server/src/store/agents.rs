@@ -79,6 +79,8 @@ pub struct Session {
     pub pending: Option<String>,
     /// A short name: the first message's start until someone sets one.
     pub title: Option<String>,
+    /// The absolute folder its harness works in on its runner, as the runner reported it.
+    pub folder: Option<String>,
 }
 
 /// The longest title, in characters.
@@ -119,7 +121,7 @@ pub struct NewSession<'a> {
 const COLUMNS: &str = "n, id, runner, harness, model, prompt, workspace, policy, secrets, state, \
     harness_session, outcome, last_seq, tokens_in, tokens_out, cache_read, cache_write, \
     cost_usd_micros, resumes, created_by, owner_module, owner_ref, created_at, updated_at, ended_at, \
-    gateway_account_id, gw_seq, gw_epoch, gw_stop, gw_stopped_at, live, waiting_since, pending, title";
+    gateway_account_id, gw_seq, gw_epoch, gw_stop, gw_stopped_at, live, waiting_since, pending, title, folder";
 
 fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
     let json = |col: &str| -> Result<Option<Value>, sqlx::Error> {
@@ -170,6 +172,7 @@ fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
         waiting_since: r.try_get("waiting_since")?,
         pending: r.try_get("pending")?,
         title: r.try_get("title")?,
+        folder: r.try_get("folder")?,
     })
 }
 
@@ -528,13 +531,14 @@ pub async fn apply(
     let i = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
     sqlx::query(
         "UPDATE core_agent_sessions SET last_seq = ?, \
-         harness_session = coalesce(?, harness_session), \
+         harness_session = coalesce(?, harness_session), folder = coalesce(?, folder), \
          tokens_in = max(tokens_in, ?), tokens_out = max(tokens_out, ?), \
          cache_read = max(cache_read, ?), cache_write = max(cache_write, ?), \
          cost_usd_micros = coalesce(?, cost_usd_micros), updated_at = ? WHERE id = ?",
     )
     .bind(i(last))
     .bind(&ev.harness_session)
+    .bind(&ev.folder)
     .bind(i(u.input))
     .bind(i(u.output))
     .bind(i(u.cache_read))

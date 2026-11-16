@@ -2122,6 +2122,13 @@ export interface components {
             failover_class?: string | null;
             /** @description The attempt this one replaced. */
             failover_of?: string | null;
+            /**
+             * @description The absolute path of the folder its harness works in, on its runner (`runner`): its
+             *     worktree under the runner's work root, or its scratch dir there. Absent until the runner
+             *     reports it after the start. A worktree is moved away when its run ends, so an ended
+             *     session's folder may no longer exist.
+             */
+            folder?: string | null;
             harness: string;
             /** @description The harness's own session id, what a resume continues. */
             harness_session?: string | null;

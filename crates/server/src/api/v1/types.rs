@@ -245,7 +245,9 @@
 ///    `POST /agent-sessions/{id}/mode` (`setAgentSessionMode`, body `AgentModeChange {policy?, plan?}`) switches a
 ///    session's mode, live on its runner (runner op `agent.mode`, transcript entry `mode_changed`); audit action
 ///    `agent.mode_changed`. `Policy.plan` in the runner contract.
-pub const API_MINOR: u32 = 75;
+/// 76: AI session folders (E2). `AgentSession.folder`: the absolute path of the session's working folder on its
+///    runner, once the runner reports it (`AgentEvents.folder` in the runner contract).
+pub const API_MINOR: u32 = 76;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

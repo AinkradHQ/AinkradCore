@@ -624,6 +624,7 @@ fn v2_agent_frames_are_pinned() {
         Body::Result(Reply::AgentRead(AgentEvents {
             gateway: vec![],
             plan_limit: None,
+            folder: None,
             session: "as_a".to_owned(),
             state: AgentState::Ended,
             last_seq: 4,
@@ -775,6 +776,7 @@ fn v2_agent_frames_are_pinned() {
                     resets_at: Some(1792608000),
                 }],
             }),
+            folder: None,
         })),
     );
     v2(

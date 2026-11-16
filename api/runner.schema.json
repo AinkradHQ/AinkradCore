@@ -73,6 +73,13 @@
           },
           "type": "array"
         },
+        "folder": {
+          "description": "The absolute path, on the runner, of the folder the session's harness works in (its\nworktree under the runner's work root, or its scratch dir there), once it has started. A\nworktree is moved away when its run ends, so after the end it may no longer exist.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "gateway": {
           "description": "What the session's auth gateway reported after `AgentRead::gw_after` (KAN-435). A channel\nof its own, never the transcript: only the gateway task writes it.",
           "items": {
