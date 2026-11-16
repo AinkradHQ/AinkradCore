@@ -205,6 +205,38 @@ pub fn schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(Item)).expect("the item schema serialises")
 }
 
+/// An item no person wrote: a Claude Code sub-agent transcript (`.../subagents/<id>.jsonl`) or a
+/// prompt that only points at a scratch file (`Read and follow exactly: /private/tmp/...`).
+pub fn is_agent_noise(path: &str, title: &str) -> bool {
+    if path.split(['/', '\\']).any(|c| c == "subagents") {
+        return true;
+    }
+    const LEAD: &str = "read and follow exactly:";
+    let t = title.trim_start();
+    let t = match t.get(..LEAD.len()) {
+        Some(h) if h.eq_ignore_ascii_case(LEAD) => t[LEAD.len()..].trim_start(),
+        _ => t,
+    };
+    ["/tmp/", "/private/tmp/", "/var/folders/"]
+        .iter()
+        .any(|p| t.starts_with(p))
+}
+
+/// The first prompt of an AI session as a comparison key: the title without a ` (part n)` tail,
+/// lower-cased, whitespace folded.
+pub fn prompt_key(title: &str) -> String {
+    let t = title.trim_end();
+    let t = t
+        .strip_suffix(')')
+        .and_then(|h| h.rsplit_once(" (part "))
+        .filter(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(t, |(h, _)| h);
+    t.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 #[cfg(test)]
 pub(crate) fn fixture(text: &str) -> Item {
     Item {
@@ -310,5 +342,32 @@ mod tests {
         let req = s["required"].as_array().unwrap();
         assert!(req.iter().any(|r| r == "content_hash"));
         assert!(!req.iter().any(|r| r == "ended_at"));
+    }
+
+    #[test]
+    fn agent_noise_is_subagent_paths_and_scratch_prompts() {
+        assert!(is_agent_noise(
+            "/u/.claude/projects/p/s1/subagents/agent-a1.jsonl",
+            "Fix it"
+        ));
+        assert!(is_agent_noise(
+            "/u/p/s.jsonl",
+            "Read and follow exactly: /private/tmp/x/task.md"
+        ));
+        assert!(is_agent_noise("/u/p/s.jsonl", "  /tmp/job.txt please"));
+        assert!(!is_agent_noise(
+            "/u/.claude/projects/p/s1.jsonl",
+            "Read the tmp notes"
+        ));
+        assert!(!is_agent_noise("/u/p/subagentsX/s.jsonl", "Fix the build"));
+    }
+
+    #[test]
+    fn prompt_key_ignores_case_space_and_part_tail() {
+        assert_eq!(
+            prompt_key("Land  these,\tin order (part 2)"),
+            prompt_key("land these, in order")
+        );
+        assert_ne!(prompt_key("a (part x)"), prompt_key("a"));
     }
 }

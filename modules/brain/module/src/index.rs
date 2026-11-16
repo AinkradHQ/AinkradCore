@@ -221,12 +221,34 @@ pub(crate) async fn latest(
 ) -> ApiResult<Latest> {
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let access = crate::inbox::open_room(&app, &b, &room).await?;
+    // Newest first. Sub-agent and scratch-prompt sources are hidden (stored before they were
+    // skipped at intake), and sources with one first prompt show once, the newest.
     let rows = sqlx::query(
-        "SELECT item_id, source_kind, title, started_at FROM sources ORDER BY started_at DESC, item_id DESC LIMIT ?",
+        "SELECT item_id, source_kind, title, started_at, path FROM sources ORDER BY started_at DESC, item_id DESC",
     )
-    .bind(limit)
     .fetch_all(access.pool())
     .await?;
+    let mut seen = std::collections::HashSet::new();
+    let rows: Vec<_> = rows
+        .into_iter()
+        .filter(|r| {
+            let (path, title, kind): (String, String, String) =
+                (r.get("path"), r.get("title"), r.get("source_kind"));
+            let session = matches!(
+                kind.as_str(),
+                "claude_code"
+                    | "codex"
+                    | "opencode"
+                    | "antigravity"
+                    | "cursor"
+                    | "kimi"
+                    | "core_transcript"
+            );
+            !brain_model::item::is_agent_noise(&path, &title)
+                && (!session || seen.insert(brain_model::item::prompt_key(&title)))
+        })
+        .take(limit as usize)
+        .collect();
     let records: i64 = sqlx::query_scalar("SELECT count(*) FROM records")
         .fetch_one(access.pool())
         .await?;
