@@ -1,5 +1,6 @@
 //! The scheduler loop (E2.9): ticks every `every` until shut down. The platform's jobs are
-//! expiring pairings past their 5 minutes and trimming events past retention (E1-04.4);
+//! expiring pairings past their 5 minutes and trimming events past retention (E1-04.4), and
+//! sweeping the attachments of sessions over for their retention (E4);
 //! modules' jobs come with E2-11. The time comes from a
 //! `Clock`, so nothing reads the system clock itself and tests drive it with a fake one.
 
@@ -167,6 +168,10 @@ impl<C: Clock> Scheduler<C> {
                     let unix = unix_secs(&now).unwrap_or_default();
                     if let Err(e) = crate::store::gov::prune_limits(&self.pool, unix).await {
                         eprintln!("ainkrad-core-server: pruning lockouts failed: {e}");
+                    }
+                    let cutoff = iso_of_unix(unix - crate::store::attachments::RETENTION_SECS);
+                    if let Err(e) = crate::store::attachments::sweep(&self.pool, &cutoff).await {
+                        eprintln!("ainkrad-core-server: sweeping attachments failed: {e}");
                     }
                     if let Some(health) = &self.health
                         && let Err(e) = health.tick(&self.pool, unix).await

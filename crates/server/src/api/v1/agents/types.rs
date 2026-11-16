@@ -17,7 +17,11 @@ pub struct AgentUsage {
 
 #[derive(Deserialize, ToSchema)]
 pub struct AgentMessage {
+    /// Up to 16 KiB; may be empty when `attachments` names a file.
     pub text: String,
+    /// Files added with `addAgentAttachment` (`at_…`, at most 16): written into the session's
+    /// folder on its runner before the message goes, and named at its end by their paths.
+    pub attachments: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, ToSchema)]

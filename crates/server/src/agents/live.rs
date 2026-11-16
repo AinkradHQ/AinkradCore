@@ -4,7 +4,6 @@
 //! (its stored state is `running`), which is what the idle end bounds.
 
 use ainkrad_core::settings::{Key, Scope};
-use ainkrad_proto::v2::AgentSend;
 
 use super::*;
 
@@ -17,14 +16,12 @@ pub(crate) async fn before_read(app: &App, s: &Session) -> Result<bool, Refusal>
     idle_end(app, s).await
 }
 
-/// Sends the pending message to the runner's session, once, then forgets it.
+/// Sends the pending message, after its attachments (E4), to the runner's session, once, then
+/// forgets it.
 async fn deliver(app: &App, s: &Session, text: &str) -> Result<(), Refusal> {
     let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();
-    let send = Command::AgentSend(AgentSend {
-        session: s.id.clone(),
-        text: text.to_owned(),
-    });
-    let ev = ask(app, &s.runner, send, app.agents.config.answer, proof).await?;
+    let ids = crate::store::attachments::pending(&app.pool, &s.id).await?;
+    let ev = super::attach::send_with(app, s, text.to_owned(), &ids, proof).await?;
     store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
     store::clear_pending(&app.pool, &s.id, text).await?;
     Ok(())

@@ -14,6 +14,7 @@ use ainkrad_core::audit::AuditActor;
 use ainkrad_core::ids::UserId;
 use ainkrad_core::settings::{Key, Scope};
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
@@ -418,6 +419,10 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/agent-sessions/{id}/messages",
             post(agents::message),
+        )
+        .route(
+            "/api/v1/agent-sessions/{id}/attachments",
+            post(agents::attach::add).layer(DefaultBodyLimit::max(agents::attach::UPLOAD_BODY)),
         )
         .route(
             "/api/v1/agent-sessions/{id}/approvals",

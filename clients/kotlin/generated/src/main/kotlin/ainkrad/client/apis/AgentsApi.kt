@@ -16,6 +16,7 @@
 package ainkrad.client.apis
 
 import ainkrad.client.models.AgentApprovals
+import ainkrad.client.models.AgentAttachment
 import ainkrad.client.models.AgentDecision
 import ainkrad.client.models.AgentMessage
 import ainkrad.client.models.AgentModeChange
@@ -25,6 +26,7 @@ import ainkrad.client.models.AgentTranscript
 import ainkrad.client.models.AgentWake
 import ainkrad.client.models.AgentWakeRequest
 import ainkrad.client.models.ErrorBody
+import ainkrad.client.models.NewAgentAttachment
 import ainkrad.client.models.NewAgentSession
 
 import ainkrad.client.infrastructure.*
@@ -42,6 +44,40 @@ import io.ktor.http.ParametersBuilder
         httpClientEngine,
         httpClientConfig,
     ) {
+
+        /**
+        * POST /api/v1/agent-sessions/{id}/attachments
+        * 
+        * 
+         * @param id The session&#39;s id, &#x60;as_…&#x60; 
+         * @param newAgentAttachment  
+         * @return AgentAttachment
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun addAgentAttachment(id: kotlin.String, newAgentAttachment: NewAgentAttachment): HttpResponse<AgentAttachment> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = newAgentAttachment
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/agent-sessions/{id}/attachments".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
 
         /**
         * POST /api/v1/agent-sessions/{id}/cancel

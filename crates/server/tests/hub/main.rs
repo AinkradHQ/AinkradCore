@@ -6,6 +6,7 @@
 mod account_health;
 mod account_vars;
 mod agents;
+mod attachments;
 use ainkrad_core_server::agents::AgentsConfig;
 mod account_placement;
 mod allocator;

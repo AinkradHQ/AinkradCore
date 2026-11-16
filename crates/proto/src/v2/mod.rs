@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod agent;
+mod attach;
 mod auth;
 mod command;
 mod control;
@@ -51,6 +52,7 @@ mod subscription;
 mod terminal;
 mod tools;
 pub use agent::*;
+pub use attach::*;
 pub use auth::*;
 pub use command::*;
 pub use control::*;

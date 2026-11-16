@@ -42,6 +42,7 @@ use tokio::sync::{Notify, mpsc};
 
 use crate::{Answer, Control, Executor, Job, Report};
 
+mod attach;
 pub mod secrets;
 use secrets::{Delivered, Redeem};
 mod front;
@@ -396,7 +397,11 @@ impl AgentDriver {
             commands: AGENT_OPS
                 .iter()
                 .chain(self.sandbox.capabilities())
-                .chain([&CAP_LIVE, &ainkrad_proto::v2::OP_AGENT_MODE])
+                .chain([
+                    &CAP_LIVE,
+                    &ainkrad_proto::v2::OP_AGENT_MODE,
+                    &ainkrad_proto::v2::OP_AGENT_ATTACH,
+                ])
                 .chain(
                     self.config
                         .plan_limit
