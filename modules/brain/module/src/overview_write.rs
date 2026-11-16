@@ -145,6 +145,7 @@ pub struct Rule {
     pub text: String,
     /// Item ids of the room's items it came from; all were shown to the model.
     #[serde(default)]
+    #[schema(required = true)]
     pub sources: Vec<String>,
 }
 
