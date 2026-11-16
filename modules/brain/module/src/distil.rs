@@ -348,6 +348,7 @@ async fn launch(app: &App, b: &Brain, d: &DistilView, by: &str) -> Result<(), Ap
     let s = ch::create_session(&app.pool, &new, None, None, req, BY, &app.clock.now())
         .await
         .map_err(ApiError::from)?;
+    agents::authorize_module_session(app, &s.id);
     if let Err(e) = claim::claim(app, &d.room, &s.id, by).await {
         // The chain moved between the check and the snapshot: the session never starts.
         alloc::end_unstarted_why(
