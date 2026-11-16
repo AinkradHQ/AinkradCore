@@ -70,11 +70,22 @@ fn spawn_daemon(
     base: &str,
     dir: &std::path::Path,
 ) -> watch::Sender<bool> {
-    let cfg = PtyConfig {
+    spawn_daemon_with(st, base, dir, |_| {})
+}
+
+/// [`spawn_daemon`] with its `pty` driver's config changed by `edit`.
+fn spawn_daemon_with(
+    st: &ainkrad_runner::v2::key::State,
+    base: &str,
+    dir: &std::path::Path,
+    edit: impl FnOnce(&mut PtyConfig),
+) -> watch::Sender<bool> {
+    let mut cfg = PtyConfig {
         enabled: true,
         grace: Duration::from_millis(200),
         ..PtyConfig::new(dir.to_owned())
     };
+    edit(&mut cfg);
     assert!(
         cfg.host.is_file(),
         "ainkrad-ptyhost is built (cargo test --workspace)"
@@ -113,6 +124,11 @@ fn elevate(core: &Core, dev: &TestDevice) {
 
 impl Fx {
     async fn new(name: &str) -> Self {
+        Self::new_with(name, |_| {}).await
+    }
+
+    /// [`Fx::new`] with the runner's `pty` config changed by `edit`.
+    async fn new_with(name: &str, edit: impl FnOnce(&mut PtyConfig)) -> Self {
         let core = Core::start(name, quick()).await;
         let base = format!("http://{}", core.host);
         let st = state(name);
@@ -120,7 +136,7 @@ impl Fx {
         let dir = PathBuf::from(format!("/tmp/ath-{name}-{}", std::process::id() % 100_000));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let stop = spawn_daemon(&st, &base, &dir);
+        let stop = spawn_daemon_with(&st, &base, &dir, edit);
         let fx = Self {
             runner: e.device_id,
             owner: core.device("device", &["read", "terminal"]).await,

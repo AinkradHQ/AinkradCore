@@ -584,6 +584,8 @@ mod pty {
     use crate::v2::pty::Op;
     use tokio::sync::{mpsc, oneshot};
 
+    mod session;
+
     fn driver(dir: &std::path::Path, enabled: bool) -> Arc<PtyDriver> {
         let host = ainkrad_ptyhost::client::find_host_binary()
             .expect("ainkrad-ptyhost is built next to the tests (cargo test --workspace)");
@@ -1180,6 +1182,7 @@ mod pty {
             program: Some("/bin/sh".to_owned()),
             args: vec!["-c".to_owned(), script.to_owned()],
             cwd: Some("/".to_owned()),
+            session: None,
             env: Default::default(),
             env_pass: vec![],
             size: Size { rows: 24, cols: 80 },

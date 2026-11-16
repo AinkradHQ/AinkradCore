@@ -43,6 +43,12 @@ pub struct PtyOpen {
     /// An absolute directory; absent, the user's home.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// The AI session (`as_…`) whose folder `cwd` is, set only by the Core when a client opens a
+    /// terminal for a session. The runner starts the shell only when `cwd` is the folder it
+    /// recorded for that session (else `invalid_args`), and its terminal sandbox then lets the
+    /// shell reach that one folder although it lies in the runner's hidden state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
     /// Set in the child as given.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,

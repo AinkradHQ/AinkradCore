@@ -818,6 +818,7 @@ pub async fn create(
     if !(1..=1000).contains(&req.size.rows) || !(1..=1000).contains(&req.size.cols) {
         return ApiError::bad_request("terminal size is out of range").into_response();
     }
+    let session = req.session.clone();
     let cwd = match (req.session.as_deref(), req.cwd) {
         (Some(_), Some(_)) => {
             return ApiError::bad_request("give cwd or session, not both").into_response();
@@ -897,6 +898,9 @@ pub async fn create(
             program: req.program,
             args: req.args.unwrap_or_default(),
             cwd,
+            // Only this path names a session: the runner then lets the shell into that session's
+            // folder, inside its hidden state, once it has checked it is the folder it recorded.
+            session,
             env: req.env.unwrap_or_default(),
             env_pass: Vec::new(),
             size: ainkrad_proto::v2::Size {

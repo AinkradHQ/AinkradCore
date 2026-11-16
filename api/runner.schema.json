@@ -2381,6 +2381,13 @@
             "null"
           ]
         },
+        "session": {
+          "description": "The AI session (`as_…`) whose folder `cwd` is, set only by the Core when a client opens a\nterminal for a session. The runner starts the shell only when `cwd` is the folder it\nrecorded for that session (else `invalid_args`), and its terminal sandbox then lets the\nshell reach that one folder although it lies in the runner's hidden state.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "size": {
           "$ref": "#/$defs/Size"
         },

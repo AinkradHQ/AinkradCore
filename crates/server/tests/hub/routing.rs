@@ -50,6 +50,7 @@ async fn the_noop_runs_end_to_end_and_only_advertised_commands_reach_the_runner(
         program: Some("/bin/sh".to_owned()),
         args: vec!["-c".to_owned(), "id".to_owned()],
         cwd: None,
+        session: None,
         env: Default::default(),
         env_pass: vec![],
         size: Size { rows: 24, cols: 80 },

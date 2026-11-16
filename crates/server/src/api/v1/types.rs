@@ -250,7 +250,10 @@
 /// 77: Terminal in an AI session's folder (E1, KAN-456). `NewTerminal.session` (`as_…`) starts the terminal in that
 ///    session's reported folder on the same runner, resolved by the Core (403 `forbidden_scope` without `agent`, 404,
 ///    409 `session_runner_mismatch` / `session_folder_unknown` / `session_folder_gone`; 400 with `cwd` too).
-pub const API_MINOR: u32 = 77;
+/// 78: Session terminals under the terminal sandbox. Runner contract only: `PtyOpen.session` names the session
+///    whose recorded folder `cwd` is; the runner checks it and lets the sandboxed shell into that one folder. A
+///    runner refusal (an unrecorded folder, or one `--terminal-user` cannot reach) is the usual 502 `terminal_failed`.
+pub const API_MINOR: u32 = 78;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
