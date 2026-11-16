@@ -165,8 +165,20 @@ async fn a_file_sent_with_a_message_lands_in_the_session_folder_and_the_message_
         exec.got.lock().unwrap()[1],
         format!("again\n\n@{}", second.display())
     );
-    let pending = attachments::pending(&core.app.pool, &s.id).await.unwrap();
-    assert!(pending.is_empty(), "delivered once");
+    // The supervisor clears the flag just after the harness has the message.
+    let mut cleared = false;
+    for _ in 0..250 {
+        if attachments::pending(&core.app.pool, &s.id)
+            .await
+            .unwrap()
+            .is_empty()
+        {
+            cleared = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(cleared, "delivered once");
 
     // Another session's attachment is not this session's: nothing is sent.
     let other = session(&core, &r.id).await;
