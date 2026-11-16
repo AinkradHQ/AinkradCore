@@ -144,6 +144,7 @@ pub fn build_prompt(room: &str, s: &Selection, retry: Option<&str>) -> String {
 pub struct Rule {
     pub text: String,
     /// Item ids of the room's items it came from; all were shown to the model.
+    #[serde(default)]
     pub sources: Vec<String>,
 }
 
@@ -183,21 +184,15 @@ pub struct Overview {
 /// The answer as an Overview, or why it is rejected. A fenced block is unwrapped. Rules citing an
 /// id outside `known` are dropped (and a rule left with no source goes with them).
 pub fn parse(out: &str, known: &HashSet<String>) -> Result<Overview, String> {
-    let t = out.trim();
-    let t = t
-        .strip_prefix("```json")
-        .or_else(|| t.strip_prefix("```"))
-        .and_then(|r| r.trim_end().strip_suffix("```"))
-        .unwrap_or(t)
-        .trim();
+    let t = crate::answer::json_body(out);
     let mut o: Overview =
         serde_json::from_str(t).map_err(|e| format!("not the output shape: {e}"))?;
-    if o.summary.trim().is_empty() || o.summary.chars().count() > 6000 {
-        return Err("the summary must be 1 to 6000 characters".to_owned());
+    if o.summary.trim().is_empty() {
+        return Err("the summary is empty".to_owned());
     }
-    if o.instructions.chars().count() > 8000 {
-        return Err("the instructions are over 8000 characters".to_owned());
-    }
+    // Too long is cut, not refused: a long answer is still a good one.
+    o.summary = o.summary.chars().take(6000).collect();
+    o.instructions = o.instructions.chars().take(8000).collect();
     for g in [
         &mut o.rules.workflow,
         &mut o.rules.code,
