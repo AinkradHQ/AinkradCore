@@ -448,6 +448,45 @@
         ],
         "type": "object"
       },
+      "AgentEdit": {
+        "description": "The `edit` of a file edit's `tool_use` entry (Claude's Edit, MultiEdit, Write and NotebookEdit,\nCodex's fileChange, OpenCode's edit, multiedit and write): what each change took out and put\nin, the same shape for every harness. The texts are at most 64 KiB in all; past that they are\ncut at a line end, `truncated` is set, and the entry's `input` keeps only its small fields.",
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/AgentEditChange"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "changes",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "AgentEditChange": {
+        "description": "One change of an `AgentEdit`. A new file's `old` is empty, a deleted one's `new`. From a\nunified diff (Codex), the lines before and after with the hunk headers left out.",
+        "properties": {
+          "new": {
+            "type": "string"
+          },
+          "old": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "old",
+          "new"
+        ],
+        "type": "object"
+      },
       "AgentMessage": {
         "properties": {
           "text": {
@@ -789,12 +828,12 @@
       "AgentTranscriptEntry": {
         "properties": {
           "at_ms": {
-            "description": "Unix milliseconds, on the runner.",
+            "description": "Unix milliseconds, on the runner: when it took the event. A `tool_use`'s is when the call\nstarted (a sub-agent's `Task` or `Agent` included), an `approval_request`'s when the\napproval was asked.",
             "format": "int64",
             "type": "integer"
           },
           "body": {
-            "description": "A harness event, or the session's own (`started`, `message`, `approval_request`,\n`approval_decided`, `interrupted`, `gap`, `ended`), redacted.",
+            "description": "A harness event, or the session's own (`started`, `message`, `approval_request`,\n`approval_decided`, `interrupted`, `gap`, `ended`), redacted. A file edit's `tool_use` also\ncarries `edit` (`AgentEdit`).",
             "type": "object"
           },
           "seq": {
@@ -8570,7 +8609,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.78.0"
+    "version": "1.79.0"
   },
   "openapi": "3.1.0",
   "paths": {

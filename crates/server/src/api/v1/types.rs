@@ -253,7 +253,11 @@
 /// 78: Session terminals under the terminal sandbox. Runner contract only: `PtyOpen.session` names the session
 ///    whose recorded folder `cwd` is; the runner checks it and lets the sandboxed shell into that one folder. A
 ///    runner refusal (an unrecorded folder, or one `--terminal-user` cannot reach) is the usual 502 `terminal_failed`.
-pub const API_MINOR: u32 = 78;
+/// 79: File edits with their lines (E5). A file edit's `tool_use` transcript entry carries `edit`
+///    (`AgentEdit {changes: [AgentEditChange {path, old, new}], truncated}`), the same for every harness,
+///    at most 64 KiB of text. `AgentTranscriptEntry.at_ms` documented as the event's own time (a sub-agent's
+///    start, an approval's request).
+pub const API_MINOR: u32 = 79;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

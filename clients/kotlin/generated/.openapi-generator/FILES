@@ -44,6 +44,8 @@ src/main/kotlin/ainkrad/client/models/AccountsDeleted.kt
 src/main/kotlin/ainkrad/client/models/AgentApproval.kt
 src/main/kotlin/ainkrad/client/models/AgentApprovals.kt
 src/main/kotlin/ainkrad/client/models/AgentDecision.kt
+src/main/kotlin/ainkrad/client/models/AgentEdit.kt
+src/main/kotlin/ainkrad/client/models/AgentEditChange.kt
 src/main/kotlin/ainkrad/client/models/AgentMessage.kt
 src/main/kotlin/ainkrad/client/models/AgentModeChange.kt
 src/main/kotlin/ainkrad/client/models/AgentSecret.kt
