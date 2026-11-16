@@ -148,7 +148,7 @@ async fn a_cloud_room_waits_with_the_reason_when_it_cannot_start() {
     bind_distil_chain(&fx, make_chain(&fx, &["anthropic"]).await).await;
     fx.brain.distil_step().await.unwrap();
     let l = ok(&fx, Method::GET, &format!("/rooms/{room}/distils"), None).await;
-    assert_eq!(l[0]["detail"], "no runner is online");
+    assert_eq!(l[0]["detail"], "no runner with a sandbox is online");
     assert_eq!(count(&fx, "core_agent_sessions").await, 0);
 }
 
