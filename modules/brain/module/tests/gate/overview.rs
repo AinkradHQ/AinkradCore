@@ -49,8 +49,25 @@ async fn ids(fx: &Fx, room: &str) -> Vec<String> {
     v
 }
 
+/// What the gate offers by default: one candidate per item, `c1` for the first.
+async fn offered(fx: &Fx, room: &str) -> Value {
+    let rules: Vec<Value> = ids(fx, room)
+        .await
+        .iter()
+        .enumerate()
+        .map(|(n, id)| json!({"id": format!("c{}", n + 1), "text": "t", "items": [id], "doc": false}))
+        .collect();
+    json!({"rules": rules, "min_sources": 1})
+}
+
 /// The room's overview write as the job would find it: running, its session ended with `answer`.
 async fn ended(fx: &Fx, room: &str, answer: &str, attempt: i64) {
+    let o = offered(fx, room).await;
+    ended_with(fx, room, answer, attempt, &o).await;
+}
+
+/// As `ended`, with the candidates `offered` stored as the selection.
+async fn ended_with(fx: &Fx, room: &str, answer: &str, attempt: i64, offered: &Value) {
     let session = chain_session(fx, &["anthropic"]).await;
     let (st, v) = call(
         fx,
@@ -97,22 +114,22 @@ async fn ended(fx: &Fx, room: &str, answer: &str, attempt: i64) {
         .await
         .unwrap();
     sqlx::query("UPDATE room_overview SET selection = ?, state = 'writing' WHERE id = 1")
-        .bind(json!(ids(fx, room).await).to_string())
+        .bind(offered.to_string())
         .execute(&p)
         .await
         .unwrap();
     p.close().await;
 }
 
-fn good(ids: &[String]) -> String {
+fn good() -> String {
     json!({
         "summary": "A billing and deploy project.",
         "facts": {"stack": "Rust", "state": "active", "last_activity": "today"},
         "rules": {
-            "workflow": [{"text": "Tag a release before deploying.", "sources": [ids[1], "not-an-item"]}],
-            "code": [{"text": "Run the linter before you push.", "sources": [ids[0]]}],
+            "workflow": [{"text": "Tag a release before deploying.", "candidates": ["c2", "not-offered"]}],
+            "code": [{"text": "Run the linter before you push.", "candidates": ["c1"]}],
             "design": [],
-            "never": [{"text": "Never invent sources.", "sources": ["not-an-item"]}]
+            "never": [{"text": "Never invent sources.", "candidates": ["not-offered"]}]
         },
         "instructions": "Run the linter. Tag releases."
     })
@@ -163,11 +180,11 @@ async fn an_account_queues_it_and_one_open_write_blocks_another() {
 }
 
 #[tokio::test]
-async fn a_good_answer_is_stored_with_unseen_sources_dropped_and_instructions_round_trip() {
+async fn a_good_answer_is_stored_with_counted_sources_and_instructions_round_trip() {
     let fx = fx().await;
     let room = committed_room(&fx, DOCS).await;
     let ids = ids(&fx, &room).await;
-    ended(&fx, &room, &good(&ids), 1).await;
+    ended(&fx, &room, &good(), 1).await;
     fx.brain.overview_step().await.unwrap();
     let v = get(&fx, &room).await;
     assert_eq!(v["state"], "written", "{v}");
@@ -182,7 +199,7 @@ async fn a_good_answer_is_stored_with_unseen_sources_dropped_and_instructions_ro
     assert_eq!(
         v["overview"]["rules"]["never"],
         json!([]),
-        "a rule with no shown source is dropped"
+        "a rule with no offered candidate is dropped"
     );
     assert_eq!(v["overview"]["rules"]["code"].as_array().unwrap().len(), 1);
     // Built from the rules that passed, not the model's own text.
@@ -204,7 +221,7 @@ async fn a_good_answer_is_stored_with_unseen_sources_dropped_and_instructions_ro
     assert!(v["instructions_approved_at"].is_null());
     // A new write keeps an approved text of the person's.
     p(json!({"approved": true})).await;
-    ended(&fx, &room, &good(&ids), 1).await;
+    ended(&fx, &room, &good(), 1).await;
     fx.brain.overview_step().await.unwrap();
     assert_eq!(get(&fx, &room).await["instructions"], "Lint, then test.");
 }
@@ -297,8 +314,7 @@ async fn a_write_starts_at_once_and_shows_its_stage() {
 async fn the_stage_follows_the_session_to_reading_and_clears_when_written() {
     let fx = fx().await;
     let room = committed_room(&fx, DOCS).await;
-    let ids = ids(&fx, &room).await;
-    ended(&fx, &room, &good(&ids), 1).await;
+    ended(&fx, &room, &good(), 1).await;
     let s = session_of(&fx, &room).await;
     let set = |state: &'static str| {
         let s = s.clone();
@@ -349,4 +365,74 @@ async fn a_rejected_answer_shows_retrying_and_a_failure_clears_the_stage() {
     let v = get(&fx, &room).await;
     assert_eq!(v["state"], "failed", "{v}");
     assert!(v["stage"].is_null() && v["stage_since"].is_null());
+}
+
+/// The owner's case, through the room's own selection (made-up text): an AGENTS.md states three
+/// conventions, session prompts repeat one of them twice among one-off orders. The overview keeps
+/// the three and the repeated one; its sources are the two items counted, not what the model cited.
+#[tokio::test]
+async fn documentation_leads_and_support_is_counted_not_cited() {
+    let fx = fx().await;
+    let mut texts: Vec<(String, String)> = vec![
+        ("AGENTS.md".into(), "# Conventions\n- Open every PR against the development branch.\n- Keep controllers thin; business logic lives in app/Actions.\n- Never commit secrets or .env files.".into()),
+        ("fix login".into(), "User: always run the test suite before you push.\nMerge #312 now, it is billing-blocked until then.".into()),
+        ("tidy".into(), "User: Always run the test suite before you push!\nDon't touch the billing code until 2026-12-01.".into()),
+        ("plan".into(), "User: you must read docs/plan.md first and do step 3".into()),
+    ];
+    texts.extend((0..20).map(|i| {
+        (
+            format!("chat {i}"),
+            format!("we talked about widget {i} today"),
+        )
+    }));
+    let refs: Vec<(&str, &str)> = texts
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let room = committed_room(&fx, &refs).await;
+    let p = canon_pool(&fx, &room).await;
+    let sel = brain_module::overview_select::select(&fx.brain, &p, vec![])
+        .await
+        .unwrap();
+    p.close().await;
+    let offered = &sel.offered.rules;
+    let texts: Vec<&str> = offered.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(texts.len(), 4, "{texts:?}");
+    assert!(
+        texts
+            .iter()
+            .all(|t| !t.contains("#312") && !t.contains("2026") && !t.contains("plan.md"))
+    );
+    let repeated = offered
+        .iter()
+        .find(|r| r.text.contains("test suite"))
+        .unwrap();
+    assert_eq!(repeated.items.len(), 2);
+    let doc_id = &offered[0].items[0];
+    assert!(
+        sel.items.first().is_some_and(|i| &i.0 == doc_id),
+        "the doc is the first excerpt"
+    );
+    // The model picks every candidate and adds a one-off; it cites one id per rule.
+    let pick =
+        |r: &brain_module::overview_write::Shown| json!({"text": r.text, "candidates": [r.id]});
+    let answer = json!({
+        "summary": "A made-up web shop.",
+        "rules": {
+            "workflow": offered.iter().map(pick).chain([json!({"text": "Merge #312 now.", "candidates": [repeated.id]})]).collect::<Vec<_>>(),
+        }
+    })
+    .to_string();
+    ended_with(&fx, &room, &answer, 1, &json!(sel.offered)).await;
+    fx.brain.overview_step().await.unwrap();
+    let v = get(&fx, &room).await;
+    assert_eq!(v["state"], "written", "{v}");
+    let kept = v["overview"]["rules"]["workflow"].as_array().unwrap();
+    assert_eq!(kept.len(), 4, "{v}");
+    let r = kept
+        .iter()
+        .find(|r| r["text"].as_str().unwrap().contains("test suite"))
+        .unwrap();
+    assert_eq!(r["sources"], json!(repeated.items));
+    assert_eq!(v["instructions"].as_str().unwrap().lines().count(), 4);
 }

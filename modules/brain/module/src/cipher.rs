@@ -9,10 +9,27 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 /// Open or create `path` under `key`. Opening an existing file with a wrong key fails on the first
 /// read (SQLCipher reports "file is not a database"), which `open` forces so callers see it at once.
 pub async fn open(path: &Path, key: &[u8; 32], create: bool) -> Result<SqlitePool, sqlx::Error> {
+    connect(
+        path,
+        key,
+        SqliteConnectOptions::new().create_if_missing(create),
+    )
+    .await
+}
+
+/// Opens an existing `path` under `key` for reading only (the overview eval reads a copy).
+pub async fn open_read_only(path: &Path, key: &[u8; 32]) -> Result<SqlitePool, sqlx::Error> {
+    connect(path, key, SqliteConnectOptions::new().read_only(true)).await
+}
+
+async fn connect(
+    path: &Path,
+    key: &[u8; 32],
+    opts: SqliteConnectOptions,
+) -> Result<SqlitePool, sqlx::Error> {
     let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
-    let opts = SqliteConnectOptions::new()
+    let opts = opts
         .filename(path)
-        .create_if_missing(create)
         .busy_timeout(std::time::Duration::from_secs(5))
         // `key` must be the first pragma the connection runs; sqlx orders `key` first.
         .pragma("key", format!("\"x'{hex}'\""));
