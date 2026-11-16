@@ -24,7 +24,7 @@ use sqlx::{Row, SqlitePool};
 use utoipa::ToSchema;
 
 use crate::claim::{self, check_chain};
-use crate::distil::{AGENT, answer_of, canon, distilled_by, pick_runner};
+use crate::distil::{AGENT, answer_of, canon, distilled_by, pick_runner, session_policy};
 use crate::overview_write::{self as w, Overview};
 use crate::policy::{self, APPROVED_CLOUD, Policy};
 use crate::{Brain, code, record};
@@ -455,7 +455,13 @@ async fn launch(app: &App, b: &Brain, room: &str, attempt: i64, by: &str) -> Res
         return Ok(queue_state(app, room, "done", None, attempt).await?);
     }
     let Some(runner) = pick_runner(app) else {
-        set_state(&pool, "writing", "waiting: no runner is online", &now).await?;
+        set_state(
+            &pool,
+            "writing",
+            "waiting: no runner with a sandbox is online",
+            &now,
+        )
+        .await?;
         pool.close().await;
         return Ok(());
     };
@@ -473,7 +479,7 @@ async fn launch(app: &App, b: &Brain, room: &str, attempt: i64, by: &str) -> Res
         .filter(|_| attempt > 1);
     let prompt = w::build_prompt(&p.name, &sel, retry.as_deref());
     let user = ch::user_of(&app.pool, by).await?;
-    let policy = json!({"mode": "ask"});
+    let policy = session_policy();
     let new = NewSession {
         runner: &runner,
         harness: "",

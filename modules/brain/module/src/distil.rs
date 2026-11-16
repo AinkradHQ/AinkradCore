@@ -227,7 +227,15 @@ async fn advance_inner(app: &App, b: &Brain) -> Result<(), ApiError> {
 }
 
 /// The first online runner that offers AI sessions.
+/// The policy of a Brain AI session (distil, overview). It holds a provider-account secret, so the
+/// Core only places it in a sandbox of at least the `process` tier (`agents::account_policy_problem`).
+pub(crate) fn session_policy() -> serde_json::Value {
+    json!({"mode": "ask", "min_isolation": "process"})
+}
+
+/// The first online runner that offers agent sessions in a sandbox meeting [`session_policy`].
 pub(crate) fn pick_runner(app: &App) -> Option<String> {
+    let policy = session_policy();
     let mut all: Vec<_> = app
         .hub
         .runners()
@@ -237,6 +245,7 @@ pub(crate) fn pick_runner(app: &App) -> Option<String> {
                 && r.drivers
                     .iter()
                     .any(|d| d.name == ainkrad_proto::v2::AGENT_DRIVER)
+                && ainkrad_core_server::agents::tier_refusal(r, &policy).is_none()
         })
         .map(|(id, _)| id)
         .collect();
@@ -297,7 +306,14 @@ async fn launch(app: &App, b: &Brain, d: &DistilView, by: &str) -> Result<(), Ap
         return Ok(set_state(app, &d.id, state, &why, None).await?);
     }
     let Some(runner) = pick_runner(app) else {
-        return Ok(set_state(app, &d.id, "waiting", "no runner is online", None).await?);
+        return Ok(set_state(
+            app,
+            &d.id,
+            "waiting",
+            "no runner with a sandbox is online",
+            None,
+        )
+        .await?);
     };
     let pool = canon(app, b, &d.room).await?;
     let sources = sources_for(&pool).await?;
@@ -313,7 +329,7 @@ async fn launch(app: &App, b: &Brain, d: &DistilView, by: &str) -> Result<(), Ap
         .await?);
     }
     let prompt = build_prompt(&p.name, &sources);
-    let policy = json!({"mode": "ask"});
+    let policy = session_policy();
     let new = NewSession {
         runner: &runner,
         harness: "",
@@ -631,4 +647,17 @@ pub(crate) fn job(b: &Brain) -> Job {
         Schedule::Every(DISTIL_EVERY_SECS),
         Arc::new(DistilJob(b.clone())),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_brain_session_asks_for_the_sandbox_an_account_needs() {
+        let p: ainkrad_proto::runner::Policy =
+            serde_json::from_value(super::session_policy()).expect("the policy parses");
+        assert_eq!(
+            ainkrad_core_server::agents::account_policy_problem(&p),
+            None
+        );
+    }
 }
