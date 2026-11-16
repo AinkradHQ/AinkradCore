@@ -4,7 +4,6 @@
 //! (`distil`). A room that does not allow cloud, or a Core with no account, calls nothing. One room
 //! is written at a time. The instructions are the person's to edit and approve; nothing reads them yet.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -516,7 +515,7 @@ async fn launch(app: &App, b: &Brain, room: &str, attempt: i64, by: &str) -> Res
         return Ok(());
     };
     set_stage(&pool, "picking", &now).await?;
-    let sel = w::select(b, &pool).await?;
+    let sel = crate::overview_select::select(b, &pool, other_rooms(app, room).await?).await?;
     if sel.items.is_empty() {
         set_state(&pool, "failed", "the room has no items to read", &now).await?;
         pool.close().await;
@@ -557,7 +556,7 @@ async fn launch(app: &App, b: &Brain, room: &str, attempt: i64, by: &str) -> Res
         return Ok(queue_state(app, room, "done", None, attempt).await?);
     }
     sqlx::query("UPDATE room_overview SET selection = ?, picked = ? WHERE id = 1")
-        .bind(json!(sel.ids()).to_string())
+        .bind(json!(sel.offered).to_string())
         .bind(sel.ids().len() as i64)
         .execute(&pool)
         .await?;
@@ -610,23 +609,18 @@ async fn finish(
     }
     set_stage(&pool, "reading", &now).await?;
     let output = answer_of(app, &s.id).await?;
-    let known: HashSet<String> = serde_json::from_str::<Vec<String>>(
+    // What was offered: an older write's list of ids offers no candidates, so it keeps no rules.
+    let offered: w::Offered = serde_json::from_str(
         &sqlx::query_scalar::<_, String>("SELECT selection FROM room_overview WHERE id = 1")
             .fetch_one(&pool)
             .await?,
     )
-    .unwrap_or_default()
-    .into_iter()
-    .collect();
-    let others: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM brain_rooms WHERE id != ? AND state = 'active'")
-            .bind(room)
-            .fetch_all(&app.pool)
-            .await?;
-    let check = w::Check::for_room(others, known.len());
+    .unwrap_or_default();
+    let mut check = w::Check::for_room(other_rooms(app, room).await?, 0);
+    check.min_sources = offered.min_sources;
     let parsed = match output.as_deref() {
         None => Err("the AI session gave no answer".to_owned()),
-        Some(o) => w::parse(o, &known, &check),
+        Some(o) => w::parse(o, &offered.rules, &check),
     };
     // The answer's text goes into the room (C-08); the Core keeps a placeholder.
     sqlx::query("INSERT INTO room_audit (action, detail, at) VALUES ('overview.answer', ?, ?)")
@@ -672,6 +666,14 @@ async fn finish(
     }
     pool.close().await;
     Ok(())
+}
+
+/// The names of the other active rooms: a rule naming one is about another project.
+async fn other_rooms(app: &App, room: &str) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT name FROM brain_rooms WHERE id != ? AND state = 'active'")
+        .bind(room)
+        .fetch_all(&app.pool)
+        .await
 }
 
 struct OverviewJob(Brain);
