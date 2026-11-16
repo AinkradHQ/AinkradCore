@@ -261,6 +261,17 @@ pub(crate) async fn stage_items(
             results.push(reply("rejected", Some(why.code().to_owned())));
             continue;
         }
+        // Not human work: a sub-agent's transcript or a prompt that only points at a scratch file.
+        if brain_model::item::is_agent_noise(&item.origin.path, &item.title) {
+            *counts.skipped.entry("subagent".to_owned()).or_default() += 1;
+            counts.refused += 1;
+            sqlx::query("INSERT INTO skips (item_id, reason) VALUES (?, 'subagent')")
+                .bind(&item.item_id)
+                .execute(&mut *stx)
+                .await?;
+            results.push(reply("refused", Some("subagent".to_owned())));
+            continue;
+        }
         let signals = extract(item);
         if let Some(rule) = rules::first_match(&rules, item, &signals) {
             let reason = format!("rule:{}", rule.id);

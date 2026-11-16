@@ -250,3 +250,63 @@ async fn latest_lists_the_newest_sources_and_says_nothing_is_distilled() {
     let (s, _) = call(&fx, &fx.admin, Method::GET, "/rooms/nope/latest", None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
+
+/// Sub-agent transcripts and scratch-path prompts are refused at intake; one first prompt shows once.
+#[tokio::test]
+async fn sub_agent_prompts_are_skipped_and_one_first_prompt_lists_once() {
+    let fx = fx().await;
+    let run = start(&fx).await;
+    let mut sub = item(1, ALPHA, "Fix the made-up build", "sub-agent text");
+    sub["origin"]["path"] = json!("/synthetic/projects/p/s9/subagents/agent-x.jsonl");
+    let scratch = item(
+        2,
+        ALPHA,
+        "Read and follow exactly: /private/tmp/made-up/t.md",
+        "scratch",
+    );
+    let first = item(3, ALPHA, "Land these, in order", "first run");
+    let again = item(4, ALPHA, "Land  these, in order (part 1)", "second run");
+    let other = item(5, ALPHA, "Write the made-up docs", "docs");
+    let v = send(&fx, &run, vec![sub, scratch, first, again, other]).await;
+    let st: Vec<_> = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        st,
+        ["refused", "refused", "stored", "stored", "stored"],
+        "{v}"
+    );
+    finish(&fx, &run).await;
+    let id = proposals(&fx, &run).await[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("/imports/{run}/proposals/{id}"),
+        Some(json!({"state": "accepted"})),
+    )
+    .await;
+    let room =
+        ok(&fx, Method::POST, &format!("/imports/{run}/commit"), None).await["rooms"][0]["room"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    ok(&fx, Method::POST, &format!("/rooms/{room}/open"), None).await;
+    let v = ok(&fx, Method::GET, &format!("/rooms/{room}/latest"), None).await;
+    let titles: Vec<_> = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles.len(), 2, "{v}");
+    assert!(
+        titles.contains(&"Land  these, in order (part 1)"),
+        "the newest copy stays: {v}"
+    );
+}
