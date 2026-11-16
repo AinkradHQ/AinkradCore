@@ -176,6 +176,10 @@ async fn a_good_answer_is_stored_with_unseen_sources_dropped_and_instructions_ro
         v["overview"]["rules"]["workflow"][0]["sources"],
         json!([ids[1]])
     );
+    assert!(
+        v["source_titles"][ids[1].as_str()].is_string(),
+        "a cited item has its title: {v}"
+    );
     assert_eq!(
         v["overview"]["rules"]["never"],
         json!([]),

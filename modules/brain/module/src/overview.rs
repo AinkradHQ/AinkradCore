@@ -57,6 +57,8 @@ pub struct OverviewView {
     pub instructions: Option<String>,
     pub instructions_approved_at: Option<String>,
     pub progress: Progress,
+    /// Title of every item a rule cites, by item id (for "from N items").
+    pub source_titles: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -109,10 +111,31 @@ async fn row(pool: &SqlitePool, now: &str) -> Result<sqlx::sqlite::SqliteRow, sq
 
 async fn view(app: &App, room: &str, pool: &SqlitePool) -> Result<OverviewView, ApiError> {
     let r = row(pool, &app.clock.now()).await?;
-    let overview = r
+    let overview: Option<Overview> = r
         .try_get::<Option<String>, _>("overview")?
         .and_then(|j| serde_json::from_str(&j).ok());
+    let mut source_titles = std::collections::BTreeMap::new();
+    if let Some(o) = &overview {
+        let rs = &o.rules;
+        for id in [&rs.workflow, &rs.code, &rs.design, &rs.never]
+            .into_iter()
+            .flatten()
+            .flat_map(|x| &x.sources)
+        {
+            if source_titles.contains_key(id) {
+                continue;
+            }
+            let t: Option<String> = sqlx::query_scalar("SELECT title FROM sources WHERE item_id = ?")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+            if let Some(t) = t {
+                source_titles.insert(id.clone(), t);
+            }
+        }
+    }
     Ok(OverviewView {
+        source_titles,
         room: room.to_owned(),
         state: r.try_get("state")?,
         detail: r.try_get("detail")?,

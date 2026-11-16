@@ -4870,6 +4870,16 @@
           "room": {
             "type": "string"
           },
+          "source_titles": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Title of every item a rule cites, by item id (for \"from N items\").",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "state": {
             "description": "`not_written`, `writing`, `written`, `failed`, `needs_account` or `cloud_off`.",
             "type": "string"
@@ -4885,7 +4895,8 @@
           "room",
           "state",
           "detail",
-          "progress"
+          "progress",
+          "source_titles"
         ],
         "type": "object"
       },
