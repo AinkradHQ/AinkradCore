@@ -125,10 +125,11 @@ async fn view(app: &App, room: &str, pool: &SqlitePool) -> Result<OverviewView, 
             if source_titles.contains_key(id) {
                 continue;
             }
-            let t: Option<String> = sqlx::query_scalar("SELECT title FROM sources WHERE item_id = ?")
-                .bind(id)
-                .fetch_optional(pool)
-                .await?;
+            let t: Option<String> =
+                sqlx::query_scalar("SELECT title FROM sources WHERE item_id = ?")
+                    .bind(id)
+                    .fetch_optional(pool)
+                    .await?;
             if let Some(t) = t {
                 source_titles.insert(id.clone(), t);
             }
