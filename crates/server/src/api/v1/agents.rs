@@ -203,6 +203,48 @@ async fn one(app: &App, me: &Caller, id: &str) -> Result<Session, ApiError> {
     Ok(s)
 }
 
+/// The folder a terminal for session `id` starts in (`createTerminal`'s `session`): the folder its
+/// runner reported, never a path from the client. 403 `forbidden_scope` without the `agent` scope,
+/// 404 for a session the caller cannot see, 409 `session_runner_mismatch` when it is on another
+/// runner, `session_folder_gone` for an ended session whose worktree was moved away, and
+/// `session_folder_unknown` before its runner has reported a folder.
+pub(in crate::api::v1) async fn terminal_folder(
+    app: &App,
+    me: &Caller,
+    runner: &str,
+    id: &str,
+) -> Result<String, ApiError> {
+    if !me.device.scopes.iter().any(|s| s == "agent") {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "forbidden_scope",
+            "opening a terminal in a session's folder requires the agent scope",
+        ));
+    }
+    let s = shown(app, me, id).await?.0;
+    let conflict =
+        |code: &'static str, why: &str| Err(ApiError::new(StatusCode::CONFLICT, code, why));
+    if s.runner != runner {
+        return conflict(
+            "session_runner_mismatch",
+            "the session runs on another runner",
+        );
+    }
+    if s.workspace.is_some() && matches!(s.state.as_str(), "ended" | "lost") {
+        return conflict(
+            "session_folder_gone",
+            "the session's worktree was moved away when it ended",
+        );
+    }
+    match s.folder {
+        Some(folder) => Ok(folder),
+        None => conflict(
+            "session_folder_unknown",
+            "the session's runner has not reported its folder yet",
+        ),
+    }
+}
+
 /// A session a module drives answers to that module's own routes (its audit, its approvals, its
 /// run state): a client's write on it would bypass them, so it is refused.
 fn not_a_modules(s: &Session) -> Result<(), ApiError> {

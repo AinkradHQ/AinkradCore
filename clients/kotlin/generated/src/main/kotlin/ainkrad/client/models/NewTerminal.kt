@@ -27,9 +27,10 @@ import kotlinx.serialization.Contextual
  * @param runner 
  * @param propertySize 
  * @param args 
- * @param cwd 
+ * @param cwd An absolute directory to start in; absent, the home folder. Not with `session`.
  * @param env 
  * @param program 
+ * @param session Start in the folder of this AI session (`as_…`, its `AgentSession.folder`) without naming the path: the Core resolves it. The session must be on `runner`, one the caller can see (and the caller needs the `agent` scope), and its runner must have reported its folder. Not with `cwd`.
  */
 @Serializable
 
@@ -44,6 +45,7 @@ data class NewTerminal (
     @SerialName(value = "args")
     val args: kotlin.collections.List<kotlin.String>? = null,
 
+    /* An absolute directory to start in; absent, the home folder. Not with `session`. */
     @SerialName(value = "cwd")
     val cwd: kotlin.String? = null,
 
@@ -51,7 +53,11 @@ data class NewTerminal (
     val env: kotlin.collections.Map<kotlin.String, kotlin.String>? = null,
 
     @SerialName(value = "program")
-    val program: kotlin.String? = null
+    val program: kotlin.String? = null,
+
+    /* Start in the folder of this AI session (`as_…`, its `AgentSession.folder`) without naming the path: the Core resolves it. The session must be on `runner`, one the caller can see (and the caller needs the `agent` scope), and its runner must have reported its folder. Not with `cwd`. */
+    @SerialName(value = "session")
+    val session: kotlin.String? = null
 
 ) {
 

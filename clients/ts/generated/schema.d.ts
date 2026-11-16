@@ -3352,12 +3352,20 @@ export interface components {
         };
         NewTerminal: {
             args?: string[] | null;
+            /** @description An absolute directory to start in; absent, the home folder. Not with `session`. */
             cwd?: string | null;
             env?: {
                 [key: string]: string;
             } | null;
             program?: string | null;
             runner: string;
+            /**
+             * @description Start in the folder of this AI session (`as_…`, its `AgentSession.folder`) without naming
+             *     the path: the Core resolves it. The session must be on `runner`, one the caller can see (and
+             *     the caller needs the `agent` scope), and its runner must have reported its folder. Not with
+             *     `cwd`.
+             */
+            session?: string | null;
             size: components["schemas"]["TerminalSize"];
         };
         /** @description The no-op's answer. */
@@ -8648,7 +8656,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The terminal was opened */
+            /** @description The terminal was opened. With `session`: 400 `bad_request` when `cwd` is given too, 403 `forbidden_scope` without the `agent` scope, 404 for a session the caller cannot see, 409 `session_runner_mismatch` (the session is on another runner), `session_folder_unknown` (its runner has not reported its folder yet) or `session_folder_gone` (an ended session's worktree was moved away) */
             201: {
                 headers: {
                     [name: string]: unknown;
