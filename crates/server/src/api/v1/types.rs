@@ -257,7 +257,10 @@
 ///    (`AgentEdit {changes: [AgentEditChange {path, old, new}], truncated}`), the same for every harness,
 ///    at most 64 KiB of text. `AgentTranscriptEntry.at_ms` documented as the event's own time (a sub-agent's
 ///    start, an approval's request).
-pub const API_MINOR: u32 = 79;
+/// 80: Brain Overview stages. `OverviewView.stage` (`queued`, `waiting_runner`, `picking`, `starting`, `writing`,
+///    `reading`, `retrying`; null unless `state` is `writing`), `stage_since` (RFC 3339 UTC ms) and `picked`
+///    (items chosen, once known). A write starts at once and a finished AI session is read within seconds.
+pub const API_MINOR: u32 = 80;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
