@@ -67,7 +67,7 @@ fn view(r: &sqlx::sqlite::SqliteRow) -> Result<DistilView, sqlx::Error> {
     })
 }
 
-async fn canon(app: &App, b: &Brain, room: &str) -> Result<SqlitePool, ApiError> {
+pub(crate) async fn canon(app: &App, b: &Brain, room: &str) -> Result<SqlitePool, ApiError> {
     let key = b.key(app).await?;
     files::open_migrated(
         &files::room_path(&files::root(app), room),
@@ -227,7 +227,7 @@ async fn advance_inner(app: &App, b: &Brain) -> Result<(), ApiError> {
 }
 
 /// The first online runner that offers AI sessions.
-fn pick_runner(app: &App) -> Option<String> {
+pub(crate) fn pick_runner(app: &App) -> Option<String> {
     let mut all: Vec<_> = app
         .hub
         .runners()
@@ -388,7 +388,7 @@ async fn give_back(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError>
 }
 
 /// The model's answer: the last thing the assistant said in the session.
-async fn answer_of(app: &App, session: &str) -> Result<Option<String>, sqlx::Error> {
+pub(crate) async fn answer_of(app: &App, session: &str) -> Result<Option<String>, sqlx::Error> {
     let (mut after, mut last) = (0, None);
     loop {
         let page =
@@ -498,7 +498,10 @@ pub(crate) struct DistilledBy {
     pub tool: Option<String>,
 }
 
-async fn distilled_by(app: &App, s: &ainkrad_core_server::store::agents::Session) -> DistilledBy {
+pub(crate) async fn distilled_by(
+    app: &App,
+    s: &ainkrad_core_server::store::agents::Session,
+) -> DistilledBy {
     let account = match alloc::view(&app.pool, &s.id).await {
         Ok(Some(v)) => v.account,
         _ => None,

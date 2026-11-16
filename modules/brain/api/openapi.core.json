@@ -1180,6 +1180,10 @@
           "brain.import.started",
           "brain.inbox.decided",
           "brain.inbox.notice",
+          "brain.overview.failed",
+          "brain.overview.instructions",
+          "brain.overview.queued",
+          "brain.overview.written",
           "brain.room.access",
           "brain.room.centroid_backfilled",
           "brain.room.created",
@@ -2951,6 +2955,20 @@
         ],
         "type": "object"
       },
+      "Facts": {
+        "properties": {
+          "last_activity": {
+            "type": "string"
+          },
+          "stack": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "GroupLease": {
         "description": "One lease of a group's grant: hand `lease` to the runner. No `Debug`.",
         "properties": {
@@ -3393,6 +3411,25 @@
         },
         "required": [
           "tool"
+        ],
+        "type": "object"
+      },
+      "InstructionsPatch": {
+        "properties": {
+          "approved": {
+            "description": "True approves the text as it is after this call; false withdraws approval.",
+            "type": "boolean"
+          },
+          "text": {
+            "description": "New text; omitted keeps the current text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "approved"
         ],
         "type": "object"
       },
@@ -4778,6 +4815,80 @@
         ],
         "type": "object"
       },
+      "Overview": {
+        "properties": {
+          "facts": {
+            "$ref": "#/components/schemas/Facts"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "rules": {
+            "$ref": "#/components/schemas/Rules"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "type": "object"
+      },
+      "OverviewView": {
+        "properties": {
+          "detail": {
+            "description": "Why it waits, failed, or cannot be written.",
+            "type": "string"
+          },
+          "instructions": {
+            "description": "The editable instructions; approved when `instructions_approved_at` is set.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "instructions_approved_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "description": "The provider and account that wrote it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "overview": {
+            "$ref": "#/components/schemas/Overview"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/Progress"
+          },
+          "room": {
+            "type": "string"
+          },
+          "state": {
+            "description": "`not_written`, `writing`, `written`, `failed`, `needs_account` or `cloud_off`.",
+            "type": "string"
+          },
+          "written_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "room",
+          "state",
+          "detail",
+          "progress"
+        ],
+        "type": "object"
+      },
       "Page_Event": {
         "description": "A page of a list. `next_after` is the cursor of the next page, absent on the last.",
         "properties": {
@@ -5231,6 +5342,36 @@
           "cache_per_mtok_micro",
           "priced_at",
           "created_at"
+        ],
+        "type": "object"
+      },
+      "Progress": {
+        "properties": {
+          "done": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "failed": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "room": {
+            "description": "The room being written now.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "Rooms in the current write-all (or the one room), and how many are finished.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "done",
+          "failed"
         ],
         "type": "object"
       },
@@ -6061,6 +6202,25 @@
         ],
         "type": "object"
       },
+      "Rule": {
+        "properties": {
+          "sources": {
+            "description": "Item ids of the room's items it came from; all were shown to the model.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "sources"
+        ],
+        "type": "object"
+      },
       "RulePatch": {
         "properties": {
           "enabled": {
@@ -6117,6 +6277,35 @@
           "enabled",
           "reason"
         ],
+        "type": "object"
+      },
+      "Rules": {
+        "properties": {
+          "code": {
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "type": "array"
+          },
+          "design": {
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "type": "array"
+          },
+          "never": {
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "type": "array"
+          },
+          "workflow": {
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "type": "array"
+          }
+        },
         "type": "object"
       },
       "RunId": {
@@ -8313,7 +8502,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.73.0"
+    "version": "1.74.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -18272,6 +18461,90 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/modules/brain/v1/overview/progress": {
+      "get": {
+        "operationId": "brainOverviewProgress",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Progress"
+                }
+              }
+            },
+            "description": "How far the current batch of overview writes is: `done` of `total` rooms"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/brain/v1/overview/write-all": {
+      "post": {
+        "operationId": "brainOverviewWriteAll",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Progress"
+                }
+              }
+            },
+            "description": "Queues every active room that is not already queued and can be written; rooms that cannot (cloud off, no account) get that state. Poll `GET /overview/progress`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/modules/brain/v1/rooms": {
       "get": {
         "operationId": "brainRooms",
@@ -18873,6 +19146,185 @@
           "brain"
         ],
         "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/overview": {
+      "get": {
+        "operationId": "brainOverview",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewView"
+                }
+              }
+            },
+            "description": "The room's Overview: summary, facts, rule sets, instructions, its state and the progress of the write in flight"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/overview/instructions": {
+      "patch": {
+        "operationId": "brainOverviewInstructions",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstructionsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewView"
+                }
+              }
+            },
+            "description": "The instructions after the change. Editing the text without `approved: true` withdraws approval. `not_written` (409) before an overview exists"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/overview/write": {
+      "post": {
+        "operationId": "brainOverviewWrite",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewView"
+                }
+              }
+            },
+            "description": "Nothing was queued: the state is `cloud_off` (the room does not allow cloud) or `needs_account` (no approved account); no model was called"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewView"
+                }
+              }
+            },
+            "description": "Queued: a background job picks the room's items locally and has the cloud model write the overview. One room is written at a time"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
         "x-ainkrad-scope": "admin"
       }
     },

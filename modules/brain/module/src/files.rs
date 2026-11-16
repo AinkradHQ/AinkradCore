@@ -212,4 +212,9 @@ pub static CANON: &[FileMigration] = &[
         name: "canon_0003",
         up: include_str!("../migrations/canon_0003.sql"),
     },
+    FileMigration {
+        version: 4,
+        name: "canon_0004",
+        up: include_str!("../migrations/canon_0004.sql"),
+    },
 ];

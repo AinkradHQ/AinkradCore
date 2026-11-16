@@ -237,7 +237,10 @@
 /// 73: Brain Review decides in one call. `POST /imports/{run}/commit` takes an optional body `CommitKeep`
 ///    (`keep`: the proposal ids to import, `keep_unsorted`: optional, default true): every other open room is
 ///    refused and wiped in the same call. Without a body the accepted rooms are imported as before.
-pub const API_MINOR: u32 = 73;
+/// 74: Brain room Overview. `GET /rooms/{room}/overview`, `POST /rooms/{room}/overview/write` (202),
+///    `PATCH /rooms/{room}/overview/instructions`, `POST /overview/write-all` and `GET /overview/progress`
+///    (module routes, `modules/brain/api/openapi.core.json`).
+pub const API_MINOR: u32 = 74;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
