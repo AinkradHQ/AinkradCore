@@ -29,7 +29,9 @@ use crate::overview_write::{self as w, Overview};
 use crate::policy::{self, APPROVED_CLOUD, Policy};
 use crate::{Brain, code, record};
 
-pub const OVERVIEW_EVERY_SECS: u64 = 60;
+/// The job is a cheap check when nothing is queued (it records no audit row), so it runs often: a
+/// finished AI session is read within seconds.
+pub const OVERVIEW_EVERY_SECS: u64 = 5;
 const MAX_INSTRUCTIONS: usize = 8000;
 
 #[derive(Serialize, ToSchema)]
@@ -49,6 +51,15 @@ pub struct OverviewView {
     pub state: String,
     /// Why it waits, failed, or cannot be written.
     pub detail: String,
+    /// While `state` is `writing`: `queued` (waiting for its turn), `waiting_runner` (no runner with a
+    /// sandbox online), `picking` (the local model is choosing items), `starting` (AI session created,
+    /// not running yet), `writing` (AI session running), `reading` (session ended, answer being
+    /// read and checked) or `retrying` (first answer rejected, second try queued). Otherwise null.
+    pub stage: Option<String>,
+    /// When the current `stage` began, RFC 3339 UTC with milliseconds.
+    pub stage_since: Option<String>,
+    /// How many items the local model chose, once known.
+    pub picked: Option<i64>,
     pub written_at: Option<String>,
     /// The provider and account that wrote it.
     pub model: Option<String>,
@@ -135,7 +146,13 @@ async fn view(app: &App, room: &str, pool: &SqlitePool) -> Result<OverviewView, 
             }
         }
     }
+    let writing = r.try_get::<String, _>("state")? == "writing";
     Ok(OverviewView {
+        stage: r.try_get::<Option<String>, _>("stage")?.filter(|_| writing),
+        stage_since: r
+            .try_get::<Option<String>, _>("stage_since")?
+            .filter(|_| writing),
+        picked: r.try_get::<Option<i64>, _>("picked")?.filter(|_| writing),
         source_titles,
         room: room.to_owned(),
         state: r.try_get("state")?,
@@ -156,13 +173,32 @@ async fn set_state(
     now: &str,
 ) -> Result<(), sqlx::Error> {
     row(pool, now).await?;
-    sqlx::query("UPDATE room_overview SET state = ?, detail = ?, updated_at = ? WHERE id = 1")
-        .bind(state)
-        .bind(detail)
-        .bind(now)
-        .execute(pool)
-        .await
-        .map(drop)
+    // Any state but `writing` ends the stages.
+    sqlx::query(
+        "UPDATE room_overview SET state = ?1, detail = ?2, updated_at = ?3, \
+         stage = CASE WHEN ?1 = 'writing' THEN stage END, \
+         stage_since = CASE WHEN ?1 = 'writing' THEN stage_since END, \
+         picked = CASE WHEN ?1 = 'writing' THEN picked END WHERE id = 1",
+    )
+    .bind(state)
+    .bind(detail)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map(drop)
+}
+
+/// Enters `stage`; `stage_since` moves only when the stage changes.
+async fn set_stage(pool: &SqlitePool, stage: &str, now: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE room_overview SET stage_since = CASE WHEN stage IS ?1 THEN stage_since ELSE ?2 END, \
+         stage = ?1 WHERE id = 1",
+    )
+    .bind(stage)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map(drop)
 }
 
 async fn audit(
@@ -261,6 +297,10 @@ async fn enqueue(app: &App, b: &Brain, room: &str, by: &str) -> Result<bool, Api
         return Ok(false);
     }
     set_state(&pool, "writing", "queued", &now).await?;
+    sqlx::query("UPDATE room_overview SET stage = NULL, picked = NULL WHERE id = 1")
+        .execute(&pool)
+        .await?;
+    set_stage(&pool, "queued", &now).await?;
     pool.close().await;
     let batch = batch_of_open(app).await?;
     sqlx::query(
@@ -291,7 +331,7 @@ pub(crate) async fn write(
 ) -> Result<(StatusCode, Json<OverviewView>), ApiError> {
     let queued = enqueue(&app, &b, &room, &me.device.id).await?;
     if queued {
-        advance(&app, &b).await?;
+        start_now(&app, &b);
     }
     let pool = canon(&app, &b, &room).await?;
     let v = view(&app, &room, &pool).await;
@@ -322,7 +362,7 @@ pub(crate) async fn write_all(
             Err(e) => return Err(e),
         }
     }
-    advance(&app, &b).await?;
+    start_now(&app, &b);
     Ok((StatusCode::ACCEPTED, Json(progress(&app).await?)))
 }
 
@@ -380,6 +420,15 @@ pub(crate) async fn instructions(
     let v = view(&app, &room, &pool).await;
     pool.close().await;
     Ok(Json(v?))
+}
+
+/// Starts the queue now, off the request (picking can take a while), instead of waiting for the job's
+/// next run. Errors are left to the job's next run.
+fn start_now(app: &App, b: &Brain) {
+    let (app, b) = (app.clone(), b.clone());
+    tokio::spawn(async move {
+        let _ = advance(&app, &b).await;
+    });
 }
 
 /// Moves the queue one step: finishes the running room, else starts the oldest queued one. Never
@@ -462,9 +511,11 @@ async fn launch(app: &App, b: &Brain, room: &str, attempt: i64, by: &str) -> Res
             &now,
         )
         .await?;
+        set_stage(&pool, "waiting_runner", &now).await?;
         pool.close().await;
         return Ok(());
     };
+    set_stage(&pool, "picking", &now).await?;
     let sel = w::select(b, &pool).await?;
     if sel.items.is_empty() {
         set_state(&pool, "failed", "the room has no items to read", &now).await?;
@@ -505,11 +556,13 @@ async fn launch(app: &App, b: &Brain, room: &str, attempt: i64, by: &str) -> Res
         pool.close().await;
         return Ok(queue_state(app, room, "done", None, attempt).await?);
     }
-    sqlx::query("UPDATE room_overview SET selection = ? WHERE id = 1")
+    sqlx::query("UPDATE room_overview SET selection = ?, picked = ? WHERE id = 1")
         .bind(json!(sel.ids()).to_string())
+        .bind(sel.ids().len() as i64)
         .execute(&pool)
         .await?;
     set_state(&pool, "writing", "", &now).await?;
+    set_stage(&pool, "starting", &now).await?;
     pool.close().await;
     match agents::start(app, &s).await {
         Ok(()) => Ok(queue_state(app, room, "running", Some(&s.id), attempt).await?),
@@ -523,6 +576,7 @@ async fn launch(app: &App, b: &Brain, room: &str, attempt: i64, by: &str) -> Res
                 &now,
             )
             .await?;
+            set_stage(&pool, "queued", &now).await?;
             pool.close().await;
             Ok(())
         }
@@ -542,12 +596,20 @@ async fn finish(
     let Some(s) = ainkrad_core_server::store::agents::get(&app.pool, session).await? else {
         return Err(code(500, "session_gone", "the AI session is gone"));
     };
-    if s.live() {
-        return Ok(());
-    }
-    let output = answer_of(app, &s.id).await?;
     let pool = canon(app, b, room).await?;
     let now = app.clock.now();
+    if s.live() {
+        let stage = if s.state == "running" {
+            "writing"
+        } else {
+            "starting"
+        };
+        set_stage(&pool, stage, &now).await?;
+        pool.close().await;
+        return Ok(());
+    }
+    set_stage(&pool, "reading", &now).await?;
+    let output = answer_of(app, &s.id).await?;
     let known: HashSet<String> = serde_json::from_str::<Vec<String>>(
         &sqlx::query_scalar::<_, String>("SELECT selection FROM room_overview WHERE id = 1")
             .fetch_one(&pool)
@@ -556,9 +618,15 @@ async fn finish(
     .unwrap_or_default()
     .into_iter()
     .collect();
+    let others: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM brain_rooms WHERE id != ? AND state = 'active'")
+            .bind(room)
+            .fetch_all(&app.pool)
+            .await?;
+    let check = w::Check::for_room(others, known.len());
     let parsed = match output.as_deref() {
         None => Err("the AI session gave no answer".to_owned()),
-        Some(o) => w::parse(o, &known),
+        Some(o) => w::parse(o, &known, &check),
     };
     // The answer's text goes into the room (C-08); the Core keeps a placeholder.
     sqlx::query("INSERT INTO room_audit (action, detail, at) VALUES ('overview.answer', ?, ?)")
@@ -570,6 +638,7 @@ async fn finish(
     match parsed {
         Err(why) if attempt < 2 => {
             set_state(&pool, "writing", &format!("rejected: {why}"), &now).await?;
+            set_stage(&pool, "retrying", &now).await?;
             queue_state(app, room, "queued", None, attempt + 1).await?;
         }
         Err(why) => {
@@ -586,7 +655,7 @@ async fn finish(
             };
             // An approved text of the person's stays; the model's new one waits in `overview`.
             sqlx::query(
-                "UPDATE room_overview SET state = 'written', detail = '', overview = ?, written_at = ?, model = ?, \
+                "UPDATE room_overview SET state = 'written', detail = '', overview = ?, written_at = ?, model = ?, stage = NULL, stage_since = NULL, picked = NULL, \
                  instructions = CASE WHEN instructions_approved_at IS NULL OR instructions IS NULL THEN ? ELSE instructions END, \
                  updated_at = ? WHERE id = 1",
             )

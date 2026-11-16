@@ -5030,6 +5030,14 @@
           "overview": {
             "$ref": "#/components/schemas/Overview"
           },
+          "picked": {
+            "description": "How many items the local model chose, once known.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "progress": {
             "$ref": "#/components/schemas/Progress"
           },
@@ -5045,6 +5053,20 @@
               "type": "string"
             },
             "type": "object"
+          },
+          "stage": {
+            "description": "While `state` is `writing`: `queued` (waiting for its turn), `waiting_runner` (no runner with a\nsandbox online), `picking` (the local model is choosing items), `starting` (AI session created,\nnot running yet), `writing` (AI session running), `reading` (session ended, answer being\nread and checked) or `retrying` (first answer rejected, second try queued). Otherwise null.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_since": {
+            "description": "When the current `stage` began, RFC 3339 UTC with milliseconds.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "state": {
             "description": "`not_written`, `writing`, `written`, `failed`, `needs_account` or `cloud_off`.",
@@ -8679,7 +8701,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.80.0"
+    "version": "1.81.0"
   },
   "openapi": "3.1.0",
   "paths": {

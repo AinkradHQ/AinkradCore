@@ -185,7 +185,11 @@ async fn a_good_answer_is_stored_with_unseen_sources_dropped_and_instructions_ro
         "a rule with no shown source is dropped"
     );
     assert_eq!(v["overview"]["rules"]["code"].as_array().unwrap().len(), 1);
-    assert_eq!(v["instructions"], "Run the linter. Tag releases.");
+    // Built from the rules that passed, not the model's own text.
+    assert_eq!(
+        v["instructions"],
+        "- Tag a release before deploying.\n- Run the linter before you push."
+    );
     assert!(v["instructions_approved_at"].is_null());
     assert!(v["written_at"].is_string());
     // Edit and approve; a plain edit later withdraws the approval.
@@ -244,4 +248,105 @@ async fn instructions_need_an_overview_first() {
         (st, v["code"].as_str()),
         (StatusCode::CONFLICT, Some("not_written"))
     );
+}
+
+async fn session_of(fx: &Fx, room: &str) -> String {
+    sqlx::query_scalar("SELECT session FROM brain_overview_queue WHERE room = ?")
+        .bind(room)
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_write_starts_at_once_and_shows_its_stage() {
+    let fx = fx().await;
+    let room = committed_room(&fx, DOCS).await;
+    assert!(get(&fx, &room).await["stage"].is_null());
+    bind_distil_chain(&fx, make_chain(&fx, &["anthropic"]).await).await;
+    // The POST answers with the first stage and queues the start itself: no wait for the job.
+    let (st, v) = write(&fx, &room).await;
+    assert_eq!(st, StatusCode::ACCEPTED, "{v}");
+    assert_eq!(v["state"], "writing");
+    assert!(v["stage_since"].is_string(), "{v}");
+    assert!(
+        ["queued", "waiting_runner"].contains(&v["stage"].as_str().unwrap()),
+        "{v}"
+    );
+    // No runner is online in the gate: the started write says so.
+    let mut v = get(&fx, &room).await;
+    for _ in 0..100 {
+        if v["stage"] == "waiting_runner" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        v = get(&fx, &room).await;
+    }
+    assert_eq!(v["stage"], "waiting_runner", "{v}");
+    assert!(v["picked"].is_null());
+    let since = v["stage_since"].clone();
+    fx.brain.overview_step().await.unwrap();
+    assert_eq!(
+        get(&fx, &room).await["stage_since"],
+        since,
+        "the same stage keeps its start time"
+    );
+}
+
+#[tokio::test]
+async fn the_stage_follows_the_session_to_reading_and_clears_when_written() {
+    let fx = fx().await;
+    let room = committed_room(&fx, DOCS).await;
+    let ids = ids(&fx, &room).await;
+    ended(&fx, &room, &good(&ids), 1).await;
+    let s = session_of(&fx, &room).await;
+    let set = |state: &'static str| {
+        let s = s.clone();
+        let pool = fx.app.pool.clone();
+        async move {
+            sqlx::query("UPDATE core_agent_sessions SET state = ? WHERE id = ?")
+                .bind(state)
+                .bind(s)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    };
+    set("starting").await;
+    fx.brain.overview_step().await.unwrap();
+    let v = get(&fx, &room).await;
+    assert_eq!(v["stage"], "starting", "{v}");
+    let since = v["stage_since"].clone();
+    assert!(since.is_string());
+    set("running").await;
+    fx.brain.overview_step().await.unwrap();
+    let v = get(&fx, &room).await;
+    assert_eq!(v["stage"], "writing", "{v}");
+    assert_ne!(v["stage_since"], Value::Null);
+    set("ended").await;
+    fx.brain.overview_step().await.unwrap();
+    let v = get(&fx, &room).await;
+    assert_eq!(v["state"], "written", "{v}");
+    for k in ["stage", "stage_since", "picked"] {
+        assert!(v[k].is_null(), "{k} clears once written: {v}");
+    }
+}
+
+#[tokio::test]
+async fn a_rejected_answer_shows_retrying_and_a_failure_clears_the_stage() {
+    let fx = fx().await;
+    let room = committed_room(&fx, DOCS).await;
+    ended(&fx, &room, "not json", 1).await;
+    fx.brain.overview_step().await.unwrap();
+    let v = get(&fx, &room).await;
+    assert_eq!(
+        (v["state"].as_str(), v["stage"].as_str()),
+        (Some("writing"), Some("retrying")),
+        "{v}"
+    );
+    ended(&fx, &room, "{\"summary\":", 2).await;
+    fx.brain.overview_step().await.unwrap();
+    let v = get(&fx, &room).await;
+    assert_eq!(v["state"], "failed", "{v}");
+    assert!(v["stage"].is_null() && v["stage_since"].is_null());
 }
