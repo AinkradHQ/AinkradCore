@@ -51,6 +51,7 @@ src/Ainkrad.Client/Model/AccountTested.cs
 src/Ainkrad.Client/Model/AccountsDeleted.cs
 src/Ainkrad.Client/Model/AgentApproval.cs
 src/Ainkrad.Client/Model/AgentApprovals.cs
+src/Ainkrad.Client/Model/AgentAttachment.cs
 src/Ainkrad.Client/Model/AgentDecision.cs
 src/Ainkrad.Client/Model/AgentEdit.cs
 src/Ainkrad.Client/Model/AgentEditChange.cs
@@ -131,6 +132,7 @@ src/Ainkrad.Client/Model/LoginCode.cs
 src/Ainkrad.Client/Model/Me.cs
 src/Ainkrad.Client/Model/ModelPrice.cs
 src/Ainkrad.Client/Model/Named.cs
+src/Ainkrad.Client/Model/NewAgentAttachment.cs
 src/Ainkrad.Client/Model/NewAgentSession.cs
 src/Ainkrad.Client/Model/NewBinding.cs
 src/Ainkrad.Client/Model/NewChain.cs

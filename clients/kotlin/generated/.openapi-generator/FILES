@@ -43,6 +43,7 @@ src/main/kotlin/ainkrad/client/models/AccountTested.kt
 src/main/kotlin/ainkrad/client/models/AccountsDeleted.kt
 src/main/kotlin/ainkrad/client/models/AgentApproval.kt
 src/main/kotlin/ainkrad/client/models/AgentApprovals.kt
+src/main/kotlin/ainkrad/client/models/AgentAttachment.kt
 src/main/kotlin/ainkrad/client/models/AgentDecision.kt
 src/main/kotlin/ainkrad/client/models/AgentEdit.kt
 src/main/kotlin/ainkrad/client/models/AgentEditChange.kt
@@ -123,6 +124,7 @@ src/main/kotlin/ainkrad/client/models/LoginCode.kt
 src/main/kotlin/ainkrad/client/models/Me.kt
 src/main/kotlin/ainkrad/client/models/ModelPrice.kt
 src/main/kotlin/ainkrad/client/models/Named.kt
+src/main/kotlin/ainkrad/client/models/NewAgentAttachment.kt
 src/main/kotlin/ainkrad/client/models/NewAgentSession.kt
 src/main/kotlin/ainkrad/client/models/NewBinding.kt
 src/main/kotlin/ainkrad/client/models/NewChain.kt

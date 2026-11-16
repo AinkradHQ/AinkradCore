@@ -25,6 +25,7 @@
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
 mod allocate;
+pub mod attach;
 mod ending;
 mod failover;
 pub mod gateway;

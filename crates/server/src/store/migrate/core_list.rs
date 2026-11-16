@@ -221,4 +221,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0036_session_folder.up.sql"),
         down: include_str!("../../../migrations/0036_session_folder.down.sql"),
     },
+    Migration {
+        version: 37,
+        name: "agent_attachments",
+        up: include_str!("../../../migrations/0037_agent_attachments.up.sql"),
+        down: include_str!("../../../migrations/0037_agent_attachments.down.sql"),
+    },
 ];

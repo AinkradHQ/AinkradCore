@@ -479,6 +479,7 @@ impl Session {
             | Command::PlanCheck(_)
             | Command::HistoryRead(_)
             | Command::AgentMode(_)
+            | Command::AgentAttach(_)
             | Command::GatewayTest(_) => self.start_agent(stream, command),
             Command::RunnerPolicy(_) | Command::ToolsInstall(_) | Command::ToolsStatus(_) => {
                 self.start_control(stream, command)
@@ -597,6 +598,7 @@ impl Session {
                 Command::AgentDecide(req) => agent.decide(req).map(Reply::AgentDecide),
                 Command::AgentStop(req) => agent.stop(req).map(Reply::AgentStop),
                 Command::AgentMode(req) => agent.mode(req).map(Reply::AgentMode),
+                Command::AgentAttach(req) => agent.attach(req).map(Reply::AgentAttach),
                 Command::AgentLimit(req) => agent.limit(req).map(Reply::AgentLimit),
                 Command::AgentTools(req) => agent.tools(&req).await.map(Reply::AgentTools),
                 Command::GatewayTest(req) => agent.gateway_test(req).await.map(Reply::GatewayTest),

@@ -749,6 +749,18 @@ pub async fn wake(
     text: Option<&str>,
     now: &str,
 ) -> Result<Woken, sqlx::Error> {
+    wake_with(pool, id, text, &[], now).await
+}
+
+/// [`wake`], and a live session's pending message names `attachments` (E4): they are marked
+/// pending in the same write, the ones of an earlier pending message no longer.
+pub async fn wake_with(
+    pool: &SqlitePool,
+    id: &str,
+    text: Option<&str>,
+    attachments: &[String],
+    now: &str,
+) -> Result<Woken, sqlx::Error> {
     let mut tx = super::begin_write(pool).await?;
     // state, harness session, outcome, owner module
     type Found = (String, Option<String>, Option<String>, Option<String>);
@@ -794,6 +806,16 @@ pub async fn wake(
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    if text.is_some() {
+        sqlx::query(
+            "UPDATE core_agent_attachments SET pending = (id IN (SELECT value FROM json_each(?1))) \
+             WHERE session = ?2 AND (SELECT live FROM core_agent_sessions WHERE id = ?2) = 1",
+        )
+        .bind(serde_json::to_string(attachments).expect("ids serialize"))
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
     if state != "interrupted" {
         let payload = json!({"session": id, "state": "interrupted", "reason": "woken"});
         emit(&mut tx, "agent.state", payload).await?;
@@ -857,11 +879,21 @@ pub async fn title_from_first_message(
 }
 
 /// Forgets the pending message `text` once it is delivered.
+/// Its attachments (E4) are no longer pending with it.
 pub async fn clear_pending(pool: &SqlitePool, id: &str, text: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE core_agent_sessions SET pending = NULL WHERE id = ? AND pending = ?")
-        .bind(id)
-        .bind(text)
-        .execute(pool)
-        .await
-        .map(drop)
+    let mut tx = super::begin_write(pool).await?;
+    let cleared =
+        sqlx::query("UPDATE core_agent_sessions SET pending = NULL WHERE id = ? AND pending = ?")
+            .bind(id)
+            .bind(text)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+    if cleared > 0 {
+        sqlx::query("UPDATE core_agent_attachments SET pending = 0 WHERE session = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await
 }

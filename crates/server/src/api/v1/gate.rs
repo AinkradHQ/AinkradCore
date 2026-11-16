@@ -344,9 +344,15 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
         Some(t) => super::ticket::redeem(&app, &t, &addr).await,
         None => {
             // A file secret of 1 MiB is a third longer in base64 (decision G1).
-            let cap = match parts.uri.path().starts_with("/api/v1/secrets") {
-                true => SECRET_BODY,
-                false => SIGNED_BODY,
+            let path = parts.uri.path();
+            let cap = if path.starts_with("/api/v1/secrets") {
+                SECRET_BODY
+            } else if path.starts_with("/api/v1/agent-sessions/") && path.ends_with("/attachments")
+            {
+                // A 10 MiB attachment in base64 (E4).
+                super::agents::attach::UPLOAD_BODY
+            } else {
+                SIGNED_BODY
             };
             verify(&app, &parts, raw, cap, &addr, Mode::Session).await
         }

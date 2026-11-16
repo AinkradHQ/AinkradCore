@@ -165,6 +165,7 @@ use super::{
         agents::get,
         agents::transcript,
         agents::message,
+        agents::attach::add,
         agents::approvals,
         agents::decide,
         agents::interrupt,

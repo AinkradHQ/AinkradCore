@@ -513,6 +513,53 @@ extension Components {
                 case approvals
             }
         }
+        /// - Remark: Generated from `#/components/schemas/AgentAttachment`.
+        public struct AgentAttachment: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentAttachment/content_type`.
+            public var contentType: Swift.String?
+            /// `at_…`: name it in `sendAgentMessage`'s `attachments`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentAttachment/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AgentAttachment/name`.
+            public var name: Swift.String
+            /// Hex SHA-256 of the file.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentAttachment/sha256`.
+            public var sha256: Swift.String
+            /// Bytes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentAttachment/size`.
+            public var size: Swift.Int64
+            /// Creates a new `AgentAttachment`.
+            ///
+            /// - Parameters:
+            ///   - contentType:
+            ///   - id: `at_…`: name it in `sendAgentMessage`'s `attachments`.
+            ///   - name:
+            ///   - sha256: Hex SHA-256 of the file.
+            ///   - size: Bytes.
+            public init(
+                contentType: Swift.String? = nil,
+                id: Swift.String,
+                name: Swift.String,
+                sha256: Swift.String,
+                size: Swift.Int64
+            ) {
+                self.contentType = contentType
+                self.id = id
+                self.name = name
+                self.sha256 = sha256
+                self.size = size
+            }
+            public enum CodingKeys: String, CodingKey {
+                case contentType = "content_type"
+                case id
+                case name
+                case sha256
+                case size
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/AgentDecision`.
         public struct AgentDecision: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/AgentDecision/approved`.
@@ -600,16 +647,29 @@ extension Components {
         }
         /// - Remark: Generated from `#/components/schemas/AgentMessage`.
         public struct AgentMessage: Codable, Hashable, Sendable {
+            /// Files added with `addAgentAttachment` (`at_…`, at most 16): written into the session's
+            /// folder on its runner before the message goes, and named at its end by their paths.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentMessage/attachments`.
+            public var attachments: [Swift.String]?
+            /// Up to 16 KiB; may be empty when `attachments` names a file.
+            ///
             /// - Remark: Generated from `#/components/schemas/AgentMessage/text`.
             public var text: Swift.String
             /// Creates a new `AgentMessage`.
             ///
             /// - Parameters:
-            ///   - text:
-            public init(text: Swift.String) {
+            ///   - attachments: Files added with `addAgentAttachment` (`at_…`, at most 16): written into the session's
+            ///   - text: Up to 16 KiB; may be empty when `attachments` names a file.
+            public init(
+                attachments: [Swift.String]? = nil,
+                text: Swift.String
+            ) {
+                self.attachments = attachments
                 self.text = text
             }
             public enum CodingKeys: String, CodingKey {
+                case attachments
                 case text
             }
         }
@@ -4206,6 +4266,43 @@ extension Components {
             }
             public enum CodingKeys: String, CodingKey {
                 case id
+                case name
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/NewAgentAttachment`.
+        public struct NewAgentAttachment: Codable, Hashable, Sendable {
+            /// Its media type, as the client knows it (`image/png`); kept, never interpreted.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewAgentAttachment/content_type`.
+            public var contentType: Swift.String?
+            /// The file, standard base64: 1 byte to 10 MiB once decoded.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewAgentAttachment/data`.
+            public var data: Swift.String
+            /// The file's name as the user knows it: 1 to 255 bytes, no `/`, `\` or control character,
+            /// not `.` or `..`. The runner writes it as `<id>-<name>` with anything outside
+            /// `[A-Za-z0-9._-]` made `_`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewAgentAttachment/name`.
+            public var name: Swift.String
+            /// Creates a new `NewAgentAttachment`.
+            ///
+            /// - Parameters:
+            ///   - contentType: Its media type, as the client knows it (`image/png`); kept, never interpreted.
+            ///   - data: The file, standard base64: 1 byte to 10 MiB once decoded.
+            ///   - name: The file's name as the user knows it: 1 to 255 bytes, no `/`, `\` or control character,
+            public init(
+                contentType: Swift.String? = nil,
+                data: Swift.String,
+                name: Swift.String
+            ) {
+                self.contentType = contentType
+                self.data = data
+                self.name = name
+            }
+            public enum CodingKeys: String, CodingKey {
+                case contentType = "content_type"
+                case data
                 case name
             }
         }

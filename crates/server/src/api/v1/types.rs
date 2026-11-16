@@ -260,7 +260,13 @@
 /// 80: Brain Overview stages. `OverviewView.stage` (`queued`, `waiting_runner`, `picking`, `starting`, `writing`,
 ///    `reading`, `retrying`; null unless `state` is `writing`), `stage_since` (RFC 3339 UTC ms) and `picked`
 ///    (items chosen, once known). A write starts at once and a finished AI session is read within seconds.
-pub const API_MINOR: u32 = 80;
+/// 81: Attachments for AI sessions (E4). `POST /agent-sessions/{id}/attachments` (`addAgentAttachment`, body
+///    `NewAgentAttachment {name, content_type?, data}` base64, at most 10 MiB a file and 100 MiB a session; 413
+///    `attachment_too_large` / `attachments_full`, 400 `bad_attachment_name`) returns `AgentAttachment {id, name,
+///    content_type, size, sha256}`; `AgentMessage.attachments` names them (400 `unknown_attachment`), and the
+///    runner writes each into the session's folder before the message (runner op `agent.attach`). Audit action
+///    `agent.attachment_added`.
+pub const API_MINOR: u32 = 81;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

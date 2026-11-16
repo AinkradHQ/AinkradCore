@@ -23,9 +23,10 @@ use crate::api::App;
 use crate::auth::crypto::is_id;
 use crate::store::agents::{self as store, Session, SessionSecret};
 use ainkrad_proto::runner::PermissionMode;
-use ainkrad_proto::v2::{AgentDecide, AgentMode, AgentSend, AgentStop, Command};
+use ainkrad_proto::v2::{AgentDecide, AgentMode, AgentStop, Command};
 
 pub(super) mod access;
+pub(in crate::api::v1) mod attach;
 pub(in crate::api::v1) mod sched;
 mod types;
 use sched::{AgentWaiting, create_named, listed, page, shown};
@@ -439,6 +440,17 @@ pub async fn transcript(
     }))
 }
 
+fn live_or_over(s: &Session) -> Result<(), ApiError> {
+    match s.live() {
+        true => Ok(()),
+        false => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "session_over",
+            "the session is over",
+        )),
+    }
+}
+
 /// Sends `command` about `s` to its runner (answer within the service's wait).
 async fn tell(app: &App, s: &Session, command: Command, caller: &Caller) -> Result<(), ApiError> {
     not_a_modules(s)?;
@@ -447,13 +459,7 @@ async fn tell(app: &App, s: &Session, command: Command, caller: &Caller) -> Resu
 }
 
 async fn send(app: &App, s: &Session, command: Command, caller: &Caller) -> Result<(), ApiError> {
-    if !s.live() {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "session_over",
-            "the session is over",
-        ));
-    }
+    live_or_over(s)?;
     let ev = agents::ask(
         app,
         &s.runner,
@@ -476,9 +482,13 @@ async fn send(app: &App, s: &Session, command: Command, caller: &Caller) -> Resu
         `waiting` becomes `running`, and a message sent while an answer runs is queued behind \
         it. A live session whose process is gone (a runner restart, a lost runner, an idle end) \
         is started again with the harness's own resume in the same folder and gets it there, so \
-        the conversation goes on. A first message gives an untitled session its `title`. 409 \
-        `session_over`, `session_starting` (not on its runner yet), 502 `runner_failed` when it \
-        is not running", body = AgentSession)))]
+        the conversation goes on. A first message gives an untitled session its `title`. \
+        `attachments` (from `addAgentAttachment`) are written into the session's folder on its \
+        runner first, and the message the harness gets ends with their paths, one a line \
+        (`@<path>` for Claude Code); a message with attachments may have no text. 400 \
+        `unknown_attachment` (not this session's, or swept). 409 `session_over`, \
+        `session_starting` (not on its runner yet), `unsupported_command` (a runner too old for \
+        attachments), 502 `runner_failed` when it is not running", body = AgentSession)))]
 pub async fn message(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -487,22 +497,24 @@ pub async fn message(
 ) -> ApiResult<AgentSession> {
     let s = one(&app, &me, &id).await?;
     let b: AgentMessage = parse(&body)?;
-    if b.text.is_empty() || b.text.len() > MAX_MESSAGE {
+    let ids = attach::named(&app, &s.id, b.attachments).await?;
+    if (b.text.is_empty() && ids.is_empty()) || b.text.len() > MAX_MESSAGE {
         return Err(ApiError::bad_request("a message is 1 byte to 16 KiB"));
     }
     let bytes = b.text.len();
     let text = b.text;
     store::title_from_first_message(&app.pool, &s.id, &text).await?;
     if s.conversation && s.state != "running" {
-        restart_with(&app, &s, &me, &text).await?;
+        restart_with(&app, &s, &me, &text, &ids).await?;
     } else {
-        let send = Command::AgentSend(AgentSend {
-            session: s.id.clone(),
-            text,
-        });
-        tell(&app, &s, send, &me).await?;
+        not_a_modules(&s)?;
+        owns_secrets(&s, &me)?;
+        live_or_over(&s)?;
+        let proof = Some(app.hub.agent_elevation(&me));
+        let ev = agents::attach::send_with(&app, &s, text, &ids, proof).await?;
+        store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
     }
-    let details = json!({"bytes": bytes});
+    let details = json!({"bytes": bytes, "attachments": ids.len()});
     store::action(
         &app.pool,
         &s,
@@ -518,7 +530,13 @@ pub async fn message(
 
 /// A message for a live session that is not on its runner: kept as `pending` and delivered by its
 /// supervisor once the harness runs again (resumed by its own session id, in the session's folder).
-async fn restart_with(app: &App, s: &Session, me: &Caller, text: &str) -> Result<(), ApiError> {
+async fn restart_with(
+    app: &App,
+    s: &Session,
+    me: &Caller,
+    text: &str,
+    attachments: &[String],
+) -> Result<(), ApiError> {
     not_a_modules(s)?;
     owns_secrets(s, me)?;
     let conflict =
@@ -530,7 +548,7 @@ async fn restart_with(app: &App, s: &Session, me: &Caller, text: &str) -> Result
     if over && agents::supervised(app).contains(&s.id) {
         return conflict("session_busy", "the session is still finishing: try again");
     }
-    match store::wake(&app.pool, &s.id, Some(text), &app.clock.now()).await? {
+    match store::wake_with(&app.pool, &s.id, Some(text), attachments, &app.clock.now()).await? {
         store::Woken::Reopened => {
             agents::authorize_message(app, me, &s.id);
             agents::supervise(app, &s.id);

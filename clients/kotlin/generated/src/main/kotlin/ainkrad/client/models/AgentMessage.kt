@@ -23,14 +23,20 @@ import kotlinx.serialization.Contextual
 /**
  * 
  *
- * @param text 
+ * @param text Up to 16 KiB; may be empty when `attachments` names a file.
+ * @param attachments Files added with `addAgentAttachment` (`at_…`, at most 16): written into the session's folder on its runner before the message goes, and named at its end by their paths.
  */
 @Serializable
 
 data class AgentMessage (
 
+    /* Up to 16 KiB; may be empty when `attachments` names a file. */
     @SerialName(value = "text")
-    val text: kotlin.String
+    val text: kotlin.String,
+
+    /* Files added with `addAgentAttachment` (`at_…`, at most 16): written into the session's folder on its runner before the message goes, and named at its end by their paths. */
+    @SerialName(value = "attachments")
+    val attachments: kotlin.collections.List<kotlin.String>? = null
 
 ) {
 

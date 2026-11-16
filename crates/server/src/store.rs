@@ -17,6 +17,7 @@ pub mod account_keys;
 pub mod accounts;
 pub mod agents;
 pub mod alloc;
+pub mod attachments;
 pub mod audit;
 mod backup;
 pub mod budgets;

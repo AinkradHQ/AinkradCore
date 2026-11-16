@@ -35,6 +35,7 @@ mod allocator_life;
 mod allocator_props;
 mod allocator_rows;
 mod allocator_states;
+mod attachments;
 mod audit_growth;
 mod budgets_api;
 mod budgets_store;

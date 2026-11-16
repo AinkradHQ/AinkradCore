@@ -103,6 +103,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "account.tested",
     "alarm.cleared",
     "alarm.raised",
+    "agent.attachment_added",
     "agent.cancelled",
     "agent.created",
     "agent.decided",

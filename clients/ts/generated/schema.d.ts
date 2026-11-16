@@ -324,6 +324,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agent-sessions/{id}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["addAgentAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent-sessions/{id}/cancel": {
         parameters: {
             query?: never;
@@ -2058,6 +2074,19 @@ export interface components {
         AgentApprovals: {
             approvals: components["schemas"]["AgentApproval"][];
         };
+        AgentAttachment: {
+            content_type?: string | null;
+            /** @description `at_…`: name it in `sendAgentMessage`'s `attachments`. */
+            id: string;
+            name: string;
+            /** @description Hex SHA-256 of the file. */
+            sha256: string;
+            /**
+             * Format: int64
+             * @description Bytes.
+             */
+            size: number;
+        };
         AgentDecision: {
             approved: boolean;
             /** @description Told to the agent; a denial's reason. */
@@ -2083,6 +2112,12 @@ export interface components {
             path: string;
         };
         AgentMessage: {
+            /**
+             * @description Files added with `addAgentAttachment` (`at_…`, at most 16): written into the session's
+             *     folder on its runner before the message goes, and named at its end by their paths.
+             */
+            attachments?: string[] | null;
+            /** @description Up to 16 KiB; may be empty when `attachments` names a file. */
             text: string;
         };
         /** @description A session's new mode: either field, or both. */
@@ -3131,6 +3166,18 @@ export interface components {
         Named: {
             /** @description `d_` and 26 characters. */
             id: string;
+            name: string;
+        };
+        NewAgentAttachment: {
+            /** @description Its media type, as the client knows it (`image/png`); kept, never interpreted. */
+            content_type?: string | null;
+            /** @description The file, standard base64: 1 byte to 10 MiB once decoded. */
+            data: string;
+            /**
+             * @description The file's name as the user knows it: 1 to 255 bytes, no `/`, `\` or control character,
+             *     not `.` or `..`. The runner writes it as `<id>-<name>` with anything outside
+             *     `[A-Za-z0-9._-]` made `_`.
+             */
             name: string;
         };
         /** @description A session to start. No `Debug`: the prompt is the caller's. */
@@ -5243,6 +5290,40 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    addAgentAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewAgentAttachment"];
+            };
+        };
+        responses: {
+            /** @description Kept with the session (audited as `agent.attachment_added`, its id and size only) until the session row goes or the session has been over for 7 days. Name its id in `sendAgentMessage`'s `attachments`: the runner then writes the file into the session's folder (`<folder>/.ainkrad/attachments/<id>-<name>`) and the message ends with its path (`@<path>` for Claude Code). The caller needs the same rights as for a message. 400 `bad_request` (not base64, empty, a bad `content_type`), `bad_attachment_name`; 413 `attachment_too_large` (over 10 MiB), `attachments_full` (the session's attachments would pass 100 MiB); 403 `forbidden_scope` (a session holding secrets, not the caller's); 409 `module_owned` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentAttachment"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     cancelAgentSession: {
         parameters: {
             query?: never;
@@ -5349,7 +5430,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Given to the harness as its next turn (audited as `agent.messaged`, its length only). A live session takes it in its running process: `waiting` becomes `running`, and a message sent while an answer runs is queued behind it. A live session whose process is gone (a runner restart, a lost runner, an idle end) is started again with the harness's own resume in the same folder and gets it there, so the conversation goes on. A first message gives an untitled session its `title`. 409 `session_over`, `session_starting` (not on its runner yet), 502 `runner_failed` when it is not running */
+            /** @description Given to the harness as its next turn (audited as `agent.messaged`, its length only). A live session takes it in its running process: `waiting` becomes `running`, and a message sent while an answer runs is queued behind it. A live session whose process is gone (a runner restart, a lost runner, an idle end) is started again with the harness's own resume in the same folder and gets it there, so the conversation goes on. A first message gives an untitled session its `title`. `attachments` (from `addAgentAttachment`) are written into the session's folder on its runner first, and the message the harness gets ends with their paths, one a line (`@<path>` for Claude Code); a message with attachments may have no text. 400 `unknown_attachment` (not this session's, or swept). 409 `session_over`, `session_starting` (not on its runner yet), `unsupported_command` (a runner too old for attachments), 502 `runner_failed` when it is not running */
             200: {
                 headers: {
                     [name: string]: unknown;

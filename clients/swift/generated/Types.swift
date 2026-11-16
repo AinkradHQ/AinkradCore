@@ -86,6 +86,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/approvals/{request}`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/approvals/{request}/post(decideAgentApproval)`.
     func decideAgentApproval(_ input: Operations.DecideAgentApproval.Input) async throws -> Operations.DecideAgentApproval.Output
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/attachments`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/attachments/post(addAgentAttachment)`.
+    func addAgentAttachment(_ input: Operations.AddAgentAttachment.Input) async throws -> Operations.AddAgentAttachment.Output
     /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/cancel`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/cancel/post(cancelAgentSession)`.
     func cancelAgentSession(_ input: Operations.CancelAgentSession.Input) async throws -> Operations.CancelAgentSession.Output
@@ -771,6 +774,19 @@ extension APIProtocol {
         body: Operations.DecideAgentApproval.Input.Body
     ) async throws -> Operations.DecideAgentApproval.Output {
         try await decideAgentApproval(Operations.DecideAgentApproval.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/attachments`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/attachments/post(addAgentAttachment)`.
+    public func addAgentAttachment(
+        path: Operations.AddAgentAttachment.Input.Path,
+        headers: Operations.AddAgentAttachment.Input.Headers = .init(),
+        body: Operations.AddAgentAttachment.Input.Body
+    ) async throws -> Operations.AddAgentAttachment.Output {
+        try await addAgentAttachment(Operations.AddAgentAttachment.Input(
             path: path,
             headers: headers,
             body: body
