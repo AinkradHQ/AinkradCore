@@ -5,6 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ainkrad_core::untrusted::wrap;
+use brain_model::item::is_agent_noise;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use utoipa::ToSchema;
@@ -43,7 +44,7 @@ impl Selection {
 pub async fn select(b: &Brain, pool: &SqlitePool) -> Result<Selection, sqlx::Error> {
     // ponytail: the 3000 newest items and their first 20k characters; a bigger room is sampled by recency.
     let rows = sqlx::query(
-        "SELECT item_id, content_hash, title, substr(text, 1, 20000) AS text, author_kind \
+        "SELECT item_id, content_hash, path, title, substr(text, 1, 20000) AS text, author_kind \
          FROM sources WHERE pointer = 0 ORDER BY started_at DESC, item_id LIMIT 3000",
     )
     .fetch_all(pool)
@@ -56,6 +57,13 @@ pub async fn select(b: &Brain, pool: &SqlitePool) -> Result<Selection, sqlx::Err
     let vecs: HashMap<String, Vec<f32>> = b.vectors_for(&hashes).await.unwrap_or_default();
     let mut rec = vec![];
     for r in &rows {
+        // Sub-agent transcripts and scratch-file prompts are no one's words about the project.
+        if is_agent_noise(
+            &r.try_get::<String, _>("path")?,
+            &r.try_get::<String, _>("title")?,
+        ) {
+            continue;
+        }
         let h: String = r.try_get("content_hash")?;
         rec.push((
             r.try_get::<String, _>("item_id")?,
