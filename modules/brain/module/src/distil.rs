@@ -622,6 +622,18 @@ impl JobHandler for DistilJob {
             let Some(app) = self.0.inner.app.get() else {
                 return Err("the Core is still starting".to_owned());
             };
+            // Once per start: rooms an older import held for a backup (see `commit::release_held`).
+            if !self.0.inner.held_released.swap(true, Ordering::SeqCst) {
+                match crate::commit::release_held(app, &self.0).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!(rooms = n, "imported the rooms an earlier import held"),
+                    Err(e) => {
+                        // The key may still be locked: try again on the next run.
+                        self.0.inner.held_released.store(false, Ordering::SeqCst);
+                        tracing::warn!(error = %e.message, "held rooms not imported yet");
+                    }
+                }
+            }
             let open: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM brain_distils WHERE state IN ('queued','needs_local_model','waiting','running')",
             )

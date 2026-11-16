@@ -607,3 +607,46 @@ async fn regroup_keeps_decisions_on_rooms_that_survive_and_audits() {
     .unwrap();
     assert_eq!(n, 1);
 }
+
+/// Rooms an import held for a room backup before 0.8.5 come in once the Core runs again: the
+/// person accepted them, so they are imported as a commit would now. Undecided rooms and the
+/// run's state stay as they are.
+#[tokio::test]
+async fn rooms_held_for_a_backup_are_imported_and_undecided_rooms_stay() {
+    let fx = fx().await;
+    let run = sample_run(&fx).await;
+    let ps = proposals(&fx, &run).await;
+    let alpha = by_name(&ps, "Alpha")["id"].as_str().unwrap().to_owned();
+    let st = staging_pool(&fx, &run).await;
+    sqlx::query("UPDATE proposals SET state = 'held' WHERE id = ?")
+        .bind(&alpha)
+        .execute(&st)
+        .await
+        .unwrap();
+    st.close().await;
+    assert_eq!(fx.brain.release_held().await.unwrap(), 1);
+    let st = staging_pool(&fx, &run).await;
+    let states: Vec<(String, String)> = sqlx::query_as("SELECT id, state FROM proposals")
+        .fetch_all(&st)
+        .await
+        .unwrap();
+    st.close().await;
+    assert!(
+        states
+            .iter()
+            .any(|(id, s)| *id == alpha && s == "committed"),
+        "{states:?}"
+    );
+    assert!(
+        states.iter().any(|(id, s)| *id != alpha && s == "proposed"),
+        "undecided rooms stay: {states:?}"
+    );
+    let run_state: String = sqlx::query_scalar("SELECT state FROM brain_import_runs WHERE id = ?")
+        .bind(&run)
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(run_state, "review");
+    // Run again: nothing is held any more.
+    assert_eq!(fx.brain.release_held().await.unwrap(), 0);
+}

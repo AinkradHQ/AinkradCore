@@ -199,6 +199,8 @@ struct Inner {
     syncing: AtomicBool,
     distilling: AtomicBool,
     overviewing: AtomicBool,
+    /// Rooms held for a backup before 0.8.5 were imported this process (`commit::release_held`).
+    held_released: AtomicBool,
     /// The shared semantic service: model, vector store and background worker (`semantic::service`).
     sem: semantic::service::Service,
     /// Runs whose semantic step is queued or working, with (items embedded, items to embed).
@@ -352,6 +354,15 @@ impl Brain {
         match self.inner.app.get() {
             Some(app) => distil::advance(app, self).await,
             None => Ok(()),
+        }
+    }
+
+    /// Imports the rooms an earlier import held for a room backup (once per Core start; the
+    /// `brain_distil` job calls it). The number of rooms imported.
+    pub async fn release_held(&self) -> Result<usize, ApiError> {
+        match self.inner.app.get() {
+            Some(app) => commit::release_held(app, self).await,
+            None => Ok(0),
         }
     }
 
