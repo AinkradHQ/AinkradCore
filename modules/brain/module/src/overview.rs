@@ -618,9 +618,15 @@ async fn finish(
     .unwrap_or_default()
     .into_iter()
     .collect();
+    let others: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM brain_rooms WHERE id != ? AND state = 'active'")
+            .bind(room)
+            .fetch_all(&app.pool)
+            .await?;
+    let check = w::Check::for_room(others, known.len());
     let parsed = match output.as_deref() {
         None => Err("the AI session gave no answer".to_owned()),
-        Some(o) => w::parse(o, &known),
+        Some(o) => w::parse(o, &known, &check),
     };
     // The answer's text goes into the room (C-08); the Core keeps a placeholder.
     sqlx::query("INSERT INTO room_audit (action, detail, at) VALUES ('overview.answer', ?, ?)")

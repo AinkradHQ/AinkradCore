@@ -185,7 +185,11 @@ async fn a_good_answer_is_stored_with_unseen_sources_dropped_and_instructions_ro
         "a rule with no shown source is dropped"
     );
     assert_eq!(v["overview"]["rules"]["code"].as_array().unwrap().len(), 1);
-    assert_eq!(v["instructions"], "Run the linter. Tag releases.");
+    // Built from the rules that passed, not the model's own text.
+    assert_eq!(
+        v["instructions"],
+        "- Tag a release before deploying.\n- Run the linter before you push."
+    );
     assert!(v["instructions_approved_at"].is_null());
     assert!(v["written_at"].is_string());
     // Edit and approve; a plain edit later withdraws the approval.
