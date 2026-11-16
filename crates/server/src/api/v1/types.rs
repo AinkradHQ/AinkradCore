@@ -247,7 +247,10 @@
 ///    `agent.mode_changed`. `Policy.plan` in the runner contract.
 /// 76: AI session folders (E2). `AgentSession.folder`: the absolute path of the session's working folder on its
 ///    runner, once the runner reports it (`AgentEvents.folder` in the runner contract).
-pub const API_MINOR: u32 = 76;
+/// 77: Terminal in an AI session's folder (E1, KAN-456). `NewTerminal.session` (`as_…`) starts the terminal in that
+///    session's reported folder on the same runner, resolved by the Core (403 `forbidden_scope` without `agent`, 404,
+///    409 `session_runner_mismatch` / `session_folder_unknown` / `session_folder_gone`; 400 with `cwd` too).
+pub const API_MINOR: u32 = 77;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

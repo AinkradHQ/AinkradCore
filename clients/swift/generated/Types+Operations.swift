@@ -39643,7 +39643,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The terminal was opened
+            /// The terminal was opened. With `session`: 400 `bad_request` when `cwd` is given too, 403 `forbidden_scope` without the `agent` scope, 404 for a session the caller cannot see, 409 `session_runner_mismatch` (the session is on another runner), `session_folder_unknown` (its runner has not reported its folder yet) or `session_folder_gone` (an ended session's worktree was moved away)
             ///
             /// - Remark: Generated from `#/paths//api/v1/terminals/post(createTerminal)/responses/201`.
             ///

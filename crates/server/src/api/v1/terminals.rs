@@ -252,7 +252,13 @@ pub struct NewTerminal {
     pub runner: String,
     pub program: Option<String>,
     pub args: Option<Vec<String>>,
+    /// An absolute directory to start in; absent, the home folder. Not with `session`.
     pub cwd: Option<String>,
+    /// Start in the folder of this AI session (`as_…`, its `AgentSession.folder`) without naming
+    /// the path: the Core resolves it. The session must be on `runner`, one the caller can see (and
+    /// the caller needs the `agent` scope), and its runner must have reported its folder. Not with
+    /// `cwd`.
+    pub session: Option<String>,
     pub env: Option<BTreeMap<String, String>>,
     pub size: TerminalSize,
 }
@@ -803,7 +809,7 @@ async fn event_with(
     Ok(())
 }
 
-#[utoipa::path(post, path="/api/v1/terminals", operation_id="createTerminal", tag="terminals", request_body=NewTerminal, responses((status=201, description="The terminal was opened", body=Terminal)))]
+#[utoipa::path(post, path="/api/v1/terminals", operation_id="createTerminal", tag="terminals", request_body=NewTerminal, responses((status=201, description="The terminal was opened. With `session`: 400 `bad_request` when `cwd` is given too, 403 `forbidden_scope` without the `agent` scope, 404 for a session the caller cannot see, 409 `session_runner_mismatch` (the session is on another runner), `session_folder_unknown` (its runner has not reported its folder yet) or `session_folder_gone` (an ended session's worktree was moved away)", body=Terminal)))]
 pub async fn create(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -812,6 +818,18 @@ pub async fn create(
     if !(1..=1000).contains(&req.size.rows) || !(1..=1000).contains(&req.size.cols) {
         return ApiError::bad_request("terminal size is out of range").into_response();
     }
+    let cwd = match (req.session.as_deref(), req.cwd) {
+        (Some(_), Some(_)) => {
+            return ApiError::bad_request("give cwd or session, not both").into_response();
+        }
+        (Some(id), None) => {
+            match super::agents::terminal_folder(&app, &me, &req.runner, id).await {
+                Ok(folder) => Some(folder),
+                Err(e) => return e.into_response(),
+            }
+        }
+        (None, cwd) => cwd,
+    };
     // The caps are counted and used up under one lock, so concurrent creates cannot overshoot.
     let _turn = app.terminals.create.lock().await;
     if let Err(e) = reap(&app).await {
@@ -878,7 +896,7 @@ pub async fn create(
         Command::PtyOpen(PtyOpen {
             program: req.program,
             args: req.args.unwrap_or_default(),
-            cwd: req.cwd,
+            cwd,
             env: req.env.unwrap_or_default(),
             env_pass: Vec::new(),
             size: ainkrad_proto::v2::Size {

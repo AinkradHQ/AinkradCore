@@ -3738,6 +3738,7 @@
             ]
           },
           "cwd": {
+            "description": "An absolute directory to start in; absent, the home folder. Not with `session`.",
             "type": [
               "string",
               "null"
@@ -3763,6 +3764,13 @@
           },
           "runner": {
             "type": "string"
+          },
+          "session": {
+            "description": "Start in the folder of this AI session (`as_…`, its `AgentSession.folder`) without naming\nthe path: the Core resolves it. The session must be on `runner`, one the caller can see (and\nthe caller needs the `agent` scope), and its runner must have reported its folder. Not with\n`cwd`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "size": {
             "$ref": "#/components/schemas/TerminalSize"
@@ -6142,7 +6150,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.76.0"
+    "version": "1.77.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -13883,7 +13891,7 @@
                 }
               }
             },
-            "description": "The terminal was opened"
+            "description": "The terminal was opened. With `session`: 400 `bad_request` when `cwd` is given too, 403 `forbidden_scope` without the `agent` scope, 404 for a session the caller cannot see, 409 `session_runner_mismatch` (the session is on another runner), `session_folder_unknown` (its runner has not reported its folder yet) or `session_folder_gone` (an ended session's worktree was moved away)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
