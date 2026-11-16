@@ -547,6 +547,18 @@ pub fn authorize_for_tests(app: &App, session: &str) {
         .insert(session.to_owned(), Elevated::for_tests());
 }
 
+/// The proof of a session a module created through a chain (`store::chains::create_session`, as
+/// the Brain's distil and overview do), which no client request carries: as for
+/// [`ModuleAgents::create`], the module's operator enabled the module. Without it the
+/// allocator's start is refused with "agent elevation missing".
+pub fn authorize_module_session(app: &App, session: &str) {
+    app.agents
+        .elevated
+        .lock()
+        .unwrap()
+        .insert(session.to_owned(), app.hub.module_elevation());
+}
+
 /// Keeps the caller's proof for a message that restarts a live session (its supervisor sends the
 /// runner commands with it).
 pub fn authorize_message(app: &App, caller: &Caller, session: &str) {

@@ -498,6 +498,7 @@ async fn launch(app: &App, b: &Brain, room: &str, attempt: i64, by: &str) -> Res
     let s = ch::create_session(&app.pool, &new, None, None, req, BY, &now)
         .await
         .map_err(ApiError::from)?;
+    agents::authorize_module_session(app, &s.id);
     if let Err(e) = claim::claim(app, room, &s.id, by).await {
         alloc::end_unstarted_why(&app.pool, &s.id, &now, "the room refused its claim").await?;
         set_state(&pool, "needs_account", &e.message, &now).await?;
