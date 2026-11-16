@@ -196,6 +196,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ),
     ("PATCH", "/api/v1/agent-sessions/{id}", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/interrupt", "agent"),
+    ("POST", "/api/v1/agent-sessions/{id}/mode", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/cancel", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/kill", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/resume", "agent"),
@@ -308,6 +309,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/agent-sessions"),
     ("POST", "/api/v1/agent-sessions/{id}/messages"),
     ("POST", "/api/v1/agent-sessions/{id}/interrupt"),
+    // A mode change can widen what the harness does unasked (accept_edits, leaving plan).
+    ("POST", "/api/v1/agent-sessions/{id}/mode"),
     ("POST", "/api/v1/agent-sessions/{id}/cancel"),
     ("POST", "/api/v1/agent-sessions/{id}/kill"),
     ("POST", "/api/v1/agent-sessions/{id}/resume"),

@@ -7,7 +7,7 @@ use ainkrad_harness::{
     DROPPED, Decision, ErrorClass, Harness, HarnessEvent, Meter, PROTOCOL, Spec, TurnOutcome,
     Usage, classify, tokens, weighted_tokens,
 };
-use ainkrad_proto::runner::{Outcome, RepoDiff, TokenCaps, Tokens};
+use ainkrad_proto::runner::{Outcome, PermissionMode, Policy, RepoDiff, TokenCaps, Tokens};
 use serde_json::json;
 use tokio::sync::mpsc;
 
@@ -64,7 +64,7 @@ impl HarnessExecutor {
             && limits.warm_max > 0
             && job.resume_session.is_none();
         // A server kept warm outlives this run's worktree: it works from the work root (E15.9).
-        let spec = Spec {
+        let mut spec = Spec {
             process_dir: warm.then(|| self.work_root.clone()),
             ..spec
         };
@@ -109,8 +109,19 @@ impl HarnessExecutor {
                         idle = false;
                     }
                     Idle::End(outcome) => break outcome,
+                    Idle::Retune => {
+                        let resumable = session.is_some();
+                        self.retune(job, &inbox, &mut spec, &mut harness, resumable)
+                            .await;
+                        continue;
+                    }
                 }
             }
+            // The run's mode (E3) is the harness's before each turn: told live, or restarted below.
+            inbox.take_retune();
+            let resumable = session.is_some();
+            self.retune(job, &inbox, &mut spec, &mut harness, resumable)
+                .await;
             if harness.is_none() {
                 // The process is gone (a restart, a crash, or a harness that exits when its
                 // turn is stopped): the conversation goes on in a new one, by the harness's own
@@ -328,6 +339,9 @@ impl HarnessExecutor {
                             if inbox.take_interrupt() {
                                 break Next::Interrupt;
                             }
+                            if inbox.take_retune() {
+                                break Next::Retune;
+                            }
                         }
                     }
                 }
@@ -340,6 +354,18 @@ impl HarnessExecutor {
                 Next::Interrupt => {
                     if let Err(e) = harness.interrupt().await {
                         tracing::warn!(run = job.run, error = %e, "interrupting a turn failed");
+                    }
+                    continue;
+                }
+                // A new mode mid-turn: a harness that switches live is told now; the next turn's
+                // start brings the run's spec along (and restarts one that cannot switch).
+                Next::Retune => {
+                    let tuned = self.tuned(spec, &inbox.policy(&job.policy));
+                    match harness.set_mode(&tuned).await {
+                        Err(e) if e.kind() != std::io::ErrorKind::Unsupported => {
+                            tracing::warn!(run = job.run, error = %e, "switching the mode failed");
+                        }
+                        _ => {}
                     }
                     continue;
                 }
@@ -489,6 +515,9 @@ impl HarnessExecutor {
             if let Some((id, text)) = inbox.take_message() {
                 return Idle::Message(id, text);
             }
+            if inbox.take_retune() {
+                return Idle::Retune;
+            }
             // Nothing runs to stop.
             inbox.take_interrupt();
             let woke = {
@@ -530,6 +559,52 @@ impl HarnessExecutor {
                     let _ = reports.send(Report::Event(event)).await;
                 }
             }
+        }
+    }
+
+    /// `spec` with the mode `policy` sets: plan, accepted edits, acting unasked in a sandbox.
+    fn tuned(&self, spec: &Spec, policy: &Policy) -> Spec {
+        Spec {
+            plan: policy.plan,
+            accept_edits: policy.mode == PermissionMode::AcceptEdits,
+            sandboxed: policy.mode == PermissionMode::Sandboxed && self.sandboxed,
+            ..spec.clone()
+        }
+    }
+
+    /// The run's policy changed (`Control::Policy`, E3): `spec` takes its mode, and a running
+    /// harness is told. One that cannot switch live is stopped when it has a session to resume, so
+    /// the next turn starts it again with the new flags; the runner's own approval decisions
+    /// follow the new policy either way.
+    async fn retune<H: Harness>(
+        &self,
+        job: &Job,
+        inbox: &super::inbox::Inbox,
+        spec: &mut Spec,
+        harness: &mut Option<H>,
+        resumable: bool,
+    ) {
+        let tuned = self.tuned(spec, &inbox.policy(&job.policy));
+        let mode = |s: &Spec| (s.plan, s.accept_edits, s.sandboxed);
+        if mode(&tuned) == mode(spec) {
+            return;
+        }
+        *spec = tuned;
+        let Some(h) = harness.as_mut() else {
+            return;
+        };
+        match h.set_mode(spec).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::Unsupported && resumable => {
+                tracing::info!(
+                    run = job.run,
+                    "the mode changed; the harness restarts with it"
+                );
+                if let Some(h) = harness.take() {
+                    h.stop().await;
+                }
+            }
+            Err(e) => tracing::warn!(run = job.run, error = %e, "switching the mode failed"),
         }
     }
 
@@ -610,6 +685,8 @@ enum Next {
     Stalled,
     Paused,
     Interrupt,
+    /// The run's policy changed: its harness is to take the new mode.
+    Retune,
 }
 
 /// How one harness process's turn ended.
@@ -634,6 +711,8 @@ const INTERRUPTED: &str = "interrupted";
 enum Idle {
     Message(i64, String),
     End(Outcome),
+    /// The run's policy changed while it waited.
+    Retune,
 }
 
 /// `total` less `base`, field by field.

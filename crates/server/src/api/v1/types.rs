@@ -240,7 +240,12 @@
 /// 74: Brain room Overview. `GET /rooms/{room}/overview`, `POST /rooms/{room}/overview/write` (202),
 ///    `PATCH /rooms/{room}/overview/instructions`, `POST /overview/write-all` and `GET /overview/progress`
 ///    (module routes, `modules/brain/api/openapi.core.json`).
-pub const API_MINOR: u32 = 74;
+/// 75: AI session modes (E3). `AgentSession.policy` (`ask`, `accept_edits`, `sandboxed`) and `AgentSession.plan`;
+///    `NewAgentSession.plan` starts a claude session in Plan mode (400 `plan_unsupported` for another harness);
+///    `POST /agent-sessions/{id}/mode` (`setAgentSessionMode`, body `AgentModeChange {policy?, plan?}`) switches a
+///    session's mode, live on its runner (runner op `agent.mode`, transcript entry `mode_changed`); audit action
+///    `agent.mode_changed`. `Policy.plan` in the runner contract.
+pub const API_MINOR: u32 = 75;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

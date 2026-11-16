@@ -32,6 +32,7 @@ struct Seen {
     env: HashMap<i64, Vec<(String, String)>>,
     messages: Vec<String>,
     resumes: Vec<Option<String>>,
+    policies: Vec<ainkrad_proto::runner::Policy>,
 }
 
 /// A harness that runs `sh -c <script>` with the run's own variables: each stdout line is a
@@ -127,8 +128,10 @@ impl Executor for Script {
     }
 
     fn control(&self, _: i64, control: Control) {
-        if let Control::Message { text, .. } = control {
-            self.seen.lock().unwrap().messages.push(text);
+        match control {
+            Control::Message { text, .. } => self.seen.lock().unwrap().messages.push(text),
+            Control::Policy(p) => self.seen.lock().unwrap().policies.push(p),
+            _ => {}
         }
     }
 
@@ -1466,4 +1469,60 @@ async fn a_gateway_grant_gives_the_harness_a_socket_not_a_key_and_a_stop_closes_
         );
         assert!(!why.contains(&key) && !why.contains(lease), "{why}");
     }
+}
+
+/// E3: `agent.mode` hands a running session's run its new policy and logs `mode_changed`; plan
+/// mode only for claude, never more isolation than the session started with, nothing once over.
+#[tokio::test]
+async fn a_mode_change_reaches_the_run_and_the_transcript() {
+    use ainkrad_proto::runner::{PermissionMode, Policy};
+    let (root, config) = dirs("mode");
+    let gate = root.join("go");
+    let s = script(&format!(
+        "echo up; while [ ! -e '{}' ]; do sleep 0.05; done",
+        gate.display()
+    ));
+    let seen = Arc::clone(&s.seen);
+    let d = Arc::new(AgentDriver::new(config, s).unwrap());
+    let mut planned = start("as_p", "fake");
+    planned.policy.plan = true;
+    assert_eq!(d.start(planned).unwrap_err().code, ErrorCode::InvalidArgs);
+    d.start(start("as_m", "fake")).unwrap();
+    let mode = |policy: Policy| AgentMode {
+        session: "as_m".into(),
+        policy,
+    };
+    let edits = Policy {
+        mode: PermissionMode::AcceptEdits,
+        ..Policy::default()
+    };
+    d.mode(mode(edits.clone())).unwrap();
+    let plan = Policy {
+        plan: true,
+        ..Policy::default()
+    };
+    assert_eq!(d.mode(mode(plan)).unwrap_err().code, ErrorCode::InvalidArgs);
+    let walled = Policy {
+        min_isolation: Some(Isolation::Process),
+        ..Policy::default()
+    };
+    assert_eq!(
+        d.mode(mode(walled)).unwrap_err().code,
+        ErrorCode::InvalidArgs
+    );
+    assert_eq!(seen.lock().unwrap().policies, std::slice::from_ref(&edits));
+    std::fs::write(&gate, "").unwrap();
+    let (all, _) = drain(&d, "as_m").await;
+    let changed: Vec<_> = (all.iter())
+        .filter(|e| e.body["type"] == "mode_changed")
+        .map(|e| e.body.clone())
+        .collect();
+    assert_eq!(
+        changed,
+        [json!({"type": "mode_changed", "mode": "accept_edits", "plan": false})]
+    );
+    assert_eq!(
+        d.mode(mode(edits)).unwrap_err().code,
+        ErrorCode::InvalidArgs
+    );
 }

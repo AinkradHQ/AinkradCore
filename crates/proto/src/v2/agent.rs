@@ -36,6 +36,9 @@ pub const OP_AGENT_READ: &str = "agent.read";
 pub const OP_AGENT_SEND: &str = "agent.send";
 pub const OP_AGENT_DECIDE: &str = "agent.decide";
 pub const OP_AGENT_STOP: &str = "agent.stop";
+/// A session's new permission policy (`AgentMode`). A runner that takes it lists the op itself
+/// among its agent driver's commands; the Core sends it to no other.
+pub const OP_AGENT_MODE: &str = "agent.mode";
 
 /// The command an agent driver lists when it keeps a session's harness alive between answers: an
 /// `agent.start` with `live` then runs one conversation (state `waiting` after each answer, each
@@ -353,6 +356,16 @@ pub struct AgentStop {
     /// Nothing happens when no answer runs. Overrides `kill`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub turn: bool,
+}
+
+/// A running session's new permission policy: its mode and `plan`. Its next tool calls are decided
+/// by it at once; the harness takes it live where it can switch (Claude's `set_permission_mode`),
+/// else at its next turn (the process is resumed with the new flags). Every later start of the
+/// session carries it as `AgentStart::policy`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentMode {
+    pub session: String,
+    pub policy: Policy,
 }
 
 /// Where a session is, as its runner sees it.

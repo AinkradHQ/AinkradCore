@@ -103,6 +103,9 @@ pub struct Spec {
     pub sandboxed: bool,
     /// The project lets file edits inside `cwd` go ahead without asking (E3.10).
     pub accept_edits: bool,
+    /// Plan mode: the harness reads and plans and edits nothing (Claude's `--permission-mode
+    /// plan`). Only Claude has one; the Core refuses it for any other harness.
+    pub plan: bool,
     /// Where the process is started (E8a-06); `None` is the local backend: bubblewrap, Seatbelt
     /// or nothing, as the spec's `AINKRAD_SANDBOX*` variables say.
     pub backend: Option<std::sync::Arc<dyn exec::ExecBackend>>,
@@ -233,6 +236,12 @@ pub trait Harness: Sized + Send + 'static {
     /// Ends the running turn; the process stays up for the next `send`, except agy's, which
     /// exits after the turn ends (`resume` continues it).
     fn interrupt(&mut self) -> impl Future<Output = io::Result<()>> + Send;
+    /// Switches the running process to `spec`'s `plan` and `accept_edits` (Claude's
+    /// `set_permission_mode`). `Unsupported`: the harness takes them only at a start or resume.
+    fn set_mode(&mut self, spec: &Spec) -> impl Future<Output = io::Result<()>> + Send {
+        let _ = spec;
+        async { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+    }
     /// Answers an `ApprovalRequested`.
     fn approve(
         &mut self,

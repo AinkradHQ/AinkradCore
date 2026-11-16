@@ -825,6 +825,16 @@ pub async fn set_title(pool: &SqlitePool, id: &str, title: &str) -> Result<bool,
         .map(|r| r.rows_affected() > 0)
 }
 
+/// Replaces a session's policy (`setAgentSessionMode`): every later start of it runs under this one.
+pub async fn set_policy(pool: &SqlitePool, id: &str, policy: &Value) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE core_agent_sessions SET policy = ? WHERE id = ?")
+        .bind(policy.to_string())
+        .bind(id)
+        .execute(pool)
+        .await
+        .map(drop)
+}
+
 /// Gives a session with no title the start of its first message.
 pub async fn title_from_first_message(
     pool: &SqlitePool,

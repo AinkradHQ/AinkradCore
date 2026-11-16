@@ -376,6 +376,7 @@ impl HarnessExecutor {
             // `start` refused a sandboxed policy on a runner that is not.
             sandboxed: job.policy.mode == PermissionMode::Sandboxed && self.sandboxed,
             accept_edits: job.policy.mode == PermissionMode::AcceptEdits,
+            plan: job.policy.plan,
             instructions: files.instructions.clone(),
             mcp_config: files.mcp_config.clone(),
             backend: self.backend.clone(),

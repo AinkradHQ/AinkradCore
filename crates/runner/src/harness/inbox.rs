@@ -21,6 +21,8 @@ pub(super) struct Inbox {
     messages: Mutex<VecDeque<(i64, String)>>,
     /// The run's policy since the admin changed it; `None`, its `Assign`'s.
     policy: Mutex<Option<Policy>>,
+    /// A new policy arrived that the harness has not been told yet (`take_retune`).
+    retune: AtomicBool,
     /// Wakes the turn loop when something arrives.
     pub arrived: Notify,
 }
@@ -28,7 +30,10 @@ pub(super) struct Inbox {
 impl Inbox {
     pub fn put(&self, control: Control) {
         match control {
-            Control::Policy(policy) => *self.policy.lock().expect("inbox lock") = Some(policy),
+            Control::Policy(policy) => {
+                *self.policy.lock().expect("inbox lock") = Some(policy);
+                self.retune.store(true, Ordering::SeqCst);
+            }
             Control::Pause => self.pause.store(true, Ordering::SeqCst),
             Control::Live => self.live.store(true, Ordering::SeqCst),
             Control::Interrupt => self.interrupt.store(true, Ordering::SeqCst),
@@ -53,6 +58,12 @@ impl Inbox {
     /// Whether a turn stop was asked since the last call (and forgets it).
     pub fn take_interrupt(&self) -> bool {
         self.interrupt.swap(false, Ordering::SeqCst)
+    }
+
+    /// Whether a new policy arrived since the last call (and forgets it): the harness's own mode
+    /// is to follow it.
+    pub fn take_retune(&self) -> bool {
+        self.retune.swap(false, Ordering::SeqCst)
     }
 
     /// The run's policy now: the latest update, else `assigned`.

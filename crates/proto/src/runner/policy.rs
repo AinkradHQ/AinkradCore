@@ -23,6 +23,10 @@ pub struct Policy {
     /// Runs must work in a disposable sandbox: only a sandboxed runner may take them.
     #[serde(default)]
     pub sandboxed: bool,
+    /// Plan mode: the harness reads and plans and edits nothing (Claude Code's `plan`). Only a
+    /// harness that has one takes it; an older runner refuses the field.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plan: bool,
     /// The weakest isolation the session may run in (E8a-08). Absent: any runner. A runner that
     /// cannot offer it is never given the session, and refuses it if it is (E8a-09).
     #[serde(default, skip_serializing_if = "Option::is_none")]

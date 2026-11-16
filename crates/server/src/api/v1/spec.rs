@@ -168,6 +168,7 @@ use super::{
         agents::approvals,
         agents::decide,
         agents::interrupt,
+        agents::mode,
         agents::title,
         agents::cancel,
         agents::kill,

@@ -156,6 +156,22 @@
       ],
       "type": "object"
     },
+    "AgentMode": {
+      "description": "A running session's new permission policy: its mode and `plan`. Its next tool calls are decided\nby it at once; the harness takes it live where it can switch (Claude's `set_permission_mode`),\nelse at its next turn (the process is resumed with the new flags). Every later start of the\nsession carries it as `AgentStart::policy`.",
+      "properties": {
+        "policy": {
+          "$ref": "#/$defs/Policy"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "policy"
+      ],
+      "type": "object"
+    },
     "AgentRead": {
       "description": "Core to runner: the transcript after `after`.",
       "properties": {
@@ -663,6 +679,19 @@
           "properties": {
             "op": {
               "const": "history.read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentMode",
+          "properties": {
+            "op": {
+              "const": "agent.mode",
               "type": "string"
             }
           },
@@ -2194,6 +2223,10 @@
         "mode": {
           "$ref": "#/$defs/PermissionMode"
         },
+        "plan": {
+          "description": "Plan mode: the harness reads and plans and edits nothing (Claude Code's `plan`). Only a\nharness that has one takes it; an older runner refuses the field.",
+          "type": "boolean"
+        },
         "sandboxed": {
           "default": false,
           "description": "Runs must work in a disposable sandbox: only a sandboxed runner may take them.",
@@ -2624,6 +2657,19 @@
           "properties": {
             "op": {
               "const": "history.read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentEvents",
+          "properties": {
+            "op": {
+              "const": "agent.mode",
               "type": "string"
             }
           },

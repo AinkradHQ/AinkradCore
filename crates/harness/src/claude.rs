@@ -63,6 +63,16 @@ pub fn mcp_config(url: &str, token: &str) -> Value {
         "headers": {"Authorization": format!("Bearer {token}")}}}})
 }
 
+/// Claude's permission mode for `spec`: `plan` reads and plans only; `acceptEdits` lets file edits
+/// through; `default` asks (every ask reaches the runner's policy through the prompt tool).
+pub fn permission_mode(spec: &Spec) -> &'static str {
+    match (spec.plan, spec.accept_edits) {
+        (true, _) => "plan",
+        (false, true) => "acceptEdits",
+        (false, false) => "default",
+    }
+}
+
 /// The argv: flags and file paths only, never a prompt.
 pub fn args(spec: &Spec, resume: Option<&str>) -> Vec<String> {
     let mut args: Vec<String> = [
@@ -75,11 +85,7 @@ pub fn args(spec: &Spec, resume: Option<&str>) -> Vec<String> {
         "--permission-prompt-tool",
         "stdio",
         "--permission-mode",
-        if spec.accept_edits {
-            "acceptEdits"
-        } else {
-            "default"
-        },
+        permission_mode(spec),
         "--setting-sources",
         "local",
         "--settings",
@@ -433,6 +439,12 @@ impl Harness for Claude {
     async fn interrupt(&mut self) -> io::Result<()> {
         self.decoder.interrupting = true;
         self.control(json!({"subtype": "interrupt"})).await
+    }
+
+    async fn set_mode(&mut self, spec: &Spec) -> io::Result<()> {
+        let mode = permission_mode(spec);
+        self.control(json!({"subtype": "set_permission_mode", "mode": mode}))
+            .await
     }
 
     async fn approve(&mut self, id: &str, decision: Decision) -> io::Result<()> {

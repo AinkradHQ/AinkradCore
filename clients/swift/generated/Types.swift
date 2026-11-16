@@ -98,6 +98,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/messages`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/messages/post(sendAgentMessage)`.
     func sendAgentMessage(_ input: Operations.SendAgentMessage.Input) async throws -> Operations.SendAgentMessage.Output
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/mode`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/mode/post(setAgentSessionMode)`.
+    func setAgentSessionMode(_ input: Operations.SetAgentSessionMode.Input) async throws -> Operations.SetAgentSessionMode.Output
     /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/resume`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/resume/post(resumeAgentSession)`.
     func resumeAgentSession(_ input: Operations.ResumeAgentSession.Input) async throws -> Operations.ResumeAgentSession.Output
@@ -814,6 +817,19 @@ extension APIProtocol {
         body: Operations.SendAgentMessage.Input.Body
     ) async throws -> Operations.SendAgentMessage.Output {
         try await sendAgentMessage(Operations.SendAgentMessage.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/mode`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/mode/post(setAgentSessionMode)`.
+    public func setAgentSessionMode(
+        path: Operations.SetAgentSessionMode.Input.Path,
+        headers: Operations.SetAgentSessionMode.Input.Headers = .init(),
+        body: Operations.SetAgentSessionMode.Input.Body
+    ) async throws -> Operations.SetAgentSessionMode.Output {
+        try await setAgentSessionMode(Operations.SetAgentSessionMode.Input(
             path: path,
             headers: headers,
             body: body

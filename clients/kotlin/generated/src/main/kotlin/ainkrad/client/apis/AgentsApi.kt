@@ -18,6 +18,7 @@ package ainkrad.client.apis
 import ainkrad.client.models.AgentApprovals
 import ainkrad.client.models.AgentDecision
 import ainkrad.client.models.AgentMessage
+import ainkrad.client.models.AgentModeChange
 import ainkrad.client.models.AgentSession
 import ainkrad.client.models.AgentTitle
 import ainkrad.client.models.AgentTranscript
@@ -413,6 +414,40 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.POST,
             "/api/v1/agent-sessions/{id}/messages".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/agent-sessions/{id}/mode
+        * 
+        * 
+         * @param id The session&#39;s id, &#x60;as_…&#x60; 
+         * @param agentModeChange  
+         * @return AgentSession
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun setAgentSessionMode(id: kotlin.String, agentModeChange: AgentModeChange): HttpResponse<AgentSession> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = agentModeChange
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/agent-sessions/{id}/mode".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

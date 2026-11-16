@@ -56,6 +56,15 @@ pub struct AgentApprovals {
     pub approvals: Vec<AgentApproval>,
 }
 
+/// A session's new mode: either field, or both.
+#[derive(Deserialize, ToSchema)]
+pub struct AgentModeChange {
+    /// `ask`, `accept_edits` or `sandboxed`; absent, unchanged.
+    pub policy: Option<String>,
+    /// Plan mode on or off; absent, unchanged.
+    pub plan: Option<bool>,
+}
+
 /// A new title for a session.
 #[derive(Deserialize, ToSchema)]
 pub struct AgentTitle {
@@ -151,6 +160,10 @@ pub struct NewAgentSession {
     /// `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
     #[schema(value_type = Option<Object>)]
     pub policy: Option<Value>,
+    /// Start in Plan mode: the harness reads and plans and edits nothing until the mode is
+    /// switched (`setAgentSessionMode`). Only `claude` has one (400 `plan_unsupported`); a
+    /// runner too old for it answers 409 `unsupported_command`. Default `false`.
+    pub plan: Option<bool>,
     /// At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
     pub secrets: Option<Vec<AgentSecret>>,
     /// A fallback chain's id: the session draws its account from it, one at a time. Needs

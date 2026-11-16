@@ -472,7 +472,8 @@ pub async fn ask(
             | Reply::AgentSend(ev)
             | Reply::AgentDecide(ev)
             | Reply::AgentStop(ev)
-            | Reply::AgentLimit(ev),
+            | Reply::AgentLimit(ev)
+            | Reply::AgentMode(ev),
         ) => Ok(ev),
         other => Err(StreamError::new(
             ErrorCode::BadFrame,
@@ -558,11 +559,16 @@ pub fn authorize_message(app: &App, caller: &Caller, session: &str) {
 
 /// Whether `runner`'s agent driver keeps a harness alive between answers (`CAP_LIVE`).
 pub fn offers_live(app: &App, runner: &str) -> bool {
+    offers(app, runner, ainkrad_proto::v2::CAP_LIVE)
+}
+
+/// Whether `runner`'s agent driver lists `command` (an op or a capability).
+pub fn offers(app: &App, runner: &str, command: &str) -> bool {
     app.hub.runners().get(runner).is_some_and(|r| {
         r.drivers
             .iter()
             .filter(|d| d.name == AGENT_DRIVER)
-            .any(|d| d.commands.iter().any(|c| c == ainkrad_proto::v2::CAP_LIVE))
+            .any(|d| d.commands.iter().any(|c| c == command))
     })
 }
 
