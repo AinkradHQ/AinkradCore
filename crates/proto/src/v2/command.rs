@@ -59,6 +59,8 @@ pub enum Command {
     PlanCheck(super::PlanCheck),
     #[serde(rename = "history.read")]
     HistoryRead(super::HistoryRead),
+    #[serde(rename = "agent.mode")]
+    AgentMode(super::AgentMode),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -83,6 +85,7 @@ impl Command {
             Self::AgentTools(_) => super::OP_AGENT_TOOLS,
             Self::PlanCheck(_) => super::OP_PLAN_CHECK,
             Self::HistoryRead(_) => super::OP_HISTORY_READ,
+            Self::AgentMode(_) => super::OP_AGENT_MODE,
             Self::LoginStart(_) => super::OP_LOGIN_START,
             Self::LoginCode(_) => super::OP_LOGIN_CODE,
             Self::LoginCancel(_) => super::OP_LOGIN_CANCEL,
@@ -179,6 +182,8 @@ pub enum Reply {
     /// The answer to `history.read`.
     #[serde(rename = "history.read")]
     HistoryRead(super::HistoryChunk),
+    #[serde(rename = "agent.mode")]
+    AgentMode(super::AgentEvents),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

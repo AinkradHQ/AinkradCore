@@ -82,6 +82,7 @@ mod health_harness;
 mod live;
 mod me;
 mod metrics;
+mod mode;
 mod modules;
 mod neg_alloc;
 mod neg_chains;

@@ -31,6 +31,7 @@ import kotlinx.serialization.Contextual
  * @param harness `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it (and `model`) when the session draws from a chain: the account the allocator picks sets them.
  * @param live One live conversation (default `true`): the harness stays up after each answer, the state is `waiting` until the next `sendAgentMessage`, and the session ends only on `cancel`, `kill`, the idle end (`agents.idle_end_secs`) or when the CLI exits by itself. `false`, or a runner that does not offer it (the answer's `live` says), runs one answer and ends.
  * @param model The model id as the provider names it. For a session served by the auth gateway it must be one of the ids priced for its provider, exactly: the gateway resolves no alias.
+ * @param plan Start in Plan mode: the harness reads and plans and edits nothing until the mode is switched (`setAgentSessionMode`). Only `claude` has one (400 `plan_unsupported`); a runner too old for it answers 409 `unsupported_command`. Default `false`.
  * @param policy `{\"mode\": \"ask\" | \"accept_edits\" | \"sandboxed\", \"allow\": […]}`; default `ask`.
  * @param prompt The first message. Absent or empty: the session starts with no message, like opening the CLI: its harness is up, the state is `waiting`, and the first message comes through `sendAgentMessage`. A message gives the session its `title` (its first 60 characters).
  * @param secrets At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
@@ -67,6 +68,10 @@ data class NewAgentSession (
     /* The model id as the provider names it. For a session served by the auth gateway it must be one of the ids priced for its provider, exactly: the gateway resolves no alias. */
     @SerialName(value = "model")
     val model: kotlin.String? = null,
+
+    /* Start in Plan mode: the harness reads and plans and edits nothing until the mode is switched (`setAgentSessionMode`). Only `claude` has one (400 `plan_unsupported`); a runner too old for it answers 409 `unsupported_command`. Default `false`. */
+    @SerialName(value = "plan")
+    val plan: kotlin.Boolean? = null,
 
     /* `{\"mode\": \"ask\" | \"accept_edits\" | \"sandboxed\", \"allow\": […]}`; default `ask`. */
     @Contextual @SerialName(value = "policy")

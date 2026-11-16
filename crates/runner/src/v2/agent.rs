@@ -32,9 +32,9 @@ use std::time::Duration;
 use ainkrad_proto::redact::Redactor;
 use ainkrad_proto::runner::{Isolation, Outcome, RunToken, Tokens, Workspace};
 use ainkrad_proto::v2::{
-    AGENT_DRIVER, AGENT_OPS, AgentDecide, AgentEvents, AgentRead, AgentStart, AgentState,
-    AgentStop, CAP_GATEWAY, CAP_LIVE, DriverInfo, ErrorCode, IsolationCaps, Kvm, StreamError,
-    TranscriptEntry,
+    AGENT_DRIVER, AGENT_OPS, AgentDecide, AgentEvents, AgentMode, AgentRead, AgentStart,
+    AgentState, AgentStop, CAP_GATEWAY, CAP_LIVE, DriverInfo, ErrorCode, IsolationCaps, Kvm,
+    StreamError, TranscriptEntry,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -318,6 +318,10 @@ pub struct AgentDriver {
     versions: BTreeMap<String, String>,
 }
 
+/// The one harness with a plan mode (Claude Code's `--permission-mode plan`).
+const PLAN_HARNESS: &str = "claude";
+const NO_PLAN: &str = "only claude has a plan mode";
+
 fn refuse(code: ErrorCode, why: impl Into<String>) -> StreamError {
     StreamError::new(code, why)
 }
@@ -385,7 +389,7 @@ impl AgentDriver {
             commands: AGENT_OPS
                 .iter()
                 .chain(self.sandbox.capabilities())
-                .chain([&CAP_LIVE])
+                .chain([&CAP_LIVE, &ainkrad_proto::v2::OP_AGENT_MODE])
                 .chain(
                     self.config
                         .plan_limit
@@ -462,6 +466,9 @@ impl AgentDriver {
         // needs more isolation than this runner's sandbox gives is refused, never run weaker.
         if let Some(why) = req.policy.problem() {
             return Err(refuse(ErrorCode::InvalidArgs, why));
+        }
+        if req.policy.plan && req.harness != PLAN_HARNESS {
+            return Err(refuse(ErrorCode::InvalidArgs, NO_PLAN));
         }
         if let Some(min) = req.policy.required_tier()
             && !self.sandbox.tier().satisfies(min)
@@ -903,6 +910,37 @@ impl AgentDriver {
             });
             let entry = json!({"type": "approval_decided", "id": req.request,
                                "approved": req.approved});
+            push(cfg, &req.session, live, entry);
+            Ok(())
+        })
+    }
+
+    /// The session's new permission policy (`agent.mode`, E3): its run's next tool calls are
+    /// decided by it, and its harness takes the mode, live where it can (`Control::Policy`). A
+    /// policy needing more isolation than the session started with is refused: that is another
+    /// placement, not a mode.
+    pub fn mode(&self, req: AgentMode) -> Result<AgentEvents, StreamError> {
+        if let Some(why) = req.policy.problem() {
+            return Err(refuse(ErrorCode::InvalidArgs, why));
+        }
+        self.running(&req.session, |live, cfg| {
+            if req.policy.plan && live.meta.harness != PLAN_HARNESS {
+                return Err(refuse(ErrorCode::InvalidArgs, NO_PLAN));
+            }
+            let held = |min| {
+                live.required
+                    .is_some_and(|have: Isolation| have.satisfies(min))
+            };
+            if req.policy.required_tier().is_some_and(|min| !held(min)) {
+                return Err(refuse(
+                    ErrorCode::InvalidArgs,
+                    "the policy needs more isolation than the session started with",
+                ));
+            }
+            let entry = json!({"type": "mode_changed", "mode": req.policy.mode.as_str(),
+                               "plan": req.policy.plan});
+            self.harness
+                .control(live.run, Control::Policy(req.policy.clone()));
             push(cfg, &req.session, live, entry);
             Ok(())
         })

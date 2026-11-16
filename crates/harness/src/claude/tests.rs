@@ -185,6 +185,7 @@ async fn the_prompt_goes_by_stdin_and_the_config_stays_isolated() {
         session_id: Some(SESSION.to_owned()),
         sandboxed: false,
         accept_edits: false,
+        plan: false,
         backend: None,
     };
     let prompt = "PROMPT-CANARY fix the flaky test";
@@ -309,6 +310,56 @@ fn the_permission_mode_follows_the_spec() {
         ..Spec::default()
     };
     assert_eq!(mode(&edits), "acceptEdits");
+    // Plan mode wins over either: it edits nothing.
+    for accept_edits in [false, true] {
+        let plan = Spec {
+            plan: true,
+            accept_edits,
+            ..Spec::default()
+        };
+        assert_eq!(mode(&plan), "plan");
+    }
+}
+
+/// A live switch (E3): one `set_permission_mode` control request on the CLI's stdin, after the
+/// `initialize` every start sends; the process is not restarted.
+#[tokio::test]
+async fn a_mode_switch_is_one_set_permission_mode_request_to_the_running_cli() {
+    let dir = scratch("set-mode");
+    let script = dir.join("claude");
+    let d = dir.display();
+    std::fs::write(&script, format!("#!/bin/sh\ncat > {d}/stdin\n")).unwrap();
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let mut spec = Spec {
+        program: Some(script),
+        cwd: dir.clone(),
+        config_dir: dir.join("config"),
+        env_allow: vec!["PATH".to_owned()],
+        ..Spec::default()
+    };
+    let mut claude = Claude::start(&spec).await.unwrap();
+    spec.plan = true;
+    claude.set_mode(&spec).await.unwrap();
+    spec.plan = false;
+    spec.accept_edits = true;
+    claude.set_mode(&spec).await.unwrap();
+    claude.stop().await;
+    let stdin = std::fs::read_to_string(dir.join("stdin")).unwrap();
+    let sent: Vec<Value> = stdin
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(sent.len(), 3, "{stdin}");
+    assert_eq!(sent[0]["request"]["subtype"], "initialize");
+    for (m, mode) in sent[1..].iter().zip(["plan", "acceptEdits"]) {
+        assert_eq!(m["type"], "control_request");
+        assert_eq!(
+            m["request"],
+            json!({"subtype": "set_permission_mode", "mode": mode})
+        );
+    }
+    assert_ne!(sent[1]["request_id"], sent[2]["request_id"]);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A tool's output that is itself a `rate_limit_event` line is a `tool_result` and nothing else:

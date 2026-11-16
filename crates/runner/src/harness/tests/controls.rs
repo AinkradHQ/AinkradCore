@@ -1,6 +1,6 @@
 //! The admin's controls of a running job (1.19, decision #34), against a fake `claude`: a
 //! pause lets the tool call in flight finish, then ends the run `Cancelled`; a message is the
-//! harness's next turn, and the run goes on.
+//! harness's next turn, and the run goes on; a new policy switches Claude's mode live.
 
 use std::time::Instant;
 
@@ -14,21 +14,21 @@ fn fake(dir: &Path, mode: &str) -> HarnessExecutor {
     let bin = dir.join("claude");
     let script = format!(
         r#"#!/usr/bin/perl
-use IO::Select;
 use Time::HiRes qw(sleep);
 exit 0 if $ENV{{AINKRAD_EXEC_PROBE}};
 $| = 1;
-my $in = IO::Select->new(\*STDIN);
 <STDIN>; <STDIN>;
 print qq({{"type":"system","subtype":"init","session_id":"S"}}\n);
 print qq({{"type":"assistant","message":{{"id":"m1","content":[{{"type":"tool_use","id":"t1","name":"Bash","input":{{"command":"cargo test"}}}}]}}}}\n);
 sleep 0.4;
 print qq({{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t1","content":"ok"}}]}}}}\n);
 print qq({{"type":"result","subtype":"success","is_error":false,"usage":{{}}}}\n) if "{mode}" eq "message";
-while (1) {{
-    next unless $in->can_read(0.05);
-    my $line = <STDIN>;
-    exit 0 unless defined $line;
+# Blocking reads: lines that arrive together sit in Perl's buffer, which a select never sees.
+while (defined(my $line = <STDIN>)) {{
+    if ($line =~ /set_permission_mode/ && $line =~ /"mode":"(\w+)"/) {{
+        print qq({{"type":"assistant","message":{{"id":"m3","content":[{{"type":"text","text":"mode: $1"}}]}}}}\n);
+        next;
+    }}
     if ($line =~ /"interrupt"/) {{
         print qq({{"type":"result","subtype":"error_during_execution","is_error":true,"usage":{{}}}}\n);
         exit 0;
@@ -51,10 +51,15 @@ while (1) {{
 /// Runs the job, putting `control` in once its `tool_use` is reported: its outcome, how long
 /// that took, its chunks.
 async fn work(ex: &HarnessExecutor, control: Control) -> (Outcome, Duration, Vec<Value>) {
+    work_all(ex, vec![control]).await
+}
+
+/// `work` with several controls, put in at once and in order.
+async fn work_all(ex: &HarnessExecutor, controls: Vec<Control>) -> (Outcome, Duration, Vec<Value>) {
     let job = job("claude");
     ex.start(&job).await.unwrap();
     let (tx, mut rx) = mpsc::channel(4096);
-    let mut control = Some(control);
+    let mut control = Some(controls);
     let (mut chunks, mut since) = (vec![], Instant::now());
     let watch = async {
         while let Some(report) = rx.recv().await {
@@ -65,7 +70,9 @@ async fn work(ex: &HarnessExecutor, control: Control) -> (Outcome, Duration, Vec
                 && let Some(c) = control.take()
             {
                 since = Instant::now();
-                ex.control(job.run, c);
+                for c in c {
+                    ex.control(job.run, c);
+                }
             }
             chunks.push(chunk);
         }
@@ -115,5 +122,29 @@ async fn a_message_is_the_next_turn_and_the_run_goes_on() {
             .any(|c| c["text"] == "got: use the in-memory transport"),
         "{chunks:?}"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// E3: a new policy mid-turn reaches the running Claude as `set_permission_mode` (no restart: one
+/// process, one `tool_use`), and again at the next turn's start, where the run's flags follow it.
+#[tokio::test]
+async fn a_new_policy_switches_claudes_mode_live_without_a_restart() {
+    let dir = scratch("mode");
+    let ex = fake(&dir, "message");
+    let plan = Policy {
+        plan: true,
+        ..Policy::default()
+    };
+    let text = "now plan it".to_owned();
+    let controls = vec![Control::Policy(plan), Control::Message { id: 3, text }];
+    let (outcome, _, chunks) = work_all(&ex, controls).await;
+    assert_eq!(outcome, Outcome::Succeeded);
+    let said: Vec<_> = (chunks.iter())
+        .filter(|c| c["type"] == "assistant_text")
+        .filter_map(|c| c["text"].as_str())
+        .collect();
+    assert_eq!(said, ["mode: plan", "mode: plan", "got: now plan it"]);
+    let uses = chunks.iter().filter(|c| c["type"] == "tool_use").count();
+    assert_eq!(uses, 1, "never restarted: {chunks:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

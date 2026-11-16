@@ -388,6 +388,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agent-sessions/{id}/mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["setAgentSessionMode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent-sessions/{id}/resume": {
         parameters: {
             query?: never;
@@ -2050,6 +2066,13 @@ export interface components {
         AgentMessage: {
             text: string;
         };
+        /** @description A session's new mode: either field, or both. */
+        AgentModeChange: {
+            /** @description Plan mode on or off; absent, unchanged. */
+            plan?: boolean | null;
+            /** @description `ask`, `accept_edits` or `sandboxed`; absent, unchanged. */
+            policy?: string | null;
+        };
         /** @description A secret for the session: the broker's secret `name`, delivered under `var`. */
         AgentSecret: {
             name: string;
@@ -2124,6 +2147,13 @@ export interface components {
              *     "lost", "reason": …}`.
              */
             outcome?: Record<string, never> | null;
+            /** @description Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`). */
+            plan?: boolean | null;
+            /**
+             * @description Its permission mode now: `ask`, `accept_edits` or `sandboxed` (the create's `policy.mode`,
+             *     or the latest `setAgentSessionMode`).
+             */
+            policy?: string | null;
             /**
              * Format: int64
              * @description How many accounts a launch refused after the pick before the one it holds (at most 2).
@@ -3113,6 +3143,12 @@ export interface components {
              *     one of the ids priced for its provider, exactly: the gateway resolves no alias.
              */
             model?: string | null;
+            /**
+             * @description Start in Plan mode: the harness reads and plans and edits nothing until the mode is
+             *     switched (`setAgentSessionMode`). Only `claude` has one (400 `plan_unsupported`); a
+             *     runner too old for it answers 409 `unsupported_command`. Default `false`.
+             */
+            plan?: boolean | null;
             /** @description `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`. */
             policy?: Record<string, never> | null;
             /**
@@ -5277,6 +5313,40 @@ export interface operations {
         };
         responses: {
             /** @description Given to the harness as its next turn (audited as `agent.messaged`, its length only). A live session takes it in its running process: `waiting` becomes `running`, and a message sent while an answer runs is queued behind it. A live session whose process is gone (a runner restart, a lost runner, an idle end) is started again with the harness's own resume in the same folder and gets it there, so the conversation goes on. A first message gives an untitled session its `title`. 409 `session_over`, `session_starting` (not on its runner yet), 502 `runner_failed` when it is not running */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setAgentSessionMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentModeChange"];
+            };
+        };
+        responses: {
+            /** @description Sets the session's permission mode (`policy`), Plan mode (`plan`), or both (audited as `agent.mode_changed` with the mode before and after). A session on its runner (`running`, `waiting`) takes it at once: its next tool calls are decided by it, Claude switches live, another harness at its next turn (resumed with the new flags), and its transcript gets a `mode_changed` entry. A session off its runner (`interrupted`, `lost`, `ended`) takes it at its next start. 400 for neither field or an unknown `policy`, 400 `plan_unsupported` for `plan` on a harness other than claude, 409 `mode_at_start` for a switch into `sandboxed` (it decides where a session runs), 409 `session_starting`, `unsupported_command` (a runner too old to switch), `runner_offline`, `module_owned` */
             200: {
                 headers: {
                     [name: string]: unknown;

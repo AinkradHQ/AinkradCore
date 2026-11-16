@@ -22,7 +22,8 @@ use crate::agents;
 use crate::api::App;
 use crate::auth::crypto::is_id;
 use crate::store::agents::{self as store, Session, SessionSecret};
-use ainkrad_proto::v2::{AgentDecide, AgentSend, AgentStop, Command};
+use ainkrad_proto::runner::PermissionMode;
+use ainkrad_proto::v2::{AgentDecide, AgentMode, AgentSend, AgentStop, Command};
 
 pub(super) mod access;
 pub(in crate::api::v1) mod sched;
@@ -31,6 +32,17 @@ use sched::{AgentWaiting, create_named, listed, page, shown};
 use types::*;
 
 const MAX_MESSAGE: usize = 16 * 1024;
+
+/// The one harness with a plan mode (Claude Code's `--permission-mode plan`).
+const PLAN_HARNESS: &str = "claude";
+
+fn no_plan() -> ApiError {
+    ApiError::new(
+        StatusCode::BAD_REQUEST,
+        "plan_unsupported",
+        "only the claude harness has a plan mode",
+    )
+}
 
 /// An agent session: a harness on a runner.
 #[derive(Debug, Serialize, ToSchema)]
@@ -108,12 +120,20 @@ pub struct AgentSession {
     /// absent for a scratch dir.
     #[schema(value_type = Option<Object>)]
     pub workspace: Option<Value>,
+    /// Its permission mode now: `ask`, `accept_edits` or `sandboxed` (the create's `policy.mode`,
+    /// or the latest `setAgentSessionMode`).
+    pub policy: Option<String>,
+    /// Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`).
+    pub plan: Option<bool>,
 }
 
 impl From<Session> for AgentSession {
     fn from(s: Session) -> Self {
         let state = s.api_state().to_owned();
+        let mode = s.policy["mode"].as_str().unwrap_or("ask").to_owned();
         Self {
+            policy: Some(mode),
+            plan: Some(s.policy["plan"] == true),
             live: Some(s.conversation),
             idle_since: s
                 .waiting_since
@@ -236,9 +256,26 @@ pub async fn create(
             var: s.var,
         })
         .collect();
-    let policy = b.policy.unwrap_or_else(|| {
+    let mut policy = b.policy.unwrap_or_else(|| {
         serde_json::to_value(ainkrad_proto::runner::Policy::default()).expect("a policy serializes")
     });
+    if b.plan == Some(true)
+        && let Some(m) = policy.as_object_mut()
+    {
+        m.insert("plan".into(), true.into());
+    }
+    if policy["plan"] == true {
+        if b.harness != PLAN_HARNESS {
+            return Err(no_plan());
+        }
+        if !agents::offers(&app, &b.runner, ainkrad_proto::v2::OP_AGENT_MODE) {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "unsupported_command",
+                "the runner is too old for plan mode",
+            ));
+        }
+    }
     // An account session (an `acct.*` secret, or a chain/agent the allocator draws one from) runs
     // sandboxed: the Core adds the floor instead of refusing a client that left it out.
     let draws_account = b.chain.is_some() || b.agent.is_some();
@@ -520,6 +557,94 @@ pub async fn title(
         &me.device.id,
     )
     .await?;
+    shown(&app, &me, &id).await
+}
+
+#[utoipa::path(post, path = "/api/v1/agent-sessions/{id}/mode",
+    operation_id = "setAgentSessionMode", tag = "agents",
+    params(("id" = String, Path, description = "The session's id, `as_…`")),
+    request_body = AgentModeChange,
+    responses((status = 200, description = "Sets the session's permission mode (`policy`), Plan \
+        mode (`plan`), or both (audited as `agent.mode_changed` with the mode before and after). A \
+        session on its runner (`running`, `waiting`) takes it at once: its next tool calls are \
+        decided by it, Claude switches live, another harness at its next turn (resumed with the \
+        new flags), and its transcript gets a `mode_changed` entry. A session off its runner \
+        (`interrupted`, `lost`, `ended`) takes it at its next start. 400 for neither field or an \
+        unknown `policy`, 400 `plan_unsupported` for `plan` on a harness other than claude, 409 \
+        `mode_at_start` for a switch into `sandboxed` (it decides where a session runs), 409 \
+        `session_starting`, `unsupported_command` (a runner too old to switch), `runner_offline`, \
+        `module_owned`", body = AgentSession)))]
+pub async fn mode(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> ApiResult<AgentSession> {
+    let s = one(&app, &me, &id).await?;
+    let b: AgentModeChange = parse(&body)?;
+    not_a_modules(&s)?;
+    owns_secrets(&s, &me)?;
+    let was = s.policy["mode"].as_str().unwrap_or("ask").to_owned();
+    let was_plan = s.policy["plan"] == true;
+    let mode = match b.policy.as_deref() {
+        None if b.plan.is_none() => {
+            return Err(ApiError::bad_request("send policy, plan or both"));
+        }
+        None => was.clone(),
+        Some(m) => m
+            .parse::<PermissionMode>()
+            .map_err(|_| ApiError::bad_request("policy is ask, accept_edits or sandboxed"))?
+            .as_str()
+            .to_owned(),
+    };
+    let plan = b.plan.unwrap_or(was_plan);
+    if plan && s.harness != PLAN_HARNESS {
+        return Err(no_plan());
+    }
+    if mode == PermissionMode::Sandboxed.as_str() && was != mode {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "mode_at_start",
+            "sandboxed is chosen at start: it decides where the session runs",
+        ));
+    }
+    let mut policy = match &s.policy {
+        Value::Object(m) => m.clone(),
+        _ => serde_json::Map::new(),
+    };
+    policy.insert("mode".into(), mode.clone().into());
+    // Absent when off: an older runner refuses a policy field it does not know.
+    match plan {
+        true => policy.insert("plan".into(), true.into()),
+        false => policy.remove("plan"),
+    };
+    let policy = Value::Object(policy);
+    let typed = serde_json::from_value(policy.clone())
+        .map_err(|_| ApiError::bad_request("the session's policy does not have its shape"))?;
+    match s.state.as_str() {
+        "starting" => {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "session_starting",
+                "the session is not on its runner yet",
+            ));
+        }
+        // On its runner: told first, kept only once it took it.
+        "running" => {
+            let cmd = Command::AgentMode(AgentMode {
+                session: s.id.clone(),
+                policy: typed,
+            });
+            tell(&app, &s, cmd, &me).await?;
+        }
+        // Off its runner: every later start carries the stored policy.
+        _ => {}
+    }
+    store::set_policy(&app.pool, &s.id, &policy).await?;
+    let details = json!({"from": {"policy": was, "plan": was_plan},
+                         "to": {"policy": mode, "plan": plan}});
+    let action = "agent.mode_changed";
+    store::action(&app.pool, &s, BY, action, None, details, &me.device.id).await?;
     shown(&app, &me, &id).await
 }
 

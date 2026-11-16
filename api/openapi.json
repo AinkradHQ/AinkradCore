@@ -459,6 +459,26 @@
         ],
         "type": "object"
       },
+      "AgentModeChange": {
+        "description": "A session's new mode: either field, or both.",
+        "properties": {
+          "plan": {
+            "description": "Plan mode on or off; absent, unchanged.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "policy": {
+            "description": "`ask`, `accept_edits` or `sandboxed`; absent, unchanged.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "AgentSecret": {
         "description": "A secret for the session: the broker's secret `name`, delivered under `var`.",
         "properties": {
@@ -606,6 +626,20 @@
             "description": "Once over: `{\"kind\": \"succeeded\" | \"failed\" | \"cancelled\" | \"token_cap\" | \"stalled\" |\n\"lost\", \"reason\": …}`.",
             "type": [
               "object",
+              "null"
+            ]
+          },
+          "plan": {
+            "description": "Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "policy": {
+            "description": "Its permission mode now: `ask`, `accept_edits` or `sandboxed` (the create's `policy.mode`,\nor the latest `setAgentSessionMode`).",
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -993,6 +1027,7 @@
           "agent.interrupted",
           "agent.killed",
           "agent.messaged",
+          "agent.mode_changed",
           "agent.renamed",
           "agent.resumed",
           "agent.wake_dropped",
@@ -3180,6 +3215,13 @@
             "description": "The model id as the provider names it. For a session served by the auth gateway it must be\none of the ids priced for its provider, exactly: the gateway resolves no alias.",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "plan": {
+            "description": "Start in Plan mode: the harness reads and plans and edits nothing until the mode is\nswitched (`setAgentSessionMode`). Only `claude` has one (400 `plan_unsupported`); a\nrunner too old for it answers 409 `unsupported_command`. Default `false`.",
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -6093,7 +6135,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.74.0"
+    "version": "1.75.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -7840,6 +7882,70 @@
               }
             },
             "description": "Given to the harness as its next turn (audited as `agent.messaged`, its length only). A live session takes it in its running process: `waiting` becomes `running`, and a message sent while an answer runs is queued behind it. A live session whose process is gone (a runner restart, a lost runner, an idle end) is started again with the harness's own resume in the same folder and gets it there, so the conversation goes on. A first message gives an untitled session its `title`. 409 `session_over`, `session_starting` (not on its runner yet), 502 `runner_failed` when it is not running"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "agents"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/api/v1/agent-sessions/{id}/mode": {
+      "post": {
+        "operationId": "setAgentSessionMode",
+        "parameters": [
+          {
+            "description": "The session's id, `as_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentModeChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSession"
+                }
+              }
+            },
+            "description": "Sets the session's permission mode (`policy`), Plan mode (`plan`), or both (audited as `agent.mode_changed` with the mode before and after). A session on its runner (`running`, `waiting`) takes it at once: its next tool calls are decided by it, Claude switches live, another harness at its next turn (resumed with the new flags), and its transcript gets a `mode_changed` entry. A session off its runner (`interrupted`, `lost`, `ended`) takes it at its next start. 400 for neither field or an unknown `policy`, 400 `plan_unsupported` for `plan` on a harness other than claude, 409 `mode_at_start` for a switch into `sandboxed` (it decides where a session runs), 409 `session_starting`, `unsupported_command` (a runner too old to switch), `runner_offline`, `module_owned`"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

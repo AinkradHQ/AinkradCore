@@ -553,6 +553,35 @@ extension Components {
                 case text
             }
         }
+        /// A session's new mode: either field, or both.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentModeChange`.
+        public struct AgentModeChange: Codable, Hashable, Sendable {
+            /// Plan mode on or off; absent, unchanged.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentModeChange/plan`.
+            public var plan: Swift.Bool?
+            /// `ask`, `accept_edits` or `sandboxed`; absent, unchanged.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentModeChange/policy`.
+            public var policy: Swift.String?
+            /// Creates a new `AgentModeChange`.
+            ///
+            /// - Parameters:
+            ///   - plan: Plan mode on or off; absent, unchanged.
+            ///   - policy: `ask`, `accept_edits` or `sandboxed`; absent, unchanged.
+            public init(
+                plan: Swift.Bool? = nil,
+                policy: Swift.String? = nil
+            ) {
+                self.plan = plan
+                self.policy = policy
+            }
+            public enum CodingKeys: String, CodingKey {
+                case plan
+                case policy
+            }
+        }
         /// A secret for the session: the broker's secret `name`, delivered under `var`.
         ///
         /// - Remark: Generated from `#/components/schemas/AgentSecret`.
@@ -663,6 +692,15 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/outcome`.
             public var outcome: OpenAPIRuntime.OpenAPIObjectContainer?
+            /// Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/plan`.
+            public var plan: Swift.Bool?
+            /// Its permission mode now: `ask`, `accept_edits` or `sandboxed` (the create's `policy.mode`,
+            /// or the latest `setAgentSessionMode`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/policy`.
+            public var policy: Swift.String?
             /// How many accounts a launch refused after the pick before the one it holds (at most 2).
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/repicked`.
@@ -741,6 +779,8 @@ extension Components {
             ///   - live: A live conversation (`createAgentSession`'s `live`): the state is `waiting` between answers.
             ///   - model:
             ///   - outcome: Once over: `{"kind": "succeeded" | "failed" | "cancelled" | "token_cap" | "stalled" |
+            ///   - plan: Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`).
+            ///   - policy: Its permission mode now: `ask`, `accept_edits` or `sandboxed` (the create's `policy.mode`,
             ///   - repicked: How many accounts a launch refused after the pick before the one it holds (at most 2).
             ///   - resumes: How many times it was resumed.
             ///   - run: The run it belongs to: its first attempt's id. A failover is a new session (an attempt) of
@@ -776,6 +816,8 @@ extension Components {
                 live: Swift.Bool? = nil,
                 model: Swift.String? = nil,
                 outcome: OpenAPIRuntime.OpenAPIObjectContainer? = nil,
+                plan: Swift.Bool? = nil,
+                policy: Swift.String? = nil,
                 repicked: Swift.Int64? = nil,
                 resumes: Swift.Int64? = nil,
                 run: Swift.String? = nil,
@@ -811,6 +853,8 @@ extension Components {
                 self.live = live
                 self.model = model
                 self.outcome = outcome
+                self.plan = plan
+                self.policy = policy
                 self.repicked = repicked
                 self.resumes = resumes
                 self.run = run
@@ -847,6 +891,8 @@ extension Components {
                 case live
                 case model
                 case outcome
+                case plan
+                case policy
                 case repicked
                 case resumes
                 case run
@@ -4129,6 +4175,12 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/model`.
             public var model: Swift.String?
+            /// Start in Plan mode: the harness reads and plans and edits nothing until the mode is
+            /// switched (`setAgentSessionMode`). Only `claude` has one (400 `plan_unsupported`); a
+            /// runner too old for it answers 409 `unsupported_command`. Default `false`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewAgentSession/plan`.
+            public var plan: Swift.Bool?
             /// `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/policy`.
@@ -4161,6 +4213,7 @@ extension Components {
             ///   - harness: `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it
             ///   - live: One live conversation (default `true`): the harness stays up after each answer, the state
             ///   - model: The model id as the provider names it. For a session served by the auth gateway it must be
+            ///   - plan: Start in Plan mode: the harness reads and plans and edits nothing until the mode is
             ///   - policy: `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
             ///   - prompt: The first message. Absent or empty: the session starts with no message, like opening the
             ///   - runner: The runner's device id, `d_…`.
@@ -4173,6 +4226,7 @@ extension Components {
                 harness: Swift.String? = nil,
                 live: Swift.Bool? = nil,
                 model: Swift.String? = nil,
+                plan: Swift.Bool? = nil,
                 policy: OpenAPIRuntime.OpenAPIObjectContainer? = nil,
                 prompt: Swift.String? = nil,
                 runner: Swift.String,
@@ -4185,6 +4239,7 @@ extension Components {
                 self.harness = harness
                 self.live = live
                 self.model = model
+                self.plan = plan
                 self.policy = policy
                 self.prompt = prompt
                 self.runner = runner
@@ -4198,6 +4253,7 @@ extension Components {
                 case harness
                 case live
                 case model
+                case plan
                 case policy
                 case prompt
                 case runner

@@ -109,6 +109,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "agent.interrupted",
     "agent.killed",
     "agent.messaged",
+    "agent.mode_changed",
     "agent.renamed",
     "agent.resumed",
     "agent.wake_dropped",
