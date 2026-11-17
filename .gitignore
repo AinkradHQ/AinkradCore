@@ -6,3 +6,5 @@ target/
 /fuzz/target/
 /fuzz/artifacts/
 /fuzz/corpus/
+/modules/design/model/fuzz/artifacts/
+/modules/design/model/fuzz/corpus/

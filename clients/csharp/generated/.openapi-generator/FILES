@@ -17,6 +17,7 @@ src/Ainkrad.Client/Api/EventsApi.cs
 src/Ainkrad.Client/Api/HandshakeApi.cs
 src/Ainkrad.Client/Api/OpsApi.cs
 src/Ainkrad.Client/Api/PairingApi.cs
+src/Ainkrad.Client/Api/ProjectsApi.cs
 src/Ainkrad.Client/Api/RunnersApi.cs
 src/Ainkrad.Client/Api/SecretsApi.cs
 src/Ainkrad.Client/Api/SettingsApi.cs
@@ -130,6 +131,7 @@ src/Ainkrad.Client/Model/LogLine.cs
 src/Ainkrad.Client/Model/LogPage.cs
 src/Ainkrad.Client/Model/LoginCode.cs
 src/Ainkrad.Client/Model/Me.cs
+src/Ainkrad.Client/Model/MirrorState.cs
 src/Ainkrad.Client/Model/ModelPrice.cs
 src/Ainkrad.Client/Model/Named.cs
 src/Ainkrad.Client/Model/NewAgentAttachment.cs
@@ -145,6 +147,8 @@ src/Ainkrad.Client/Model/NewLease.cs
 src/Ainkrad.Client/Model/NewLogin.cs
 src/Ainkrad.Client/Model/NewPairingBody.cs
 src/Ainkrad.Client/Model/NewPool.cs
+src/Ainkrad.Client/Model/NewProject.cs
+src/Ainkrad.Client/Model/NewProjectRepo.cs
 src/Ainkrad.Client/Model/NewProviderAccount.cs
 src/Ainkrad.Client/Model/NewSecret.cs
 src/Ainkrad.Client/Model/NewSecretGroup.cs
@@ -161,6 +165,8 @@ src/Ainkrad.Client/Model/PastRetention.cs
 src/Ainkrad.Client/Model/PolicyResult.cs
 src/Ainkrad.Client/Model/Pool.cs
 src/Ainkrad.Client/Model/PriceBookEntry.cs
+src/Ainkrad.Client/Model/ProjectInfo.cs
+src/Ainkrad.Client/Model/ProjectRepo.cs
 src/Ainkrad.Client/Model/Provider.cs
 src/Ainkrad.Client/Model/ProviderAccount.cs
 src/Ainkrad.Client/Model/PushKinds.cs
@@ -210,6 +216,7 @@ src/Ainkrad.Client/Model/TerminalSize.cs
 src/Ainkrad.Client/Model/TerminalStatus.cs
 src/Ainkrad.Client/Model/ToolOperation.cs
 src/Ainkrad.Client/Model/UpdateConnection.cs
+src/Ainkrad.Client/Model/UpdateProject.cs
 src/Ainkrad.Client/Model/UpdateSecretGroup.cs
 src/Ainkrad.Client/Model/UsageByCompany.cs
 src/Ainkrad.Client/Model/UsageWindow.cs

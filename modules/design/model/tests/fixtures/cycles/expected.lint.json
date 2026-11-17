@@ -1,0 +1,107 @@
+[
+  {
+    "fix": "see the message",
+    "msg": "the component contains an instance of itself",
+    "node": "n_inabaaaaaaaa/n_inbaaaaaaaaa/n_inabaaaaaaaa",
+    "rule": "instance.cycle",
+    "severity": "error"
+  },
+  {
+    "fix": "see the message",
+    "msg": "the component contains an instance of itself",
+    "node": "n_inbaaaaaaaaa/n_inabaaaaaaaa/n_inbaaaaaaaaa",
+    "rule": "instance.cycle",
+    "severity": "error"
+  },
+  {
+    "fix": "see the message",
+    "msg": "the component contains an instance of itself",
+    "node": "n_useaaaaaaaaa/n_inabaaaaaaaa/n_inbaaaaaaaaa",
+    "rule": "instance.cycle",
+    "severity": "error"
+  },
+  {
+    "fix": "see the message",
+    "msg": "component \"dd_other/n_buttonaaaaaa\" not found in this design or its system",
+    "node": "n_foreignaaaaa",
+    "rule": "instance.missing",
+    "severity": "error"
+  },
+  {
+    "fix": "see the message",
+    "msg": "component \"dd_main/n_comp7aaaaaaa\" not found in this design or its system",
+    "node": "n_noneaaaaaaaa",
+    "rule": "instance.missing",
+    "severity": "error"
+  },
+  {
+    "fix": "remove the override or point it at a child that exists",
+    "msg": "override path n_nopeaaaaaaaa matches no child of the component",
+    "node": "n_dangleaaaaaa",
+    "rule": "override.dangling",
+    "severity": "warning"
+  },
+  {
+    "fix": "remove the prop or set a value the schema allows",
+    "msg": "bogus: unknown prop",
+    "node": "n_badaaaaaaaaa",
+    "rule": "schema.invalid",
+    "severity": "error"
+  },
+  {
+    "fix": "remove the prop or set a value the schema allows",
+    "msg": "w: expected a number in 0..=1000000",
+    "node": "n_badaaaaaaaaa",
+    "rule": "schema.invalid",
+    "severity": "error"
+  },
+  {
+    "fix": "remove the prop or set a value the schema allows",
+    "msg": "x: expected a number in -1000000..=1000000",
+    "node": "n_badaaaaaaaaa",
+    "rule": "schema.invalid",
+    "severity": "error"
+  },
+  {
+    "fix": "see the message",
+    "msg": "radius: token \"color.bg\" is a Color, not usable here",
+    "node": "n_badaaaaaaaaa",
+    "rule": "token.kind",
+    "severity": "error"
+  },
+  {
+    "fix": "see the message",
+    "msg": "fill: no token \"color.nope\"",
+    "node": "n_badaaaaaaaaa",
+    "rule": "token.missing",
+    "severity": "error"
+  },
+  {
+    "fix": "two moves crossed; put the node back where it belongs",
+    "msg": "a move cycle was cut here",
+    "node": "n_bframeaaaaaa",
+    "rule": "tree.cycle",
+    "severity": "error"
+  },
+  {
+    "fix": "move the node under a page or a frame, or delete it",
+    "msg": "node has no parent (or its parent does not exist)",
+    "node": "n_orphanaaaaaa",
+    "rule": "tree.detached",
+    "severity": "error"
+  },
+  {
+    "fix": "move the node into a frame, or turn its parent into a frame",
+    "msg": "parent is a Text node, which has no children",
+    "node": "n_kidaaaaaaaaa",
+    "rule": "tree.leaf-parent",
+    "severity": "error"
+  },
+  {
+    "fix": "reorder the siblings",
+    "msg": "same position as its previous sibling",
+    "node": "n_inneraaaaaaa",
+    "rule": "tree.order-tie",
+    "severity": "warning"
+  }
+]

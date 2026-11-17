@@ -2312,6 +2312,24 @@
       ],
       "type": "object"
     },
+    "PodmanFacts": {
+      "description": "Podman as the runner finds it.",
+      "properties": {
+        "rootless": {
+          "description": "The rootless setup for the `ainkrad-run` user is complete (user, subuid/subgid, linger).",
+          "type": "boolean"
+        },
+        "version": {
+          "description": "`podman --version`, e.g. `5.7.0`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "rootless"
+      ],
+      "type": "object"
+    },
     "Policy": {
       "additionalProperties": false,
       "description": "A project's harness permission policy (1.3). Never full-auto by default.",
@@ -2996,6 +3014,33 @@
       ],
       "type": "object"
     },
+    "RunCaps": {
+      "description": "What a project run may count on (see [`RunnerFacts::run_caps`]).",
+      "properties": {
+        "cpus": {
+          "description": "Logical CPUs of the host.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "isolate": {
+          "description": "Project networks can be isolated from each other (`--opt isolate=true`).",
+          "type": "boolean"
+        },
+        "mem_mb": {
+          "description": "Memory of the host in MB.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cpus",
+        "mem_mb",
+        "isolate"
+      ],
+      "type": "object"
+    },
     "RunLimits": {
       "description": "What the runner is told of the server's settings for one run (1.11, E15.17).",
       "properties": {
@@ -3090,6 +3135,17 @@
           },
           "type": "array"
         },
+        "podman": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PodmanFacts"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Podman on this host, when it is installed. Absent from a runner that predates project runs."
+        },
         "policy": {
           "anyOf": [
             {
@@ -3107,6 +3163,17 @@
             "boolean",
             "null"
           ]
+        },
+        "run_caps": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunCaps"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What project runs can use here. Present only when every prerequisite holds (Podman, the\n`ainkrad-run` user with subuid/subgid and linger, cpu/memory/pids delegated): a Core must\nnot place a run on a runner without it, because the limits would be silently ignored."
         },
         "tools": {
           "additionalProperties": {
