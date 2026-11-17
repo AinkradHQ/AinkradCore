@@ -1,0 +1,33 @@
+# The Design renderer (V2-01, T2): resolved model -> taffy layout -> Skia draw. CPU raster (runners, goldens) always;
+# Metal behind `--features metal` (the App). skia-safe is pinned exactly and uses the prebuilt Skia binaries (T6):
+# build with SKIA_BINARIES_URL pointing at the AinkradHQ mirror; Linux needs libfontconfig + libfreetype installed.
+[package]
+name = "design-render"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# `unsafe` is denied crate-wide (the FFI crate, V2-02, is the only unsafe crate); the Metal module alone allows the
+# raw-handle calls Skia's Metal backend needs.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[features]
+default = []
+metal = ["skia-safe/metal", "skia-safe/ganesh", "dep:metal"]
+
+[dependencies]
+design-model = { path = "../model" }
+serde_json = "1.0.154"
+skia-safe = { version = "=0.157.0", features = ["textlayout"] }
+taffy = "=0.15.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = { version = "=0.33.0", optional = true }
+
+[[example]]
+name = "frame_bench"
+path = "examples/frame_bench.rs"
