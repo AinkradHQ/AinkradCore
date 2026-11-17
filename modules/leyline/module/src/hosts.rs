@@ -4,11 +4,11 @@
 
 use ainkrad_core::audit::NewAuditEvent;
 use ainkrad_core_server::api::App;
-use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY};
+use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY, Caller, step_up_required};
 use ainkrad_core_server::store::{audit, begin_write, events};
 use axum::Json;
 use axum::extract::rejection::QueryRejection;
-use axum::extract::{FromRequest, Path, Query, Request, State};
+use axum::extract::{Extension, FromRequest, Path, Query, Request, State};
 use axum::http::StatusCode;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -59,7 +59,7 @@ pub struct HostView {
     pub via_runner: Option<String>,
     pub group: Option<String>,
     pub tags: Vec<String>,
-    /// `read_only` or `ask` (`allowed` arrives with the gate story, Y4-01).
+    /// `read_only`, `ask` or `allowed` (what an AI session may do on it; see the gate).
     pub ai_rule: String,
     pub record: String,
     pub health: bool,
@@ -109,7 +109,7 @@ pub struct NewHost {
     pub via_runner: Option<String>,
     pub group: Option<String>,
     pub tags: Option<Vec<String>>,
-    /// `read_only` or `ask` (the default).
+    /// `read_only`, `ask` (the default) or `allowed`; `allowed` needs a step-up.
     pub ai_rule: Option<String>,
 }
 
@@ -168,7 +168,7 @@ impl Fields {
             && self.key_id.as_deref().is_none_or(valid::key_id)
             && self.via_runner.as_deref().is_none_or(valid::runner)
             && valid::tags(&self.tags).as_ref() == Some(&self.tags)
-            && ["read_only", "ask"].contains(&self.ai_rule.as_str())
+            && ["read_only", "ask", "allowed"].contains(&self.ai_rule.as_str())
             && self.jump_chain.len() <= 3
             && self
                 .jump_chain
@@ -199,6 +199,30 @@ impl Fields {
         }
         Ok(())
     }
+}
+
+/// Whether this session has a live step-up. A Code Mode caller never does (its session id is not a
+/// real session), so an AI can never widen a host or repoint it.
+fn elevated(app: &App, me: &Caller) -> bool {
+    let now = app.clock.unix();
+    app.auth
+        .session(&me.session, &me.device.id, now)
+        .is_some_and(|s| s.elevated(now))
+}
+
+type Was = (
+    String,
+    (String, u16, String),
+    (Option<String>, Vec<String>, Option<String>),
+);
+
+/// A change that widens an AI's reach (`allowed`) or points the host's credentials and traffic
+/// somewhere else needs a step-up, like trusting a key.
+fn needs_step_up(was: &Was, f: &Fields) -> bool {
+    let now = (f.address.clone(), f.port, f.username.clone());
+    (f.ai_rule == "allowed" && was.0 != "allowed")
+        || was.1 != now
+        || was.2 != (f.key_id.clone(), f.jump_chain.clone(), f.via_runner.clone())
 }
 
 /// A table refusal is the second layer answering: a fixed sentence, never the database's text.
@@ -306,7 +330,14 @@ pub(crate) async fn list(
 
 #[utoipa::path(post, path = "/hosts", operation_id = "leylineCreateHost", tag = "leyline", request_body = NewHost,
     responses((status = 200, description = "The new host (audited as `leyline.host.created`)", body = HostView)))]
-pub(crate) async fn create(State(app): State<App>, In(req): In<NewHost>) -> ApiResult<HostView> {
+pub(crate) async fn create(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    In(req): In<NewHost>,
+) -> ApiResult<HostView> {
+    if req.ai_rule.as_deref() == Some("allowed") && !elevated(&app, &me) {
+        return Err(step_up_required());
+    }
     let f = Fields {
         name: req.name,
         address: req.address,
@@ -362,11 +393,21 @@ pub(crate) async fn get(State(app): State<App>, Path(host): Path<String>) -> Api
 pub(crate) async fn patch(
     State(app): State<App>,
     Path(host): Path<String>,
+    Extension(me): Extension<Caller>,
     In(req): In<HostPatch>,
 ) -> ApiResult<HostView> {
     let mut tx = begin_write(&app.pool).await?;
     let id = find(&mut tx, &host).await?;
     let cur = load(&mut tx, &id).await?;
+    let cur0 = (
+        cur.ai_rule.clone(),
+        (cur.address.clone(), cur.port, cur.username.clone()),
+        (
+            cur.key_id.clone(),
+            cur.jump_chain.clone(),
+            cur.via_runner.clone(),
+        ),
+    );
     let f = Fields {
         name: req.name.unwrap_or(cur.name),
         address: req.address.unwrap_or(cur.address),
@@ -383,6 +424,9 @@ pub(crate) async fn patch(
         ai_rule: req.ai_rule.unwrap_or(cur.ai_rule),
     };
     f.check(&mut tx, Some(&id)).await?;
+    if needs_step_up(&cur0, &f) && !elevated(&app, &me) {
+        return Err(step_up_required());
+    }
     sqlx::query(
         "UPDATE leyline_hosts SET name = ?, address = ?, port = ?, username = ?, key_id = ?, jump_chain = ?, \
          via_runner = ?, group_name = ?, tags = ?, ai_rule = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
