@@ -547,3 +547,21 @@ fn trial_cost() {
         times[10], times[19]
     );
 }
+
+/// Memory over many engines and remote updates (like the fuzz target): `/usr/bin/time -l cargo test --release -p
+/// design-doc --test hostile no_growth -- --ignored`.
+#[test]
+#[ignore]
+fn no_growth() {
+    let mut a = Live::new();
+    a.apply_remote(BASE).unwrap();
+    for i in 0..20_000u32 {
+        let mut b = Live::new();
+        b.apply_remote(BASE).unwrap();
+        op(
+            &mut a,
+            json!([{"op": "set", "id": FRAME, "key": "w", "value": i}]),
+        );
+        let _ = b.apply_remote(&a.outbox(true));
+    }
+}

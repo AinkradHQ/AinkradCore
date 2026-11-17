@@ -15,6 +15,7 @@ use yrs::updates::decoder::Decode;
 use yrs::{Any, Doc, Map, MapRef, Out, ReadTxn, StateVector, Text, Transact, Update};
 
 /// The stack for the trial and for applying remote updates to the replica.
+#[cfg(not(fuzzing))]
 pub(crate) const BIG_STACK: usize = 1 << 30;
 
 pub(crate) struct Trial {
@@ -22,7 +23,16 @@ pub(crate) struct Trial {
     pub(crate) sv: StateVector,
 }
 
+/// Under the fuzzer `f` runs inline instead, on the fuzz target's 512 KB stack: AddressSanitizer never frees its
+/// per-thread records, so two threads per update ran the fuzzer out of memory, and inline the fuzzer also proves the
+/// layout gate alone keeps yrs from recursing deeply (any miss would abort the run).
+#[cfg(fuzzing)]
+pub(crate) fn big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
+}
+
 /// Run `f` on a thread with `BIG_STACK`; `None` when the thread cannot start or `f` panicked.
+#[cfg(not(fuzzing))]
 pub(crate) fn big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Option<T> {
     std::thread::scope(|s| {
         std::thread::Builder::new()
