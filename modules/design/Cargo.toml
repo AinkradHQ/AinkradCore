@@ -1,9 +1,9 @@
 # The Design module (V1-02): its own workspace like `modules/brain` and `modules/leyline`,
-# `make build-design` / `make test-design`. V2-01 added `render`; later stories add `ffi`.
+# `make build-design` / `make test-design`. V2-01 added `render`, V2-02 `doc` + `ffi`.
 [workspace]
 resolver = "3"
-members = ["model", "module", "render"]
-exclude = ["model/fuzz"]
+members = ["doc", "ffi", "model", "module", "render"]
+exclude = ["model/fuzz", "ffi/fuzz"]
 
 [workspace.package]
 version = "0.1.0"

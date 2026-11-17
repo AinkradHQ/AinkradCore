@@ -1,0 +1,17 @@
+# The live design document (V2-02, T1/T3): a `yrs` doc in the T1 layout, typed edit ops validated by `design-model`,
+# undo/redo, sync bytes and awareness. Pure safe Rust, no Skia, no I/O: the App's engine (`ffi`) uses it, and the Core's
+# per-doc actor (V1-03) can use the same layout and ops. Not Miri-clean: yrs 0.28.1 itself is UB under Miri.
+[package]
+name = "design-doc"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+design-model = { path = "../model" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+yrs = "=0.28.1"
