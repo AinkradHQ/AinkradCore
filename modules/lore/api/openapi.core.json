@@ -5455,6 +5455,13 @@
           },
           {
             "properties": {
+              "missing_attachments": {
+                "description": "Attachments the returned `text` names (`lore-attachment:<sha>`) that the Core does not hold (never\nuploaded, or swept): re-upload them from the local copy. Ascending, no repeats.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "outcome": {
                 "description": "`saved`, `merged` (both sides kept; `text` is the merge), `conflict` (the client's lines won, the old head is\nthe version named in `version`), `base_lost` (the base had left the ring; same keep) or `restored`.",
                 "type": "string"
@@ -5468,7 +5475,8 @@
               }
             },
             "required": [
-              "outcome"
+              "outcome",
+              "missing_attachments"
             ],
             "type": "object"
           }

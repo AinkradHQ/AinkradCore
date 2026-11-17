@@ -285,3 +285,40 @@ async fn a_trashed_note_keeps_its_attachment_until_the_sweep_purges_the_note() {
     assert_eq!(held(sha(&used)).await, 0);
     assert_eq!(held(sha(&young)).await, 1);
 }
+
+#[tokio::test]
+async fn a_re_upload_makes_the_file_young_so_a_sweep_spares_it() {
+    let fx = fx().await;
+    let (_, a) = upload(&fx, png(8)).await;
+    let sha = a["sha256"].as_str().unwrap().to_owned();
+    sqlx::query("UPDATE lore_attachments SET created_at = '2020-01-01T00:00:00.000Z'")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(upload(&fx, png(8)).await.1["duplicate"], json!(true));
+    lore_module::sweep(&fx.app.pool).await.unwrap();
+    assert_eq!(count(&fx).await, 1, "{sha} was swept after a re-upload");
+}
+
+#[tokio::test]
+async fn a_save_reports_the_attachments_it_names_that_are_missing() {
+    let fx = fx().await;
+    let (_, a) = upload(&fx, png(9)).await;
+    let have = a["sha256"].as_str().unwrap().to_owned();
+    let gone = "f".repeat(64);
+    let id = note(&fx, "# T").await;
+    let text = format!(
+        "# T\n![a](lore-attachment:{have})\n![b](lore-attachment:{gone}) lore-attachment:{gone}"
+    );
+    let (s, v, _, _) = send(
+        &fx,
+        Method::PUT,
+        &format!("/notes/{id}/text"),
+        json!({"base_rev": 1, "text": text})
+            .to_string()
+            .into_bytes(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["missing_attachments"], json!([gone]));
+}

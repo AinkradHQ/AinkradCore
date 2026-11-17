@@ -23,6 +23,7 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{SqliteConnection, SqlitePool};
+use std::collections::{BTreeSet, HashSet};
 use utoipa::ToSchema;
 
 /// One file; also the route's body ceiling at the gate.
@@ -120,7 +121,15 @@ pub(crate) async fn upload(
             .fetch_one(&mut *tx)
             .await?
             > 0;
-    if !dup {
+    if dup {
+        // A re-upload makes the file young again, so a sweep between this and the save that names it spares it.
+        sqlx::query(
+            "UPDATE lore_attachments SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE sha256 = ?",
+        )
+        .bind(&sha)
+        .execute(&mut *tx)
+        .await?;
+    } else {
         let held: i64 = sqlx::query_scalar("SELECT coalesce(sum(size), 0) FROM lore_attachments")
             .fetch_one(&mut *tx)
             .await?;
@@ -190,23 +199,82 @@ async fn record(conn: &mut SqliteConnection, op: &str, sha: &str) -> Result<(), 
     Ok(())
 }
 
+const PREFIX: &str = "lore-attachment:";
+
+/// Every `lore-attachment:<64 lowercase hex>` in `text`, as the sha.
+pub(crate) fn refs(text: &str) -> impl Iterator<Item = &str> {
+    text.match_indices(PREFIX).filter_map(|(i, _)| {
+        let sha = text.get(i + PREFIX.len()..i + PREFIX.len() + 64)?;
+        sha_ok(sha).then_some(sha)
+    })
+}
+
+/// The shas `text` names that are not stored, ascending and without repeats.
+pub(crate) async fn missing(
+    conn: &mut SqliteConnection,
+    text: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    let named: BTreeSet<&str> = refs(text).collect();
+    let mut out = Vec::new();
+    for sha in named {
+        let have: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM lore_attachments WHERE sha256 = ?")
+                .bind(sha)
+                .fetch_one(&mut *conn)
+                .await?;
+        if have == 0 {
+            out.push(sha.to_owned());
+        }
+    }
+    Ok(out)
+}
+
 /// Deletes the attachments no note (trashed ones included, until they are purged) or version names in its
 /// text and that are older than the grace day. Run after the notes are purged. Returns how many.
+/// The texts are read once outside the write lock; the candidates are re-checked inside a short write.
 pub(crate) async fn sweep(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
-    let mut tx = begin_write(pool).await?;
-    let gone: Vec<String> = sqlx::query_scalar(
-        "DELETE FROM lore_attachments WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?) \
-         AND NOT EXISTS (SELECT 1 FROM lore_notes n WHERE instr(n.text, 'lore-attachment:' || sha256) > 0) \
-         AND NOT EXISTS (SELECT 1 FROM lore_versions v WHERE instr(v.text, 'lore-attachment:' || sha256) > 0) \
-         RETURNING sha256",
+    let old: Vec<String> = sqlx::query_scalar(
+        "SELECT sha256 FROM lore_attachments WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)",
     )
     .bind(format!("-{GRACE_DAYS} days"))
-    .fetch_all(&mut *tx)
+    .fetch_all(pool)
     .await?;
-    for sha in &gone {
-        record(&mut tx, "purged", sha).await?;
+    if old.is_empty() {
+        return Ok(0);
     }
-    tx.commit().await?;
+    let mut named: HashSet<String> = HashSet::new();
+    // ponytail: all texts in memory at once (notes are capped at 2 MB each); page by rowid if that ever hurts.
+    let texts: Vec<String> =
+        sqlx::query_scalar("SELECT text FROM lore_notes UNION ALL SELECT text FROM lore_versions")
+            .fetch_all(pool)
+            .await?;
+    for text in &texts {
+        named.extend(refs(text).map(str::to_owned));
+    }
+    let cands: Vec<String> = old.into_iter().filter(|s| !named.contains(s)).collect();
+    let mut gone = Vec::new();
+    for chunk in cands.chunks(50) {
+        // A save may have named one since the read: the check is repeated per candidate under the lock.
+        let mut tx = begin_write(pool).await?;
+        for sha in chunk {
+            let deleted: Option<String> = sqlx::query_scalar(
+                "DELETE FROM lore_attachments WHERE sha256 = ?1 \
+                 AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?2) \
+                 AND NOT EXISTS (SELECT 1 FROM lore_notes n WHERE instr(n.text, 'lore-attachment:' || ?1) > 0) \
+                 AND NOT EXISTS (SELECT 1 FROM lore_versions v WHERE instr(v.text, 'lore-attachment:' || ?1) > 0) \
+                 RETURNING sha256",
+            )
+            .bind(sha)
+            .bind(format!("-{GRACE_DAYS} days"))
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some(d) = deleted {
+                record(&mut tx, "purged", &d).await?;
+                gone.push(d);
+            }
+        }
+        tx.commit().await?;
+    }
     Ok(gone.len() as u64)
 }
 
@@ -222,5 +290,12 @@ mod tests {
         assert_eq!(sniff(b"<svg xmlns='x'></svg>"), None);
         assert_eq!(sniff(b"\x89PNG\r\n\x1a\n<svg onload=x>"), None);
         assert_eq!(sniff(b"MZ"), None);
+        let sha = "a".repeat(64);
+        let t = format!(
+            "![x](lore-attachment:{sha}) lore-attachment:{} lore-attachment:{}",
+            "A".repeat(64),
+            "b".repeat(63)
+        );
+        assert_eq!(refs(&t).collect::<Vec<_>>(), vec![sha.as_str()]);
     }
 }
