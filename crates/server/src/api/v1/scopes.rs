@@ -8,6 +8,7 @@
 //! - `admin`: devices, pairing, setting changes, the audit log, the metrics.
 //! - `agent`: sending a runner a command (`POST /api/v1/runners/{id}/noop`).
 //! - Agent sessions (E2-08): `agent`; deciding a tool call `approve`.
+//! - Projects (P1-02): reading is `read`; every write is `admin` and destructive.
 //! - Secrets (E2-07): managing them and granting a lease is `admin` (and destructive); the one
 //!   route a `runner` device may call is redeeming a lease granted to it.
 //! - Fallback chains and their bindings (S7): every route is `admin`; every write is destructive.
@@ -164,6 +165,18 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("DELETE", "/api/v1/budgets/{id}", "admin"),
     ("POST", "/api/v1/budgets/{id}/raise", "admin"),
     ("PUT", "/api/v1/prices", "admin"),
+    ("GET", "/api/v1/projects", "read"),
+    ("POST", "/api/v1/projects", "admin"),
+    ("GET", "/api/v1/projects/{id}", "read"),
+    ("PATCH", "/api/v1/projects/{id}", "admin"),
+    ("POST", "/api/v1/projects/{id}/archive", "admin"),
+    ("POST", "/api/v1/projects/{id}/repos", "admin"),
+    ("DELETE", "/api/v1/projects/{id}/repos/{repo}", "admin"),
+    (
+        "POST",
+        "/api/v1/projects/{id}/repos/{repo}/primary",
+        "admin",
+    ),
     ("GET", "/api/v1/secrets", "admin"),
     ("POST", "/api/v1/secrets", "admin"),
     ("PUT", "/api/v1/secrets/{id}", "admin"),
@@ -238,6 +251,13 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/runners/{id}/tools"),
     ("GET", "/api/v1/system/logs/runner"),
     ("GET", "/api/v1/system/logs/backup"),
+    // Projects (P1-02): every write decides what the Core fetches and which repos a session gets.
+    ("POST", "/api/v1/projects"),
+    ("PATCH", "/api/v1/projects/{id}"),
+    ("POST", "/api/v1/projects/{id}/archive"),
+    ("POST", "/api/v1/projects/{id}/repos"),
+    ("DELETE", "/api/v1/projects/{id}/repos/{repo}"),
+    ("POST", "/api/v1/projects/{id}/repos/{repo}/primary"),
     // Secrets (E2-07): every write, and a lease, the only way a value leaves the Core.
     ("POST", "/api/v1/secrets"),
     ("PUT", "/api/v1/secrets/{id}"),

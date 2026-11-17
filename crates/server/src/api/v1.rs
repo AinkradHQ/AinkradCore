@@ -45,6 +45,7 @@ mod me;
 pub mod pair;
 mod pairing;
 pub mod passkey;
+mod projects;
 mod runner_control;
 mod runners;
 pub mod scopes;
@@ -89,6 +90,7 @@ pub const QUERY: &[&str] = &[
     "lines",
     "origin",
     "nobody_watching",
+    "archived",
 ];
 
 /// A page of a list: the cursor to continue after (its meaning is per route) and how many.
@@ -386,6 +388,24 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/connection-apps/{kind}",
             get(connections::apps::get).put(connections::apps::set),
+        )
+        .route(
+            "/api/v1/projects",
+            get(projects::list).post(projects::create),
+        )
+        .route(
+            "/api/v1/projects/{id}",
+            get(projects::get).patch(projects::update),
+        )
+        .route("/api/v1/projects/{id}/archive", post(projects::archive))
+        .route("/api/v1/projects/{id}/repos", post(projects::add_repo))
+        .route(
+            "/api/v1/projects/{id}/repos/{repo}",
+            delete(projects::remove_repo),
+        )
+        .route(
+            "/api/v1/projects/{id}/repos/{repo}/primary",
+            post(projects::set_primary),
         )
         .route("/api/v1/secrets", get(secrets::list).post(secrets::create))
         .route(
