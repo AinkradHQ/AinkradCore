@@ -1,0 +1,30 @@
+# Throwaway spike (V0-01). Own workspace root so it never joins the Core workspace.
+[workspace]
+
+[package]
+name = "design-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[[bin]]
+name = "cpu_render"
+path = "src/bin/cpu_render.rs"
+
+[[bin]]
+name = "png_diff"
+path = "src/bin/png_diff.rs"
+
+[features]
+default = []
+metal = ["skia-safe/metal", "skia-safe/ganesh"]
+
+[dependencies]
+skia-safe = { version = "=0.157.0", features = ["textlayout"] }
+taffy = "=0.15.1"
+
+[profile.release]
+debug = 1
