@@ -277,7 +277,10 @@
 ///    `POST /projects/{id}/repos` (`addProjectRepo`), `DELETE /projects/{id}/repos/{repo}` (`removeProjectRepo`),
 ///    `POST /projects/{id}/repos/{repo}/primary` (`setProjectRepoPrimary`). Reading is `read`; every write is `admin`
 ///    and destructive. A project carries its repos, each with its read-only `mirror` state; query `archived`.
-pub const API_MINOR: u32 = 85;
+/// 86: Leyline runner SSH (Y2-01). Runner wire protocol only (`runner.schema.json`): op `ssh.exec` (`SshExec` ->
+///    `ExecResult`), error codes `host_key_unknown`, `host_key_changed`, `ssh_auth_failed`, `ssh_failed`, and
+///    `StreamError.host_key`; no route yet. (84 and 85 are the runner Podman facts and the projects API.)
+pub const API_MINOR: u32 = 86;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
