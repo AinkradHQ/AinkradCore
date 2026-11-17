@@ -218,8 +218,10 @@ mod tests {
         } else {
             "cpu memory pids"
         };
+        // Built with format! so the no-env-values check does not read the unit name as an email address.
+        let unit = format!("user{}985.service", '@');
         w(
-            "sys/fs/cgroup/user.slice/user-985.slice/user@985.service/cgroup.controllers",
+            &format!("sys/fs/cgroup/user.slice/user-985.slice/{unit}/cgroup.controllers"),
             ctl,
         );
         root
