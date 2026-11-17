@@ -193,11 +193,17 @@ pub(crate) async fn open(
         .ok_or_else(|| ApiError::not_found("no such room"))?;
     let key = b.key(&app).await?;
     let now = app.clock.unix();
-    // Opening the file now proves it is readable by this binary before the lease starts.
+    // Opening the file now proves it is readable by this binary before the lease starts. A project's
+    // room made before the brain key existed has no file yet: it is made here, on first open.
+    let of_project: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM brain_project_rooms WHERE room = ?")
+            .bind(&room)
+            .fetch_one(&app.pool)
+            .await?;
     match files::open_migrated(
         &files::room_path(&files::root(&app), &room),
         &key,
-        false,
+        of_project > 0,
         CANON,
     )
     .await
