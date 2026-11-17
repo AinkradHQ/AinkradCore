@@ -50,6 +50,9 @@ pub const PLATFORM_EVENT_KINDS: &[&str] = &[
     "agent.state",
     "agent.transcript",
     "notify.delivery",
+    "project.archived",
+    "project.created",
+    "project.updated",
     "runner.connected",
     "runner.degraded",
     "runner.disconnected",
@@ -76,7 +79,7 @@ pub fn platform_scope(kind: &str) -> &'static str {
         "approve"
     } else if kind.starts_with("agent.") {
         "agent"
-    } else if kind.starts_with("runner.") {
+    } else if kind.starts_with("runner.") || kind.starts_with("project.") {
         "read"
     } else if kind.starts_with("terminal.") {
         "terminal"
@@ -186,6 +189,12 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "price.set",
     "provider.created",
     "provider.deleted",
+    "project.archived",
+    "project.created",
+    "project.repo_added",
+    "project.repo_primary_set",
+    "project.repo_removed",
+    "project.updated",
     "provider.updated",
     "recover.started",
     "runner.command",

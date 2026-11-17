@@ -2472,6 +2472,12 @@
           "pool.member_removed",
           "pool.unbound",
           "price.set",
+          "project.archived",
+          "project.created",
+          "project.repo_added",
+          "project.repo_primary_set",
+          "project.repo_removed",
+          "project.updated",
           "provider.created",
           "provider.deleted",
           "provider.updated",
@@ -4857,6 +4863,9 @@
           "citadel.wake",
           "connection.health",
           "notify.delivery",
+          "project.archived",
+          "project.created",
+          "project.updated",
           "runner.connected",
           "runner.degraded",
           "runner.disconnected",
@@ -4893,6 +4902,9 @@
           "citadel.wake": "admin",
           "connection.health": "admin",
           "notify.delivery": "admin",
+          "project.archived": "read",
+          "project.created": "read",
+          "project.updated": "read",
           "runner.connected": "read",
           "runner.degraded": "read",
           "runner.disconnected": "read",
@@ -13419,7 +13431,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.82.0"
+    "version": "1.83.0"
   },
   "openapi": "3.1.0",
   "paths": {
