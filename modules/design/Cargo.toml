@@ -2,7 +2,7 @@
 # `make build-design` / `make test-design`. Later stories add `render` and `ffi` here.
 [workspace]
 resolver = "3"
-members = ["model", "module"]
+members = ["model", "crdt", "module"]
 exclude = ["model/fuzz"]
 
 [workspace.package]

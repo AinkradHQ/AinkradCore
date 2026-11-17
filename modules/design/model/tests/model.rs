@@ -113,6 +113,7 @@ fn frame(parent: &str, order: &str) -> Node {
         parent: Some(parent.into()),
         order: order.into(),
         clock: 1,
+        prev: None,
         name: String::new(),
         props: Default::default(),
         text: None,
@@ -128,6 +129,7 @@ fn base_doc(n: usize) -> Doc {
             parent: None,
             order: "a".into(),
             clock: 0,
+            prev: None,
             name: String::new(),
             props: Default::default(),
             text: None,
@@ -211,7 +213,12 @@ fn crossing_moves_break_the_same_way_in_either_order() {
         vec![id(1)],
         "equal clocks: the higher id loses its link"
     );
-    assert_eq!(f.detached, vec![id(1)]);
+    assert_eq!(f.reverted, vec![id(1)], "the losing move is reverted");
+    assert!(f.detached.is_empty(), "nothing is detached");
+    assert!(
+        f.children[PAGE].contains(&id(1)),
+        "back under its old parent"
+    );
     assert_eq!(
         f.children[&id(1)],
         vec![id(0)],
@@ -229,6 +236,7 @@ fn move_of(d: &Doc, i: &str) -> MoveRecord {
         parent: n.parent.clone(),
         order: n.order.clone(),
         clock: n.clock,
+        prev: n.prev.clone(),
     }
 }
 
@@ -319,6 +327,7 @@ fn n(ty: NodeType, parent: &str, order: &str, props: Value) -> Node {
         parent: Some(parent.into()),
         order: order.into(),
         clock: 1,
+        prev: None,
         name: String::new(),
         props: props.as_object().unwrap().clone(),
         text: None,

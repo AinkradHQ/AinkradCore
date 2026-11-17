@@ -7,6 +7,8 @@
 //! migration, no Core crate names this module.
 
 mod docs;
+mod sync;
+mod ws;
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::module::Module;
@@ -14,6 +16,7 @@ use ainkrad_core_server::store::Migration;
 use axum::Router;
 use axum::routing::{get, post, put};
 use serde_json::Value;
+use std::sync::Arc;
 use utoipa::OpenApi;
 
 pub const MODULE: &str = "design";
@@ -36,8 +39,27 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
 const ROUTE_SCOPES: &[(&str, &str, &str)] =
     &[("GET", "/docs", "read"), ("GET", "/docs/{doc}", "read")];
 
-#[derive(Default, Clone, Copy)]
-pub struct Design;
+/// The live documents (`sync`) live in the module value, so each Core has its own.
+#[derive(Default, Clone)]
+pub struct Design {
+    registry: Arc<sync::Registry>,
+}
+
+impl Design {
+    /// Tighter limits than the defaults, for tests of compaction, unloading and rate caps.
+    pub fn with_limits(limits: sync::Limits) -> Self {
+        Self {
+            registry: Arc::new(sync::Registry::with_limits(limits)),
+        }
+    }
+
+    /// How many documents are loaded right now.
+    pub async fn loaded(&self) -> usize {
+        self.registry.loaded().await
+    }
+}
+
+pub use sync::Limits;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -48,7 +70,8 @@ pub struct Design;
         docs::patch,
         docs::archive,
         docs::link,
-        docs::unlink
+        docs::unlink,
+        ws::sync
     ),
     components(schemas(docs::DocView, docs::NewDoc, docs::DocPatch))
 )]
@@ -64,10 +87,12 @@ impl Module for Design {
             .route("/docs", get(docs::list).post(docs::create))
             .route("/docs/{doc}", get(docs::get).patch(docs::patch))
             .route("/docs/{doc}/archive", post(docs::archive))
+            .route("/docs/{doc}/sync", get(ws::sync))
             .route(
                 "/docs/{doc}/projects/{project}",
                 put(docs::link).delete(docs::unlink),
             )
+            .layer(axum::Extension(self.registry.clone()))
     }
 
     fn migrations(&self) -> &'static [Migration] {
