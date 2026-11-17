@@ -272,7 +272,7 @@
 ///    (`stopAgentSubagent`, step-up; 404 `unknown_subagent`, 409 `unsupported_command`) stops one Claude Code
 ///    sub-agent by its `stop_task` (runner op `agent.subagent_stop`). Audit action `agent.subagent_stopped`.
 /// 83: Project store (P1-01). Registers the event kinds and audit actions `project.*`; no route yet.
-pub const API_MINOR: u32 = 83;
+pub const API_MINOR: u32 = 84;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
