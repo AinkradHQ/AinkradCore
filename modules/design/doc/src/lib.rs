@@ -14,7 +14,8 @@
 //! Trust note: yrs decodes, encodes, converts and drops nested values recursively, so nesting is where a hostile
 //! update could exhaust the stack (an abort, not a panic). Two guards: every `Any` in a remote update is decoded
 //! through `decode` (depth-capped at `MAX_JSON_DEPTH`, no collection longer than the bytes), and a node whose props
-//! hold a nested yrs map, array or text (no op writes one) is never read. A panic inside yrs while applying resets the
+//! hold a nested yrs map, array or text (no op writes one) is never read, and `layout` refuses any remote block outside
+//! the T1 layout before yrs integrates it (nesting depth, list-side content, clock wrap). A panic inside yrs while applying resets the
 //! replica (`Error::Reset`) instead of aborting. The Core (V1-03) reuses `apply_remote` and gets the same guards; it
 //! must still trial-apply an update before it stores or relays it.
 
@@ -31,6 +32,7 @@ use yrs::{
 };
 
 mod decode;
+mod layout;
 mod ops;
 mod presence;
 #[cfg(test)]
@@ -73,6 +75,8 @@ pub struct Live {
     tokens: MapRef,
     undo: UndoManager<()>,
     outbox: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// What the replica holds, placed in the T1 layout (fed by every committed update; gates remote ones).
+    shadow: Arc<Mutex<layout::Shadow>>,
     /// When the last resets happened (ms, the presence clock), for the breaker.
     resets: Vec<u64>,
     halted: bool,
@@ -100,9 +104,17 @@ impl Live {
         let meta = doc.get_or_insert_map("meta");
         let tokens = doc.get_or_insert_map("tokens");
         let ob = outbox.clone();
+        let shadow: Arc<Mutex<layout::Shadow>> = Arc::default();
+        let sh = shadow.clone();
         let remote = Origin::from(REMOTE);
-        // Everything this replica did (edits, undo, redo) goes out; what came in does not echo back.
+        // Everything this replica did (edits, undo, redo) goes out; what came in does not echo back. Everything
+        // committed, either way, is placed in the shadow layout.
         doc.observe_update_v1("outbox", move |txn, e| {
+            if let Ok(mut sh) = sh.lock()
+                && let Ok(l) = sh.check(&e.update)
+            {
+                sh.learn(l);
+            }
             if txn.origin() != Some(&remote)
                 && let Ok(mut o) = ob.lock()
             {
@@ -121,6 +133,7 @@ impl Live {
             tokens,
             undo,
             outbox,
+            shadow,
             resets: vec![],
             halted: false,
         }
@@ -140,6 +153,11 @@ impl Live {
         }
         let (u, refs) = decode::update(update)?;
         self.no_gap(&u, &refs)?;
+        self.shadow
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .check(update)
+            .map_err(Error::Malformed)?;
         let r = self.integrate(u);
         if r == Err(Error::Reset) {
             self.reset();

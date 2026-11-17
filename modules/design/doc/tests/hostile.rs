@@ -9,7 +9,7 @@ use design_doc::{Error, Live, MAX_PEERS, PEER_TTL_MS, parse_ops};
 use serde_json::json;
 use yrs::sync::awareness::{AwarenessUpdate, AwarenessUpdateEntry};
 use yrs::updates::encoder::Encode;
-use yrs::{Any, ClientID, Doc, Map, MapPrelim, Out, Transact};
+use yrs::{Any, Array, ClientID, Doc, Map, MapPrelim, Out, Transact};
 
 const PAGE: &str = "n_aaaaaaaaaaaa";
 const FRAME: &str = "n_bbbbbbbbbbbb";
@@ -69,17 +69,138 @@ fn a_deep_chain_of_maps_in_props_is_refused_on_a_small_stack() {
     }
     let updates = std::mem::take(&mut *log.lock().unwrap());
     assert!(updates.len() > 20_000);
-    let (pages, frame) = small_stack(move || {
+    let (refused, pages, frame) = small_stack(move || {
         let mut l = Live::new();
-        for u in &updates {
-            l.apply_remote(u).unwrap();
-        }
+        l.apply_remote(&updates[0]).unwrap(); // the two nodes
+        // the first level is a map inside props: refused by the layout; every later one builds on a refused block
+        let refused = updates[1..]
+            .iter()
+            .filter(|u| l.apply_remote(u).is_err())
+            .count();
         let doc = l.read();
         let _ = l.diff(&[]).unwrap();
-        (doc.nodes.contains_key(PAGE), doc.nodes.contains_key(FRAME))
+        (
+            refused,
+            doc.nodes.contains_key(PAGE),
+            doc.nodes.contains_key(FRAME),
+        )
     });
-    assert!(pages, "the clean node still reads");
-    assert!(!frame, "the node with nested maps in its props is left out");
+    assert_eq!(refused, 20_000);
+    assert!(
+        pages && frame,
+        "both nodes read; no level of the chain got in"
+    );
+}
+
+/// The #301 review's PoC: ONE update holding a 20 000-deep chain of nested maps under a node, whose delete set
+/// removes that node. yrs integrates and then deletes / garbage-collects the chain recursively, which overflows the
+/// stack inside `apply_update` (an abort). The layout gate refuses it before yrs sees it.
+#[test]
+fn a_deep_chain_inside_one_update_is_refused_before_yrs() {
+    // building (and dropping) the chain recurses in yrs too: do it on a big stack and leak the source document
+    let merged = std::thread::Builder::new()
+        .stack_size(1 << 30)
+        .spawn(|| {
+            let a = Doc::with_client_id(7);
+            let nodes = a.get_or_insert_map("nodes");
+            let mut u = vec![];
+            {
+                let mut t = a.transact_mut();
+                let mut m = nodes.insert(&mut t, "n_xxxxxxxxxxxx", MapPrelim::default());
+                for _ in 0..20_000 {
+                    m = m.insert(&mut t, "k", MapPrelim::default());
+                }
+                u.push(t.encode_update_v1());
+            }
+            {
+                let mut t = a.transact_mut();
+                nodes.remove(&mut t, "n_xxxxxxxxxxxx");
+                u.push(t.encode_update_v1());
+            }
+            std::mem::forget(a);
+            yrs::merge_updates_v1(&u).unwrap()
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    let r = small_stack(move || Live::new().apply_remote(&merged));
+    assert!(matches!(r, Err(Error::Malformed(_))), "{r:?}");
+}
+
+#[test]
+fn list_side_content_in_a_map_and_rich_text_are_refused() {
+    // an item with no key under the `nodes` root: invisible to every key-based read
+    let c = Doc::with_client_id(9);
+    let arr = c.get_or_insert_array("nodes");
+    let hidden = {
+        let mut t = c.transact_mut();
+        arr.push_back(&mut t, "x".repeat(1000));
+        t.encode_update_v1()
+    };
+    assert!(matches!(
+        Live::new().apply_remote(&hidden),
+        Err(Error::Malformed(_))
+    ));
+    // another root
+    let d = Doc::with_client_id(10);
+    let other = d.get_or_insert_map("elsewhere");
+    let u = {
+        let mut t = d.transact_mut();
+        other.insert(&mut t, "k", 1.0);
+        t.encode_update_v1()
+    };
+    assert!(matches!(
+        Live::new().apply_remote(&u),
+        Err(Error::Malformed(_))
+    ));
+    // a text node whose text carries formatting (not a plain string)
+    let (d, log) = hostile();
+    let nodes = d.get_or_insert_map("nodes");
+    let text = {
+        let mut t = d.transact_mut();
+        let Some(Out::YMap(n)) = nodes.get(&t, FRAME) else {
+            unreachable!()
+        };
+        n.insert(&mut t, "text", yrs::TextPrelim::new(""))
+    };
+    let mut l = Live::new();
+    for u in log.lock().unwrap().drain(..) {
+        l.apply_remote(&u).unwrap();
+    }
+    {
+        let mut t = d.transact_mut();
+        let attrs: yrs::types::Attrs = [(Arc::<str>::from("bold"), Any::Bool(true))]
+            .into_iter()
+            .collect();
+        yrs::Text::insert_with_attributes(&text, &mut t, 0, "hi", attrs);
+    }
+    let rich = log.lock().unwrap().drain(..).collect::<Vec<_>>();
+    assert!(rich.iter().any(|u| l.apply_remote(u).is_err()));
+}
+
+#[test]
+fn a_hundred_thousand_clients_in_one_update_stay_linear() {
+    // 100 000 clients, one GC block each: varint count, then per client (1 struct, client, clock 0, info 0, len 1)
+    let mut u = vec![];
+    let var = |u: &mut Vec<u8>, mut v: u64| loop {
+        let b = (v & 0x7f) as u8;
+        v >>= 7;
+        if v == 0 {
+            u.push(b);
+            break;
+        }
+        u.push(b | 0x80);
+    };
+    var(&mut u, 100_000);
+    for c in 1..=100_000u64 {
+        var(&mut u, 1);
+        var(&mut u, c);
+        u.extend([0, 0, 1]);
+    }
+    u.push(0); // empty delete set
+    let t = std::time::Instant::now();
+    let _ = Live::new().apply_remote(&u);
+    assert!(t.elapsed().as_secs() < 30, "{:?}", t.elapsed());
 }
 
 #[test]
