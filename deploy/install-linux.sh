@@ -2,7 +2,7 @@
 # Installs the ainkrad-runner systemd unit (E1-12.3; protocol v2 since E1-14.5; terminals and pairing E2-15).
 # Idempotent; does not start unless --start or --pair. Works on the Core's own host and on a remote Linux host.
 #   install-linux.sh [--binary PATH] [--ptyhost PATH] [--pty] [--ca PEM]
-#                    [--agents] [--exec] [--root] [--pair https://<core> --code - | --invite -] [--start]
+#                    [--agents] [--exec] [--root] [--with-run] [--pair https://<core> --code - | --invite -] [--start]
 #                    [--prefix DIR] [--dry-run]
 # --pty      offer terminals (--enable-pty); needs ainkrad-ptyhost (--ptyhost, default: beside --binary). The shell
 #            runs as the unprivileged ainkrad-runner user inside the unit's sandbox. Off unless asked. Also installs zsh
@@ -21,11 +21,16 @@
 #            ainkrad-runner.service.d/authority.conf). A compromised Core is then root on this host, root terminals
 #            can overwrite /usr/local/bin and /etc/systemd/system, and agent sessions are refused at uid 0. The
 #            guided installer never passes it. A re-run without it removes that one file.
+# --with-run set this host up to run project containers with rootless Podman (Core 0.9 Projects). Opt-in, idempotent:
+#            installs podman, uidmap, passt, aardvark-dns and nftables (deploy/tools.manifest.json `distro.podman`), creates the system user
+#            ainkrad-run (not the runner's) with its own subuid/subgid block, turns on linger for it, writes the cgroup
+#            delegation drop-in user@.service.d/delegate.conf and waits for its runtime dir. The runner then reports `run_caps`.
+#            Needs the whole host, so it is skipped under --prefix except for the drop-in. Nothing else (no sysctl, no AppArmor).
 # --prefix installs under DIR (a throwaway root, for tests): no user creation, no systemctl, no shell profile download.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-binary="$HERE/../target/release/ainkrad-runner" ptyhost='' pty=0 agents=0 ca='' pair='' code='' invite='' prefix='' start=0 dry=0 exec_on=0 root=0
+binary="$HERE/../target/release/ainkrad-runner" ptyhost='' with_run=0 pty=0 agents=0 ca='' pair='' code='' invite='' prefix='' start=0 dry=0 exec_on=0 root=0
 run() { printf '+ %s\n' "$*"; [ "$dry" = 1 ] || "$@"; }
 WAS_ACTIVE=1
 # Demoting a root runner: its terminal hosts (ptyhosts, started as root; KillMode=process keeps them alive across a restart)
@@ -50,8 +55,57 @@ runner_restart_if_needed() {
     run systemctl try-restart ainkrad-runner.service
   fi
 }
+RUN_USER=ainkrad-run RUN_HOME=/var/lib/ainkrad-run
+# First free uid/gid of a 65536 block after every range in the given subuid/subgid files (at least 100000).
+sub_next() { awk -F: 'BEGIN { m = 99999 } { e = $2 + $3 - 1; if (e > m) m = e } END { print m + 1 }' "$@" 2>/dev/null || echo 100000; }
+# The cgroup v2 delegation of cpu, memory and pids to user managers: default on systemd 258+, but older ones delegate only
+# memory and pids, and then --cpus would be silently ignored. Harmless where it is already the default.
+DELEGATE_CONF='# Written by deploy/install-linux.sh --with-run: project containers run under the ainkrad-run user manager, which needs these controllers.
+[Service]
+Delegate=cpu cpuset io memory pids'
+# Rootless Podman for project runs (--with-run). Reads the globals prefix and dry; the system steps run only on the real host.
+run_setup() {
+  local d="$prefix/etc/systemd/system/user@.service.d" cur='' changed=0 uid pk
+  if [ -f "$d/delegate.conf" ]; then cur=$(cat "$d/delegate.conf"); fi
+  if [ "$cur" = "$DELEGATE_CONF" ]; then echo "delegation drop-in already in place: $d/delegate.conf"
+  else
+    changed=1; run install -d "$d"; printf '+ write %s/delegate.conf\n' "$d"
+    if [ "$dry" = 0 ]; then printf '%s\n' "$DELEGATE_CONF" >"$d/delegate.conf"; fi
+  fi
+  if [ -n "$prefix" ] && [ "$dry" = 0 ]; then echo "+ skipped under --prefix: podman packages, the $RUN_USER user, linger"; return 0; fi
+  if [ "$dry" = 1 ] || ! { command -v podman && command -v newuidmap && command -v pasta && [ -x /usr/lib/podman/aardvark-dns ]; } >/dev/null 2>&1; then
+    if [ "$dry" = 1 ] || command -v apt-get >/dev/null 2>&1; then
+      run env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+      run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends podman uidmap passt aardvark-dns nftables
+    elif command -v dnf >/dev/null 2>&1; then run dnf install -y --setopt=install_weak_deps=False podman shadow-utils passt aardvark-dns nftables
+    else echo "--with-run needs apt-get or dnf to install podman" >&2; return 1; fi
+  else echo "podman, uidmap, passt and aardvark-dns are already installed"; fi
+  if id "$RUN_USER" >/dev/null 2>&1; then echo "user $RUN_USER already exists"
+  else run useradd --system --user-group --create-home --home-dir "$RUN_HOME" --shell /usr/sbin/nologin "$RUN_USER"; fi
+  run chmod 0700 "$RUN_HOME"
+  # A system user gets no subuid/subgid from useradd; without them podman silently maps a single uid (postgres etc. then break).
+  if grep -q "^$RUN_USER:" /etc/subuid 2>/dev/null && grep -q "^$RUN_USER:" /etc/subgid 2>/dev/null; then echo "subuid/subgid of $RUN_USER already set"
+  else
+    local s; s=$(sub_next /etc/subuid /etc/subgid)
+    run usermod --add-subuids "$s-$((s + 65535))" --add-subgids "$s-$((s + 65535))" "$RUN_USER"
+  fi
+  run systemctl daemon-reload
+  run loginctl enable-linger "$RUN_USER"
+  [ "$dry" = 1 ] && return 0
+  uid=$(id -u "$RUN_USER")
+  # Linger starts the user manager (and /run/user/UID with its bus); a manager that was already up must restart to take a new drop-in.
+  if [ "$changed" = 1 ] && systemctl is-active --quiet "user@$uid.service"; then run systemctl restart "user@$uid.service"
+  else run systemctl start "user@$uid.service"; fi
+  for _ in $(seq 1 30); do [ -S "/run/user/$uid/bus" ] && break; sleep 0.5; done
+  [ -S "/run/user/$uid/bus" ] || { echo "WARNING: /run/user/$uid/bus did not appear: projects cannot run until user@$uid.service is up" >&2; return 1; }
+  pk=$(tr '\n' ' ' <"/sys/fs/cgroup/user.slice/user-$uid.slice/user@$uid.service/cgroup.controllers" 2>/dev/null || true)
+  if [ "$(for c in cpu memory pids; do case " $pk " in *" $c "*) echo y ;; esac; done | wc -l)" -ge 3 ]; then echo "controllers delegated to $RUN_USER: $pk"
+  else echo "WARNING: cpu, memory and pids are not all delegated to $RUN_USER ($pk): the runner will not offer project runs" >&2; fi
+  run runuser -u "$RUN_USER" -- env -C "$RUN_HOME" "XDG_RUNTIME_DIR=/run/user/$uid" "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" "HOME=$RUN_HOME" \
+    podman info --format 'rootless={{.Host.Security.Rootless}} cgroups={{.Host.CgroupManager}}'
+}
 [ "${AINKRAD_INSTALL_SOURCE_ONLY:-}" != 1 ] || [ "${BASH_SOURCE[0]}" = "$0" ] || return 0
-usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 # A secret flag's value: `-` reads it from the terminal (no echo) or stdin; a literal still works, with a warning (argv shows in `ps`).
 secret_arg() {
   local v
@@ -68,6 +122,7 @@ while [ $# -gt 0 ]; do
     --exec) exec_on=1; shift ;;
     --agents) agents=1; shift ;;
     --root) root=1; shift ;;
+    --with-run) with_run=1; shift ;;
     --ca) ca=${2:?}; shift 2 ;;
     --pair) pair=${2:?}; shift 2 ;;
     --code) code=$(secret_arg --code "${2:?}"); shift 2 ;;
@@ -197,4 +252,5 @@ if [ -z "$prefix" ]; then
     echo "installed, not started. Pair it (see the unit's header), then: systemctl enable --now ainkrad-runner"
   fi
 fi
+[ "$with_run" = 0 ] || run_setup
 runner_restart_if_needed

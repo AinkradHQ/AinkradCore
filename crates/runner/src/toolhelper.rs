@@ -551,6 +551,11 @@ mod tests {
                 || m.distro.contains_key(t.name());
             assert!(known, "{}", t.name());
         }
+        // Podman is not a one-click Tool: `install-linux.sh --with-run` installs it with the run user, from this entry.
+        let p = &m.distro["podman"];
+        assert_eq!(p.bin, "podman");
+        let installer = include_str!("../../../deploy/install-linux.sh");
+        assert!(installer.contains(&p.apt.join(" ")) && installer.contains(&p.dnf.join(" ")));
         for u in [&m.node.url, &m.claude.url, &m.codex.url] {
             assert!(guard_url(&u.replace("{version}", "1").replace("{arch}", "x64")).is_ok());
         }

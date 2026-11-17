@@ -30418,6 +30418,2345 @@ public enum Operations {
             }
         }
     }
+    /// - Remark: HTTP `GET /api/v1/projects`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/get(listProjects)`.
+    public enum ListProjects {
+        public static let id: Swift.String = "listProjects"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/api/v1/projects/GET/query`.
+            public struct Query: Sendable, Hashable {
+                /// Include archived projects; default false.
+                ///
+                /// - Remark: Generated from `#/paths/api/v1/projects/GET/query/archived`.
+                public var archived: Swift.Bool?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - archived: Include archived projects; default false.
+                public init(archived: Swift.Bool? = nil) {
+                    self.archived = archived
+                }
+            }
+            public var query: Operations.ListProjects.Input.Query
+            /// - Remark: Generated from `#/paths/api/v1/projects/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ListProjects.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ListProjects.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.ListProjects.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - query:
+            ///   - headers:
+            public init(
+                query: Operations.ListProjects.Input.Query = .init(),
+                headers: Operations.ListProjects.Input.Headers = .init()
+            ) {
+                self.query = query
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/projects/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/projects/GET/responses/200/content/application\/json`.
+                    case json([Components.Schemas.ProjectInfo])
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: [Components.Schemas.ProjectInfo] {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.ListProjects.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.ListProjects.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Projects by slug, each with its repos and their mirror state; archived ones only with `archived=true`
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/get(listProjects)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.ListProjects.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.ListProjects.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Bad request, or a query parameter that is not allowed
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/get(listProjects)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Components.Responses.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Components.Responses.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/get(listProjects)/responses/401`.
+            ///
+            /// HTTP response code: `401 unauthorized`.
+            case unauthorized(Components.Responses.Unauthorized)
+            /// The associated value of the enum case if `self` is `.unauthorized`.
+            ///
+            /// - Throws: An error if `self` is not `.unauthorized`.
+            /// - SeeAlso: `.unauthorized`.
+            public var unauthorized: Components.Responses.Unauthorized {
+                get throws {
+                    switch self {
+                    case let .unauthorized(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unauthorized",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked x-ainkrad-destructive without a live step-up elevation (step_up_required)
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/get(listProjects)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Components.Responses.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Components.Responses.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No such resource
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/get(listProjects)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Conflicts with the current state
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/get(listProjects)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Components.Responses.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            public var conflict: Components.Responses.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Rate limited; see Retry-After
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/get(listProjects)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            case tooManyRequests(Components.Responses.TooManyRequests)
+            /// The associated value of the enum case if `self` is `.tooManyRequests`.
+            ///
+            /// - Throws: An error if `self` is not `.tooManyRequests`.
+            /// - SeeAlso: `.tooManyRequests`.
+            public var tooManyRequests: Components.Responses.TooManyRequests {
+                get throws {
+                    switch self {
+                    case let .tooManyRequests(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "tooManyRequests",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Internal error
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/get(listProjects)/responses/500`.
+            ///
+            /// HTTP response code: `500 internalServerError`.
+            case internalServerError(Components.Responses.InternalError)
+            /// The associated value of the enum case if `self` is `.internalServerError`.
+            ///
+            /// - Throws: An error if `self` is not `.internalServerError`.
+            /// - SeeAlso: `.internalServerError`.
+            public var internalServerError: Components.Responses.InternalError {
+                get throws {
+                    switch self {
+                    case let .internalServerError(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "internalServerError",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// - Remark: HTTP `POST /api/v1/projects`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/post(createProject)`.
+    public enum CreateProject {
+        public static let id: Swift.String = "createProject"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/api/v1/projects/POST/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CreateProject.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CreateProject.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.CreateProject.Input.Headers
+            /// - Remark: Generated from `#/paths/api/v1/projects/POST/requestBody`.
+            @frozen public enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/projects/POST/requestBody/content/application\/json`.
+                case json(Components.Schemas.NewProject)
+            }
+            public var body: Operations.CreateProject.Input.Body
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - headers:
+            ///   - body:
+            public init(
+                headers: Operations.CreateProject.Input.Headers = .init(),
+                body: Operations.CreateProject.Input.Body
+            ) {
+                self.headers = headers
+                self.body = body
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/projects/POST/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/projects/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.ProjectInfo)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ProjectInfo {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.CreateProject.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.CreateProject.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Created as a manual project (audited and emitted as `project.created`). 400 `bad_request` for a bad or reserved slug or a bad name; 409 `conflict` when the slug is taken
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/post(createProject)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.CreateProject.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.CreateProject.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Bad request, or a query parameter that is not allowed
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/post(createProject)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Components.Responses.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Components.Responses.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/post(createProject)/responses/401`.
+            ///
+            /// HTTP response code: `401 unauthorized`.
+            case unauthorized(Components.Responses.Unauthorized)
+            /// The associated value of the enum case if `self` is `.unauthorized`.
+            ///
+            /// - Throws: An error if `self` is not `.unauthorized`.
+            /// - SeeAlso: `.unauthorized`.
+            public var unauthorized: Components.Responses.Unauthorized {
+                get throws {
+                    switch self {
+                    case let .unauthorized(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unauthorized",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked x-ainkrad-destructive without a live step-up elevation (step_up_required)
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/post(createProject)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Components.Responses.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Components.Responses.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No such resource
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/post(createProject)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Conflicts with the current state
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/post(createProject)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Components.Responses.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            public var conflict: Components.Responses.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Rate limited; see Retry-After
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/post(createProject)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            case tooManyRequests(Components.Responses.TooManyRequests)
+            /// The associated value of the enum case if `self` is `.tooManyRequests`.
+            ///
+            /// - Throws: An error if `self` is not `.tooManyRequests`.
+            /// - SeeAlso: `.tooManyRequests`.
+            public var tooManyRequests: Components.Responses.TooManyRequests {
+                get throws {
+                    switch self {
+                    case let .tooManyRequests(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "tooManyRequests",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Internal error
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/post(createProject)/responses/500`.
+            ///
+            /// HTTP response code: `500 internalServerError`.
+            case internalServerError(Components.Responses.InternalError)
+            /// The associated value of the enum case if `self` is `.internalServerError`.
+            ///
+            /// - Throws: An error if `self` is not `.internalServerError`.
+            /// - SeeAlso: `.internalServerError`.
+            public var internalServerError: Components.Responses.InternalError {
+                get throws {
+                    switch self {
+                    case let .internalServerError(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "internalServerError",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)`.
+    public enum GetProject {
+        public static let id: Swift.String = "getProject"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/GET/path`.
+            public struct Path: Sendable, Hashable {
+                /// The project's id
+                ///
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/GET/path/id`.
+                public var id: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - id: The project's id
+                public init(id: Swift.String) {
+                    self.id = id
+                }
+            }
+            public var path: Operations.GetProject.Input.Path
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/GET/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetProject.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetProject.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.GetProject.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.GetProject.Input.Path,
+                headers: Operations.GetProject.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/GET/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/projects/{id}/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.ProjectInfo)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ProjectInfo {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.GetProject.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.GetProject.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// The project with its repos and their mirror state; 404 for no such project
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.GetProject.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.GetProject.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Bad request, or a query parameter that is not allowed
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Components.Responses.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Components.Responses.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)/responses/401`.
+            ///
+            /// HTTP response code: `401 unauthorized`.
+            case unauthorized(Components.Responses.Unauthorized)
+            /// The associated value of the enum case if `self` is `.unauthorized`.
+            ///
+            /// - Throws: An error if `self` is not `.unauthorized`.
+            /// - SeeAlso: `.unauthorized`.
+            public var unauthorized: Components.Responses.Unauthorized {
+                get throws {
+                    switch self {
+                    case let .unauthorized(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unauthorized",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked x-ainkrad-destructive without a live step-up elevation (step_up_required)
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Components.Responses.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Components.Responses.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No such resource
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Conflicts with the current state
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Components.Responses.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            public var conflict: Components.Responses.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Rate limited; see Retry-After
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            case tooManyRequests(Components.Responses.TooManyRequests)
+            /// The associated value of the enum case if `self` is `.tooManyRequests`.
+            ///
+            /// - Throws: An error if `self` is not `.tooManyRequests`.
+            /// - SeeAlso: `.tooManyRequests`.
+            public var tooManyRequests: Components.Responses.TooManyRequests {
+                get throws {
+                    switch self {
+                    case let .tooManyRequests(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "tooManyRequests",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Internal error
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)/responses/500`.
+            ///
+            /// HTTP response code: `500 internalServerError`.
+            case internalServerError(Components.Responses.InternalError)
+            /// The associated value of the enum case if `self` is `.internalServerError`.
+            ///
+            /// - Throws: An error if `self` is not `.internalServerError`.
+            /// - SeeAlso: `.internalServerError`.
+            public var internalServerError: Components.Responses.InternalError {
+                get throws {
+                    switch self {
+                    case let .internalServerError(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "internalServerError",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// - Remark: HTTP `PATCH /api/v1/projects/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/patch(updateProject)`.
+    public enum UpdateProject {
+        public static let id: Swift.String = "updateProject"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/PATCH/path`.
+            public struct Path: Sendable, Hashable {
+                /// The project's id
+                ///
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/PATCH/path/id`.
+                public var id: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - id: The project's id
+                public init(id: Swift.String) {
+                    self.id = id
+                }
+            }
+            public var path: Operations.UpdateProject.Input.Path
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/PATCH/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.UpdateProject.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.UpdateProject.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.UpdateProject.Input.Headers
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/PATCH/requestBody`.
+            @frozen public enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/PATCH/requestBody/content/application\/json`.
+                case json(Components.Schemas.UpdateProject)
+            }
+            public var body: Operations.UpdateProject.Input.Body
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            ///   - body:
+            public init(
+                path: Operations.UpdateProject.Input.Path,
+                headers: Operations.UpdateProject.Input.Headers = .init(),
+                body: Operations.UpdateProject.Input.Body
+            ) {
+                self.path = path
+                self.headers = headers
+                self.body = body
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/PATCH/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/projects/{id}/PATCH/responses/200/content/application\/json`.
+                    case json(Components.Schemas.ProjectInfo)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ProjectInfo {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.UpdateProject.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.UpdateProject.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Changed (audited and emitted as `project.updated`). 404 for no such project; 409 `conflict` when it is archived; 400 for a bad name
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/patch(updateProject)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.UpdateProject.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.UpdateProject.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Bad request, or a query parameter that is not allowed
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/patch(updateProject)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Components.Responses.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Components.Responses.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/patch(updateProject)/responses/401`.
+            ///
+            /// HTTP response code: `401 unauthorized`.
+            case unauthorized(Components.Responses.Unauthorized)
+            /// The associated value of the enum case if `self` is `.unauthorized`.
+            ///
+            /// - Throws: An error if `self` is not `.unauthorized`.
+            /// - SeeAlso: `.unauthorized`.
+            public var unauthorized: Components.Responses.Unauthorized {
+                get throws {
+                    switch self {
+                    case let .unauthorized(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unauthorized",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked x-ainkrad-destructive without a live step-up elevation (step_up_required)
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/patch(updateProject)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Components.Responses.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Components.Responses.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No such resource
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/patch(updateProject)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Conflicts with the current state
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/patch(updateProject)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Components.Responses.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            public var conflict: Components.Responses.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Rate limited; see Retry-After
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/patch(updateProject)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            case tooManyRequests(Components.Responses.TooManyRequests)
+            /// The associated value of the enum case if `self` is `.tooManyRequests`.
+            ///
+            /// - Throws: An error if `self` is not `.tooManyRequests`.
+            /// - SeeAlso: `.tooManyRequests`.
+            public var tooManyRequests: Components.Responses.TooManyRequests {
+                get throws {
+                    switch self {
+                    case let .tooManyRequests(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "tooManyRequests",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Internal error
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/patch(updateProject)/responses/500`.
+            ///
+            /// HTTP response code: `500 internalServerError`.
+            case internalServerError(Components.Responses.InternalError)
+            /// The associated value of the enum case if `self` is `.internalServerError`.
+            ///
+            /// - Throws: An error if `self` is not `.internalServerError`.
+            /// - SeeAlso: `.internalServerError`.
+            public var internalServerError: Components.Responses.InternalError {
+                get throws {
+                    switch self {
+                    case let .internalServerError(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "internalServerError",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/archive`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/archive/post(archiveProject)`.
+    public enum ArchiveProject {
+        public static let id: Swift.String = "archiveProject"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/archive/POST/path`.
+            public struct Path: Sendable, Hashable {
+                /// The project's id
+                ///
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/archive/POST/path/id`.
+                public var id: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - id: The project's id
+                public init(id: Swift.String) {
+                    self.id = id
+                }
+            }
+            public var path: Operations.ArchiveProject.Input.Path
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/archive/POST/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ArchiveProject.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ArchiveProject.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.ArchiveProject.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.ArchiveProject.Input.Path,
+                headers: Operations.ArchiveProject.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/archive/POST/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/projects/{id}/archive/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.ProjectInfo)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ProjectInfo {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.ArchiveProject.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.ArchiveProject.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Archived; its repos, mirrors and sessions stay (audited and emitted as `project.archived`). 404 for no such project; 409 `conflict` when it already is
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/archive/post(archiveProject)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.ArchiveProject.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.ArchiveProject.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Bad request, or a query parameter that is not allowed
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/archive/post(archiveProject)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Components.Responses.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Components.Responses.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/archive/post(archiveProject)/responses/401`.
+            ///
+            /// HTTP response code: `401 unauthorized`.
+            case unauthorized(Components.Responses.Unauthorized)
+            /// The associated value of the enum case if `self` is `.unauthorized`.
+            ///
+            /// - Throws: An error if `self` is not `.unauthorized`.
+            /// - SeeAlso: `.unauthorized`.
+            public var unauthorized: Components.Responses.Unauthorized {
+                get throws {
+                    switch self {
+                    case let .unauthorized(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unauthorized",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked x-ainkrad-destructive without a live step-up elevation (step_up_required)
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/archive/post(archiveProject)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Components.Responses.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Components.Responses.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No such resource
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/archive/post(archiveProject)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Conflicts with the current state
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/archive/post(archiveProject)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Components.Responses.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            public var conflict: Components.Responses.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Rate limited; see Retry-After
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/archive/post(archiveProject)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            case tooManyRequests(Components.Responses.TooManyRequests)
+            /// The associated value of the enum case if `self` is `.tooManyRequests`.
+            ///
+            /// - Throws: An error if `self` is not `.tooManyRequests`.
+            /// - SeeAlso: `.tooManyRequests`.
+            public var tooManyRequests: Components.Responses.TooManyRequests {
+                get throws {
+                    switch self {
+                    case let .tooManyRequests(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "tooManyRequests",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Internal error
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/archive/post(archiveProject)/responses/500`.
+            ///
+            /// HTTP response code: `500 internalServerError`.
+            case internalServerError(Components.Responses.InternalError)
+            /// The associated value of the enum case if `self` is `.internalServerError`.
+            ///
+            /// - Throws: An error if `self` is not `.internalServerError`.
+            /// - SeeAlso: `.internalServerError`.
+            public var internalServerError: Components.Responses.InternalError {
+                get throws {
+                    switch self {
+                    case let .internalServerError(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "internalServerError",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/repos`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/post(addProjectRepo)`.
+    public enum AddProjectRepo {
+        public static let id: Swift.String = "addProjectRepo"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/POST/path`.
+            public struct Path: Sendable, Hashable {
+                /// The project's id
+                ///
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/POST/path/id`.
+                public var id: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - id: The project's id
+                public init(id: Swift.String) {
+                    self.id = id
+                }
+            }
+            public var path: Operations.AddProjectRepo.Input.Path
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/POST/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AddProjectRepo.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.AddProjectRepo.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.AddProjectRepo.Input.Headers
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/POST/requestBody`.
+            @frozen public enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/POST/requestBody/content/application\/json`.
+                case json(Components.Schemas.NewProjectRepo)
+            }
+            public var body: Operations.AddProjectRepo.Input.Body
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            ///   - body:
+            public init(
+                path: Operations.AddProjectRepo.Input.Path,
+                headers: Operations.AddProjectRepo.Input.Headers = .init(),
+                body: Operations.AddProjectRepo.Input.Body
+            ) {
+                self.path = path
+                self.headers = headers
+                self.body = body
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/POST/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.ProjectInfo)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ProjectInfo {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.AddProjectRepo.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.AddProjectRepo.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Added (audited as `project.repo_added`); the project as it now is. 400 for a bad name, remote or branch; 404 for no such project; 409 `conflict` for an archived project or a repeated name or remote
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/post(addProjectRepo)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.AddProjectRepo.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.AddProjectRepo.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Bad request, or a query parameter that is not allowed
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/post(addProjectRepo)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Components.Responses.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Components.Responses.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/post(addProjectRepo)/responses/401`.
+            ///
+            /// HTTP response code: `401 unauthorized`.
+            case unauthorized(Components.Responses.Unauthorized)
+            /// The associated value of the enum case if `self` is `.unauthorized`.
+            ///
+            /// - Throws: An error if `self` is not `.unauthorized`.
+            /// - SeeAlso: `.unauthorized`.
+            public var unauthorized: Components.Responses.Unauthorized {
+                get throws {
+                    switch self {
+                    case let .unauthorized(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unauthorized",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked x-ainkrad-destructive without a live step-up elevation (step_up_required)
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/post(addProjectRepo)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Components.Responses.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Components.Responses.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No such resource
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/post(addProjectRepo)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Conflicts with the current state
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/post(addProjectRepo)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Components.Responses.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            public var conflict: Components.Responses.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Rate limited; see Retry-After
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/post(addProjectRepo)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            case tooManyRequests(Components.Responses.TooManyRequests)
+            /// The associated value of the enum case if `self` is `.tooManyRequests`.
+            ///
+            /// - Throws: An error if `self` is not `.tooManyRequests`.
+            /// - SeeAlso: `.tooManyRequests`.
+            public var tooManyRequests: Components.Responses.TooManyRequests {
+                get throws {
+                    switch self {
+                    case let .tooManyRequests(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "tooManyRequests",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Internal error
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/post(addProjectRepo)/responses/500`.
+            ///
+            /// HTTP response code: `500 internalServerError`.
+            case internalServerError(Components.Responses.InternalError)
+            /// The associated value of the enum case if `self` is `.internalServerError`.
+            ///
+            /// - Throws: An error if `self` is not `.internalServerError`.
+            /// - SeeAlso: `.internalServerError`.
+            public var internalServerError: Components.Responses.InternalError {
+                get throws {
+                    switch self {
+                    case let .internalServerError(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "internalServerError",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// - Remark: HTTP `DELETE /api/v1/projects/{id}/repos/{repo}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/delete(removeProjectRepo)`.
+    public enum RemoveProjectRepo {
+        public static let id: Swift.String = "removeProjectRepo"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/{repo}/DELETE/path`.
+            public struct Path: Sendable, Hashable {
+                /// The project's id
+                ///
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/{repo}/DELETE/path/id`.
+                public var id: Swift.String
+                /// The repo's id
+                ///
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/{repo}/DELETE/path/repo`.
+                public var repo: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - id: The project's id
+                ///   - repo: The repo's id
+                public init(
+                    id: Swift.String,
+                    repo: Swift.String
+                ) {
+                    self.id = id
+                    self.repo = repo
+                }
+            }
+            public var path: Operations.RemoveProjectRepo.Input.Path
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/{repo}/DELETE/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.RemoveProjectRepo.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.RemoveProjectRepo.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.RemoveProjectRepo.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.RemoveProjectRepo.Input.Path,
+                headers: Operations.RemoveProjectRepo.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/{repo}/DELETE/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/{repo}/DELETE/responses/200/content/application\/json`.
+                    case json(Components.Schemas.ProjectInfo)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ProjectInfo {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.RemoveProjectRepo.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.RemoveProjectRepo.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Removed with its mirror row (audited as `project.repo_removed`); the project as it now is. 404 for no such project or repo; 409 `conflict` for an archived project or the primary while others remain
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/delete(removeProjectRepo)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.RemoveProjectRepo.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.RemoveProjectRepo.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Bad request, or a query parameter that is not allowed
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/delete(removeProjectRepo)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Components.Responses.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Components.Responses.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/delete(removeProjectRepo)/responses/401`.
+            ///
+            /// HTTP response code: `401 unauthorized`.
+            case unauthorized(Components.Responses.Unauthorized)
+            /// The associated value of the enum case if `self` is `.unauthorized`.
+            ///
+            /// - Throws: An error if `self` is not `.unauthorized`.
+            /// - SeeAlso: `.unauthorized`.
+            public var unauthorized: Components.Responses.Unauthorized {
+                get throws {
+                    switch self {
+                    case let .unauthorized(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unauthorized",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked x-ainkrad-destructive without a live step-up elevation (step_up_required)
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/delete(removeProjectRepo)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Components.Responses.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Components.Responses.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No such resource
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/delete(removeProjectRepo)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Conflicts with the current state
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/delete(removeProjectRepo)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Components.Responses.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            public var conflict: Components.Responses.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Rate limited; see Retry-After
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/delete(removeProjectRepo)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            case tooManyRequests(Components.Responses.TooManyRequests)
+            /// The associated value of the enum case if `self` is `.tooManyRequests`.
+            ///
+            /// - Throws: An error if `self` is not `.tooManyRequests`.
+            /// - SeeAlso: `.tooManyRequests`.
+            public var tooManyRequests: Components.Responses.TooManyRequests {
+                get throws {
+                    switch self {
+                    case let .tooManyRequests(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "tooManyRequests",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Internal error
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/delete(removeProjectRepo)/responses/500`.
+            ///
+            /// HTTP response code: `500 internalServerError`.
+            case internalServerError(Components.Responses.InternalError)
+            /// The associated value of the enum case if `self` is `.internalServerError`.
+            ///
+            /// - Throws: An error if `self` is not `.internalServerError`.
+            /// - SeeAlso: `.internalServerError`.
+            public var internalServerError: Components.Responses.InternalError {
+                get throws {
+                    switch self {
+                    case let .internalServerError(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "internalServerError",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/repos/{repo}/primary`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/primary/post(setProjectRepoPrimary)`.
+    public enum SetProjectRepoPrimary {
+        public static let id: Swift.String = "setProjectRepoPrimary"
+        public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/{repo}/primary/POST/path`.
+            public struct Path: Sendable, Hashable {
+                /// The project's id
+                ///
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/{repo}/primary/POST/path/id`.
+                public var id: Swift.String
+                /// The repo's id
+                ///
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/{repo}/primary/POST/path/repo`.
+                public var repo: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - id: The project's id
+                ///   - repo: The repo's id
+                public init(
+                    id: Swift.String,
+                    repo: Swift.String
+                ) {
+                    self.id = id
+                    self.repo = repo
+                }
+            }
+            public var path: Operations.SetProjectRepoPrimary.Input.Path
+            /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/{repo}/primary/POST/header`.
+            public struct Headers: Sendable, Hashable {
+                public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.SetProjectRepoPrimary.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                public init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.SetProjectRepoPrimary.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            public var headers: Operations.SetProjectRepoPrimary.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            public init(
+                path: Operations.SetProjectRepoPrimary.Input.Path,
+                headers: Operations.SetProjectRepoPrimary.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        @frozen public enum Output: Sendable, Hashable {
+            public struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/{repo}/primary/POST/responses/200/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/api/v1/projects/{id}/repos/{repo}/primary/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.ProjectInfo)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas.ProjectInfo {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.SetProjectRepoPrimary.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.SetProjectRepoPrimary.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// The repo is the one primary (audited as `project.repo_primary_set`); the project as it now is. 404 for no such project or repo; 409 `conflict` for an archived project
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/primary/post(setProjectRepoPrimary)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.SetProjectRepoPrimary.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            public var ok: Operations.SetProjectRepoPrimary.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Bad request, or a query parameter that is not allowed
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/primary/post(setProjectRepoPrimary)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Components.Responses.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Components.Responses.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// auth_failed (any signature or device failure, alike whatever the reason), clock_skew (with server_time), or session_expired
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/primary/post(setProjectRepoPrimary)/responses/401`.
+            ///
+            /// HTTP response code: `401 unauthorized`.
+            case unauthorized(Components.Responses.Unauthorized)
+            /// The associated value of the enum case if `self` is `.unauthorized`.
+            ///
+            /// - Throws: An error if `self` is not `.unauthorized`.
+            /// - SeeAlso: `.unauthorized`.
+            public var unauthorized: Components.Responses.Unauthorized {
+                get throws {
+                    switch self {
+                    case let .unauthorized(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unauthorized",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Wrong Host (unknown_host), an Origin header (origin_refused), a scope the device lacks (forbidden_scope; see each operation's x-ainkrad-scope), or an operation marked x-ainkrad-destructive without a live step-up elevation (step_up_required)
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/primary/post(setProjectRepoPrimary)/responses/403`.
+            ///
+            /// HTTP response code: `403 forbidden`.
+            case forbidden(Components.Responses.Forbidden)
+            /// The associated value of the enum case if `self` is `.forbidden`.
+            ///
+            /// - Throws: An error if `self` is not `.forbidden`.
+            /// - SeeAlso: `.forbidden`.
+            public var forbidden: Components.Responses.Forbidden {
+                get throws {
+                    switch self {
+                    case let .forbidden(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "forbidden",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// No such resource
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/primary/post(setProjectRepoPrimary)/responses/404`.
+            ///
+            /// HTTP response code: `404 notFound`.
+            case notFound(Components.Responses.NotFound)
+            /// The associated value of the enum case if `self` is `.notFound`.
+            ///
+            /// - Throws: An error if `self` is not `.notFound`.
+            /// - SeeAlso: `.notFound`.
+            public var notFound: Components.Responses.NotFound {
+                get throws {
+                    switch self {
+                    case let .notFound(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "notFound",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Conflicts with the current state
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/primary/post(setProjectRepoPrimary)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Components.Responses.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            public var conflict: Components.Responses.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Rate limited; see Retry-After
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/primary/post(setProjectRepoPrimary)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            case tooManyRequests(Components.Responses.TooManyRequests)
+            /// The associated value of the enum case if `self` is `.tooManyRequests`.
+            ///
+            /// - Throws: An error if `self` is not `.tooManyRequests`.
+            /// - SeeAlso: `.tooManyRequests`.
+            public var tooManyRequests: Components.Responses.TooManyRequests {
+                get throws {
+                    switch self {
+                    case let .tooManyRequests(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "tooManyRequests",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Internal error
+            ///
+            /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/primary/post(setProjectRepoPrimary)/responses/500`.
+            ///
+            /// HTTP response code: `500 internalServerError`.
+            case internalServerError(Components.Responses.InternalError)
+            /// The associated value of the enum case if `self` is `.internalServerError`.
+            ///
+            /// - Throws: An error if `self` is not `.internalServerError`.
+            /// - SeeAlso: `.internalServerError`.
+            public var internalServerError: Components.Responses.InternalError {
+                get throws {
+                    switch self {
+                    case let .internalServerError(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "internalServerError",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        @frozen public enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            public init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            public var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            public static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
     /// - Remark: HTTP `PUT /api/v1/push-token`.
     /// - Remark: Generated from `#/paths//api/v1/push-token/put(setPushToken)`.
     public enum SetPushToken {
