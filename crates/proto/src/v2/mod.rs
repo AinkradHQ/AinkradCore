@@ -48,6 +48,7 @@ mod history;
 pub mod local;
 mod login;
 mod plan_limit;
+mod sftp;
 mod ssh;
 mod subscription;
 mod terminal;
@@ -61,6 +62,7 @@ pub use gateway::*;
 pub use history::*;
 pub use login::*;
 pub use plan_limit::*;
+pub use sftp::*;
 pub use ssh::*;
 pub use subscription::*;
 pub use terminal::*;
@@ -340,6 +342,8 @@ pub enum Control {
     Signal(SignalReq),
     /// Runner to Core on a terminal stream: the screen now; output resumes at its `seq`.
     Snapshot(Snapshot),
+    /// Core to runner on an `ssh.sftp.write` stream: the last byte was sent (`sftp`).
+    Eof,
     /// A type from a newer peer: ignored. Never sent.
     #[serde(other)]
     Unknown,
@@ -522,6 +526,16 @@ pub enum ErrorCode {
     SshAuthFailed,
     /// `ssh.exec`: no connection, no common algorithm, or the channel failed.
     SshFailed,
+    /// `ssh.sftp.*`: no such path on the host.
+    SftpNotFound,
+    /// `ssh.sftp.*`: the host refused the user access to the path.
+    SftpDenied,
+    /// `ssh.sftp.*`: the path is taken (a write without `overwrite`, a rename, a mkdir).
+    SftpExists,
+    /// `ssh.sftp.*`: the host refused for another reason, or the SFTP session failed.
+    SftpFailed,
+    /// A transfer over `SFTP_MAX_BYTES`.
+    TooLarge,
     /// A code from a newer peer. Never sent.
     #[serde(other)]
     Unknown,

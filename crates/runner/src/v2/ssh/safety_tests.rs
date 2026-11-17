@@ -54,7 +54,7 @@ async fn a_cancel_after_the_dial_never_sends_the_command() {
     let d = ssh(&leases);
     let r = req(s.hop("me", "l_1"), vec![], "name");
     // The connection is up and idle; the cancel is already there when the command would go.
-    let conn = d.connect(&r).await.unwrap();
+    let conn = d.connect(&r.target, &r.hops).await.unwrap();
     for fired in [true, false] {
         let (tx, rx) = oneshot::channel();
         match fired {
