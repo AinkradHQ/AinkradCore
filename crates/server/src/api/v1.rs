@@ -436,6 +436,10 @@ pub fn router(app: App) -> Router {
             "/api/v1/agent-sessions/{id}/interrupt",
             post(agents::interrupt),
         )
+        .route(
+            "/api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop",
+            post(agents::stop_subagent),
+        )
         .route("/api/v1/agent-sessions/{id}/mode", post(agents::mode))
         .route("/api/v1/agent-sessions/{id}/cancel", post(agents::cancel))
         .route("/api/v1/agent-sessions/{id}/kill", post(agents::kill))

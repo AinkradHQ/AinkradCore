@@ -19,6 +19,8 @@ pub(super) struct Inbox {
     /// The running turn is to be stopped (`Control::Interrupt`).
     interrupt: AtomicBool,
     messages: Mutex<VecDeque<(i64, String)>>,
+    /// Sub-agents to stop, by their tool call id (`Control::StopSubagent`).
+    subagent_stops: Mutex<Vec<String>>,
     /// The run's policy since the admin changed it; `None`, its `Assign`'s.
     policy: Mutex<Option<Policy>>,
     /// A new policy arrived that the harness has not been told yet (`take_retune`).
@@ -37,6 +39,7 @@ impl Inbox {
             Control::Pause => self.pause.store(true, Ordering::SeqCst),
             Control::Live => self.live.store(true, Ordering::SeqCst),
             Control::Interrupt => self.interrupt.store(true, Ordering::SeqCst),
+            Control::StopSubagent(id) => self.subagent_stops.lock().expect("inbox lock").push(id),
             Control::Message { id, text } => {
                 let mut messages = self.messages.lock().expect("inbox lock");
                 if !messages.iter().any(|(seen, _)| *seen == id) {
@@ -70,6 +73,11 @@ impl Inbox {
     pub fn policy(&self, assigned: &Policy) -> Policy {
         let policy = self.policy.lock().expect("inbox lock");
         policy.as_ref().unwrap_or(assigned).clone()
+    }
+
+    /// The sub-agents to stop since the last call (and forgets them).
+    pub fn take_subagent_stops(&self) -> Vec<String> {
+        std::mem::take(&mut *self.subagent_stops.lock().expect("inbox lock"))
     }
 
     /// The oldest message not yet given to the harness.

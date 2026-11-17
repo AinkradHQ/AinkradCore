@@ -497,6 +497,41 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * POST /api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop
+        * 
+        * 
+         * @param id The session&#39;s id, &#x60;as_…&#x60; 
+         * @param toolUseId The &#x60;id&#x60; of the sub-agent&#39;s &#x60;tool_use&#x60; entry (Claude Code&#39;s &#x60;Task&#x60; or &#x60;Agent&#x60;) 
+         * @return AgentSession
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun stopAgentSubagent(id: kotlin.String, toolUseId: kotlin.String): HttpResponse<AgentSession> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop".replace("{" + "id" + "}", "$id").replace("{" + "tool_use_id" + "}", "$toolUseId"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * PATCH /api/v1/agent-sessions/{id}
         * 
         * 

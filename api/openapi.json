@@ -606,6 +606,13 @@
               "null"
             ]
           },
+          "can_stop_subagents": {
+            "description": "Whether one sub-agent of it (a running `Task`/`Agent` tool call) can be stopped on its own\nwith `stopAgentSubagent`: its harness can (Claude Code) and its runner relays it.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "chain": {
             "description": "The chain as it was when the session began (an edit never moves a running run).",
             "items": {
@@ -790,6 +797,22 @@
             "description": "A short name: the first message's start, or the one `titleAgentSession` set.",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "turn_cost_approximate": {
+            "description": "`turn_cost_usd_micros` is a lower estimate: Claude Code reports an answer's output tokens as\nthey were when it started, so the turn's own closing `usage` entry is the exact count.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "turn_cost_usd_micros": {
+            "description": "While `running`: what the answer that runs now has cost so far, in micro-dollars, from the\nharness's mid-turn token reports (its `usage_so_far` entries) at the price book's rates for\nthe session's model. 0 when its message has just started it; absent when no answer runs or\nthe model has no price. It moves with the transcript: each change comes with an\n`agent.transcript` event.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -1122,6 +1145,7 @@
           "agent.mode_changed",
           "agent.renamed",
           "agent.resumed",
+          "agent.subagent_stopped",
           "agent.wake_dropped",
           "agent.wake_queued",
           "agent.woken",
@@ -6259,7 +6283,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.81.0"
+    "version": "1.82.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -8188,6 +8212,69 @@
               }
             },
             "description": "A `lost` or `interrupted` session is started again on its runner, continuing the harness's own session, with fresh leases (audited as `agent.resumed`). 409 `not_resumable` otherwise"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "agents"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop": {
+      "post": {
+        "operationId": "stopAgentSubagent",
+        "parameters": [
+          {
+            "description": "The session's id, `as_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The `id` of the sub-agent's `tool_use` entry (Claude Code's `Task` or `Agent`)",
+            "in": "path",
+            "name": "tool_use_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSession"
+                }
+              }
+            },
+            "description": "Stops that one sub-agent, not the answer (audited as `agent.subagent_stopped`): its harness is told at once, and the tool call ends with its `tool_result` while the answer goes on. `can_stop_subagents` says whether the session can. 404 `unknown_subagent` for an id that is not a sub-agent's call of this session with no result yet. 409 `unsupported_command` for a harness that cannot stop one sub-agent (or a runner too old to relay it), `session_over`, `module_owned`"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

@@ -169,6 +169,7 @@ use super::{
         agents::approvals,
         agents::decide,
         agents::interrupt,
+        agents::stop_subagent,
         agents::mode,
         agents::title,
         agents::cancel,

@@ -474,7 +474,8 @@ pub async fn ask(
             | Reply::AgentDecide(ev)
             | Reply::AgentStop(ev)
             | Reply::AgentLimit(ev)
-            | Reply::AgentMode(ev),
+            | Reply::AgentMode(ev)
+            | Reply::AgentSubagentStop(ev),
         ) => Ok(ev),
         other => Err(StreamError::new(
             ErrorCode::BadFrame,

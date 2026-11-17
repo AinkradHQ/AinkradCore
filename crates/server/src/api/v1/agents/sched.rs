@@ -57,7 +57,10 @@ async fn present(app: &App, v: &Viewer, s: Session) -> Result<Option<AgentSessio
     if sched.user != v.user {
         return Ok(None);
     }
+    let can_stop = super::SUBAGENT_STOP_HARNESSES.contains(&s.harness.as_str())
+        && agents::offers(app, &s.runner, ainkrad_proto::v2::OP_AGENT_SUBAGENT_STOP);
     let mut out = AgentSession::from(s);
+    out.can_stop_subagents = Some(can_stop);
     if v.admin {
         out.agent = sched.agent;
         out.chain_id = sched.chain_id;

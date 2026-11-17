@@ -63,6 +63,8 @@ pub enum Command {
     AgentMode(super::AgentMode),
     #[serde(rename = "agent.attach")]
     AgentAttach(super::AgentAttach),
+    #[serde(rename = "agent.subagent_stop")]
+    AgentSubagentStop(super::AgentSubagentStop),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -89,6 +91,7 @@ impl Command {
             Self::HistoryRead(_) => super::OP_HISTORY_READ,
             Self::AgentMode(_) => super::OP_AGENT_MODE,
             Self::AgentAttach(_) => super::OP_AGENT_ATTACH,
+            Self::AgentSubagentStop(_) => super::OP_AGENT_SUBAGENT_STOP,
             Self::LoginStart(_) => super::OP_LOGIN_START,
             Self::LoginCode(_) => super::OP_LOGIN_CODE,
             Self::LoginCancel(_) => super::OP_LOGIN_CANCEL,
@@ -189,6 +192,8 @@ pub enum Reply {
     AgentMode(super::AgentEvents),
     #[serde(rename = "agent.attach")]
     AgentAttach(super::AgentAttached),
+    #[serde(rename = "agent.subagent_stop")]
+    AgentSubagentStop(super::AgentEvents),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

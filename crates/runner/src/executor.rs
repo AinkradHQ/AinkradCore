@@ -122,6 +122,8 @@ pub enum Control {
     Live,
     /// Stops the running turn only (Esc in the CLI); the run goes on, waiting if it is live.
     Interrupt,
+    /// Stops the sub-agent its harness started with this tool call id; the turn goes on.
+    StopSubagent(String),
 }
 
 /// A reviewer's answer to an escalated tool call.

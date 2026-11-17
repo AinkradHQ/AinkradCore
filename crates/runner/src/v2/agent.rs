@@ -33,8 +33,8 @@ use ainkrad_proto::redact::Redactor;
 use ainkrad_proto::runner::{Isolation, Outcome, RunToken, Tokens, Workspace};
 use ainkrad_proto::v2::{
     AGENT_DRIVER, AGENT_OPS, AgentDecide, AgentEvents, AgentMode, AgentRead, AgentStart,
-    AgentState, AgentStop, CAP_GATEWAY, CAP_LIVE, DriverInfo, ErrorCode, IsolationCaps, Kvm,
-    StreamError, TranscriptEntry,
+    AgentState, AgentStop, AgentSubagentStop, CAP_GATEWAY, CAP_LIVE, DriverInfo, ErrorCode,
+    IsolationCaps, Kvm, StreamError, TranscriptEntry,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -401,6 +401,7 @@ impl AgentDriver {
                     &CAP_LIVE,
                     &ainkrad_proto::v2::OP_AGENT_MODE,
                     &ainkrad_proto::v2::OP_AGENT_ATTACH,
+                    &ainkrad_proto::v2::OP_AGENT_SUBAGENT_STOP,
                 ])
                 .chain(
                     self.config
@@ -962,6 +963,22 @@ impl AgentDriver {
             self.harness
                 .control(live.run, Control::Policy(req.policy.clone()));
             push(cfg, &req.session, live, entry);
+            Ok(())
+        })
+    }
+
+    /// Stops one sub-agent of the session (`agent.subagent_stop`): its run's harness is told
+    /// (`Control::StopSubagent`), during a turn or between them; one that cannot ignores it.
+    pub fn subagent_stop(&self, req: AgentSubagentStop) -> Result<AgentEvents, StreamError> {
+        if !(1..=128).contains(&req.tool_use_id.len()) {
+            return Err(refuse(
+                ErrorCode::InvalidArgs,
+                "a tool_use_id is 1 to 128 bytes",
+            ));
+        }
+        self.running(&req.session, |live, _| {
+            self.harness
+                .control(live.run, Control::StopSubagent(req.tool_use_id.clone()));
             Ok(())
         })
     }

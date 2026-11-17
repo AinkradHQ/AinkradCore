@@ -81,6 +81,11 @@ pub struct Session {
     pub title: Option<String>,
     /// The absolute folder its harness works in on its runner, as the runner reported it.
     pub folder: Option<String>,
+    /// The running turn's cost so far in micro-dollars (`turn_cost`); none when no turn runs or
+    /// its model has no price.
+    pub turn_cost_micros: Option<i64>,
+    /// That cost counts the harness's mid-turn reports, which undercount (`turn_cost`).
+    pub turn_cost_approx: bool,
 }
 
 /// The longest title, in characters.
@@ -121,7 +126,8 @@ pub struct NewSession<'a> {
 const COLUMNS: &str = "n, id, runner, harness, model, prompt, workspace, policy, secrets, state, \
     harness_session, outcome, last_seq, tokens_in, tokens_out, cache_read, cache_write, \
     cost_usd_micros, resumes, created_by, owner_module, owner_ref, created_at, updated_at, ended_at, \
-    gateway_account_id, gw_seq, gw_epoch, gw_stop, gw_stopped_at, live, waiting_since, pending, title, folder";
+    gateway_account_id, gw_seq, gw_epoch, gw_stop, gw_stopped_at, live, waiting_since, pending, title, folder, \
+    turn_cost_micros, turn_cost_approx";
 
 fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
     let json = |col: &str| -> Result<Option<Value>, sqlx::Error> {
@@ -173,6 +179,8 @@ fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
         pending: r.try_get("pending")?,
         title: r.try_get("title")?,
         folder: r.try_get("folder")?,
+        turn_cost_micros: r.try_get("turn_cost_micros")?,
+        turn_cost_approx: r.try_get::<i64, _>("turn_cost_approx")? != 0,
     })
 }
 
@@ -509,6 +517,7 @@ pub async fn apply(
         }
     }
     if last >= from {
+        turn_cost(&mut tx, id, &ev.entries[..], from, last).await?;
         emit(
             &mut tx,
             "agent.transcript",
@@ -550,6 +559,61 @@ pub async fn apply(
     .await?;
     tx.commit().await?;
     Ok(last)
+}
+
+/// The running turn's cost (E6), from the newest of the stored entries `from..=to` that says
+/// something about it: a `user_message` starts a turn at 0, a `usage_so_far` (the harness's tokens
+/// of the turn so far) is priced with the price book for the session's harness's provider and its
+/// model (none without a price), and a `turn_ended`, `waiting` or `ended` clears it. The
+/// `agent.transcript` event of the same write tells clients to read it again.
+///
+/// Approximate for Claude Code, whose mid-turn reports count an answer's output tokens at its
+/// start (`ainkrad_harness::Meter`); the others report each finished step's tokens. Cache reads and
+/// writes are priced at the book's one cache rate, as the ledger does (`usage_meter`).
+async fn turn_cost(
+    tx: &mut SqliteConnection,
+    id: &str,
+    entries: &[TranscriptEntry],
+    from: u64,
+    to: u64,
+) -> Result<(), sqlx::Error> {
+    let Some(e) = entries.iter().rev().find(|e| {
+        (from..=to).contains(&e.seq)
+            && matches!(
+                e.body["type"].as_str(),
+                Some("usage_so_far" | "user_message" | "turn_ended" | "waiting" | "ended")
+            )
+    }) else {
+        return Ok(());
+    };
+    let row = sqlx::query("SELECT harness, model FROM core_agent_sessions WHERE id = ?")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let harness: String = row.try_get("harness")?;
+    let model: Option<String> = row.try_get("model")?;
+    let n = |k: &str| i64::try_from(e.body[k].as_u64().unwrap_or(0)).unwrap_or(i64::MAX);
+    let cost = match e.body["type"].as_str() {
+        Some("user_message") => Some(0),
+        Some("usage_so_far") => {
+            let rates = match (ainkrad_proto::v2::harness_provider(&harness), &model) {
+                (Some(p), Some(m)) => super::prices::rates_in(tx, p, m).await?,
+                _ => None,
+            };
+            let cache = n("cache_read").saturating_add(n("cache_write"));
+            rates.and_then(|r| r.cost(n("input"), n("output"), cache))
+        }
+        _ => None,
+    };
+    sqlx::query(
+        "UPDATE core_agent_sessions SET turn_cost_micros = ?, turn_cost_approx = ? WHERE id = ?",
+    )
+    .bind(cost)
+    .bind(cost.is_some() && harness == "claude" && e.body["type"] == "usage_so_far")
+    .bind(id)
+    .execute(&mut *tx)
+    .await
+    .map(drop)
 }
 
 /// Moves a `running` live session between working and `waiting` (`agent.state` says so).
@@ -610,6 +674,26 @@ async fn insert(
     .execute(conn)
     .await
     .map(drop)
+}
+
+/// Whether the transcript of `id` has a sub-agent's tool call `call` (Claude Code's `Task` or
+/// `Agent`) with no result yet.
+pub async fn subagent_running(
+    pool: &SqlitePool,
+    id: &str,
+    call: &str,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM core_agent_transcript WHERE session = ?1 \
+           AND json_extract(body, '$.type') = 'tool_use' AND json_extract(body, '$.id') = ?2 \
+           AND json_extract(body, '$.name') IN ('Task', 'Agent')) \
+         AND NOT EXISTS (SELECT 1 FROM core_agent_transcript WHERE session = ?1 \
+           AND json_extract(body, '$.type') = 'tool_result' AND json_extract(body, '$.id') = ?2)",
+    )
+    .bind(id)
+    .bind(call)
+    .fetch_one(pool)
+    .await
 }
 
 /// Entries with `seq` above `after`, oldest first, at most `limit`.

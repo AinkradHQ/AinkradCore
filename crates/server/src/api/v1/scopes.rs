@@ -197,6 +197,11 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ),
     ("PATCH", "/api/v1/agent-sessions/{id}", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/interrupt", "agent"),
+    (
+        "POST",
+        "/api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop",
+        "agent",
+    ),
     ("POST", "/api/v1/agent-sessions/{id}/mode", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/cancel", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/kill", "agent"),
@@ -312,6 +317,10 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     // The same rights as a message (E4): what it uploads is shipped to the runner with one.
     ("POST", "/api/v1/agent-sessions/{id}/attachments"),
     ("POST", "/api/v1/agent-sessions/{id}/interrupt"),
+    (
+        "POST",
+        "/api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop",
+    ),
     // A mode change can widen what the harness does unasked (accept_edits, leaving plan).
     ("POST", "/api/v1/agent-sessions/{id}/mode"),
     ("POST", "/api/v1/agent-sessions/{id}/cancel"),

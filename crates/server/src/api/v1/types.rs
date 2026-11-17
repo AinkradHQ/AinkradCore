@@ -266,7 +266,12 @@
 ///    content_type, size, sha256}`; `AgentMessage.attachments` names them (400 `unknown_attachment`), and the
 ///    runner writes each into the session's folder before the message (runner op `agent.attach`). Audit action
 ///    `agent.attachment_added`.
-pub const API_MINOR: u32 = 81;
+/// 82: AI session card data (E6). `AgentSession.turn_cost_usd_micros` and `turn_cost_approximate` (the running
+///    answer's cost so far, from its `usage_so_far` entries and the price book; absent unless `running`; it moves
+///    with `agent.transcript`) and `can_stop_subagents`. `POST /agent-sessions/{id}/subagents/{tool_use_id}/stop`
+///    (`stopAgentSubagent`, step-up; 404 `unknown_subagent`, 409 `unsupported_command`) stops one Claude Code
+///    sub-agent by its `stop_task` (runner op `agent.subagent_stop`). Audit action `agent.subagent_stopped`.
+pub const API_MINOR: u32 = 82;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
