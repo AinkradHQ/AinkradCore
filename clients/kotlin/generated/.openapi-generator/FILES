@@ -17,6 +17,7 @@ src/main/kotlin/ainkrad/client/apis/EventsApi.kt
 src/main/kotlin/ainkrad/client/apis/HandshakeApi.kt
 src/main/kotlin/ainkrad/client/apis/OpsApi.kt
 src/main/kotlin/ainkrad/client/apis/PairingApi.kt
+src/main/kotlin/ainkrad/client/apis/ProjectsApi.kt
 src/main/kotlin/ainkrad/client/apis/RunnersApi.kt
 src/main/kotlin/ainkrad/client/apis/SecretsApi.kt
 src/main/kotlin/ainkrad/client/apis/SettingsApi.kt
@@ -122,6 +123,7 @@ src/main/kotlin/ainkrad/client/models/LogLine.kt
 src/main/kotlin/ainkrad/client/models/LogPage.kt
 src/main/kotlin/ainkrad/client/models/LoginCode.kt
 src/main/kotlin/ainkrad/client/models/Me.kt
+src/main/kotlin/ainkrad/client/models/MirrorState.kt
 src/main/kotlin/ainkrad/client/models/ModelPrice.kt
 src/main/kotlin/ainkrad/client/models/Named.kt
 src/main/kotlin/ainkrad/client/models/NewAgentAttachment.kt
@@ -137,6 +139,8 @@ src/main/kotlin/ainkrad/client/models/NewLease.kt
 src/main/kotlin/ainkrad/client/models/NewLogin.kt
 src/main/kotlin/ainkrad/client/models/NewPairingBody.kt
 src/main/kotlin/ainkrad/client/models/NewPool.kt
+src/main/kotlin/ainkrad/client/models/NewProject.kt
+src/main/kotlin/ainkrad/client/models/NewProjectRepo.kt
 src/main/kotlin/ainkrad/client/models/NewProviderAccount.kt
 src/main/kotlin/ainkrad/client/models/NewSecret.kt
 src/main/kotlin/ainkrad/client/models/NewSecretGroup.kt
@@ -153,6 +157,8 @@ src/main/kotlin/ainkrad/client/models/PastRetention.kt
 src/main/kotlin/ainkrad/client/models/PolicyResult.kt
 src/main/kotlin/ainkrad/client/models/Pool.kt
 src/main/kotlin/ainkrad/client/models/PriceBookEntry.kt
+src/main/kotlin/ainkrad/client/models/ProjectInfo.kt
+src/main/kotlin/ainkrad/client/models/ProjectRepo.kt
 src/main/kotlin/ainkrad/client/models/Provider.kt
 src/main/kotlin/ainkrad/client/models/ProviderAccount.kt
 src/main/kotlin/ainkrad/client/models/PushKinds.kt
@@ -202,6 +208,7 @@ src/main/kotlin/ainkrad/client/models/TerminalSize.kt
 src/main/kotlin/ainkrad/client/models/TerminalStatus.kt
 src/main/kotlin/ainkrad/client/models/ToolOperation.kt
 src/main/kotlin/ainkrad/client/models/UpdateConnection.kt
+src/main/kotlin/ainkrad/client/models/UpdateProject.kt
 src/main/kotlin/ainkrad/client/models/UpdateSecretGroup.kt
 src/main/kotlin/ainkrad/client/models/UsageByCompany.kt
 src/main/kotlin/ainkrad/client/models/UsageWindow.kt

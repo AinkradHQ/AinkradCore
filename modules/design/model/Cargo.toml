@@ -1,0 +1,17 @@
+# The Design document model (T1, T11): schema, validators, resolver, structural lint. Pure Rust, no I/O, no Skia
+# (tests/model.rs checks the dependency list), used by the Core, the runner helper and the App.
+[package]
+name = "design-model"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+proptest = "1.7.0"

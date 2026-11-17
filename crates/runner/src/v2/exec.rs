@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 
 use ainkrad_proto::redact::Redactor;
 use ainkrad_proto::v2::{
-    Captured, DriverInfo, ErrorCode, ExecResult, ExecRun, OP_EXEC_RUN, OP_NOOP, StreamError,
-    TRUNCATED_MARKER,
+    Captured, DriverInfo, ErrorCode, ExecLimits, ExecResult, ExecRun, OP_EXEC_RUN, OP_NOOP,
+    StreamError, TRUNCATED_MARKER,
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
@@ -112,6 +112,25 @@ impl ExecDriver {
         })
     }
 
+    /// The Core's limits clamped to this runner's ceilings: (timeout, output cap per pipe). Shared
+    /// with `ssh.exec`, which runs under the same limits.
+    pub(super) fn clamp(&self, l: &ExecLimits) -> (Duration, usize) {
+        let timeout = l
+            .timeout_ms
+            .map_or(self.config.max_timeout, Duration::from_millis)
+            .min(self.config.max_timeout);
+        let cap = l
+            .max_output_bytes
+            .unwrap_or(u64::MAX)
+            .min(self.config.max_output_bytes) as usize;
+        (timeout, cap)
+    }
+
+    /// Redacts `text` with the runner's own secrets (the same redactor as `exec.run` output).
+    pub(super) fn redact(&self, text: &str) -> String {
+        self.redactor.text(text)
+    }
+
     /// Runs `req` to its end, its timeout, or `cancel` (fired or dropped).
     pub async fn run(
         &self,
@@ -125,16 +144,7 @@ impl ExecDriver {
         if req.cwd.as_deref().is_some_and(|c| !c.starts_with('/')) {
             return Err(invalid("cwd must be absolute"));
         }
-        let timeout = req
-            .limits
-            .timeout_ms
-            .map_or(self.config.max_timeout, Duration::from_millis)
-            .min(self.config.max_timeout);
-        let cap = req
-            .limits
-            .max_output_bytes
-            .unwrap_or(u64::MAX)
-            .min(self.config.max_output_bytes) as usize;
+        let (timeout, cap) = self.clamp(&req.limits);
 
         let mut cmd = Command::new(&req.program);
         cmd.args(&req.args)
@@ -213,6 +223,11 @@ impl ExecDriver {
             Ok(Ok(raw)) => raw,
             _ => Raw::default(),
         };
+        self.finish(raw)
+    }
+
+    /// One pipe's bytes, redacted and cut to its limit.
+    pub(super) fn finish(&self, raw: Raw) -> Captured {
         let mut text = self.redactor.text(&String::from_utf8_lossy(&raw.kept));
         let truncated = raw.total > raw.cap as u64;
         if truncated {
@@ -232,25 +247,36 @@ impl ExecDriver {
 }
 
 #[derive(Default)]
-struct Raw {
+pub(super) struct Raw {
     kept: Vec<u8>,
     total: u64,
     cap: usize,
 }
 
+impl Raw {
+    pub(super) fn new(cap: usize) -> Self {
+        Self {
+            cap,
+            ..Self::default()
+        }
+    }
+
+    /// Counts `chunk`, keeping what fits in `cap + REDACT_MARGIN`.
+    pub(super) fn push(&mut self, chunk: &[u8]) {
+        self.total += chunk.len() as u64;
+        let keep = self.cap.saturating_add(REDACT_MARGIN);
+        let room = keep.saturating_sub(self.kept.len()).min(chunk.len());
+        self.kept.extend_from_slice(&chunk[..room]);
+    }
+}
+
 /// Reads `pipe` to EOF, keeping `cap + REDACT_MARGIN` bytes and counting all.
 async fn capture(pipe: Option<impl AsyncRead + Unpin>, cap: usize) -> Raw {
-    let mut raw = Raw {
-        cap,
-        ..Raw::default()
-    };
+    let mut raw = Raw::new(cap);
     let Some(mut pipe) = pipe else { return raw };
-    let keep = cap.saturating_add(REDACT_MARGIN);
     let mut buf = [0u8; 8192];
     while let Ok(n @ 1..) = pipe.read(&mut buf).await {
-        raw.total += n as u64;
-        let room = keep.saturating_sub(raw.kept.len()).min(n);
-        raw.kept.extend_from_slice(&buf[..room]);
+        raw.push(&buf[..n]);
     }
     raw
 }

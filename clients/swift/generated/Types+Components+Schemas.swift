@@ -4241,6 +4241,41 @@ extension Components {
                 case versions
             }
         }
+        /// The Core's copy of a repo.
+        ///
+        /// - Remark: Generated from `#/components/schemas/MirrorState`.
+        public struct MirrorState: Codable, Hashable, Sendable {
+            /// Why the last fetch failed; the older head is kept.
+            ///
+            /// - Remark: Generated from `#/components/schemas/MirrorState/error`.
+            public var error: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/MirrorState/fetched_at`.
+            public var fetchedAt: Components.Schemas.Timestamp?
+            /// The commit the last fetch ended at.
+            ///
+            /// - Remark: Generated from `#/components/schemas/MirrorState/head`.
+            public var head: Swift.String?
+            /// Creates a new `MirrorState`.
+            ///
+            /// - Parameters:
+            ///   - error: Why the last fetch failed; the older head is kept.
+            ///   - fetchedAt:
+            ///   - head: The commit the last fetch ended at.
+            public init(
+                error: Swift.String? = nil,
+                fetchedAt: Components.Schemas.Timestamp? = nil,
+                head: Swift.String? = nil
+            ) {
+                self.error = error
+                self.fetchedAt = fetchedAt
+                self.head = head
+            }
+            public enum CodingKeys: String, CodingKey {
+                case error
+                case fetchedAt = "fetched_at"
+                case head
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/ModelPrice`.
         public struct ModelPrice: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/ModelPrice/id`.
@@ -4904,6 +4939,82 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case name
                 case provider
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/NewProject`.
+        public struct NewProject: Codable, Hashable, Sendable {
+            /// Default empty.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProject/description`.
+            public var description: Swift.String?
+            /// One line, 1-100 characters.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProject/name`.
+            public var name: Swift.String
+            /// See `ProjectInfo.slug`; it is the project's public host name.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProject/slug`.
+            public var slug: Swift.String
+            /// Creates a new `NewProject`.
+            ///
+            /// - Parameters:
+            ///   - description: Default empty.
+            ///   - name: One line, 1-100 characters.
+            ///   - slug: See `ProjectInfo.slug`; it is the project's public host name.
+            public init(
+                description: Swift.String? = nil,
+                name: Swift.String,
+                slug: Swift.String
+            ) {
+                self.description = description
+                self.name = name
+                self.slug = slug
+            }
+            public enum CodingKeys: String, CodingKey {
+                case description
+                case name
+                case slug
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/NewProjectRepo`.
+        public struct NewProjectRepo: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/NewProjectRepo/default_branch`.
+            public var defaultBranch: Swift.String
+            /// The folder name: 1-100 of `[A-Za-z0-9._-]`, not starting with `.` or `-`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProjectRepo/name`.
+            public var name: Swift.String
+            /// Make it the primary repo (the first repo always is).
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProjectRepo/primary`.
+            public var primary: Swift.Bool?
+            /// An `https://`, `ssh://` or scp-style remote with no credential in it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProjectRepo/remote_url`.
+            public var remoteUrl: Swift.String
+            /// Creates a new `NewProjectRepo`.
+            ///
+            /// - Parameters:
+            ///   - defaultBranch:
+            ///   - name: The folder name: 1-100 of `[A-Za-z0-9._-]`, not starting with `.` or `-`.
+            ///   - primary: Make it the primary repo (the first repo always is).
+            ///   - remoteUrl: An `https://`, `ssh://` or scp-style remote with no credential in it.
+            public init(
+                defaultBranch: Swift.String,
+                name: Swift.String,
+                primary: Swift.Bool? = nil,
+                remoteUrl: Swift.String
+            ) {
+                self.defaultBranch = defaultBranch
+                self.name = name
+                self.primary = primary
+                self.remoteUrl = remoteUrl
+            }
+            public enum CodingKeys: String, CodingKey {
+                case defaultBranch = "default_branch"
+                case name
+                case primary
+                case remoteUrl = "remote_url"
             }
         }
         /// A new account. Deliberately no `Debug`.
@@ -5708,6 +5819,158 @@ extension Components {
                 case pricedAt = "priced_at"
                 case provider
                 case version
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/ProjectInfo`.
+        public struct ProjectInfo: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/cpu_limit`.
+            public var cpuLimit: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/created_at`.
+            public var createdAt: Components.Schemas.Timestamp
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/description`.
+            public var description: Swift.String
+            /// Whether the running project gets a public link.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/expose`.
+            public var expose: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/id`.
+            public var id: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/idle_minutes`.
+            public var idleMinutes: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/mem_limit_mb`.
+            public var memLimitMb: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/name`.
+            public var name: Swift.String
+            /// The primary repo first, then by name.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/repos`.
+            public var repos: [Components.Schemas.ProjectRepo]
+            /// A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/slug`.
+            public var slug: Swift.String
+            /// `manual` or `github`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/source`.
+            public var source: Swift.String
+            /// `active` or `archived`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/state`.
+            public var state: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/updated_at`.
+            public var updatedAt: Components.Schemas.Timestamp
+            /// Creates a new `ProjectInfo`.
+            ///
+            /// - Parameters:
+            ///   - cpuLimit:
+            ///   - createdAt:
+            ///   - description:
+            ///   - expose: Whether the running project gets a public link.
+            ///   - id:
+            ///   - idleMinutes:
+            ///   - memLimitMb:
+            ///   - name:
+            ///   - repos: The primary repo first, then by name.
+            ///   - slug: A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name.
+            ///   - source: `manual` or `github`.
+            ///   - state: `active` or `archived`.
+            ///   - updatedAt:
+            public init(
+                cpuLimit: Swift.Double,
+                createdAt: Components.Schemas.Timestamp,
+                description: Swift.String,
+                expose: Swift.Bool,
+                id: Swift.Int64,
+                idleMinutes: Swift.Int64,
+                memLimitMb: Swift.Int64,
+                name: Swift.String,
+                repos: [Components.Schemas.ProjectRepo],
+                slug: Swift.String,
+                source: Swift.String,
+                state: Swift.String,
+                updatedAt: Components.Schemas.Timestamp
+            ) {
+                self.cpuLimit = cpuLimit
+                self.createdAt = createdAt
+                self.description = description
+                self.expose = expose
+                self.id = id
+                self.idleMinutes = idleMinutes
+                self.memLimitMb = memLimitMb
+                self.name = name
+                self.repos = repos
+                self.slug = slug
+                self.source = source
+                self.state = state
+                self.updatedAt = updatedAt
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cpuLimit = "cpu_limit"
+                case createdAt = "created_at"
+                case description
+                case expose
+                case id
+                case idleMinutes = "idle_minutes"
+                case memLimitMb = "mem_limit_mb"
+                case name
+                case repos
+                case slug
+                case source
+                case state
+                case updatedAt = "updated_at"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/ProjectRepo`.
+        public struct ProjectRepo: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ProjectRepo/default_branch`.
+            public var defaultBranch: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ProjectRepo/id`.
+            public var id: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/ProjectRepo/is_primary`.
+            public var isPrimary: Swift.Bool
+            /// None until the Core has tried to fetch it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectRepo/mirror`.
+            public var mirror: Components.Schemas.MirrorState?
+            /// The folder name in a multi-repo checkout.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectRepo/name`.
+            public var name: Swift.String
+            /// The source of truth; never carries a credential.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectRepo/remote_url`.
+            public var remoteUrl: Swift.String
+            /// Creates a new `ProjectRepo`.
+            ///
+            /// - Parameters:
+            ///   - defaultBranch:
+            ///   - id:
+            ///   - isPrimary:
+            ///   - mirror: None until the Core has tried to fetch it.
+            ///   - name: The folder name in a multi-repo checkout.
+            ///   - remoteUrl: The source of truth; never carries a credential.
+            public init(
+                defaultBranch: Swift.String,
+                id: Swift.Int64,
+                isPrimary: Swift.Bool,
+                mirror: Components.Schemas.MirrorState? = nil,
+                name: Swift.String,
+                remoteUrl: Swift.String
+            ) {
+                self.defaultBranch = defaultBranch
+                self.id = id
+                self.isPrimary = isPrimary
+                self.mirror = mirror
+                self.name = name
+                self.remoteUrl = remoteUrl
+            }
+            public enum CodingKeys: String, CodingKey {
+                case defaultBranch = "default_branch"
+                case id
+                case isPrimary = "is_primary"
+                case mirror
+                case name
+                case remoteUrl = "remote_url"
             }
         }
         /// A provider definition: a built-in, or user data validated before it is stored.
@@ -8278,6 +8541,37 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case disabled
                 case label
+                case name
+            }
+        }
+        /// What changes; an omitted field is kept.
+        ///
+        /// - Remark: Generated from `#/components/schemas/UpdateProject`.
+        public struct UpdateProject: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UpdateProject/description`.
+            public var description: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/UpdateProject/expose`.
+            public var expose: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/UpdateProject/name`.
+            public var name: Swift.String?
+            /// Creates a new `UpdateProject`.
+            ///
+            /// - Parameters:
+            ///   - description:
+            ///   - expose:
+            ///   - name:
+            public init(
+                description: Swift.String? = nil,
+                expose: Swift.Bool? = nil,
+                name: Swift.String? = nil
+            ) {
+                self.description = description
+                self.expose = expose
+                self.name = name
+            }
+            public enum CodingKeys: String, CodingKey {
+                case description
+                case expose
                 case name
             }
         }

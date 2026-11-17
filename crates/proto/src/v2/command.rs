@@ -65,6 +65,8 @@ pub enum Command {
     AgentAttach(super::AgentAttach),
     #[serde(rename = "agent.subagent_stop")]
     AgentSubagentStop(super::AgentSubagentStop),
+    #[serde(rename = "ssh.exec")]
+    SshExec(super::SshExec),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -98,6 +100,7 @@ impl Command {
             Self::RunnerPolicy(_) => super::OP_RUNNER_POLICY,
             Self::ToolsInstall(_) => super::OP_TOOLS_INSTALL,
             Self::ToolsStatus(_) => super::OP_TOOLS_STATUS,
+            Self::SshExec(_) => super::OP_SSH_EXEC,
             Self::Unknown => "unknown",
         }
     }
@@ -194,6 +197,9 @@ pub enum Reply {
     AgentAttach(super::AgentAttached),
     #[serde(rename = "agent.subagent_stop")]
     AgentSubagentStop(super::AgentEvents),
+    /// The answer to `ssh.exec`.
+    #[serde(rename = "ssh.exec")]
+    SshExec(ExecResult),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

@@ -38,12 +38,14 @@ pub mod pair;
 pub mod pty;
 mod sandbox;
 mod session;
+mod ssh;
 pub mod termbox;
 mod tools;
 pub use exec::{ExecConfig, ExecDriver};
 pub use pty::{PtyConfig, PtyDriver};
 pub use sandbox::ProcessSandbox;
 pub use session::Session;
+pub use ssh::SshDriver;
 
 /// What the runner proves itself with on one connection.
 pub struct Link {
