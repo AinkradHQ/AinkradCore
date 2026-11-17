@@ -10,13 +10,18 @@ workspace = true
 [dependencies]
 ainkrad-core = { path = "../../../crates/core" }
 ainkrad-core-server = { path = "../../../crates/server" }
+# V6-01: the `design.check` command a runner's helper answers.
+ainkrad-proto = { path = "../../../crates/proto" }
 axum = "0.8.9"
+base64 = "0.22.1"
 getrandom = "0.4.3"
 quick-xml = "0.42.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10.9"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
+tokio = { version = "1.54.0", features = ["time"] }
+tracing = "0.1.44"
 utoipa = "6.0.0"
 
 [dev-dependencies]
