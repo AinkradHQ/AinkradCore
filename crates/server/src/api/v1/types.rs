@@ -272,7 +272,12 @@
 ///    (`stopAgentSubagent`, step-up; 404 `unknown_subagent`, 409 `unsupported_command`) stops one Claude Code
 ///    sub-agent by its `stop_task` (runner op `agent.subagent_stop`). Audit action `agent.subagent_stopped`.
 /// 83: Project store (P1-01). Registers the event kinds and audit actions `project.*`; no route yet.
-pub const API_MINOR: u32 = 84;
+/// 85: Projects API (P1-02; 84 is the runner Podman facts, #276). `GET/POST /projects` (`listProjects`, `createProject`),
+///    `GET/PATCH /projects/{id}` (`getProject`, `updateProject`), `POST /projects/{id}/archive` (`archiveProject`),
+///    `POST /projects/{id}/repos` (`addProjectRepo`), `DELETE /projects/{id}/repos/{repo}` (`removeProjectRepo`),
+///    `POST /projects/{id}/repos/{repo}/primary` (`setProjectRepoPrimary`). Reading is `read`; every write is `admin`
+///    and destructive. A project carries its repos, each with its read-only `mirror` state; query `archived`.
+pub const API_MINOR: u32 = 85;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
