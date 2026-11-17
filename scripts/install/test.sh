@@ -181,6 +181,26 @@ T=$D/systemd/ainkrad-runner-tools.socket TS=$D/systemd/ainkrad-runner-tools@.ser
   grep -qx 'ExecStart=/usr/local/bin/ainkrad-runner tools-helper' "$TS" && grep -qx 'StandardInput=socket' "$TS"; } && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: the tool installer socket/unit is not locked down" >&2; }
 bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --dry-run >"$t/out-tools" 2>&1 &&
   grep -q 'ainkrad-runner-tools.socket' "$t/out-tools" && grep -q 'enable --now ainkrad-runner-tools.socket' "$t/out-tools" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: install-linux.sh does not plan the tool installer" >&2; }
+# --with-run (rootless Podman for project runs): off unless asked; the dry run plans every prerequisite; under --prefix only the
+# delegation drop-in is written, and a re-run finds it in place. The package list is the manifest's `distro.podman`.
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --prefix "$t/w0" >/dev/null 2>&1 &&
+  [ ! -e "$t/w0/etc/systemd/system/user@.service.d" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --with-run work done without --with-run" >&2; }
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --with-run --dry-run >"$t/out-run" 2>&1 &&
+  grep -q 'apt-get install -y -q --no-install-recommends podman uidmap passt nftables' "$t/out-run" &&
+  grep -q 'useradd --system --user-group --create-home --home-dir /var/lib/ainkrad-run --shell /usr/sbin/nologin ainkrad-run' "$t/out-run" &&
+  grep -qE 'usermod --add-subuids [0-9]+-[0-9]+ --add-subgids [0-9]+-[0-9]+ ainkrad-run' "$t/out-run" &&
+  grep -q 'loginctl enable-linger ainkrad-run' "$t/out-run" && grep -q 'user@.service.d/delegate.conf' "$t/out-run" &&
+  ! grep -qE 'sysctl|apparmor' "$t/out-run" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --with-run dry run does not plan the setup: $(cat "$t/out-run")" >&2; }
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --with-run --prefix "$t/w1" >"$t/out-w1" 2>&1 &&
+  grep -qx 'Delegate=cpu cpuset io memory pids' "$t/w1/etc/systemd/system/user@.service.d/delegate.conf" && grep -q 'skipped under --prefix' "$t/out-w1" &&
+  bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --with-run --prefix "$t/w1" >"$t/out-w1b" 2>&1 &&
+  grep -q 'delegation drop-in already in place' "$t/out-w1b" && ! grep -q 'write .*delegate.conf' "$t/out-w1b" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --with-run --prefix drop-in not written once and left alone" >&2; }
+# The next free subuid block is after every existing range (and never below 100000).
+printf 'ahmed:100000:65536\nbob:165536:1000\n' >"$t/subuid"; printf 'ahmed:100000:65536\n' >"$t/subgid"
+[ "$(AINKRAD_INSTALL_SOURCE_ONLY=1 bash -c ". '$D/install-linux.sh'; sub_next '$t/subuid' '$t/subgid'")" = 166536 ] &&
+  [ "$(AINKRAD_INSTALL_SOURCE_ONLY=1 bash -c ". '$D/install-linux.sh'; sub_next /nonexistent")" = 100000 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: sub_next picks a wrong subuid block" >&2; }
+python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["distro"]["podman"]; s=open(sys.argv[2]).read(); sys.exit(0 if " ".join(m["apt"]) in s and " ".join(m["dnf"]) in s else 1)' "$D/tools.manifest.json" "$D/install-linux.sh" &&
+  pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: install-linux.sh --with-run packages differ from tools.manifest.json distro.podman" >&2; }
 # bubblewrap (agent sessions, terminals) needs these; `RestrictNamespaces=yes`, ProcSubset=pid and the /proc overmounting
 # Protect* lines make it fail on a real host (H0b), so they must not come back.
 grep -qx 'RestrictNamespaces=user mnt pid ipc uts cgroup net' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks the bwrap namespace allow-list" >&2; }
