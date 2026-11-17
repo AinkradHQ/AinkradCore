@@ -1,0 +1,23 @@
+[package]
+name = "leyline-module"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ainkrad-core = { path = "../../../crates/core" }
+ainkrad-core-server = { path = "../../../crates/server" }
+axum = "0.8.9"
+getrandom = "0.4.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
+utoipa = "6.0.0"
+
+[dev-dependencies]
+ainkrad-core-server = { path = "../../../crates/server", features = ["test-support"] }
+tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5.3", features = ["util"] }

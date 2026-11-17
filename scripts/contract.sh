@@ -19,4 +19,7 @@ if [ "$out" = "api" ]; then
   # The same for the Brain module (KAN-476): modules/brain/api/openapi.core.json.
   cargo run -q --manifest-path modules/brain/Cargo.toml -p brain-module --example contract > "$t/brain.core.json"
   mkdir -p modules/brain/api && cp "$t/brain.core.json" modules/brain/api/openapi.core.json
+  # And the Leyline module (Y1-01): modules/leyline/api/openapi.core.json.
+  cargo run -q --manifest-path modules/leyline/Cargo.toml -p leyline-module --example contract > "$t/leyline.core.json"
+  mkdir -p modules/leyline/api && cp "$t/leyline.core.json" modules/leyline/api/openapi.core.json
 fi
