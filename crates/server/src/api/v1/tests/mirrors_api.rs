@@ -217,7 +217,7 @@ async fn a_runner_clones_two_at_once_and_cannot_push_or_read_without_its_scope()
     let none = "/api/v1/mirrors/999/info/refs?service=git-upload-pack";
     assert_eq!(
         raw(&fx, Some(&vm), Method::GET, none, b"").await.0,
-        StatusCode::SERVICE_UNAVAILABLE
+        StatusCode::NOT_FOUND
     );
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -283,4 +283,102 @@ async fn a_token_comes_only_from_a_granted_github_connection_that_covers_the_rep
         token("https://gitlab.com/acme/web.git").await.is_none(),
         "another host"
     );
+}
+
+fn run(cmd: &mut std::process::Command) {
+    assert!(cmd.status().unwrap().success());
+}
+
+#[tokio::test]
+async fn a_removed_repo_is_gone_and_a_recycled_id_never_serves_the_old_objects() {
+    let (fx, id, repo, old, dir) = shop().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let refs = format!("/api/v1/mirrors/{repo}/info/refs?service=git-upload-pack");
+    let pack = format!("/api/v1/mirrors/{repo}/git-upload-pack");
+    let copy = dir.join("mirrors").join(format!("{repo}.git"));
+    assert_eq!(fetch(&fx, &fx.dev, id, repo).await.0, StatusCode::OK);
+    assert_eq!(
+        raw(&fx, Some(&vm), Method::GET, &refs, b"").await.0,
+        StatusCode::OK
+    );
+    // Kept aside, to put back as if the removal had not cleaned up.
+    let aside = dir.join("aside.git");
+    run(std::process::Command::new("cp")
+        .arg("-R")
+        .arg(&copy)
+        .arg(&aside));
+
+    let uri = format!("/api/v1/projects/{id}/repos/{repo}");
+    let r = send(&fx.app, req(Method::DELETE, &uri, Some(&fx.dev), None)).await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    assert!(!copy.exists(), "the copy goes with the repo");
+    for r in [
+        raw(&fx, Some(&vm), Method::GET, &refs, b"").await,
+        raw(&fx, Some(&vm), Method::POST, &pack, &want(&old)).await,
+    ] {
+        assert_eq!(r.0, StatusCode::NOT_FOUND);
+    }
+
+    // The id comes back for another repo whose remote cannot be reached, and the old copy is
+    // still on disk: it is not served, and the failed fetch does not bring it back.
+    run(std::process::Command::new("cp")
+        .arg("-R")
+        .arg(&aside)
+        .arg(&copy));
+    let gone = dir.join("nowhere");
+    sqlx::query(
+        "INSERT INTO core_project_repos (id, project_id, name, remote_url, default_branch, is_primary) \
+         VALUES (?, ?, 'web', ?, 'main', 1)",
+    )
+    .bind(repo)
+    .bind(id)
+    .bind(gone.to_str().unwrap())
+    .execute(&fx.app.pool)
+    .await
+    .unwrap();
+    for r in [
+        raw(&fx, Some(&vm), Method::GET, &refs, b"").await,
+        raw(&fx, Some(&vm), Method::POST, &pack, &want(&old)).await,
+    ] {
+        assert_eq!(
+            r.0,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "never the old objects"
+        );
+    }
+    let r = fetch(&fx, &fx.dev, id, repo).await;
+    assert_eq!(r.0, StatusCode::OK);
+    assert!(r.1["repos"][0]["mirror"]["error"].is_string());
+    assert!(
+        r.1["repos"][0]["mirror"]["head"].is_null(),
+        "no head from the old repo"
+    );
+    let r = raw(&fx, Some(&vm), Method::GET, &refs, b"").await;
+    assert_eq!(r.0, StatusCode::SERVICE_UNAVAILABLE);
+
+    // Pointed at a repo that works: only its own objects.
+    let dir2 = tmp("api2");
+    let (remote2, _) = remote(&dir2);
+    run(std::process::Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q"])
+        .args(["--allow-empty", "-m", "unique"])
+        .current_dir(&remote2)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null"));
+    sqlx::query("UPDATE core_project_repos SET remote_url = ? WHERE id = ?")
+        .bind(remote2.to_str().unwrap())
+        .bind(repo)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let r = fetch(&fx, &fx.dev, id, repo).await;
+    let new = r.1["repos"][0]["mirror"]["head"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(new, old);
+    let r = raw(&fx, Some(&vm), Method::GET, &refs, b"").await;
+    let text = String::from_utf8_lossy(&r.2).into_owned();
+    assert!(text.contains(&new) && !text.contains(&old));
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(dir2);
 }

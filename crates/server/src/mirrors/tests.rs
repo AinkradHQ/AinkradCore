@@ -133,6 +133,7 @@ fn fake_git(dir: &Path) -> (PathBuf, PathBuf) {
     let (script, log) = (dir.join("fakegit"), dir.join("calls.log"));
     let body = format!(
         "#!/bin/sh\nprintf '%s\\n' \"$@\" >> {log}\nprintf 'ENV token=%s askpass=%s\\n' \"$AINKRAD_GIT_TOKEN\" \"$GIT_ASKPASS\" >> {log}\n\
+         case \"$*\" in *for-each-ref*) exit 0 ;; esac\n\
          echo \"fatal: authentication failed for $AINKRAD_GIT_TOKEN\" >&2\nexit 1\n",
         log = log.display()
     );
@@ -151,6 +152,7 @@ async fn a_token_is_only_in_the_environment_never_argv_or_the_error() {
     // `init` is the first call and fails; the fetch is reached by the second sync on a made dir.
     std::fs::create_dir_all(m.dir(7)).unwrap();
     std::fs::write(m.dir(7).join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(m.dir(7).join(MARKER), &t.remote).unwrap();
     let err = m.sync(&t, Some(TOKEN)).await.unwrap_err();
     assert!(!err.contains(TOKEN) && err.contains("***"), "{err}");
     let calls = std::fs::read_to_string(&log).unwrap();
@@ -198,4 +200,87 @@ fn only_a_plain_github_remote_gets_a_token_and_text_is_scrubbed() {
     }
     assert_eq!(scrub("a\n  b  tok c", Some("tok")), "a b *** c");
     assert!(scrub(&"x".repeat(1000), None).len() <= 300);
+}
+
+#[tokio::test]
+async fn a_commit_the_remote_dropped_is_not_kept_after_the_next_fetch() {
+    let dir = tmp("gc");
+    let (remote, old) = remote(&dir);
+    let m = Mirrors::new(dir.join("mirrors"));
+    assert_eq!(m.sync(&target(&remote), None).await.unwrap(), old);
+    // A force push: the old commit is replaced by an amended one.
+    git(&remote, &["commit", "-q", "--amend", "-m", "rewritten"]);
+    let new = git(&remote, &["rev-parse", "HEAD"]);
+    assert_ne!(old, new);
+    assert_eq!(m.sync(&target(&remote), None).await.unwrap(), new);
+    let dropped = std::process::Command::new("git")
+        .args(["cat-file", "-e", &old])
+        .current_dir(m.dir(7))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .status()
+        .unwrap();
+    assert!(
+        !dropped.success(),
+        "the dropped commit is still in the copy"
+    );
+    // A plain fast-forward keeps its history (and needs no collection).
+    std::fs::write(remote.join("c.txt"), "c").unwrap();
+    git(&remote, &["add", "."]);
+    git(&remote, &["commit", "-q", "-m", "three"]);
+    let third = git(&remote, &["rev-parse", "HEAD"]);
+    assert_eq!(m.sync(&target(&remote), None).await.unwrap(), third);
+    git(&m.dir(7), &["cat-file", "-e", &new]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_copy_made_from_another_remote_is_never_reused() {
+    let dir = tmp("recycled");
+    let (remote, old) = remote(&dir);
+    let m = Mirrors::new(dir.join("mirrors"));
+    m.sync(&target(&remote), None).await.unwrap();
+    assert!(m.ready(7, remote.to_str().unwrap()).is_ok());
+    // The same id, another remote that cannot be reached: nothing of the old repo is served.
+    let other = dir.join("nowhere");
+    assert!(m.sync(&target(&other), None).await.is_err());
+    assert!(!m.dir(7).exists(), "the old copy was kept");
+    assert_eq!(
+        m.ready(7, other.to_str().unwrap()),
+        Err(ServeError::NotReady)
+    );
+    // Another remote that works: its own objects only.
+    let dir2 = tmp("recycled2");
+    let (remote2, _) = self::remote(&dir2);
+    git(
+        &remote2,
+        &[
+            "commit",
+            "-q",
+            "--amend",
+            "--allow-empty",
+            "-m",
+            "another root",
+        ],
+    );
+    let new = git(&remote2, &["rev-parse", "HEAD"]);
+    assert_eq!(m.sync(&target(&remote2), None).await.unwrap(), new);
+    let missing = std::process::Command::new("git")
+        .args(["cat-file", "-e", &old])
+        .current_dir(m.dir(7))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .status()
+        .unwrap();
+    assert!(
+        !missing.success(),
+        "the old repo's commit is in the new copy"
+    );
+    assert_eq!(
+        m.ready(7, remote.to_str().unwrap()),
+        Err(ServeError::NotReady)
+    );
+    // `forget` removes the copy.
+    m.forget(7).await;
+    assert!(!m.dir(7).exists());
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&dir2);
 }

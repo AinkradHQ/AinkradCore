@@ -2,6 +2,9 @@
 //! git smart HTTP, upload side only, behind the signed gate with the `runner` scope. The git
 //! clients are the runner's (it signs each request); a push is refused here, always, because the
 //! copy is read-only: the remote is where work is pushed.
+//!
+//! TODO(P3-02): any `runner` device may read any repo's copy. P3-02 adds a lease per (device,
+//! repo ids), granted with a session's workspace list and checked in `info_refs` and `upload_pack`.
 
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
@@ -66,6 +69,14 @@ fn repo_id(s: &str) -> Result<i64, ApiError> {
         .ok_or_else(|| ApiError::not_found("no such repo"))
 }
 
+/// The repo's remote: a repo that is gone (removed, its id maybe recycled) is a 404, whatever
+/// is still on disk.
+async fn remote(app: &App, repo: i64) -> Result<String, ApiError> {
+    crate::mirrors::remote_of(&app.pool, repo)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such repo"))
+}
+
 /// `GET /api/v1/mirrors/{repo}/info/refs?service=git-upload-pack`.
 pub async fn info_refs(
     State(app): State<App>,
@@ -79,8 +90,10 @@ pub async fn info_refs(
         Some("git-receive-pack") => return Err(read_only()),
         _ => return Err(ApiError::bad_request("service must be git-upload-pack")),
     }
-    let body = mirrors(&app)?
-        .advertise(repo, protocol(&headers))
+    let mirrors = mirrors(&app)?;
+    let remote = remote(&app, repo).await?;
+    let body = mirrors
+        .advertise(repo, &remote, protocol(&headers))
         .await
         .map_err(failed)?;
     Ok((
@@ -111,8 +124,10 @@ pub async fn upload_pack(
     let bytes = axum::body::to_bytes(body, super::gate::SIGNED_BODY)
         .await
         .map_err(|_| ApiError::bad_request("the request is too large"))?;
-    let out: Body = mirrors(&app)?
-        .upload_pack(repo, protocol(&parts.headers), &bytes, gzip)
+    let mirrors = mirrors(&app)?;
+    let remote = remote(&app, repo).await?;
+    let out: Body = mirrors
+        .upload_pack(repo, &remote, protocol(&parts.headers), &bytes, gzip)
         .await
         .map_err(failed)?;
     Ok((

@@ -9,17 +9,33 @@
 //!   which holds only what the remote holds. `git receive-pack` is never run, so a runner cannot
 //!   write the Core's copy; the route that names it answers 403. Nothing a runner sends reaches
 //!   a shell: the repo is a number, the rest is the pack protocol on stdin.
+//!   TODO(P3-02): today any runner device reads any project's mirror. P3-02 narrows it to a
+//!   lease per (device, repo ids), checked in `info_refs` and `upload_pack`, granted when the
+//!   Core builds a session's workspace list.
+//! - A mirror is only served while its repo row exists and its remote is the one the mirror was
+//!   made from (a marker file in it): removing a repo deletes its copy, and a recycled repo id
+//!   with another remote starts from nothing, never from the old objects.
+//! - Protocol v2 lets a client ask for any object the copy holds, referenced or not. So after a
+//!   fetch that dropped or rewrote refs (a force push, a deleted branch) the copy runs
+//!   `git gc --prune=now` under the repo lock, and nothing unreferenced stays fetchable.
+//!   ponytail: gc rewrites packs while a stream may read them; an open file survives that, a
+//!   stream that loses the race fails and the runner retries. Only a force push costs that.
 //! - The Core's copy has no remote configured and no credential in it: the URL is a command
 //!   argument (never one with a secret, `repo_url_problem`), and a token reaches git only in the
 //!   environment of that one process, read by a fixed askpass script. It is never in argv, in a
 //!   URL, in the repo config or in a log; git's own stderr is scrubbed of it before it is kept.
 //! - git runs from a cleared environment: no global or system config, no hooks, no prompts, no
-//!   redirects, only https and ssh. Only a github.com https remote gets a token, found through
+//!   redirects, only https and ssh, objects checked as they arrive (`transfer.fsckObjects`). ssh
+//!   uses no key, no agent and the Core's own `known_hosts` (`StrictHostKeyChecking=accept-new`:
+//!   trust on first use, a changed key is refused), so ssh remotes only work where no key is
+//!   needed. Only a github.com https remote gets a token, found through
 //!   the connections broker (`resolve` with the project owner's grants), so a repo no connection
 //!   covers is fetched anonymously.
-//! - Every git command runs in its own process group, killed when it ends or times out. One
+//! - Every git command runs in its own process group, killed when its output ends (before it is
+//!   waited for) or when it times out; a pack stream has a total limit of 30 minutes. One
 //!   fetch per repo at a time (an in-process lock); reads never take it, since git's own ref
-//!   updates are atomic (`fetch --atomic`): a failed fetch leaves the older refs.
+//!   updates are atomic (`fetch --atomic`): a failed fetch leaves the older refs. Pack streams
+//!   and advertisements share four slots, taken before anything is inflated or spawned.
 
 use std::collections::HashMap;
 use std::os::unix::process::CommandExt;
@@ -29,9 +45,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::runner::{branch_name_ok, repo_url_problem};
-use axum::body::{Body, Bytes};
 use sqlx::{Row, SqlitePool};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::{OwnedMutexGuard, Semaphore};
 use zeroize::Zeroizing;
@@ -44,6 +59,9 @@ use crate::store::projects as store;
 
 /// How often every active project's repos are fetched.
 pub const INTERVAL: Duration = Duration::from_secs(15 * 60);
+
+/// The file in a mirror naming the remote it was made from.
+const MARKER: &str = "ainkrad-remote";
 
 /// The most a request to `upload-pack` may be once decompressed.
 const REQUEST_MAX: usize = 8 << 20;
@@ -60,6 +78,8 @@ pub struct Mirrors {
     /// Pack streams in flight; the Core machine runs other things too.
     serving: Arc<Semaphore>,
 }
+
+mod serve;
 
 /// Why a mirror cannot be served.
 #[derive(Debug, PartialEq, Eq)]
@@ -111,9 +131,41 @@ impl Mirrors {
         lock.lock_owned().await
     }
 
+    /// The repo's lock if no fetch holds it.
+    fn try_lock(&self, repo: i64) -> Option<OwnedMutexGuard<()>> {
+        let lock = self
+            .locks
+            .lock()
+            .expect("locks")
+            .entry(repo)
+            .or_default()
+            .clone();
+        lock.try_lock_owned().ok()
+    }
+
+    /// Deletes the repo's copy, once nothing is fetching it (the repo was removed).
+    pub async fn forget(&self, repo: i64) {
+        let _one = self.lock(repo).await;
+        for dir in [self.dir(repo), self.dir(repo).with_extension("cloning")] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
     /// `git args…` as every git here runs (see the module docs); `token` only in its environment.
     fn command(&self, args: &[&str], token: Option<&str>) -> Command {
         let mut cmd = Command::new(&self.git);
+        let known_hosts = self.root.join("known_hosts");
+        let ssh = match known_hosts
+            .to_str()
+            .filter(|p| !p.contains(char::is_whitespace))
+        {
+            Some(p) => format!(
+                "core.sshCommand=ssh -F /dev/null -oBatchMode=yes -oIdentitiesOnly=yes \
+                 -oIdentityFile=none -oUserKnownHostsFile={p} -oStrictHostKeyChecking=accept-new"
+            ),
+            // A path ssh could not be given whole: no ssh at all.
+            None => "protocol.ssh.allow=never".to_owned(),
+        };
         let fixed = [
             "core.hooksPath=/dev/null",
             "core.fsmonitor=false",
@@ -126,7 +178,8 @@ impl Mirrors {
             "init.templateDir=",
             "credential.helper=",
             "gc.auto=0",
-            "core.sshCommand=ssh -F /dev/null -oBatchMode=yes -oStrictHostKeyChecking=yes",
+            "transfer.fsckObjects=true",
+            ssh.as_str(),
         ];
         for c in fixed {
             cmd.args(["-c", c]);
@@ -173,24 +226,30 @@ impl Mirrors {
             .command(args, token)
             .spawn()
             .map_err(|e| format!("git: {e}"))?;
-        let _group = Group(child.id().ok_or("git has no pid")?);
+        let group = Group::new(child.id().ok_or("git has no pid")?);
         let (out, err) = (child.stdout.take(), child.stderr.take());
-        let read = |s: Option<tokio::process::ChildStdout>,
-                    e: Option<tokio::process::ChildStderr>| async move {
+        let read = async {
             let (mut a, mut b) = (Vec::new(), Vec::new());
-            if let Some(s) = s {
-                s.take(16 << 20).read_to_end(&mut a).await.ok();
-            }
-            if let Some(e) = e {
-                e.take(1 << 20).read_to_end(&mut b).await.ok();
-            }
+            tokio::join!(
+                async {
+                    if let Some(s) = out {
+                        s.take(16 << 20).read_to_end(&mut a).await.ok();
+                    }
+                },
+                async {
+                    if let Some(e) = err {
+                        e.take(1 << 20).read_to_end(&mut b).await.ok();
+                    }
+                }
+            );
             (a, b)
         };
-        let run = async { tokio::join!(child.wait(), read(out, None), read(None, err)) };
-        let Ok((status, (out, _), (_, err))) = tokio::time::timeout(self.timeout, run).await else {
+        let Ok((out, err)) = tokio::time::timeout(self.timeout, read).await else {
             return Err("git timed out".into());
         };
-        match status {
+        // Both pipes are closed: whatever is left (ssh, helpers) is killed before the wait.
+        group.kill();
+        match child.wait().await {
             Ok(s) if s.success() => Ok(String::from_utf8_lossy(&out).into_owned()),
             _ => Err(scrub(&String::from_utf8_lossy(&err), token)),
         }
@@ -217,6 +276,10 @@ impl Mirrors {
                 .map_err(|e| format!("mirrors: {e}"))?;
         }
         let dir = self.dir(t.id);
+        // A copy made from another remote (a recycled repo id) is not this repo's: start over.
+        if dir.exists() && self.ready(t.id, &t.remote).is_err() {
+            std::fs::remove_dir_all(&dir).map_err(|e| format!("mirrors: {e}"))?;
+        }
         // A first fetch is made aside and moved in, so a failed one leaves no half-made mirror.
         let fresh = !dir.join("HEAD").exists();
         let work = if fresh {
@@ -228,7 +291,12 @@ impl Mirrors {
         if fresh {
             let _ = std::fs::remove_dir_all(&work);
             self.run(&["init", "--bare", "-q", "--", w], None).await?;
+            std::fs::write(work.join(MARKER), &t.remote).map_err(|e| format!("mirrors: {e}"))?;
         }
+        let before = match fresh {
+            true => Vec::new(),
+            false => self.refs(w).await?,
+        };
         let branch = format!("refs/heads/{}", t.branch);
         let fetch = [
             "-C",
@@ -244,6 +312,7 @@ impl Mirrors {
         ];
         let head = async {
             self.run(&fetch, token).await?;
+            self.forget_dropped(w, before).await;
             self.run(&["-C", w, "symbolic-ref", "HEAD", &branch], None)
                 .await?;
             let sha = self
@@ -271,10 +340,11 @@ impl Mirrors {
         head
     }
 
-    /// The mirror to serve, if a fetch has made one.
-    fn ready(&self, repo: i64) -> Result<String, ServeError> {
+    /// The mirror to serve: made by a fetch, from `remote`.
+    fn ready(&self, repo: i64, remote: &str) -> Result<String, ServeError> {
         let dir = self.dir(repo);
-        match dir.join("HEAD").exists() {
+        let made = std::fs::read_to_string(dir.join(MARKER)).is_ok_and(|m| m == remote);
+        match dir.join("HEAD").exists() && made {
             true => dir
                 .into_os_string()
                 .into_string()
@@ -283,164 +353,45 @@ impl Mirrors {
         }
     }
 
-    /// The reference advertisement of `git upload-pack` for smart HTTP. `protocol` is the
-    /// client's `Git-Protocol` header (`version=2`), passed on only if it is that plain.
-    pub async fn advertise(
-        &self,
-        repo: i64,
-        protocol: Option<&str>,
-    ) -> Result<Vec<u8>, ServeError> {
-        let dir = self.ready(repo)?;
-        let mut cmd = self.command(
-            &[
-                "upload-pack",
-                "--stateless-rpc",
-                "--advertise-refs",
-                "--timeout=30",
-                &dir,
-            ],
-            None,
-        );
-        let v2 = protocol_of(protocol).is_some_and(|p| p == "version=2");
-        if let Some(p) = protocol_of(protocol) {
-            cmd.env("GIT_PROTOCOL", p);
-        }
-        let mut child = cmd.spawn().map_err(|e| ServeError::Failed(e.to_string()))?;
-        let _group = Group(
-            child
-                .id()
-                .ok_or_else(|| ServeError::Failed("no pid".into()))?,
-        );
-        let (mut out, mut err) = (child.stdout.take(), child.stderr.take());
-        let (mut a, mut b) = (Vec::new(), Vec::new());
-        let io = async {
-            tokio::join!(
-                async {
-                    if let Some(o) = out.as_mut() {
-                        o.take(16 << 20).read_to_end(&mut a).await.ok();
-                    }
-                },
-                async {
-                    if let Some(e) = err.as_mut() {
-                        e.take(1 << 16).read_to_end(&mut b).await.ok();
-                    }
-                },
-            );
-            child.wait().await
-        };
-        match tokio::time::timeout(Duration::from_secs(30), io).await {
-            Ok(Ok(s)) if s.success() => {
-                // Version 2 has no service line; version 0 and 1 have one and a flush.
-                let mut body = if v2 {
-                    vec![]
-                } else {
-                    b"001e# service=git-upload-pack\n0000".to_vec()
-                };
-                body.extend(a);
-                Ok(body)
-            }
-            _ => Err(ServeError::Failed(scrub(
-                &String::from_utf8_lossy(&b),
+    /// Every ref and what it points at.
+    async fn refs(&self, w: &str) -> Result<Vec<(String, String)>, String> {
+        let out = self
+            .run(
+                &["-C", w, "for-each-ref", "--format=%(objectname) %(refname)"],
                 None,
-            ))),
-        }
+            )
+            .await?;
+        let pair = |l: &str| l.split_once(' ').map(|(o, r)| (r.to_owned(), o.to_owned()));
+        Ok(out.lines().filter_map(pair).collect())
     }
 
-    /// `git upload-pack` answering one request: its output as it is made. `gzip` says the
-    /// request is gzip-compressed, as git sends a large one.
-    pub async fn upload_pack(
-        &self,
-        repo: i64,
-        protocol: Option<&str>,
-        request: &[u8],
-        gzip: bool,
-    ) -> Result<Body, ServeError> {
-        let dir = self.ready(repo)?;
-        let request = match gzip {
-            true => self.gunzip(request).await?,
-            false => request.to_vec(),
+    /// After a fetch: if a ref was deleted or moved to a commit that does not contain what it
+    /// held, objects no ref reaches are left, and protocol v2 would hand them out: collect them
+    /// now. A failure here is logged; the fetch itself succeeded.
+    async fn forget_dropped(&self, w: &str, before: Vec<(String, String)>) {
+        let Ok(after) = self.refs(w).await else {
+            return;
         };
-        let permit = self
-            .serving
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| ServeError::Bad("closed"))?;
-        let mut cmd = self.command(
-            &["upload-pack", "--stateless-rpc", "--timeout=60", &dir],
-            None,
-        );
-        if let Some(p) = protocol_of(protocol) {
-            cmd.env("GIT_PROTOCOL", p);
+        let mut dropped = false;
+        for (name, old) in &before {
+            dropped |= match after.iter().find(|(n, _)| n == name) {
+                None => true,
+                Some((_, new)) if new == old => false,
+                Some((_, new)) => self
+                    .run(&["-C", w, "merge-base", "--is-ancestor", old, new], None)
+                    .await
+                    .is_err(),
+            };
+            if dropped {
+                break;
+            }
         }
-        // Nobody reads its stderr: a full pipe would stall it.
-        cmd.stdin(Stdio::piped()).stderr(Stdio::null());
-        let mut child = cmd.spawn().map_err(|e| ServeError::Failed(e.to_string()))?;
-        let group = Group(
-            child
-                .id()
-                .ok_or_else(|| ServeError::Failed("no pid".into()))?,
-        );
-        let (stdin, stdout) = (child.stdin.take(), child.stdout.take());
-        let (Some(mut stdin), Some(stdout)) = (stdin, stdout) else {
-            return Err(ServeError::Failed("no pipes".into()));
-        };
-        tokio::spawn(async move {
-            let _ = stdin.write_all(&request).await;
-        });
-        // The child, its group and the permit live as long as the stream.
-        let stream = futures_util::stream::unfold(
-            (stdout, child, group, permit),
-            |(mut out, mut child, group, permit)| async move {
-                let mut buf = vec![0; 64 << 10];
-                match out.read(&mut buf).await {
-                    Ok(n) if n > 0 => {
-                        buf.truncate(n);
-                        Some((
-                            Ok::<_, std::io::Error>(Bytes::from(buf)),
-                            (out, child, group, permit),
-                        ))
-                    }
-                    _ => {
-                        let _ = child.wait().await;
-                        None
-                    }
-                }
-            },
-        );
-        Ok(Body::from_stream(stream))
-    }
-
-    /// `request` decompressed, within `REQUEST_MAX`, by the system `gzip`.
-    async fn gunzip(&self, request: &[u8]) -> Result<Vec<u8>, ServeError> {
-        let mut cmd = Command::new("gzip");
-        cmd.arg("-dc")
-            .env_clear()
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        let mut child = cmd.spawn().map_err(|e| ServeError::Failed(e.to_string()))?;
-        let (mut stdin, stdout) = (child.stdin.take(), child.stdout.take());
-        let (Some(stdin), Some(stdout)) = (stdin.take(), stdout) else {
-            return Err(ServeError::Failed("no pipes".into()));
-        };
-        let input = request.to_vec();
-        tokio::spawn(async move {
-            let mut stdin = stdin;
-            let _ = stdin.write_all(&input).await;
-        });
-        let mut out = Vec::new();
-        stdout
-            .take(REQUEST_MAX as u64 + 1)
-            .read_to_end(&mut out)
-            .await
-            .map_err(|e| ServeError::Failed(e.to_string()))?;
-        match out.len() <= REQUEST_MAX && child.wait().await.is_ok_and(|s| s.success()) {
-            true => Ok(out),
-            false => Err(ServeError::Bad(
-                "the request is not valid gzip or is too large",
-            )),
+        if dropped
+            && let Err(why) = self
+                .run(&["-C", w, "gc", "--prune=now", "--quiet"], None)
+                .await
+        {
+            tracing::warn!(why, "collecting a mirror's dropped objects failed");
         }
     }
 }
@@ -450,16 +401,44 @@ fn protocol_of(header: Option<&str>) -> Option<&str> {
     header.filter(|h| matches!(*h, "version=0" | "version=1" | "version=2"))
 }
 
-/// Kills the git process group when dropped: also what git started (ssh, remote helpers).
-struct Group(u32);
+/// A git process group: killed by `kill`, when dropped, and when its deadline (if any) passes,
+/// so also what git started (ssh, remote helpers).
+struct Group {
+    pgid: u32,
+    deadline: Option<tokio::task::AbortHandle>,
+}
+
+impl Group {
+    fn new(pgid: u32) -> Self {
+        Self {
+            pgid,
+            deadline: None,
+        }
+    }
+
+    fn with_deadline(pgid: u32, limit: Duration) -> Self {
+        let watchdog = tokio::spawn(async move {
+            tokio::time::sleep(limit).await;
+            let _ = ainkrad_sys::killpg(pgid, 9);
+        });
+        Self {
+            pgid,
+            deadline: Some(watchdog.abort_handle()),
+        }
+    }
+
+    fn kill(&self) {
+        let _ = ainkrad_sys::killpg(self.pgid, 9);
+    }
+}
 
 impl Drop for Group {
     fn drop(&mut self) {
-        let _ = std::process::Command::new("/bin/kill")
-            .args(["-KILL", "--", &format!("-{}", self.0)])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        // The watchdog first: the id may be reused once this group is gone.
+        if let Some(w) = &self.deadline {
+            w.abort();
+        }
+        self.kill();
     }
 }
 
@@ -541,6 +520,11 @@ async fn target(pool: &SqlitePool, repo: i64) -> Result<Option<Target>, sqlx::Er
     .transpose()
 }
 
+/// The remote of repo `repo`, or `None` if there is no such repo (any more).
+pub async fn remote_of(pool: &SqlitePool, repo: i64) -> Result<Option<String>, sqlx::Error> {
+    Ok(target(pool, repo).await?.map(|t| t.remote))
+}
+
 /// Why a fetch was not tried.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Refused {
@@ -551,13 +535,45 @@ pub enum Refused {
     Db(String),
 }
 
-/// Fetches one repo's remote into the Core's copy and records the outcome: the new head, or the
-/// reason it failed with the older head and time kept. A failed fetch is a recorded state, not
-/// an `Err`; `Err` is only for a fetch that could not be tried. Call it when a session or run
-/// starts.
+/// Fetches one repo's remote into the Core's copy, waiting its turn, and records the outcome: the
+/// new head, or the reason it failed with the older head and time kept. A failed fetch is a
+/// recorded state, not an `Err`; `Err` is only for a fetch that could not be tried. Call it when
+/// a session or run starts.
 pub async fn refresh(app: &App, repo: i64) -> Result<store::Mirror, Refused> {
-    let db = |e: sqlx::Error| Refused::Db(e.to_string());
     let mirrors = app.mirrors.as_ref().ok_or(Refused::Off)?;
+    let one = mirrors.lock(repo).await;
+    fetch(app, mirrors, repo, one).await
+}
+
+/// "Fetch now": as `refresh`, but a fetch already under way for the repo is not queued behind or
+/// started again; the state as it is comes back (the caller sees the running fetch's result
+/// when it reads the state again).
+pub async fn fetch_now(app: &App, repo: i64) -> Result<store::Mirror, Refused> {
+    let mirrors = app.mirrors.as_ref().ok_or(Refused::Off)?;
+    match mirrors.try_lock(repo) {
+        Some(one) => fetch(app, mirrors, repo, one).await,
+        None => {
+            let db = |e: sqlx::Error| Refused::Db(e.to_string());
+            let m = store::mirror(&app.pool, repo).await.map_err(db)?;
+            Ok(m.unwrap_or(store::Mirror {
+                repo_id: repo,
+                head: None,
+                fetched_at: None,
+                error: None,
+            }))
+        }
+    }
+}
+
+/// The fetch itself, holding the repo's lock. The repo is looked up only now: it may have been
+/// removed while this waited.
+async fn fetch(
+    app: &App,
+    mirrors: &Mirrors,
+    repo: i64,
+    _one: OwnedMutexGuard<()>,
+) -> Result<store::Mirror, Refused> {
+    let db = |e: sqlx::Error| Refused::Db(e.to_string());
     let t = target(&app.pool, repo)
         .await
         .map_err(db)?
@@ -565,7 +581,6 @@ pub async fn refresh(app: &App, repo: i64) -> Result<store::Mirror, Refused> {
     if !t.active {
         return Err(Refused::Archived);
     }
-    let _one = mirrors.lock(repo).await;
     let now = app.clock.now();
     let token = match &app.secrets {
         Some(sealer) => {
@@ -583,11 +598,17 @@ pub async fn refresh(app: &App, repo: i64) -> Result<store::Mirror, Refused> {
     };
     let outcome = mirrors.sync(&t, token.as_ref().map(|t| t.as_str())).await;
     let before = store::mirror(&app.pool, repo).await.map_err(db)?;
+    // The older head is only kept while the copy it names is still there.
+    let kept = mirrors
+        .ready(repo, &t.remote)
+        .is_ok()
+        .then_some(before)
+        .flatten();
     let (head, at, error) = match &outcome {
         Ok(head) => (Some(head.clone()), Some(now), None),
         Err(why) => (
-            before.as_ref().and_then(|m| m.head.clone()),
-            before.and_then(|m| m.fetched_at),
+            kept.as_ref().and_then(|m| m.head.clone()),
+            kept.and_then(|m| m.fetched_at),
             Some(why.clone()),
         ),
     };
