@@ -5,7 +5,7 @@ use design_crdt::{MAX_UPDATE_BYTES, NodeType, Refused, Replica};
 use design_model::tree::forest;
 use serde_json::{Value, json};
 use yrs::types::map::MapPrelim;
-use yrs::{Any, Map as _, Transact, WriteTxn};
+use yrs::{Any, Map as _, ReadTxn, Transact, WriteTxn};
 
 const PAGE: &str = "n_pageaaaaaaaa";
 
@@ -374,4 +374,161 @@ fn the_node_budget_and_repeats_are_enforced() {
     let big = json!({"fill": []});
     let (_, u) = c.edit(|e| e.set_prop(&id(1), "fill", big.get("fill")));
     assert!(s.apply_remote(&u).is_ok());
+}
+
+fn var(mut n: u64, out: &mut Vec<u8>) {
+    loop {
+        let b = (n & 0x7f) as u8;
+        n >>= 7;
+        if n == 0 {
+            out.push(b);
+            return;
+        }
+        out.push(b | 0x80);
+    }
+}
+
+/// One client, one `Any` block holding `depth` nested arrays: what would overflow yrs' recursive decoder.
+fn nested(depth: usize) -> Vec<u8> {
+    let mut u = vec![];
+    var(1, &mut u); // clients
+    var(1, &mut u); // blocks
+    var(7, &mut u); // client
+    var(0, &mut u); // clock
+    u.push(8 | 0x20); // an Any item with a map key: the named parent follows
+    var(1, &mut u);
+    var(5, &mut u);
+    u.extend_from_slice(b"nodes");
+    var(1, &mut u);
+    u.push(b'k');
+    var(1, &mut u); // one value
+    for _ in 0..depth {
+        u.push(117);
+        var(1, &mut u);
+    }
+    u.push(126);
+    var(0, &mut u); // empty delete set
+    u
+}
+
+#[test]
+fn hostile_encodings_are_refused_before_yrs_sees_them() {
+    let server = server_with_page();
+    // honest depth passes the scan, absurd depth is refused without recursing (yrs itself would abort the process)
+    assert!(design_crdt::guard::scan(&nested(3)).is_ok());
+    for bytes in [nested(100_000), nested(design_crdt::guard::MAX_DEPTH + 2)] {
+        let mut s = client_of(&server);
+        assert_eq!(s.apply_remote(&bytes), Err(Refused::Malformed));
+        // refused before anything was integrated: the replica is still usable
+        assert_eq!(s.apply_remote(&[0, 0]), Ok(None));
+    }
+    // a declared length far beyond the bytes present: refused, nothing reserved
+    let mut huge = vec![];
+    var(u32::MAX as u64, &mut huge);
+    var(1, &mut huge);
+    assert_eq!(
+        client_of(&server).apply_remote(&huge),
+        Err(Refused::Malformed)
+    );
+    let mut arr = nested(1);
+    let n = arr.len();
+    arr.splice(n - 4..n - 1, [117, 0xff, 0xff, 0xff, 0xff, 0x0f]);
+    assert_eq!(
+        client_of(&server).apply_remote(&arr),
+        Err(Refused::Malformed)
+    );
+    // content kinds we never write (embed, binary, doc, format, json) and trailing bytes
+    for tag in [5u8, 3, 9, 6, 2] {
+        let mut u = vec![1, 1, 7, 0, tag | 0x20, 1, 5];
+        u.extend_from_slice(b"nodes");
+        u.extend_from_slice(&[1, b'k', 0, 0]);
+        assert_eq!(
+            client_of(&server).apply_remote(&u),
+            Err(Refused::Malformed),
+            "{tag}"
+        );
+    }
+    let mut trailing = client_of(&server).state();
+    trailing.push(0);
+    assert_eq!(
+        client_of(&server).apply_remote(&trailing),
+        Err(Refused::Malformed)
+    );
+    // random bytes never panic or abort the process
+    let mut rng = Rng(0xDEAD_BEEF_1234_5678);
+    for _ in 0..3000 {
+        let n = rng.below(64);
+        let junk: Vec<u8> = (0..n).map(|_| rng.next() as u8).collect();
+        let _ = client_of(&server).apply_remote(&junk);
+    }
+    // the guard accepts what a real client sends: snapshots and edits
+    let mut c = client_of(&server);
+    let (_, u) = c.edit(|e| {
+        e.insert_node(
+            &id(1),
+            NodeType::Text,
+            Some(PAGE),
+            "a",
+            "t",
+            &json!({"w": [1, {"a": 2}]}),
+            Some("hi"),
+        )
+    });
+    assert!(design_crdt::guard::scan(&u).is_ok());
+    assert!(design_crdt::guard::scan(&c.state()).is_ok());
+}
+
+#[test]
+fn a_chain_of_small_nested_updates_is_refused_at_the_step_that_nests() {
+    // Nested maps are stored flat, so no single update looks deep. Each small update here adds one level under a
+    // node's props; the gate trial-applies each to the Core's own replica and refuses the first that leaves the schema.
+    let mut server = server_with_page();
+    let mut c = client_of(&server);
+    let (_, u) = c.edit(|e| {
+        e.insert_node(
+            &id(1),
+            NodeType::Frame,
+            Some(PAGE),
+            "a",
+            "f",
+            &json!({}),
+            None,
+        )
+    });
+    server.apply_remote(&u).unwrap();
+    let before = server.state();
+    let forger = client_of(&server);
+    let mut refused_at = None;
+    let mut parent = {
+        let txn = forger.raw().transact();
+        let nodes = txn.get_map("nodes").unwrap();
+        let Some(yrs::Out::YMap(n)) = nodes.get(&txn, &id(1)) else {
+            panic!()
+        };
+        let Some(yrs::Out::YMap(p)) = n.get(&txn, "props") else {
+            panic!()
+        };
+        p
+    };
+    for depth in 0..40 {
+        let bytes = {
+            let mut txn = forger.raw().transact_mut();
+            let before = txn.state_vector();
+            parent = parent.insert(&mut txn, "k", MapPrelim::default());
+            txn.encode_diff_v1(&before)
+        };
+        assert!(bytes.len() < 200, "each step is small");
+        if server.apply_remote(&bytes).is_err() {
+            refused_at = Some(depth);
+            break;
+        }
+    }
+    assert_eq!(
+        refused_at,
+        Some(0),
+        "a nested shared type inside props is never accepted"
+    );
+    // the poisoned replica is not stored anywhere: a rebuild from what was stored equals the state before
+    let rebuilt = Replica::from_stored([before.as_slice()]).unwrap();
+    assert_eq!(rebuilt.read().unwrap().nodes[&id(1)].props.len(), 0);
 }

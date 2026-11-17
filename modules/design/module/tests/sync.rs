@@ -503,8 +503,7 @@ async fn a_revoked_device_is_cut_and_a_read_only_device_never_opens() {
     let viewer = enroll(&fx.app, "viewer", &["read"]).await;
     let err = connect_as(&fx, &viewer, DOC, None)
         .await
-        .err()
-        .expect("refused");
+        .expect_err("refused");
     assert!(matches!(err, tokio_tungstenite::tungstenite::Error::Http(r) if r.status() == 403));
 }
 
@@ -521,8 +520,7 @@ async fn archived_docs_and_mockups_do_not_sync() {
     ] {
         let err = connect_as(&fx, &fx.dev, doc, None)
             .await
-            .err()
-            .expect("refused");
+            .expect_err("refused");
         assert!(
             matches!(err, tokio_tungstenite::tungstenite::Error::Http(r) if r.status() == status),
             "{doc}"
@@ -608,4 +606,66 @@ async fn too_many_updates_close_the_socket() {
         }
     }
     assert!(closed);
+}
+
+#[tokio::test]
+async fn a_refused_update_is_quarantined_and_never_reaches_another_device() {
+    let fx = boot(Limits::default()).await;
+    let (mut wa, mut a) = client(&fx).await;
+    push(&mut wa, &first_edit(&mut a)).await;
+    let good = a.state();
+    // device A forges an update that is out of schema, sends it, and is dropped
+    let bad = a
+        .edit(|e| {
+            e.insert_node(
+                "n_aaaaaaaaaaac",
+                NodeType::Frame,
+                Some(PAGE),
+                "a",
+                "f",
+                &json!({"script": 1}),
+                None,
+            );
+        })
+        .1;
+    send(&mut wa, &bad).await;
+    assert!(matches!(next(&mut wa).await, F::Closed(1008)));
+    // nothing of it was stored, in the log or in a snapshot
+    let rows: Vec<Vec<u8>> = sqlx::query_scalar("SELECT data FROM design_updates WHERE doc = ?")
+        .bind(DOC)
+        .fetch_all(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1, "only the update that passed the trial apply");
+    let mut from_log = Replica::new();
+    for r in &rows {
+        from_log.apply_trusted(r).unwrap();
+    }
+    assert_eq!(
+        from_log.read().unwrap(),
+        Replica::from_stored([good.as_slice()])
+            .unwrap()
+            .read()
+            .unwrap()
+    );
+    // device B resyncs by snapshot and by cursor: neither carries the bad update, and both read back clean
+    let (_, b) = client(&fx).await;
+    assert!(!b.read().unwrap().nodes.contains_key("n_aaaaaaaaaaac"));
+    let mut ws = connect_doc(&fx, Some(0)).await;
+    let mut via_cursor = Replica::new();
+    while let F::Bin(t, _, body) = next(&mut ws).await {
+        assert!(t == 1 || t == 2);
+        via_cursor.apply_trusted(&body).unwrap();
+        if via_cursor.read().unwrap().nodes.len() == 2 {
+            break;
+        }
+    }
+    assert!(
+        !via_cursor
+            .read()
+            .unwrap()
+            .nodes
+            .contains_key("n_aaaaaaaaaaac")
+    );
+    assert_eq!(b.read().unwrap(), via_cursor.read().unwrap());
 }

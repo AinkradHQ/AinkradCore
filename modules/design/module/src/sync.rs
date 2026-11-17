@@ -235,12 +235,11 @@ impl Actor {
             from: conn,
             bytes: Arc::new(diff),
         });
-        if st.log_updates >= self.limits.compact_updates
-            || st.log_bytes >= self.limits.compact_bytes
+        if (st.log_updates >= self.limits.compact_updates
+            || st.log_bytes >= self.limits.compact_bytes)
+            && let Err(e) = self.compact(&mut st).await
         {
-            if let Err(e) = self.compact(&mut st).await {
-                tracing::error!(error = %e, doc = %self.id, "design compaction failed");
-            }
+            tracing::error!(error = %e, doc = %self.id, "design compaction failed");
         }
         Ok(seq)
     }

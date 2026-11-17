@@ -83,6 +83,7 @@ impl<'a, 'd> Editor<'a, 'd> {
     }
 
     /// A new node under `parent` (a page has none). `props` is a JSON object, `text` for text nodes.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_node(
         &mut self,
         id: &str,

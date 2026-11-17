@@ -1243,6 +1243,7 @@
           "secret.master_rotated",
           "secret.redeemed",
           "secret.rotated",
+          "secret.runners_changed",
           "secret.used",
           "secret_group.created",
           "secret_group.deleted",
@@ -6611,7 +6612,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.85.0"
+    "version": "1.87.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16089,6 +16090,65 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "design"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/design/v1/docs/{doc}/sync": {
+      "get": {
+        "operationId": "designSyncDoc",
+        "parameters": [
+          {
+            "description": "Design id",
+            "in": "path",
+            "name": "doc",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The last update seq this client applied; absent or out of the log: a snapshot first",
+            "in": "header",
+            "name": "Last-Update-Seq",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "A WebSocket: the live document of a `design` or `system` doc (binary frames `01` update, `02` snapshot, `03` ack; text frames are presence JSON). Every update is validated before it is stored or relayed; a refused one closes the socket (1008, 1009 too large, 4429 rate). Also 1013 (too slow: resume from the last seq), 4001 (revoked), 4003 (scopes changed), 4409 (archived)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such design, or a mockup (no live document)"
+          },
+          "409": {
+            "description": "The design is archived"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"

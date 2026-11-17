@@ -7,7 +7,8 @@
 //! - Refused means a protocol violation: the caller drops the peer and discards the replica (`poisoned`), then rebuilds
 //!   it from storage. It is never "skip this update and carry on": an honest client cannot send any of these, and a
 //!   skipped update would let replicas drift.
-//! - Order of checks: size cap (before decoding) -> decode -> integrate -> no pending (missing dependencies) -> no
+//! - Order of checks: size cap -> `guard::scan` of the raw bytes (bounded nesting, declared counts, accepted content
+//!   kinds; yrs recurses on nested values and a crafted one aborts the process) -> decode (panics caught = invalid) -> integrate -> no pending (missing dependencies) -> no
 //!   foreign root types or sub-documents -> every node the update touched is read strictly (`read`) and validated by
 //!   the model crate (`design_model::validate`) -> clock cap -> node and token budgets. Only touched nodes are checked,
 //!   found through yrs deep observers on the three roots, so a check costs the size of the update, not of the document.
@@ -21,6 +22,7 @@
 //!   document byte budget (it counts stored bytes, which only the store knows).
 
 mod edit;
+pub mod guard;
 mod read;
 
 use std::collections::BTreeSet;
@@ -153,13 +155,21 @@ impl Replica {
 
     /// Integrate bytes from a source this process already trusts (the Core's own broadcast, on a client; the store).
     pub fn apply_trusted(&mut self, update: &[u8]) -> Result<(), Refused> {
-        let u = Update::decode_v1(update).map_err(|_| Refused::Malformed)?;
-        self.doc
-            .transact_mut()
-            .apply_update(u)
-            .map_err(|_| Refused::Malformed)
+        guard::scan(update)?;
+        // yrs decoders can panic on malformed input; a panic is invalid input, never a crash.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let u = Update::decode_v1(update).map_err(|_| Refused::Malformed)?;
+            self.doc
+                .transact_mut()
+                .apply_update(u)
+                .map_err(|_| Refused::Malformed)
+        }))
+        .unwrap_or(Err(Refused::Malformed))
     }
 
+    // TODO(V1-02/#298): switch this trial-apply to `design_doc::apply_remote` once that crate (the App engine's
+    // guarded document) is merged, so Core and engine share one guard. Until then this replica IS the trial:
+    // every update is applied to it under catch_unwind, validated, and only then stored or relayed.
     /// The gate. `Ok(None)`: valid, but nothing in it was new. `Ok(Some(diff))`: what was integrated, to persist and
     /// broadcast. `Err`: a protocol violation; the replica is poisoned (see the module docs).
     pub fn apply_remote(&mut self, update: &[u8]) -> Result<Option<Vec<u8>>, Refused> {
@@ -169,17 +179,20 @@ impl Replica {
         if update.len() > MAX_UPDATE_BYTES {
             return Err(Refused::TooLarge);
         }
-        let u = Update::decode_v1(update).map_err(|_| Refused::Malformed)?;
+        // Before yrs sees a byte: bounded structure and nesting (see `guard`).
+        guard::scan(update)?;
         *self.dirty.lock().unwrap_or_else(|e| e.into_inner()) = Dirty::default();
         // From here the document may hold unverified content until `verify` passes.
         self.poisoned = true;
-        let (diff, pending) = {
+        let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let u = Update::decode_v1(update).map_err(|_| Refused::Malformed)?;
             let mut txn = self.doc.transact_mut();
             txn.apply_update(u).map_err(|_| Refused::Malformed)?;
             let pending =
                 txn.store().pending_update().is_some() || txn.store().pending_ds().is_some();
-            (txn.encode_update_v1(), pending)
-        };
+            Ok((txn.encode_update_v1(), pending))
+        }));
+        let (diff, pending) = applied.unwrap_or(Err(Refused::Malformed))?;
         if pending {
             return Err(Refused::Pending);
         }
