@@ -1284,6 +1284,43 @@
         ],
         "type": "object"
       },
+      "Backlink": {
+        "properties": {
+          "context": {
+            "description": "The trimmed line the link is on (at most 160 characters). Note text: outside data.",
+            "type": "string"
+          },
+          "heading": {
+            "description": "The `#Heading` the link names, empty when it names none.",
+            "type": "string"
+          },
+          "note": {
+            "description": "The linking note.",
+            "type": "string"
+          },
+          "project": {
+            "description": "The linking note's project id; `null` = personal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "note",
+          "title",
+          "heading",
+          "context",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "BindChain": {
         "properties": {
           "chain": {
@@ -6760,7 +6797,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.87.0"
+    "version": "1.88.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16074,6 +16111,62 @@
           "lore"
         ],
         "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/notes/{note}/backlinks": {
+      "get": {
+        "operationId": "loreBacklinks",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Backlink"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The live notes linking to this one, newest first, at most 500, one row per distinct link with its context line. Links to a note in the trash or deleted are not listed"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/modules/lore/v1/notes/{note}/restore": {
