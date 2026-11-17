@@ -173,6 +173,34 @@ pub struct RunnerFacts {
     /// that predates the runner policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<RunnerPolicy>,
+    /// Podman on this host, when it is installed. Absent from a runner that predates project runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub podman: Option<PodmanFacts>,
+    /// What project runs can use here. Present only when every prerequisite holds (Podman, the
+    /// `ainkrad-run` user with subuid/subgid and linger, cpu/memory/pids delegated): a Core must
+    /// not place a run on a runner without it, because the limits would be silently ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_caps: Option<RunCaps>,
+}
+
+/// Podman as the runner finds it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PodmanFacts {
+    /// `podman --version`, e.g. `5.7.0`.
+    pub version: String,
+    /// The rootless setup for the `ainkrad-run` user is complete (user, subuid/subgid, linger).
+    pub rootless: bool,
+}
+
+/// What a project run may count on (see [`RunnerFacts::run_caps`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RunCaps {
+    /// Logical CPUs of the host.
+    pub cpus: u32,
+    /// Memory of the host in MB.
+    pub mem_mb: u64,
+    /// Project networks can be isolated from each other (`--opt isolate=true`).
+    pub isolate: bool,
 }
 
 /// The state of `/dev/kvm` on a runner, for the microvm tier (E8a-09).

@@ -272,9 +272,14 @@
 ///    (`stopAgentSubagent`, step-up; 404 `unknown_subagent`, 409 `unsupported_command`) stops one Claude Code
 ///    sub-agent by its `stop_task` (runner op `agent.subagent_stop`). Audit action `agent.subagent_stopped`.
 /// 83: Project store (P1-01). Registers the event kinds and audit actions `project.*`; no route yet.
+/// 85: Projects API (P1-02; 84 is the runner Podman facts, #276). `GET/POST /projects` (`listProjects`, `createProject`),
+///    `GET/PATCH /projects/{id}` (`getProject`, `updateProject`), `POST /projects/{id}/archive` (`archiveProject`),
+///    `POST /projects/{id}/repos` (`addProjectRepo`), `DELETE /projects/{id}/repos/{repo}` (`removeProjectRepo`),
+///    `POST /projects/{id}/repos/{repo}/primary` (`setProjectRepoPrimary`). Reading is `read`; every write is `admin`
+///    and destructive. A project carries its repos, each with its read-only `mirror` state; query `archived`.
 /// 86: Leyline runner SSH (Y2-01). Runner wire protocol only (`runner.schema.json`): op `ssh.exec` (`SshExec` ->
 ///    `ExecResult`), error codes `host_key_unknown`, `host_key_changed`, `ssh_auth_failed`, `ssh_failed`, and
-///    `StreamError.host_key`; no route yet. (84 and 85 are taken by other open changes.)
+///    `StreamError.host_key`; no route yet. (84 and 85 are the runner Podman facts and the projects API.)
 pub const API_MINOR: u32 = 86;
 
 use serde::{Deserialize, Serialize};
