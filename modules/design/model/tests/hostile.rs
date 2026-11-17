@@ -331,3 +331,45 @@ fn rebalance_spaces_orders() {
     }
     assert!(rebalance(design_model::limits::MAX_NODES + 1).is_none());
 }
+
+#[test]
+fn a_huge_token_value_is_refused_not_cloned() {
+    // a 1 MB colour token used by 20 rects: invalid tokens are treated as missing, nothing is copied
+    let mut sys = Doc::default();
+    let huge = format!("#{}", "a".repeat(1_000_000));
+    sys.tokens.insert(
+        "color.big".into(),
+        design_model::Token {
+            kind: design_model::TokenKind::Color,
+            day: json!(huge),
+            night: json!("#000000"),
+        },
+    );
+    sys.tokens.insert(
+        "color.ok".into(),
+        design_model::Token {
+            kind: design_model::TokenKind::Color,
+            day: json!("#ffffff"),
+            night: json!("#000000"),
+        },
+    );
+    let mut d = base();
+    d.meta.system = Some("dd_sys".into());
+    for i in 0..20usize {
+        let id = format!("n_aaaaaaaaaaa{}", (b'a' + i as u8) as char);
+        d.nodes.insert(id, node(NodeType::Rect, Some(PAGE), &format!("{}1", (b'a' + i as u8) as char), json!({"fill": [{"type": "solid", "color": {"token": "color.big"}}], "stroke": {"color": {"token": "color.ok"}}}), None));
+    }
+    let t = Instant::now();
+    let r = resolve("dd_main", &d, Some(("dd_sys", &sys)), Theme::Day).unwrap();
+    assert!(r.diagnostics.iter().any(|x| x.code == "token.invalid"));
+    assert!(r.diagnostics.iter().any(|x| x.code == "token.missing"));
+    assert!(serde_json::to_string(&r).unwrap().len() < 20_000);
+    assert_eq!(
+        r.pages[0].children[0].props["stroke"]["color"], "#ffffff",
+        "valid tokens still work"
+    );
+    let findings = lint("dd_main", &d, Some(("dd_sys", &sys)), None);
+    assert!(findings.iter().any(|f| f.rule == "token.invalid"));
+    assert!(serde_json::to_string(&findings).unwrap().len() < 50_000);
+    assert!(t.elapsed() < Duration::from_secs(5));
+}

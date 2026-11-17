@@ -214,6 +214,7 @@ pub fn lint(
                     "instance.missing" => "instance.missing",
                     "system.missing" => "system.missing",
                     "token.missing" => "token.missing",
+                    "token.invalid" => "token.invalid",
                     "token.kind" => "token.kind",
                     "override.prop" => "override.prop",
                     _ => continue, // prop.invalid duplicates schema.invalid

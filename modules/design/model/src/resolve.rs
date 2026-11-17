@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::ids::{is_node_id, parse_component_ref};
+use crate::ids::{is_node_id, is_token_name, parse_component_ref};
 use crate::limits::*;
 use crate::schema::{Doc, Node, NodeType, Token};
 use crate::tree::{Forest, forest};
@@ -78,7 +78,8 @@ struct Scope<'a> {
 struct Rx<'a> {
     own: Ctx<'a>,
     sys: Option<Ctx<'a>>,
-    toks: Option<&'a BTreeMap<String, Token>>,
+    /// The tokens that passed `validate::token`; an invalid one is as good as missing.
+    toks: BTreeMap<&'a str, &'a Token>,
     theme: Theme,
     count: usize,
     bytes: usize,
@@ -108,20 +109,35 @@ pub fn resolve(
             doc: d,
             forest: f,
         }),
-        toks: None,
+        toks: BTreeMap::new(),
         theme,
         count: 0,
         bytes: 0,
         diags: vec![],
     };
-    match (&doc.meta.system, rx.sys) {
-        (None, _) => rx.toks = Some(&doc.tokens),
-        (Some(want), Some(s)) if want == s.id => rx.toks = Some(&s.doc.tokens),
-        (Some(_), _) => rx.diag(
-            "system.missing",
-            doc_id,
-            "the design system this design names was not provided",
-        ),
+    let source: Option<&BTreeMap<String, Token>> = match (&doc.meta.system, rx.sys) {
+        (None, _) => Some(&doc.tokens),
+        (Some(want), Some(s)) if want == s.id => Some(&s.doc.tokens),
+        (Some(_), _) => {
+            rx.diag(
+                "system.missing",
+                doc_id,
+                "the design system this design names was not provided",
+            );
+            None
+        }
+    };
+    // Token values are untrusted too: validate them once, before any prop can clone one.
+    for (name, t) in source.into_iter().flatten() {
+        if is_token_name(name) && validate::token(t).is_ok() {
+            rx.toks.insert(name, t);
+        } else {
+            rx.diag(
+                "token.invalid",
+                name,
+                "token is malformed; treated as missing",
+            );
+        }
     }
     let mut out = Resolved {
         doc: doc_id.to_string(),
@@ -255,7 +271,7 @@ impl<'a> Rx<'a> {
         rid: &str,
         ty: NodeType,
         raw: Map<String, Value>,
-    ) -> Map<String, Value> {
+    ) -> Result<Map<String, Value>, ResolveError> {
         let mut out = Map::new();
         'props: for (k, v) in raw {
             let mut cx = Cx::raw();
@@ -264,7 +280,7 @@ impl<'a> Rx<'a> {
                 continue;
             }
             for u in &cx.uses {
-                match self.toks.and_then(|t| t.get(&u.name)) {
+                match self.toks.get(u.name.as_str()) {
                     None => {
                         self.diag("token.missing", rid, format!("{k}: no token {:?}", u.name));
                         continue 'props;
@@ -280,7 +296,7 @@ impl<'a> Rx<'a> {
                     Some(_) => {}
                 }
             }
-            let lit = self.subst(&v);
+            let lit = self.subst(&v)?;
             match validate::prop(ty, &k, &lit, &mut Cx::resolved()) {
                 Ok(()) => {
                     out.insert(k, lit);
@@ -288,27 +304,37 @@ impl<'a> Rx<'a> {
                 Err(e) => self.diag("prop.invalid", rid, format!("after tokens: {e}")),
             }
         }
-        out
+        Ok(out)
     }
 
-    fn subst(&self, v: &Value) -> Value {
+    /// Replace token refs by the theme's literal. Each substituted value is charged to the byte budget before it is
+    /// cloned (a prop can name the same token many times, so the token's size multiplies).
+    fn subst(&mut self, v: &Value) -> Result<Value, ResolveError> {
         if let Some(n) = token_ref(v) {
-            let t = self.toks.and_then(|t| t.get(n));
-            return t.map_or(Value::Null, |t| {
-                if self.theme == Theme::Day {
-                    t.day.clone()
-                } else {
-                    t.night.clone()
-                }
-            });
+            let Some(t) = self.toks.get(n).copied() else {
+                return Ok(Value::Null);
+            };
+            let lit = if self.theme == Theme::Day {
+                &t.day
+            } else {
+                &t.night
+            };
+            self.charge(vbytes(lit))?;
+            return Ok(lit.clone());
         }
-        match v {
+        Ok(match v {
             Value::Object(m) => {
-                Value::Object(m.iter().map(|(k, x)| (k.clone(), self.subst(x))).collect())
+                let mut o = Map::new();
+                for (k, x) in m {
+                    o.insert(k.clone(), self.subst(x)?);
+                }
+                Value::Object(o)
             }
-            Value::Array(a) => Value::Array(a.iter().map(|x| self.subst(x)).collect()),
+            Value::Array(a) => {
+                Value::Array(a.iter().map(|x| self.subst(x)).collect::<Result<_, _>>()?)
+            }
             _ => v.clone(),
-        }
+        })
     }
 
     fn node(
@@ -391,7 +417,7 @@ impl<'a> Rx<'a> {
             self.charge(mbytes(m))?;
             self.apply_override(&rid, n.ty, &mut raw, &mut text, m);
         }
-        let props = self.finish_props(&rid, n.ty, raw);
+        let props = self.finish_props(&rid, n.ty, raw)?;
         if let Some(t) = &text
             && validate::text_str(t).is_err()
         {

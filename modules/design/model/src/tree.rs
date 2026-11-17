@@ -199,6 +199,11 @@ impl Doc {
     /// clock in the document (a peer sending `u64::MAX` would otherwise pin the node for ever; the sync layer should
     /// treat `false` as a protocol violation). `true` means the record was valid, not that it won. Commutative and
     /// idempotent for valid records. O(nodes); use `apply_remote_moves` for a batch.
+    ///
+    /// The clock cap makes acceptance depend on the receiver's state, so it is NOT commutative for records that
+    /// exceed it: replicas that disagree on the highest clock can disagree on whether to apply one. That is
+    /// deliberate (an honest peer never exceeds it), so the sync layer must treat `false` as a protocol violation and
+    /// drop the peer, never as a skipped update. TODO(V1-03): test that a refused update closes the connection.
     pub fn apply_remote_move(&mut self, id: &str, rec: MoveRecord) -> bool {
         let limit = self.next_clock().saturating_add(MAX_CLOCK_JUMP);
         self.apply_bounded(id, rec, limit)
@@ -247,6 +252,11 @@ impl Doc {
     /// Renumber the children of `parent` with evenly spaced orders, keeping their current sequence. Call it when
     /// `ids::between` returns `None` (32-character orders exhausted by repeated inserts at one spot). One new clock
     /// for all of them; returns how many nodes were renumbered.
+    ///
+    /// Only the orders change: the parent written back is each child's current (effective) parent. But the model keeps
+    /// parent and order in one move record, so the new clock also outranks a concurrent move of one of these
+    /// children to another parent, which is then lost (intent loss). TODO(V1-03): store order and parent as separate
+    /// LWW registers in the yrs document so a rebalance touches only the orders.
     pub fn rebalance_children(&mut self, parent: &str) -> Result<usize, MoveError> {
         if !self.nodes.contains_key(parent) {
             return Err(MoveError::UnknownParent);

@@ -4,7 +4,8 @@
 //!  - whatever the resolver returns re-validates (props against the schema with refs refused) and stays in budget;
 //!  - `forest` reaches every node exactly once, whatever the parent links say;
 //!  - `between` is strictly between its bounds and always a valid order; `rebalance` is increasing;
-//!  - local moves never create a cycle, whatever the remote moves did.
+//!  - local moves never create a cycle, whatever the remote moves did; a rebalance keeps parents and makes orders
+//!    strictly increasing; a remote clock above the cap is refused without a change.
 use std::collections::BTreeSet;
 
 use design_model::limits::MAX_RESOLVED_NODES;
@@ -190,7 +191,38 @@ fuzz_target!(|data: &[u8]| {
                     name(parent)
                 };
                 let order = format!("{}1", (b'a' + op[2] % 26) as char);
-                if op[2] & 0x80 == 0 {
+                if op[0] & 0x80 != 0 {
+                    // rebalance the page's children: strictly increasing orders, the same parents, no node lost
+                    let parents: Vec<_> = d.nodes.values().map(|n| n.parent.clone()).collect();
+                    d.rebalance_children(page).unwrap();
+                    assert_eq!(
+                        parents,
+                        d.nodes
+                            .values()
+                            .map(|n| n.parent.clone())
+                            .collect::<Vec<_>>()
+                    );
+                    let f = forest(&d);
+                    let kids = f.children.get(page).map_or(&[][..], |k| &k[..]);
+                    assert!(
+                        kids.windows(2)
+                            .all(|w| d.nodes[&w[0]].order < d.nodes[&w[1]].order)
+                    );
+                } else if op[2] & 0xC0 == 0xC0 {
+                    // a remote clock far above the document's: refused, nothing changes
+                    any_remote = true;
+                    let before = d.clone();
+                    let rec = MoveRecord {
+                        parent: Some(pid),
+                        order,
+                        clock: u64::MAX - u64::from(op[1]),
+                    };
+                    assert!(
+                        !d.apply_remote_move(&node, rec),
+                        "a clock above the cap was accepted"
+                    );
+                    assert_eq!(d, before);
+                } else if op[2] & 0x80 == 0 {
                     let clock = d.next_clock();
                     let before = d.clone();
                     let into_desc = pid == node || is_descendant(&d, &pid, &node);
