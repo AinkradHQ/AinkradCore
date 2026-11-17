@@ -11,6 +11,7 @@ workspace = true
 ainkrad-core-server = { path = "../../../crates/server" }
 brain-module = { path = "../module" }
 leyline-module = { path = "../../leyline/module" }
+lore-module = { path = "../../lore/module" }
 design-module = { path = "../../design/module" }
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
 
