@@ -341,3 +341,40 @@ fn task(t: &str) -> Option<(bool, &str)> {
     let after = &rest[3..];
     (after.is_empty() || after.starts_with([' ', '\t'])).then_some((done, after))
 }
+
+/// `text` with every wikilink to the note titled `old_title` pointed at `new_title` (T6 rename), outside code spans,
+/// fences and front matter; `#Heading` and `|alias` kept. `None` when no link matched or `new_title` could not
+/// sit inside a wikilink. Line endings and every other byte are kept.
+pub fn rename_wikilinks(text: &str, old_title: &str, new_title: &str) -> Option<String> {
+    if new_title.is_empty() || new_title.contains(['[', ']', '|', '#', '`', '\n', '\r', '\\']) {
+        return None;
+    }
+    let old_norm = normalize_title(old_title);
+    let mut scratch = Acc {
+        p: Parsed::default(),
+    };
+    let skip = front_matter(text, &mut scratch);
+    let (mut out, mut changed) = (String::with_capacity(text.len() + 64), false);
+    let mut fence: Option<(u8, usize)> = None;
+    for (i, raw) in text.split_inclusive('\n').enumerate() {
+        let body = raw.strip_suffix('\n').unwrap_or(raw);
+        let body = body.strip_suffix('\r').unwrap_or(body);
+        let t = body.trim_start_matches([' ', '>', '\t']);
+        if let Some((c, n)) = fence {
+            if is_fence_close(t, c, n) {
+                fence = None;
+            }
+        } else if let Some(f) = fence_open(t) {
+            fence = Some(f);
+        } else if i >= skip
+            && let Some(new) = inline::rename_in_line(body, &old_norm, new_title)
+        {
+            out.push_str(&new);
+            out.push_str(&raw[body.len()..]);
+            changed = true;
+            continue;
+        }
+        out.push_str(raw);
+    }
+    changed.then_some(out)
+}
