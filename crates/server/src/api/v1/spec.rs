@@ -158,6 +158,7 @@ use super::{
         projects::add_repo,
         projects::remove_repo,
         projects::set_primary,
+        projects::fetch_now,
         secrets::list,
         secrets::create,
         secrets::rotate,

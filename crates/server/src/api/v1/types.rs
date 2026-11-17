@@ -277,7 +277,11 @@
 ///    `POST /projects/{id}/repos` (`addProjectRepo`), `DELETE /projects/{id}/repos/{repo}` (`removeProjectRepo`),
 ///    `POST /projects/{id}/repos/{repo}/primary` (`setProjectRepoPrimary`). Reading is `read`; every write is `admin`
 ///    and destructive. A project carries its repos, each with its read-only `mirror` state; query `archived`.
-pub const API_MINOR: u32 = 85;
+/// 86: Core-held repo mirrors (P3-01). `POST /projects/{id}/repos/{repo}/fetch` (`fetchProjectRepo`, `admin`, no step-up)
+///    fetches a repo's remote into the Core's copy now; a failed fetch is still 200 with `mirror.error` set and the older
+///    `mirror.head` kept. The copy is served to `runner` devices as git smart HTTP, upload side only
+///    (`/mirrors/{repo}/info/refs`, `/git-upload-pack`; `/git-receive-pack` is always 403 `read_only`): not in the contract.
+pub const API_MINOR: u32 = 86;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
