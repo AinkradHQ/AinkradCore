@@ -17,6 +17,34 @@ use crate::run::helper::{self, Request};
 pub struct RunDriver {
     socket: PathBuf,
     redeem: Redeem,
+    /// Where this runner's own checkouts live; a run's `checkouts.dir` must resolve under it.
+    checkouts: PathBuf,
+}
+
+/// The unit that loads `deploy/run-egress.nft` (and re-loads it with nftables.service).
+pub const EGRESS_UNIT: &str = "ainkrad-run-egress.service";
+
+/// Whether the egress block is up. The runner cannot read nftables itself (no `CAP_NET_ADMIN`), so it
+/// asks systemd; the helper unit re-loads the table as root before every op and does not start
+/// without it (`ExecStartPre=+nft -f`), which is the check that holds at the moment of a start.
+pub fn egress_active() -> bool {
+    std::process::Command::new("systemctl")
+        .args(["is-active", "--quiet", EGRESS_UNIT])
+        .stdin(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// `dir`, resolved, when it lies under `root` (also resolved); `Err` otherwise.
+pub(super) fn checkout_dir(root: &Path, dir: &str) -> Result<PathBuf, String> {
+    let bad = || format!("the checkout {dir} is not one of this runner's");
+    let root = root.canonicalize().map_err(|_| bad())?;
+    let d = Path::new(dir).canonicalize().map_err(|_| bad())?;
+    if d.starts_with(&root) && d != root {
+        Ok(d)
+    } else {
+        Err(bad())
+    }
 }
 
 /// Fills every `${secret:NAME}` in `v` from `values`; `Err` names a secret it does not have.
@@ -41,10 +69,11 @@ pub(super) fn fill(
 }
 
 impl RunDriver {
-    pub fn new(socket: impl Into<PathBuf>, redeem: Redeem) -> Self {
+    pub fn new(socket: impl Into<PathBuf>, redeem: Redeem, checkouts: impl Into<PathBuf>) -> Self {
         Self {
             socket: socket.into(),
             redeem,
+            checkouts: checkouts.into(),
         }
     }
 
@@ -69,11 +98,20 @@ impl RunDriver {
         }
         match command {
             Command::RunStart(req) => {
+                // Fail closed: no egress block, no run.
+                if !egress_active() {
+                    return Err(StreamError::new(
+                        ErrorCode::Internal,
+                        format!("{EGRESS_UNIT} is not active; refusing to start a run"),
+                    ));
+                }
                 let req = self.prepare(req).await?;
                 let tmp = tempdir()?;
                 let mut bundles = Vec::new();
                 for c in &req.checkouts {
-                    bundles.push(bundle(Path::new(&c.dir), &tmp.0.join(&c.repo)).await?);
+                    let dir = checkout_dir(&self.checkouts, &c.dir)
+                        .map_err(|e| StreamError::new(ErrorCode::InvalidArgs, e))?;
+                    bundles.push(bundle(&dir, &tmp.0.join(&c.repo)).await?);
                 }
                 let lens = bundles.iter().map(|b| b.1).collect();
                 let paths: Vec<PathBuf> = bundles.into_iter().map(|b| b.0).collect();
@@ -201,9 +239,35 @@ mod tests {
     async fn without_the_helper_the_driver_is_not_offered() {
         let redeem: Redeem = Arc::new(|_| Box::pin(async { Err("none".to_owned()) }));
         assert!(
-            RunDriver::new("/nonexistent/run.sock", redeem)
+            RunDriver::new("/nonexistent/run.sock", redeem, "/nonexistent")
                 .info()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_checkout_must_resolve_under_the_runners_root() {
+        let base = std::env::temp_dir().join(format!("run-checkouts-{}", std::process::id()));
+        let (root, other) = (base.join("root"), base.join("other"));
+        std::fs::create_dir_all(root.join("s1/web")).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::os::unix::fs::symlink(&other, root.join("s1/link")).unwrap();
+        let ok = checkout_dir(&root, root.join("s1/web").to_str().unwrap()).unwrap();
+        assert_eq!(ok, root.canonicalize().unwrap().join("s1/web"));
+        for bad in [
+            root.join("s1/link"),
+            root.join("s1/web/../../../other"),
+            root.clone(),
+            other.clone(),
+            PathBuf::from("/etc"),
+            root.join("missing"),
+        ] {
+            assert!(
+                checkout_dir(&root, bad.to_str().unwrap()).is_err(),
+                "{}",
+                bad.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

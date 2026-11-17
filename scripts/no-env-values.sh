@@ -2,7 +2,7 @@
 # No environment-specific values in this public repo (E1-16.x): hosts, IPs, bucket namespaces and emails are
 # supplied at install time (scripts/install.sh), never committed. Fails, listing file:line, on
 #   - a public-looking IPv4 literal (allowed: loopback, 0.0.0.0, RFC 1918, RFC 5737 documentation ranges,
-#     RFC 6598 shared space (100.64/10), link-local, masks, and dotted version strings),
+#     RFC 6598 shared space (100.64/10), 192.0.0/24, 198.18/15, link-local, masks, and dotted version strings),
 #   - an OCI object-storage or Oracle Cloud hostname (allowed under a reserved TLD: .example/.test/.invalid),
 #   - an OCI namespace given literally (--namespace-name, namespace=, *_NS=),
 #   - a real-looking email (allowed: example.com/.org/.net, reserved TLDs, .lan/.local, git/token@github.com),
@@ -35,6 +35,8 @@ scan() { # FILE... -> offending lines on stdout, exit 1 if any
         next if $o[0] == 192 && $o[1] == 168;
         next if $o[0] == 169 && $o[1] == 254;
         next if $o[0] == 100 && $o[1] >= 64 && $o[1] <= 127;         # RFC 6598 shared address space
+        next if "$o[0].$o[1].$o[2]" eq "192.0.0";                      # IETF protocol assignments (RFC 6890)
+        next if $o[0] == 198 && ($o[1] == 18 || $o[1] == 19);         # benchmarking (RFC 2544)
         next if "$o[0].$o[1].$o[2]" =~ /^(192\.0\.2|198\.51\.100|203\.0\.113)$/;
         push @why, "public IPv4 $ip";
       }

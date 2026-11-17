@@ -14,6 +14,9 @@ Requires=ainkrad-run-egress.service
 
 [Service]
 Type=exec
+# Fail closed: as root ("+"), re-load the egress table before every op (a `flush ruleset` may have removed it); the
+# helper does not start when that fails.
+ExecStartPre=+/usr/sbin/nft -f /etc/ainkrad-runner/run-egress.nft
 User=ainkrad-run
 Group=ainkrad-run
 WorkingDirectory=/var/lib/ainkrad-run
@@ -25,6 +28,7 @@ StandardInput=socket
 StandardOutput=journal
 StandardError=journal
 KillMode=process
+# A start keeps within 1500 s (crates/runner/src/run.rs START_BUDGET), each child with its own timeout.
 RuntimeMaxSec=1800
 # 0022: a checkout mounted at /repo/<name> must be readable by the container's own non-root users (nginx, node).
 # Host users still cannot reach it: each run dir is 0700, and env files are written 0600 in a 0700 dir.

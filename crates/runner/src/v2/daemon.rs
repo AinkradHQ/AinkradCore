@@ -69,6 +69,8 @@ pub struct Daemon {
     pub control: Option<Arc<super::control::Control>>,
     pub tls: Option<Arc<rustls::ClientConfig>>,
     pub backoff: Backoff,
+    /// The runner's checkout root (its work root): a run's checkouts must lie under it.
+    pub run_checkouts: PathBuf,
 }
 
 impl Daemon {
@@ -91,7 +93,11 @@ impl Daemon {
 
     /// Project runs; offered where the run helper is installed (`RunDriver::info`).
     fn run_driver(&self) -> Option<Arc<super::RunDriver>> {
-        let run = super::RunDriver::new(crate::run::helper::SOCKET, self.redeem()?);
+        let run = super::RunDriver::new(
+            crate::run::helper::SOCKET,
+            self.redeem()?,
+            self.run_checkouts.clone(),
+        );
         run.info().map(|_| Arc::new(run))
     }
 
@@ -235,6 +241,7 @@ pub async fn from_state(
         control,
         tls,
         backoff: Backoff::default(),
+        run_checkouts: super::cli::runtime_paths(&state.0)[1].clone(),
     };
     daemon.run(stop).await
 }
@@ -306,6 +313,7 @@ mod tests {
                 max: Duration::from_millis(20),
                 refused: Duration::from_millis(20),
             },
+            run_checkouts: PathBuf::from("/nonexistent"),
         }
     }
 

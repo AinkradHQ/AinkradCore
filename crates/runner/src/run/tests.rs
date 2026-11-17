@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use ainkrad_proto::v2::{RunLimits, RunPhase, RunStart};
+use ainkrad_proto::v2::{PublishedPort, RunLimits, RunPhase, RunStart};
 
 use super::*;
 
@@ -45,7 +45,8 @@ fn create_args_confine_the_container() {
         "--security-opt no-new-privileges",
         "--env-file /e/r1-db.env",
         "-v ainkrad-p7-data:/var/lib/postgresql/data",
-        "-v /runs/r1/repos/web:/repo/web",
+        "-v /runs/r1/repos/web:/repo/web:ro",
+        "--pull missing",
         "-p 127.0.0.1::5432",
         "--health-cmd pg_isready --health-interval disable",
     ] {
@@ -61,6 +62,146 @@ fn create_args_confine_the_container() {
     ] {
         assert!(!j.contains(never), "{never} in {j}");
     }
+}
+
+/// A git repo at `dir` with `files` (path, contents) and `links` (path, target) committed.
+fn repo(dir: &Path, files: &[(&str, &[u8])], links: &[(&str, &Path)]) {
+    std::fs::create_dir_all(dir).unwrap();
+    for (f, body) in files {
+        std::fs::create_dir_all(dir.join(f).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(f), body).unwrap();
+    }
+    for (l, target) in links {
+        std::os::unix::fs::symlink(target, dir.join(l)).unwrap();
+    }
+    let git = |args: &[&str]| {
+        let ok = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "x"]);
+}
+
+/// `git bundle create <to> HEAD` of `dir`.
+fn bundle(dir: &Path, to: &Path) {
+    let ok = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["bundle", "create", "-q"])
+        .arg(to)
+        .arg("HEAD")
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok);
+}
+
+fn scratch(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("run-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+#[test]
+fn a_build_path_through_a_committed_symlink_is_refused() {
+    let d = scratch("inside");
+    let outside = d.join("store");
+    std::fs::create_dir_all(&outside).unwrap();
+    let r = d.join("repo");
+    repo(
+        &r,
+        &[("app/Dockerfile", b"FROM scratch\n")],
+        &[("ctx", &outside), ("Dockerfile", &outside.join("x"))],
+    );
+    let root = r.canonicalize().unwrap();
+    assert_eq!(inside(&r, ".").unwrap(), root);
+    assert_eq!(
+        inside(&r, "app/Dockerfile").unwrap(),
+        root.join("app/Dockerfile")
+    );
+    for bad in ["ctx", "ctx/..", "Dockerfile", "app/../../store", "missing"] {
+        assert!(inside(&r, bad).is_err(), "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
+fn checkouts_past_the_byte_cap_are_refused_before_the_tree_is_written() {
+    let d = scratch("cap");
+    repo(&d.join("src"), &[("big.bin", &vec![7u8; 3 << 20])], &[]);
+    bundle(&d.join("src"), &d.join("b"));
+    let engine = |cap| Engine {
+        podman: "podman".into(),
+        root: d.clone(),
+        env_dir: d.join("env"),
+        runtime_dir: None,
+        checkout_cap: cap,
+    };
+    let later = Instant::now() + Duration::from_secs(60);
+    let mut used = 0;
+    let why = engine(2 << 20)
+        .checkout(&d.join("b"), &d.join("small"), &mut used, later)
+        .unwrap_err();
+    assert!(why.contains("MiB"), "{why}");
+    assert!(!d.join("small/big.bin").exists(), "the tree was written");
+    let mut used = 0;
+    engine(64 << 20)
+        .checkout(&d.join("b"), &d.join("ok"), &mut used, later)
+        .unwrap();
+    assert_eq!(
+        std::fs::metadata(d.join("ok/big.bin")).unwrap().len(),
+        3 << 20
+    );
+    assert!(used >= 3 << 20);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_child_past_its_timeout_dies_with_its_whole_group() {
+    let d = scratch("timeout");
+    let pidfile = d.join("pid");
+    let mut c = Command::new("sh");
+    c.arg("-c")
+        .arg(format!("sleep 60 & echo $! > {}; wait", pidfile.display()));
+    let t = Instant::now();
+    let why = exec(c, "sh", Duration::from_secs(1)).unwrap_err();
+    assert!(why.contains("did not finish"), "{why}");
+    assert!(t.elapsed() < Duration::from_secs(10));
+    let pid: u32 = std::fs::read_to_string(&pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // The grandchild is gone (or a zombie waiting for init), not sleeping on.
+    let gone = (0..50).any(|_| {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let dead = stat.is_empty()
+            || stat
+                .rsplit(')')
+                .next()
+                .is_some_and(|r| r.trim_start().starts_with('Z'));
+        if !dead {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        dead
+    });
+    assert!(gone, "the grandchild {pid} outlived the timeout");
+    assert_eq!(
+        exec(Command::new("true"), "true", Duration::from_secs(5)),
+        Ok(String::new())
+    );
+    let _ = std::fs::remove_dir_all(&d);
 }
 
 #[test]
@@ -113,6 +254,7 @@ impl Host {
                 root: tmp.join("runs"),
                 env_dir: tmp.join("env"),
                 runtime_dir: None,
+                checkout_cap: MAX_CHECKOUT_BYTES,
             },
             tmp,
             projects: Vec::new(),
@@ -128,8 +270,12 @@ impl Host {
     }
 
     fn start(&mut self, req: &RunStart) -> RunInfo {
+        self.start_with(req, &BTreeMap::new())
+    }
+
+    fn start_with(&mut self, req: &RunStart, bundles: &BTreeMap<String, PathBuf>) -> RunInfo {
         self.runs.push(req.run.clone());
-        self.engine.start(req, &BTreeMap::new()).unwrap()
+        self.engine.start(req, bundles).unwrap()
     }
 }
 
@@ -189,6 +335,9 @@ fn a_crashing_service_fails_the_run_and_is_named() {
         (RunPhase::Failed, Some("web")),
         "{r:?}"
     );
+    // A failed start is stopped: `db`, which did come up, and the run dir are gone.
+    assert!(h.engine.status(&now.run, p).unwrap().services.is_empty());
+    assert!(!h.engine.root.join(&now.run).exists());
     // Later: `late` runs, then dies; status (labels only, as after a runner restart) names it.
     let later = start(
         &format!("{id}2"),
@@ -246,7 +395,8 @@ fn the_env_file_is_gone_after_start_and_ports_listen_on_loopback_only() {
     assert!(net.contains("isolate:true"), "{net}");
     // Published on 127.0.0.1 only: the host's listener table has it on loopback and nowhere else.
     let hp = r.services[0].ports[0].host_port;
-    assert!(std::net::TcpStream::connect(("127.0.0.1", hp)).is_ok());
+    // Not connected to from here: this test runs as `ainkrad-run`, whose own traffic to the host is
+    // refused by the egress table (`fib daddr type local`); the runner, another user, is the client.
     let hex = format!(":{hp:04X} ");
     let tables = std::fs::read_to_string("/proc/net/tcp").unwrap()
         + &std::fs::read_to_string("/proc/net/tcp6").unwrap_or_default();
@@ -307,7 +457,7 @@ fn a_container_cannot_reach_another_projects_network() {
 
 #[test]
 #[ignore = "needs rootless podman as ainkrad-run with deploy/run-egress.nft loaded"]
-fn the_cloud_metadata_address_is_unreachable() {
+fn the_cloud_metadata_address_and_the_host_itself_are_unreachable() {
     let mut h = Host::new("egress");
     let p = h.project(5);
     let run = format!("t{}m", std::process::id());
@@ -325,4 +475,81 @@ fn the_cloud_metadata_address_is_unreachable() {
         "the internet is reachable"
     );
     assert!(!sh_ok(&ctr, "nc -w 5 169.254.169.254 80 </dev/null"));
+    // The host itself: its own address (the listener is on every address) and the host alias.
+    let l = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let ips = Command::new("hostname").arg("-I").output().unwrap().stdout;
+    let host_ip = String::from_utf8_lossy(&ips)
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned();
+    for target in [host_ip.as_str(), "host.containers.internal"] {
+        assert!(
+            !sh_ok(&ctr, &format!("nc -w 3 {target} {port} </dev/null")),
+            "reached the host at {target}:{port}"
+        );
+    }
+}
+
+/// The build context resolves into the image store through a committed symlink: refused, and the
+/// whole run cleaned up. A normal build then runs, its checkout mounted read-only, and `stop`
+/// removes its image.
+#[test]
+#[ignore = "needs rootless podman"]
+fn builds_stay_in_their_checkout_mount_it_read_only_and_leave_no_image() {
+    let mut h = Host::new("build");
+    let p = h.project(6);
+    let id = std::process::id();
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    let src = h.tmp.join("src");
+    repo(
+        &src,
+        &[("Dockerfile", format!("FROM {ALPINE}\n").as_bytes())],
+        &[("escape", &home.join(".local/share/containers"))],
+    );
+    let spec = |ctx: &str| {
+        let mut r = start(
+            &format!("t{id}{}", if ctx == "." { "g" } else { "s" }),
+            p,
+            serde_json::json!({"services": {
+                "db": {"image": ALPINE, "command": ["sleep", "600"]},
+                "web": {"build": {"repo": "web", "context": ctx}, "repo": "web",
+                        "command": ["sleep", "600"], "depends_on": ["db"]}}}),
+        );
+        r.checkouts = vec![ainkrad_proto::v2::RunCheckout {
+            repo: "web".into(),
+            dir: "/unused".into(),
+        }];
+        r
+    };
+    let tmp = h.tmp.clone();
+    let bundles = |n: &str| {
+        let b = tmp.join(n);
+        bundle(&src, &b);
+        BTreeMap::from([("web".to_owned(), b)])
+    };
+    let escape = spec("escape");
+    let b = bundles("b1");
+    let r = h.start_with(&escape, &b);
+    assert_eq!(
+        (r.phase, r.failed_service.as_deref()),
+        (RunPhase::Failed, Some("web")),
+        "{r:?}"
+    );
+    assert!(r.reason.unwrap().contains("outside the repo"));
+    assert!(h.engine.status(&escape.run, p).unwrap().services.is_empty());
+    assert!(!h.engine.root.join(&escape.run).exists());
+
+    let good = spec(".");
+    let b = bundles("b2");
+    let r = h.start_with(&good, &b);
+    assert_eq!(r.phase, RunPhase::Running, "{r:?}");
+    let web = container(&good.run, "web");
+    assert!(sh_ok(&web, "test -f /repo/web/Dockerfile"));
+    assert!(!sh_ok(&web, "touch /repo/web/x"), "/repo is writable");
+    let tag = format!("localhost/{}-web:{}", network(p), good.run);
+    assert!(podman(&["images", "-q", &tag]).len() > 1);
+    h.engine.stop(&good.run).unwrap();
+    assert_eq!(podman(&["images", "-q", &tag]), "");
 }

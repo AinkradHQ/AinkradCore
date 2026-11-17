@@ -214,9 +214,40 @@ fn repo_path_ok(p: &str, dot_ok: bool) -> bool {
             && p.split('/').all(|c| !matches!(c, "" | "." | "..")))
 }
 
-/// Printable ASCII, not a flag; the full grammar is the Core's (P4-01), this keeps it an image.
-fn image_ok(i: &str) -> bool {
-    (1..=255).contains(&i.len()) && !i.starts_with('-') && i.bytes().all(|b| b.is_ascii_graphic())
+/// Image transports Podman reads instead of a registry (`oci-archive:/path`, `dir:x`, ...).
+const TRANSPORTS: &[&str] = &[
+    "containers-storage",
+    "dir",
+    "docker",
+    "docker-archive",
+    "docker-daemon",
+    "oci",
+    "oci-archive",
+    "ostree",
+    "sif",
+    "tarball",
+];
+
+/// Printable ASCII, not a flag, and a registry image: never a transport, a `localhost/` image, an
+/// image id, or one of the run helper's own build tags (`ainkrad-p...`), which would read another
+/// project's build out of the shared image store. The full grammar is the Core's (P4-01).
+pub fn image_ok(i: &str) -> bool {
+    let l = i.to_ascii_lowercase();
+    let first = l.split(['/', '@']).next().unwrap_or("");
+    // `docker:27-dind` is a registry image (that transport needs `docker://`).
+    let transport = first
+        .split_once(':')
+        .is_some_and(|(t, rest)| TRANSPORTS.contains(&t) && (t != "docker" || rest.is_empty()));
+    let id = !l.contains(['/', ':', '@']) && l.bytes().all(|b| b.is_ascii_hexdigit());
+    (1..=255).contains(&i.len())
+        && !i.starts_with('-')
+        && i.bytes().all(|b| b.is_ascii_graphic())
+        && !transport
+        && !id
+        && !l.starts_with("sha256:")
+        && first != "localhost"
+        && !first.starts_with("localhost:")
+        && !l.contains("ainkrad-p")
 }
 
 impl RunStart {
@@ -233,9 +264,15 @@ impl RunStart {
         if !(16..=32768).contains(&l.pids) {
             return bad("limits.pids", "16 to 32768");
         }
-        for c in &self.checkouts {
+        if self.checkouts.len() > 16 {
+            return bad("checkouts", "at most 16");
+        }
+        for (i, c) in self.checkouts.iter().enumerate() {
             if !valid_name(&c.repo) || !c.dir.starts_with('/') {
                 return bad("checkouts", "a repo name and an absolute dir");
+            }
+            if self.checkouts[..i].iter().any(|o| o.repo == c.repo) {
+                return bad("checkouts", "one checkout per repo");
             }
         }
         let has_repo = |r: &str| self.checkouts.iter().any(|c| c.repo == r);
@@ -372,6 +409,18 @@ mod tests {
             serde_json::json!({"services": {
                 "a": {"image": "x", "depends_on": ["b"]}, "b": {"image": "x", "depends_on": ["a"]}}}),
             serde_json::json!({"services": {}}),
+            // Only the run helper's own builds may be local images.
+            serde_json::json!({"services": {"a": {"image": "localhost/ainkrad-p8-web:r2"}}}),
+            serde_json::json!({"services": {"a": {"image": "localhost:5000/x"}}}),
+            serde_json::json!({"services": {"a": {"image": "ainkrad-p8-web:r2"}}}),
+            serde_json::json!({"services": {"a": {"image": "docker.io/x/AINKRAD-P8-web"}}}),
+            serde_json::json!({"services": {"a": {"image": "oci-archive:/var/lib/x.tar"}}}),
+            serde_json::json!({"services": {"a": {"image": "dir:/tmp/x"}}}),
+            serde_json::json!({"services": {"a": {"image": "docker-archive:x.tar"}}}),
+            serde_json::json!({"services": {"a": {"image": "containers-storage:alpine"}}}),
+            serde_json::json!({"services": {"a": {"image": "docker://alpine"}}}),
+            serde_json::json!({"services": {"a": {"image": "sha256:0759823471bf"}}}),
+            serde_json::json!({"services": {"a": {"image": "0759823471bf"}}}),
         ];
         for spec in bad {
             assert!(start(spec.clone()).problem().is_some(), "accepted {spec}");
@@ -382,6 +431,30 @@ mod tests {
         s.run = "r1".into();
         s.limits.memory_mb = 0;
         assert!(s.problem().is_some());
+    }
+
+    #[test]
+    fn registry_images_pass_and_checkouts_are_capped() {
+        for ok in [
+            "alpine",
+            "alpine:3",
+            "docker:27-dind",
+            "docker.io/library/nginx:alpine",
+            "ghcr.io/o/app@sha256:0759823471bf",
+            "registry.example:5000/team/app:1.2",
+        ] {
+            assert!(image_ok(ok), "{ok}");
+        }
+        let mut s = start(serde_json::json!({"services": {"a": {"image": "x"}}}));
+        s.checkouts.push(s.checkouts[0].clone());
+        assert!(s.problem().unwrap().contains("one checkout per repo"));
+        s.checkouts = (0..17)
+            .map(|i| RunCheckout {
+                repo: format!("r{i}"),
+                dir: "/w".into(),
+            })
+            .collect();
+        assert!(s.problem().unwrap().contains("at most 16"));
     }
 
     #[test]

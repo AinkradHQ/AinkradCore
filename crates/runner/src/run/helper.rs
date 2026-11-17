@@ -3,7 +3,8 @@
 //! runner's client of it.
 //!
 //! Wire: one JSON line [`Request`] (at most 1 MiB, within 10 s), then for `start` each checkout's git
-//! bundle as raw bytes, in `checkouts` order, of the lengths the request gives (each at most 2 GiB).
+//! bundle as raw bytes, in `checkouts` order, of the lengths the request gives (each at most 2 GiB,
+//! all of them at most 4 GiB).
 //! The answer is one JSON line, `{"ok": RunInfo | RunList}` or `{"err": "why"}`. The peer must be the
 //! runner's user or root (`SO_PEERCRED`), on top of the socket's mode.
 
@@ -23,6 +24,7 @@ pub const SOCKET: &str = "/run/ainkrad-run.sock";
 const RUNNER_USER: &str = "ainkrad-runner";
 const MAX_LINE: usize = 1 << 20;
 const MAX_BUNDLE: u64 = 2 << 30;
+const MAX_BUNDLES: u64 = 4 << 30;
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -62,8 +64,11 @@ fn receive(
     lens: &[u64],
     dir: &Path,
 ) -> Result<BTreeMap<String, PathBuf>, String> {
-    if lens.len() != start.checkouts.len() || lens.iter().any(|l| *l > MAX_BUNDLE) {
-        return Err("one bundle per checkout, each at most 2 GiB".to_owned());
+    if lens.len() != start.checkouts.len()
+        || lens.iter().any(|l| *l > MAX_BUNDLE)
+        || lens.iter().fold(0u64, |a, l| a.saturating_add(*l)) > MAX_BUNDLES
+    {
+        return Err("one bundle per checkout, each at most 2 GiB, 4 GiB in all".to_owned());
     }
     super::private_dir(dir)?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
