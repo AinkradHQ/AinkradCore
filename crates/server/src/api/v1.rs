@@ -46,6 +46,7 @@ pub mod pair;
 mod pairing;
 pub mod passkey;
 mod projects;
+mod projects_github;
 mod runner_control;
 mod runners;
 pub mod scopes;
@@ -89,6 +90,12 @@ pub const QUERY: &[&str] = &[
     "origin",
     "nobody_watching",
     "archived",
+    // GET /projects/github/repos (P2-01)
+    "connection",
+    "project",
+    "q",
+    "page",
+    "per_page",
 ];
 
 /// A page of a list: the cursor to continue after (its meaning is per route) and how many.
@@ -394,6 +401,11 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/projects/{id}",
             get(projects::get).patch(projects::update),
+        )
+        .route("/api/v1/projects/github/repos", get(projects_github::list))
+        .route(
+            "/api/v1/projects/from-github",
+            post(projects_github::create),
         )
         .route("/api/v1/projects/{id}/archive", post(projects::archive))
         .route("/api/v1/projects/{id}/repos", post(projects::add_repo))

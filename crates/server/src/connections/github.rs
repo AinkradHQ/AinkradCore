@@ -27,6 +27,7 @@ pub mod http;
 pub mod install;
 pub mod ops;
 pub mod outcome;
+pub mod repos;
 
 pub use guard::BuildError;
 pub use http::{Rate, Transport};

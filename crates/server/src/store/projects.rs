@@ -207,6 +207,20 @@ pub async fn create(
         return refused("bad_request", "a source is manual or github");
     }
     let mut tx = super::begin_write(pool).await?;
+    let p = create_in(&mut tx, slug, name, description, source, who).await?;
+    tx.commit().await?;
+    Ok(p)
+}
+
+/// [`create`] inside the caller's write transaction.
+async fn create_in(
+    tx: &mut SqliteConnection,
+    slug: &str,
+    name: &str,
+    description: &str,
+    source: &str,
+    who: Who<'_>,
+) -> Result<Project, Error> {
     let taken: i64 = sqlx::query_scalar("SELECT count(*) FROM core_projects WHERE slug = ?")
         .bind(slug)
         .fetch_one(&mut *tx)
@@ -227,10 +241,8 @@ pub async fn create(
     .fetch_one(&mut *tx)
     .await?;
     let details = json!({"slug": slug, "name": name, "source": source, "by_device": who.by_device});
-    record(&mut tx, who.actor, "project.created", id, details, true).await?;
-    let p = get(&mut tx, id).await?;
-    tx.commit().await?;
-    Ok(p)
+    record(tx, who.actor, "project.created", id, details, true).await?;
+    get(tx, id).await
 }
 
 /// Changes name, description and/or public exposure (`None` keeps it). An archived project is
@@ -308,6 +320,27 @@ pub async fn add_repo(
     primary: bool,
     who: Who<'_>,
 ) -> Result<Repo, Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let r = add_repo_in(
+        &mut tx,
+        project_id,
+        (name, remote_url, default_branch),
+        primary,
+        who,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(r)
+}
+
+/// [`add_repo`] inside the caller's write transaction.
+async fn add_repo_in(
+    tx: &mut SqliteConnection,
+    project_id: i64,
+    (name, remote_url, default_branch): (&str, &str, &str),
+    primary: bool,
+    who: Who<'_>,
+) -> Result<Repo, Error> {
     if !repo_name_ok(name) {
         return refused(
             "bad_request",
@@ -320,8 +353,7 @@ pub async fn add_repo(
     if !branch_name_ok(default_branch) {
         return refused("bad_request", "bad default branch name");
     }
-    let mut tx = super::begin_write(pool).await?;
-    if get(&mut tx, project_id).await?.state == "archived" {
+    if get(tx, project_id).await?.state == "archived" {
         return refused("conflict", "the project is archived");
     }
     let dup: i64 = sqlx::query_scalar(
@@ -335,7 +367,7 @@ pub async fn add_repo(
     if dup > 0 {
         return refused("conflict", "the project has a repo of that name or remote");
     }
-    let first = repos(&mut tx, project_id).await?.is_empty();
+    let first = repos(tx, project_id).await?.is_empty();
     let primary = primary || first;
     if primary {
         sqlx::query("UPDATE core_project_repos SET is_primary = 0 WHERE project_id = ?")
@@ -356,7 +388,7 @@ pub async fn add_repo(
     .await?;
     let details = json!({"repo": name, "primary": primary, "by_device": who.by_device});
     record(
-        &mut tx,
+        tx,
         who.actor,
         "project.repo_added",
         project_id,
@@ -364,11 +396,10 @@ pub async fn add_repo(
         false,
     )
     .await?;
-    let r = repos(&mut tx, project_id)
+    let r = repos(tx, project_id)
         .await?
         .into_iter()
         .find(|r| r.id == id);
-    tx.commit().await?;
     r.ok_or_else(|| Error::Db(sqlx::Error::RowNotFound))
 }
 
@@ -490,6 +521,9 @@ pub async fn mirror(pool: &SqlitePool, repo_id: i64) -> Result<Option<Mirror>, s
     })
     .transpose()
 }
+
+mod github;
+pub use github::{NewGithubRepo, create_from_github};
 
 #[cfg(test)]
 mod tests;

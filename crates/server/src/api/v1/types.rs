@@ -282,7 +282,11 @@
 ///    `StreamError.host_key`; no route yet. (84 and 85 are the runner Podman facts and the projects API.)
 /// 87: the `secret.runners_changed` audit action (a secret's runner scope changed on its own, with its
 ///    leases dropped); the Leyline key runner sync (Y1-02) is its first user.
-pub const API_MINOR: u32 = 87;
+/// 93: Projects from GitHub (P2-01; 88-92 are claimed by other lanes). `GET /projects/github/repos` (`listGithubRepos`:
+///    the repos of the project's or default GitHub connection, grouped by owner, `q`, `page`, `per_page`) and
+///    `POST /projects/from-github` (`createProjectFromGithub`: creates the project, its repos and a `project`-scope
+///    connection binding). Both `admin`; the POST is destructive. No new audit or event kinds.
+pub const API_MINOR: u32 = 93;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
