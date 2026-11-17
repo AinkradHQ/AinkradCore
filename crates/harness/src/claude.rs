@@ -15,7 +15,7 @@
 //! `CLAUDE.md` discovery still walks up from the working directory, so a runner's work root
 //! must not sit under a directory holding one (e.g. a home with `~/CLAUDE.md`).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 
 use serde_json::{Value, json};
@@ -172,6 +172,11 @@ pub struct Decoder {
     /// The control request refused since the last turn ended: a newer CLI's, the protocol
     /// failure when the process then ends without a result.
     refused: Option<String>,
+    /// Running sub-agents: the `Task`/`Agent` tool call id → the CLI's task id (`task_started`),
+    /// what `stop_task` names.
+    tasks: HashMap<String, String>,
+    /// Sub-agents asked to stop before their `task_started`, by tool call id: stopped when it comes.
+    stopping: HashSet<String>,
 }
 
 fn text(v: &Value) -> String {
@@ -260,14 +265,27 @@ impl Decoder {
                 events.extend(self.progress(&m["message"]));
                 events
             }
+            // A sub-agent's task starts and settles; nothing for the transcript.
+            "system" => {
+                self.task(m);
+                vec![]
+            }
             // Tool results come back as a user message of `tool_result` blocks.
-            "user" => m["message"]["content"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|b| b["type"] == "tool_result")
-                .map(tool_result)
-                .collect(),
+            "user" => {
+                let results: Vec<HarnessEvent> = m["message"]["content"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|b| b["type"] == "tool_result")
+                    .map(tool_result)
+                    .collect();
+                for r in &results {
+                    if let HarnessEvent::ToolResult { id, .. } = r {
+                        self.stopping.remove(id);
+                    }
+                }
+                results
+            }
             "control_request" => self.control_request(m),
             "rate_limit_event" => rate_limit(&m["rate_limit_info"]).into_iter().collect(),
             "result" => self.result(m),
@@ -291,6 +309,35 @@ impl Decoder {
                 code: crate::PROTOCOL.to_owned(),
             },
         })
+    }
+
+    /// `task_started` names a sub-agent's task for its tool call; `task_notification` says it settled.
+    fn task(&mut self, m: &Value) {
+        match (m["subtype"].as_str(), m["task_id"].as_str()) {
+            (Some("task_started"), Some(task)) => {
+                let Some(call) = m["tool_use_id"].as_str() else {
+                    return;
+                };
+                if self.stopping.remove(call) {
+                    self.replies.push(stop_task(call, task));
+                } else {
+                    self.tasks.insert(call.to_owned(), task.to_owned());
+                }
+            }
+            (Some("task_notification"), Some(task)) => self.tasks.retain(|_, t| t != task),
+            _ => {}
+        }
+    }
+
+    /// Asks the CLI to stop the sub-agent of tool call `call` (`stop_task`), now if its task has
+    /// started, else when it does.
+    pub fn stop_subagent(&mut self, call: &str) {
+        match self.tasks.remove(call) {
+            Some(task) => self.replies.push(stop_task(call, &task)),
+            None => {
+                self.stopping.insert(call.to_owned());
+            }
+        }
     }
 
     fn control_request(&mut self, m: &Value) -> Vec<HarnessEvent> {
@@ -396,6 +443,12 @@ impl Decoder {
     }
 }
 
+/// The `stop_task` control request for the task of tool call `call`.
+fn stop_task(call: &str, task: &str) -> Value {
+    json!({"type": "control_request", "request_id": format!("citadel-stop-{call}"),
+           "request": {"subtype": "stop_task", "task_id": task}})
+}
+
 impl Claude {
     async fn spawn(spec: &Spec, resume: Option<&str>) -> io::Result<Self> {
         let mut claude = Self {
@@ -445,6 +498,14 @@ impl Harness for Claude {
         let mode = permission_mode(spec);
         self.control(json!({"subtype": "set_permission_mode", "mode": mode}))
             .await
+    }
+
+    async fn stop_subagent(&mut self, tool_use_id: &str) -> io::Result<()> {
+        self.decoder.stop_subagent(tool_use_id);
+        for reply in std::mem::take(&mut self.decoder.replies) {
+            self.proc.write(&reply).await?;
+        }
+        Ok(())
     }
 
     async fn approve(&mut self, id: &str, decision: Decision) -> io::Result<()> {

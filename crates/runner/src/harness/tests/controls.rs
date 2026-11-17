@@ -148,3 +148,41 @@ async fn a_new_policy_switches_claudes_mode_live_without_a_restart() {
     assert_eq!(uses, 1, "never restarted: {chunks:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// E6: stopping one sub-agent mid-turn reaches Claude as `stop_task` with its task's id (from
+/// `task_started`); the sub-agent's call ends and the turn goes on to its own end.
+#[tokio::test]
+async fn a_sub_agent_stop_reaches_claude_as_stop_task_and_the_turn_goes_on() {
+    let dir = scratch("subagent");
+    let bin = dir.join("claude");
+    let script = r#"#!/usr/bin/perl
+exit 0 if $ENV{AINKRAD_EXEC_PROBE};
+$| = 1;
+<STDIN>; <STDIN>;
+print qq({"type":"system","subtype":"init","session_id":"S"}\n);
+print qq({"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t1","name":"Task","input":{"description":"look"}}]}}\n);
+print qq({"type":"system","subtype":"task_started","task_id":"k1","tool_use_id":"t1","description":"look"}\n);
+while (defined(my $line = <STDIN>)) {
+    if ($line =~ /"stop_task"/ && $line =~ /"task_id":"k1"/) {
+        print qq({"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"stopped"}]}}\n);
+        print qq({"type":"assistant","message":{"id":"m2","content":[{"type":"text","text":"went on"}]}}\n);
+        print qq({"type":"result","subtype":"success","is_error":false,"usage":{}}\n);
+        exit 0;
+    }
+}
+"#;
+    std::fs::write(&bin, script).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::exec_ready(&bin);
+    let mut ex = HarnessExecutor::new(dir.join("work"), dir.join("config"));
+    ex.bins.insert("claude".to_owned(), bin);
+    let (outcome, _, chunks) = work(&ex, Control::StopSubagent("t1".to_owned())).await;
+    assert_eq!(outcome, Outcome::Succeeded);
+    let result = chunks.iter().find(|c| c["type"] == "tool_result").unwrap();
+    assert_eq!(
+        (&result["id"], &result["status"]),
+        (&json!("t1"), &json!("error"))
+    );
+    assert!(chunks.iter().any(|c| c["text"] == "went on"), "{chunks:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

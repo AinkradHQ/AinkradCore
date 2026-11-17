@@ -33,6 +33,7 @@ mod routing;
 mod runner;
 mod runner_control;
 mod sandbox;
+mod subagents;
 mod subscription;
 mod subscription_gone;
 mod subscription_rules;

@@ -342,6 +342,10 @@ impl HarnessExecutor {
                             if inbox.take_retune() {
                                 break Next::Retune;
                             }
+                            let stops = inbox.take_subagent_stops();
+                            if !stops.is_empty() {
+                                break Next::StopSubagents(stops);
+                            }
                         }
                     }
                 }
@@ -355,6 +359,10 @@ impl HarnessExecutor {
                     if let Err(e) = harness.interrupt().await {
                         tracing::warn!(run = job.run, error = %e, "interrupting a turn failed");
                     }
+                    continue;
+                }
+                Next::StopSubagents(ids) => {
+                    stop_subagents(job, harness, ids).await;
                     continue;
                 }
                 // A new mode mid-turn: a harness that switches live is told now; the next turn's
@@ -518,8 +526,11 @@ impl HarnessExecutor {
             if inbox.take_retune() {
                 return Idle::Retune;
             }
-            // Nothing runs to stop.
+            // Nothing runs to stop, but a sub-agent may (Claude's background ones).
             inbox.take_interrupt();
+            if let Some(h) = harness.as_mut() {
+                stop_subagents(job, h, inbox.take_subagent_stops()).await;
+            }
             let woke = {
                 let event = async {
                     match harness.as_mut() {
@@ -687,6 +698,18 @@ enum Next {
     Interrupt,
     /// The run's policy changed: its harness is to take the new mode.
     Retune,
+    /// Sub-agents to stop, by their tool call ids.
+    StopSubagents(Vec<String>),
+}
+
+/// Tells `harness` to stop each sub-agent of `ids`; one it does not know, or a harness that cannot,
+/// is only logged.
+async fn stop_subagents<H: Harness>(job: &Job, harness: &mut H, ids: Vec<String>) {
+    for id in ids {
+        if let Err(e) = harness.stop_subagent(&id).await {
+            tracing::warn!(run = job.run, error = %e, "stopping a sub-agent failed");
+        }
+    }
 }
 
 /// How one harness process's turn ended.

@@ -131,6 +131,42 @@ fn unknown_control_requests_are_refused_not_left_hanging() {
     assert_eq!(decoder.replies[0]["response"]["request_id"], "r1");
 }
 
+/// One sub-agent is stopped by its task (`stop_task`, Claude Code 2.1.322+ `task_started`): at
+/// once when its task has started, else when it starts; a call with its result is forgotten.
+#[test]
+fn a_sub_agent_is_stopped_by_its_task_id() {
+    let mut decoder = Decoder::default();
+    let started = |call: &str, task: &str| {
+        json!({"type": "system", "subtype": "task_started", "task_id": task,
+               "tool_use_id": call, "description": "look", "subagent_type": "general-purpose"})
+    };
+    assert!(decoder.decode(&started("toolu_a", "a1b2c3")).is_empty());
+    decoder.stop_subagent("toolu_a");
+    let stop = |task: &str| json!({"subtype": "stop_task", "task_id": task});
+    assert_eq!(decoder.replies.len(), 1);
+    assert_eq!(decoder.replies[0]["type"], "control_request");
+    assert_eq!(decoder.replies[0]["request"], stop("a1b2c3"));
+    decoder.replies.clear();
+    // Asked before its task started: sent when it does.
+    decoder.stop_subagent("toolu_b");
+    assert!(decoder.replies.is_empty());
+    decoder.decode(&started("toolu_b", "d4e5f6"));
+    assert_eq!(decoder.replies.len(), 1);
+    assert_eq!(decoder.replies[0]["request"], stop("d4e5f6"));
+    decoder.replies.clear();
+    // A settled task, or a call with its result, is no longer stopped.
+    decoder.decode(&started("toolu_c", "g7h8"));
+    decoder.decode(&json!({"type": "system", "subtype": "task_notification",
+                           "task_id": "g7h8", "status": "completed"}));
+    decoder.stop_subagent("toolu_d");
+    let result = json!({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "toolu_d", "content": "done"}]}});
+    assert_eq!(decoder.decode(&result).len(), 1);
+    decoder.decode(&started("toolu_d", "late"));
+    assert!(decoder.tasks.contains_key("toolu_d") && decoder.replies.is_empty());
+    assert!(!decoder.tasks.contains_key("toolu_c"));
+}
+
 #[test]
 fn session_ids_are_v4_uuids() {
     let id = new_session_id().unwrap();

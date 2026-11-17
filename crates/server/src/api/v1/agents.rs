@@ -23,7 +23,7 @@ use crate::api::App;
 use crate::auth::crypto::is_id;
 use crate::store::agents::{self as store, Session, SessionSecret};
 use ainkrad_proto::runner::PermissionMode;
-use ainkrad_proto::v2::{AgentDecide, AgentMode, AgentStop, Command};
+use ainkrad_proto::v2::{AgentDecide, AgentMode, AgentStop, AgentSubagentStop, Command};
 
 pub(super) mod access;
 pub(in crate::api::v1) mod attach;
@@ -35,6 +35,10 @@ use types::*;
 pub(super) use types::{AgentEdit, AgentEditChange};
 
 const MAX_MESSAGE: usize = 16 * 1024;
+
+/// The harnesses that can stop one sub-agent on its own (Claude Code's `stop_task`). Codex's
+/// app-server and OpenCode have no such request, and agy has no sub-agents.
+pub(super) const SUBAGENT_STOP_HARNESSES: &[&str] = &["claude"];
 
 /// The one harness with a plan mode (Claude Code's `--permission-mode plan`).
 const PLAN_HARNESS: &str = "claude";
@@ -133,11 +137,27 @@ pub struct AgentSession {
     /// reports it after the start. A worktree is moved away when its run ends, so an ended
     /// session's folder may no longer exist.
     pub folder: Option<String>,
+    /// While `running`: what the answer that runs now has cost so far, in micro-dollars, from the
+    /// harness's mid-turn token reports (its `usage_so_far` entries) at the price book's rates for
+    /// the session's model. 0 when its message has just started it; absent when no answer runs or
+    /// the model has no price. It moves with the transcript: each change comes with an
+    /// `agent.transcript` event.
+    pub turn_cost_usd_micros: Option<u64>,
+    /// `turn_cost_usd_micros` is a lower estimate: Claude Code reports an answer's output tokens as
+    /// they were when it started, so the turn's own closing `usage` entry is the exact count.
+    pub turn_cost_approximate: Option<bool>,
+    /// Whether one sub-agent of it (a running `Task`/`Agent` tool call) can be stopped on its own
+    /// with `stopAgentSubagent`: its harness can (Claude Code) and its runner relays it.
+    pub can_stop_subagents: Option<bool>,
 }
 
 impl From<Session> for AgentSession {
     fn from(s: Session) -> Self {
         let state = s.api_state().to_owned();
+        let turn_cost = s
+            .turn_cost_micros
+            .filter(|_| state == "running")
+            .and_then(|c| u64::try_from(c).ok());
         let mode = s.policy["mode"].as_str().unwrap_or("ask").to_owned();
         Self {
             policy: Some(mode),
@@ -149,6 +169,9 @@ impl From<Session> for AgentSession {
                 .map(|t| ts(&crate::scheduler::iso_of_unix(t))),
             title: s.title,
             folder: s.folder,
+            turn_cost_approximate: Some(turn_cost.is_some() && s.turn_cost_approx),
+            turn_cost_usd_micros: turn_cost,
+            can_stop_subagents: Some(false),
             workspace: s.workspace,
             id: s.id,
             runner: s.runner,
@@ -591,6 +614,51 @@ pub async fn interrupt(
     tell(&app, &s, stop, &me).await?;
     let action = "agent.interrupted";
     store::action(&app.pool, &s, BY, action, None, json!({}), &me.device.id).await?;
+    shown(&app, &me, &id).await
+}
+
+#[utoipa::path(post, path = "/api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop",
+    operation_id = "stopAgentSubagent", tag = "agents",
+    params(("id" = String, Path, description = "The session's id, `as_…`"),
+        ("tool_use_id" = String, Path, description = "The `id` of the sub-agent's `tool_use` \
+        entry (Claude Code's `Task` or `Agent`)")),
+    responses((status = 200, description = "Stops that one sub-agent, not the answer (audited as \
+        `agent.subagent_stopped`): its harness is told at once, and the tool call ends with its \
+        `tool_result` while the answer goes on. `can_stop_subagents` says whether the session can. \
+        404 `unknown_subagent` for an id that is not a sub-agent's call of this session with no \
+        result yet. 409 `unsupported_command` for a harness that cannot stop one sub-agent (or a \
+        runner too old to relay it), `session_over`, `module_owned`", body = AgentSession)))]
+pub async fn stop_subagent(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path((id, tool_use_id)): Path<(String, String)>,
+) -> ApiResult<AgentSession> {
+    let s = one(&app, &me, &id).await?;
+    if !SUBAGENT_STOP_HARNESSES.contains(&s.harness.as_str()) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "unsupported_command",
+            format!("the {} harness cannot stop one sub-agent", s.harness),
+        ));
+    }
+    if !request_ok(&tool_use_id)
+        || s.state != "running"
+        || !store::subagent_running(&app.pool, &s.id, &tool_use_id).await?
+    {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "unknown_subagent",
+            "no sub-agent of this session runs with that id",
+        ));
+    }
+    let stop = Command::AgentSubagentStop(AgentSubagentStop {
+        session: s.id.clone(),
+        tool_use_id: tool_use_id.clone(),
+    });
+    tell(&app, &s, stop, &me).await?;
+    let details = json!({"tool_use_id": tool_use_id});
+    let action = "agent.subagent_stopped";
+    store::action(&app.pool, &s, BY, action, None, details, &me.device.id).await?;
     shown(&app, &me, &id).await
 }
 

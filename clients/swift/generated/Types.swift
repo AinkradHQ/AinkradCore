@@ -107,6 +107,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/resume`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/resume/post(resumeAgentSession)`.
     func resumeAgentSession(_ input: Operations.ResumeAgentSession.Input) async throws -> Operations.ResumeAgentSession.Output
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop/post(stopAgentSubagent)`.
+    func stopAgentSubagent(_ input: Operations.StopAgentSubagent.Input) async throws -> Operations.StopAgentSubagent.Output
     /// - Remark: HTTP `GET /api/v1/agent-sessions/{id}/transcript`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/transcript/get(getAgentTranscript)`.
     func getAgentTranscript(_ input: Operations.GetAgentTranscript.Input) async throws -> Operations.GetAgentTranscript.Output
@@ -858,6 +861,17 @@ extension APIProtocol {
         headers: Operations.ResumeAgentSession.Input.Headers = .init()
     ) async throws -> Operations.ResumeAgentSession.Output {
         try await resumeAgentSession(Operations.ResumeAgentSession.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop`.
+    /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop/post(stopAgentSubagent)`.
+    public func stopAgentSubagent(
+        path: Operations.StopAgentSubagent.Input.Path,
+        headers: Operations.StopAgentSubagent.Input.Headers = .init()
+    ) async throws -> Operations.StopAgentSubagent.Output {
+        try await stopAgentSubagent(Operations.StopAgentSubagent.Input(
             path: path,
             headers: headers
         ))

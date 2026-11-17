@@ -37,6 +37,7 @@ import kotlinx.serialization.Contextual
  * @param account The account the session holds, whatever its delivery (an API key or a subscription).
  * @param agent The opaque agent id the create named (the key of its chain binding).
  * @param attempt Which attempt of its run it is, from 0.
+ * @param canStopSubagents Whether one sub-agent of it (a running `Task`/`Agent` tool call) can be stopped on its own with `stopAgentSubagent`: its harness can (Claude Code) and its runner relays it.
  * @param chain The chain as it was when the session began (an edit never moves a running run).
  * @param chainId The chain the run draws its accounts from; absent for a session that names its account itself or uses the runner's own login.
  * @param chainPos The entry of `chain` the run sits on, from 0.
@@ -59,6 +60,8 @@ import kotlinx.serialization.Contextual
  * @param secrets The secrets it is leased at each start, by name.
  * @param skipPools The pools a budget stop took out of the run's chain. Admin only.
  * @param title A short name: the first message's start, or the one `titleAgentSession` set.
+ * @param turnCostApproximate `turn_cost_usd_micros` is a lower estimate: Claude Code reports an answer's output tokens as they were when it started, so the turn's own closing `usage` entry is the exact count.
+ * @param turnCostUsdMicros While `running`: what the answer that runs now has cost so far, in micro-dollars, from the harness's mid-turn token reports (its `usage_so_far` entries) at the price book's rates for the session's model. 0 when its message has just started it; absent when no answer runs or the model has no price. It moves with the transcript: each change comes with an `agent.transcript` event.
  * @param upstreamClass The last status class its own gateway reported: `ok`, `rate_limited`, `quota`, `server_error`, `auth_failed`, …
  * @param usage 
  * @param waiting Set while a chain session waits for an account: it stays `starting` until `until`, or until `scheduler.wait_max_secs` ends the run.
@@ -109,6 +112,10 @@ data class AgentSession (
     /* Which attempt of its run it is, from 0. */
     @SerialName(value = "attempt")
     val attempt: kotlin.Long? = null,
+
+    /* Whether one sub-agent of it (a running `Task`/`Agent` tool call) can be stopped on its own with `stopAgentSubagent`: its harness can (Claude Code) and its runner relays it. */
+    @SerialName(value = "can_stop_subagents")
+    val canStopSubagents: kotlin.Boolean? = null,
 
     /* The chain as it was when the session began (an edit never moves a running run). */
     @SerialName(value = "chain")
@@ -196,6 +203,14 @@ data class AgentSession (
     /* A short name: the first message's start, or the one `titleAgentSession` set. */
     @SerialName(value = "title")
     val title: kotlin.String? = null,
+
+    /* `turn_cost_usd_micros` is a lower estimate: Claude Code reports an answer's output tokens as they were when it started, so the turn's own closing `usage` entry is the exact count. */
+    @SerialName(value = "turn_cost_approximate")
+    val turnCostApproximate: kotlin.Boolean? = null,
+
+    /* While `running`: what the answer that runs now has cost so far, in micro-dollars, from the harness's mid-turn token reports (its `usage_so_far` entries) at the price book's rates for the session's model. 0 when its message has just started it; absent when no answer runs or the model has no price. It moves with the transcript: each change comes with an `agent.transcript` event. */
+    @SerialName(value = "turn_cost_usd_micros")
+    val turnCostUsdMicros: kotlin.Long? = null,
 
     /* The last status class its own gateway reported: `ok`, `rate_limited`, `quota`, `server_error`, `auth_failed`, … */
     @SerialName(value = "upstream_class")

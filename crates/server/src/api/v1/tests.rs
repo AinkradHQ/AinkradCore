@@ -39,6 +39,7 @@ mod attachments;
 mod audit_growth;
 mod budgets_api;
 mod budgets_store;
+mod card_data;
 mod chains;
 mod chains_api;
 mod chains_guard;

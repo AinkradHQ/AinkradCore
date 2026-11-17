@@ -39,6 +39,9 @@ pub const OP_AGENT_STOP: &str = "agent.stop";
 /// A session's new permission policy (`AgentMode`). A runner that takes it lists the op itself
 /// among its agent driver's commands; the Core sends it to no other.
 pub const OP_AGENT_MODE: &str = "agent.mode";
+/// Stops one running sub-agent of a session (`AgentSubagentStop`), not its turn. A runner that can
+/// relay it lists the op among its agent driver's commands; the Core sends it to no other.
+pub const OP_AGENT_SUBAGENT_STOP: &str = "agent.subagent_stop";
 
 /// The command an agent driver lists when it keeps a session's harness alive between answers: an
 /// `agent.start` with `live` then runs one conversation (state `waiting` after each answer, each
@@ -366,6 +369,15 @@ pub struct AgentStop {
 pub struct AgentMode {
     pub session: String,
     pub policy: Policy,
+}
+
+/// Stops the sub-agent a session's harness started with the tool call `tool_use_id` (Claude Code's
+/// `Task`/`Agent`, by its `stop_task` control request); the turn goes on, and that call ends with
+/// its result. A harness that cannot stop one sub-agent ignores it (the Core sends it for none).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentSubagentStop {
+    pub session: String,
+    pub tool_use_id: String,
 }
 
 /// Where a session is, as its runner sees it.

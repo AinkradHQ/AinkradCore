@@ -746,6 +746,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/attempt`.
             public var attempt: Swift.Int64?
+            /// Whether one sub-agent of it (a running `Task`/`Agent` tool call) can be stopped on its own
+            /// with `stopAgentSubagent`: its harness can (Claude Code) and its runner relays it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/can_stop_subagents`.
+            public var canStopSubagents: Swift.Bool?
             /// The chain as it was when the session began (an edit never moves a running run).
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/chain`.
@@ -863,6 +868,19 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/title`.
             public var title: Swift.String?
+            /// `turn_cost_usd_micros` is a lower estimate: Claude Code reports an answer's output tokens as
+            /// they were when it started, so the turn's own closing `usage` entry is the exact count.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/turn_cost_approximate`.
+            public var turnCostApproximate: Swift.Bool?
+            /// While `running`: what the answer that runs now has cost so far, in micro-dollars, from the
+            /// harness's mid-turn token reports (its `usage_so_far` entries) at the price book's rates for
+            /// the session's model. 0 when its message has just started it; absent when no answer runs or
+            /// the model has no price. It moves with the transcript: each change comes with an
+            /// `agent.transcript` event.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/turn_cost_usd_micros`.
+            public var turnCostUsdMicros: Swift.Int64?
             /// - Remark: Generated from `#/components/schemas/AgentSession/updated_at`.
             public var updatedAt: Components.Schemas.Timestamp
             /// The last status class its own gateway reported: `ok`, `rate_limited`, `quota`,
@@ -888,6 +906,7 @@ extension Components {
             ///   - account: The account the session holds, whatever its delivery (an API key or a subscription).
             ///   - agent: The opaque agent id the create named (the key of its chain binding).
             ///   - attempt: Which attempt of its run it is, from 0.
+            ///   - canStopSubagents: Whether one sub-agent of it (a running `Task`/`Agent` tool call) can be stopped on its own
             ///   - chain: The chain as it was when the session began (an edit never moves a running run).
             ///   - chainId: The chain the run draws its accounts from; absent for a session that names its account
             ///   - chainPos: The entry of `chain` the run sits on, from 0.
@@ -917,6 +936,8 @@ extension Components {
             ///   - skipPools: The pools a budget stop took out of the run's chain. Admin only.
             ///   - state: `starting`, `running` (working), `waiting` (a live session finished its answer and waits
             ///   - title: A short name: the first message's start, or the one `titleAgentSession` set.
+            ///   - turnCostApproximate: `turn_cost_usd_micros` is a lower estimate: Claude Code reports an answer's output tokens as
+            ///   - turnCostUsdMicros: While `running`: what the answer that runs now has cost so far, in micro-dollars, from the
             ///   - updatedAt:
             ///   - upstreamClass: The last status class its own gateway reported: `ok`, `rate_limited`, `quota`,
             ///   - usage:
@@ -926,6 +947,7 @@ extension Components {
                 account: Swift.Int64? = nil,
                 agent: Swift.String? = nil,
                 attempt: Swift.Int64? = nil,
+                canStopSubagents: Swift.Bool? = nil,
                 chain: [Components.Schemas.ChainEntry]? = nil,
                 chainId: Swift.Int64? = nil,
                 chainPos: Swift.Int64? = nil,
@@ -955,6 +977,8 @@ extension Components {
                 skipPools: [Swift.Int64]? = nil,
                 state: Swift.String,
                 title: Swift.String? = nil,
+                turnCostApproximate: Swift.Bool? = nil,
+                turnCostUsdMicros: Swift.Int64? = nil,
                 updatedAt: Components.Schemas.Timestamp,
                 upstreamClass: Swift.String? = nil,
                 usage: Components.Schemas.AgentUsage? = nil,
@@ -964,6 +988,7 @@ extension Components {
                 self.account = account
                 self.agent = agent
                 self.attempt = attempt
+                self.canStopSubagents = canStopSubagents
                 self.chain = chain
                 self.chainId = chainId
                 self.chainPos = chainPos
@@ -993,6 +1018,8 @@ extension Components {
                 self.skipPools = skipPools
                 self.state = state
                 self.title = title
+                self.turnCostApproximate = turnCostApproximate
+                self.turnCostUsdMicros = turnCostUsdMicros
                 self.updatedAt = updatedAt
                 self.upstreamClass = upstreamClass
                 self.usage = usage
@@ -1003,6 +1030,7 @@ extension Components {
                 case account
                 case agent
                 case attempt
+                case canStopSubagents = "can_stop_subagents"
                 case chain
                 case chainId = "chain_id"
                 case chainPos = "chain_pos"
@@ -1032,6 +1060,8 @@ extension Components {
                 case skipPools = "skip_pools"
                 case state
                 case title
+                case turnCostApproximate = "turn_cost_approximate"
+                case turnCostUsdMicros = "turn_cost_usd_micros"
                 case updatedAt = "updated_at"
                 case upstreamClass = "upstream_class"
                 case usage

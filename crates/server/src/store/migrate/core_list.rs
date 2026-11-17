@@ -227,4 +227,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0037_agent_attachments.up.sql"),
         down: include_str!("../../../migrations/0037_agent_attachments.down.sql"),
     },
+    Migration {
+        version: 38,
+        name: "turn_cost",
+        up: include_str!("../../../migrations/0038_turn_cost.up.sql"),
+        down: include_str!("../../../migrations/0038_turn_cost.down.sql"),
+    },
 ];

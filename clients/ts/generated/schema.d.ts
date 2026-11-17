@@ -436,6 +436,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["stopAgentSubagent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent-sessions/{id}/transcript": {
         parameters: {
             query?: never;
@@ -2150,6 +2166,11 @@ export interface components {
              * @description Which attempt of its run it is, from 0.
              */
             attempt?: number | null;
+            /**
+             * @description Whether one sub-agent of it (a running `Task`/`Agent` tool call) can be stopped on its own
+             *     with `stopAgentSubagent`: its harness can (Claude Code) and its runner relays it.
+             */
+            can_stop_subagents?: boolean | null;
             /** @description The chain as it was when the session began (an edit never moves a running run). */
             chain?: components["schemas"]["ChainEntry"][] | null;
             /**
@@ -2244,6 +2265,20 @@ export interface components {
             state: string;
             /** @description A short name: the first message's start, or the one `titleAgentSession` set. */
             title?: string | null;
+            /**
+             * @description `turn_cost_usd_micros` is a lower estimate: Claude Code reports an answer's output tokens as
+             *     they were when it started, so the turn's own closing `usage` entry is the exact count.
+             */
+            turn_cost_approximate?: boolean | null;
+            /**
+             * Format: int64
+             * @description While `running`: what the answer that runs now has cost so far, in micro-dollars, from the
+             *     harness's mid-turn token reports (its `usage_so_far` entries) at the price book's rates for
+             *     the session's model. 0 when its message has just started it; absent when no answer runs or
+             *     the model has no price. It moves with the transcript: each change comes with an
+             *     `agent.transcript` event.
+             */
+            turn_cost_usd_micros?: number | null;
             updated_at: components["schemas"]["Timestamp"];
             /**
              * @description The last status class its own gateway reported: `ok`, `rate_limited`, `quota`,
@@ -5495,6 +5530,38 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description A `lost` or `interrupted` session is started again on its runner, continuing the harness's own session, with fresh leases (audited as `agent.resumed`). 409 `not_resumable` otherwise */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    stopAgentSubagent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+                /** @description The `id` of the sub-agent's `tool_use` entry (Claude Code's `Task` or `Agent`) */
+                tool_use_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stops that one sub-agent, not the answer (audited as `agent.subagent_stopped`): its harness is told at once, and the tool call ends with its `tool_result` while the answer goes on. `can_stop_subagents` says whether the session can. 404 `unknown_subagent` for an id that is not a sub-agent's call of this session with no result yet. 409 `unsupported_command` for a harness that cannot stop one sub-agent (or a runner too old to relay it), `session_over`, `module_owned` */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -134,7 +134,8 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (34, "audit_origin"),
             (35, "code_mode_writes"),
             (36, "session_folder"),
-            (37, "agent_attachments")
+            (37, "agent_attachments"),
+            (38, "turn_cost")
         ]
     );
     let sum: Vec<u8> =

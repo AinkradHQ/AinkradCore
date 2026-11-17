@@ -242,6 +242,13 @@ pub trait Harness: Sized + Send + 'static {
         let _ = spec;
         async { Err(io::Error::from(io::ErrorKind::Unsupported)) }
     }
+    /// Stops the sub-agent the tool call `tool_use_id` started, not the turn: Claude's `Task`/`Agent`
+    /// (`stop_task`); that call then ends with its result. `Unsupported`: the harness has no way to
+    /// stop one sub-agent on its own.
+    fn stop_subagent(&mut self, tool_use_id: &str) -> impl Future<Output = io::Result<()>> + Send {
+        let _ = tool_use_id;
+        async { Err(io::Error::from(io::ErrorKind::Unsupported)) }
+    }
     /// Answers an `ApprovalRequested`.
     fn approve(
         &mut self,
