@@ -104,8 +104,14 @@ impl Decoder for Guarded<'_> {
         }
         Ok(c)
     }
+    /// Skip blocks (ref 10) only appear in merged updates; an honest relay never sends one, and an integrated skip
+    /// leaves a hole in the store that the pending check cannot see.
     fn read_info(&mut self) -> Result<u8, ReadError> {
-        self.0.read_info()
+        let info = self.0.read_info()?;
+        if info & 0x1f == 10 {
+            return Err(ReadError::UnexpectedValue);
+        }
+        Ok(info)
     }
     fn read_parent_info(&mut self) -> Result<bool, ReadError> {
         self.0.read_parent_info()

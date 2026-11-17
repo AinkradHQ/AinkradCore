@@ -155,15 +155,22 @@ impl Live {
     /// reach it.
     fn no_gap(&self, u: &Update, refs: &[yrs::ID]) -> Result<(), Error> {
         let have = self.doc().transact().state_vector();
-        let upper = u.state_vector();
-        let limit = |c: &yrs::ClientID| have.get(c).max(upper.get(c));
+        // what the update itself inserts (one contiguous run per client: a client listed twice is refused at decode)
+        let ins = u.insertions(true);
+        let held = |id: &yrs::ID| id.clock < have.get(&id.client) || ins.contains(id);
+        let deletable = |c: &yrs::ClientID, r: &std::ops::Range<u32>| {
+            let from = r.start.max(have.get(c));
+            from >= r.end
+                || (ins.contains(&yrs::ID::new(*c, from))
+                    && ins.contains(&yrs::ID::new(*c, r.end - 1)))
+        };
         if u.state_vector_lower()
             .iter()
             .any(|(c, lower)| *lower > have.get(c))
-            || refs.iter().any(|id| id.clock >= limit(&id.client))
+            || !refs.iter().all(held)
             || u.delete_set()
                 .iter()
-                .any(|(c, rs)| rs.iter().any(|r| r.end > limit(c)))
+                .any(|(c, rs)| rs.iter().any(|r| !deletable(c, r)))
         {
             return Err(Error::Malformed(
                 "update does not follow this replica's state; resync".into(),
