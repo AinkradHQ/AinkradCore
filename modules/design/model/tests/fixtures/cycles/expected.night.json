@@ -1,0 +1,337 @@
+{
+  "detached": [
+    {
+      "children": [
+        {
+          "children": [],
+          "id": "n_aframeaaaaaa",
+          "name": "A",
+          "props": {
+            "h": 100,
+            "w": 100
+          },
+          "type": "frame"
+        },
+        {
+          "children": [],
+          "id": "n_inneraaaaaaa",
+          "name": "inner",
+          "props": {},
+          "text": "kept with B",
+          "type": "text"
+        }
+      ],
+      "id": "n_bframeaaaaaa",
+      "name": "B",
+      "props": {
+        "h": 50,
+        "w": 50
+      },
+      "type": "frame"
+    },
+    {
+      "children": [],
+      "id": "n_orphanaaaaaa",
+      "name": "Orphan",
+      "props": {
+        "h": 5,
+        "w": 5
+      },
+      "type": "rect"
+    }
+  ],
+  "diagnostics": [
+    {
+      "code": "tree.cycle",
+      "msg": "a move cycle was cut here; the node is detached",
+      "node": "n_bframeaaaaaa"
+    },
+    {
+      "code": "prop.invalid",
+      "msg": "bogus: unknown prop",
+      "node": "n_badaaaaaaaaa"
+    },
+    {
+      "code": "token.missing",
+      "msg": "fill: no token \"color.nope\"",
+      "node": "n_badaaaaaaaaa"
+    },
+    {
+      "code": "token.kind",
+      "msg": "radius: token \"color.bg\" is a Color, not usable here",
+      "node": "n_badaaaaaaaaa"
+    },
+    {
+      "code": "prop.invalid",
+      "msg": "w: expected a number in 0..=1000000",
+      "node": "n_badaaaaaaaaa"
+    },
+    {
+      "code": "prop.invalid",
+      "msg": "x: expected a number in -1000000..=1000000",
+      "node": "n_badaaaaaaaaa"
+    },
+    {
+      "code": "instance.missing",
+      "msg": "component \"dd_main/n_comp7aaaaaaa\" not found in this design or its system",
+      "node": "n_noneaaaaaaaa"
+    },
+    {
+      "code": "instance.missing",
+      "msg": "component \"dd_other/n_buttonaaaaaa\" not found in this design or its system",
+      "node": "n_foreignaaaaa"
+    },
+    {
+      "code": "child.leaf",
+      "msg": "a leaf node cannot have children; they are not drawn",
+      "node": "n_leafaaaaaaaa"
+    },
+    {
+      "code": "instance.cycle",
+      "msg": "the component contains an instance of itself",
+      "node": "n_inabaaaaaaaa/n_inbaaaaaaaaa/n_inabaaaaaaaa"
+    },
+    {
+      "code": "instance.cycle",
+      "msg": "the component contains an instance of itself",
+      "node": "n_inbaaaaaaaaa/n_inabaaaaaaaa/n_inbaaaaaaaaa"
+    },
+    {
+      "code": "instance.cycle",
+      "msg": "the component contains an instance of itself",
+      "node": "n_useaaaaaaaaa/n_inabaaaaaaaa/n_inbaaaaaaaaa"
+    }
+  ],
+  "doc": "dd_main",
+  "pages": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [],
+              "id": "n_badaaaaaaaaa",
+              "name": "Bad props",
+              "props": {
+                "h": 20,
+                "opacity": 0.5
+              },
+              "type": "rect"
+            },
+            {
+              "children": [],
+              "component": "dd_main/n_comp7aaaaaaa",
+              "id": "n_noneaaaaaaaa",
+              "name": "no component",
+              "props": {},
+              "type": "instance"
+            },
+            {
+              "children": [],
+              "component": "dd_other/n_buttonaaaaaa",
+              "id": "n_foreignaaaaa",
+              "name": "foreign doc",
+              "props": {},
+              "type": "instance"
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "id": "n_dangleaaaaaa/n_bgaaaaaaaaaa",
+                  "name": "bg",
+                  "props": {
+                    "fill": [
+                      {
+                        "color": "#101014",
+                        "type": "solid"
+                      }
+                    ],
+                    "material": "well",
+                    "radius": 8
+                  },
+                  "type": "rect"
+                },
+                {
+                  "children": [],
+                  "id": "n_dangleaaaaaa/n_labelaaaaaaa",
+                  "name": "label",
+                  "props": {
+                    "fill": [
+                      {
+                        "color": "#f2f2f2",
+                        "type": "solid"
+                      }
+                    ],
+                    "type": {
+                      "font": "system",
+                      "size": 13,
+                      "weight": 500
+                    },
+                    "w": 4
+                  },
+                  "text": "Button",
+                  "type": "text"
+                }
+              ],
+              "component": "dd_sys/n_buttonaaaaaa",
+              "id": "n_dangleaaaaaa",
+              "name": "dangling override",
+              "props": {
+                "layout": {
+                  "dir": "row",
+                  "gap": 12,
+                  "pad": [
+                    8,
+                    12,
+                    8,
+                    12
+                  ]
+                }
+              },
+              "type": "instance"
+            },
+            {
+              "children": [],
+              "id": "n_leafaaaaaaaa",
+              "name": "leaf with child",
+              "props": {},
+              "text": "x",
+              "type": "text"
+            }
+          ],
+          "id": "n_goodaaaaaaaa",
+          "name": "Good",
+          "props": {
+            "h": 10,
+            "w": 10
+          },
+          "type": "frame"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [],
+                      "component": "dd_main/n_compbaaaaaaa",
+                      "id": "n_inabaaaaaaaa/n_inbaaaaaaaaa/n_inabaaaaaaaa",
+                      "name": "C1 holds C2",
+                      "props": {},
+                      "type": "instance"
+                    }
+                  ],
+                  "component": "dd_main/n_compaaaaaaaa",
+                  "id": "n_inabaaaaaaaa/n_inbaaaaaaaaa",
+                  "name": "C2 holds C1",
+                  "props": {
+                    "h": 80,
+                    "w": 80
+                  },
+                  "type": "instance"
+                }
+              ],
+              "component": "dd_main/n_compbaaaaaaa",
+              "id": "n_inabaaaaaaaa",
+              "name": "C1 holds C2",
+              "props": {
+                "h": 60,
+                "w": 60
+              },
+              "type": "instance"
+            }
+          ],
+          "id": "n_compaaaaaaaa",
+          "name": "C1",
+          "props": {
+            "h": 80,
+            "w": 80
+          },
+          "type": "component"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [],
+                      "component": "dd_main/n_compaaaaaaaa",
+                      "id": "n_inbaaaaaaaaa/n_inabaaaaaaaa/n_inbaaaaaaaaa",
+                      "name": "C2 holds C1",
+                      "props": {},
+                      "type": "instance"
+                    }
+                  ],
+                  "component": "dd_main/n_compbaaaaaaa",
+                  "id": "n_inbaaaaaaaaa/n_inabaaaaaaaa",
+                  "name": "C1 holds C2",
+                  "props": {
+                    "h": 60,
+                    "w": 60
+                  },
+                  "type": "instance"
+                }
+              ],
+              "component": "dd_main/n_compaaaaaaaa",
+              "id": "n_inbaaaaaaaaa",
+              "name": "C2 holds C1",
+              "props": {
+                "h": 80,
+                "w": 80
+              },
+              "type": "instance"
+            }
+          ],
+          "id": "n_compbaaaaaaa",
+          "name": "C2",
+          "props": {
+            "h": 60,
+            "w": 60
+          },
+          "type": "component"
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [],
+                  "component": "dd_main/n_compaaaaaaaa",
+                  "id": "n_useaaaaaaaaa/n_inabaaaaaaaa/n_inbaaaaaaaaa",
+                  "name": "C2 holds C1",
+                  "props": {},
+                  "type": "instance"
+                }
+              ],
+              "component": "dd_main/n_compbaaaaaaa",
+              "id": "n_useaaaaaaaaa/n_inabaaaaaaaa",
+              "name": "C1 holds C2",
+              "props": {
+                "h": 60,
+                "w": 60
+              },
+              "type": "instance"
+            }
+          ],
+          "component": "dd_main/n_compaaaaaaaa",
+          "id": "n_useaaaaaaaaa",
+          "name": "uses C1",
+          "props": {
+            "h": 80,
+            "w": 80
+          },
+          "type": "instance"
+        }
+      ],
+      "id": "n_pageaaaaaaaa",
+      "name": "Main",
+      "props": {},
+      "type": "page"
+    }
+  ],
+  "theme": "night"
+}

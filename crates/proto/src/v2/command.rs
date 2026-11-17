@@ -65,6 +65,22 @@ pub enum Command {
     AgentAttach(super::AgentAttach),
     #[serde(rename = "agent.subagent_stop")]
     AgentSubagentStop(super::AgentSubagentStop),
+    #[serde(rename = "ssh.exec")]
+    SshExec(super::SshExec),
+    #[serde(rename = "ssh.sftp.list")]
+    SshSftpList(super::SftpList),
+    #[serde(rename = "ssh.sftp.stat")]
+    SshSftpStat(super::SftpStat),
+    #[serde(rename = "ssh.sftp.read")]
+    SshSftpRead(super::SftpRead),
+    #[serde(rename = "ssh.sftp.write")]
+    SshSftpWrite(super::SftpWrite),
+    #[serde(rename = "ssh.sftp.mkdir")]
+    SshSftpMkdir(super::SftpMkdir),
+    #[serde(rename = "ssh.sftp.rename")]
+    SshSftpRename(super::SftpRename),
+    #[serde(rename = "ssh.sftp.remove")]
+    SshSftpRemove(super::SftpRemove),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -98,6 +114,14 @@ impl Command {
             Self::RunnerPolicy(_) => super::OP_RUNNER_POLICY,
             Self::ToolsInstall(_) => super::OP_TOOLS_INSTALL,
             Self::ToolsStatus(_) => super::OP_TOOLS_STATUS,
+            Self::SshExec(_) => super::OP_SSH_EXEC,
+            Self::SshSftpList(_) => super::OP_SFTP_LIST,
+            Self::SshSftpStat(_) => super::OP_SFTP_STAT,
+            Self::SshSftpRead(_) => super::OP_SFTP_READ,
+            Self::SshSftpWrite(_) => super::OP_SFTP_WRITE,
+            Self::SshSftpMkdir(_) => super::OP_SFTP_MKDIR,
+            Self::SshSftpRename(_) => super::OP_SFTP_RENAME,
+            Self::SshSftpRemove(_) => super::OP_SFTP_REMOVE,
             Self::Unknown => "unknown",
         }
     }
@@ -194,6 +218,23 @@ pub enum Reply {
     AgentAttach(super::AgentAttached),
     #[serde(rename = "agent.subagent_stop")]
     AgentSubagentStop(super::AgentEvents),
+    /// The answer to `ssh.exec`.
+    #[serde(rename = "ssh.exec")]
+    SshExec(ExecResult),
+    #[serde(rename = "ssh.sftp.list")]
+    SshSftpList(super::SftpEntries),
+    #[serde(rename = "ssh.sftp.stat")]
+    SshSftpStat(super::SftpEntry),
+    #[serde(rename = "ssh.sftp.read")]
+    SshSftpRead(super::SftpTransferred),
+    #[serde(rename = "ssh.sftp.write")]
+    SshSftpWrite(super::SftpTransferred),
+    #[serde(rename = "ssh.sftp.mkdir")]
+    SshSftpMkdir(super::SftpDone),
+    #[serde(rename = "ssh.sftp.rename")]
+    SshSftpRename(super::SftpDone),
+    #[serde(rename = "ssh.sftp.remove")]
+    SshSftpRemove(super::SftpDone),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

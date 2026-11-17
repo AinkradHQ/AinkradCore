@@ -256,6 +256,52 @@ async fn login_ops_are_refused_where_the_runner_offers_no_sign_in() {
     assert_eq!(error(core.answer(1).await), ErrorCode::UnsupportedCommand);
 }
 
+/// Y2-01: a runner whose Core never gave it an `ssh` driver lists none and refuses `ssh.exec`.
+#[tokio::test]
+async fn ssh_exec_is_refused_where_the_runner_offers_no_ssh_driver() {
+    let (mut core, hello) = Core::start(1).await;
+    assert!(hello.drivers.iter().all(|d| d.name != "ssh"));
+    let hop = ainkrad_proto::v2::SshHop {
+        host: "127.0.0.1".to_owned(),
+        port: 22,
+        user: "me".to_owned(),
+        pinned_keys: vec![],
+        lease: "l_1".to_owned(),
+    };
+    let req = ainkrad_proto::v2::SshExec {
+        target: hop,
+        hops: vec![],
+        run: "id".to_owned(),
+        limits: ainkrad_proto::v2::ExecLimits::default(),
+    };
+    core.send(1, Body::Command(Command::SshExec(req))).await;
+    assert_eq!(error(core.answer(1).await), ErrorCode::UnsupportedCommand);
+}
+
+/// Y2-03: a runner without the `ssh` driver refuses every `ssh.sftp.*` op the same way.
+#[tokio::test]
+async fn ssh_sftp_is_refused_where_the_runner_offers_no_ssh_driver() {
+    let (mut core, _) = Core::start(1).await;
+    let route = ainkrad_proto::v2::SshRoute {
+        target: ainkrad_proto::v2::SshHop {
+            host: "127.0.0.1".to_owned(),
+            port: 22,
+            user: "me".to_owned(),
+            pinned_keys: vec![],
+            lease: "l_1".to_owned(),
+        },
+        hops: vec![],
+    };
+    let read = ainkrad_proto::v2::SftpRead {
+        route,
+        path: "/etc/hostname".to_owned(),
+        offset: 0,
+    };
+    core.send(1, Body::Command(Command::SshSftpRead(read)))
+        .await;
+    assert_eq!(error(core.answer(1).await), ErrorCode::UnsupportedCommand);
+}
+
 #[tokio::test]
 async fn hello_lists_the_exec_driver_and_its_capacity_then_noop_answers() {
     let (mut core, hello) = Core::start(3).await;

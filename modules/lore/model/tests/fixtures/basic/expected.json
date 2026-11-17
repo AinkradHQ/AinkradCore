@@ -1,0 +1,96 @@
+{
+  "attachments": [
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  ],
+  "headings": [
+    {
+      "level": 1,
+      "line": 3,
+      "text": "Trip Planning"
+    },
+    {
+      "level": 2,
+      "line": 7,
+      "text": "Packing list"
+    }
+  ],
+  "links": [
+    {
+      "image": false,
+      "line": 15,
+      "text": "guide",
+      "url": "https://example.test/guide"
+    },
+    {
+      "image": true,
+      "line": 15,
+      "text": "photo",
+      "url": "https://example.test/p.png"
+    }
+  ],
+  "tags": [
+    "travel",
+    "plans/2027",
+    "quoted"
+  ],
+  "tasks": [
+    {
+      "done": false,
+      "line": 9,
+      "text": "Passport"
+    },
+    {
+      "done": true,
+      "line": 10,
+      "text": "Charger for [[Gadgets|the gadget kit]]"
+    },
+    {
+      "done": false,
+      "line": 11,
+      "text": "Nested box with `[[not a link]]` in code"
+    },
+    {
+      "done": true,
+      "line": 12,
+      "text": "Numbered done item"
+    }
+  ],
+  "title": "Trip Planning",
+  "title_norm": "trip planning",
+  "truncated": false,
+  "wikilinks": [
+    {
+      "alias": "the gadget kit",
+      "context": "- [x] Charger for [[Gadgets|the gadget kit]]",
+      "heading": null,
+      "line": 10,
+      "title": "Gadgets",
+      "title_norm": "gadgets"
+    },
+    {
+      "alias": null,
+      "context": "See [[Maps#Coastal route]] and [[maps#Coastal route]] again, plus [[  Spare   Parts ]] and ![[Gadgets]].",
+      "heading": "Coastal route",
+      "line": 14,
+      "title": "Maps",
+      "title_norm": "maps"
+    },
+    {
+      "alias": null,
+      "context": "See [[Maps#Coastal route]] and [[maps#Coastal route]] again, plus [[  Spare   Parts ]] and ![[Gadgets]].",
+      "heading": null,
+      "line": 14,
+      "title": "Spare   Parts",
+      "title_norm": "spare parts"
+    },
+    {
+      "alias": null,
+      "context": "> Quoted line with a #quoted tag and [[Quoted Target]]",
+      "heading": null,
+      "line": 20,
+      "title": "Quoted Target",
+      "title_norm": "quoted target"
+    }
+  ],
+  "words": 86
+}

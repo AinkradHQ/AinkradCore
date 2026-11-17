@@ -48,6 +48,8 @@ mod history;
 pub mod local;
 mod login;
 mod plan_limit;
+mod sftp;
+mod ssh;
 mod subscription;
 mod terminal;
 mod tools;
@@ -60,6 +62,8 @@ pub use gateway::*;
 pub use history::*;
 pub use login::*;
 pub use plan_limit::*;
+pub use sftp::*;
+pub use ssh::*;
 pub use subscription::*;
 pub use terminal::*;
 pub use tools::*;
@@ -338,6 +342,8 @@ pub enum Control {
     Signal(SignalReq),
     /// Runner to Core on a terminal stream: the screen now; output resumes at its `seq`.
     Snapshot(Snapshot),
+    /// Core to runner on an `ssh.sftp.write` stream: the last byte was sent (`sftp`).
+    Eof,
     /// A type from a newer peer: ignored. Never sent.
     #[serde(other)]
     Unknown,
@@ -459,6 +465,9 @@ pub struct Close {
 pub struct StreamError {
     pub code: ErrorCode,
     pub message: String,
+    /// With `host_key_unknown` and `host_key_changed`: whose key, and which.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_key: Option<HostKeyEvidence>,
 }
 
 impl StreamError {
@@ -466,7 +475,16 @@ impl StreamError {
         Self {
             code,
             message: message.into(),
+            host_key: None,
         }
+    }
+
+    pub fn with_host_key(mut self, hop: u8, fingerprint: impl Into<String>) -> Self {
+        self.host_key = Some(HostKeyEvidence {
+            hop,
+            fingerprint: fingerprint.into(),
+        });
+        self
     }
 }
 
@@ -499,6 +517,25 @@ pub enum ErrorCode {
     /// The connection went while the command was in flight and its outcome is unknown: it may
     /// or may not have run. Reported once per command, never followed by a result.
     Lost,
+    /// `ssh.exec`: the host presented a key the Core has not pinned (none pinned yet). Nothing was
+    /// authenticated; `host_key` has the fingerprint for a person to trust.
+    HostKeyUnknown,
+    /// `ssh.exec`: the host presented a key other than the pinned ones. Nothing was authenticated.
+    HostKeyChanged,
+    /// `ssh.exec`: the host refused the key (or it could not be read).
+    SshAuthFailed,
+    /// `ssh.exec`: no connection, no common algorithm, or the channel failed.
+    SshFailed,
+    /// `ssh.sftp.*`: no such path on the host.
+    SftpNotFound,
+    /// `ssh.sftp.*`: the host refused the user access to the path.
+    SftpDenied,
+    /// `ssh.sftp.*`: the path is taken (a write without `overwrite`, a rename, a mkdir).
+    SftpExists,
+    /// `ssh.sftp.*`: the host refused for another reason, or the SFTP session failed.
+    SftpFailed,
+    /// A transfer over `SFTP_MAX_BYTES`.
+    TooLarge,
     /// A code from a newer peer. Never sent.
     #[serde(other)]
     Unknown,

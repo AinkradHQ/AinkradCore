@@ -37,6 +37,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use super::agent::AgentDriver;
 use super::pty::{Op, PtyDriver};
+use super::ssh::SshDriver;
 use super::{ExecDriver, Link, handshake, key, lost, rotate, send};
 use crate::load::host_load;
 
@@ -112,6 +113,8 @@ impl Held {
 pub struct Session {
     exec: Arc<ExecDriver>,
     pty: Option<Arc<PtyDriver>>,
+    /// `ssh.exec` (Leyline), offered where `exec.run` is.
+    ssh: Option<Arc<SshDriver>>,
     /// Agent sessions (`--enable-agents`), if offered.
     agent: Option<Arc<AgentDriver>>,
     pub(super) login: Option<Arc<super::login::LoginDriver>>, // KAN-441 L2, set with `agent`
@@ -132,6 +135,7 @@ impl Session {
         Self {
             exec,
             pty: None,
+            ssh: None,
             agent: None,
             login: None,
             control: None,
@@ -154,6 +158,12 @@ impl Session {
     /// Offers the `pty` driver too (when its config enables it).
     pub fn with_pty(mut self, pty: Arc<PtyDriver>) -> Self {
         self.pty = Some(pty);
+        self
+    }
+
+    /// Offers the `ssh` driver too.
+    pub fn with_ssh(mut self, ssh: Arc<SshDriver>) -> Self {
+        self.ssh = Some(ssh);
         self
     }
 
@@ -227,6 +237,7 @@ impl Session {
         let hello = RunnerHello {
             drivers: std::iter::once(self.exec.info())
                 .chain(pty_info)
+                .chain(self.ssh.as_ref().and_then(|s| s.info()))
                 .chain(agent_info)
                 .chain(
                     self.control
@@ -464,6 +475,37 @@ impl Session {
                 });
                 None
             }
+            Command::SshExec(req) => {
+                let Some(ssh) = self.ssh.as_ref().filter(|s| s.info().is_some()) else {
+                    return Some(Body::Error(StreamError::new(
+                        ErrorCode::UnsupportedCommand,
+                        "ssh is off on this runner (it follows exec.run: --enable-exec)",
+                    )));
+                };
+                let slot = match ssh.slot() {
+                    Ok(slot) => slot,
+                    Err(e) => return Some(Body::Error(e)),
+                };
+                let (cancel_tx, cancel_rx) = oneshot::channel();
+                h.cancel = Some(cancel_tx);
+                let (ssh, done) = (Arc::clone(ssh), self.done_tx.clone());
+                tokio::spawn(async move {
+                    let body = match ssh.run(&req, cancel_rx).await {
+                        Ok(result) => Body::Result(Reply::SshExec(result)),
+                        Err(e) => Body::Error(e),
+                    };
+                    drop(slot);
+                    let _ = done.send((stream, body));
+                });
+                None
+            }
+            Command::SshSftpList(_)
+            | Command::SshSftpStat(_)
+            | Command::SshSftpRead(_)
+            | Command::SshSftpWrite(_)
+            | Command::SshSftpMkdir(_)
+            | Command::SshSftpRename(_)
+            | Command::SshSftpRemove(_) => self.start_sftp(stream, command, h),
             Command::PtyOpen(_) | Command::PtyAttach(_) | Command::PtyClose(_) => {
                 self.start_pty(stream, command, h)
             }
@@ -547,6 +589,47 @@ impl Session {
                 )
                 .await;
             let _ = done.send((stream, last));
+        });
+        None
+    }
+}
+
+impl Session {
+    /// An `ssh.sftp.*` command: one task; a read or write also gets the stream's inbox (credit,
+    /// the Core's bytes and `eof`) and sends its frames as they are made.
+    fn start_sftp(&self, stream: u64, command: Command, h: &mut Held) -> Option<Body> {
+        let Some(ssh) = self.ssh.as_ref().filter(|s| s.info().is_some()) else {
+            return Some(Body::Error(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                "ssh is off on this runner (it follows exec.run: --enable-exec)",
+            )));
+        };
+        let slot = match ssh.slot() {
+            Ok(slot) => slot,
+            Err(e) => return Some(Body::Error(e)),
+        };
+        let (cancel_tx, cancel) = oneshot::channel();
+        h.cancel = Some(cancel_tx);
+        let (ssh, done) = (Arc::clone(ssh), self.done_tx.clone());
+        let (inbox_tx, inbox) = mpsc::unbounded_channel();
+        let frames = done.clone();
+        let send = move |b: Body| drop(frames.send((stream, b)));
+        if matches!(command, Command::SshSftpRead(_) | Command::SshSftpWrite(_)) {
+            h.inbox = Some(inbox_tx);
+        }
+        tokio::spawn(async move {
+            let answer = match &command {
+                Command::SshSftpRead(r) => {
+                    (ssh.sftp_read(r, send, inbox, cancel).await).map(Reply::SshSftpRead)
+                }
+                Command::SshSftpWrite(r) => {
+                    (ssh.sftp_write(r, send, inbox, cancel).await).map(Reply::SshSftpWrite)
+                }
+                _ => ssh.sftp_unary(&command, cancel).await,
+            };
+            drop(slot);
+            let body = answer.map_or_else(Body::Error, Body::Result);
+            let _ = done.send((stream, body));
         });
         None
     }

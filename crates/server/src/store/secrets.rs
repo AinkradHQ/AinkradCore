@@ -726,6 +726,46 @@ pub async fn rotate_in(
     Ok(m)
 }
 
+/// Sets `name`'s own runner scope to `runners` (each an active runner, none twice), inside the
+/// caller's write transaction; the caller commits. Only the scope changes: the value, its version
+/// and its group stay. An equal set (order aside) is `Ok(false)` and writes nothing. A changed
+/// scope drops every outstanding lease on the secret (a lease granted under the old scope must not
+/// outlive it) and is audited as `secret.runners_changed`. It does not look at `secrets.mode`:
+/// narrowing who may be leased a secret has to work with the broker off.
+pub async fn set_runners_in(
+    tx: &mut SqliteConnection,
+    name: &str,
+    runners: &[String],
+    by_device: &str,
+    actor: AuditActor,
+    now: &str,
+) -> Result<bool, Error> {
+    let old = find(&mut *tx, name).await?;
+    check_runners(&mut *tx, runners).await?;
+    let mut sorted = runners.to_vec();
+    sorted.sort();
+    let mut have = old.runners.clone();
+    have.sort();
+    if have == sorted {
+        return Ok(false);
+    }
+    sqlx::query("UPDATE core_secrets SET runners = ?, updated_at = ? WHERE id = ?")
+        .bind(json!(sorted).to_string())
+        .bind(now)
+        .bind(old.id)
+        .execute(&mut *tx)
+        .await?;
+    let dropped = sqlx::query("DELETE FROM core_secret_leases WHERE secret_id = ?")
+        .bind(old.id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let details = json!({"name": name, "runners": sorted, "leases_revoked": dropped,
+                         "by_device": by_device});
+    audit(&mut *tx, actor, "secret.runners_changed", old.id, details).await?;
+    Ok(true)
+}
+
 /// Deletes `name` and its leases, audited as `secret.deleted`. Works whatever the mode.
 pub async fn delete(
     pool: &SqlitePool,
