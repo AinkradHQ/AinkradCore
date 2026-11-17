@@ -321,7 +321,7 @@ fn the_cloud_metadata_address_is_unreachable() {
     let ctr = container(&run, "probe");
     // A TCP connect, not an HTTP answer: the metadata service answers some paths with errors anyway.
     assert!(
-        sh_ok(&ctr, "nc -w 5 1.1.1.1 80 </dev/null"),
+        sh_ok(&ctr, "nc -w 5 example.com 80 </dev/null"),
         "the internet is reachable"
     );
     assert!(!sh_ok(&ctr, "nc -w 5 169.254.169.254 80 </dev/null"));
