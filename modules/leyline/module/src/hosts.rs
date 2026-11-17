@@ -357,6 +357,7 @@ pub(crate) async fn create(
     record(&mut tx, "created", &id).await?;
     let out = load(&mut tx, &id).await?;
     tx.commit().await?;
+    crate::keys::sync_runners(&app).await?;
     Ok(Json(out))
 }
 
@@ -430,6 +431,7 @@ pub(crate) async fn patch(
     record(&mut tx, "changed", &id).await?;
     let out = load(&mut tx, &id).await?;
     tx.commit().await?;
+    crate::keys::sync_runners(&app).await?;
     Ok(Json(out))
 }
 
@@ -459,6 +461,7 @@ pub(crate) async fn remove(State(app): State<App>, Path(host): Path<String>) -> 
         .await?;
     record(&mut tx, "deleted", &id).await?;
     tx.commit().await?;
+    crate::keys::sync_runners(&app).await?;
     Ok(Json(Deleted { deleted: id }))
 }
 

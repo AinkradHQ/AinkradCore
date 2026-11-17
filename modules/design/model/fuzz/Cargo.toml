@@ -1,0 +1,24 @@
+# V1-02: the validator fuzz target, in its OWN workspace (cargo-fuzz needs nightly; `make build-design` never touches it).
+# Run with `make fuzz-design` or `cd modules/design/model/fuzz && cargo +nightly fuzz run validators`.
+[package]
+name = "design-model-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+design-model = { path = ".." }
+serde_json = "1.0.154"
+
+[workspace]
+
+[[bin]]
+name = "validators"
+path = "fuzz_targets/validators.rs"
+test = false
+doc = false
+bench = false

@@ -11,16 +11,21 @@ workspace = true
 ainkrad-core = { path = "../../../crates/core" }
 ainkrad-core-server = { path = "../../../crates/server" }
 axum = "0.8.9"
+base64 = "0.22.1"
 getrandom = "0.4.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10.9"
+# No `rsa`/`dsa` feature (RUSTSEC-2023-0071) and no `p256`/`p384` (they pull crypto-bigint 0.5, RUSTSEC-2026-0387).
+ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "ecdsa", "encryption"] }
 tokio = { version = "1.54.0", features = ["rt", "sync"] }
 tracing = "0.1"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
 utoipa = "6.0.0"
+zeroize = { version = "1.9.1", features = ["serde"] }
 
 [dev-dependencies]
 ainkrad-core-server = { path = "../../../crates/server", features = ["test-support"] }
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5.3", features = ["util"] }
+tracing-subscriber = "0.3.23"

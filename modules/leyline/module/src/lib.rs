@@ -1,7 +1,8 @@
 //! The Leyline module (Y1-01): the Core's address book of SSH hosts. This story is the store and
 //! the API only: hosts, groups and tags, label addressing, the validation that keeps argv-injection
-//! text out (API and table), `leyline.*` events and audit. Keys (Y1-02), attachments (Y1-03), SSH
-//! itself (Y2+) come later; the command gate (`gate`, Y4-01) is here; no secret is handled here.
+//! text out (API and table), `leyline.*` events and audit; and keys (Y1-02): generated or imported,
+//! sealed in the Core's secret store, public data only in the API. Attachments (Y1-03) and SSH itself
+//! (Y2+) come later; the command gate (`gate`, Y4-01) is here.
 //!
 //! Module off, the Core is unchanged: the tables are its own `leyline_` namespace, no Core
 //! migration, no Core crate names this module.
@@ -9,6 +10,7 @@
 mod address;
 pub mod gate;
 mod hosts;
+mod keys;
 mod policy;
 mod valid;
 
@@ -16,7 +18,7 @@ use ainkrad_core_server::api::App;
 use ainkrad_core_server::module::Module;
 use ainkrad_core_server::store::Migration;
 use axum::Router;
-use axum::routing::get;
+use axum::routing::{get, post};
 use serde_json::Value;
 use utoipa::OpenApi;
 
@@ -37,15 +39,27 @@ pub static MIGRATIONS: &[Migration] = &[
     },
 ];
 
-const DESTRUCTIVE: &[(&str, &str)] = &[("DELETE", "/hosts/{host}")];
+// A key write is a secret write: importing needs the step-up like the Core's own secret writes.
+// Generating does not (the Core makes the key; nothing of the caller's is stored).
+const DESTRUCTIVE: &[(&str, &str)] = &[
+    ("DELETE", "/hosts/{host}"),
+    ("DELETE", "/keys/{key}"),
+    ("POST", "/keys/import"),
+];
 // POST and PATCH need a step-up only for what widens an AI's reach or repoints a host (`allowed`,
 // address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
-const NON_DESTRUCTIVE: &[(&str, &str)] = &[("POST", "/hosts"), ("PATCH", "/hosts/{host}")];
+const NON_DESTRUCTIVE: &[(&str, &str)] = &[
+    ("POST", "/hosts"),
+    ("PATCH", "/hosts/{host}"),
+    ("POST", "/keys"),
+];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts", "read"),
     ("GET", "/hosts/{host}", "read"),
     ("GET", "/groups", "read"),
     ("GET", "/tags", "read"),
+    ("GET", "/keys", "read"),
+    ("GET", "/keys/{key}", "read"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -60,14 +74,23 @@ pub struct Leyline;
         hosts::patch,
         hosts::remove,
         hosts::groups,
-        hosts::tags
+        hosts::tags,
+        keys::list,
+        keys::generate,
+        keys::import,
+        keys::get,
+        keys::remove
     ),
     components(schemas(
         hosts::HostView,
         hosts::NewHost,
         hosts::HostPatch,
         hosts::Deleted,
-        hosts::Count
+        hosts::Count,
+        keys::KeyView,
+        keys::NewKey,
+        keys::ImportKey,
+        keys::KeyDeleted
     ))
 )]
 struct Doc;
@@ -86,6 +109,9 @@ impl Module for Leyline {
             )
             .route("/groups", get(hosts::groups))
             .route("/tags", get(hosts::tags))
+            .route("/keys", get(keys::list).post(keys::generate))
+            .route("/keys/import", post(keys::import))
+            .route("/keys/{key}", get(keys::get).delete(keys::remove))
     }
 
     fn migrations(&self) -> &'static [Migration] {
@@ -93,7 +119,7 @@ impl Module for Leyline {
     }
 
     fn event_kinds(&self) -> &'static [&'static str] {
-        &["leyline.host"]
+        &["leyline.host", "leyline.key"]
     }
 
     /// Ids only, so a read-only device may see them.
@@ -106,6 +132,8 @@ impl Module for Leyline {
             "leyline.host.created",
             "leyline.host.changed",
             "leyline.host.deleted",
+            "leyline.key.created",
+            "leyline.key.deleted",
             "leyline.run.requested",
             "leyline.run.approval",
             "leyline.run.allowed",
