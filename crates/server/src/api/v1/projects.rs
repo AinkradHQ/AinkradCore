@@ -62,6 +62,13 @@ impl ProjectRepo {
     }
 }
 
+/// The Brain room linked to a project (strictly 1:1).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectRoom {
+    pub room_id: String,
+    pub name: String,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProjectInfo {
     pub id: i64,
@@ -80,6 +87,8 @@ pub struct ProjectInfo {
     pub mem_limit_mb: i64,
     /// The primary repo first, then by name.
     pub repos: Vec<ProjectRepo>,
+    /// The linked Brain room; null when the Brain is off or the project has none.
+    pub room: Option<ProjectRoom>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -91,6 +100,23 @@ async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError> {
         let m = store::mirror(&app.pool, r.id).await?;
         repos.push(ProjectRepo::new(r, m));
     }
+    // The link is a Brain table: without the Brain module there is no table and no room.
+    let brain: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'brain_project_rooms'",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    let room = match brain {
+        0 => None,
+        _ => sqlx::query_as::<_, (String, String)>(
+            "SELECT r.id, r.name FROM brain_project_rooms l JOIN brain_rooms r ON r.id = l.room \
+             WHERE l.project = ?",
+        )
+        .bind(p.id.to_string())
+        .fetch_optional(&mut *conn)
+        .await?
+        .map(|(room_id, name)| ProjectRoom { room_id, name }),
+    };
     Ok(ProjectInfo {
         id: p.id,
         slug: p.slug,
@@ -103,6 +129,7 @@ async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError> {
         cpu_limit: p.cpu_limit,
         mem_limit_mb: p.mem_limit_mb,
         repos,
+        room,
         created_at: ts(&p.created_at),
         updated_at: ts(&p.updated_at),
     })
