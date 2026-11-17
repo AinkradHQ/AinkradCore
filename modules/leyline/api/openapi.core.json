@@ -1201,9 +1201,11 @@
           "job.failed",
           "job.missed",
           "job.ran",
+          "leyline.host.attached",
           "leyline.host.changed",
           "leyline.host.created",
           "leyline.host.deleted",
+          "leyline.host.detached",
           "leyline.key.created",
           "leyline.key.deleted",
           "notify.token_pruned",
@@ -2228,6 +2230,17 @@
         ],
         "type": "object"
       },
+      "Detached": {
+        "properties": {
+          "detached": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "detached"
+        ],
+        "type": "object"
+      },
       "Device": {
         "description": "A device: who it is and what it may do. Never a key's private half: the Core has none.",
         "properties": {
@@ -2803,6 +2816,23 @@
         },
         "type": "object"
       },
+      "HostProject": {
+        "description": "A project a host is attached to.",
+        "properties": {
+          "project": {
+            "description": "The Core project's id.",
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "role"
+        ],
+        "type": "object"
+      },
       "HostStatus": {
         "description": "The Core machine as the host helper reports it.",
         "properties": {
@@ -2959,6 +2989,13 @@
             "minimum": 0,
             "type": "integer"
           },
+          "projects": {
+            "description": "The projects it is attached to, with the role in each.",
+            "items": {
+              "$ref": "#/components/schemas/HostProject"
+            },
+            "type": "array"
+          },
           "record": {
             "type": "string"
           },
@@ -3000,7 +3037,8 @@
           "record",
           "health",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "projects"
         ],
         "type": "object"
       },
@@ -4726,6 +4764,27 @@
         ],
         "type": "object"
       },
+      "ProjectHost": {
+        "description": "A host attached to a project.",
+        "properties": {
+          "host_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "description": "`production`, `staging`, `development` or `other`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host_id",
+          "name",
+          "role"
+        ],
+        "type": "object"
+      },
       "ProjectInfo": {
         "properties": {
           "cpu_limit": {
@@ -5175,6 +5234,18 @@
         },
         "required": [
           "request_id"
+        ],
+        "type": "object"
+      },
+      "Role": {
+        "properties": {
+          "role": {
+            "description": "`production`, `staging`, `development` or `other`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
         ],
         "type": "object"
       },
@@ -16538,6 +16609,194 @@
           "leyline"
         ],
         "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/leyline/v1/projects/{project}/hosts": {
+      "get": {
+        "operationId": "leylineListProjectHosts",
+        "parameters": [
+          {
+            "description": "The Core project's id",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectHost"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The project's hosts by label; 404 for no such project"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "leyline"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/leyline/v1/projects/{project}/hosts/{host}": {
+      "delete": {
+        "operationId": "leylineDetachHost",
+        "parameters": [
+          {
+            "description": "The Core project's id",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Host id, else its unique label",
+            "in": "path",
+            "name": "host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Detached"
+                }
+              }
+            },
+            "description": "Detached (audited as `leyline.host.detached`); 404 when it was not attached"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "leyline"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "leylineAttachHost",
+        "parameters": [
+          {
+            "description": "The Core project's id",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Host id, else its unique label",
+            "in": "path",
+            "name": "host",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Role"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectHost"
+                }
+              }
+            },
+            "description": "Attached, or the role changed (audited as `leyline.host.attached`); 404 for no such project or host; 409 for an archived project"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "leyline"
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/modules/leyline/v1/tags": {
