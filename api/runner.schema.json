@@ -798,6 +798,19 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/SshExec",
+          "properties": {
+            "op": {
+              "const": "ssh.exec",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer Core: answered `unsupported_command`. Never sent.",
           "properties": {
             "op": {
@@ -1236,6 +1249,26 @@
         {
           "const": "lost",
           "description": "The connection went while the command was in flight and its outcome is unknown: it may\nor may not have run. Reported once per command, never followed by a result.",
+          "type": "string"
+        },
+        {
+          "const": "host_key_unknown",
+          "description": "`ssh.exec`: the host presented a key the Core has not pinned (none pinned yet). Nothing was\nauthenticated; `host_key` has the fingerprint for a person to trust.",
+          "type": "string"
+        },
+        {
+          "const": "host_key_changed",
+          "description": "`ssh.exec`: the host presented a key other than the pinned ones. Nothing was authenticated.",
+          "type": "string"
+        },
+        {
+          "const": "ssh_auth_failed",
+          "description": "`ssh.exec`: the host refused the key (or it could not be read).",
+          "type": "string"
+        },
+        {
+          "const": "ssh_failed",
+          "description": "`ssh.exec`: no connection, no common algorithm, or the channel failed.",
           "type": "string"
         },
         {
@@ -1810,6 +1843,27 @@
       "required": [
         "reason",
         "count"
+      ],
+      "type": "object"
+    },
+    "HostKeyEvidence": {
+      "description": "Which hop of an `ssh.exec` a host-key refusal is about, and the key it presented.",
+      "properties": {
+        "fingerprint": {
+          "description": "`SHA256:<base64>` of the presented host key.",
+          "type": "string"
+        },
+        "hop": {
+          "description": "Index into `hops`; `hops.len()` is the target.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "hop",
+        "fingerprint"
       ],
       "type": "object"
     },
@@ -2827,6 +2881,20 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/ExecResult",
+          "description": "The answer to `ssh.exec`.",
+          "properties": {
+            "op": {
+              "const": "ssh.exec",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer runner. Never sent.",
           "properties": {
             "op": {
@@ -3415,11 +3483,87 @@
       ],
       "type": "object"
     },
+    "SshExec": {
+      "description": "Runs `run` on `target`, through `hops` (jump hosts, first to last), and answers with the exit and\noutput of the remote command: an `ExecResult` with `exec.run`'s limits, redaction and capacity.",
+      "properties": {
+        "hops": {
+          "default": [],
+          "description": "At most `MAX_SSH_HOPS`.",
+          "items": {
+            "$ref": "#/$defs/SshHop"
+          },
+          "type": "array"
+        },
+        "limits": {
+          "$ref": "#/$defs/ExecLimits",
+          "default": {}
+        },
+        "run": {
+          "description": "The command line, given to the remote user's shell as the SSH `exec` request.",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SshHop"
+        }
+      },
+      "required": [
+        "target",
+        "run"
+      ],
+      "type": "object"
+    },
+    "SshHop": {
+      "description": "One machine on the path: where, as whom, which host keys are trusted, and which key to prove with.",
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "lease": {
+          "description": "A secret lease (`l_…`) for this hop's private key, redeemed by the runner, once.",
+          "type": "string"
+        },
+        "pinned_keys": {
+          "default": [],
+          "description": "Host keys the Core trusts for this machine, as `SHA256:<base64>` fingerprints (what\n`ssh-keygen -l` prints). A presented key not listed here ends the connection before any\nauthentication: `host_key_unknown` when this list is empty, `host_key_changed` when not.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "port": {
+          "default": 22,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "user": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "user",
+        "lease"
+      ],
+      "type": "object"
+    },
     "StreamError": {
       "description": "A command's failure, or (on stream 0) a connection's. `message` is human text, redacted.",
       "properties": {
         "code": {
           "$ref": "#/$defs/ErrorCode"
+        },
+        "host_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostKeyEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "With `host_key_unknown` and `host_key_changed`: whose key, and which."
         },
         "message": {
           "type": "string"

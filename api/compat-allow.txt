@@ -15,6 +15,8 @@ runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/prop
 # New runner ops go before the `#[serde(other)]` catch-all, which serde keeps last, so it moves down: the positional
 # comparison sees its old slot taken by a new op. No variant is removed (checked by op name); only positions shift.
 # Delete these two lines in the next change to api/ (the baseline will have the op then).
-# (agent.subagent_stop, E6: the catch-all moved from #23 to #24 and from #21 to #22.)
-runner.schema.json: variant #23 removed at /$defs/Command/oneOf
-runner.schema.json: variant #21 removed at /$defs/Reply/oneOf
+# (ssh.exec, Leyline Y2-01: the catch-all moved from #24 to #25 and from #22 to #23; the second `ExecResult`
+# reply, `ssh.exec`'s, makes the old catch-all's slot read as an `ExecResult` op tag.)
+runner.schema.json: variant #24 removed at /$defs/Command/oneOf
+runner.schema.json: variant #22 removed at /$defs/Reply/oneOf
+runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/ExecResult/properties/op
