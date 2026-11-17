@@ -19,6 +19,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use yrs::{ClientID, StateVector};
+
 use crate::MAX_JSON_DEPTH;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,8 +92,11 @@ impl Shadow {
         (clock < *end).then(|| p.clone())
     }
 
-    /// Check `update` against the layout; on success, return what it would add.
-    pub(crate) fn check(&self, update: &[u8]) -> Result<Learned, String> {
+    /// Check `update` against the layout; on success, return what it would add. `have` is the replica's state
+    /// vector: like yrs, every block (or block part) below it is already held and is skipped, and an id below it is
+    /// looked up only in the shadow, never in what the update claims (a resent block relabelled as something else
+    /// must not become a parent).
+    pub(crate) fn check(&self, update: &[u8], have: &StateVector) -> Result<Learned, String> {
         let blocks = parse(update).ok_or("malformed update")?;
         let mut new = Learned::default();
         let mut todo: Vec<&Block> = blocks.iter().collect();
@@ -100,7 +105,7 @@ impl Shadow {
             let before = todo.len();
             let mut i = 0;
             while i < todo.len() {
-                match self.resolve(&mut new, todo[i])? {
+                match self.resolve(&mut new, todo[i], have)? {
                     Some(()) => {
                         todo.swap_remove(i);
                     }
@@ -115,13 +120,48 @@ impl Shadow {
     }
 
     /// Place one block; `Ok(None)` = depends on a block of this update not placed yet.
-    fn resolve(&self, new: &mut Learned, b: &Block) -> Result<Option<()>, String> {
-        let range = (b.client, b.clock, b.clock + b.len);
+    fn resolve(
+        &self,
+        new: &mut Learned,
+        b: &Block,
+        have: &StateVector,
+    ) -> Result<Option<()>, String> {
+        let held = |c: u64| have.get(&ClientID::new(c));
+        let end = b.clock + b.len;
+        let start = b.clock.max(held(b.client));
+        if start >= end {
+            return Ok(Some(())); // already held: yrs drops it
+        }
+        let range = (b.client, start, end);
         let Some(it) = &b.item else {
             new.record(range, None, None);
             return Ok(Some(()));
         };
-        let lookup = |new: &Learned, id: (u64, u32)| new.place(id).or_else(|| self.place(id));
+        let below = |id: (u64, u32)| id.1 < held(id.0);
+        let lookup = |new: &Learned, id: (u64, u32)| {
+            if below(id) {
+                self.place(id)
+            } else {
+                new.place(id)
+            }
+        };
+        if start > b.clock {
+            // yrs integrates the rest of a partly held block after its own held part: same place as that part
+            let place = match self.place((b.client, start - 1)) {
+                Some(Some(p)) => p,
+                Some(None) => Place {
+                    parent: Parent::Gone,
+                    key: None,
+                },
+                None => return Err("a partly held block this replica cannot place".into()),
+            };
+            let made = allowed(&place, it.content)?;
+            if made.is_some() {
+                return Err("a nested type cannot be split".into());
+            }
+            new.record(range, Some(place), None);
+            return Ok(Some(()));
+        }
         let place = match (&it.parent, it.origin.or(it.right)) {
             (Some(Pref::Root(r)), _) => {
                 let parent = match &**r {
@@ -136,11 +176,12 @@ impl Shadow {
                 }
             }
             (Some(Pref::Id(c, k)), _) => {
-                let kind = match new
-                    .types
-                    .get(&(*c, *k))
-                    .or_else(|| self.types.get(&(*c, *k)))
-                {
+                let types = if below((*c, *k)) {
+                    &self.types
+                } else {
+                    &new.types
+                };
+                let kind = match types.get(&(*c, *k)) {
                     Some(kind) => *kind,
                     None if lookup(new, (*c, *k)).is_some() => {
                         return Err("parent is not a nested type".into());

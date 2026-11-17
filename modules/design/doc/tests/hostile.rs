@@ -501,3 +501,49 @@ fn fuzz_seeds() {
         }
     }
 }
+
+/// Cost of the trial layer on a spike-size document (5 000 nodes): `cargo test --release -p design-doc --test hostile
+/// trial_cost -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn trial_cost() {
+    let mut a = Live::new();
+    a.apply_remote(BASE).unwrap();
+    for batch in 0..25 {
+        let ops: Vec<_> = (0..200)
+            .map(|i| {
+                let n = batch * 200 + i;
+                let id: String = format!("{n:0>12}").chars().map(|c| (b'k' + (c as u8 - b'0')) as char).collect();
+                json!({"op": "add", "id": format!("n_{id}"), "type": "rect", "parent": FRAME,
+                       "order": format!("c{n}z"), "props": {"w": 10, "h": 10, "x": n % 1000, "y": n / 1000}})
+            })
+            .collect();
+        op(&mut a, serde_json::Value::Array(ops));
+    }
+    let full = a.diff(&[]).unwrap();
+    let mut b = Live::new();
+    let t = std::time::Instant::now();
+    b.apply_remote(&full).unwrap();
+    println!(
+        "full state {} KB: first apply (builds the trial) {:?}",
+        full.len() / 1024,
+        t.elapsed()
+    );
+    a.outbox(true);
+    let mut times = vec![];
+    for i in 0..20 {
+        op(
+            &mut a,
+            json!([{"op": "set", "id": FRAME, "key": "w", "value": 500 + i}]),
+        );
+        let u = a.outbox(true);
+        let t = std::time::Instant::now();
+        b.apply_remote(&u).unwrap();
+        times.push(t.elapsed());
+    }
+    times.sort();
+    println!(
+        "one-prop edit, 20 runs: median {:?}, max {:?}",
+        times[10], times[19]
+    );
+}
