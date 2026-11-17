@@ -233,4 +233,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0038_turn_cost.up.sql"),
         down: include_str!("../../../migrations/0038_turn_cost.down.sql"),
     },
+    Migration {
+        version: 39,
+        name: "projects",
+        up: include_str!("../../../migrations/0039_projects.up.sql"),
+        down: include_str!("../../../migrations/0039_projects.down.sql"),
+    },
 ];

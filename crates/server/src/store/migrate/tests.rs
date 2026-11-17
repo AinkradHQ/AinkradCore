@@ -135,7 +135,8 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (35, "code_mode_writes"),
             (36, "session_folder"),
             (37, "agent_attachments"),
-            (38, "turn_cost")
+            (38, "turn_cost"),
+            (39, "projects")
         ]
     );
     let sum: Vec<u8> =
@@ -399,7 +400,10 @@ fn the_schema_diff_flags_objects_outside_the_prefix() {
 /// the platform's schema and a module's, so a module table is held to it too.
 #[tokio::test]
 async fn user_owned_tables_carry_user_id() {
-    const NOT_USER_OWNED: [&str; 10] = [
+    const NOT_USER_OWNED: [&str; 12] = [
+        // Each describes a project, which carries its own user.
+        "core_project_repos",
+        "core_project_mirrors",
         // A registered name belongs to the platform or a module, not to a user.
         "event_kinds",
         "audit_actions",
