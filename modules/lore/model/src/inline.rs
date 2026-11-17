@@ -227,3 +227,46 @@ fn add_link(label: &str, url: &str, image: bool, no: usize, acc: &mut Acc) {
         line: no,
     });
 }
+
+/// Rewrite the target title of every `[[old...]]` in one line (code spans and `\[` escapes skipped) to `new_title`,
+/// keeping a `#Heading` and a `|alias` as written. `None` when nothing matched.
+pub(crate) fn rename_in_line(line: &str, old_norm: &str, new_title: &str) -> Option<String> {
+    let b = line.as_bytes();
+    let spans = code_spans(b);
+    let (mut si, mut i, mut last) = (0, 0, 0);
+    let mut out = String::new();
+    while i < b.len() {
+        while si < spans.len() && spans[si].1 <= i {
+            si += 1;
+        }
+        if si < spans.len() && spans[si].0 <= i {
+            i = spans[si].1;
+            continue;
+        }
+        match b[i] {
+            b'\\' if matches!(b.get(i + 1), Some(b'[' | b']' | b'#' | b'\\')) => i += 2,
+            b'[' if b.get(i + 1) == Some(&b'[') => match wikilink(line, i) {
+                Some((end, inner)) => {
+                    // the title is the text before the first `#` or `|`
+                    let cut = inner.find(['#', '|']).unwrap_or(inner.len());
+                    let title = inner[..cut].trim_end_matches('\\');
+                    if !title.trim().is_empty() && normalize_title(title) == old_norm {
+                        out.push_str(&line[last..i + 2]);
+                        out.push_str(new_title);
+                        out.push_str(&inner[cut..]);
+                        out.push_str("]]");
+                        last = end;
+                    }
+                    i = end;
+                }
+                None => i += 1,
+            },
+            _ => i += 1,
+        }
+    }
+    if last == 0 {
+        return None;
+    }
+    out.push_str(&line[last..]);
+    Some(out)
+}
