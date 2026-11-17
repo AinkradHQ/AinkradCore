@@ -67,6 +67,8 @@ pub struct HostView {
     pub os: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// The projects it is attached to, with the role in each.
+    pub projects: Vec<crate::attach::HostProject>,
 }
 
 fn view(r: &sqlx::sqlite::SqliteRow) -> Result<HostView, sqlx::Error> {
@@ -92,6 +94,7 @@ fn view(r: &sqlx::sqlite::SqliteRow) -> Result<HostView, sqlx::Error> {
         os: r.try_get("os")?,
         created_at: text("created_at")?,
         updated_at: text("updated_at")?,
+        projects: Vec::new(),
     })
 }
 
@@ -277,9 +280,15 @@ pub(crate) async fn find(conn: &mut SqliteConnection, ident: &str) -> Result<Str
 async fn load(conn: &mut SqliteConnection, id: &str) -> Result<HostView, ApiError> {
     let row = sqlx::query("SELECT * FROM leyline_hosts WHERE id = ?")
         .bind(id)
-        .fetch_one(conn)
+        .fetch_one(&mut *conn)
         .await?;
-    Ok(view(&row)?)
+    let mut out = view(&row)?;
+    out.projects = crate::attach::of_hosts(conn, Some(id))
+        .await?
+        .into_iter()
+        .map(|(_, p)| p)
+        .collect();
+    Ok(out)
 }
 
 #[derive(Deserialize)]
@@ -308,7 +317,15 @@ pub(crate) async fn list(
     .bind(LIST_MAX)
     .fetch_all(&app.pool)
     .await?;
-    Ok(Json(rows.iter().map(view).collect::<Result<_, _>>()?))
+    let mut out = rows.iter().map(view).collect::<Result<Vec<_>, _>>()?;
+    let mut conn = app.pool.acquire().await?;
+    let mut all = crate::attach::of_hosts(&mut conn, None).await?;
+    for h in &mut out {
+        let (mine, rest): (Vec<_>, Vec<_>) = all.into_iter().partition(|(id, _)| *id == h.id);
+        h.projects = mine.into_iter().map(|(_, p)| p).collect();
+        all = rest;
+    }
+    Ok(Json(out))
 }
 
 #[utoipa::path(post, path = "/hosts", operation_id = "leylineCreateHost", tag = "leyline", request_body = NewHost,

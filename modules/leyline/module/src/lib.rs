@@ -1,13 +1,14 @@
 //! The Leyline module (Y1-01): the Core's address book of SSH hosts. This story is the store and
 //! the API only: hosts, groups and tags, label addressing, the validation that keeps argv-injection
 //! text out (API and table), `leyline.*` events and audit; and keys (Y1-02): generated or imported,
-//! sealed in the Core's secret store, public data only in the API. Attachments (Y1-03) and SSH itself
-//! (Y2+) come later; the command gate (`gate`, Y4-01) is here.
+//! sealed in the Core's secret store, public data only in the API; and project attachments (Y1-03).
+//! SSH itself (Y2+) comes later; the command gate (`gate`, Y4-01) is here.
 //!
 //! Module off, the Core is unchanged: the tables are its own `leyline_` namespace, no Core
 //! migration, no Core crate names this module.
 
 mod address;
+mod attach;
 pub mod gate;
 mod hosts;
 mod keys;
@@ -18,7 +19,7 @@ use ainkrad_core_server::api::App;
 use ainkrad_core_server::module::Module;
 use ainkrad_core_server::store::Migration;
 use axum::Router;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use serde_json::Value;
 use utoipa::OpenApi;
 
@@ -52,6 +53,8 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/hosts"),
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
+    ("PUT", "/projects/{project}/hosts/{host}"),
+    ("DELETE", "/projects/{project}/hosts/{host}"),
 ];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts", "read"),
@@ -60,6 +63,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/tags", "read"),
     ("GET", "/keys", "read"),
     ("GET", "/keys/{key}", "read"),
+    ("GET", "/projects/{project}/hosts", "read"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -79,7 +83,10 @@ pub struct Leyline;
         keys::generate,
         keys::import,
         keys::get,
-        keys::remove
+        keys::remove,
+        attach::list,
+        attach::attach,
+        attach::detach
     ),
     components(schemas(
         hosts::HostView,
@@ -90,7 +97,11 @@ pub struct Leyline;
         keys::KeyView,
         keys::NewKey,
         keys::ImportKey,
-        keys::KeyDeleted
+        keys::KeyDeleted,
+        attach::ProjectHost,
+        attach::HostProject,
+        attach::Role,
+        attach::Detached
     ))
 )]
 struct Doc;
@@ -112,6 +123,11 @@ impl Module for Leyline {
             .route("/keys", get(keys::list).post(keys::generate))
             .route("/keys/import", post(keys::import))
             .route("/keys/{key}", get(keys::get).delete(keys::remove))
+            .route("/projects/{project}/hosts", get(attach::list))
+            .route(
+                "/projects/{project}/hosts/{host}",
+                put(attach::attach).delete(attach::detach),
+            )
     }
 
     fn migrations(&self) -> &'static [Migration] {
@@ -132,6 +148,8 @@ impl Module for Leyline {
             "leyline.host.created",
             "leyline.host.changed",
             "leyline.host.deleted",
+            "leyline.host.attached",
+            "leyline.host.detached",
             "leyline.key.created",
             "leyline.key.deleted",
             "leyline.run.requested",

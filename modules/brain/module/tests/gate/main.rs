@@ -14,6 +14,7 @@ mod index;
 mod intake;
 mod keys;
 mod overview;
+mod project_rooms;
 mod query;
 mod review;
 mod rooms;
