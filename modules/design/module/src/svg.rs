@@ -280,13 +280,21 @@ fn refuse<T>() -> Result<T, ()> {
 }
 
 /// One kept start tag, or `None` when the element is not allowed (its subtree goes with it).
-fn open_tag(e: &BytesStart<'_>, self_closing: bool, root: bool) -> Result<Option<String>, ()> {
+struct Tag {
+    text: String,
+    id: Option<String>,
+    /// The `#id`s a `<use>` points at.
+    targets: Vec<String>,
+}
+
+fn open_tag(e: &BytesStart<'_>, self_closing: bool, root: bool) -> Result<Option<Tag>, ()> {
     let name = e.name().as_ref().to_owned();
     // No prefix at all: `svg:rect`, `inkscape:*`, `sodipodi:*` are dropped.
     if !ELEMENTS.contains(&name.as_str()) || (root && name != "svg") {
         return if root { refuse() } else { Ok(None) };
     }
     let mut out = format!("<{name}");
+    let (mut id, mut targets) = (None, Vec::new());
     for a in e.attributes() {
         let a = a.map_err(|_| ())?;
         let key = a.key.as_ref();
@@ -305,11 +313,20 @@ fn open_tag(e: &BytesStart<'_>, self_closing: bool, root: bool) -> Result<Option
             k => ATTRS.contains(&k) && value_ok(&value),
         };
         if keep {
+            if key == "id" {
+                id = Some(value.to_string());
+            } else if name == "use" && (key == "href" || key == "xlink:href") {
+                targets.push(value[1..].to_owned());
+            }
             out.push_str(&format!(" {key}=\"{}\"", escape(&*value)));
         }
     }
     out.push_str(if self_closing { "/>" } else { ">" });
-    Ok(Some(out))
+    Ok(Some(Tag {
+        text: out,
+        id,
+        targets,
+    }))
 }
 
 /// The sanitised SVG, or `Err(())` when the file is not an SVG, is not well-formed, or is too deep or
@@ -323,6 +340,12 @@ pub(crate) fn sanitise(input: &[u8]) -> Result<Vec<u8>, ()> {
         (0usize, 0usize, 0usize, 0usize, 0usize);
     // Where a kept `<style>` began in `out`, so a hostile one can be cut back out.
     let mut style_at: Vec<usize> = Vec::new();
+    // No nested `<use>`: `frames` is (id, has a use in its subtree) per open kept element; `seen` maps
+    // each finished element's id to that flag, `targets` lists every use's target. A use whose target
+    // holds a use (or is one) could expand exponentially, so the file is refused.
+    let mut frames: Vec<(Option<String>, bool)> = Vec::new();
+    let mut seen: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut targets: Vec<String> = Vec::new();
     loop {
         match rd.read_event().map_err(|_| ())? {
             Event::Start(e) => {
@@ -344,16 +367,19 @@ pub(crate) fn sanitise(input: &[u8]) -> Result<Vec<u8>, ()> {
                 }
                 match open_tag(&e, false, root)? {
                     Some(tag) => {
-                        uses += is_use(&tag) as usize;
+                        let used = is_use(&tag.text);
+                        uses += used as usize;
                         if uses > MAX_USES {
                             return refuse();
                         }
-                        if tag.starts_with("<style") {
+                        if tag.text.starts_with("<style") {
                             style_at.push(out.len());
                         } else {
                             style_at.push(usize::MAX);
                         }
-                        out.push_str(&tag);
+                        frames.push((tag.id, used));
+                        targets.extend(tag.targets);
+                        out.push_str(&tag.text);
                     }
                     None => skip = 1,
                 }
@@ -371,11 +397,19 @@ pub(crate) fn sanitise(input: &[u8]) -> Result<Vec<u8>, ()> {
                     return refuse();
                 }
                 if let Some(tag) = open_tag(&e, true, root)? {
-                    uses += is_use(&tag) as usize;
+                    let used = is_use(&tag.text);
+                    uses += used as usize;
                     if uses > MAX_USES {
                         return refuse();
                     }
-                    out.push_str(&tag);
+                    if let Some(id) = tag.id {
+                        *seen.entry(id).or_default() |= used;
+                    }
+                    if let Some(parent) = frames.last_mut() {
+                        parent.1 |= used;
+                    }
+                    targets.extend(tag.targets);
+                    out.push_str(&tag.text);
                 }
             }
             Event::End(e) => {
@@ -386,6 +420,13 @@ pub(crate) fn sanitise(input: &[u8]) -> Result<Vec<u8>, ()> {
                 }
                 let name = e.name().as_ref().to_owned();
                 let at = style_at.pop().ok_or(())?;
+                let (id, has_use) = frames.pop().ok_or(())?;
+                if let Some(id) = id {
+                    *seen.entry(id).or_default() |= has_use;
+                }
+                if let Some(parent) = frames.last_mut() {
+                    parent.1 |= has_use;
+                }
                 if at != usize::MAX {
                     // `<style>` .. now: keep it only when its CSS is clean.
                     let css_start = out[at..].find('>').ok_or(())? + at + 1;
@@ -423,7 +464,7 @@ pub(crate) fn sanitise(input: &[u8]) -> Result<Vec<u8>, ()> {
             _ => {}
         }
     }
-    if depth != 0 || roots != 1 {
+    if depth != 0 || roots != 1 || targets.iter().any(|t| seen.get(t) == Some(&true)) {
         return refuse();
     }
     Ok(out.into_bytes())

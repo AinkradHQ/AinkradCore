@@ -882,3 +882,45 @@ async fn l1_an_unsigned_or_unknown_caller_cannot_tell_the_upload_route_exists() 
         StatusCode::UNAUTHORIZED
     );
 }
+
+#[tokio::test]
+async fn l4_nested_use_chains_are_refused() {
+    let fx = fx().await;
+    // 85 groups of 3 uses each pointing at the previous group: under 256 uses, 3^85 instances.
+    let mut chain = String::from(r#"<g id="a0"><rect width="1" height="1"/></g>"#);
+    for n in 1..=85 {
+        chain.push_str(&format!(
+            r##"<g id="a{n}"><use href="#a{p}"/><use href="#a{p}"/><use href="#a{p}"/></g>"##,
+            p = n - 1
+        ));
+    }
+    let (s, v) = upload(&fx, "name=bomb.svg", svg_with(&chain).as_bytes()).await;
+    assert_eq!(
+        (s, &v["code"]),
+        (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            &json!("unsupported_type")
+        )
+    );
+    // A use of a use, a use of an ancestor, and a forward reference are refused the same way.
+    for bad in [
+        r##"<use id="b" href="#a"/><use href="#b"/>"##,
+        r##"<g id="a"><use href="#a"/></g>"##,
+        r##"<use href="#a"/><g id="a"><g><use href="#x"/></g></g>"##,
+    ] {
+        assert_eq!(
+            upload(&fx, "name=n.svg", svg_with(bad).as_bytes()).await.0,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "{bad}"
+        );
+    }
+    // A plain use of a plain shape stays.
+    let ok = svg_with(
+        r##"<defs><rect id="s" width="1" height="1"/></defs><use href="#s"/><use href="#s"/>"##,
+    );
+    assert_eq!(
+        upload(&fx, "name=ok.svg", ok.as_bytes()).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(count(&fx, "design_assets").await, 1);
+}
