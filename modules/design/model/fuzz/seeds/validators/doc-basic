@@ -1,0 +1,423 @@
+Æ{
+  "meta": {
+    "system": "dd_sys",
+    "version": 1
+  },
+  "nodes": {
+    "n_cardaaaaaaaa": {
+      "clock": 1,
+      "name": "Card",
+      "order": "b",
+      "parent": "n_screenaaaaaa",
+      "props": {
+        "blend": "normal",
+        "fill": [
+          {
+            "color": {
+              "token": "color.text"
+            },
+            "type": "solid"
+          }
+        ],
+        "h": 80,
+        "opacity": 0.9,
+        "radius": [
+          12,
+          12,
+          6,
+          6
+        ],
+        "shadow": {
+          "token": "shadow.card"
+        },
+        "stroke": {
+          "color": {
+            "token": "color.text"
+          },
+          "role": "chart",
+          "width": 1
+        },
+        "w": 200
+      },
+      "type": "rect"
+    },
+    "n_dotaaaaaaaaa": {
+      "clock": 1,
+      "name": "Dot",
+      "order": "c",
+      "parent": "n_screenaaaaaa",
+      "props": {
+        "fill": [
+          {
+            "angle": 90,
+            "stops": [
+              {
+                "at": 0,
+                "color": "#ff0000"
+              },
+              {
+                "at": 1,
+                "color": {
+                  "token": "color.text"
+                }
+              }
+            ],
+            "type": "linear"
+          }
+        ],
+        "h": 10,
+        "w": 10
+      },
+      "type": "ellipse"
+    },
+    "n_imageaaaaaaa": {
+      "clock": 1,
+      "name": "Photo",
+      "order": "d",
+      "parent": "n_screenaaaaaa",
+      "props": {
+        "asset": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fit": "fill",
+        "h": 64,
+        "radius": 8,
+        "w": 64
+      },
+      "type": "image"
+    },
+    "n_inst2aaaaaaa": {
+      "clock": 1,
+      "name": "Cancel",
+      "order": "g",
+      "parent": "n_screenaaaaaa",
+      "props": {
+        "component": "dd_sys/n_buttonaaaaaa",
+        "overrides": {
+          "n_bgaaaaaaaaaa": {
+            "material": "clear"
+          },
+          "n_labelaaaaaaa": {
+            "fill": null,
+            "text": "Cancel"
+          }
+        },
+        "x": 150,
+        "y": 200
+      },
+      "type": "instance"
+    },
+    "n_instaaaaaaaa": {
+      "clock": 1,
+      "name": "Save",
+      "order": "f",
+      "parent": "n_screenaaaaaa",
+      "props": {
+        "component": "dd_sys/n_buttonaaaaaa",
+        "link": {
+          "to": "n_screen2aaaaa",
+          "transition": "fade"
+        },
+        "overrides": {
+          ".": {
+            "w": 120
+          },
+          "n_bgaaaaaaaaaa": {
+            "fill": [
+              {
+                "color": {
+                  "token": "color.text"
+                },
+                "type": "solid"
+              }
+            ]
+          },
+          "n_labelaaaaaaa": {
+            "text": "Save"
+          }
+        },
+        "x": 16,
+        "y": 200
+      },
+      "type": "instance"
+    },
+    "n_pageaaaaaaaa": {
+      "clock": 1,
+      "name": "Main",
+      "order": "a",
+      "parent": null,
+      "props": {
+        "fill": [
+          {
+            "color": {
+              "token": "color.bg"
+            },
+            "type": "solid"
+          }
+        ]
+      },
+      "type": "page"
+    },
+    "n_screen2aaaaa": {
+      "clock": 1,
+      "name": "Screen 2",
+      "order": "b",
+      "parent": "n_pageaaaaaaaa",
+      "props": {
+        "h": 844,
+        "w": 390,
+        "x": 500,
+        "y": 0
+      },
+      "type": "frame"
+    },
+    "n_screenaaaaaa": {
+      "clock": 1,
+      "name": "Screen",
+      "order": "a",
+      "parent": "n_pageaaaaaaaa",
+      "props": {
+        "clip": true,
+        "fill": [
+          {
+            "color": {
+              "token": "color.bg"
+            },
+            "type": "solid"
+          }
+        ],
+        "h": 844,
+        "layout": {
+          "align": "start",
+          "dir": "column",
+          "gap": {
+            "token": "space.gap"
+          },
+          "justify": "start",
+          "pad": [
+            16,
+            16,
+            16,
+            16
+          ],
+          "wrap": false
+        },
+        "material": {
+          "token": "material.glass"
+        },
+        "radius": [
+          {
+            "token": "radius.control"
+          },
+          {
+            "token": "radius.control"
+          },
+          16,
+          16
+        ],
+        "role": "pane",
+        "sizing": {
+          "h": "fixed",
+          "w": "fixed"
+        },
+        "w": 390,
+        "x": 0,
+        "y": 0
+      },
+      "type": "frame"
+    },
+    "n_text2aaaaaaa": {
+      "clock": 1,
+      "name": "Body",
+      "order": "a",
+      "parent": "n_screen2aaaaa",
+      "props": {
+        "type": {
+          "font": "system",
+          "size": 15
+        }
+      },
+      "text": "Second screen",
+      "type": "text"
+    },
+    "n_titleaaaaaaa": {
+      "clock": 1,
+      "name": "Title",
+      "order": "a",
+      "parent": "n_screenaaaaaa",
+      "props": {
+        "fill": [
+          {
+            "color": {
+              "token": "color.text"
+            },
+            "type": "solid"
+          }
+        ],
+        "type": {
+          "token": "type.body"
+        }
+      },
+      "text": "Hello",
+      "type": "text"
+    },
+    "n_vectoraaaaaa": {
+      "clock": 1,
+      "name": "Arrow",
+      "order": "e",
+      "parent": "n_screenaaaaaa",
+      "props": {
+        "fill": [
+          {
+            "color": "#336699",
+            "type": "solid"
+          }
+        ],
+        "path": "M0 0L10 0L10 10z",
+        "visible": true
+      },
+      "type": "vector"
+    }
+  }
+}
+{
+  "meta": {
+    "version": 1
+  },
+  "nodes": {
+    "n_bgaaaaaaaaaa": {
+      "clock": 1,
+      "name": "bg",
+      "order": "a",
+      "parent": "n_buttonaaaaaa",
+      "props": {
+        "fill": [
+          {
+            "color": {
+              "token": "color.bg"
+            },
+            "type": "solid"
+          }
+        ],
+        "material": {
+          "token": "material.glass"
+        },
+        "radius": {
+          "token": "radius.control"
+        }
+      },
+      "type": "rect"
+    },
+    "n_buttonaaaaaa": {
+      "clock": 1,
+      "name": "Button",
+      "order": "a",
+      "parent": "n_syspageaaaaa",
+      "props": {
+        "layout": {
+          "dir": "row",
+          "gap": {
+            "token": "space.gap"
+          },
+          "pad": [
+            8,
+            12,
+            8,
+            12
+          ]
+        },
+        "x": 40,
+        "y": 40
+      },
+      "type": "component"
+    },
+    "n_labelaaaaaaa": {
+      "clock": 1,
+      "name": "label",
+      "order": "b",
+      "parent": "n_buttonaaaaaa",
+      "props": {
+        "fill": [
+          {
+            "color": {
+              "token": "color.text"
+            },
+            "type": "solid"
+          }
+        ],
+        "type": {
+          "token": "type.body"
+        }
+      },
+      "text": "Button",
+      "type": "text"
+    },
+    "n_syspageaaaaa": {
+      "clock": 1,
+      "name": "Components",
+      "order": "a",
+      "parent": null,
+      "props": {},
+      "type": "page"
+    }
+  },
+  "tokens": {
+    "color.bg": {
+      "day": "#ffffff",
+      "kind": "color",
+      "night": "#101014"
+    },
+    "color.text": {
+      "day": "#111111",
+      "kind": "color",
+      "night": "#f2f2f2"
+    },
+    "material.glass": {
+      "day": "glass",
+      "kind": "material",
+      "night": "well"
+    },
+    "radius.control": {
+      "day": 8,
+      "kind": "radius",
+      "night": 8
+    },
+    "shadow.card": {
+      "day": [
+        {
+          "blur": 8,
+          "color": "#00000033",
+          "spread": 0,
+          "x": 0,
+          "y": 2
+        }
+      ],
+      "kind": "shadow",
+      "night": [
+        {
+          "blur": 8,
+          "color": "#000000aa",
+          "spread": 0,
+          "x": 0,
+          "y": 2
+        }
+      ]
+    },
+    "space.gap": {
+      "day": 8,
+      "kind": "space",
+      "night": 12
+    },
+    "type.body": {
+      "day": {
+        "font": "system",
+        "size": 13,
+        "weight": 400
+      },
+      "kind": "type",
+      "night": {
+        "font": "system",
+        "size": 13,
+        "weight": 500
+      }
+    }
+  }
+}
