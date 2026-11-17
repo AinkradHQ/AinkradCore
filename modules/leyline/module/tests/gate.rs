@@ -783,6 +783,9 @@ async fn projects_attach_hosts_with_a_role_and_both_sides_list_them() {
         .await
         .unwrap();
     assert_eq!(count(&fx, "leyline_project_hosts").await, 2);
+    // ...but nothing new attaches to it (409); detach stays allowed
+    let (s, b) = call(&fx, &fx.admin, Method::PUT, &path, staging()).await;
+    assert_eq!((s, &b["code"]), (StatusCode::CONFLICT, &json!("conflict")));
     let (s, _) = call(&fx, &fx.admin, Method::DELETE, &path, None).await;
     assert_eq!(s, StatusCode::OK);
     let (s, _) = call(&fx, &fx.admin, Method::DELETE, &path, None).await;

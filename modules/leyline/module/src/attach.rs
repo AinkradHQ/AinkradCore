@@ -50,7 +50,7 @@ pub struct Detached {
 
 /// The project `p` names, through the Projects store; its id as text. A bad id and a missing
 /// project are the same fixed answer.
-async fn project(conn: &mut SqliteConnection, p: &str) -> Result<String, ApiError> {
+async fn project(conn: &mut SqliteConnection, p: &str) -> Result<(String, bool), ApiError> {
     let none = || ApiError::not_found("no such project");
     let id = p
         .parse::<u64>()
@@ -58,7 +58,7 @@ async fn project(conn: &mut SqliteConnection, p: &str) -> Result<String, ApiErro
         .and_then(|n| i64::try_from(n).ok())
         .ok_or_else(none)?;
     match projects::get(conn, id).await {
-        Ok(p) => Ok(p.id.to_string()),
+        Ok(p) => Ok((p.id.to_string(), p.state == "archived")),
         Err(StoreError::Db(e)) => Err(e.into()),
         Err(_) => Err(none()),
     }
@@ -113,7 +113,7 @@ pub(crate) async fn list(
     Path(p): Path<String>,
 ) -> ApiResult<Vec<ProjectHost>> {
     let mut conn = app.pool.acquire().await?;
-    let p = project(&mut conn, &p).await?;
+    let (p, _) = project(&mut conn, &p).await?;
     let rows: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT h.id, h.name, a.role FROM leyline_project_hosts a JOIN leyline_hosts h ON h.id = a.host_id \
          WHERE a.project = ? ORDER BY h.name COLLATE NOCASE",
@@ -136,7 +136,7 @@ pub(crate) async fn list(
     params(("project" = String, Path, description = "The Core project's id"),
            ("host" = String, Path, description = "Host id, else its unique label")),
     request_body = Role,
-    responses((status = 200, description = "Attached, or the role changed (audited as `leyline.host.attached`); 404 for no such project or host", body = ProjectHost)))]
+    responses((status = 200, description = "Attached, or the role changed (audited as `leyline.host.attached`); 404 for no such project or host; 409 for an archived project", body = ProjectHost)))]
 pub(crate) async fn attach(
     State(app): State<App>,
     Path((p, host)): Path<(String, String)>,
@@ -148,7 +148,10 @@ pub(crate) async fn attach(
         ));
     }
     let mut tx = begin_write(&app.pool).await?;
-    let p = project(&mut tx, &p).await?;
+    let (p, archived) = project(&mut tx, &p).await?;
+    if archived {
+        return Err(ApiError::conflict("the project is archived"));
+    }
     let id = find(&mut tx, &host).await?;
     sqlx::query(
         "INSERT INTO leyline_project_hosts (project, host_id, role) VALUES (?, ?, ?) \
@@ -181,7 +184,7 @@ pub(crate) async fn detach(
     Path((p, host)): Path<(String, String)>,
 ) -> ApiResult<Detached> {
     let mut tx = begin_write(&app.pool).await?;
-    let p = project(&mut tx, &p).await?;
+    let (p, _) = project(&mut tx, &p).await?;
     let id = find(&mut tx, &host).await?;
     let n = sqlx::query("DELETE FROM leyline_project_hosts WHERE project = ? AND host_id = ?")
         .bind(&p)

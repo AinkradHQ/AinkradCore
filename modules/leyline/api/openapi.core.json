@@ -16749,7 +16749,7 @@
                 }
               }
             },
-            "description": "Attached, or the role changed (audited as `leyline.host.attached`); 404 for no such project or host"
+            "description": "Attached, or the role changed (audited as `leyline.host.attached`); 404 for no such project or host; 409 for an archived project"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
