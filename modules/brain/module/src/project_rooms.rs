@@ -53,12 +53,17 @@ async fn link(conn: &mut SqliteConnection, project: &str, room: &str) -> Result<
             .fetch_one(&mut *conn)
             .await?;
     if by_project > 0 {
-        return Err(code(409, "project_linked", "that project is linked already"));
+        return Err(code(
+            409,
+            "project_linked",
+            "that project is linked already",
+        ));
     }
-    let by_room: i64 = sqlx::query_scalar("SELECT count(*) FROM brain_project_rooms WHERE room = ?")
-        .bind(room)
-        .fetch_one(&mut *conn)
-        .await?;
+    let by_room: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM brain_project_rooms WHERE room = ?")
+            .bind(room)
+            .fetch_one(&mut *conn)
+            .await?;
     if by_room > 0 {
         return Err(code(409, "room_linked", "that room is linked already"));
     }
