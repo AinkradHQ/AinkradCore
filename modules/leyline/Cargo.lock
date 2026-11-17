@@ -2038,6 +2038,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tower",
+ "tracing",
  "utoipa",
 ]
 

@@ -4,6 +4,7 @@ CREATE TABLE leyline_runs (
     id          TEXT PRIMARY KEY CHECK (substr(id, 1, 3) = 'lr_'),
     command_id  TEXT,
     adhoc       TEXT,
+    detail      TEXT,
     action      TEXT NOT NULL,
     principal   TEXT NOT NULL,
     state       TEXT NOT NULL CHECK (state IN ('waiting_approval', 'running', 'done', 'cancelled', 'denied')),

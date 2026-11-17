@@ -7,13 +7,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use ainkrad_core_server::api::v1::Caller;
 use ainkrad_core_server::api::{App, router};
 use ainkrad_core_server::auth::Identity;
 use ainkrad_core_server::auth::testing::TestDevice;
 use ainkrad_core_server::module::Module;
 use ainkrad_core_server::ops_catalog::{Decided, decide_approval, pending};
 use ainkrad_core_server::scheduler::{Clock, SystemClock};
-use ainkrad_core_server::store::{connect, migrate};
+use ainkrad_core_server::store::{connect, gov, migrate};
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use leyline_module::Leyline;
@@ -135,7 +136,22 @@ async fn session(fx: &Fx, id: &str) -> (Principal, String) {
     .execute(&fx.app.pool)
     .await
     .unwrap();
-    (Principal::Session(id.to_owned()), dev.id)
+    let me = caller(fx, &dev.id, &format!("code_mode:{id}")).await;
+    (Principal::of(&me), dev.id)
+}
+
+async fn caller(fx: &Fx, device: &str, session: &str) -> Caller {
+    Caller {
+        device: gov::get_device(&fx.app.pool, device)
+            .await
+            .unwrap()
+            .unwrap(),
+        session: session.to_owned(),
+    }
+}
+
+async fn person(fx: &Fx) -> Principal {
+    Principal::of(&caller(fx, &fx.admin.id, "a-real-session").await)
 }
 
 async fn states(fx: &Fx, sql: &'static str, bind: &str) -> Vec<String> {
@@ -207,7 +223,7 @@ async fn allowed_and_repointing_need_a_step_up_and_other_changes_do_not() {
 async fn a_person_is_allowed_and_leaves_a_run_and_audit() {
     let fx = fx().await;
     let id = add(&fx, "web", "read_only").await;
-    let who = Principal::Person(fx.admin.id.clone());
+    let who = person(&fx).await;
     let a = authorize(&fx.app, &who, "web", &exec()).await.unwrap();
     assert_eq!(a.host_id(), id);
     let run = a.run_id().to_owned();
@@ -298,14 +314,6 @@ async fn an_ai_never_trusts_a_key_or_leases_direct_whatever_the_rule() {
     for a in [Action::Trust, Action::Direct] {
         assert!(authorize(&fx.app, &ai, "open", &a).await.is_err(), "{a:?}");
     }
-    assert!(
-        authorize(&fx.app, &Principal::Health, "open", &exec())
-            .await
-            .is_err()
-    );
-    authorize(&fx.app, &Principal::Health, "open", &Action::Probe)
-        .await
-        .unwrap();
     // `allowed` runs at once and is audited as the AI session.
     authorize(&fx.app, &ai, "open", &exec()).await.unwrap();
     let o: Vec<(String, Option<String>)> = sqlx::query_as(
@@ -440,4 +448,206 @@ async fn a_fleet_with_ask_hosts_asks_once_and_refuses_the_read_only_one() {
     assert_eq!(got, want);
     assert_eq!(g.refused.len(), 1);
     assert_eq!(g.refused[0].0, c);
+}
+
+#[tokio::test]
+async fn a_code_mode_caller_is_an_ai_session_and_only_that() {
+    let fx = fx().await;
+    let ai = Principal::of(&caller(&fx, &fx.admin.id, "code_mode:as_x").await);
+    let me = Principal::of(&caller(&fx, &fx.admin.id, "code_mode:").await);
+    let plain = person(&fx).await;
+    assert_eq!(format!("{ai:?}"), r#"Principal(Session("as_x"))"#);
+    assert!(
+        format!("{me:?}").contains("Person"),
+        "an empty id is no session"
+    );
+    assert!(format!("{plain:?}").contains("Person"));
+}
+
+#[tokio::test]
+async fn the_run_keeps_a_redacted_detail_for_every_action_and_the_authorized_keeps_the_action() {
+    let fx = fx().await;
+    add(&fx, "d", "allowed").await;
+    let who = person(&fx).await;
+    let a = authorize(
+        &fx.app,
+        &who,
+        "d",
+        &Action::FileRead("/etc/hostname".into()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(a.action(), &Action::FileRead("/etc/hostname".into()));
+    assert_eq!(a.op_sha256().len(), 64);
+    assert_eq!(
+        states(
+            &fx,
+            "SELECT detail FROM leyline_runs WHERE id = ?",
+            a.run_id()
+        )
+        .await,
+        ["/etc/hostname"]
+    );
+    let e = authorize(
+        &fx.app,
+        &who,
+        "d",
+        &Action::Exec("echo Bearer abcdefghijklmnopqrstuvwxyz0123456789".into()),
+    )
+    .await
+    .unwrap();
+    let d = states(
+        &fx,
+        "SELECT detail FROM leyline_runs WHERE id = ?",
+        e.run_id(),
+    )
+    .await;
+    assert!(!d[0].contains("abcdefghijklmnopqrstuvwxyz"), "{d:?}");
+    let audit: Vec<String> = sqlx::query_scalar(
+        "SELECT details FROM audit_events WHERE action = 'leyline.run.requested'",
+    )
+    .fetch_all(&fx.app.pool)
+    .await
+    .unwrap();
+    assert!(
+        audit
+            .iter()
+            .all(|d| d.contains("op_sha256") && !d.contains("command_sha256"))
+    );
+}
+
+#[tokio::test]
+async fn a_card_that_would_be_cut_is_never_parked() {
+    let fx = fx().await;
+    add(&fx, "long", "ask").await;
+    let (ai, _) = session(&fx, "as_long").await;
+    for cmd in [
+        "x".repeat(201),
+        "echo Bearer abcdefghijklmnopqrstuvwxyz0123456789".to_owned(),
+    ] {
+        let e = authorize(&fx.app, &ai, "long", &Action::Exec(cmd))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (e.status, e.message.as_str()),
+            (StatusCode::FORBIDDEN, "too long to show for approval")
+        );
+    }
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_code_mode_approvals")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+    // 200 characters is shown whole, and the refused runs are cancelled, not left waiting.
+    assert_eq!(
+        states(
+            &fx,
+            "SELECT state FROM leyline_runs WHERE principal = ?",
+            "session:as_long"
+        )
+        .await,
+        ["cancelled", "cancelled"]
+    );
+}
+
+/// Parks a call on `host`, runs `change` on the store while it waits, then approves it.
+async fn approved_after(
+    fx: &Fx,
+    host: &str,
+    session_id: &str,
+    change: &'static str,
+) -> (String, String) {
+    let (ai, dev) = session(fx, session_id).await;
+    let app = fx.app.clone();
+    let name = host.to_owned();
+    let h = tokio::spawn(async move { authorize(&app, &ai, &name, &exec()).await });
+    let req = parked(fx, session_id).await;
+    sqlx::query(sqlx::AssertSqlSafe(change)) // test-only literal
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    decide_approval(&fx.app, session_id, &req, true, &dev)
+        .await
+        .unwrap();
+    let e = tokio::time::timeout(Duration::from_secs(10), h)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!((e.status, e.code), (StatusCode::FORBIDDEN, "gate_refused"));
+    (req, e.message)
+}
+
+#[tokio::test]
+async fn an_approval_is_void_when_the_host_changes_while_it_waits() {
+    let fx = fx().await;
+    for (n, (rule_change, session_id)) in [
+        (
+            "UPDATE leyline_hosts SET ai_rule = 'read_only' WHERE name = 'w-0'",
+            "as_w0",
+        ),
+        (
+            "UPDATE leyline_hosts SET address = 'evil.example.com' WHERE name = 'w-1'",
+            "as_w1",
+        ),
+        (
+            "UPDATE leyline_hosts SET port = 2222 WHERE name = 'w-2'",
+            "as_w2",
+        ),
+        (
+            "UPDATE leyline_hosts SET via_runner = 'd_other' WHERE name = 'w-3'",
+            "as_w3",
+        ),
+        ("DELETE FROM leyline_hosts WHERE name = 'w-4'", "as_w4"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        add(&fx, &format!("w-{n}"), "ask").await;
+        let (req, why) = approved_after(&fx, &format!("w-{n}"), session_id, rule_change).await;
+        assert_eq!(why, "a host changed while it waited", "{rule_change}");
+        // Nothing was spent for it, and the run is denied.
+        assert_eq!(
+            states(
+                &fx,
+                "SELECT state FROM core_code_mode_approvals WHERE id = ?",
+                &req
+            )
+            .await,
+            ["approved"]
+        );
+        assert_eq!(
+            states(
+                &fx,
+                "SELECT state FROM leyline_runs WHERE principal = ?",
+                &format!("session:{session_id}")
+            )
+            .await,
+            ["denied"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_dropped_call_cancels_its_waiting_run() {
+    let fx = fx().await;
+    add(&fx, "drop", "ask").await;
+    let (ai, _) = session(&fx, "as_drop").await;
+    let app = fx.app.clone();
+    let h = tokio::spawn(async move { authorize(&app, &ai, "drop", &exec()).await });
+    parked(&fx, "as_drop").await;
+    h.abort();
+    for _ in 0..200 {
+        let s = states(
+            &fx,
+            "SELECT state FROM leyline_runs WHERE principal = ?",
+            "session:as_drop",
+        )
+        .await;
+        if s == ["cancelled"] {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the run was left waiting");
 }

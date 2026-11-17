@@ -1,10 +1,13 @@
 //! The gate's policy (T10): who may do what on a host, in one table. Pure: no store, no I/O.
 
 use ainkrad_core::audit::{AuditOrigin, OriginKind};
+use ainkrad_core_server::api::v1::Caller;
 
-/// Who asks. Built by the Core from the authenticated request, never from its body.
+/// Code Mode runs a session's call as its creator device with this session prefix.
+const CODE_MODE: &str = "code_mode:";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Principal {
+pub(crate) enum Who {
     /// A person, by device id.
     Person(String),
     /// An AI session, by session id.
@@ -13,20 +16,41 @@ pub enum Principal {
     Health,
 }
 
+/// Who asks. The inner type is private: outside the gate a principal can only come from the
+/// authenticated request ([`Principal::of`]); `Health` is built only by the module's own prober.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Principal(pub(crate) Who);
+
 impl Principal {
+    /// The principal of an authenticated request: a Code Mode call (its session id carries the
+    /// `code_mode:` prefix, which only the Core sets) is that AI session, anything else is the
+    /// person behind the device.
+    pub fn of(me: &Caller) -> Self {
+        match me.session.strip_prefix(CODE_MODE).filter(|s| !s.is_empty()) {
+            Some(s) => Self(Who::Session(s.to_owned())),
+            None => Self(Who::Person(me.device.id.clone())),
+        }
+    }
+
+    /// The health prober (Y5). Not public: a route cannot claim it.
+    #[allow(dead_code)] // first caller arrives with Y5-01
+    pub(crate) fn health() -> Self {
+        Self(Who::Health)
+    }
+
     pub(crate) fn label(&self) -> String {
-        match self {
-            Self::Person(d) => format!("person:{d}"),
-            Self::Session(s) => format!("session:{s}"),
-            Self::Health => "system:health".to_owned(),
+        match &self.0 {
+            Who::Person(d) => format!("person:{d}"),
+            Who::Session(s) => format!("session:{s}"),
+            Who::Health => "system:health".to_owned(),
         }
     }
 
     pub(crate) fn origin(&self) -> AuditOrigin {
-        match self {
-            Self::Person(d) => AuditOrigin::new(OriginKind::Person, Some(d.clone())),
-            Self::Session(s) => AuditOrigin::new(OriginKind::AiSession, Some(s.clone())),
-            Self::Health => AuditOrigin::new(OriginKind::System, None),
+        match &self.0 {
+            Who::Person(d) => AuditOrigin::new(OriginKind::Person, Some(d.clone())),
+            Who::Session(s) => AuditOrigin::new(OriginKind::AiSession, Some(s.clone())),
+            Who::Health => AuditOrigin::new(OriginKind::System, None),
         }
     }
 }
@@ -112,11 +136,11 @@ pub(crate) enum Verdict {
 /// The whole policy, in one table.
 pub(crate) fn verdict(who: &Principal, rule: Rule, action: &Action) -> Verdict {
     use Action::{Direct, FileList, FileRead, Preset, Probe, Trust};
-    match who {
-        Principal::Person(_) => Verdict::Allow,
-        Principal::Health if *action == Probe => Verdict::Allow,
-        Principal::Health => Verdict::Deny("health may only probe"),
-        Principal::Session(_) => match (action, rule) {
+    match &who.0 {
+        Who::Person(_) => Verdict::Allow,
+        Who::Health if *action == Probe => Verdict::Allow,
+        Who::Health => Verdict::Deny("health may only probe"),
+        Who::Session(_) => match (action, rule) {
             (Direct | Trust, _) => Verdict::Deny("only a person may do that"),
             (_, Rule::Allowed) => Verdict::Allow,
             (_, Rule::Ask) => Verdict::Ask,
@@ -141,9 +165,9 @@ mod tests {
     fn the_policy_table() {
         use Rule::{Allowed, Ask as AskR, ReadOnly};
         use Verdict::{Allow, Ask, Deny};
-        let person = Principal::Person("d_1".into());
-        let ai = Principal::Session("as_1".into());
-        let health = Principal::Health;
+        let person = Principal(Who::Person("d_1".into()));
+        let ai = Principal(Who::Session("as_1".into()));
+        let health = Principal::health();
         let ro_cmd = Action::Preset {
             id: "c".into(),
             read_only: true,

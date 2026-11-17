@@ -3,8 +3,7 @@
 //! document ([`build`]), a typed definition per operation ([`render`]) and the search a session
 //! asks for ([`search`], served by [`serve`]). `call` (E2) runs the read-only ones for a session.
 
-/// Public so a module's gate (Leyline Y4-01) parks its own calls through the same Core-held approval.
-pub mod approval;
+mod approval;
 mod args;
 mod build;
 mod call;
@@ -23,7 +22,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 pub use approval::{
-    Decided, PREFIX as APPROVAL_PREFIX, Pending, decide as decide_approval, pending,
+    Decided, Outcome, PREFIX as APPROVAL_PREFIX, Pending, Waiting, consume as consume_approval,
+    create as create_approval, decide as decide_approval, new_id as new_approval_id, pending,
+    wait as wait_approval,
 };
 pub use build::build;
 pub use call::{CALL, CallState, call_call, call_tool};

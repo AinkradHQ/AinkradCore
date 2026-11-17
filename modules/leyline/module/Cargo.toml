@@ -15,6 +15,8 @@ getrandom = "0.4.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10.9"
+tokio = { version = "1.54.0", features = ["rt", "sync"] }
+tracing = "0.1"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
 utoipa = "6.0.0"
 
