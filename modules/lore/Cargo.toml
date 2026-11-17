@@ -1,8 +1,9 @@
-# The Lore module (R1-01): its own workspace like `modules/brain`, `modules/leyline` and `modules/design`,
-# `make build-lore` / `make test-lore`. The released Core carries it through `modules/brain/bin`.
+# The Lore module (R1-01, R1-03): its own workspace like `modules/design`. `make build-lore` / `make test-lore`.
+# The released Core carries it through `modules/brain/bin`. Later stories add `api` here.
 [workspace]
 resolver = "3"
-members = ["module"]
+members = ["model", "module"]
+exclude = ["model/fuzz"]
 
 [workspace.package]
 version = "0.1.0"
