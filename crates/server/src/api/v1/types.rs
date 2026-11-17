@@ -277,7 +277,11 @@
 ///    `POST /projects/{id}/repos` (`addProjectRepo`), `DELETE /projects/{id}/repos/{repo}` (`removeProjectRepo`),
 ///    `POST /projects/{id}/repos/{repo}/primary` (`setProjectRepoPrimary`). Reading is `read`; every write is `admin`
 ///    and destructive. A project carries its repos, each with its read-only `mirror` state; query `archived`.
-pub const API_MINOR: u32 = 85;
+/// 86: Project run spec (P4-01). `GET/PUT /projects/{id}/spec` (`getProjectSpec`, `saveProjectSpec`: a save is a new
+///    version, step-up), `GET /projects/{id}/spec/versions` (`listProjectSpecVersions`) and
+///    `GET /projects/{id}/spec/versions/{version}` (`getProjectSpecVersion`). 400 `invalid_spec` names the bad field.
+///    Registers the event kind and audit action `project.spec_saved`.
+pub const API_MINOR: u32 = 86;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

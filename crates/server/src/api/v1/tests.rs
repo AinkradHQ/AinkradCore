@@ -105,6 +105,7 @@ mod projects_api;
 mod providers;
 mod push;
 mod revocation;
+mod run_spec_api;
 mod runners;
 mod scheduler_events;
 mod scheduler_failover;
