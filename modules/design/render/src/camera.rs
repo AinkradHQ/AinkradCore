@@ -119,6 +119,40 @@ impl Camera {
     }
 }
 
+/// Camera moves on the renderer (benches and the host's scripted paths).
+impl crate::scene::Renderer {
+    pub fn pan_by(&mut self, dx: f32, dy: f32) {
+        let c = Camera {
+            pan: (self.camera.pan.0 + dx, self.camera.pan.1 + dy),
+            ..self.camera
+        };
+        self.set_camera(c);
+    }
+
+    pub fn zoom_at(&mut self, factor: f32, x: f32, y: f32) {
+        let mut c = self.camera;
+        c.zoom_at(factor, x, y);
+        self.set_camera(c);
+    }
+
+    pub fn set_view(&mut self, w: f32, h: f32, scale: f32) {
+        let c = Camera {
+            view: (w, h),
+            scale,
+            ..self.camera
+        };
+        self.set_camera(c);
+    }
+
+    pub fn fit_all(&mut self) {
+        if let Some(r) = self.world_bounds() {
+            let mut c = self.camera;
+            c.fit(r, 0.05);
+            self.set_camera(c);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

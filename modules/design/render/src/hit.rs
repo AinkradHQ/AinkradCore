@@ -3,6 +3,7 @@
 use skia_safe::{Contains, Point};
 
 use crate::layout::LNode;
+use crate::scene::Renderer;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
@@ -41,4 +42,37 @@ pub(crate) fn hit_node(
     }
     path.pop();
     None
+}
+
+impl Renderer {
+    /// The deepest, topmost visible node under a screen point (points). Hidden nodes and anything outside a clipping
+    /// frame are not hit.
+    pub fn hit(&self, sx: f32, sy: f32) -> Option<Hit> {
+        let (x, y) = self.camera.to_world(sx, sy);
+        self.hit_world(x, y)
+    }
+
+    pub fn hit_world(&self, x: f32, y: f32) -> Option<Hit> {
+        self.hit_world_skip(x, y, &|_| false)
+    }
+
+    /// As `hit_world`, but nodes for which `skip` is true are not there (nor their subtrees): a drag looks through the
+    /// nodes it carries to find the container under them.
+    pub fn hit_world_skip(&self, x: f32, y: f32, skip: &dyn Fn(&str) -> bool) -> Option<Hit> {
+        for b in self.boards.iter().rev() {
+            let (lx, ly) = (x - b.origin.x, y - b.origin.y);
+            if !b.laid.bounds.contains(Point::new(lx, ly)) {
+                continue;
+            }
+            let mut path = vec![];
+            if hit_node(&b.laid.nodes, 0, lx, ly, &mut path, skip).is_some() {
+                return Some(Hit {
+                    id: path.last().cloned().unwrap_or_default(),
+                    artboard: b.id.clone(),
+                    path,
+                });
+            }
+        }
+        None
+    }
 }

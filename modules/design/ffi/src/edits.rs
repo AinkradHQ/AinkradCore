@@ -5,20 +5,18 @@
 //! top-level node, whose `x`/`y` are world); in an auto-layout frame a drag or nudge changes the order instead.
 //! Pointer deltas are whole points; snapped values are written to 1/100 pt. ⌘ held while dragging turns snapping off.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
 
 use design_doc::Op;
+use design_model::NodeType;
 use design_model::ids::between;
-use design_model::tree::forest;
-use design_model::{Doc, Forest, NodeType, ResolvedNode};
 use design_render::Rect;
 use serde_json::{Value, json};
 
 use crate::ffi::*;
 use crate::host::Host;
 use crate::interact::{Edit, Gesture, union};
-use crate::preview;
 use crate::snap::{SNAP_PT, edges, insert_index, map_rect, resize, round2, snap_edges, snap_move};
 
 /// Gap between a duplicated top-level node and its original.
@@ -329,62 +327,6 @@ impl Host {
         (ops, guides)
     }
 
-    /// Write `ops` as one batch, then keep the cached model, resolved page and renderer in step by patching only
-    /// the boards they touch (the gesture preview's path) instead of re-reading and re-resolving the whole document,
-    /// which costs 100+ ms at 5 000 nodes. Anything the patch cannot follow falls back to the full refresh.
-    pub(crate) fn commit(&mut self, ops: &[Op], dups: &HashMap<String, String>) -> Result<(), i32> {
-        if ops.is_empty() {
-            return Ok(());
-        }
-        let simple = ops
-            .iter()
-            .all(|o| matches!(o, Op::Set { .. } | Op::Move { .. } | Op::Add { .. }));
-        let patched = match (&self.model, &self.resolved) {
-            (Some(m), Some(res)) if simple && self.is_loaded() => res
-                .pages
-                .get(self.page)
-                .map(|page| preview::patch(page, m, ops, dups)),
-            _ => None,
-        };
-        let (Some(mut p), Some(mut m)) = (patched, self.model.take()) else {
-            self.live.apply_ops(ops).map_err(crate::host::code)?;
-            self.changed();
-            return Ok(());
-        };
-        if let Err(e) = self.live.apply_ops_on(&mut m, ops) {
-            self.changed();
-            return Err(crate::host::code(e));
-        }
-        let (Some(res), Some(r)) = (self.resolved.as_mut(), self.renderer.as_mut()) else {
-            self.changed();
-            return Ok(());
-        };
-        let Some(page) = res.pages.get_mut(self.page) else {
-            self.changed();
-            return Ok(());
-        };
-        let mut changed: HashSet<String> = p.boards.keys().cloned().collect();
-        changed.extend(std::mem::take(&mut self.previewed));
-        let mut old: HashMap<String, ResolvedNode> = std::mem::take(&mut page.children)
-            .into_iter()
-            .map(|c| (c.id.clone(), c))
-            .collect();
-        page.children = p
-            .order
-            .iter()
-            .filter_map(|id| p.boards.remove(id).or_else(|| old.remove(id)))
-            .collect();
-        let roots: Vec<&ResolvedNode> = page.children.iter().collect();
-        r.load_patch(&roots, &changed);
-        match self.tree.as_mut() {
-            Some(t) => tree_apply(t, &m, ops),
-            None => self.tree = Some(forest(&m)),
-        }
-        self.selection.retain(|id| m.nodes.contains_key(id));
-        self.model = Some(m);
-        Ok(())
-    }
-
     /// ⌘D: copy each selected subtree right after its original (a top-level copy sits to the right of it) and
     /// select the copies.
     pub(crate) fn duplicate(&mut self) -> Result<(), i32> {
@@ -467,35 +409,6 @@ impl Host {
             }
         }
         self.commit(&ops, &HashMap::new())
-    }
-}
-
-/// Keep the tree in step with a committed batch of moves and adds (re-deriving it costs ~30 ms at 5 000 nodes).
-/// Local moves never make a cycle, so only the parent map and the ordered child lists change.
-fn tree_apply(t: &mut Forest, m: &Doc, ops: &[Op]) {
-    let key = |id: &str| (m.nodes.get(id).map(|n| n.order.clone()), id.to_string());
-    for op in ops {
-        let (id, parent) = match op {
-            Op::Move {
-                id,
-                parent: Some(p),
-                ..
-            }
-            | Op::Add {
-                id,
-                parent: Some(p),
-                ..
-            } => (id, p),
-            _ => continue,
-        };
-        if let Some(old) = t.parent.insert(id.clone(), parent.clone())
-            && let Some(k) = t.children.get_mut(&old)
-        {
-            k.retain(|c| c != id);
-        }
-        let kids = t.children.entry(parent.clone()).or_default();
-        let at = kids.partition_point(|c| key(c) < key(id));
-        kids.insert(at, id.clone());
     }
 }
 

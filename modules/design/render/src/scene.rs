@@ -5,13 +5,12 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use design_model::{NodeType, Resolved, ResolvedNode, Theme};
-use skia_safe::{Canvas, Color, Contains, Paint, Picture, Point, Rect};
+use skia_safe::{Canvas, Color, Paint, Picture, Point, Rect};
 
 use crate::assets::Assets;
 use crate::camera::Camera;
 use crate::draw::{DrawCx, LODS, Lod, record};
 use crate::fonts::Fonts;
-use crate::hit::{Hit, hit_node};
 use crate::layout::{Laid, build};
 use crate::look::{Fill, num};
 use crate::overlay::{self, Overlay};
@@ -75,12 +74,12 @@ pub struct Stats {
     pub pictures_recorded: u64,
 }
 
-struct Board {
-    id: String,
+pub(crate) struct Board {
+    pub(crate) id: String,
     hash: u64,
     fonts_epoch: u64,
-    origin: Point,
-    laid: Laid,
+    pub(crate) origin: Point,
+    pub(crate) laid: Laid,
     index: HashMap<String, u32>,
     pics: [Option<Picture>; LODS],
     last_used: u64,
@@ -99,7 +98,7 @@ pub struct Renderer {
     pub camera: Camera,
     pub stats: Stats,
     theme: Theme,
-    boards: Vec<Board>,
+    pub(crate) boards: Vec<Board>,
     background: Color,
     dirty: Dirty,
     frame: u64,
@@ -287,29 +286,6 @@ impl Renderer {
         }
     }
 
-    pub fn pan_by(&mut self, dx: f32, dy: f32) {
-        let c = Camera {
-            pan: (self.camera.pan.0 + dx, self.camera.pan.1 + dy),
-            ..self.camera
-        };
-        self.set_camera(c);
-    }
-
-    pub fn zoom_at(&mut self, factor: f32, x: f32, y: f32) {
-        let mut c = self.camera;
-        c.zoom_at(factor, x, y);
-        self.set_camera(c);
-    }
-
-    pub fn set_view(&mut self, w: f32, h: f32, scale: f32) {
-        let c = Camera {
-            view: (w, h),
-            scale,
-            ..self.camera
-        };
-        self.set_camera(c);
-    }
-
     pub fn world_bounds(&self) -> Option<Rect> {
         self.boards.iter().map(Board::world_bounds).reduce(|a, b| {
             Rect::new(
@@ -319,14 +295,6 @@ impl Renderer {
                 a.bottom.max(b.bottom),
             )
         })
-    }
-
-    pub fn fit_all(&mut self) {
-        if let Some(r) = self.world_bounds() {
-            let mut c = self.camera;
-            c.fit(r, 0.05);
-            self.set_camera(c);
-        }
     }
 
     pub fn invalidate_all(&mut self) {
@@ -502,36 +470,5 @@ impl Renderer {
             self.boards[i].pics = Default::default();
             total -= freed;
         }
-    }
-
-    /// The deepest, topmost visible node under a screen point (points). Hidden nodes and anything outside a clipping
-    /// frame are not hit.
-    pub fn hit(&self, sx: f32, sy: f32) -> Option<Hit> {
-        let (x, y) = self.camera.to_world(sx, sy);
-        self.hit_world(x, y)
-    }
-
-    pub fn hit_world(&self, x: f32, y: f32) -> Option<Hit> {
-        self.hit_world_skip(x, y, &|_| false)
-    }
-
-    /// As `hit_world`, but nodes for which `skip` is true are not there (nor their subtrees): a drag looks through the
-    /// nodes it carries to find the container under them.
-    pub fn hit_world_skip(&self, x: f32, y: f32, skip: &dyn Fn(&str) -> bool) -> Option<Hit> {
-        for b in self.boards.iter().rev() {
-            let (lx, ly) = (x - b.origin.x, y - b.origin.y);
-            if !b.laid.bounds.contains(Point::new(lx, ly)) {
-                continue;
-            }
-            let mut path = vec![];
-            if hit_node(&b.laid.nodes, 0, lx, ly, &mut path, skip).is_some() {
-                return Some(Hit {
-                    id: path.last().cloned().unwrap_or_default(),
-                    artboard: b.id.clone(),
-                    path,
-                });
-            }
-        }
-        None
     }
 }
