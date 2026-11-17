@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: build-design test-design fuzz-design audit-design build-leyline test-leyline build-brain test-brain test-brain-linux check-env install-test perf test-web e1-exit e1-exit-faults e2-exit e2-exit-faults e2-soak soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel build-toy test-toy release-dry release-repro release-test fuzz-smoke audit-fuzz
+.PHONY: build-lore test-lore build-design test-design fuzz-design audit-design build-leyline test-leyline build-brain test-brain test-brain-linux check-env install-test perf test-web e1-exit e1-exit-faults e2-exit e2-exit-faults e2-soak soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel build-toy test-toy release-dry release-repro release-test fuzz-smoke audit-fuzz
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check check-env ; scripts/api-minor-check.sh && $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -71,6 +71,10 @@ test-brain-linux: ; $(call DOCKER_RUN,arm64) --platform linux/arm64 $(RUST_IMAGE
 LEYLINE = --manifest-path modules/leyline/Cargo.toml --workspace
 build-leyline: ; $(CARGO) build $(LEYLINE)
 test-leyline: ; $(CARGO) test $(LEYLINE)
+# The Lore module (R1-01): its own workspace; the released Core carries it through modules/brain/bin.
+LORE = --manifest-path modules/lore/Cargo.toml --workspace
+build-lore: ; $(CARGO) build $(LORE)
+test-lore: ; $(CARGO) test $(LORE)
 # The Design module (V1-02): its own workspace, pure Rust (no Skia, no Docker). The validator fuzz target is nightly
 # only, like fuzz/ (`make fuzz-design FUZZ_SECS=60`); seeds are committed, the corpus is not.
 DESIGN = --manifest-path modules/design/Cargo.toml --workspace
