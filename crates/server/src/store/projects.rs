@@ -5,7 +5,6 @@
 //! machine, so a repo has at most one mirror row.
 
 use ainkrad_core::audit::{AuditActor, AuditEntity, NewAuditEvent};
-use ainkrad_proto::runner::{branch_name_ok, repo_url_problem};
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Row, SqliteConnection};
@@ -308,9 +307,9 @@ pub async fn archive(pool: &SqlitePool, id: i64, who: Who<'_>) -> Result<Project
 
 mod github;
 mod repos;
-pub use repos::{add_repo, mirror, remove_repo, set_mirror, set_primary};
-use repos::add_repo_in;
 pub use github::{NewGithubRepo, create_from_github};
+use repos::add_repo_in;
+pub use repos::{add_repo, mirror, remove_repo, set_mirror, set_primary};
 
 #[cfg(test)]
 mod tests;

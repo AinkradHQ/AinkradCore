@@ -55,14 +55,13 @@ async fn the_list_is_grouped_by_owner_searched_and_paged() {
     assert!(last.path.starts_with("/user/repos?"), "{}", last.path);
     assert!(!last.path.contains(GH_TOKEN));
 
-    cx.gh.push(200, &[], &four());
+    // Searching and paging reuse the cached list: no new GitHub call.
     let r = cx
         .ok(Method::GET, &format!("{LIST}?q=WEB"), Value::Null)
         .await;
     assert_eq!(r["total"], 1);
     assert_eq!(r["owners"][0]["repos"][0]["default_branch"], "trunk");
 
-    cx.gh.push(200, &[], &four());
     let r = cx
         .ok(
             Method::GET,
@@ -78,7 +77,7 @@ async fn the_list_is_grouped_by_owner_searched_and_paged() {
 
 #[tokio::test]
 async fn create_fills_name_slug_branch_and_binds_the_connection_to_the_project() {
-    let (cx, id) = setup().await;
+    let (cx, _) = setup().await;
     cx.gh
         .push(200, &[], &repo("acme", "Shop.Front", "develop").to_string());
     cx.gh
@@ -99,15 +98,28 @@ async fn create_fills_name_slug_branch_and_binds_the_connection_to_the_project()
         p["repos"][1]["remote_url"],
         "https://github.com/acme/shop-api.git"
     );
-    let b: i64 = sqlx::query_scalar(
-        "SELECT connection_id FROM core_connection_bindings WHERE scope_kind = 'project' \
-         AND scope_ref = ?",
-    )
-    .bind(p["id"].as_i64().unwrap().to_string())
-    .fetch_one(&cx.fx.app.pool)
-    .await
-    .unwrap();
-    assert_eq!(b, id);
+    // The picked connection is the workspace default: no per-project binding is written.
+    let rows = |pid: i64| {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT connection_id FROM core_connection_bindings WHERE scope_kind = 'project' \
+             AND scope_ref = ?",
+        )
+        .bind(pid.to_string())
+        .fetch_all(&cx.fx.app.pool)
+    };
+    assert!(rows(p["id"].as_i64().unwrap()).await.unwrap().is_empty());
+    // Another connection, picked explicitly, is bound to the new project.
+    let other = cx.github("other").await;
+    cx.gh
+        .push(200, &[], &repo("acme", "tool", "main").to_string());
+    let q = cx
+        .ok(
+            Method::POST,
+            FROM,
+            json!({"repos": ["acme/tool"], "connection_id": other}),
+        )
+        .await;
+    assert_eq!(rows(q["id"].as_i64().unwrap()).await.unwrap(), [other]);
 
     // The same name again: the slug gets -2, then -3.
     for want in ["shop-front-2", "shop-front-3"] {

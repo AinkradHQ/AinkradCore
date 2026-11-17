@@ -4,7 +4,9 @@ use serde_json::json;
 use sqlx::sqlite::SqlitePool;
 use sqlx::{Row, SqliteConnection};
 
-use super::{Error, Mirror, Repo, Who, get, record, refused, repo, repos};
+use ainkrad_proto::runner::{branch_name_ok, repo_url_problem};
+
+use super::{Error, Mirror, Repo, Who, get, record, refused, repos};
 
 fn repo_name_ok(name: &str) -> bool {
     (1..=100).contains(&name.len())
@@ -25,7 +27,7 @@ pub async fn add_repo(
     primary: bool,
     who: Who<'_>,
 ) -> Result<Repo, Error> {
-    let mut tx = super::begin_write(pool).await?;
+    let mut tx = crate::store::begin_write(pool).await?;
     let r = add_repo_in(
         &mut tx,
         project_id,
@@ -116,7 +118,7 @@ pub async fn remove_repo(
     repo_id: i64,
     who: Who<'_>,
 ) -> Result<(), Error> {
-    let mut tx = super::begin_write(pool).await?;
+    let mut tx = crate::store::begin_write(pool).await?;
     if get(&mut tx, project_id).await?.state == "archived" {
         return refused("conflict", "the project is archived");
     }
@@ -155,7 +157,7 @@ pub async fn set_primary(
     repo_id: i64,
     who: Who<'_>,
 ) -> Result<(), Error> {
-    let mut tx = super::begin_write(pool).await?;
+    let mut tx = crate::store::begin_write(pool).await?;
     if get(&mut tx, project_id).await?.state == "archived" {
         return refused("conflict", "the project is archived");
     }
