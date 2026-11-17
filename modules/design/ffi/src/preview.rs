@@ -246,12 +246,14 @@ impl Host {
             _ => None,
         };
         let (Some(mut p), Some(mut m)) = (patched, self.model.take()) else {
-            let r = self.live.apply_ops(ops);
+            let mut m = self.live.read();
+            let r = self.live.apply_gesture_ops(&mut m, ops);
             // also after a refusal: an `Error::Reset` emptied the document
             self.changed();
             return r.map_err(crate::host::code);
         };
-        if let Err(e) = self.live.apply_ops_on(&mut m, ops) {
+        // inside `recover`: a yrs panic resets the replica and comes back as `Error::Reset` -> DE_ERR_RESET
+        if let Err(e) = self.live.apply_gesture_ops(&mut m, ops) {
             self.changed();
             return Err(crate::host::code(e));
         }

@@ -162,7 +162,11 @@ impl Host {
         match phase {
             DE_POINTER_DOWN => self.down(x, y, mods),
             DE_POINTER_MOVE => self.drag(x, y, mods),
-            _ => self.up(),
+            _ => {
+                let r = self.up();
+                self.refresh();
+                return r;
+            }
         }
         self.refresh();
         Ok(())
@@ -297,7 +301,8 @@ impl Host {
         }
     }
 
-    fn up(&mut self) {
+    /// Errors: the gesture's batch was refused or reset the replica (`DE_ERR_RESET`); nothing of it is written.
+    fn up(&mut self) -> Result<(), i32> {
         match self.gesture.take() {
             Some(Gesture::Press {
                 kind: Press::Board(id),
@@ -323,17 +328,19 @@ impl Host {
                 }
             }
             Some(Gesture::Edit(e)) => {
-                let ok = !e.ops.is_empty() && self.commit(&e.ops, &e.dups).is_ok();
-                if ok {
-                    if !e.dups.is_empty() {
-                        self.selection = e.ids;
-                    }
-                } else {
+                if let Err(c) = self.commit(&e.ops, &e.dups) {
                     self.sync_preview();
+                    return Err(c);
+                }
+                if e.ops.is_empty() {
+                    self.sync_preview();
+                } else if !e.dups.is_empty() {
+                    self.selection = e.ids;
                 }
             }
             _ => {}
         }
+        Ok(())
     }
 
     /// Drop a gesture in progress without writing anything. `true` when there was one.
@@ -462,7 +469,8 @@ impl Host {
             return;
         };
         let p = self.camera.pan;
-        let t = (p.0.clamp(rx.0, rx.1), p.1.clamp(ry.0, ry.1));
+        // not `clamp`: it panics on lo > hi or a NaN bound
+        let t = (p.0.max(rx.0).min(rx.1), p.1.max(ry.0).min(ry.1));
         if t == p {
             self.settle = None;
         } else if reduce_motion {
