@@ -811,6 +811,97 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/SftpList",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SftpStat",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.stat",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SftpRead",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SftpWrite",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.write",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SftpMkdir",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.mkdir",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SftpRename",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.rename",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SftpRemove",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.remove",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer Core: answered `unsupported_command`. Never sent.",
           "properties": {
             "op": {
@@ -972,6 +1063,19 @@
           "properties": {
             "type": {
               "const": "snapshot",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Core to runner on an `ssh.sftp.write` stream: the last byte was sent (`sftp`).",
+          "properties": {
+            "type": {
+              "const": "eof",
               "type": "string"
             }
           },
@@ -1269,6 +1373,31 @@
         {
           "const": "ssh_failed",
           "description": "`ssh.exec`: no connection, no common algorithm, or the channel failed.",
+          "type": "string"
+        },
+        {
+          "const": "sftp_not_found",
+          "description": "`ssh.sftp.*`: no such path on the host.",
+          "type": "string"
+        },
+        {
+          "const": "sftp_denied",
+          "description": "`ssh.sftp.*`: the host refused the user access to the path.",
+          "type": "string"
+        },
+        {
+          "const": "sftp_exists",
+          "description": "`ssh.sftp.*`: the path is taken (a write without `overwrite`, a rename, a mkdir).",
+          "type": "string"
+        },
+        {
+          "const": "sftp_failed",
+          "description": "`ssh.sftp.*`: the host refused for another reason, or the SFTP session failed.",
+          "type": "string"
+        },
+        {
+          "const": "too_large",
+          "description": "A transfer over `SFTP_MAX_BYTES`.",
           "type": "string"
         },
         {
@@ -2895,6 +3024,97 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/SftpEntries",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SftpEntry",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.stat",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SftpTransferred",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.read",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SftpTransferred",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.write",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SftpDone",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.mkdir",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SftpDone",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.rename",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SftpDone",
+          "properties": {
+            "op": {
+              "const": "ssh.sftp.remove",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer runner. Never sent.",
           "properties": {
             "op": {
@@ -3428,6 +3648,312 @@
       "required": [
         "lease",
         "var"
+      ],
+      "type": "object"
+    },
+    "SftpDone": {
+      "description": "The answer to `ssh.sftp.mkdir`, `rename` and `remove`.",
+      "type": "object"
+    },
+    "SftpEntries": {
+      "description": "The answer to `ssh.sftp.list`.",
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/SftpEntry"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "default": false,
+          "description": "The directory has more than [`SFTP_MAX_ENTRIES`].",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "type": "object"
+    },
+    "SftpEntry": {
+      "description": "What the host said about one path. Every field is the host's word, so data.",
+      "properties": {
+        "gid": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/SftpKind"
+        },
+        "mode": {
+          "description": "Permission bits (`0o7777`).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mtime": {
+          "description": "Seconds since the epoch.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The entry's name in a listing; the path as asked for `stat`.",
+          "type": "string"
+        },
+        "size": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "uid": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "SftpKind": {
+      "enum": [
+        "file",
+        "dir",
+        "symlink",
+        "other"
+      ],
+      "type": "string"
+    },
+    "SftpList": {
+      "description": "`ssh.sftp.list`: the entries of a directory, sorted by name, without `.` and `..`.",
+      "properties": {
+        "hops": {
+          "default": [],
+          "description": "At most `MAX_SSH_HOPS`.",
+          "items": {
+            "$ref": "#/$defs/SshHop"
+          },
+          "type": "array"
+        },
+        "path": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SshHop"
+        }
+      },
+      "required": [
+        "target",
+        "path"
+      ],
+      "type": "object"
+    },
+    "SftpMkdir": {
+      "description": "`ssh.sftp.mkdir`: one directory (its parent must exist).",
+      "properties": {
+        "hops": {
+          "default": [],
+          "description": "At most `MAX_SSH_HOPS`.",
+          "items": {
+            "$ref": "#/$defs/SshHop"
+          },
+          "type": "array"
+        },
+        "path": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SshHop"
+        }
+      },
+      "required": [
+        "target",
+        "path"
+      ],
+      "type": "object"
+    },
+    "SftpRead": {
+      "description": "`ssh.sftp.read`: a file's bytes as `output` frames, from `offset`.",
+      "properties": {
+        "hops": {
+          "default": [],
+          "description": "At most `MAX_SSH_HOPS`.",
+          "items": {
+            "$ref": "#/$defs/SshHop"
+          },
+          "type": "array"
+        },
+        "offset": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SshHop"
+        }
+      },
+      "required": [
+        "target",
+        "path"
+      ],
+      "type": "object"
+    },
+    "SftpRemove": {
+      "description": "`ssh.sftp.remove`: a file or symlink, or with `dir` an empty directory. Never recursive.",
+      "properties": {
+        "dir": {
+          "default": false,
+          "type": "boolean"
+        },
+        "hops": {
+          "default": [],
+          "description": "At most `MAX_SSH_HOPS`.",
+          "items": {
+            "$ref": "#/$defs/SshHop"
+          },
+          "type": "array"
+        },
+        "path": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SshHop"
+        }
+      },
+      "required": [
+        "target",
+        "path"
+      ],
+      "type": "object"
+    },
+    "SftpRename": {
+      "description": "`ssh.sftp.rename`: `from` to `to`; `sftp_exists` when `to` is taken.",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "hops": {
+          "default": [],
+          "description": "At most `MAX_SSH_HOPS`.",
+          "items": {
+            "$ref": "#/$defs/SshHop"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/SshHop"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "SftpStat": {
+      "description": "`ssh.sftp.stat`: one path's attributes. A symlink is reported as a symlink unless `follow`.",
+      "properties": {
+        "follow": {
+          "default": false,
+          "type": "boolean"
+        },
+        "hops": {
+          "default": [],
+          "description": "At most `MAX_SSH_HOPS`.",
+          "items": {
+            "$ref": "#/$defs/SshHop"
+          },
+          "type": "array"
+        },
+        "path": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/SshHop"
+        }
+      },
+      "required": [
+        "target",
+        "path"
+      ],
+      "type": "object"
+    },
+    "SftpTransferred": {
+      "description": "The answer to `ssh.sftp.read` and `ssh.sftp.write`: the bytes moved.",
+      "properties": {
+        "bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "SftpWrite": {
+      "description": "`ssh.sftp.write`: a file from the Core's `output` frames, ended by `control` `eof`.",
+      "properties": {
+        "hops": {
+          "default": [],
+          "description": "At most `MAX_SSH_HOPS`.",
+          "items": {
+            "$ref": "#/$defs/SshHop"
+          },
+          "type": "array"
+        },
+        "overwrite": {
+          "default": false,
+          "description": "Replace an existing file (`sftp_exists` when absent and the path is taken).",
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "size": {
+          "description": "The size the sender will send: over the cap is refused at once, and a different count at\n`eof` fails the transfer (nothing is left behind).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/SshHop"
+        }
+      },
+      "required": [
+        "target",
+        "path"
       ],
       "type": "object"
     },

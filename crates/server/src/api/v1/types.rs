@@ -280,6 +280,8 @@
 /// 86: Leyline runner SSH (Y2-01). Runner wire protocol only (`runner.schema.json`): op `ssh.exec` (`SshExec` ->
 ///    `ExecResult`), error codes `host_key_unknown`, `host_key_changed`, `ssh_auth_failed`, `ssh_failed`, and
 ///    `StreamError.host_key`; no route yet. (84 and 85 are the runner Podman facts and the projects API.)
+/// 87: the `secret.runners_changed` audit action (a secret's runner scope changed on its own, with its
+///    leases dropped); the Leyline key runner sync (Y1-02) is its first user.
 pub const API_MINOR: u32 = 89;
 
 use serde::{Deserialize, Serialize};
