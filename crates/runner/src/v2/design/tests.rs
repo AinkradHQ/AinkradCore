@@ -120,7 +120,7 @@ async fn the_sandbox_has_no_network_and_sees_only_its_job() {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
     let body = format!(
         r#"r=""
-(exec 3<>/dev/tcp/1.1.1.1/53) 2>/dev/null && r="$r net-ip"
+grep -vqE '^ *(Inter|face| *lo:)' /proc/net/dev && r="$r net-if"
 (exec 3<>/dev/tcp/127.0.0.1/22) 2>/dev/null && r="$r net-lo"
 getent hosts example.com >/dev/null 2>&1 && r="$r dns"
 [ -e "{home}" ] && r="$r home"
@@ -312,7 +312,7 @@ async fn chromium_shots_a_page_with_no_network() {
     let html = r#"<!doctype html><html><body style="margin:0;background:#00f">
 <script>
 document.body.style.background = '#0f0';
-fetch('http://1.1.1.1/').then(() => document.body.style.background = '#f00').catch(() => {});
+fetch('https://example.com/').then(() => document.body.style.background = '#f00').catch(() => {});
 </script></body></html>"#;
     let shot = Command::DesignShot(DesignShot {
         files: vec![DesignShotFile {

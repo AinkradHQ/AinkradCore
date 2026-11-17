@@ -83,7 +83,7 @@ fn play(
         let mut i = 0;
         while let Some(f) = rx.recv().await {
             if let Ok(Some(Body::Command(Command::DesignCheck(c)))) = f.body() {
-                assert_eq!(c.kind.is_empty(), false);
+                assert!(!c.kind.is_empty());
                 let reply = ainkrad_proto::v2::Frame::new(f.stream_id, 0, answer(i));
                 hub.answer_for_tests("dv_runner", reply);
                 i += 1;
