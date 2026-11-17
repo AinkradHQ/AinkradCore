@@ -300,9 +300,10 @@ pub async fn remove_repo(
     let now = app.clock.now();
     let repo = num(&repo, "repo")?;
     store::remove_repo(&app.pool, id, repo, who(&me, &now)).await?;
-    // The Core's copy goes with the repo: its id can be handed out again.
-    if let Some(mirrors) = &app.mirrors {
-        mirrors.forget(repo).await;
+    // The Core's copy goes with the repo (its id can be handed out again), in a task a dropped
+    // request cannot cancel; the mirror's marker covers a cleanup that never ran.
+    if let Some(mirrors) = app.mirrors.clone() {
+        let _ = tokio::spawn(async move { mirrors.forget(repo).await }).await;
     }
     current(&app, id).await
 }

@@ -3,8 +3,9 @@
 //! clients are the runner's (it signs each request); a push is refused here, always, because the
 //! copy is read-only: the remote is where work is pushed.
 //!
-//! TODO(P3-02): any `runner` device may read any repo's copy. P3-02 adds a lease per (device,
-//! repo ids), granted with a session's workspace list and checked in `info_refs` and `upload_pack`.
+//! TODO(P3-02): any `runner` device may read any repo's copy, archived projects' included. P3-02
+//! adds a lease per (device, repo ids), granted with a session's workspace list and checked in
+//! `info_refs` and `upload_pack`; it must also require an active project.
 
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
@@ -69,10 +70,10 @@ fn repo_id(s: &str) -> Result<i64, ApiError> {
         .ok_or_else(|| ApiError::not_found("no such repo"))
 }
 
-/// The repo's remote: a repo that is gone (removed, its id maybe recycled) is a 404, whatever
-/// is still on disk.
-async fn remote(app: &App, repo: i64) -> Result<String, ApiError> {
-    crate::mirrors::remote_of(&app.pool, repo)
+/// What the repo's mirror must have been made for: a repo that is gone (removed, its id maybe
+/// recycled) is a 404, whatever is still on disk.
+async fn key(app: &App, repo: i64) -> Result<String, ApiError> {
+    crate::mirrors::key_of(&app.pool, repo)
         .await?
         .ok_or_else(|| ApiError::not_found("no such repo"))
 }
@@ -91,9 +92,9 @@ pub async fn info_refs(
         _ => return Err(ApiError::bad_request("service must be git-upload-pack")),
     }
     let mirrors = mirrors(&app)?;
-    let remote = remote(&app, repo).await?;
+    let key = key(&app, repo).await?;
     let body = mirrors
-        .advertise(repo, &remote, protocol(&headers))
+        .advertise(repo, &key, protocol(&headers))
         .await
         .map_err(failed)?;
     Ok((
@@ -125,9 +126,9 @@ pub async fn upload_pack(
         .await
         .map_err(|_| ApiError::bad_request("the request is too large"))?;
     let mirrors = mirrors(&app)?;
-    let remote = remote(&app, repo).await?;
+    let key = key(&app, repo).await?;
     let out: Body = mirrors
-        .upload_pack(repo, &remote, protocol(&parts.headers), &bytes, gzip)
+        .upload_pack(repo, &key, protocol(&parts.headers), &bytes, gzip)
         .await
         .map_err(failed)?;
     Ok((

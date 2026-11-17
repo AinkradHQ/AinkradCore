@@ -24,10 +24,10 @@ impl Mirrors {
     pub async fn advertise(
         &self,
         repo: i64,
-        remote: &str,
+        key: &str,
         protocol: Option<&str>,
     ) -> Result<Vec<u8>, ServeError> {
-        let dir = self.ready(repo, remote)?;
+        let dir = self.ready(repo, key)?;
         let _slot = self.slot().await?;
         let mut cmd = self.command(
             &[
@@ -44,7 +44,7 @@ impl Mirrors {
             cmd.env("GIT_PROTOCOL", p);
         }
         let mut child = cmd.spawn().map_err(|e| ServeError::Failed(e.to_string()))?;
-        let group = Group::new(
+        let mut group = Group::new(
             child
                 .id()
                 .ok_or_else(|| ServeError::Failed("no pid".into()))?,
@@ -70,7 +70,9 @@ impl Mirrors {
             .is_ok();
         // Before the wait, while the group id is still ours.
         group.kill();
-        let ok = done && child.wait().await.is_ok_and(|s| s.success());
+        let waited = child.wait().await;
+        group.reaped();
+        let ok = done && waited.is_ok_and(|s| s.success());
         match ok {
             true => {
                 // Version 2 has no service line; version 0 and 1 have one and a flush.
@@ -94,12 +96,12 @@ impl Mirrors {
     pub async fn upload_pack(
         &self,
         repo: i64,
-        remote: &str,
+        key: &str,
         protocol: Option<&str>,
         request: &[u8],
         gzip: bool,
     ) -> Result<Body, ServeError> {
-        let dir = self.ready(repo, remote)?;
+        let dir = self.ready(repo, key)?;
         let permit = self.slot().await?;
         let request = match gzip {
             true => self.gunzip(request).await?,
@@ -130,20 +132,21 @@ impl Mirrors {
         });
         // The child, its group (with the time limit) and the slot live as long as the stream.
         let stream = futures_util::stream::unfold(
-            (stdout, child, group, permit),
-            |(mut out, mut child, group, permit)| async move {
+            (stdout, group, child, permit),
+            |(mut out, mut group, mut child, permit)| async move {
                 let mut buf = vec![0; 64 << 10];
                 match out.read(&mut buf).await {
                     Ok(n) if n > 0 => {
                         buf.truncate(n);
                         Some((
                             Ok::<_, std::io::Error>(Bytes::from(buf)),
-                            (out, child, group, permit),
+                            (out, group, child, permit),
                         ))
                     }
                     _ => {
                         group.kill();
                         let _ = child.wait().await;
+                        group.reaped();
                         None
                     }
                 }

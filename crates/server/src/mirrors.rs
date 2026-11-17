@@ -11,13 +11,17 @@
 //!   a shell: the repo is a number, the rest is the pack protocol on stdin.
 //!   TODO(P3-02): today any runner device reads any project's mirror. P3-02 narrows it to a
 //!   lease per (device, repo ids), checked in `info_refs` and `upload_pack`, granted when the
-//!   Core builds a session's workspace list.
-//! - A mirror is only served while its repo row exists and its remote is the one the mirror was
-//!   made from (a marker file in it): removing a repo deletes its copy, and a recycled repo id
-//!   with another remote starts from nothing, never from the old objects.
+//!   Core builds a session's workspace list. The lease check must also require an active
+//!   project: an archived project's copy is still served today.
+//! - A mirror is only served while its repo row exists and its project and remote are the ones
+//!   the mirror was made from (a marker file in it): removing a repo deletes its copy (in a task
+//!   a dropped request cannot cancel), and a recycled repo id of another project or remote starts
+//!   from nothing, never from the old objects.
 //! - Protocol v2 lets a client ask for any object the copy holds, referenced or not. So after a
 //!   fetch that dropped or rewrote refs (a force push, a deleted branch) the copy runs
-//!   `git gc --prune=now` under the repo lock, and nothing unreferenced stays fetchable.
+//!   `git gc --prune=now` under the repo lock, and nothing unreferenced stays fetchable. A flag
+//!   file is set before every fetch and cleared once no collection is owed, so a crash or a
+//!   failed gc is made up at the next fetch.
 //!   ponytail: gc rewrites packs while a stream may read them; an open file survives that, a
 //!   stream that loses the race fails and the runner retries. Only a force push costs that.
 //! - The Core's copy has no remote configured and no credential in it: the URL is a command
@@ -28,7 +32,9 @@
 //!   redirects, only https and ssh, objects checked as they arrive (`transfer.fsckObjects`). ssh
 //!   uses no key, no agent and the Core's own `known_hosts` (`StrictHostKeyChecking=accept-new`:
 //!   trust on first use, a changed key is refused), so ssh remotes only work where no key is
-//!   needed. Only a github.com https remote gets a token, found through
+//!   needed. `core.sshCommand` goes through `sh -c`, so ssh is only allowed when the mirrors
+//!   path is plain (`[A-Za-z0-9/._-]`); otherwise `GIT_ALLOW_PROTOCOL` is `https` alone, which
+//!   (unlike `protocol.ssh.allow`) nothing in the config can widen. Only a github.com https remote gets a token, found through
 //!   the connections broker (`resolve` with the project owner's grants), so a repo no connection
 //!   covers is fetched anonymously.
 //! - Every git command runs in its own process group, killed when its output ends (before it is
@@ -60,8 +66,16 @@ use crate::store::projects as store;
 /// How often every active project's repos are fetched.
 pub const INTERVAL: Duration = Duration::from_secs(15 * 60);
 
-/// The file in a mirror naming the remote it was made from.
+/// The file in a mirror naming the project and remote it was made from (`key`).
 const MARKER: &str = "ainkrad-remote";
+
+/// The file in a mirror while a collection of dropped objects may be owed.
+const GC_FLAG: &str = "ainkrad-gc-owed";
+
+/// What a mirror is made for: its project (a recycled repo id may land in another) and remote.
+pub(crate) fn key(project: i64, remote: &str) -> String {
+    format!("{project}\n{remote}")
+}
 
 /// The most a request to `upload-pack` may be once decompressed.
 const REQUEST_MAX: usize = 8 << 20;
@@ -93,14 +107,23 @@ pub enum ServeError {
 /// A repo to fetch and who owns its project.
 struct Target {
     id: i64,
+    project: i64,
     remote: String,
     branch: String,
     owner: i64,
     active: bool,
 }
 
+impl Target {
+    fn key(&self) -> String {
+        key(self.project, &self.remote)
+    }
+}
+
 impl Mirrors {
     pub fn new(root: PathBuf) -> Self {
+        // git runs with the mirrors dir as its working directory: every path must be absolute.
+        let root = std::path::absolute(&root).unwrap_or(root);
         Self {
             root,
             git: PathBuf::from("git"),
@@ -154,16 +177,18 @@ impl Mirrors {
     /// `git args…` as every git here runs (see the module docs); `token` only in its environment.
     fn command(&self, args: &[&str], token: Option<&str>) -> Command {
         let mut cmd = Command::new(&self.git);
+        // `core.sshCommand` is run by `sh -c`: only a plain path may go into it.
         let known_hosts = self.root.join("known_hosts");
-        let ssh = match known_hosts
-            .to_str()
-            .filter(|p| !p.contains(char::is_whitespace))
-        {
+        let plain = |p: &str| {
+            p.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b))
+        };
+        let ssh = known_hosts.to_str().filter(|p| plain(p));
+        let sshconf = match ssh {
             Some(p) => format!(
                 "core.sshCommand=ssh -F /dev/null -oBatchMode=yes -oIdentitiesOnly=yes \
                  -oIdentityFile=none -oUserKnownHostsFile={p} -oStrictHostKeyChecking=accept-new"
             ),
-            // A path ssh could not be given whole: no ssh at all.
             None => "protocol.ssh.allow=never".to_owned(),
         };
         let fixed = [
@@ -171,7 +196,6 @@ impl Mirrors {
             "core.fsmonitor=false",
             "protocol.allow=never",
             "protocol.https.allow=always",
-            "protocol.ssh.allow=always",
             "http.followRedirects=false",
             "http.lowSpeedLimit=1024",
             "http.lowSpeedTime=20",
@@ -179,7 +203,7 @@ impl Mirrors {
             "credential.helper=",
             "gc.auto=0",
             "transfer.fsckObjects=true",
-            ssh.as_str(),
+            sshconf.as_str(),
         ];
         for c in fixed {
             cmd.args(["-c", c]);
@@ -197,10 +221,11 @@ impl Mirrors {
             .env("GIT_TEMPLATE_DIR", "")
             .env(
                 "GIT_ALLOW_PROTOCOL",
-                if cfg!(test) {
-                    "https:ssh:file"
-                } else {
-                    "https:ssh"
+                match (ssh.is_some(), cfg!(test)) {
+                    (true, true) => "https:ssh:file",
+                    (true, false) => "https:ssh",
+                    (false, true) => "https:file",
+                    (false, false) => "https",
                 },
             )
             .stdin(Stdio::null())
@@ -222,11 +247,20 @@ impl Mirrors {
 
     /// Runs `args` to the end within the timeout; stdout, or git's scrubbed last words.
     async fn run(&self, args: &[&str], token: Option<&str>) -> Result<String, String> {
+        self.run_for(args, token, self.timeout).await
+    }
+
+    async fn run_for(
+        &self,
+        args: &[&str],
+        token: Option<&str>,
+        limit: Duration,
+    ) -> Result<String, String> {
         let mut child = self
             .command(args, token)
             .spawn()
             .map_err(|e| format!("git: {e}"))?;
-        let group = Group::new(child.id().ok_or("git has no pid")?);
+        let mut group = Group::new(child.id().ok_or("git has no pid")?);
         let (out, err) = (child.stdout.take(), child.stderr.take());
         let read = async {
             let (mut a, mut b) = (Vec::new(), Vec::new());
@@ -244,12 +278,14 @@ impl Mirrors {
             );
             (a, b)
         };
-        let Ok((out, err)) = tokio::time::timeout(self.timeout, read).await else {
+        let Ok((out, err)) = tokio::time::timeout(limit, read).await else {
             return Err("git timed out".into());
         };
         // Both pipes are closed: whatever is left (ssh, helpers) is killed before the wait.
         group.kill();
-        match child.wait().await {
+        let status = child.wait().await;
+        group.reaped();
+        match status {
             Ok(s) if s.success() => Ok(String::from_utf8_lossy(&out).into_owned()),
             _ => Err(scrub(&String::from_utf8_lossy(&err), token)),
         }
@@ -277,7 +313,7 @@ impl Mirrors {
         }
         let dir = self.dir(t.id);
         // A copy made from another remote (a recycled repo id) is not this repo's: start over.
-        if dir.exists() && self.ready(t.id, &t.remote).is_err() {
+        if dir.exists() && self.ready(t.id, &t.key()).is_err() {
             std::fs::remove_dir_all(&dir).map_err(|e| format!("mirrors: {e}"))?;
         }
         // A first fetch is made aside and moved in, so a failed one leaves no half-made mirror.
@@ -291,7 +327,14 @@ impl Mirrors {
         if fresh {
             let _ = std::fs::remove_dir_all(&work);
             self.run(&["init", "--bare", "-q", "--", w], None).await?;
-            std::fs::write(work.join(MARKER), &t.remote).map_err(|e| format!("mirrors: {e}"))?;
+            std::fs::write(work.join(MARKER), t.key()).map_err(|e| format!("mirrors: {e}"))?;
+        }
+        // Set before the fetch and cleared once no collection is owed: whatever stops this
+        // short (a crash, a failed gc) leaves it for the next fetch.
+        let flag = work.join(GC_FLAG);
+        let owed = flag.exists();
+        if !fresh {
+            std::fs::write(&flag, "").map_err(|e| format!("mirrors: {e}"))?;
         }
         let before = match fresh {
             true => Vec::new(),
@@ -312,7 +355,7 @@ impl Mirrors {
         ];
         let head = async {
             self.run(&fetch, token).await?;
-            self.forget_dropped(w, before).await;
+            self.forget_dropped(w, before, owed).await;
             self.run(&["-C", w, "symbolic-ref", "HEAD", &branch], None)
                 .await?;
             let sha = self
@@ -340,10 +383,10 @@ impl Mirrors {
         head
     }
 
-    /// The mirror to serve: made by a fetch, from `remote`.
-    fn ready(&self, repo: i64, remote: &str) -> Result<String, ServeError> {
+    /// The mirror to serve: made by a fetch, for `key`.
+    fn ready(&self, repo: i64, key: &str) -> Result<String, ServeError> {
         let dir = self.dir(repo);
-        let made = std::fs::read_to_string(dir.join(MARKER)).is_ok_and(|m| m == remote);
+        let made = std::fs::read_to_string(dir.join(MARKER)).is_ok_and(|m| m == key);
         match dir.join("HEAD").exists() && made {
             true => dir
                 .into_os_string()
@@ -367,12 +410,13 @@ impl Mirrors {
 
     /// After a fetch: if a ref was deleted or moved to a commit that does not contain what it
     /// held, objects no ref reaches are left, and protocol v2 would hand them out: collect them
-    /// now. A failure here is logged; the fetch itself succeeded.
-    async fn forget_dropped(&self, w: &str, before: Vec<(String, String)>) {
+    /// now (also when an earlier one was owed and not done: `owed`). A failure here is logged and
+    /// leaves the flag; the fetch itself succeeded.
+    async fn forget_dropped(&self, w: &str, before: Vec<(String, String)>, owed: bool) {
         let Ok(after) = self.refs(w).await else {
             return;
         };
-        let mut dropped = false;
+        let mut dropped = owed;
         for (name, old) in &before {
             dropped |= match after.iter().find(|(n, _)| n == name) {
                 None => true,
@@ -386,12 +430,15 @@ impl Mirrors {
                 break;
             }
         }
-        if dropped
-            && let Err(why) = self
-                .run(&["-C", w, "gc", "--prune=now", "--quiet"], None)
-                .await
-        {
-            tracing::warn!(why, "collecting a mirror's dropped objects failed");
+        let flag = std::path::Path::new(w).join(GC_FLAG);
+        if !dropped {
+            let _ = std::fs::remove_file(flag);
+            return;
+        }
+        let gc = ["-C", w, "gc", "--prune=now", "--quiet"];
+        match self.run_for(&gc, None, Duration::from_secs(30 * 60)).await {
+            Ok(_) => drop(std::fs::remove_file(flag)),
+            Err(why) => tracing::warn!(why, "collecting a mirror's dropped objects failed"),
         }
     }
 }
@@ -406,6 +453,8 @@ fn protocol_of(header: Option<&str>) -> Option<&str> {
 struct Group {
     pgid: u32,
     deadline: Option<tokio::task::AbortHandle>,
+    /// The leader was waited for: its id may be anyone's now, so nothing is signalled.
+    reaped: bool,
 }
 
 impl Group {
@@ -413,6 +462,7 @@ impl Group {
         Self {
             pgid,
             deadline: None,
+            reaped: false,
         }
     }
 
@@ -424,11 +474,22 @@ impl Group {
         Self {
             pgid,
             deadline: Some(watchdog.abort_handle()),
+            reaped: false,
         }
     }
 
     fn kill(&self) {
-        let _ = ainkrad_sys::killpg(self.pgid, 9);
+        if !self.reaped {
+            let _ = ainkrad_sys::killpg(self.pgid, 9);
+        }
+    }
+
+    /// Call right after the wait: no later kill (or the watchdog) may reach a reused id.
+    fn reaped(&mut self) {
+        self.reaped = true;
+        if let Some(w) = &self.deadline {
+            w.abort();
+        }
     }
 }
 
@@ -502,7 +563,7 @@ pub(crate) async fn token_for(
 
 async fn target(pool: &SqlitePool, repo: i64) -> Result<Option<Target>, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT r.id, r.remote_url, r.default_branch, p.user_id, p.state FROM core_project_repos r \
+        "SELECT r.id, r.project_id, r.remote_url, r.default_branch, p.user_id, p.state FROM core_project_repos r \
          JOIN core_projects p ON p.id = r.project_id WHERE r.id = ?",
     )
     .bind(repo)
@@ -511,6 +572,7 @@ async fn target(pool: &SqlitePool, repo: i64) -> Result<Option<Target>, sqlx::Er
     row.map(|r| {
         Ok(Target {
             id: r.try_get("id")?,
+            project: r.try_get("project_id")?,
             remote: r.try_get("remote_url")?,
             branch: r.try_get("default_branch")?,
             owner: r.try_get("user_id")?,
@@ -520,9 +582,10 @@ async fn target(pool: &SqlitePool, repo: i64) -> Result<Option<Target>, sqlx::Er
     .transpose()
 }
 
-/// The remote of repo `repo`, or `None` if there is no such repo (any more).
-pub async fn remote_of(pool: &SqlitePool, repo: i64) -> Result<Option<String>, sqlx::Error> {
-    Ok(target(pool, repo).await?.map(|t| t.remote))
+/// What repo `repo`'s mirror must have been made for (`key`), or `None` if there is no such repo
+/// (any more).
+pub async fn key_of(pool: &SqlitePool, repo: i64) -> Result<Option<String>, sqlx::Error> {
+    Ok(target(pool, repo).await?.map(|t| t.key()))
 }
 
 /// Why a fetch was not tried.
@@ -600,7 +663,7 @@ async fn fetch(
     let before = store::mirror(&app.pool, repo).await.map_err(db)?;
     // The older head is only kept while the copy it names is still there.
     let kept = mirrors
-        .ready(repo, &t.remote)
+        .ready(repo, &t.key())
         .is_ok()
         .then_some(before)
         .flatten();

@@ -54,6 +54,7 @@ pub(crate) fn remote(dir: &Path) -> (PathBuf, String) {
 fn target(url: &Path) -> Target {
     Target {
         id: 7,
+        project: 1,
         remote: url.to_str().unwrap().to_owned(),
         branch: "main".into(),
         owner: 1,
@@ -152,7 +153,7 @@ async fn a_token_is_only_in_the_environment_never_argv_or_the_error() {
     // `init` is the first call and fails; the fetch is reached by the second sync on a made dir.
     std::fs::create_dir_all(m.dir(7)).unwrap();
     std::fs::write(m.dir(7).join("HEAD"), "ref: refs/heads/main\n").unwrap();
-    std::fs::write(m.dir(7).join(MARKER), &t.remote).unwrap();
+    std::fs::write(m.dir(7).join(MARKER), t.key()).unwrap();
     let err = m.sync(&t, Some(TOKEN)).await.unwrap_err();
     assert!(!err.contains(TOKEN) && err.contains("***"), "{err}");
     let calls = std::fs::read_to_string(&log).unwrap();
@@ -239,15 +240,14 @@ async fn a_copy_made_from_another_remote_is_never_reused() {
     let (remote, old) = remote(&dir);
     let m = Mirrors::new(dir.join("mirrors"));
     m.sync(&target(&remote), None).await.unwrap();
-    assert!(m.ready(7, remote.to_str().unwrap()).is_ok());
+    assert!(m.ready(7, &target(&remote).key()).is_ok());
+    // The same remote under another project (a recycled id) is not this copy either.
+    assert!(m.ready(7, &key(2, remote.to_str().unwrap())).is_err());
     // The same id, another remote that cannot be reached: nothing of the old repo is served.
     let other = dir.join("nowhere");
     assert!(m.sync(&target(&other), None).await.is_err());
     assert!(!m.dir(7).exists(), "the old copy was kept");
-    assert_eq!(
-        m.ready(7, other.to_str().unwrap()),
-        Err(ServeError::NotReady)
-    );
+    assert_eq!(m.ready(7, &target(&other).key()), Err(ServeError::NotReady));
     // Another remote that works: its own objects only.
     let dir2 = tmp("recycled2");
     let (remote2, _) = self::remote(&dir2);
@@ -275,7 +275,7 @@ async fn a_copy_made_from_another_remote_is_never_reused() {
         "the old repo's commit is in the new copy"
     );
     assert_eq!(
-        m.ready(7, remote.to_str().unwrap()),
+        m.ready(7, &target(&remote).key()),
         Err(ServeError::NotReady)
     );
     // `forget` removes the copy.
@@ -283,4 +283,52 @@ async fn a_copy_made_from_another_remote_is_never_reused() {
     assert!(!m.dir(7).exists());
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&dir2);
+}
+
+#[tokio::test]
+async fn ssh_runs_only_when_the_mirrors_path_can_go_into_the_ssh_command() {
+    let t = |dir: &Path| {
+        let mut t = target(dir);
+        t.remote = "ssh://git@127.0.0.1:9/x.git".into();
+        t
+    };
+    // A path with a space cannot be given to `sh -c` whole: ssh is not allowed at all, so
+    // nothing reads the Core user's own ssh config or keys.
+    let bad = tmp("a b");
+    let m = Mirrors::new(bad.join("mirrors"));
+    let err = m.sync(&t(&bad), None).await.unwrap_err();
+    assert!(err.contains("not allowed"), "{err}");
+    // Control: a plain path does reach ssh (which cannot connect to that port).
+    let good = tmp("plain");
+    let m = Mirrors::new(good.join("mirrors"));
+    let err = m.sync(&t(&good), None).await.unwrap_err();
+    assert!(!err.contains("not allowed"), "{err}");
+    let _ = std::fs::remove_dir_all(&bad);
+    let _ = std::fs::remove_dir_all(&good);
+}
+
+#[tokio::test]
+async fn a_gc_that_did_not_run_is_made_up_at_the_next_fetch() {
+    let dir = tmp("gcflag");
+    let (remote, old) = remote(&dir);
+    let m = Mirrors::new(dir.join("mirrors"));
+    m.sync(&target(&remote), None).await.unwrap();
+    git(&remote, &["commit", "-q", "--amend", "-m", "rewritten"]);
+    // As if the collection after this fetch had failed: the flag is left behind.
+    let _ = std::fs::write(m.dir(7).join(GC_FLAG), "");
+    let new = git(&remote, &["rev-parse", "HEAD"]);
+    m.sync(&target(&remote), None).await.unwrap();
+    let kept = std::process::Command::new("git")
+        .args(["cat-file", "-e", &old])
+        .current_dir(m.dir(7))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .status()
+        .unwrap();
+    assert!(!kept.success());
+    assert!(!m.dir(7).join(GC_FLAG).exists(), "cleared once collected");
+    // Nothing dropped and nothing owed: the flag does not stay.
+    m.sync(&target(&remote), None).await.unwrap();
+    assert!(!m.dir(7).join(GC_FLAG).exists());
+    assert_eq!(git(&m.dir(7), &["rev-parse", "refs/heads/main"]), new);
+    let _ = std::fs::remove_dir_all(&dir);
 }
