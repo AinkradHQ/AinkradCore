@@ -15,6 +15,7 @@ const SVG_NS: &str = "http://www.w3.org/2000/svg";
 const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
 const MAX_DEPTH: usize = 64;
 const MAX_ELEMENTS: usize = 50_000;
+const MAX_USES: usize = 256;
 
 const ELEMENTS: &[&str] = &[
     "svg",
@@ -198,26 +199,58 @@ const REF_ELEMENTS: &[&str] = &[
     "textPath",
 ];
 
-/// A value that cannot carry script or reach outside the file: every `url(` must be a local `#id`.
+/// Functions a value may call; `url(` is separate (a local `#id` only). Anything else (`image-set(`,
+/// `src(`, `var(`, `calc(` ...) can fetch or compute, so the value is dropped.
+const FUNCTIONS: &[&str] = &[
+    "rgb",
+    "rgba",
+    "hsl",
+    "hsla",
+    "translate",
+    "rotate",
+    "scale",
+    "matrix",
+    "skewx",
+    "skewy",
+];
+
+/// A value that cannot carry script or reach outside the file: no backslash (CSS escapes can spell
+/// `url(`), no quote, no function but the allow-list, and every `url(` a local `#id`.
 fn value_ok(v: &str) -> bool {
     let l = v.to_ascii_lowercase();
-    if ["javascript:", "vbscript:", "data:", "expression(", "<"]
-        .iter()
-        .any(|bad| l.contains(bad))
+    if [
+        "javascript:",
+        "vbscript:",
+        "data:",
+        "expression(",
+        "<",
+        "\\",
+        "\"",
+        "'",
+    ]
+    .iter()
+    .any(|bad| l.contains(bad))
     {
         return false;
     }
-    l.match_indices("url(").all(|(i, _)| {
-        l[i + 4..]
-            .trim_start_matches([' ', '\'', '"'])
-            .starts_with('#')
+    l.match_indices('(').all(|(i, _)| {
+        let name = l[..i]
+            .trim_end()
+            .rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .next()
+            .unwrap_or("");
+        if name == "url" {
+            l[i + 1..].trim_start().starts_with('#')
+        } else {
+            FUNCTIONS.contains(&name)
+        }
     })
 }
 
-/// CSS the file may keep: no at-rule (`@import`), no escape, no non-local `url(`, no script hook.
+/// CSS the file may keep: the value rules, no at-rule (`@import`), no script hook.
 fn css_ok(css: &str) -> bool {
     value_ok(css)
-        && !css.contains(['@', '\\'])
+        && !css.contains('@')
         && !css.to_ascii_lowercase().contains("behavior")
         && !css.to_ascii_lowercase().contains("binding")
 }
@@ -234,6 +267,12 @@ fn data_image_ok(v: &str) -> bool {
         && b64.bytes().all(|c| {
             c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'=' | b'\n' | b'\r' | b' ')
         })
+}
+
+/// Each `<use>` can instantiate a subtree, so their number is capped (a cheap expansion bomb guard).
+fn is_use(tag: &str) -> bool {
+    tag.strip_prefix("<use")
+        .is_some_and(|r| r.starts_with([' ', '/', '>']))
 }
 
 fn refuse<T>() -> Result<T, ()> {
@@ -280,7 +319,8 @@ pub(crate) fn sanitise(input: &[u8]) -> Result<Vec<u8>, ()> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut rd = Reader::from_str(text);
     let mut out = String::with_capacity(text.len());
-    let (mut depth, mut skip, mut elements, mut roots) = (0usize, 0usize, 0usize, 0usize);
+    let (mut depth, mut skip, mut elements, mut roots, mut uses) =
+        (0usize, 0usize, 0usize, 0usize, 0usize);
     // Where a kept `<style>` began in `out`, so a hostile one can be cut back out.
     let mut style_at: Vec<usize> = Vec::new();
     loop {
@@ -304,6 +344,10 @@ pub(crate) fn sanitise(input: &[u8]) -> Result<Vec<u8>, ()> {
                 }
                 match open_tag(&e, false, root)? {
                     Some(tag) => {
+                        uses += is_use(&tag) as usize;
+                        if uses > MAX_USES {
+                            return refuse();
+                        }
                         if tag.starts_with("<style") {
                             style_at.push(out.len());
                         } else {
@@ -327,6 +371,10 @@ pub(crate) fn sanitise(input: &[u8]) -> Result<Vec<u8>, ()> {
                     return refuse();
                 }
                 if let Some(tag) = open_tag(&e, true, root)? {
+                    uses += is_use(&tag) as usize;
+                    if uses > MAX_USES {
+                        return refuse();
+                    }
                     out.push_str(&tag);
                 }
             }

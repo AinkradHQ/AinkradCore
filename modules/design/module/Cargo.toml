@@ -21,5 +21,6 @@ utoipa = "6.0.0"
 
 [dev-dependencies]
 ainkrad-core-server = { path = "../../../crates/server", features = ["test-support"] }
+futures-util = "0.3.34"
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5.3", features = ["util"] }

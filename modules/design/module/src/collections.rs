@@ -132,7 +132,7 @@ async fn check_kit(
     }
     for f in fonts {
         let kind: Option<String> =
-            sqlx::query_scalar("SELECT kind FROM design_assets WHERE sha256 = ? AND library = 1")
+            sqlx::query_scalar("SELECT kind FROM design_assets WHERE sha256 = ? AND library = 1 AND check_state = 'ok'")
                 .bind(f)
                 .fetch_optional(&mut *conn)
                 .await?;
@@ -333,10 +333,12 @@ pub(crate) async fn put_item(
     }
     let mut tx = begin_write(&app.pool).await?;
     view(&mut tx, &id).await?;
-    let lib: Option<i64> = sqlx::query_scalar("SELECT library FROM design_assets WHERE sha256 = ?")
-        .bind(&sha)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let lib: Option<i64> = sqlx::query_scalar(
+        "SELECT library FROM design_assets WHERE sha256 = ? AND check_state = 'ok'",
+    )
+    .bind(&sha)
+    .fetch_optional(&mut *tx)
+    .await?;
     if lib != Some(1) {
         return Err(ApiError::not_found("no such asset"));
     }

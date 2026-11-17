@@ -6875,7 +6875,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.87.0"
+    "version": "1.88.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16324,7 +16324,7 @@
                 }
               }
             },
-            "description": "The stored bytes with the Core-decided content type, `nosniff` and a sandboxing CSP; a refused font is 404"
+            "description": "The stored bytes with the Core-decided content type, `nosniff` and a sandboxing CSP; a font or zip the helper has not passed (`pending`) or has `refused` is 404"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

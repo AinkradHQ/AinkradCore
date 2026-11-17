@@ -103,7 +103,15 @@ pub struct Verified {
     pub device: Device,
     pub session: Option<Session>,
     pub body: Bytes,
+    /// A bulk route's share of the in-flight byte budget, held until the request is answered.
+    pub permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
+
+/// The most bytes bulk routes (`Module::body_limits`) may hold in memory at once, all requests
+/// together: each takes its declared Content-Length before its body is read.
+pub const BULK_BUDGET: usize = 64 * 1024 * 1024;
+static BULK: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(BULK_BUDGET)));
 
 pub async fn verify(
     app: &App,
@@ -112,6 +120,22 @@ pub async fn verify(
     limit: usize,
     addr: &str,
     mode: Mode,
+) -> Result<Verified, Refusal> {
+    verify_in(app, parts, raw, limit, addr, mode, false).await
+}
+
+/// [`verify`]; `bulk` marks a route with a declared body limit: its (usable) device must send a
+/// Content-Length (411), one past the limit is a 413, and the length is taken from [`BULK_BUDGET`]
+/// (429 when it is not free). Only a request naming a usable device gets these answers; every other
+/// one is the same drained 401 as on any route.
+pub async fn verify_in(
+    app: &App,
+    parts: &Parts,
+    raw: Body,
+    limit: usize,
+    addr: &str,
+    mode: Mode,
+    bulk: bool,
 ) -> Result<Verified, Refusal> {
     // Unsigned altogether: the plain 401 every unknown path also gets (spec §4), so routes
     // cannot be told apart. Not counted: it names no device and proves nothing.
@@ -160,6 +184,29 @@ pub async fn verify(
     // Every device's body is held to the same `limit`, and one past it is the same refusal
     // whoever claims to send it (review N5). Only a usable device's body is kept; any other is
     // read and dropped as it arrives, so it costs no memory and answers no sooner (review L1).
+    let mut permit = None;
+    if bulk && usable {
+        let declared = parts
+            .headers
+            .get(axum::http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok()?.parse::<usize>().ok());
+        match declared {
+            None => {
+                return Err(ApiError::new(
+                    StatusCode::LENGTH_REQUIRED,
+                    "length_required",
+                    "the request needs a Content-Length",
+                )
+                .into_response()
+                .into());
+            }
+            Some(n) if n > limit => return Err(crate::gateway::preauth::too_large().into()),
+            Some(n) => match BULK.clone().try_acquire_many_owned(n.max(1) as u32) {
+                Ok(p) => permit = Some(p),
+                Err(_) => return Err(too_many(std::time::Duration::from_secs(1)).into()),
+            },
+        }
+    }
     let (bytes, oversize) = if usable {
         match body(raw, limit).await {
             Ok(b) => (b, false),
@@ -263,6 +310,7 @@ pub async fn verify(
         device,
         session,
         body: bytes,
+        permit,
     })
 }
 
@@ -346,17 +394,6 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
             // A file secret of 1 MiB is a third longer in base64 (decision G1).
             let path = parts.uri.path();
             let declared = super::scopes::module_body_limit(&app.modules, &parts.method, path);
-            // An honest client announces its length: a body past the route's own limit is a plain 413,
-            // not an unverifiable signature (an unsigned oversize body is the 401 every other route gives).
-            if let Some(n) = declared
-                && parts
-                    .headers
-                    .get(axum::http::header::CONTENT_LENGTH)
-                    .and_then(|v| v.to_str().ok()?.parse::<usize>().ok())
-                    .is_some_and(|len| len > n)
-            {
-                return crate::gateway::preauth::too_large();
-            }
             let cap = if let Some(n) = declared {
                 n
             } else if path.starts_with("/api/v1/secrets") {
@@ -368,13 +405,24 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
             } else {
                 SIGNED_BODY
             };
-            verify(&app, &parts, raw, cap, &addr, Mode::Session).await
+            verify_in(
+                &app,
+                &parts,
+                raw,
+                cap,
+                &addr,
+                Mode::Session,
+                declared.is_some(),
+            )
+            .await
         }
     };
-    let v = match v {
+    let mut v = match v {
         Ok(v) => v,
         Err(r) => return *r,
     };
+    // A bulk route's byte budget stays taken until the response is built.
+    let _permit = v.permit.take();
     // Deny by default: the route's declared scope, or nothing (`scopes`).
     let need = super::scopes::required(&parts.method, parts.uri.path(), &app.modules);
     if !need.is_some_and(|s| v.device.scopes.iter().any(|d| d == s)) {

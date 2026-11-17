@@ -501,8 +501,61 @@ async fn brand_kits_collections_and_project_links() {
         font["sha256"].as_str().unwrap(),
         logo["sha256"].as_str().unwrap(),
     );
-    let (s, kit) = call(&fx, Method::POST, "/collections", Some(json!({
-        "kind": "brand_kit", "name": "Acme", "colors": ["#0a84ff", "#FFF"], "fonts": [fs], "project": p}))).await;
+    // M2: a font the helper has not passed is neither served nor nameable.
+    let (s, _, _, _) = send(
+        &fx,
+        &fx.admin,
+        Method::GET,
+        &format!("/assets/{fs}/data"),
+        vec![],
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let kit_body = json!({"kind": "brand_kit", "name": "Acme", "colors": ["#0a84ff", "#FFF"], "fonts": [fs], "project": p});
+    assert_eq!(
+        call(&fx, Method::POST, "/collections", Some(kit_body.clone()))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (_, folder) = call(
+        &fx,
+        Method::POST,
+        "/collections",
+        Some(json!({"kind": "folder", "name": "F"})),
+    )
+    .await;
+    let fid = folder["id"].as_str().unwrap();
+    assert_eq!(
+        call(
+            &fx,
+            Method::PUT,
+            &format!("/collections/{fid}/items/{fs}"),
+            Some(json!({}))
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    // The helper (V6-01) passes it.
+    sqlx::query("UPDATE design_assets SET check_state = 'ok' WHERE sha256 = ?")
+        .bind(fs)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        send(
+            &fx,
+            &fx.admin,
+            Method::GET,
+            &format!("/assets/{fs}/data"),
+            vec![]
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (s, kit) = call(&fx, Method::POST, "/collections", Some(kit_body)).await;
     assert_eq!(s, StatusCode::OK, "{kit}");
     let id = kit["id"].as_str().unwrap();
     assert_eq!(
@@ -589,6 +642,9 @@ async fn brand_kits_collections_and_project_links() {
         .0,
         StatusCode::OK
     );
+    // L2: a kit that names a font keeps it from deletion.
+    let (s, v) = call(&fx, Method::DELETE, &format!("/assets/{fs}"), None).await;
+    assert_eq!((s, &v["code"]), (StatusCode::CONFLICT, &json!("conflict")));
     assert_eq!(
         call(&fx, Method::DELETE, &format!("/collections/{id}"), None)
             .await
@@ -653,5 +709,176 @@ async fn scopes_audit_and_the_contract() {
     assert_eq!(
         p["/modules/design/v1/assets/{sha}/data"]["get"]["x-ainkrad-scope"],
         "read"
+    );
+}
+
+fn svg_with(inner: &str) -> String {
+    format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">{inner}</svg>"##)
+}
+
+async fn svg_out(fx: &Fx, inner: &str) -> String {
+    let (s, v) = upload(fx, "name=t.svg", svg_with(inner).as_bytes()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    stored(fx, v["sha256"].as_str().unwrap()).await
+}
+
+#[tokio::test]
+async fn m1_no_css_function_or_escape_reaches_the_network() {
+    let fx = fx().await;
+    let out = svg_out(&fx, concat!(
+        r#"<rect width="1" height="1" fill="image-set('https://evil/a.png' 1x)" filter="\75 rl(https://evil/f)" stroke="rgb(1,2,3)" transform="translate(1 2) rotate(3)"/>"#,
+        r#"<rect id="q" style="background:image-set(&quot;https://evil/b.png&quot; 1x)" fill="url('#a')"/>"#,
+        r#"<rect id="r" style="fill:var(--x)" fill-opacity="calc(1 + 1)"/>"#,
+        "<style>rect { fill: image-set('https://evil/c.png' 1x) }</style>",
+        "<style>rect { fill: \\75 rl(https://evil/d) }</style>",
+        "<style>rect { fill: red }</style>",
+    )).await;
+    for bad in ["evil", "image-set", "\\", "var(", "calc(", "url('"] {
+        assert!(!out.contains(bad), "{bad} survived: {out}");
+    }
+    for good in [
+        "stroke=\"rgb(1,2,3)\"",
+        "translate(1 2) rotate(3)",
+        "fill: red",
+    ] {
+        assert!(out.contains(good), "{good} lost: {out}");
+    }
+}
+
+#[tokio::test]
+async fn l3_a_raster_that_is_also_an_svg_is_refused() {
+    let fx = fx().await;
+    let mut poly = png(1);
+    poly.extend(b"<svg xmlns='http://www.w3.org/2000/svg' onload='alert(1)'/>");
+    let (s, v) = upload(&fx, "name=p.png", &poly).await;
+    assert_eq!(
+        (s, &v["code"]),
+        (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            &json!("unsupported_type")
+        )
+    );
+    assert_eq!(count(&fx, "design_assets").await, 0);
+}
+
+#[tokio::test]
+async fn l4_use_elements_are_capped() {
+    let fx = fx().await;
+    let ok = svg_with(&r##"<use href="#a"/>"##.repeat(256));
+    assert_eq!(
+        upload(&fx, "name=ok.svg", ok.as_bytes()).await.0,
+        StatusCode::OK
+    );
+    let many = svg_with(&r##"<use href="#a"/>"##.repeat(257));
+    assert_eq!(
+        upload(&fx, "name=many.svg", many.as_bytes()).await.0,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+}
+
+fn upload_request(dev: &TestDevice, content_length: Option<usize>, body: Body) -> Request<Body> {
+    let uri = format!("{BASE}/assets?name=x.png");
+    let mut b = Request::builder()
+        .method(Method::POST)
+        .uri(&uri)
+        .header(header::HOST, HOST);
+    for (name, value) in dev.headers("POST", &uri, &[]) {
+        b = b.header(name, value);
+    }
+    if let Some(n) = content_length {
+        b = b.header(header::CONTENT_LENGTH, n);
+    }
+    b.body(body).unwrap()
+}
+
+#[tokio::test]
+async fn m3_a_bulk_upload_needs_a_length_and_takes_from_a_shared_budget() {
+    let fx = fx().await;
+    let call = |req: Request<Body>| {
+        let app = fx.app.clone();
+        async move { router(app).oneshot(req).await.unwrap().status() }
+    };
+    // No Content-Length (chunked): 411, before anything is read.
+    assert_eq!(
+        call(upload_request(&fx.admin, None, Body::from(png(1)))).await,
+        StatusCode::LENGTH_REQUIRED
+    );
+    // Two uploads that announce 25 MiB and never finish hold 50 of the 64 MiB.
+    let hold = |n| {
+        let app = fx.app.clone();
+        let req = upload_request(
+            &fx.admin,
+            Some(25 * 1024 * 1024),
+            Body::from_stream(futures_util::stream::pending::<
+                Result<axum::body::Bytes, std::convert::Infallible>,
+            >()),
+        );
+        let _ = n;
+        tokio::spawn(async move { router(app).oneshot(req).await })
+    };
+    let (h1, h2) = (hold(1), hold(2));
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // A third would need 75 MiB: refused at once, not queued.
+    let third = call(upload_request(
+        &fx.admin,
+        Some(25 * 1024 * 1024),
+        Body::empty(),
+    ))
+    .await;
+    assert_eq!(third, StatusCode::TOO_MANY_REQUESTS);
+    // A small upload still fits, and once the others are gone the budget is free again.
+    h1.abort();
+    h2.abort();
+    let (_, _) = (h1.await.err(), h2.await.err());
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let (s, v) = upload(&fx, "name=ok.png", &png(1)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+}
+
+#[tokio::test]
+async fn l1_an_unsigned_or_unknown_caller_cannot_tell_the_upload_route_exists() {
+    let fx = fx().await;
+    // Unsigned, huge announced length: the same 401 every route gives.
+    let anon = Request::builder()
+        .method(Method::POST)
+        .uri(format!("{BASE}/assets?name=x.png"))
+        .header(header::HOST, HOST)
+        .header(header::CONTENT_LENGTH, 99_000_000)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        router(fx.app.clone()).oneshot(anon).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    // A device header that names no usable device: 401 as well, never 413 or 411.
+    let uri = format!("{BASE}/assets?name=x.png");
+    let mut b = Request::builder()
+        .method(Method::POST)
+        .uri(&uri)
+        .header(header::HOST, HOST)
+        .header(header::CONTENT_LENGTH, 99_000_000);
+    for (n, v) in fx.admin.headers("POST", &uri, &[]) {
+        let (n, v) = (n.to_string(), v.to_string());
+        let v = if n.eq_ignore_ascii_case("ainkrad-device") {
+            {
+                let mut id = fx.admin.id.clone();
+                let last = if id.ends_with('0') { '1' } else { '0' };
+                id.pop();
+                id.push(last);
+                id
+            }
+        } else {
+            v
+        };
+        b = b.header(n, v);
+    }
+    let ghost = b.body(Body::empty()).unwrap();
+    assert_eq!(
+        router(fx.app.clone())
+            .oneshot(ghost)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
     );
 }

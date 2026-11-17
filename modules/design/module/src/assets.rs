@@ -176,13 +176,19 @@ pub(crate) async fn upload(
         return Err(too_large("the file is over the size limit"));
     }
     let (mime, class) = sniff(&body).ok_or_else(unsupported)?;
-    let data: Vec<u8> = if class == Class::Svg {
+    // A raster, PDF, font or zip that is also an SVG (a polyglot) is refused: browsers sniff it.
+    if class != Class::Svg
+        && String::from_utf8_lossy(&body[..body.len().min(4096)]).contains("<svg")
+    {
+        return Err(unsupported());
+    }
+    let data: Bytes = if class == Class::Svg {
         if body.len() > SVG_MAX {
             return Err(too_large("the file is over the size limit"));
         }
-        svg::sanitise(&body).map_err(|()| unsupported())?
+        Bytes::from(svg::sanitise(&body).map_err(|()| unsupported())?)
     } else {
-        body.to_vec()
+        body
     };
     let kind = match q.kind.as_deref() {
         None => kinds(class)[0],
@@ -237,7 +243,7 @@ pub(crate) async fn upload(
         .bind(mime)
         .bind(size)
         .bind(check)
-        .bind(&data)
+        .bind(&data[..])
         .bind(format!("person:{}", me.device.id))
         .execute(&mut *tx)
         .await?;
@@ -333,7 +339,7 @@ pub(crate) async fn get(State(app): State<App>, Path(sha): Path<String>) -> ApiR
 
 #[utoipa::path(get, path = "/assets/{sha}/data", operation_id = "designGetAssetData", tag = "design",
     params(("sha" = String, Path, description = "sha256 of the asset")),
-    responses((status = 200, description = "The stored bytes with the Core-decided content type, `nosniff` and a sandboxing CSP; a refused font is 404", body = Vec<u8>, content_type = "application/octet-stream")))]
+    responses((status = 200, description = "The stored bytes with the Core-decided content type, `nosniff` and a sandboxing CSP; a font or zip the helper has not passed (`pending`) or has `refused` is 404", body = Vec<u8>, content_type = "application/octet-stream")))]
 pub(crate) async fn data(
     State(app): State<App>,
     Path(sha): Path<String>,
@@ -342,7 +348,7 @@ pub(crate) async fn data(
         return Err(none());
     }
     let row: Option<(String, Vec<u8>)> = sqlx::query_as(
-        "SELECT content_type, data FROM design_assets WHERE sha256 = ? AND check_state <> 'refused'",
+        "SELECT content_type, data FROM design_assets WHERE sha256 = ? AND check_state = 'ok'",
     )
     .bind(&sha)
     .fetch_optional(&app.pool)
@@ -433,7 +439,14 @@ pub(crate) async fn delete(
         .bind(&sha)
         .fetch_one(&mut *tx)
         .await?;
-    if used > 0 {
+    // A brand kit naming the font keeps it too (its `fonts` list holds the sha, not a foreign key).
+    let named: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM design_collections c, json_each(c.fonts) f WHERE f.value = ?",
+    )
+    .bind(&sha)
+    .fetch_one(&mut *tx)
+    .await?;
+    if used > 0 || named > 0 {
         return Err(ApiError::conflict("the asset is in use"));
     }
     sqlx::query("DELETE FROM design_links WHERE item_kind = 'asset' AND item = ?")
