@@ -484,9 +484,7 @@ mod tests {
                 break;
             }
             assert!(c.len() <= 7_000, "{}", c.len());
-            // integrated directly: this checks the chunks, not the relay's ordering guard (`apply_remote`)
-            let (u, _) = crate::decode::update(&c).unwrap();
-            peer.integrate(u).unwrap();
+            peer.apply_remote(&c).unwrap();
             chunks += 1;
         }
         assert!(chunks >= 3, "{chunks}");

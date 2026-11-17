@@ -138,7 +138,8 @@ int32_t de_sync_diff(uint64_t h,
                      size_t cap,
                      size_t *out_len);
 
-// Local edits not yet sent, merged into one update; drained only when they fit (`*out_len == 0`: nothing to send).
+// Local edits not yet sent, merged into one update of at most `DE_MAX_SYNC_BYTES`; more pending than that come in
+// later calls, so call until `*out_len == 0` (nothing to send). Drained only when they fit.
 //
 // # Safety
 // See `put`.
