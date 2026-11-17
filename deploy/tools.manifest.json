@@ -27,6 +27,6 @@
     "go": {"bin": "go", "apt": ["golang-go"], "dnf": ["golang"]},
     "rust": {"bin": "rustc", "apt": ["rustc", "cargo"], "dnf": ["rust", "cargo"]},
     "docker": {"bin": "docker", "apt": ["docker.io"], "dnf": ["moby-engine"]},
-    "podman": {"bin": "podman", "apt": ["podman", "uidmap", "passt", "nftables"], "dnf": ["podman", "shadow-utils", "passt", "nftables"]}
+    "podman": {"bin": "podman", "apt": ["podman", "uidmap", "passt", "aardvark-dns", "nftables"], "dnf": ["podman", "shadow-utils", "passt", "aardvark-dns", "nftables"]}
   }
 }

@@ -22,7 +22,7 @@
 #            can overwrite /usr/local/bin and /etc/systemd/system, and agent sessions are refused at uid 0. The
 #            guided installer never passes it. A re-run without it removes that one file.
 # --with-run set this host up to run project containers with rootless Podman (Core 0.9 Projects). Opt-in, idempotent:
-#            installs podman, uidmap, passt and nftables (deploy/tools.manifest.json `distro.podman`), creates the system user
+#            installs podman, uidmap, passt, aardvark-dns and nftables (deploy/tools.manifest.json `distro.podman`), creates the system user
 #            ainkrad-run (not the runner's) with its own subuid/subgid block, turns on linger for it, writes the cgroup
 #            delegation drop-in user@.service.d/delegate.conf and waits for its runtime dir. The runner then reports `run_caps`.
 #            Needs the whole host, so it is skipped under --prefix except for the drop-in. Nothing else (no sysctl, no AppArmor).
@@ -73,13 +73,13 @@ run_setup() {
     if [ "$dry" = 0 ]; then printf '%s\n' "$DELEGATE_CONF" >"$d/delegate.conf"; fi
   fi
   if [ -n "$prefix" ] && [ "$dry" = 0 ]; then echo "+ skipped under --prefix: podman packages, the $RUN_USER user, linger"; return 0; fi
-  if [ "$dry" = 1 ] || ! { command -v podman && command -v newuidmap && command -v pasta; } >/dev/null 2>&1; then
+  if [ "$dry" = 1 ] || ! { command -v podman && command -v newuidmap && command -v pasta && [ -x /usr/lib/podman/aardvark-dns ]; } >/dev/null 2>&1; then
     if [ "$dry" = 1 ] || command -v apt-get >/dev/null 2>&1; then
       run env DEBIAN_FRONTEND=noninteractive apt-get update -qq
-      run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends podman uidmap passt nftables
-    elif command -v dnf >/dev/null 2>&1; then run dnf install -y --setopt=install_weak_deps=False podman shadow-utils passt nftables
+      run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends podman uidmap passt aardvark-dns nftables
+    elif command -v dnf >/dev/null 2>&1; then run dnf install -y --setopt=install_weak_deps=False podman shadow-utils passt aardvark-dns nftables
     else echo "--with-run needs apt-get or dnf to install podman" >&2; return 1; fi
-  else echo "podman, uidmap and passt are already installed"; fi
+  else echo "podman, uidmap, passt and aardvark-dns are already installed"; fi
   if id "$RUN_USER" >/dev/null 2>&1; then echo "user $RUN_USER already exists"
   else run useradd --system --user-group --create-home --home-dir "$RUN_HOME" --shell /usr/sbin/nologin "$RUN_USER"; fi
   run chmod 0700 "$RUN_HOME"
@@ -99,7 +99,8 @@ run_setup() {
   for _ in $(seq 1 30); do [ -S "/run/user/$uid/bus" ] && break; sleep 0.5; done
   [ -S "/run/user/$uid/bus" ] || { echo "WARNING: /run/user/$uid/bus did not appear: projects cannot run until user@$uid.service is up" >&2; return 1; }
   pk=$(tr '\n' ' ' <"/sys/fs/cgroup/user.slice/user-$uid.slice/user@$uid.service/cgroup.controllers" 2>/dev/null || true)
-  case " $pk " in *" cpu "*" memory "*" pids "*) echo "controllers delegated to $RUN_USER: $pk" ;; *) echo "WARNING: cpu, memory and pids are not all delegated to $RUN_USER ($pk): the runner will not offer project runs" >&2 ;; esac
+  if [ "$(for c in cpu memory pids; do case " $pk " in *" $c "*) echo y ;; esac; done | wc -l)" -ge 3 ]; then echo "controllers delegated to $RUN_USER: $pk"
+  else echo "WARNING: cpu, memory and pids are not all delegated to $RUN_USER ($pk): the runner will not offer project runs" >&2; fi
   run runuser -u "$RUN_USER" -- env -C "$RUN_HOME" "XDG_RUNTIME_DIR=/run/user/$uid" "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" "HOME=$RUN_HOME" \
     podman info --format 'rootless={{.Host.Security.Rootless}} cgroups={{.Host.CgroupManager}}'
 }

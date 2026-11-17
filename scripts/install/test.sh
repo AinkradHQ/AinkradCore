@@ -186,7 +186,7 @@ bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --dry-run >"$t/out-t
 bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --prefix "$t/w0" >/dev/null 2>&1 &&
   [ ! -e "$t/w0/etc/systemd/system/user@.service.d" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --with-run work done without --with-run" >&2; }
 bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --with-run --dry-run >"$t/out-run" 2>&1 &&
-  grep -q 'apt-get install -y -q --no-install-recommends podman uidmap passt nftables' "$t/out-run" &&
+  grep -q 'apt-get install -y -q --no-install-recommends podman uidmap passt aardvark-dns nftables' "$t/out-run" &&
   grep -q 'useradd --system --user-group --create-home --home-dir /var/lib/ainkrad-run --shell /usr/sbin/nologin ainkrad-run' "$t/out-run" &&
   grep -qE 'usermod --add-subuids [0-9]+-[0-9]+ --add-subgids [0-9]+-[0-9]+ ainkrad-run' "$t/out-run" &&
   grep -q 'loginctl enable-linger ainkrad-run' "$t/out-run" && grep -q 'user@.service.d/delegate.conf' "$t/out-run" &&
