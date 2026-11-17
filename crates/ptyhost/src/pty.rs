@@ -121,6 +121,26 @@ pub fn environment(
     env
 }
 
+/// The pipe capacity asked for (Linux) before the key is written.
+const PIPE_WANT: usize = 64 * 1024;
+
+/// A pipe holding `bytes`, its write end closed: the child reads them, then EOF. The write end is
+/// non-blocking, so bytes that do not fit fail (`key handoff did not fit`) instead of hanging the
+/// host. `want` is the capacity asked for first (Linux; best effort).
+fn key_pipe(bytes: &[u8], want: usize) -> io::Result<std::io::PipeReader> {
+    use std::os::fd::AsFd;
+    let (reader, mut writer) = std::io::pipe()?;
+    ainkrad_sys::pipe_setup(writer.as_fd(), want)?;
+    writer.write_all(bytes).map_err(|e| {
+        if e.kind() == io::ErrorKind::WouldBlock {
+            io::Error::other("key handoff did not fit")
+        } else {
+            e
+        }
+    })?;
+    Ok(reader)
+}
+
 /// Starts `spec` on the PTY at `tty` with `secret` (base64) readable from an inherited pipe on
 /// descriptor 3. `portable-pty`'s own spawn closes every descriptor above 2, so it cannot pass one:
 /// the child is started here, the same way (own session, the PTY as controlling terminal, the
@@ -156,9 +176,7 @@ fn spawn_with_fd3(
             .custom_flags(libc::O_NOCTTY)
             .open(&tty)
     };
-    let (reader, mut writer) = std::io::pipe()?;
-    writer.write_all(&bytes)?;
-    drop(writer);
+    let reader = key_pipe(&bytes, PIPE_WANT)?;
     let mut cmd = std::process::Command::new(program);
     cmd.args(&spec.args).env_clear().envs(&spec.env);
     if let Some(dir) = spec.cwd.as_ref().or_else(|| spec.env.get("HOME")) {
@@ -369,5 +387,26 @@ mod tests {
         assert_eq!(env["EDITOR"], "vi");
         let env = environment(&os(&[("LANG", "C.UTF-8")]), &[], &[], &BTreeMap::new());
         assert_eq!(env["LANG"], "C.UTF-8");
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod key_pipe_tests {
+    use super::*;
+
+    #[test]
+    fn a_key_that_does_not_fit_fails_instead_of_blocking() {
+        // 4096 is the smallest pipe Linux grants: 8000 bytes cannot be written without a reader.
+        let e = key_pipe(&[7u8; 8000], 4096).unwrap_err();
+        assert!(e.to_string().contains("did not fit"), "{e}");
+    }
+
+    #[test]
+    fn a_key_that_fits_is_read_back_then_eof() {
+        use std::io::Read;
+        let mut r = key_pipe(&[7u8; FD3_MAX], PIPE_WANT).unwrap();
+        let mut out = Vec::new();
+        r.read_to_end(&mut out).unwrap();
+        assert_eq!(out.len(), FD3_MAX);
     }
 }

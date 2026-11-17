@@ -11,6 +11,10 @@
 //!   used for one `publickey` attempt and wiped (`Zeroizing`, wipe on drop). The same gaps as
 //!   `ssh.exec`: russh and `ssh-key` copy while parsing and signing, and those copies are not ours to
 //!   wipe. This process lives as long as the terminal, but holds no key after authentication.
+//! - **Our own copies are wiped too.** Each key is base64 inside the JSON (no escapes, one flat
+//!   string), serialized straight into a buffer that is never reallocated (`Zeroizing`, capacity
+//!   `FD3_MAX`), and read back the same way from a buffer sized once. This process sets
+//!   `PR_SET_DUMPABLE` 0 (Linux) and closes descriptor 3 after reading it.
 //! - **Nothing is logged.** No tracing subscriber exists here; failures are fixed texts printed on
 //!   the terminal. A password or keyboard-interactive answer is read from the terminal with echo off
 //!   (or on, when the host asks for it), goes to the host and is wiped; it is never in a message.
@@ -26,7 +30,7 @@
 //! what a terminal may reach; an ssh terminal refuses to start under either (see `PtyDriver`).
 
 use std::collections::VecDeque;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::fd::AsFd;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -55,7 +59,8 @@ const ATTEMPTS: usize = 3;
 /// Longest a typed answer may be.
 const MAX_ANSWER: usize = 1024;
 
-/// One machine of the chain, as the runner hands it over: the hop and its key (OpenSSH text).
+/// One machine of the chain, as the runner hands it over: the hop and its key (the OpenSSH text,
+/// in standard base64, so the JSON has nothing to escape).
 #[derive(Serialize, Deserialize)]
 pub(crate) struct PtyHop {
     pub host: String,
@@ -106,16 +111,19 @@ impl SshDriver {
             check_hop(hop)?;
         }
         let redeem = async {
+            use base64::Engine;
             let mut hops = Vec::with_capacity(chain.len());
             for h in &chain {
                 let text = self.key_text(&h.lease).await?;
                 parse_key(&text).map_err(|m| fail(ErrorCode::SshAuthFailed, m))?;
+                let mut key = String::with_capacity(text.len().div_ceil(3) * 4);
+                base64::engine::general_purpose::STANDARD.encode_string(text.as_bytes(), &mut key);
                 hops.push(PtyHop {
                     host: h.host.clone(),
                     port: h.port,
                     user: h.user.clone(),
                     pinned_keys: h.pinned_keys.clone(),
-                    key: text.to_string(),
+                    key,
                 });
             }
             Ok::<_, StreamError>(hops)
@@ -123,24 +131,39 @@ impl SshDriver {
         let hops = tokio::time::timeout(CONNECT_TIMEOUT, redeem)
             .await
             .map_err(|_| fail(ErrorCode::SshFailed, "timed out redeeming the key leases"))??;
-        let blob = Zeroizing::new(
-            serde_json::to_vec(&Params { hops })
-                .map_err(|_| fail(ErrorCode::Internal, "cannot pack the terminal's keys"))?,
-        );
-        if blob.len() > FD3_MAX {
-            return Err(invalid("the chain's keys are too large for one terminal"));
-        }
+        // Never reallocated: the buffer's capacity is the limit, so no unwiped copy is left behind.
+        let mut blob = Zeroizing::new(Vec::with_capacity(FD3_MAX));
+        serde_json::to_writer(Capped(&mut blob), &Params { hops })
+            .map_err(|_| invalid("the chain's keys are too large for one terminal"))?;
         let program = match &self.bin {
             Some(bin) => bin.clone(),
             None => std::env::current_exe()
                 .map_err(|e| fail(ErrorCode::SpawnFailed, format!("no runner binary: {e}")))?,
         };
         use base64::Engine;
+        let mut fd3 = String::with_capacity(blob.len().div_ceil(3) * 4);
+        base64::engine::general_purpose::STANDARD.encode_string(&*blob, &mut fd3);
         Ok(Launch {
             program: program.to_string_lossy().into_owned(),
             args: vec!["ssh-pty".to_owned()],
-            fd3: Hidden(base64::engine::general_purpose::STANDARD.encode(&*blob)),
+            fd3: Hidden(fd3),
         })
+    }
+}
+
+/// A writer into a `Vec` that fails rather than grow it.
+struct Capped<'a>(&'a mut Vec<u8>);
+
+impl Write for Capped<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.0.len() + buf.len() > self.0.capacity() {
+            return Err(std::io::Error::other("too large"));
+        }
+        self.0.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -155,40 +178,71 @@ pub(crate) struct Term<O> {
     pub name: String,
 }
 
-/// Printable text from the host only: no control characters, newlines as CR LF.
-fn clean(text: &str) -> String {
+/// Unicode format characters (category Cf) and line/paragraph separators: invisible, and able to
+/// reorder or hide what the person reads (bidi overrides, zero-width characters).
+fn invisible(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{0600}'..='\u{0605}' | '\u{061C}' | '\u{06DD}' | '\u{070F}' | '\u{0890}'..='\u{0891}'
+        | '\u{08E2}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}'
+        | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}'
+        | '\u{110BD}' | '\u{110CD}' | '\u{13430}'..='\u{1343F}' | '\u{1BCA0}'..='\u{1BCA3}'
+        | '\u{1D173}'..='\u{1D17A}' | '\u{E0001}' | '\u{E0020}'..='\u{E007F}')
+}
+
+/// Printable text from the host only: no control or invisible format characters, newlines as CR LF.
+pub(super) fn clean(text: &str) -> String {
     text.chars()
         .filter_map(|c| match c {
             '\n' => Some("\r\n".to_owned()),
-            c if c.is_control() => None,
+            c if c.is_control() || invisible(c) => None,
             c => Some(c.to_string()),
         })
         .collect()
 }
 
 impl<O: AsyncWrite + Unpin> Term<O> {
-    async fn show(&mut self, text: &str) {
+    pub(super) async fn show(&mut self, text: &str) {
         let _ = self.out.write_all(text.as_bytes()).await;
         let _ = self.out.flush().await;
     }
 
     /// A line typed by the person, with echo on or off. `None`: cancelled (Ctrl-C, Ctrl-D, or the
     /// terminal went away). The answer is wiped when dropped.
-    async fn ask(&mut self, prompt: &str, echo: bool) -> Option<Zeroizing<String>> {
+    pub(super) async fn ask(&mut self, prompt: &str, echo: bool) -> Option<Zeroizing<String>> {
+        // What was typed before the prompt was shown is not an answer to it.
+        while self.input.try_recv().is_ok() {}
         let p = clean(prompt);
         self.show(&p).await;
         let mut line = Zeroizing::new(Vec::<u8>::new());
-        let mut escape = false;
+        let mut escape = Esc::None;
         loop {
             let chunk = self.input.recv().await?;
             for b in chunk {
-                if escape {
-                    // The rest of an arrow or function key: `ESC [ … final`.
-                    escape = !(0x40..=0x7e).contains(&b) || b == b'[';
-                    continue;
+                match escape {
+                    Esc::None => {}
+                    Esc::Start => {
+                        // `ESC [` opens a sequence that runs to its final byte, `ESC O` takes one
+                        // more byte; anything else after ESC is a single dropped byte.
+                        escape = match b {
+                            b'[' => Esc::Csi,
+                            b'O' => Esc::One,
+                            _ => Esc::None,
+                        };
+                        continue;
+                    }
+                    Esc::Csi => {
+                        if (0x40..=0x7e).contains(&b) {
+                            escape = Esc::None;
+                        }
+                        continue;
+                    }
+                    Esc::One => {
+                        escape = Esc::None;
+                        continue;
+                    }
                 }
                 match b {
-                    0x1b => escape = true,
+                    0x1b => escape = Esc::Start,
                     b'\r' | b'\n' => {
                         self.show("\r\n").await;
                         // Bytes typed ahead are dropped with the line, not sent to a shell.
@@ -222,6 +276,18 @@ impl<O: AsyncWrite + Unpin> Term<O> {
     }
 }
 
+/// Where `ask` is inside an escape sequence typed by the person (arrow and function keys).
+#[derive(Clone, Copy)]
+enum Esc {
+    None,
+    /// After `ESC`.
+    Start,
+    /// Inside `ESC [`, until a final byte.
+    Csi,
+    /// After `ESC O`: one byte left.
+    One,
+}
+
 /// `publickey` with the hop's key, then, while the host still offers them, keyboard-interactive and
 /// password, answered by the person typing.
 struct PromptAuth<'a, O> {
@@ -253,7 +319,8 @@ impl<O: AsyncWrite + Unpin + Send> HopAuth for PromptAuth<'_, O> {
             .authenticate_publickey(&hop.user, key)
             .await
             .map_err(|_| ended(index))?;
-        let (mut keyboard, mut password, mut announced) = (ATTEMPTS, ATTEMPTS, false);
+        // One count for both methods: ATTEMPTS answers in all, per hop.
+        let (mut tries, mut announced) = (ATTEMPTS, false);
         loop {
             let AuthResult::Failure {
                 remaining_methods, ..
@@ -262,8 +329,8 @@ impl<O: AsyncWrite + Unpin + Send> HopAuth for PromptAuth<'_, O> {
                 return Ok(());
             };
             let methods = remaining_methods;
-            let want_keyboard = keyboard > 0 && methods.contains(&MethodKind::KeyboardInteractive);
-            let want_password = password > 0 && methods.contains(&MethodKind::Password);
+            let want_keyboard = tries > 0 && methods.contains(&MethodKind::KeyboardInteractive);
+            let want_password = tries > 0 && methods.contains(&MethodKind::Password);
             if !(want_keyboard || want_password) {
                 return Err(denied(index, "the host refused the key"));
             }
@@ -273,10 +340,10 @@ impl<O: AsyncWrite + Unpin + Send> HopAuth for PromptAuth<'_, O> {
                 self.term.show(&format!("{who}\r\n")).await;
             }
             res = if want_keyboard {
-                keyboard -= 1;
+                tries -= 1;
                 self.keyboard(handle, hop, index).await?
             } else {
-                password -= 1;
+                tries -= 1;
                 let answer = (self.term.ask("Password: ", false).await)
                     .ok_or_else(|| denied(index, "cancelled"))?;
                 handle
@@ -341,6 +408,25 @@ impl<O: AsyncWrite + Unpin + Send> PromptAuth<'_, O> {
     }
 }
 
+/// A key as the runner packed it (base64) back to its text; every intermediate is wiped. A key that
+/// is not valid comes out empty, which `parse_key` refuses.
+fn unpack(packed: String) -> Zeroizing<String> {
+    use base64::Engine;
+    let packed = Zeroizing::new(packed);
+    let mut raw = Zeroizing::new(
+        base64::engine::general_purpose::STANDARD
+            .decode(packed.as_bytes())
+            .unwrap_or_default(),
+    );
+    Zeroizing::new(
+        String::from_utf8(std::mem::take(&mut *raw)).unwrap_or_else(|e| {
+            let mut bytes = e.into_bytes();
+            bytes.zeroize();
+            String::new()
+        }),
+    )
+}
+
 /// The exit code and the line a failure prints.
 fn exit_for(e: &StreamError) -> (i32, String) {
     let (code, what) = match e.code {
@@ -375,7 +461,7 @@ pub(crate) async fn run<O: AsyncWrite + Unpin + Send>(
         })
         .collect();
     let keys: VecDeque<Zeroizing<String>> = (params.hops.iter_mut())
-        .map(|h| Zeroizing::new(std::mem::take(&mut h.key)))
+        .map(|h| unpack(std::mem::take(&mut h.key)))
         .collect();
     drop(params);
     if hops.is_empty() || hops.len() > MAX_SSH_HOPS + 1 {
@@ -401,7 +487,12 @@ pub(crate) async fn run<O: AsyncWrite + Unpin + Send>(
         }
     };
     let (rows, cols) = term.size;
-    let mut ch = match conn.handle.channel_open_session().await {
+    // A stop (the terminal closing) ends the setup steps too, not only the dial and the session.
+    let opened = tokio::select! {
+        o = conn.handle.channel_open_session() => o,
+        Some(code) = stop.recv() => return code,
+    };
+    let mut ch = match opened {
         Ok(ch) => ch,
         Err(_) => {
             term.show("\r\ncannot open a channel\r\n").await;
@@ -421,7 +512,14 @@ pub(crate) async fn run<O: AsyncWrite + Unpin + Send>(
         .await?;
         ch.request_shell(true).await
     };
-    if started.await.is_err() {
+    let started = tokio::select! {
+        r = started => r,
+        Some(code) = stop.recv() => {
+            let _ = ch.close().await;
+            return code;
+        }
+    };
+    if started.is_err() {
         term.show("\r\ncannot start a shell\r\n").await;
         return SSH_PTY_EXIT_FAILED;
     }
@@ -476,14 +574,17 @@ pub(crate) async fn run<O: AsyncWrite + Unpin + Send>(
 }
 
 /// Descriptor 3 as the terminal host left it: the parameters, read to the end, at most
-/// `FD3_MAX` bytes. The pipe is opened by path, so no `unsafe` is needed to adopt it.
+/// `FD3_MAX` bytes, into a buffer sized once (so no unwiped copy). The descriptor is closed when
+/// this returns.
 fn read_params() -> Result<Params, &'static str> {
-    let mut f = std::fs::File::open("/dev/fd/3").map_err(|_| "no key handoff on descriptor 3")?;
-    let mut bytes = Zeroizing::new(Vec::new());
-    f.by_ref()
+    let fd = ainkrad_sys::adopt_fd(3).map_err(|_| "no key handoff on descriptor 3")?;
+    let mut f = std::fs::File::from(fd);
+    let mut bytes = Zeroizing::new(Vec::with_capacity(FD3_MAX + 1));
+    Read::by_ref(&mut f)
         .take(FD3_MAX as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "cannot read the key handoff")?;
+    drop(f);
     if bytes.len() > FD3_MAX {
         return Err("the key handoff is too large");
     }
@@ -493,6 +594,8 @@ fn read_params() -> Result<Params, &'static str> {
 /// `ainkrad-runner ssh-pty`: stdin and stdout are the terminal (a PTY), descriptor 3 the handoff.
 pub async fn pty_main() -> ExitCode {
     use tokio::signal::unix::{SignalKind, signal};
+    // Before the keys arrive: nobody else of this user may read them from our memory.
+    ainkrad_sys::no_dump();
     let params = match read_params() {
         Ok(p) => p,
         Err(why) => {
@@ -500,7 +603,8 @@ pub async fn pty_main() -> ExitCode {
             return ExitCode::from(255);
         }
     };
-    let Ok(raw) = ainkrad_sys::raw_mode(std::io::stdin().as_fd()) else {
+    let stdin_fd = std::io::stdin();
+    let Ok(raw) = ainkrad_sys::raw_mode(stdin_fd.as_fd()) else {
         eprintln!("ssh-pty: stdin is not a terminal; it is started by the runner, not by hand");
         return ExitCode::from(255);
     };

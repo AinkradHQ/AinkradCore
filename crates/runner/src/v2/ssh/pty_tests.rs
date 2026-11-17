@@ -322,13 +322,20 @@ impl Rig {
     }
 }
 
+/// A key as the runner packs it: its OpenSSH text in base64.
+fn pack(key: &PrivateKey) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .encode(key.to_openssh(LineEnding::LF).unwrap().as_bytes())
+}
+
 fn hop(h: &SshHop, key: &PrivateKey) -> PtyHop {
     PtyHop {
         host: h.host.clone(),
         port: h.port,
         user: h.user.clone(),
         pinned_keys: h.pinned_keys.clone(),
-        key: key.to_openssh(LineEnding::LF).unwrap().to_string(),
+        key: pack(key),
     }
 }
 
@@ -471,7 +478,10 @@ fn the_handoff_never_prints_a_key() {
         },
         &key,
     );
-    let body = p.hops[0].key.lines().nth(1).unwrap().to_owned();
+    let pem = key.to_openssh(LineEnding::LF).unwrap();
+    let body = pem.lines().nth(1).unwrap().to_owned();
+    assert!(!p.hops[0].key.contains(&body), "base64: nothing to escape");
+    let body = p.hops[0].key.clone();
     assert!(!format!("{p:?}").contains(&body));
     assert!(
         serde_json::to_string(&p).unwrap().contains(&body),
@@ -501,10 +511,9 @@ async fn the_launch_carries_every_hops_key_whatever_the_leases_delivery_and_refu
     let got: Params = serde_json::from_slice(&blob).unwrap();
     let users: Vec<&str> = got.hops.iter().map(|h| h.user.as_str()).collect();
     assert_eq!(users, ["jump", "me"], "first jump to target");
-    let pem = |k: &PrivateKey| k.to_openssh(LineEnding::LF).unwrap().to_string();
     assert_eq!(
         (got.hops[0].key.clone(), got.hops[1].key.clone()),
-        (pem(&ka), pem(&kb))
+        (pack(&ka), pack(&kb))
     );
     assert_eq!(got.hops[1].pinned_keys, b.pin());
     // An unredeemable lease, an unreadable key and four jumps are refused before any terminal.
@@ -557,4 +566,85 @@ fn a_host_is_what_leylines_address_rule_allows() {
     ] {
         assert!(!host_ok(bad), "{bad:?}");
     }
+}
+
+/// Host text may not hide or reorder what the person reads: control and Unicode format characters
+/// (bidi overrides, zero-width) go, ordinary text stays.
+#[test]
+fn host_text_loses_control_and_format_characters() {
+    use super::pty::clean;
+    assert_eq!(
+        clean("pa\u{202E}ss\u{200B}wo\u{FEFF}rd\x1b[31m"),
+        "password[31m"
+    );
+    assert_eq!(clean("a\nb"), "a\r\nb");
+    assert_eq!(clean("Passwort für 日本 é"), "Passwort für 日本 é");
+}
+
+fn bare_term(
+    out: tokio::io::DuplexStream,
+) -> (
+    Term<tokio::io::DuplexStream>,
+    mpsc::UnboundedSender<Vec<u8>>,
+) {
+    let (typed, input) = mpsc::unbounded_channel();
+    let (_resize_tx, resize) = mpsc::unbounded_channel();
+    let term = Term {
+        input,
+        out,
+        size: (24, 80),
+        resize,
+        name: "xterm".to_owned(),
+    };
+    (term, typed)
+}
+
+/// Arrow and function keys typed at a prompt are dropped whole: `ESC [ ... final`, `ESC O x`, and a
+/// lone `ESC x` loses just `x`; the letters around them are the answer.
+#[tokio::test]
+async fn escape_sequences_typed_at_a_prompt_are_dropped_whole() {
+    let (out, _keep) = tokio::io::duplex(4096);
+    let (mut term, typed) = bare_term(out);
+    let ask = tokio::spawn(async move { term.ask("P: ", true).await });
+    // `ask` drains what is queued when the prompt is shown: type after it is.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    for chunk in [&b"ab\x1b[1;5Dc\x1bOAd\x1bxe"[..], b"\x1b", b"[Af\r"] {
+        typed.send(chunk.to_vec()).unwrap();
+    }
+    assert_eq!(ask.await.unwrap().unwrap().as_str(), "abcdef");
+}
+
+/// What was typed before the prompt appeared is not an answer to it.
+#[tokio::test]
+async fn input_queued_before_a_prompt_is_drained() {
+    use tokio::io::AsyncReadExt;
+    let (out, mut shown) = tokio::io::duplex(4096);
+    let (mut term, typed) = bare_term(out);
+    typed.send(b"queued-junk\r".to_vec()).unwrap();
+    let ask = tokio::spawn(async move { term.ask("P: ", false).await });
+    let mut buf = [0u8; 3];
+    shown.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"P: ");
+    typed.send(b"real\r".to_vec()).unwrap();
+    assert_eq!(ask.await.unwrap().unwrap().as_str(), "real");
+}
+
+/// A host offering both methods gets three answers in all per hop, not three of each.
+#[tokio::test]
+async fn password_and_keyboard_interactive_share_three_tries() {
+    let s = shell(false, true, true).await;
+    let rig = Rig::start(params(&s.hop("me", "-"), &new_key()));
+    let typed = rig.typed.clone();
+    let typist = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            if typed.send(b"wrong\r".to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    assert_eq!(rig.code().await, SSH_PTY_EXIT_AUTH_FAILED);
+    typist.abort();
+    let tries = s.log.passwords.lock().unwrap().len() + s.log.codes.lock().unwrap().len();
+    assert!((1..=3).contains(&tries), "{tries} answers sent");
 }

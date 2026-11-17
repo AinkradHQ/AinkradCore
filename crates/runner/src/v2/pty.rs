@@ -327,6 +327,48 @@ impl PtyDriver {
         }
     }
 
+    /// What an ssh terminal request may and may not carry. Sync and cheap.
+    fn ssh_shape(&self, req: &PtyOpen) -> Result<(), StreamError> {
+        let invalid = |m: &str| err(ErrorCode::InvalidArgs, m);
+        if req.program.is_some()
+            || !req.args.is_empty()
+            || req.cwd.is_some()
+            || req.session.is_some()
+            || !req.env.is_empty()
+            || !req.env_pass.is_empty()
+        {
+            return Err(invalid(
+                "an ssh terminal takes no program, folder, session or env",
+            ));
+        }
+        // The key handoff is an inherited descriptor, which `sudo` closes; and a locked network
+        // cannot reach the host. Refused here, not left to fail inside the terminal.
+        if self.config.user.is_some() {
+            return Err(invalid("an ssh terminal cannot run under --terminal-user"));
+        }
+        if self.config.net != super::termbox::Net::Host {
+            return Err(invalid("an ssh terminal needs --terminal-network=host"));
+        }
+        if !req.size.valid() {
+            return Err(invalid("size must be 1 to 1000 rows and columns"));
+        }
+        Ok(())
+    }
+
+    /// Everything about an ssh terminal request that can be refused without its keys: enabled, the
+    /// shape, and (best effort: `open_with` checks again) room for another terminal. Called before
+    /// any key lease is redeemed, so a refused request redeems nothing.
+    pub async fn check_ssh(&self, req: &PtyOpen) -> Result<(), StreamError> {
+        self.enabled()?;
+        self.ssh_shape(req)?;
+        let live = scan(&self.config.dir).await.len();
+        if live >= self.config.capacity as usize {
+            let cap = self.config.capacity;
+            return Err(err(ErrorCode::Busy, format!("pty is at capacity ({cap})")));
+        }
+        Ok(())
+    }
+
     /// Starts a host for `req`; its terminal id.
     pub async fn open(&self, req: &PtyOpen) -> Result<String, StreamError> {
         self.open_with(req, None).await
@@ -342,25 +384,7 @@ impl PtyDriver {
         self.enabled()?;
         let invalid = |m: &str| err(ErrorCode::InvalidArgs, m);
         if ssh.is_some() {
-            if req.program.is_some()
-                || !req.args.is_empty()
-                || req.cwd.is_some()
-                || req.session.is_some()
-                || !req.env.is_empty()
-                || !req.env_pass.is_empty()
-            {
-                return Err(invalid(
-                    "an ssh terminal takes no program, folder, session or env",
-                ));
-            }
-            // The key handoff is an inherited descriptor, which `sudo` closes; and a locked network
-            // cannot reach the host. Refused here, not left to fail inside the terminal.
-            if self.config.user.is_some() {
-                return Err(invalid("an ssh terminal cannot run under --terminal-user"));
-            }
-            if self.config.net != super::termbox::Net::Host {
-                return Err(invalid("an ssh terminal needs --terminal-network=host"));
-            }
+            self.ssh_shape(req)?;
         }
         if !req.size.valid() {
             return Err(invalid("size must be 1 to 1000 rows and columns"));

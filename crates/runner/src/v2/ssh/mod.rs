@@ -34,8 +34,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ainkrad_proto::v2::{
-    DriverInfo, ErrorCode, ExecResult, MAX_SSH_HOPS, OP_EXEC_RUN, OP_SSH_EXEC, SshExec, SshHop,
-    StreamError,
+    DriverInfo, ErrorCode, ExecResult, FEATURE_PTY_SSH, MAX_SSH_HOPS, OP_EXEC_RUN, OP_SSH_EXEC,
+    SshExec, SshHop, StreamError,
 };
 use russh::client::{self, Handle, Handler};
 use russh::keys::{
@@ -220,7 +220,7 @@ impl SshDriver {
             .any(|c| c == OP_EXEC_RUN)
             .then(|| DriverInfo {
                 name: DRIVER.to_owned(),
-                commands: vec![OP_SSH_EXEC.to_owned()],
+                commands: vec![OP_SSH_EXEC.to_owned(), FEATURE_PTY_SSH.to_owned()],
                 capacity: e.capacity,
                 ..DriverInfo::default()
             })

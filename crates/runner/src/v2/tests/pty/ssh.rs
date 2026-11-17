@@ -3,6 +3,8 @@
 //! which the Core's lease delivers as a `file` secret, is nowhere a process, a file or the terminal
 //! could show it.
 
+use std::sync::atomic::Ordering::SeqCst;
+
 use ainkrad_proto::v2::{SshTerminal, TerminalInfo};
 use russh::keys::ssh_key::LineEnding;
 
@@ -224,6 +226,19 @@ async fn an_ssh_terminal_is_refused_without_the_ssh_driver_or_with_a_program() {
     o.program = Some("/bin/sh".to_owned());
     core.send(1, Body::Command(Command::PtyOpen(o))).await;
     assert_eq!(error(core.answer(1).await), ErrorCode::InvalidArgs);
+    assert_eq!(leases.redeemed.load(SeqCst), 0, "after the program refusal");
+    // An env is refused too; neither refusal redeemed a key lease (they are checked first).
+    let Body::Command(Command::PtyOpen(mut o)) = open_ssh(s.hop("me", "l_1")) else {
+        unreachable!()
+    };
+    o.env.insert("A".to_owned(), "b".to_owned());
+    core.send(3, Body::Command(Command::PtyOpen(o))).await;
+    assert_eq!(error(core.answer(3).await), ErrorCode::InvalidArgs);
+    assert_eq!(
+        leases.redeemed.load(SeqCst),
+        0,
+        "a refused request redeems no lease (env)"
+    );
 }
 
 /// The production default: the terminal sandbox is on, and the key handoff (an inherited descriptor)
@@ -247,4 +262,14 @@ async fn an_ssh_terminal_works_under_the_terminal_sandbox() {
     assert!(out.contains("ready"), "{out:?}");
     core.send(1, input("hello\r")).await;
     until(&mut core, 1, &mut out, |o, _| o.contains("got:hello")).await;
+    // It really ran inside bubblewrap (the launcher's command line names it and `ssh-pty`).
+    #[cfg(target_os = "linux")]
+    assert!(
+        process_text(&dir).iter().any(|(l, _)| l.contains("bwrap")),
+        "the sandbox launcher ran: {:?}",
+        process_text(&dir)
+            .iter()
+            .map(|p| p.0.clone())
+            .collect::<Vec<_>>()
+    );
 }

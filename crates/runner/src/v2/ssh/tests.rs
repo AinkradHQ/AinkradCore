@@ -171,7 +171,7 @@ async fn capacity_is_the_exec_drivers() {
     let d = SshDriver::new(Arc::new(driver(1)), leases.redeem());
     let _held = d.slot().unwrap();
     assert_eq!(d.slot().unwrap_err().code, ErrorCode::Busy);
-    assert_eq!(d.info().unwrap().commands, [OP_SSH_EXEC]);
+    assert_eq!(d.info().unwrap().commands, [OP_SSH_EXEC, FEATURE_PTY_SSH]);
 }
 
 #[tokio::test]

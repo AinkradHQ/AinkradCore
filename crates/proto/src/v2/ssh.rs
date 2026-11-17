@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 use super::ExecLimits;
 
 pub const OP_SSH_EXEC: &str = "ssh.exec";
+/// Listed in the ssh driver's `commands` by a runner that opens interactive SSH terminals
+/// (`PtyOpen.ssh`). Not an op: a runner without it would open a LOCAL shell for such a request, so
+/// the Core must refuse to send one to a runner that does not list it.
+pub const FEATURE_PTY_SSH: &str = "pty.ssh";
 
 /// The most jump hosts in front of the target (plan T4); a longer chain is `invalid_args`.
 pub const MAX_SSH_HOPS: usize = 3;
