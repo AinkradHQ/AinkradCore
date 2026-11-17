@@ -163,6 +163,7 @@ src/main/kotlin/ainkrad/client/models/Pool.kt
 src/main/kotlin/ainkrad/client/models/PriceBookEntry.kt
 src/main/kotlin/ainkrad/client/models/ProjectInfo.kt
 src/main/kotlin/ainkrad/client/models/ProjectRepo.kt
+src/main/kotlin/ainkrad/client/models/ProjectRoom.kt
 src/main/kotlin/ainkrad/client/models/Provider.kt
 src/main/kotlin/ainkrad/client/models/ProviderAccount.kt
 src/main/kotlin/ainkrad/client/models/PushKinds.kt

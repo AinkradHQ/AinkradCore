@@ -6018,6 +6018,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/repos`.
             public var repos: [Components.Schemas.ProjectRepo]
+            /// The linked Brain room; null when the Brain is off or the project has none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectInfo/room`.
+            public var room: Components.Schemas.ProjectRoom?
             /// A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name.
             ///
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/slug`.
@@ -6044,6 +6048,7 @@ extension Components {
             ///   - memLimitMb:
             ///   - name:
             ///   - repos: The primary repo first, then by name.
+            ///   - room: The linked Brain room; null when the Brain is off or the project has none.
             ///   - slug: A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name.
             ///   - source: `manual` or `github`.
             ///   - state: `active` or `archived`.
@@ -6058,6 +6063,7 @@ extension Components {
                 memLimitMb: Swift.Int64,
                 name: Swift.String,
                 repos: [Components.Schemas.ProjectRepo],
+                room: Components.Schemas.ProjectRoom? = nil,
                 slug: Swift.String,
                 source: Swift.String,
                 state: Swift.String,
@@ -6072,6 +6078,7 @@ extension Components {
                 self.memLimitMb = memLimitMb
                 self.name = name
                 self.repos = repos
+                self.room = room
                 self.slug = slug
                 self.source = source
                 self.state = state
@@ -6087,6 +6094,7 @@ extension Components {
                 case memLimitMb = "mem_limit_mb"
                 case name
                 case repos
+                case room
                 case slug
                 case source
                 case state
@@ -6144,6 +6152,31 @@ extension Components {
                 case mirror
                 case name
                 case remoteUrl = "remote_url"
+            }
+        }
+        /// The Brain room linked to a project (strictly 1:1).
+        ///
+        /// - Remark: Generated from `#/components/schemas/ProjectRoom`.
+        public struct ProjectRoom: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ProjectRoom/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ProjectRoom/room_id`.
+            public var roomId: Swift.String
+            /// Creates a new `ProjectRoom`.
+            ///
+            /// - Parameters:
+            ///   - name:
+            ///   - roomId:
+            public init(
+                name: Swift.String,
+                roomId: Swift.String
+            ) {
+                self.name = name
+                self.roomId = roomId
+            }
+            public enum CodingKeys: String, CodingKey {
+                case name
+                case roomId = "room_id"
             }
         }
         /// A provider definition: a built-in, or user data validated before it is stored.

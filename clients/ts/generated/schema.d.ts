@@ -3819,6 +3819,8 @@ export interface components {
             name: string;
             /** @description The primary repo first, then by name. */
             repos: components["schemas"]["ProjectRepo"][];
+            /** @description The linked Brain room; null when the Brain is off or the project has none. */
+            room?: components["schemas"]["ProjectRoom"];
             /** @description A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name. */
             slug: string;
             /** @description `manual` or `github`. */
@@ -3838,6 +3840,11 @@ export interface components {
             name: string;
             /** @description The source of truth; never carries a credential. */
             remote_url: string;
+        };
+        /** @description The Brain room linked to a project (strictly 1:1). */
+        ProjectRoom: {
+            name: string;
+            room_id: string;
         };
         /** @description A provider definition: a built-in, or user data validated before it is stored. */
         Provider: {
