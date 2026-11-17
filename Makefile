@@ -71,10 +71,6 @@ test-brain-linux: ; $(call DOCKER_RUN,arm64) --platform linux/arm64 $(RUST_IMAGE
 LEYLINE = --manifest-path modules/leyline/Cargo.toml --workspace
 build-leyline: ; $(CARGO) build $(LEYLINE)
 test-leyline: ; $(CARGO) test $(LEYLINE)
-# The Lore module (R1-01): its own workspace; the released Core carries it through modules/brain/bin.
-LORE = --manifest-path modules/lore/Cargo.toml --workspace
-build-lore: ; $(CARGO) build $(LORE)
-test-lore: ; $(CARGO) test $(LORE)
 # The Design module (V1-02): its own workspace, pure Rust (no Skia, no Docker). The validator fuzz target is nightly
 # only, like fuzz/ (`make fuzz-design FUZZ_SECS=60`); seeds are committed, the corpus is not.
 DESIGN = --manifest-path modules/design/Cargo.toml --workspace
