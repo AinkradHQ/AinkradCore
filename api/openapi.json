@@ -3261,6 +3261,29 @@
         ],
         "type": "object"
       },
+      "MirrorState": {
+        "description": "The Core's copy of a repo.",
+        "properties": {
+          "error": {
+            "description": "Why the last fetch failed; the older head is kept.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fetched_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "head": {
+            "description": "The commit the last fetch ended at.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ModelPrice": {
         "properties": {
           "id": {
@@ -3699,6 +3722,58 @@
         "required": [
           "name",
           "provider"
+        ],
+        "type": "object"
+      },
+      "NewProject": {
+        "properties": {
+          "description": {
+            "description": "Default empty.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "One line, 1-100 characters.",
+            "type": "string"
+          },
+          "slug": {
+            "description": "See `ProjectInfo.slug`; it is the project's public host name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "name"
+        ],
+        "type": "object"
+      },
+      "NewProjectRepo": {
+        "properties": {
+          "default_branch": {
+            "type": "string"
+          },
+          "name": {
+            "description": "The folder name: 1-100 of `[A-Za-z0-9._-]`, not starting with `.` or `-`.",
+            "type": "string"
+          },
+          "primary": {
+            "description": "Make it the primary repo (the first repo always is).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "remote_url": {
+            "description": "An `https://`, `ssh://` or scp-style remote with no credential in it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "remote_url",
+          "default_branch"
         ],
         "type": "object"
       },
@@ -4284,6 +4359,111 @@
           "cache_per_mtok_micro",
           "priced_at",
           "created_at"
+        ],
+        "type": "object"
+      },
+      "ProjectInfo": {
+        "properties": {
+          "cpu_limit": {
+            "format": "double",
+            "type": "number"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "description": {
+            "type": "string"
+          },
+          "expose": {
+            "description": "Whether the running project gets a public link.",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "idle_minutes": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "mem_limit_mb": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "repos": {
+            "description": "The primary repo first, then by name.",
+            "items": {
+              "$ref": "#/components/schemas/ProjectRepo"
+            },
+            "type": "array"
+          },
+          "slug": {
+            "description": "A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name.",
+            "type": "string"
+          },
+          "source": {
+            "description": "`manual` or `github`.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`active` or `archived`.",
+            "type": "string"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "name",
+          "description",
+          "state",
+          "source",
+          "expose",
+          "idle_minutes",
+          "cpu_limit",
+          "mem_limit_mb",
+          "repos",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ProjectRepo": {
+        "properties": {
+          "default_branch": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "is_primary": {
+            "type": "boolean"
+          },
+          "mirror": {
+            "$ref": "#/components/schemas/MirrorState",
+            "description": "None until the Core has tried to fetch it."
+          },
+          "name": {
+            "description": "The folder name in a multi-repo checkout.",
+            "type": "string"
+          },
+          "remote_url": {
+            "description": "The source of truth; never carries a credential.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "remote_url",
+          "default_branch",
+          "is_primary"
         ],
         "type": "object"
       },
@@ -6079,6 +6259,30 @@
         },
         "type": "object"
       },
+      "UpdateProject": {
+        "description": "What changes; an omitted field is kept.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expose": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "UpdateSecretGroup": {
         "description": "What changes; an omitted field is kept.",
         "properties": {
@@ -6295,7 +6499,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.83.0"
+    "version": "1.85.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -12255,6 +12459,472 @@
         },
         "tags": [
           "costs"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects": {
+      "get": {
+        "operationId": "listProjects",
+        "parameters": [
+          {
+            "description": "Include archived projects; default false.",
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectInfo"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Projects by slug, each with its repos and their mirror state; archived ones only with `archived=true`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "post": {
+        "operationId": "createProject",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewProject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectInfo"
+                }
+              }
+            },
+            "description": "Created as a manual project (audited and emitted as `project.created`). 400 `bad_request` for a bad or reserved slug or a bad name; 409 `conflict` when the slug is taken"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}": {
+      "get": {
+        "operationId": "getProject",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectInfo"
+                }
+              }
+            },
+            "description": "The project with its repos and their mirror state; 404 for no such project"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "patch": {
+        "operationId": "updateProject",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectInfo"
+                }
+              }
+            },
+            "description": "Changed (audited and emitted as `project.updated`). 404 for no such project; 409 `conflict` when it is archived; 400 for a bad name"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/archive": {
+      "post": {
+        "operationId": "archiveProject",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectInfo"
+                }
+              }
+            },
+            "description": "Archived; its repos, mirrors and sessions stay (audited and emitted as `project.archived`). 404 for no such project; 409 `conflict` when it already is"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/repos": {
+      "post": {
+        "operationId": "addProjectRepo",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewProjectRepo"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectInfo"
+                }
+              }
+            },
+            "description": "Added (audited as `project.repo_added`); the project as it now is. 400 for a bad name, remote or branch; 404 for no such project; 409 `conflict` for an archived project or a repeated name or remote"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/repos/{repo}": {
+      "delete": {
+        "operationId": "removeProjectRepo",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The repo's id",
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectInfo"
+                }
+              }
+            },
+            "description": "Removed with its mirror row (audited as `project.repo_removed`); the project as it now is. 404 for no such project or repo; 409 `conflict` for an archived project or the primary while others remain"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/repos/{repo}/primary": {
+      "post": {
+        "operationId": "setProjectRepoPrimary",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The repo's id",
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectInfo"
+                }
+              }
+            },
+            "description": "The repo is the one primary (audited as `project.repo_primary_set`); the project as it now is. 404 for no such project or repo; 409 `conflict` for an archived project"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
         ],
         "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
