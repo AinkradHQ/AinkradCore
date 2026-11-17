@@ -649,14 +649,12 @@ async fn module_off_the_core_has_no_lore_tables_or_routes() {
 }
 
 #[tokio::test]
-async fn the_migration_goes_down_and_up_again() {
+async fn the_migrations_go_down_and_up_again() {
     let fx = fx().await;
-    for stmt in lore_module::MIGRATIONS[0]
-        .down
-        .split(';')
-        .filter(|s| !s.trim().is_empty())
-    {
-        sqlx::query(stmt).execute(&fx.app.pool).await.unwrap();
+    for m in lore_module::MIGRATIONS.iter().rev() {
+        for stmt in m.down.split(';').filter(|s| !s.trim().is_empty()) {
+            sqlx::query(stmt).execute(&fx.app.pool).await.unwrap();
+        }
     }
     let left: i64 =
         sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name LIKE 'lore_%'")
@@ -664,10 +662,9 @@ async fn the_migration_goes_down_and_up_again() {
             .await
             .unwrap();
     assert_eq!(left, 0);
-    sqlx::raw_sql(lore_module::MIGRATIONS[0].up)
-        .execute(&fx.app.pool)
-        .await
-        .unwrap();
+    for m in lore_module::MIGRATIONS {
+        sqlx::raw_sql(m.up).execute(&fx.app.pool).await.unwrap();
+    }
     assert_eq!(count(&fx, "lore_notes").await, 0);
 }
 
