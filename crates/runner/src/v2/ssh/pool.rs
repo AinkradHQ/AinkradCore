@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use ainkrad_proto::v2::{SshExec, SshHop};
+use ainkrad_proto::v2::SshHop;
 use russh::client::Handle;
 use russh::keys::{HashAlg, PrivateKey};
 
@@ -50,9 +50,9 @@ pub(super) struct PoolKey {
 
 pub(super) type Pool = Arc<Mutex<HashMap<PoolKey, Arc<Conn>>>>;
 
-pub(super) fn pool_key(req: &SshExec, keys: &[PrivateKey]) -> PoolKey {
+pub(super) fn pool_key(chain: &[&SshHop], keys: &[PrivateKey]) -> PoolKey {
     PoolKey {
-        chain: (req.hops.iter().chain([&req.target]))
+        chain: (chain.iter())
             .map(|h| (h.user.clone(), h.host.clone(), h.port))
             .collect(),
         keys: keys.iter().map(fingerprint).collect(),
