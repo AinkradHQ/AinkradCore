@@ -5,6 +5,7 @@
 use sqlx::sqlite::SqlitePool;
 
 use super::{Error, Project, Who, add_repo_in, create_in, line, refused, slug_problem};
+use crate::store::connections::{Who as ConnWho, bindings};
 
 pub struct NewGithubRepo {
     /// The folder name.
@@ -39,6 +40,7 @@ pub async fn create_from_github(
     name: &str,
     repos: &[NewGithubRepo],
     who: Who<'_>,
+    bind: Option<(i64, ConnWho<'_>)>,
 ) -> Result<Project, Error> {
     line(name, 100, "a name")?;
     if repos.is_empty() {
@@ -81,6 +83,10 @@ pub async fn create_from_github(
             r.default_branch.as_str(),
         );
         add_repo_in(&mut tx, p.id, r, i == 0, who).await?;
+    }
+    // Same transaction: if the binding is refused (limit, connection gone) no project is left.
+    if let Some((conn, cw)) = bind {
+        bindings::set_in(&mut tx, conn, ("project", &p.id.to_string()), cw).await?;
     }
     tx.commit().await?;
     Ok(p)

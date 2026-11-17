@@ -18,14 +18,12 @@ use super::connections::{sealer, who as conn_who, workspace};
 use super::projects::{ProjectInfo, info, who};
 use super::{ApiError, ApiResult, Caller};
 use crate::api::App;
-use crate::connections::github::repos::{PER_PAGE, RepoSummary};
+use crate::connections::github::repos::RepoSummary;
 use crate::connections::github::{Outcome, build};
 use crate::connections::material::Material;
 use crate::store::connections::{self as conns, bindings, secret};
 use crate::store::projects::{self as store, NewGithubRepo};
 
-/// Pages of 100 read from GitHub per listing: at most this many pages are searchable.
-const MAX_PAGES: u32 = 10;
 const MAX_REPOS: usize = 10;
 
 fn upstream(o: &Outcome) -> ApiError {
@@ -153,22 +151,14 @@ pub async fn list(
     )
     .await?;
     let installation = c.auth_method == "app_install";
-    let mut all: Vec<RepoSummary> = Vec::new();
-    let mut truncated = false;
-    for page in 1..=MAX_PAGES {
-        let got = app
-            .connections
-            .github()
-            .list_repos(&m, installation, page)
-            .await
-            .map_err(|o| upstream(&o))?;
-        let last = got.len() < PER_PAGE;
-        all.extend(got);
-        truncated = !last && page == MAX_PAGES;
-        if last {
-            break;
-        }
-    }
+    let listed = app
+        .connections
+        .github()
+        .all_repos(c.id, &m, installation)
+        .await
+        .map_err(|o| upstream(&o))?;
+    let truncated = listed.1;
+    let mut all: Vec<RepoSummary> = listed.0.clone();
     let needle = q.q.as_deref().unwrap_or("").trim().to_lowercase();
     all.retain(|r| {
         format!("{}/{}", r.owner, r.name)
@@ -237,6 +227,10 @@ pub async fn create(
     if !(1..=MAX_REPOS).contains(&b.repos.len()) {
         return Err(ApiError::bad_request(format!("name 1-{MAX_REPOS} repos")));
     }
+    // Cheap check first, before any GitHub call.
+    if let Some(n) = &b.name {
+        store::name_ok(n)?;
+    }
     let user = workspace(&app, &me).await?;
     let now = app.clock.now();
     let (c, m) = pick(&app, conn_who(&me, user, &now), b.connection_id, None).await?;
@@ -267,13 +261,19 @@ pub async fn create(
         });
     }
     let name = b.name.clone().unwrap_or_else(|| repos[0].name.clone());
-    let p = store::create_from_github(&app.pool, b.slug.as_deref(), &name, &repos, who(&me, &now))
-        .await?;
-    bindings::set(
+    // The workspace default needs no per-project binding.
+    let is_default = bindings::list(&app.pool, user, Some("github"))
+        .await?
+        .iter()
+        .any(|x| x.scope_kind == "workspace" && x.connection_id == c.id);
+    let bind = (!is_default).then(|| (c.id, conn_who(&me, user, &now)));
+    let p = store::create_from_github(
         &app.pool,
-        c.id,
-        ("project", &p.id.to_string()),
-        conn_who(&me, user, &now),
+        b.slug.as_deref(),
+        &name,
+        &repos,
+        who(&me, &now),
+        bind,
     )
     .await?;
     Ok(Json(info(&app, p).await?))
