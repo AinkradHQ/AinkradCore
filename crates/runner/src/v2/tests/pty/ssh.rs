@@ -144,6 +144,17 @@ async fn an_ssh_terminal_opens_through_pty_open_resumes_resizes_and_leaks_no_key
     core.send(3, input("more\r")).await;
     until(&mut core, 3, &mut again, |o, _| o.contains("got:more")).await;
 
+    // The key is in no file the host wrote (scanned while the terminal lives: its record goes at exit).
+    let mut all = Vec::new();
+    files(&dir, &mut all);
+    assert!(!all.is_empty(), "the terminal host wrote its record");
+    for f in all {
+        assert!(
+            !String::from_utf8_lossy(&f).contains(&seed),
+            "the key is on disk"
+        );
+    }
+
     // The remote shell's end is the terminal's exit.
     core.send(3, input("exit\r")).await;
     let end = until(&mut core, 3, &mut again, |_, b| {
@@ -155,17 +166,8 @@ async fn an_ssh_terminal_opens_through_pty_open_resumes_resizes_and_leaks_no_key
     };
     assert_eq!(exit.exit_code, Some(5));
 
-    // The key is not in anything the terminal showed, nor in a file the host wrote.
+    // The key is not in anything the terminal showed.
     assert!(!out.contains(&seed) && !again.contains(&seed));
-    let mut all = Vec::new();
-    files(&dir, &mut all);
-    assert!(!all.is_empty(), "the terminal host wrote its record");
-    for f in all {
-        assert!(
-            !String::from_utf8_lossy(&f).contains(&seed),
-            "the key is on disk"
-        );
-    }
 }
 
 #[tokio::test]
