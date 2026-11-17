@@ -345,7 +345,21 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
         None => {
             // A file secret of 1 MiB is a third longer in base64 (decision G1).
             let path = parts.uri.path();
-            let cap = if path.starts_with("/api/v1/secrets") {
+            let declared = super::scopes::module_body_limit(&app.modules, &parts.method, path);
+            // An honest client announces its length: a body past the route's own limit is a plain 413,
+            // not an unverifiable signature (an unsigned oversize body is the 401 every other route gives).
+            if let Some(n) = declared
+                && parts
+                    .headers
+                    .get(axum::http::header::CONTENT_LENGTH)
+                    .and_then(|v| v.to_str().ok()?.parse::<usize>().ok())
+                    .is_some_and(|len| len > n)
+            {
+                return crate::gateway::preauth::too_large();
+            }
+            let cap = if let Some(n) = declared {
+                n
+            } else if path.starts_with("/api/v1/secrets") {
                 SECRET_BODY
             } else if path.starts_with("/api/v1/agent-sessions/") && path.ends_with("/attachments")
             {
