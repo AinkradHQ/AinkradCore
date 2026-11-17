@@ -1,0 +1,35 @@
+{
+  "attachments": [],
+  "headings": [
+    {
+      "level": 1,
+      "line": 1,
+      "text": "Fences"
+    }
+  ],
+  "links": [],
+  "tags": [
+    "real"
+  ],
+  "tasks": [
+    {
+      "done": false,
+      "line": 15,
+      "text": "real task #real"
+    }
+  ],
+  "title": "Fences",
+  "title_norm": "fences",
+  "truncated": false,
+  "wikilinks": [
+    {
+      "alias": null,
+      "context": "Before ```inline [[Hidden]]``` after [[Shown]] and ``double ` tick [[Hidden2]]`` end.",
+      "heading": null,
+      "line": 3,
+      "title": "Shown",
+      "title_norm": "shown"
+    }
+  ],
+  "words": 28
+}
