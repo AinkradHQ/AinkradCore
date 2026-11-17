@@ -858,11 +858,20 @@ async fn each_key_is_leasable_only_to_the_runners_of_the_hosts_that_use_it() {
     assert_eq!(key_runners(&fx, a).await, std::slice::from_ref(&r2.id));
     assert!(lease_and_redeem_as(&fx, c, r1).await.is_ok());
     assert!(lease_and_redeem_as(&fx, c, &r2).await.is_ok());
+    // A group list someone adds is put back to empty by the next sync: only the key's own list
+    // may widen who is leased the key.
+    sqlx::query("UPDATE core_secret_groups SET runners = ? WHERE name = 'leyline-keys'")
+        .bind(json!([r1.id]).to_string())
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    host_with(&fx, "again", b, Some(&r1.id)).await;
+    assert_eq!(key_runners(&fx, b).await, std::slice::from_ref(&r1.id)); // asserts the group is []
     // The jumping host goes: C is back to its own host's runner. The audit rows say so.
     call(&fx, Method::DELETE, &format!("/hosts/{behind}"), None).await;
     assert_eq!(key_runners(&fx, c).await, std::slice::from_ref(&r1.id));
     let n: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM audit_events WHERE action = 'leyline.key.runners'",
+        "SELECT count(*) FROM audit_events WHERE action = 'secret.runners_changed'",
     )
     .fetch_one(&fx.app.pool)
     .await

@@ -112,6 +112,7 @@ mod scoped;
 mod scopes;
 mod secret_kinds;
 mod secrets;
+mod secrets_runners;
 mod sessions;
 mod settings;
 mod signed;

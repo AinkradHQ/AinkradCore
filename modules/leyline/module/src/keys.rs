@@ -238,7 +238,7 @@ async fn store(
         .await?;
     let out = view(&row)?;
     tx.commit().await?;
-    sync_runners(app).await?;
+    // A new key has no host yet, so its (empty) runner list needs no sync.
     Ok(Json(out))
 }
 
@@ -354,9 +354,10 @@ pub(crate) async fn remove(
 /// leaves the lists that match the latest hosts.
 static SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// The `leyline-keys` group exists, with no runner of its own: a key's own list decides.
-async fn ensure_group(app: &App) -> Result<(), ApiError> {
-    let _one = SYNC.lock().await;
+/// The `leyline-keys` group exists and has no runner of its own: a key's own list decides, so a
+/// group list would only widen it. Called with `SYNC` held, outside any transaction (the group
+/// store opens its own).
+async fn assert_group(app: &App) -> Result<(), ApiError> {
     let current = {
         let mut conn = app.pool.acquire().await?;
         secret_groups::find(&mut conn, GROUP).await
@@ -385,15 +386,20 @@ async fn ensure_group(app: &App) -> Result<(), ApiError> {
     .map_err(ApiError::from)
 }
 
+async fn ensure_group(app: &App) -> Result<(), ApiError> {
+    let _one = SYNC.lock().await;
+    assert_group(app).await
+}
+
 /// Sets each key's secret to the runners that may be leased it (see the module doc). Idempotent;
-/// hosts call it after every change, in one transaction. A changed list drops the key's
-/// outstanding leases and is audited as `leyline.key.runners`.
-///
-/// ponytail: this writes `core_secrets.runners` (and drops the leases) directly: the broker has no
-/// runners-only update, and `rotate` would need the plaintext inside the Core process. A
-/// `secrets::set_runners_in` in the broker would replace it.
+/// hosts call it after every change, in one transaction, and it re-asserts the group's empty
+/// list each time. The broker does the write (`secrets::set_runners_in`: it drops the key's
+/// outstanding leases and audits `secret.runners_changed`); a change also publishes a
+/// `leyline.key` event.
 pub(crate) async fn sync_runners(app: &App) -> Result<(), ApiError> {
     let _one = SYNC.lock().await;
+    assert_group(app).await?;
+    let now = app.clock.now();
     let mut tx = begin_write(&app.pool).await?;
     let active: HashSet<String> = sqlx::query_scalar(
         "SELECT id FROM core_devices WHERE kind = 'runner' AND status = 'active' AND revoked_at IS NULL",
@@ -431,34 +437,18 @@ pub(crate) async fn sync_runners(app: &App) -> Result<(), ApiError> {
     .fetch_all(&mut *tx)
     .await?;
     for (secret, have) in keys {
-        let wanted: Vec<&String> = want
+        let wanted: Vec<String> = want
             .get(secret.as_str())
-            .map(|s| s.iter().copied().collect())
+            .map(|s| s.iter().map(|r| (*r).clone()).collect())
             .unwrap_or_default();
         let have: Vec<String> = serde_json::from_str(&have).unwrap_or_default();
-        if have.iter().eq(wanted.iter().copied()) {
+        if have.iter().eq(wanted.iter()) {
             continue;
         }
-        sqlx::query("UPDATE core_secrets SET runners = ? WHERE name = ?")
-            .bind(json!(wanted).to_string())
-            .bind(&secret)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query(
-            "DELETE FROM core_secret_leases WHERE secret_id = (SELECT id FROM core_secrets WHERE name = ?)",
-        )
-        .bind(&secret)
-        .execute(&mut *tx)
-        .await?;
-        let id = secret.strip_prefix("leyline.").unwrap_or(&secret);
-        let row = NewAuditEvent {
-            actor: BY,
-            action: "leyline.key.runners".to_owned(),
-            entity: None,
-            details: json!({"key": id, "runners": wanted}).to_string(),
-        };
-        audit::append(&mut tx, &row).await?;
-        events::append(&mut tx, "leyline.key", &json!({"op": "runners", "id": id})).await?;
+        if secrets::set_runners_in(&mut tx, &secret, &wanted, "leyline", BY, &now).await? {
+            let id = secret.strip_prefix("leyline.").unwrap_or(&secret);
+            events::append(&mut tx, "leyline.key", &json!({"op": "runners", "id": id})).await?;
+        }
     }
     tx.commit().await?;
     Ok(())

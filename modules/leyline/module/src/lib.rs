@@ -124,7 +124,6 @@ impl Module for Leyline {
             "leyline.host.deleted",
             "leyline.key.created",
             "leyline.key.deleted",
-            "leyline.key.runners",
         ]
     }
 
