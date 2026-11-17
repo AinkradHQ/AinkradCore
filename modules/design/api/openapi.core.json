@@ -16153,7 +16153,7 @@
         ],
         "responses": {
           "101": {
-            "description": "A WebSocket: the live document of a `design` or `system` doc (binary frames `01` update, `02` snapshot, `03` ack; text frames are presence JSON). Every update is validated before it is stored or relayed; a refused one closes the socket (1008, 1009 too large, 4429 rate). Also 1013 (too slow: resume from the last seq), 4001 (revoked), 4003 (scopes changed), 4409 (archived), 4412 (the update depends on state the Core lacks: reconnect without a cursor and resend)"
+            "description": "A WebSocket: the live document of a `design` or `system` doc (binary frames `01` update, `02` snapshot, `03` ack, a durability receipt that is not a resume cursor: resume from the highest `01`/`02` seq applied; text frames are presence JSON). Every update is validated before it is stored or relayed; a refused one closes the socket (1008, 1009 too large, 4429 rate). Also 1013 (too slow: resume from the last seq), 4001 (revoked), 4003 (scopes changed), 4409 (archived), 4412 (the update depends on state the Core lacks: reconnect without a cursor and resend)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -16171,10 +16171,13 @@
             "description": "The design is archived"
           },
           "429": {
-            "$ref": "#/components/responses/TooManyRequests"
+            "description": "This device already holds the most sockets it may"
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "description": "Too many designs are open and none is idle"
           }
         },
         "tags": [

@@ -4,7 +4,10 @@
 //!   client -> server  `01` + update bytes (yrs v1)
 //!   server -> client  `01` + seq (u64 BE) + update   an update, live or replayed from the cursor
 //!                     `02` + seq (u64 BE) + state    the whole document (no cursor, or it is no longer in the log)
-//!                     `03` + seq (u64 BE)            the client's update is stored (acknowledged after the commit)
+//!                     `03` + seq (u64 BE)            the client's update is stored (acknowledged after the commit).
+//!                                                    A durability receipt, NOT a resume cursor: other peers' updates
+//!                                                    with a lower seq may still be queued for this socket. The cursor is
+//!                                                    the highest seq of an `01`/`02` frame the client has applied.
 //! Text frames are presence, JSON both ways: the client sends `{"cursor":[x,y]?,"selection":[ids]?}`, everyone else
 //! receives it stamped `{"peer":"person:d_...","conn":n,...}` (or `{"conn":n,"gone":true}`).
 //! Resume: the `Last-Update-Seq` header on the upgrade, the last seq the client applied. Without it, or when it is
@@ -29,7 +32,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::sync::{BYTE_RATE, Backlog, Lease, Out, PRESENCE_RATE, Refusal, Registry};
+use crate::sync::{BYTE_RATE, Backlog, Lease, OpenError, Out, PRESENCE_RATE, Refusal, Registry};
 
 const HEARTBEAT: Duration = Duration::from_secs(20);
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -136,8 +139,10 @@ fn refusal_close(r: &Refusal) -> Message {
 #[utoipa::path(get, path = "/docs/{doc}/sync", operation_id = "designSyncDoc", tag = "design",
     params(("doc" = String, Path, description = "Design id"),
         ("Last-Update-Seq" = Option<i64>, Header, description = "The last update seq this client applied; absent or out of the log: a snapshot first")),
-    responses((status = 101, description = "A WebSocket: the live document of a `design` or `system` doc (binary frames `01` update, `02` snapshot, `03` ack; text frames are presence JSON). Every update is validated before it is stored or relayed; a refused one closes the socket (1008, 1009 too large, 4429 rate). Also 1013 (too slow: resume from the last seq), 4001 (revoked), 4003 (scopes changed), 4409 (archived), 4412 (the update depends on state the Core lacks: reconnect without a cursor and resend)"),
+    responses((status = 101, description = "A WebSocket: the live document of a `design` or `system` doc (binary frames `01` update, `02` snapshot, `03` ack, a durability receipt that is not a resume cursor: resume from the highest `01`/`02` seq applied; text frames are presence JSON). Every update is validated before it is stored or relayed; a refused one closes the socket (1008, 1009 too large, 4429 rate). Also 1013 (too slow: resume from the last seq), 4001 (revoked), 4003 (scopes changed), 4409 (archived), 4412 (the update depends on state the Core lacks: reconnect without a cursor and resend)"),
         (status = 404, description = "No such design, or a mockup (no live document)"),
+        (status = 429, description = "This device already holds the most sockets it may"),
+        (status = 503, description = "Too many designs are open and none is idle"),
         (status = 409, description = "The design is archived")))]
 pub(crate) async fn sync(
     State(app): State<App>,
@@ -196,9 +201,25 @@ pub(crate) async fn sync(
                 .into_response();
         }
     }
-    let lease = match reg.open(&app.pool, &doc).await {
+    let lease = match reg.open(&app.pool, &doc, &me.device.id).await {
         Ok(l) => l,
-        Err(e) => return ApiError::from(e).into_response(),
+        Err(OpenError::Device) => {
+            return ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too_many_sockets",
+                "this device has too many open designs",
+            )
+            .into_response();
+        }
+        Err(OpenError::Busy) => {
+            return ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "busy",
+                "too many designs are open, try again",
+            )
+            .into_response();
+        }
+        Err(OpenError::Store(e)) => return ApiError::from(e).into_response(),
     };
     let origin = format!("person:{}", me.device.id);
     let ended = async move {

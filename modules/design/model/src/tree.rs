@@ -86,7 +86,8 @@ pub fn forest(doc: &Doc) -> Forest {
         let Some(prev) = doc.nodes[v.as_str()]
             .prev
             .as_deref()
-            .filter(|p| doc.nodes.contains_key(*p))
+            // only back into a container: a leaf (a hostile `prev`) never gains children
+            .filter(|p| doc.nodes.get(*p).is_some_and(|n| n.ty.is_container()))
         else {
             continue;
         };

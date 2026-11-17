@@ -27,7 +27,7 @@ mod edit;
 pub mod guard;
 mod read;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use design_model::limits::{MAX_CLOCK_JUMP, MAX_NODES, MAX_TOKENS};
@@ -42,6 +42,22 @@ use yrs::{Doc, Map as _, ReadTxn, StateVector, Transact, Update};
 /// The most bytes one update may have (T14).
 pub const MAX_UPDATE_BYTES: usize = 1 << 20;
 const ROOTS: [&str; 3] = ["nodes", "meta", "tokens"];
+/// Stack of the thread that integrates a peer's update: yrs recurses once per nesting level in delete and gc.
+pub const BIG_STACK: usize = 256 << 20;
+
+/// Run `f` on a thread with a big stack and wait for it; a panic is `Malformed`, no thread is `Busy`.
+fn big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Result<T, Refused> {
+    std::thread::scope(|s| {
+        match std::thread::Builder::new()
+            .stack_size(BIG_STACK)
+            .spawn_scoped(s, f)
+        {
+            Ok(h) => h.join().map_err(|_| Refused::Malformed),
+            Err(_) => Err(Refused::Busy),
+        }
+    })
+}
+
 /// What `encode_update_v1` returns for a transaction that changed nothing.
 const EMPTY_UPDATE: [u8; 2] = [0, 0];
 
@@ -59,6 +75,8 @@ pub enum Refused {
     TooManyNodes,
     /// An earlier refusal left this replica unusable: rebuild it.
     Poisoned,
+    /// No thread could be started for the update (nothing was integrated).
+    Busy,
 }
 
 impl std::fmt::Display for Refused {
@@ -71,6 +89,7 @@ impl std::fmt::Display for Refused {
             Self::ClockTooHigh => f.write_str("move clock too far ahead"),
             Self::TooManyNodes => f.write_str("too many nodes"),
             Self::Poisoned => f.write_str("replica must be rebuilt"),
+            Self::Busy => f.write_str("no thread available"),
         }
     }
 }
@@ -81,6 +100,8 @@ impl std::error::Error for Refused {}
 struct Dirty {
     nodes: BTreeSet<String>,
     nodes_map: bool,
+    /// An event deeper than root -> node -> props/text: a nested shared type that must not exist.
+    too_deep: bool,
     meta: bool,
     tokens: bool,
 }
@@ -94,6 +115,8 @@ pub struct Replica {
     /// The highest move clock in the document.
     top_clock: u64,
     poisoned: bool,
+    /// Nesting depth of every shared type created so far (see `guard::Facts::resolve_types`).
+    types: HashMap<guard::ItemId, u8>,
 }
 
 impl Default for Replica {
@@ -104,7 +127,12 @@ impl Default for Replica {
 
 impl Replica {
     pub fn new() -> Self {
-        let doc = Doc::new();
+        // UTF-16 text lengths, like Yjs and every JS client (the default counts UTF-8 bytes, and `read` compares a
+        // text's length with its strings).
+        let doc = Doc::with_options(yrs::Options {
+            offset_kind: yrs::OffsetKind::Utf16,
+            ..yrs::Options::default()
+        });
         let (nodes, meta, tokens) = (
             doc.get_or_insert_map("nodes"),
             doc.get_or_insert_map("meta"),
@@ -115,12 +143,16 @@ impl Replica {
         nodes.observe_deep("dirty", move |txn, events| {
             let mut d = d.lock().unwrap_or_else(|e| e.into_inner());
             for e in events.iter() {
+                let path = e.path();
+                if path.len() > 2 {
+                    d.too_deep = true;
+                }
                 if let yrs::types::Event::Map(m) = e
-                    && e.path().is_empty()
+                    && path.is_empty()
                 {
                     d.nodes_map = true;
                     d.nodes.extend(m.keys(txn).keys().map(|k| k.to_string()));
-                } else if let Some(yrs::types::PathSegment::Key(id)) = e.path().front() {
+                } else if let Some(yrs::types::PathSegment::Key(id)) = path.front() {
                     d.nodes.insert(id.to_string());
                 }
             }
@@ -142,6 +174,7 @@ impl Replica {
             dirty,
             top_clock: 0,
             poisoned: false,
+            types: HashMap::new(),
         }
     }
 
@@ -158,7 +191,9 @@ impl Replica {
 
     /// Integrate bytes from a source this process already trusts (the Core's own broadcast, on a client; the store).
     pub fn apply_trusted(&mut self, update: &[u8]) -> Result<(), Refused> {
-        guard::scan(update)?;
+        let sv = self.doc.transact().state_vector();
+        let known = |c: u64| u64::from(sv.get(&yrs::ClientID::new(c)));
+        let new = guard::scan_facts(update)?.resolve_types(&self.types, &known, false)?;
         // yrs decoders can panic on malformed input; a panic is invalid input, never a crash.
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let u = Update::decode_v1(update).map_err(|_| Refused::Malformed)?;
@@ -167,7 +202,15 @@ impl Replica {
                 .apply_update(u)
                 .map_err(|_| Refused::Malformed)
         }))
-        .unwrap_or(Err(Refused::Malformed))
+        .unwrap_or(Err(Refused::Malformed))?;
+        self.types.extend(new);
+        Ok(())
+    }
+
+    /// True once an update was refused after it was integrated, or the owner could not rebuild: the content must not
+    /// be served to anyone. Rebuild the replica from storage.
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned
     }
 
     // TODO(V1-02/#298): switch this trial-apply to `design_doc::apply_remote` once that crate (the App engine's
@@ -184,28 +227,64 @@ impl Replica {
         }
         // Before yrs sees a byte: bounded structure and nesting, and nothing it depends on missing (see `guard`).
         let facts = guard::scan_facts(update)?;
-        {
-            let sv = self.doc.transact().state_vector();
-            facts.check_known(|c| u64::from(sv.get(&yrs::ClientID::new(c))))?;
-        }
+        let sv = self.doc.transact().state_vector();
+        let known = |c: u64| u64::from(sv.get(&yrs::ClientID::new(c)));
+        facts.check_known(known)?;
+        // Depth of every shared type it creates, before yrs can recurse over a chain of them (delete and gc do).
+        let new = facts.resolve_types(&self.types, &known, true)?;
         *self.dirty.lock().unwrap_or_else(|e| e.into_inner()) = Dirty::default();
         // From here the document may hold unverified content until `verify` passes.
         self.poisoned = true;
-        let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Defence in depth: integrate and verify on a thread with a big stack, so even a structure the guard missed
+        // cannot overflow the Core's stack (yrs recurses over nested types in delete and gc).
+        let outcome = big_stack(|| self.integrate_and_verify(update));
+        let diff = match outcome {
+            Ok(r) => r?,
+            Err(Refused::Busy) => {
+                // the thread never started: nothing was integrated
+                self.poisoned = false;
+                return Err(Refused::Busy);
+            }
+            Err(e) => return Err(e),
+        };
+        self.types.extend(new);
+        self.poisoned = false;
+        Ok((diff != EMPTY_UPDATE).then_some(diff))
+    }
+
+    /// Runs on the big-stack thread: integrate the update, then check what it did to the document.
+    fn integrate_and_verify(&mut self, update: &[u8]) -> Result<Vec<u8>, Refused> {
+        let diff = {
             let u = Update::decode_v1(update).map_err(|_| Refused::Malformed)?;
             let mut txn = self.doc.transact_mut();
             txn.apply_update(u).map_err(|_| Refused::Malformed)?;
-            let pending =
-                txn.store().pending_update().is_some() || txn.store().pending_ds().is_some();
-            Ok((txn.encode_update_v1(), pending))
-        }));
-        let (diff, pending) = applied.unwrap_or(Err(Refused::Malformed))?;
-        if pending {
-            return Err(Refused::Pending);
-        }
+            // `check_known` makes a parked (pending) update unreachable; if it ever happens yrs holds it and the
+            // replica is poisoned for good (a violation, not a resync: the owner rebuilds it).
+            if txn.store().pending_update().is_some() || txn.store().pending_ds().is_some() {
+                return Err(Refused::Malformed);
+            }
+            txn.encode_update_v1()
+        };
         self.verify()?;
-        self.poisoned = false;
-        Ok((diff != EMPTY_UPDATE).then_some(diff))
+        Ok(diff)
+    }
+
+    /// Drop this replica on a big-stack thread (a replica that took a hostile update is dropped, never trusted).
+    pub fn discard(self) {
+        let cell = Mutex::new(Some(self));
+        let ok = std::thread::scope(|s| {
+            std::thread::Builder::new()
+                .stack_size(BIG_STACK)
+                .spawn_scoped(s, || {
+                    drop(cell.lock().unwrap_or_else(|e| e.into_inner()).take())
+                })
+                .map(|h| h.join().is_ok())
+                .unwrap_or(false)
+        });
+        if !ok {
+            // could not drop it safely: leak it rather than risk the stack
+            std::mem::forget(cell.lock().unwrap_or_else(|e| e.into_inner()).take());
+        }
     }
 
     fn verify(&mut self) -> Result<(), Refused> {
@@ -215,6 +294,15 @@ impl Replica {
             return Err(Refused::Invalid("foreign root type".into()));
         }
         let invalid = |m: String| Refused::Invalid(m);
+        if dirty.too_deep {
+            return Err(invalid("shared types nested too deeply".into()));
+        }
+        // A map holds keyed entries only: an item in its list part is invisible to every read, and would be stored.
+        for m in [&self.nodes, &self.meta, &self.tokens] {
+            if read::branch_len(m) != 0 {
+                return Err(invalid("list item in a root map".into()));
+            }
+        }
         let cap = self.top_clock.saturating_add(MAX_CLOCK_JUMP);
         let mut top = self.top_clock;
         for id in &dirty.nodes {
@@ -279,6 +367,7 @@ impl Replica {
     /// Local edits (a client's gestures, the Core's own typed ops): one transaction, returned as update bytes. Local
     /// edits are not validated here; what a client sends is validated by the Core on arrival.
     pub fn edit<R>(&mut self, f: impl FnOnce(&mut Editor<'_, '_>) -> R) -> (R, Vec<u8>) {
+        let sv = self.doc.transact().state_vector();
         let mut txn = self.doc.transact_mut();
         let r = f(&mut Editor::new(
             &mut txn,
@@ -288,6 +377,14 @@ impl Replica {
             &mut self.top_clock,
         ));
         let bytes = txn.encode_update_v1();
+        drop(txn);
+        // keep the type index in step with what this replica created itself
+        let known = |c: u64| u64::from(sv.get(&yrs::ClientID::new(c)));
+        if let Ok(new) =
+            guard::scan_facts(&bytes).and_then(|f| f.resolve_types(&self.types, &known, false))
+        {
+            self.types.extend(new);
+        }
         (r, bytes)
     }
 

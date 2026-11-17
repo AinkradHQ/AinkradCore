@@ -732,3 +732,129 @@ async fn incremental_edits_from_one_device_are_all_accepted() {
     let (_, fresh) = client(&fx).await;
     assert_eq!(fresh.read().unwrap(), a.read().unwrap());
 }
+
+#[tokio::test]
+async fn a_device_may_hold_only_so_many_sockets() {
+    let fx = boot(Limits {
+        max_per_device: 3,
+        ..Limits::default()
+    })
+    .await;
+    let mut held = vec![];
+    for _ in 0..3 {
+        held.push(client(&fx).await);
+    }
+    let err = connect_as(&fx, &fx.dev, DOC, None)
+        .await
+        .expect_err("the fourth is refused");
+    assert!(matches!(err, tokio_tungstenite::tungstenite::Error::Http(r) if r.status() == 429));
+    // a closed socket frees its place
+    drop(held.pop());
+    let mut again = None;
+    for _ in 0..40 {
+        if let Ok(w) = connect_as(&fx, &fx.dev, DOC, None).await {
+            again = Some(w);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(again.is_some(), "a place was freed");
+}
+
+#[tokio::test]
+async fn only_so_many_documents_are_loaded_and_idle_ones_make_room() {
+    let fx = boot(Limits {
+        max_docs: 2,
+        idle: Duration::from_secs(3600),
+        ..Limits::default()
+    })
+    .await;
+    let (b, c) = ("dd_00000000000000ab", "dd_00000000000000ac");
+    new_doc(&fx.app, b, "design", "active").await;
+    new_doc(&fx.app, c, "design", "active").await;
+    let first = connect_as(&fx, &fx.dev, DOC, None).await.unwrap();
+    let _second = connect_as(&fx, &fx.dev, b, None).await.unwrap();
+    let err = connect_as(&fx, &fx.dev, c, None)
+        .await
+        .expect_err("both loaded docs are in use");
+    assert!(matches!(err, tokio_tungstenite::tungstenite::Error::Http(r) if r.status() == 503));
+    // the first doc goes idle (nobody holds it): it is evicted at once for the new one, long before its idle timer
+    drop(first);
+    let mut third = None;
+    for _ in 0..40 {
+        if let Ok(w) = connect_as(&fx, &fx.dev, c, None).await {
+            third = Some(w);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(third.is_some(), "an idle doc made room");
+    assert_eq!(fx.design.loaded().await, 2);
+}
+
+#[tokio::test]
+async fn auto_versions_stay_inside_their_byte_budget() {
+    let fx = boot(Limits {
+        compact_updates: 1,
+        auto_secs: 0,
+        auto_bytes: 3000,
+        ..Limits::default()
+    })
+    .await;
+    let (mut w, mut a) = client(&fx).await;
+    push(&mut w, &first_edit(&mut a)).await;
+    for i in 0..40 {
+        let u = a
+            .edit(|e| {
+                e.set_prop("n_aaaaaaaaaaab", "w", Some(&json!(i)));
+            })
+            .1;
+        push(&mut w, &u).await;
+    }
+    let rows: Vec<(i64,)> =
+        sqlx::query_as("SELECT length(state) FROM design_versions WHERE doc = ? AND kind = 'auto'")
+            .bind(DOC)
+            .fetch_all(&fx.app.pool)
+            .await
+            .unwrap();
+    let total: i64 = rows.iter().map(|r| r.0).sum();
+    assert!(
+        !rows.is_empty() && rows.len() < 41,
+        "{} versions kept",
+        rows.len()
+    );
+    assert!(total <= 3000, "{total} bytes of auto versions");
+}
+
+#[tokio::test]
+async fn a_poisoned_replica_that_cannot_be_rebuilt_is_never_served() {
+    let fx = boot(Limits::default()).await;
+    let (mut wa, mut a) = client(&fx).await;
+    push(&mut wa, &first_edit(&mut a)).await;
+    // storage turns bad: the rebuild after the next refusal cannot succeed
+    sqlx::query("INSERT INTO design_updates (doc, seq, data, origin) VALUES (?, 99, x'ff01', 'x')")
+        .bind(DOC)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let bad = a
+        .edit(|e| {
+            e.insert_node(
+                "n_aaaaaaaaaaac",
+                NodeType::Frame,
+                Some(PAGE),
+                "a",
+                "f",
+                &json!({"script": 1}),
+                None,
+            );
+        })
+        .1;
+    send(&mut wa, &bad).await;
+    assert!(matches!(next(&mut wa).await, F::Closed(1008)));
+    // a newcomer is closed with a server error, never sent a snapshot of the poisoned replica
+    let mut ws = connect_doc(&fx, None).await;
+    assert!(matches!(next(&mut ws).await, F::Closed(1011)));
+    let mut ws = connect_doc(&fx, Some(1)).await;
+    assert!(matches!(next(&mut ws).await, F::Closed(1011)));
+}

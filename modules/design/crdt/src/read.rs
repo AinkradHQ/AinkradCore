@@ -16,8 +16,20 @@ use std::collections::HashMap;
 use design_model::limits::MAX_NAME_CHARS;
 use design_model::{Doc, Meta, Node, NodeType, Token};
 use serde_json::{Map, Number as JsonNumber, Value};
+use yrs::branch::{Branch, BranchPtr};
 use yrs::types::map::MapRef;
-use yrs::{Any, GetString, Map as _, Number, Out, ReadTxn};
+use yrs::{Any, GetString, Map as _, Number, Out, ReadTxn, Text as _};
+
+/// Items in the list part of a branch. A map's list part and a text's map part are never written by an honest peer
+/// and are invisible to every read, so they are refused instead of stored.
+/// Countable content of a branch (a text: its length in UTF-16 units).
+fn branch_len_content(b: &impl AsRef<Branch>) -> u32 {
+    b.as_ref().content_len()
+}
+
+pub(crate) fn branch_len(b: &impl AsRef<Branch>) -> u32 {
+    b.as_ref().len()
+}
 
 /// JSON nesting a prop may have (the model's validators are shallower; this stops a deep value being built at all).
 const MAX_JSON_DEPTH: usize = 16;
@@ -113,6 +125,9 @@ pub(crate) fn node<T: ReadTxn>(txn: &T, nodes: &MapRef, id: &str) -> R<Option<No
     let Out::YMap(m) = out else {
         return Err("node is not a map".into());
     };
+    if branch_len(&m) != 0 {
+        return Err("list item in a node".into());
+    }
     let (mut ty, mut order, mut mv) = (None, None, None);
     let (mut name, mut props, mut text) = (String::new(), Map::new(), None);
     for (k, v) in m.iter(txn) {
@@ -136,6 +151,9 @@ pub(crate) fn node<T: ReadTxn>(txn: &T, nodes: &MapRef, id: &str) -> R<Option<No
                 let Out::YMap(p) = v else {
                     return Err("props is not a map".into());
                 };
+                if branch_len(&p) != 0 {
+                    return Err("list item in props".into());
+                }
                 for (pk, pv) in p.iter(txn) {
                     if pk.len() > 64 {
                         return Err("prop key too long".into());
@@ -147,6 +165,23 @@ pub(crate) fn node<T: ReadTxn>(txn: &T, nodes: &MapRef, id: &str) -> R<Option<No
                 let Out::YText(t) = v else {
                     return Err("text is not a Y.Text".into());
                 };
+                // plain strings only, and no keyed part
+                let keyed = MapRef::from(BranchPtr::from(AsRef::<Branch>::as_ref(&t)));
+                if keyed.len(txn) != 0 {
+                    return Err("keyed entry in a text".into());
+                }
+                // `diff` skips content kinds it does not know (an `Any` item in the list), so the plain strings it
+                // returns must also account for the branch's whole content length
+                let mut units = 0usize;
+                for d in t.diff(txn, |_| ()) {
+                    match (&d.insert, &d.attributes) {
+                        (Out::Any(Any::String(s)), None) => units += s.encode_utf16().count(),
+                        _ => return Err("text holds more than plain strings".into()),
+                    }
+                }
+                if units != branch_len_content(&t) as usize {
+                    return Err("text holds more than plain strings".into());
+                }
                 text = Some(t.get_string(txn));
             }
             _ => return Err("unknown node field".into()),

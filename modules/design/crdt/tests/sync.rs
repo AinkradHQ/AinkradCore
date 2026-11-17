@@ -4,8 +4,10 @@
 use design_crdt::{MAX_UPDATE_BYTES, NodeType, Refused, Replica};
 use design_model::tree::forest;
 use serde_json::{Value, json};
-use yrs::types::map::MapPrelim;
-use yrs::{Any, Map as _, ReadTxn, Transact, WriteTxn};
+use yrs::branch::{Branch, BranchPtr};
+use yrs::types::array::ArrayRef;
+use yrs::types::map::{MapPrelim, MapRef};
+use yrs::{Any, Array as _, Map as _, ReadTxn, Transact, WriteTxn};
 
 const PAGE: &str = "n_pageaaaaaaaa";
 
@@ -607,4 +609,424 @@ fn a_chain_of_small_nested_updates_is_refused_at_the_step_that_nests() {
     // the poisoned replica is not stored anywhere: a rebuild from what was stored equals the state before
     let rebuilt = Replica::from_stored([before.as_slice()]).unwrap();
     assert_eq!(rebuilt.read().unwrap().nodes[&id(1)].props.len(), 0);
+}
+
+fn arr_of(b: &impl AsRef<Branch>) -> ArrayRef {
+    ArrayRef::from(BranchPtr::from(b.as_ref()))
+}
+
+fn map_of(b: &impl AsRef<Branch>) -> MapRef {
+    MapRef::from(BranchPtr::from(b.as_ref()))
+}
+
+fn node_map(t: &mut yrs::TransactionMut, id: &str) -> MapRef {
+    let nodes = t.get_or_insert_map("nodes");
+    match nodes.get(&*t, id) {
+        Some(yrs::Out::YMap(m)) => m,
+        _ => panic!("no node {id}"),
+    }
+}
+
+fn child(t: &yrs::TransactionMut, m: &MapRef, key: &str) -> yrs::Out {
+    m.get(t, key).unwrap_or_else(|| panic!("no {key}"))
+}
+
+#[test]
+fn a_deep_chain_of_nested_maps_in_one_update_is_refused_without_aborting() {
+    // The review's PoC: one update with a 20 000-deep chain of maps that also deletes the chain's root. yrs recurses
+    // once per level in delete and gc, which aborts the process; the guard refuses it before yrs integrates anything.
+    let merged = std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(|| {
+            let a = yrs::Doc::with_client_id(7);
+            let nodes = a.get_or_insert_map("nodes");
+            let mut u = vec![];
+            {
+                let mut t = a.transact_mut();
+                let mut m = nodes.insert(&mut t, "n_x", MapPrelim::default());
+                for _ in 0..20_000 {
+                    m = m.insert(&mut t, "k", MapPrelim::default());
+                }
+                u.push(t.encode_update_v1());
+            }
+            {
+                let mut t = a.transact_mut();
+                nodes.remove(&mut t, "n_x");
+                u.push(t.encode_update_v1());
+            }
+            yrs::merge_updates_v1(&u).unwrap()
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(merged.len() < MAX_UPDATE_BYTES, "{} bytes", merged.len());
+    let h = std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(move || Replica::new().apply_remote(&merged))
+        .unwrap();
+    assert_eq!(
+        h.join().expect("the Core did not abort"),
+        Err(Refused::Malformed)
+    );
+}
+
+#[test]
+fn nesting_deeper_than_node_then_props_is_refused_in_every_shape() {
+    let mut server = server_with_page();
+    let mut c = client_of(&server);
+    let (_, u) = c.edit(|e| {
+        e.insert_node(
+            &id(1),
+            NodeType::Frame,
+            Some(PAGE),
+            "a",
+            "f",
+            &json!({"w": 1}),
+            None,
+        )
+    });
+    server.apply_remote(&u).unwrap();
+    // a map under props (depth 3), a text under props, and a map directly under the nodes root's node's node
+    let under_props = |t: &mut yrs::TransactionMut, text: bool| {
+        let m = node_map(t, &id(1));
+        let yrs::Out::YMap(p) = child(t, &m, "props") else {
+            panic!()
+        };
+        if text {
+            p.insert(t, "deep", yrs::types::text::TextPrelim::new("x"));
+        } else {
+            p.insert(t, "deep", MapPrelim::default());
+        }
+    };
+    for (name, bytes) in [
+        ("map in props", forge(&server, |t| under_props(t, false))),
+        ("text in props", forge(&server, |t| under_props(t, true))),
+        (
+            "map under a node's text key",
+            forge(&server, |t| {
+                let m = node_map(t, &id(1));
+                m.insert(t, "extra", MapPrelim::default());
+            }),
+        ),
+    ] {
+        let mut s = client_of(&server);
+        let r = s.apply_remote(&bytes);
+        // the first two are deeper than allowed (Malformed before integration); the third is a legal depth that
+        // the reader refuses afterwards (an unknown node field)
+        assert!(
+            matches!(r, Err(Refused::Malformed | Refused::Invalid(_))),
+            "{name}: {r:?}"
+        );
+    }
+}
+
+#[test]
+fn the_list_part_of_a_map_and_the_map_part_of_a_text_are_refused() {
+    let mut server = server_with_page();
+    let mut c = client_of(&server);
+    let (_, u) = c.edit(|e| {
+        e.insert_node(
+            &id(1),
+            NodeType::Text,
+            Some(PAGE),
+            "a",
+            "t",
+            &json!({"w": 1}),
+            Some("hi"),
+        )
+    });
+    server.apply_remote(&u).unwrap();
+    let text_of = |t: &mut yrs::TransactionMut| {
+        let m = node_map(t, &id(1));
+        match child(t, &m, "text") {
+            yrs::Out::YText(x) => x,
+            _ => panic!(),
+        }
+    };
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        (
+            "root map",
+            forge(&server, |t| {
+                let n = t.get_or_insert_map("nodes");
+                arr_of(&n).push_back(t, "x");
+            }),
+        ),
+        (
+            "meta root",
+            forge(&server, |t| {
+                let n = t.get_or_insert_map("meta");
+                arr_of(&n).push_back(t, "x");
+            }),
+        ),
+        (
+            "node map",
+            forge(&server, |t| {
+                let m = node_map(t, &id(1));
+                arr_of(&m).push_back(t, "x");
+            }),
+        ),
+        (
+            "props map",
+            forge(&server, |t| {
+                let m = node_map(t, &id(1));
+                let yrs::Out::YMap(p) = child(t, &m, "props") else {
+                    panic!()
+                };
+                arr_of(&p).push_back(t, "x");
+            }),
+        ),
+        (
+            "keyed entry in a text",
+            forge(&server, |t| {
+                let x = text_of(t);
+                map_of(&x).insert(t, "k", 1);
+            }),
+        ),
+        (
+            "non-string content in a text",
+            forge(&server, |t| {
+                let x = text_of(t);
+                arr_of(&x).push_back(t, 5);
+            }),
+        ),
+    ];
+    for (name, bytes) in cases {
+        let mut s = client_of(&server);
+        let r = s.apply_remote(&bytes);
+        assert!(matches!(r, Err(Refused::Invalid(_))), "{name}: {r:?}");
+        assert!(s.is_poisoned(), "{name}");
+        assert_eq!(s.apply_remote(&[0, 0]), Err(Refused::Poisoned), "{name}");
+    }
+}
+
+/// One client's run of one `Any` item (null) under the `nodes` root with the given key.
+fn run(client: u64, clock: u64, key: &str) -> Vec<u8> {
+    let mut u = vec![];
+    var(1, &mut u); // blocks
+    var(client, &mut u);
+    var(clock, &mut u);
+    u.push(8 | 0x20);
+    var(1, &mut u);
+    var(5, &mut u);
+    u.extend_from_slice(b"nodes");
+    var(key.len() as u64, &mut u);
+    u.extend_from_slice(key.as_bytes());
+    var(1, &mut u); // one value
+    u.push(126);
+    u
+}
+
+fn update_of(runs: &[Vec<u8>], deletes: &[(u64, u64, u64)]) -> Vec<u8> {
+    let mut u = vec![];
+    var(runs.len() as u64, &mut u);
+    for r in runs {
+        u.extend_from_slice(r);
+    }
+    var(deletes.len() as u64, &mut u);
+    for &(c, k, n) in deletes {
+        var(c, &mut u);
+        var(1, &mut u);
+        var(k, &mut u);
+        var(n, &mut u);
+    }
+    u
+}
+
+#[test]
+fn a_client_twice_in_one_update_and_clocks_past_u32_are_refused() {
+    use design_crdt::guard::scan;
+    assert!(scan(&update_of(&[run(7, 0, "a")], &[])).is_ok());
+    assert!(scan(&update_of(&[run(7, 0, "a"), run(8, 0, "b")], &[])).is_ok());
+    // the same client twice: the second run would restart the clock and make every dependency check meaningless
+    for runs in [
+        [run(7, 0, "a"), run(7, 5, "b")],
+        [run(7, 3, "a"), run(7, 3, "a")],
+    ] {
+        assert_eq!(scan(&update_of(&runs, &[])), Err(Refused::Malformed));
+        assert_eq!(
+            client_of(&server_with_page()).apply_remote(&update_of(&runs, &[])),
+            Err(Refused::Malformed)
+        );
+    }
+    // a run that would pass u32::MAX, one that starts past it, and a delete range that ends past it
+    let max = u64::from(u32::MAX);
+    for u in [
+        update_of(&[run(7, max, "a")], &[]),
+        update_of(&[run(7, max + 1, "a")], &[]),
+        update_of(&[run(7, max - 1, "a")], &[(7, max - 1, 2)]),
+        update_of(&[run(7, 0, "a")], &[(7, max, 1)]),
+        update_of(&[run(7, 0, "a")], &[(7, 0, max + 1)]),
+    ] {
+        assert_eq!(scan(&u), Err(Refused::Malformed));
+    }
+    // client ids past 53 bits trip a yrs assertion
+    assert_eq!(
+        scan(&update_of(&[run(1 << 53, 0, "a")], &[])),
+        Err(Refused::Malformed)
+    );
+}
+
+#[test]
+fn the_dependency_check_is_linear_in_the_update() {
+    // 40 000 clients, each with a run and a delete: a per-reference scan of every run would be 1.6e9 steps
+    let runs: Vec<Vec<u8>> = (1..=40_000u64).map(|c| run(c, 0, "a")).collect();
+    let dels: Vec<(u64, u64, u64)> = (1..=40_000u64).map(|c| (c, 0, 1)).collect();
+    let bytes = update_of(&runs, &dels);
+    let t = std::time::Instant::now();
+    let f = design_crdt::guard::scan_facts(&bytes).unwrap();
+    f.check_known(|_| 0).unwrap();
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        t.elapsed()
+    );
+}
+
+/// A run of two blocks for `client`: the already-held block at `tip` re-sent MISLABELLED as a map straight under the
+/// `nodes` root, then a new map nested under `tip` by id. yrs drops the held block and nests the new one under the
+/// real item, so the real chain gets one level deeper per update.
+fn resend_mislabel(client: u64, tip: u64, key: &str) -> Vec<u8> {
+    let mut u = vec![];
+    var(1, &mut u); // clients
+    var(2, &mut u); // blocks
+    var(client, &mut u);
+    var(tip, &mut u);
+    // the held block, claimed to be a root-level map
+    u.push(7 | 0x20);
+    var(1, &mut u);
+    var(5, &mut u);
+    u.extend_from_slice(b"nodes");
+    var(1, &mut u);
+    u.push(b'x');
+    u.push(1); // map
+    // the new map under the held block's id
+    u.push(7 | 0x20);
+    var(0, &mut u); // parent by id
+    var(client, &mut u);
+    var(tip, &mut u);
+    var(key.len() as u64, &mut u);
+    u.extend_from_slice(key.as_bytes());
+    u.push(1);
+    var(0, &mut u); // empty delete set
+    u
+}
+
+fn item_id(t: &yrs::TransactionMut, m: &MapRef) -> (u64, u64) {
+    let _ = t;
+    match yrs::types::SharedRef::hook(m).id() {
+        yrs::branch::BranchID::Nested(id) => (id.client.get(), u64::from(id.clock)),
+        other => panic!("not nested: {other:?}"),
+    }
+}
+
+#[test]
+fn resending_a_held_block_mislabelled_cannot_deepen_the_real_chain() {
+    // 20 000 resend-mislabel updates against the Core path, then a delete of the top node, on a 2 MB thread: every
+    // one is refused (the held block is ignored, the real depth comes from the replica) and nothing aborts.
+    let h = std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(|| {
+            let mut server = server_with_page();
+            let mut c = client_of(&server);
+            let (_, u) = c.edit(|e| {
+                e.insert_node(
+                    &id(1),
+                    NodeType::Frame,
+                    Some(PAGE),
+                    "a",
+                    "f",
+                    &json!({}),
+                    None,
+                )
+            });
+            server.apply_remote(&u).unwrap();
+            // the real props map of the node: depth 2, the deepest legal type
+            let (client, props_clock) = {
+                let mut t = c.raw().transact_mut();
+                let m = node_map(&mut t, &id(1));
+                let yrs::Out::YMap(p) = child(&t, &m, "props") else {
+                    panic!()
+                };
+                item_id(&t, &p)
+            };
+            let mut refused = 0;
+            for i in 0..20_000 {
+                let r =
+                    server.apply_remote(&resend_mislabel(client, props_clock, &format!("k{i}")));
+                match r {
+                    Err(Refused::Malformed) => refused += 1,
+                    other => panic!("update {i}: {other:?}"),
+                }
+            }
+            // the top node is deleted by an honest client; the replica is still sane and takes it
+            let (_, del) = c.edit(|e| e.remove_node(&id(1)));
+            assert!(server.apply_remote(&del).unwrap().is_some());
+            assert!(!server.read().unwrap().nodes.contains_key(&id(1)));
+            refused
+        })
+        .unwrap();
+    assert_eq!(h.join().expect("no abort"), 20_000);
+}
+
+#[test]
+fn a_held_block_is_never_a_parent_or_origin_taken_from_the_update() {
+    // `resolve_types` against an index: the update's own claim about a held id is ignored, the index is the truth
+    use design_crdt::guard::scan_facts;
+    let bytes = resend_mislabel(7, 4, "k");
+    let f = scan_facts(&bytes).unwrap();
+    let mut index = std::collections::HashMap::new();
+    index.insert((7u64, 4u64), 2u8); // the real item at clock 4 is a props map (depth 2)
+    let known = |_: u64| 5; // the replica holds clocks 0..5 of every client
+    assert_eq!(
+        f.resolve_types(&index, &known, true),
+        Err(Refused::Malformed),
+        "3 levels deep"
+    );
+    index.insert((7, 4), 1); // were it a node map, a props map under it is fine, and the mislabel changes nothing
+    let got = f.resolve_types(&index, &known, true).unwrap();
+    assert_eq!(got, vec![((7, 5), 2)]);
+    // an id the index does not know is refused, not guessed from the update
+    index.clear();
+    assert_eq!(
+        f.resolve_types(&index, &known, true),
+        Err(Refused::Malformed)
+    );
+}
+
+/// Cost of the gate per update on a big document: `cargo test --release -p design-crdt -- --ignored --nocapture cost`.
+#[test]
+#[ignore]
+fn cost_of_one_update_on_a_big_document() {
+    let mut server = server_with_page();
+    let mut c = client_of(&server);
+    let (_, big) = c.edit(|e| {
+        for i in 1..=5000u64 {
+            e.insert_node(
+                &id(i),
+                NodeType::Frame,
+                Some(PAGE),
+                "a",
+                "f",
+                &json!({"w": 10, "h": 20}),
+                None,
+            );
+        }
+    });
+    let t = std::time::Instant::now();
+    server.apply_remote(&big).unwrap();
+    eprintln!(
+        "5000-node bulk insert ({} KB): {:?}",
+        big.len() / 1024,
+        t.elapsed()
+    );
+    let mut total = std::time::Duration::ZERO;
+    for i in 0..200 {
+        let (_, u) = c.edit(|e| {
+            e.set_prop(&id(1 + i), "w", Some(&json!(i)));
+        });
+        let t = std::time::Instant::now();
+        server.apply_remote(&u).unwrap();
+        total += t.elapsed();
+    }
+    eprintln!("one prop edit on 5000 nodes: {:?} per update", total / 200);
 }

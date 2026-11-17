@@ -20,7 +20,7 @@
 //!   doc is a timer after the last peer leaves.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -33,7 +33,6 @@ pub const UPDATE_RATE: f64 = 50.0;
 pub const BYTE_RATE: f64 = 4.0 * 1024.0 * 1024.0;
 pub const PRESENCE_RATE: f64 = 20.0;
 const MAX_VERSIONS: i64 = 200;
-const AUTO_VERSION_SECS: i64 = 600;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
@@ -41,6 +40,15 @@ pub struct Limits {
     pub compact_updates: i64,
     pub compact_bytes: usize,
     pub update_rate: f64,
+    /// Sockets one device may hold open at once.
+    pub max_per_device: usize,
+    /// Documents loaded at once (idle ones are evicted first; past it a new one is refused).
+    pub max_docs: usize,
+    /// An `auto` version at most this often per doc.
+    pub auto_secs: i64,
+    /// All `auto` versions of a doc together stay under this (full snapshots are outside the doc budget otherwise);
+    /// the newest is always kept.
+    pub auto_bytes: usize,
 }
 
 impl Default for Limits {
@@ -50,6 +58,10 @@ impl Default for Limits {
             compact_updates: 500,
             compact_bytes: 1 << 20,
             update_rate: UPDATE_RATE,
+            max_per_device: 8,
+            max_docs: 64,
+            auto_secs: 600,
+            auto_bytes: MAX_DOC_BYTES,
         }
     }
 }
@@ -98,7 +110,6 @@ pub struct Actor {
     limits: Limits,
     state: Mutex<State>,
     tx: broadcast::Sender<Out>,
-    peers: AtomicUsize,
     presence: StdMutex<HashMap<u64, Arc<String>>>,
 }
 
@@ -158,14 +169,20 @@ impl Actor {
             limits,
             state: Mutex::new(state),
             tx: broadcast::channel(256).0,
-            peers: AtomicUsize::new(0),
             presence: StdMutex::default(),
         }))
     }
 
     /// Subscribe and read the backlog under the lock, so nothing falls between the two.
     pub async fn join(&self, after: Option<i64>) -> Result<Joined, sqlx::Error> {
-        let st = self.state.lock().await;
+        let mut st = self.state.lock().await;
+        // Never serve a replica that may hold unverified content: rebuild it from storage or refuse the join.
+        if st.replica.is_poisoned() {
+            self.rebuild(&mut st).await;
+            if st.replica.is_poisoned() {
+                return Err(sqlx::Error::Protocol("replica unavailable".into()));
+            }
+        }
         let rx = self.tx.subscribe();
         let backlog = match after {
             Some(n) if n >= st.snapshot_seq && n <= st.last_seq => {
@@ -203,11 +220,19 @@ impl Actor {
     /// nothing); it is only returned once the update is committed and has been sent to the other peers.
     pub async fn submit(&self, conn: u64, origin: &str, bytes: &[u8]) -> Result<i64, Refusal> {
         let mut st = self.state.lock().await;
+        if st.replica.is_poisoned() {
+            self.rebuild(&mut st).await;
+            if st.replica.is_poisoned() {
+                return Err(Refusal::Store);
+            }
+        }
         let diff = match st.replica.apply_remote(bytes) {
             Ok(None) => return Ok(st.last_seq),
             Ok(Some(d)) => d,
             // Refused before yrs integrated anything: the replica is untouched, nothing was stored.
             Err(Refused::Pending) => return Err(Refusal::Resync),
+            // the replica could not be rebuilt earlier: not the peer's doing
+            Err(Refused::Poisoned | Refused::Busy) => return Err(Refusal::Store),
             Err(e) => {
                 self.rebuild(&mut st).await;
                 return Err(Refusal::Violation(e));
@@ -304,19 +329,26 @@ impl Actor {
         .bind(&self.id)
         .bind(&snap)
         .bind(&self.id)
-        .bind(format!("-{AUTO_VERSION_SECS} seconds"))
+        .bind(format!("-{} seconds", self.limits.auto_secs))
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
-            "DELETE FROM design_versions WHERE id IN (SELECT id FROM design_versions WHERE doc = ? \
-             AND kind = 'auto' ORDER BY created_at LIMIT max(0, (SELECT count(*) FROM design_versions \
-             WHERE doc = ?) - ?))",
+        // Auto versions are full snapshots: keep the newest, then as many as fit the count and byte budgets.
+        let autos: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT id, length(state) FROM design_versions WHERE doc = ? AND kind = 'auto' ORDER BY rowid DESC",
         )
         .bind(&self.id)
-        .bind(&self.id)
-        .bind(MAX_VERSIONS)
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await?;
+        let mut total = 0usize;
+        for (n, (vid, len)) in autos.iter().enumerate() {
+            total += *len as usize;
+            if n > 0 && (n as i64 >= MAX_VERSIONS || total > self.limits.auto_bytes) {
+                sqlx::query("DELETE FROM design_versions WHERE id = ?")
+                    .bind(vid)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
         tx.commit().await?;
         st.snapshot_bytes = snap.len();
         st.snapshot_seq = st.last_seq;
@@ -328,7 +360,11 @@ impl Actor {
     /// Throw the replica away and rebuild it from what is stored (after a refusal or a failed write).
     async fn rebuild(&self, st: &mut State) {
         match load(&self.pool, &self.id).await {
-            Ok(fresh) => *st = fresh,
+            Ok(fresh) => {
+                // the old replica may hold a hostile structure: drop it on a big-stack thread, never here
+                let old = std::mem::replace(st, fresh);
+                old.replica.discard();
+            }
             // Cannot trust the replica and cannot rebuild it: every later update is refused as `Poisoned`
             // (`apply_remote` stays poisoned) until the actor is unloaded.
             Err(e) => {
@@ -347,11 +383,20 @@ impl Actor {
     }
 }
 
-/// A socket's hold on a doc: counts it as a peer, and on drop removes its presence and starts the unload timer.
+/// One document's place in the registry. `pins` counts the sockets holding it (and a load in progress); it is only
+/// raised under the registry lock, so a doc is never evicted or unloaded while a socket is joining it.
+struct Slot {
+    cell: tokio::sync::OnceCell<Arc<Actor>>,
+    pins: AtomicUsize,
+}
+
+/// A socket's hold on a doc: counts against its device, and on drop removes its presence and starts the unload timer.
 pub struct Lease {
     pub actor: Arc<Actor>,
     pub conn: u64,
     reg: Arc<Registry>,
+    slot: Arc<Slot>,
+    device: String,
 }
 
 impl Lease {
@@ -363,32 +408,44 @@ impl Lease {
 
 impl Drop for Lease {
     fn drop(&mut self) {
+        self.reg.release_device(&self.device);
         self.actor
             .presence
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&self.conn);
         let _ = self.actor.tx.send(Out::Left { conn: self.conn });
-        if self.actor.peers.fetch_sub(1, Ordering::AcqRel) == 1 {
-            let (reg, actor) = (self.reg.clone(), self.actor.clone());
+        if self.slot.pins.fetch_sub(1, Ordering::AcqRel) == 1 {
+            let (reg, slot, id) = (self.reg.clone(), self.slot.clone(), self.actor.id.clone());
             tokio::spawn(async move {
                 tokio::time::sleep(reg.limits.idle).await;
-                let mut docs = reg.docs.lock().await;
-                // Under the registry lock `open` counts a new peer in, so a doc someone just joined is kept.
-                if actor.peers.load(Ordering::Acquire) == 0
-                    && docs.get(&actor.id).is_some_and(|a| Arc::ptr_eq(a, &actor))
+                let mut docs = reg.docs.lock().unwrap_or_else(|e| e.into_inner());
+                // Pins only rise under this lock, so a doc someone just joined is kept.
+                if slot.pins.load(Ordering::Acquire) == 0
+                    && docs.get(&id).is_some_and(|s| Arc::ptr_eq(s, &slot))
                 {
-                    docs.remove(&actor.id);
+                    docs.remove(&id);
                 }
             });
         }
     }
 }
 
+/// Why a socket could not open.
+#[derive(Debug)]
+pub enum OpenError {
+    /// The device holds too many sockets.
+    Device,
+    /// Too many documents are loaded and none is idle.
+    Busy,
+    Store(sqlx::Error),
+}
+
 #[derive(Default)]
 pub struct Registry {
-    docs: Mutex<HashMap<String, Arc<Actor>>>,
-    conns: std::sync::atomic::AtomicU64,
+    docs: StdMutex<HashMap<String, Arc<Slot>>>,
+    devices: StdMutex<HashMap<String, usize>>,
+    conns: AtomicU64,
     pub limits: Limits,
 }
 
@@ -400,27 +457,77 @@ impl Registry {
         }
     }
 
-    /// The doc's actor, loaded on first use. ponytail: one lock for the map, held while a doc loads; per-doc
-    /// loading if opening many big docs at once ever shows up.
-    pub async fn open(self: &Arc<Self>, pool: &SqlitePool, id: &str) -> Result<Lease, sqlx::Error> {
-        let mut docs = self.docs.lock().await;
-        let actor = match docs.get(id) {
-            Some(a) => a.clone(),
-            None => {
-                let a = Actor::open(pool.clone(), id, self.limits).await?;
-                docs.insert(id.to_owned(), a.clone());
-                a
+    fn release_device(&self, device: &str) {
+        let mut d = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = d.get_mut(device) {
+            *n -= 1;
+            if *n == 0 {
+                d.remove(device);
             }
+        }
+    }
+
+    /// The doc's actor, loaded on first use. The registry lock is held only to find or create the slot, never while a
+    /// doc loads; two sockets opening the same doc share one load (`OnceCell`).
+    pub async fn open(
+        self: &Arc<Self>,
+        pool: &SqlitePool,
+        id: &str,
+        device: &str,
+    ) -> Result<Lease, OpenError> {
+        {
+            let mut d = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+            let n = d.entry(device.to_owned()).or_insert(0);
+            if *n >= self.limits.max_per_device {
+                return Err(OpenError::Device);
+            }
+            *n += 1;
+        }
+        let slot = {
+            let mut docs = self.docs.lock().unwrap_or_else(|e| e.into_inner());
+            if !docs.contains_key(id) && docs.len() >= self.limits.max_docs {
+                docs.retain(|_, s| s.pins.load(Ordering::Acquire) > 0);
+                if docs.len() >= self.limits.max_docs {
+                    drop(docs);
+                    self.release_device(device);
+                    return Err(OpenError::Busy);
+                }
+            }
+            let s = docs.entry(id.to_owned()).or_insert_with(|| {
+                Arc::new(Slot {
+                    cell: tokio::sync::OnceCell::new(),
+                    pins: AtomicUsize::new(0),
+                })
+            });
+            s.pins.fetch_add(1, Ordering::AcqRel);
+            s.clone()
         };
-        actor.peers.fetch_add(1, Ordering::AcqRel);
-        Ok(Lease {
-            actor,
-            conn: self.conns.fetch_add(1, Ordering::Relaxed),
-            reg: self.clone(),
-        })
+        match slot
+            .cell
+            .get_or_try_init(|| Actor::open(pool.clone(), id, self.limits))
+            .await
+        {
+            Ok(actor) => Ok(Lease {
+                actor: actor.clone(),
+                conn: self.conns.fetch_add(1, Ordering::Relaxed),
+                reg: self.clone(),
+                slot,
+                device: device.to_owned(),
+            }),
+            Err(e) => {
+                self.release_device(device);
+                let mut docs = self.docs.lock().unwrap_or_else(|e| e.into_inner());
+                if slot.pins.fetch_sub(1, Ordering::AcqRel) == 1
+                    && docs.get(id).is_some_and(|s| Arc::ptr_eq(s, &slot))
+                {
+                    docs.remove(id);
+                }
+                Err(OpenError::Store(e))
+            }
+        }
     }
 
     pub async fn loaded(&self) -> usize {
-        self.docs.lock().await.len()
+        self.docs.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 }
