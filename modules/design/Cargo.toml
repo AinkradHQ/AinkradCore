@@ -3,7 +3,7 @@
 [workspace]
 resolver = "3"
 members = ["doc", "ffi", "model", "module", "render"]
-exclude = ["model/fuzz", "ffi/fuzz"]
+exclude = ["model/fuzz", "ffi/fuzz", "doc/fuzz"]
 
 [workspace.package]
 version = "0.1.0"

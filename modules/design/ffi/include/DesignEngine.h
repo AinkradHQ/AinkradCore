@@ -30,6 +30,10 @@
 
 #define DE_ERR_GPU -9
 
+// A remote update failed inside yrs and the document was reset to empty: send the state vector again and apply the
+// full diff from the Core. Local edits not yet sent are lost.
+#define DE_ERR_RESET -10
+
 // `de_sync_apply` targets.
 #define DE_DOC 0
 
@@ -282,11 +286,13 @@ int32_t de_detach(uint64_t h);
 // 1 when something changed since the last frame, 0 when the canvas is still (draw nothing).
 int32_t de_needs_frame(uint64_t h);
 
-// Draw a frame into the drawable's texture and submit it.
+// Draw a frame into the drawable's texture and submit it. Size and pixel format are read from the texture itself
+// (they can change under a live resize); anything but a BGRA8 render target in range is `DE_ERR_ARG`.
 //
 // # Safety
-// `texture` is a live `id<MTLTexture>`, BGRA8, `w` x `h` pixels, usable as a render target.
-int32_t de_draw_metal(uint64_t h, void *texture, int32_t w, int32_t height);
+// `texture` is a live `id<MTLTexture>`.
+int32_t de_draw_metal(uint64_t h,
+                      void *texture);
 
 #ifdef __cplusplus
 }  // extern "C"

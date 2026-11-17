@@ -246,9 +246,10 @@ impl Host {
             _ => None,
         };
         let (Some(mut p), Some(mut m)) = (patched, self.model.take()) else {
-            self.live.apply_ops(ops).map_err(crate::host::code)?;
+            let r = self.live.apply_ops(ops);
+            // also after a refusal: an `Error::Reset` emptied the document
             self.changed();
-            return Ok(());
+            return r.map_err(crate::host::code);
         };
         if let Err(e) = self.live.apply_ops_on(&mut m, ops) {
             self.changed();
