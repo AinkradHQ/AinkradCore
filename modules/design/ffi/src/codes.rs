@@ -29,7 +29,22 @@ pub const DE_MOD_OPTION: u32 = 4;
 pub const DE_MOD_COMMAND: u32 = 8;
 
 pub const DE_KEY_DELETE: u32 = 1;
+/// Cancels a gesture in progress; otherwise clears the selection.
 pub const DE_KEY_ESCAPE: u32 = 2;
+/// ⌘D in the App.
+pub const DE_KEY_DUPLICATE: u32 = 3;
+/// Arrow keys nudge the selection 1 pt (10 with `DE_MOD_SHIFT`), or reorder it in an auto-layout frame.
+pub const DE_KEY_LEFT: u32 = 4;
+pub const DE_KEY_RIGHT: u32 = 5;
+pub const DE_KEY_UP: u32 = 6;
+pub const DE_KEY_DOWN: u32 = 7;
+
+/// `de_cursor` results.
+pub const DE_CURSOR_DEFAULT: i32 = 0;
+pub const DE_CURSOR_RESIZE_NS: i32 = 1;
+pub const DE_CURSOR_RESIZE_EW: i32 = 2;
+pub const DE_CURSOR_RESIZE_NWSE: i32 = 3;
+pub const DE_CURSOR_RESIZE_NESW: i32 = 4;
 
 /// Engines alive at once.
 pub const DE_MAX_ENGINES: usize = 64;

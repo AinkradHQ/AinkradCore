@@ -20,9 +20,10 @@ pub(crate) fn hit_node(
     x: f32,
     y: f32,
     path: &mut Vec<String>,
+    skip: &dyn Fn(&str) -> bool,
 ) -> Option<()> {
     let n = &nodes[i];
-    if !n.look.visible {
+    if !n.look.visible || skip(&n.id) {
         return None;
     }
     let inside = n.rect.contains(Point::new(x, y));
@@ -31,7 +32,7 @@ pub(crate) fn hit_node(
     }
     path.push(n.id.clone());
     for k in n.kids.iter().rev() {
-        if hit_node(nodes, *k as usize, x, y, path).is_some() {
+        if hit_node(nodes, *k as usize, x, y, path, skip).is_some() {
             return Some(());
         }
     }

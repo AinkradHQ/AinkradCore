@@ -162,7 +162,7 @@ pub fn run(data: &[u8]) {
                 17 => de_pointer(h, i.u32() % 4, x, y, i.u32()),
                 18 => de_scroll(h, x, y),
                 19 => de_magnify(h, i.f32(), x, y),
-                20 => de_key(h, i.u32() % 4, i.u32()),
+                20 => de_key(h, i.u32() % 9, i.u32()),
                 21 => de_selection(h, op, cap, ol),
                 22 => {
                     let id = IDS[i.u8() as usize % IDS.len()];
@@ -176,12 +176,32 @@ pub fn run(data: &[u8]) {
                 25 => de_attach_metal(h, std::ptr::null_mut(), std::ptr::null_mut()),
                 26 => de_detach(h),
                 27 => de_draw_metal(h, std::ptr::null_mut(), 10, 10),
-                28 => match i.u8() % 5 {
+                28 => match i.u8() % 10 {
                     0 => de_hit(h, x, y, op, cap, ol),
                     1 => de_needs_frame(h),
                     2 => de_fit(h),
                     3 => design_ffi::testing::draw_cpu(h, i.u8() as i32, i.u8() as i32),
-                    _ => de_pointer(h, DE_POINTER_DOWN, x, y, i.u32() % 2),
+                    4 => de_pointer(h, DE_POINTER_DOWN, x, y, i.u32() % 16),
+                    // V2-03: drags (several moves in a row), cursor, camera settle
+                    5 => {
+                        let m = i.u32() % 16;
+                        for _ in 0..(i.u8() % 6) {
+                            check(de_pointer(h, DE_POINTER_MOVE, i.f32(), i.f32(), m));
+                        }
+                        de_pointer(h, DE_POINTER_UP, x, y, m)
+                    }
+                    6 => {
+                        let c = de_cursor(h, x, y);
+                        if c >= 0 {
+                            assert!(c <= DE_CURSOR_RESIZE_NESW, "cursor {c}");
+                            0
+                        } else {
+                            c
+                        }
+                    }
+                    7 => de_gesture_end(h, i.u32() % 2),
+                    8 => de_tick(h, i.f32()),
+                    _ => de_fit_selection(h),
                 },
                 _ => match i.u8() % 2 {
                     0 => de_font_add(h, std::ptr::null(), 0, ip, il),

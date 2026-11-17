@@ -15,8 +15,10 @@ use yrs::{Any, In, Map, MapPrelim, Out, Text, TextPrelim, Transact, TransactionM
 
 use crate::{Error, LOCAL, Live, json_any};
 
-/// Ops per batch (T12).
+/// Ops per parsed batch (T12: what an AI or the inspector sends).
 pub const MAX_OPS: usize = 200;
+/// Ops per engine-made batch (V2-03): a canvas gesture on a large selection is still one batch, one undo step.
+pub const MAX_GESTURE_OPS: usize = 4 * MAX_NODES;
 pub const MAX_OPS_BYTES: usize = 1 << 20;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -189,14 +191,22 @@ fn check(m: &mut Doc, i: usize, op: &Op) -> Result<Planned, Error> {
 
 impl Live {
     /// Apply a batch: all ops valid -> one transaction, one undo step; otherwise nothing changes.
+    /// Parsed input is capped at `MAX_OPS` by `parse_ops`; the engine's own gesture batches at `MAX_GESTURE_OPS`.
     pub fn apply_ops(&mut self, ops: &[Op]) -> Result<(), Error> {
-        if ops.len() > MAX_OPS {
+        let mut m = self.read();
+        self.apply_ops_on(&mut m, ops)
+    }
+
+    /// `apply_ops` against `m`, the caller's copy of `read()` (an engine's cached model), which is brought up to date
+    /// with the batch instead of reading the whole document again. On an error nothing is written and `m` is partly
+    /// changed: drop it.
+    pub fn apply_ops_on(&mut self, m: &mut Doc, ops: &[Op]) -> Result<(), Error> {
+        if ops.len() > MAX_GESTURE_OPS {
             return Err(Error::TooLarge);
         }
-        let mut m = self.read();
         let mut plan = Vec::with_capacity(ops.len());
         for (i, op) in ops.iter().enumerate() {
-            plan.push(check(&mut m, i, op)?);
+            plan.push(check(m, i, op)?);
         }
         {
             let mut txn = self.doc().transact_mut_with(LOCAL);
@@ -207,7 +217,26 @@ impl Live {
         self.undo.reset();
         Ok(())
     }
+
+    /// Write a whole model document (nodes, meta, tokens) as it is, in one transaction outside the undo history:
+    /// seeding tests and benches with a generated scene and its design system. Not validated.
+    pub fn import(&mut self, d: &Doc) {
+        let mut txn = self.doc().transact_mut_with(IMPORT);
+        for (id, n) in &d.nodes {
+            write(&self.nodes, &mut txn, &Planned::Add(id.clone(), n.clone()));
+        }
+        if let Some(s) = &d.meta.system {
+            self.meta.insert(&mut txn, "system", s.as_str());
+        }
+        self.meta.insert(&mut txn, "version", d.meta.version as f64);
+        for (name, t) in &d.tokens {
+            let v = serde_json::to_value(t).unwrap_or(Value::Null);
+            self.tokens.insert(&mut txn, name.as_str(), json_any(&v));
+        }
+    }
 }
+
+const IMPORT: &str = "import";
 
 /// What pass 2 writes for one op, decided in pass 1.
 enum Planned {

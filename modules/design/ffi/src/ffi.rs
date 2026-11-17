@@ -378,16 +378,51 @@ pub extern "C" fn de_fit(h: u64) -> i32 {
     })
 }
 
-/// Pointer at view point (x, y): `DE_POINTER_*` phase, `DE_MOD_*` bits.
+/// Frame the selection (everything when nothing is selected).
+#[unsafe(no_mangle)]
+pub extern "C" fn de_fit_selection(h: u64) -> i32 {
+    with(h, |e| {
+        e.fit_selection();
+        Ok(DE_OK)
+    })
+}
+
+/// Pointer at view point (x, y): `DE_POINTER_*` phase, `DE_MOD_*` bits. Down selects (shift toggles); a drag moves
+/// the selection (option: a copy of it; ⌘: no snapping), resizes it from a handle, or draws a marquee; up writes the
+/// move or resize as one undo step. A move without a press is a hover.
 #[unsafe(no_mangle)]
 pub extern "C" fn de_pointer(h: u64, phase: u32, x: f32, y: f32, mods: u32) -> i32 {
     with(h, |e| ok(e.pointer(phase, x, y, mods)))
 }
 
-/// Pan by a scroll delta in points (momentum and rubber-band phases are the host's).
+/// The cursor for view point (x, y): a `DE_CURSOR_*` value (>= 0), or an error code.
+#[unsafe(no_mangle)]
+pub extern "C" fn de_cursor(h: u64, x: f32, y: f32) -> i32 {
+    with(h, |e| e.cursor(x, y))
+}
+
+/// Pan by a scroll delta in points (the host's momentum included). Past the content bounds the pan is
+/// rubber-banded; call `de_gesture_end` when the scroll or pinch ends.
 #[unsafe(no_mangle)]
 pub extern "C" fn de_scroll(h: u64, dx: f32, dy: f32) -> i32 {
     with(h, |e| ok(e.scroll(dx, dy)))
+}
+
+/// A scroll or pinch ended: settle back inside the content bounds, animated through `de_tick`, or at once when
+/// `reduce_motion` is non-zero.
+#[unsafe(no_mangle)]
+pub extern "C" fn de_gesture_end(h: u64, reduce_motion: u32) -> i32 {
+    with(h, |e| {
+        e.gesture_end(reduce_motion != 0);
+        Ok(DE_OK)
+    })
+}
+
+/// Advance animations (the rubber-band settle) by `dt` seconds (0..=1), once per display frame. 1 while
+/// something is still moving, 0 when at rest.
+#[unsafe(no_mangle)]
+pub extern "C" fn de_tick(h: u64, dt: f32) -> i32 {
+    with(h, |e| e.tick(dt).map(i32::from))
 }
 
 /// Zoom by `factor` (> 0) about view point (x, y).

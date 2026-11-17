@@ -31,7 +31,7 @@ use yrs::{
 mod ops;
 mod presence;
 
-pub use ops::{MAX_OPS, MAX_OPS_BYTES, Op, parse_ops};
+pub use ops::{MAX_GESTURE_OPS, MAX_OPS, MAX_OPS_BYTES, Op, parse_ops};
 pub use presence::{MAX_PEERS, MAX_PRESENCE_BYTES, Presence};
 
 /// A remote update or a full state: the document cap plus framing room.

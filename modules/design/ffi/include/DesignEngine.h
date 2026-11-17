@@ -51,7 +51,31 @@
 
 #define DE_KEY_DELETE 1
 
+// Cancels a gesture in progress; otherwise clears the selection.
 #define DE_KEY_ESCAPE 2
+
+// ⌘D in the App.
+#define DE_KEY_DUPLICATE 3
+
+// Arrow keys nudge the selection 1 pt (10 with `DE_MOD_SHIFT`), or reorder it in an auto-layout frame.
+#define DE_KEY_LEFT 4
+
+#define DE_KEY_RIGHT 5
+
+#define DE_KEY_UP 6
+
+#define DE_KEY_DOWN 7
+
+// `de_cursor` results.
+#define DE_CURSOR_DEFAULT 0
+
+#define DE_CURSOR_RESIZE_NS 1
+
+#define DE_CURSOR_RESIZE_EW 2
+
+#define DE_CURSOR_RESIZE_NWSE 3
+
+#define DE_CURSOR_RESIZE_NESW 4
 
 // Engines alive at once.
 #define DE_MAX_ENGINES 64
@@ -160,11 +184,36 @@ int32_t de_set_page(uint64_t h, uint32_t page);
 // Frame every artboard of the page in the view.
 int32_t de_fit(uint64_t h);
 
-// Pointer at view point (x, y): `DE_POINTER_*` phase, `DE_MOD_*` bits.
-int32_t de_pointer(uint64_t h, uint32_t phase, float x, float y, uint32_t mods);
+// Frame the selection (everything when nothing is selected).
+int32_t de_fit_selection(uint64_t h);
 
-// Pan by a scroll delta in points (momentum and rubber-band phases are the host's).
-int32_t de_scroll(uint64_t h, float dx, float dy);
+// Pointer at view point (x, y): `DE_POINTER_*` phase, `DE_MOD_*` bits. Down selects (shift toggles); a drag moves
+// the selection (option: a copy of it; ⌘: no snapping), resizes it from a handle, or draws a marquee; up writes the
+// move or resize as one undo step. A move without a press is a hover.
+int32_t de_pointer(uint64_t h,
+                   uint32_t phase,
+                   float x,
+                   float y,
+                   uint32_t mods);
+
+// The cursor for view point (x, y): a `DE_CURSOR_*` value (>= 0), or an error code.
+int32_t de_cursor(uint64_t h, float x, float y);
+
+// Pan by a scroll delta in points (the host's momentum included). Past the content bounds the pan is
+// rubber-banded; call `de_gesture_end` when the scroll or pinch ends.
+int32_t de_scroll(uint64_t h,
+                  float dx,
+                  float dy);
+
+// A scroll or pinch ended: settle back inside the content bounds, animated through `de_tick`, or at once when
+// `reduce_motion` is non-zero.
+int32_t de_gesture_end(uint64_t h,
+                       uint32_t reduce_motion);
+
+// Advance animations (the rubber-band settle) by `dt` seconds (0..=1), once per display frame. 1 while
+// something is still moving, 0 when at rest.
+int32_t de_tick(uint64_t h,
+                float dt);
 
 // Zoom by `factor` (> 0) about view point (x, y).
 int32_t de_magnify(uint64_t h, float factor, float x, float y);

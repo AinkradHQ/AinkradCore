@@ -18,6 +18,7 @@ pub mod layout;
 pub mod look;
 #[cfg(all(feature = "metal", target_os = "macos"))]
 pub mod metal;
+pub mod overlay;
 pub mod scene;
 pub mod synth;
 
@@ -26,4 +27,6 @@ pub use camera::Camera;
 pub use draw::Lod;
 pub use fonts::Fonts;
 pub use hit::Hit;
+pub use overlay::Overlay;
 pub use scene::{Config, Dirty, Renderer};
+pub use skia_safe::Rect;

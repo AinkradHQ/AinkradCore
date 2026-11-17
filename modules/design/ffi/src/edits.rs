@@ -1,0 +1,507 @@
+//! Canvas edits as typed ops (V2-03): move (with snapping, auto-layout reorder, nest/unnest by drop target),
+//! resize, duplicate (also alt-drag), nudge. Every edit is one `apply_ops` batch: one undo step.
+//!
+//! Geometry rules: `x`/`y` are written only where they mean something (a child of a frame without `layout`, or a
+//! top-level node, whose `x`/`y` are world); in an auto-layout frame a drag or nudge changes the order instead.
+//! Pointer deltas are whole points; snapped values are written to 1/100 pt. ⌘ held while dragging turns snapping off.
+
+use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasher, RandomState};
+
+use design_doc::Op;
+use design_model::ids::between;
+use design_model::tree::forest;
+use design_model::{Doc, Forest, NodeType, ResolvedNode};
+use design_render::Rect;
+use serde_json::{Value, json};
+
+use crate::ffi::*;
+use crate::host::Host;
+use crate::interact::{Edit, Gesture, union};
+use crate::preview;
+use crate::snap::{SNAP_PT, edges, insert_index, map_rect, resize, round2, snap_edges, snap_move};
+
+/// Gap between a duplicated top-level node and its original.
+const DUP_GAP: f32 = 40.0;
+
+type Guides = Vec<[f32; 4]>;
+
+fn set(id: &str, key: &str, value: Value) -> Op {
+    Op::Set {
+        id: id.into(),
+        key: key.into(),
+        value,
+    }
+}
+
+pub(crate) fn seed() -> u64 {
+    RandomState::new().hash_one(std::time::SystemTime::now()) | 1
+}
+
+impl Host {
+    fn order_of(&self, id: &str) -> Option<String> {
+        Some(self.model.as_ref()?.nodes.get(id)?.order.clone())
+    }
+
+    /// World position children of `parent` are placed from (the page's is the world origin).
+    fn origin(&self, parent: &str) -> (f32, f32) {
+        match self.rect(parent) {
+            Some(r) if Some(parent) != self.page_id().as_deref() => (r.left, r.top),
+            _ => (0.0, 0.0),
+        }
+    }
+
+    fn new_id(&mut self) -> String {
+        const A: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+        loop {
+            let mut v = self.rng;
+            v ^= v << 13;
+            v ^= v >> 7;
+            v ^= v << 17;
+            self.rng = v;
+            let id: String = "n_"
+                .chars()
+                .chain((0..12).map(|i| A[((v >> (i * 5)) & 31) as usize] as char))
+                .collect();
+            if !self
+                .model
+                .as_ref()
+                .is_some_and(|m| m.nodes.contains_key(&id))
+            {
+                return id;
+            }
+        }
+    }
+
+    /// `add` ops copying `src`'s subtree under new ids (root first, its parent/order as given) and the id map.
+    fn copy_ops(
+        &mut self,
+        src: &str,
+        parent: &str,
+        order: &str,
+        dups: &mut HashMap<String, String>,
+    ) -> Vec<Op> {
+        let mut out = vec![];
+        let mut stack = vec![(src.to_string(), parent.to_string(), Some(order.to_string()))];
+        while let Some((s, p, ord)) = stack.pop() {
+            let Some(n) = self.model.as_ref().and_then(|m| m.nodes.get(&s)).cloned() else {
+                continue;
+            };
+            let id = self.new_id();
+            for k in self.kids(&s).into_iter().rev() {
+                stack.push((k, id.clone(), None));
+            }
+            dups.insert(id.clone(), s);
+            out.push(Op::Add {
+                id,
+                ty: n.ty,
+                parent: Some(p),
+                order: ord.unwrap_or(n.order),
+                name: n.name,
+                props: n.props,
+                text: n.text,
+            });
+        }
+        out
+    }
+
+    pub(crate) fn begin_edit(
+        &mut self,
+        handle: Option<u8>,
+        dup: bool,
+        start: (f32, f32),
+    ) -> Option<Gesture> {
+        let srcs = self.top_selected();
+        let rects: Vec<Rect> = srcs.iter().map(|id| self.rect(id)).collect::<Option<_>>()?;
+        if srcs.is_empty() {
+            return None;
+        }
+        let (mut copies, mut dups) = (vec![], HashMap::new());
+        let ids = if dup {
+            for s in &srcs {
+                let (p, o) = (self.parent_of(s)?, self.order_of(s)?);
+                copies.push(self.copy_ops(s, &p, &o, &mut dups));
+            }
+            copies.iter().filter_map(|c| op_id(c.first()?)).collect()
+        } else {
+            srcs
+        };
+        Some(Gesture::Edit(Edit {
+            handle,
+            ids,
+            rects,
+            start,
+            copies,
+            dups,
+            ops: vec![],
+            guides: vec![],
+        }))
+    }
+
+    /// The container a drop at world `p` lands in: the deepest frame or component under it, looking through the
+    /// carried nodes, else the page.
+    fn drop_target(&self, p: (f32, f32), carried: &[String], page: &str) -> String {
+        let skip = |id: &str| carried.iter().any(|c| c == id);
+        let (Some(r), Some(m)) = (self.renderer.as_ref(), self.model.as_ref()) else {
+            return page.to_string();
+        };
+        r.hit_world_skip(p.0, p.1, &skip)
+            .and_then(|h| {
+                h.path.into_iter().rev().find(|id| {
+                    m.nodes
+                        .get(id)
+                        .is_some_and(|n| matches!(n.ty, NodeType::Frame | NodeType::Component))
+                })
+            })
+            .unwrap_or_else(|| page.to_string())
+    }
+
+    /// Snap candidates for nodes placed in `parent`: its other children and itself.
+    fn cands(&self, parent: &str, skip: &[String]) -> Vec<Rect> {
+        let mut c: Vec<Rect> = self
+            .kids(parent)
+            .iter()
+            .filter(|k| !skip.contains(k))
+            .filter_map(|k| self.rect(k))
+            .collect();
+        if Some(parent) != self.page_id().as_deref() {
+            c.extend(self.rect(parent));
+        }
+        c
+    }
+
+    /// Put node `i` of the gesture under `target` at `order` (a copy: its `add` ops; else a `move`), then `x`/`y`.
+    fn place(
+        &self,
+        e: &Edit,
+        i: usize,
+        target: &str,
+        order: String,
+        xy: Option<(f32, f32)>,
+    ) -> Vec<Op> {
+        let id = &e.ids[i];
+        let mut out = match e.copies.get(i) {
+            Some(c) => {
+                let mut c = c.clone();
+                if let Some(Op::Add {
+                    parent,
+                    order: o,
+                    props,
+                    ..
+                }) = c.first_mut()
+                {
+                    *parent = Some(target.to_string());
+                    *o = order;
+                    if let Some((x, y)) = xy {
+                        props.insert("x".into(), json!(x));
+                        props.insert("y".into(), json!(y));
+                    }
+                }
+                return c;
+            }
+            None if self.parent_of(id).as_deref() == Some(target) && xy.is_some() => vec![],
+            None => vec![Op::Move {
+                id: id.clone(),
+                parent: Some(target.to_string()),
+                order,
+            }],
+        };
+        if let Some((x, y)) = xy {
+            out.push(set(id, "x", json!(x)));
+            out.push(set(id, "y", json!(y)));
+        }
+        out
+    }
+
+    pub(crate) fn move_ops(&self, e: &Edit, p: (f32, f32), mods: u32) -> (Vec<Op>, Guides) {
+        let Some(page) = self.page_id() else {
+            return (vec![], vec![]);
+        };
+        let d = ((p.0 - e.start.0).round(), (p.1 - e.start.1).round());
+        let target = self.drop_target(p, &e.ids, &page);
+        let siblings: Vec<String> = self
+            .kids(&target)
+            .into_iter()
+            .filter(|k| !e.ids.contains(k))
+            .collect();
+        let mut ops = vec![];
+        if self.is_flow(&target) {
+            let rects: Vec<Rect> = siblings.iter().filter_map(|k| self.rect(k)).collect();
+            let row = self
+                .model
+                .as_ref()
+                .and_then(|m| m.nodes.get(&target))
+                .and_then(|n| {
+                    n.props
+                        .get("layout")?
+                        .get("dir")?
+                        .as_str()
+                        .map(str::to_string)
+                })
+                .is_none_or(|d| d != "column");
+            let at = insert_index(&rects, row, p);
+            let mut lo = at.checked_sub(1).and_then(|i| self.order_of(&siblings[i]));
+            let hi = siblings.get(at).and_then(|s| self.order_of(s));
+            for i in 0..e.ids.len() {
+                let Some(o) = between(lo.as_deref(), hi.as_deref()) else {
+                    return (vec![], vec![]);
+                };
+                lo = Some(o.clone());
+                ops.extend(self.place(e, i, &target, o, None));
+            }
+            return (ops, vec![]);
+        }
+        let Some(b) = union(e.rects.iter().copied()) else {
+            return (vec![], vec![]);
+        };
+        let b = b.with_offset(d);
+        let (sx, sy, guides) = if mods & DE_MOD_COMMAND == 0 {
+            snap_move(b, &self.cands(&target, &e.ids), SNAP_PT / self.camera.zoom)
+        } else {
+            (0.0, 0.0, vec![])
+        };
+        let o = self.origin(&target);
+        let mut lo = siblings.last().and_then(|s| self.order_of(s));
+        for (i, r) in e.rects.iter().enumerate() {
+            let xy = (
+                round2(r.left + d.0 + sx - o.0),
+                round2(r.top + d.1 + sy - o.1),
+            );
+            let Some(ord) = between(lo.as_deref(), None) else {
+                return (vec![], vec![]);
+            };
+            lo = Some(ord.clone());
+            ops.extend(self.place(e, i, &target, ord, Some(xy)));
+        }
+        (ops, guides)
+    }
+
+    pub(crate) fn resize_ops(
+        &self,
+        e: &Edit,
+        h: u8,
+        p: (f32, f32),
+        mods: u32,
+    ) -> (Vec<Op>, Guides) {
+        let Some(b0) = union(e.rects.iter().copied()) else {
+            return (vec![], vec![]);
+        };
+        let d = ((p.0 - e.start.0).round(), (p.1 - e.start.1).round());
+        let aspect = mods & DE_MOD_SHIFT != 0;
+        let mut b = resize(b0, h, d, aspect);
+        let mut guides = vec![];
+        let parent = self.parent_of(&e.ids[0]).unwrap_or_default();
+        if !aspect && mods & DE_MOD_COMMAND == 0 {
+            (b, guides) = snap_edges(
+                b,
+                h,
+                &self.cands(&parent, &e.ids),
+                SNAP_PT / self.camera.zoom,
+            );
+        }
+        let (l, t, r, bt) = edges(h);
+        let mut ops = vec![];
+        for (id, r0) in e.ids.iter().zip(&e.rects) {
+            let n = map_rect(*r0, b0, b);
+            ops.push(set(id, "w", json!(round2(n.width()))));
+            ops.push(set(id, "h", json!(round2(n.height()))));
+            let sizing = self
+                .model
+                .as_ref()
+                .and_then(|m| m.nodes.get(id))
+                .and_then(|n| n.props.get("sizing")?.as_object().cloned());
+            if let Some(mut s) = sizing {
+                if l || r {
+                    s.insert("w".into(), json!("fixed"));
+                }
+                if t || bt {
+                    s.insert("h".into(), json!("fixed"));
+                }
+                ops.push(set(id, "sizing", Value::Object(s)));
+            }
+            let par = self.parent_of(id).unwrap_or_default();
+            if !self.is_flow(&par) {
+                let o = self.origin(&par);
+                ops.push(set(id, "x", json!(round2(n.left - o.0))));
+                ops.push(set(id, "y", json!(round2(n.top - o.1))));
+            }
+        }
+        (ops, guides)
+    }
+
+    /// Write `ops` as one batch, then keep the cached model, resolved page and renderer in step by patching only
+    /// the boards they touch (the gesture preview's path) instead of re-reading and re-resolving the whole document,
+    /// which costs 100+ ms at 5 000 nodes. Anything the patch cannot follow falls back to the full refresh.
+    pub(crate) fn commit(&mut self, ops: &[Op], dups: &HashMap<String, String>) -> Result<(), i32> {
+        if ops.is_empty() {
+            return Ok(());
+        }
+        let simple = ops
+            .iter()
+            .all(|o| matches!(o, Op::Set { .. } | Op::Move { .. } | Op::Add { .. }));
+        let patched = match (&self.model, &self.resolved) {
+            (Some(m), Some(res)) if simple && self.is_loaded() => res
+                .pages
+                .get(self.page)
+                .map(|page| preview::patch(page, m, ops, dups)),
+            _ => None,
+        };
+        let (Some(mut p), Some(mut m)) = (patched, self.model.take()) else {
+            self.live.apply_ops(ops).map_err(crate::host::code)?;
+            self.changed();
+            return Ok(());
+        };
+        if let Err(e) = self.live.apply_ops_on(&mut m, ops) {
+            self.changed();
+            return Err(crate::host::code(e));
+        }
+        let (Some(res), Some(r)) = (self.resolved.as_mut(), self.renderer.as_mut()) else {
+            self.changed();
+            return Ok(());
+        };
+        let Some(page) = res.pages.get_mut(self.page) else {
+            self.changed();
+            return Ok(());
+        };
+        let mut changed: HashSet<String> = p.boards.keys().cloned().collect();
+        changed.extend(std::mem::take(&mut self.previewed));
+        let mut old: HashMap<String, ResolvedNode> = std::mem::take(&mut page.children)
+            .into_iter()
+            .map(|c| (c.id.clone(), c))
+            .collect();
+        page.children = p
+            .order
+            .iter()
+            .filter_map(|id| p.boards.remove(id).or_else(|| old.remove(id)))
+            .collect();
+        let roots: Vec<&ResolvedNode> = page.children.iter().collect();
+        r.load_patch(&roots, &changed);
+        match self.tree.as_mut() {
+            Some(t) => tree_apply(t, &m, ops),
+            None => self.tree = Some(forest(&m)),
+        }
+        self.selection.retain(|id| m.nodes.contains_key(id));
+        self.model = Some(m);
+        Ok(())
+    }
+
+    /// ⌘D: copy each selected subtree right after its original (a top-level copy sits to the right of it) and
+    /// select the copies.
+    pub(crate) fn duplicate(&mut self) -> Result<(), i32> {
+        self.refresh();
+        let page = self.page_id();
+        let (mut ops, mut roots, mut dups) = (vec![], vec![], HashMap::new());
+        for s in self.top_selected() {
+            let (Some(p), Some(o)) = (self.parent_of(&s), self.order_of(&s)) else {
+                continue;
+            };
+            let kids = self.kids(&p);
+            let next = kids
+                .iter()
+                .position(|k| *k == s)
+                .and_then(|i| kids.get(i + 1))
+                .and_then(|k| self.order_of(k));
+            let Some(ord) = between(Some(&o), next.as_deref()) else {
+                continue;
+            };
+            let mut c = self.copy_ops(&s, &p, &ord, &mut dups);
+            if Some(&p) == page.as_ref()
+                && let (Some(r), Some(Op::Add { props, .. })) = (self.rect(&s), c.first_mut())
+            {
+                props.insert("x".into(), json!(round2(r.right + DUP_GAP)));
+                props.insert("y".into(), json!(round2(r.top)));
+            }
+            roots.extend(c.first().and_then(op_id));
+            ops.extend(c);
+        }
+        self.commit(&ops, &dups)?;
+        if !roots.is_empty() {
+            self.selection = roots;
+        }
+        Ok(())
+    }
+
+    /// Arrow keys: 1 pt (10 with shift) in a free parent; one place earlier/later in an auto-layout parent.
+    pub(crate) fn nudge(&mut self, dx: f32, dy: f32) -> Result<(), i32> {
+        self.refresh();
+        let mut ops = vec![];
+        for id in self.top_selected() {
+            let Some(par) = self.parent_of(&id) else {
+                continue;
+            };
+            if self.is_flow(&par) {
+                let kids = self.kids(&par);
+                let Some(i) = kids.iter().position(|k| *k == id) else {
+                    continue;
+                };
+                let (lo, hi) = if dx + dy < 0.0 {
+                    let Some(j) = i.checked_sub(1) else { continue };
+                    (j.checked_sub(1).map(|k| &kids[k]), kids.get(j))
+                } else {
+                    (kids.get(i + 1), kids.get(i + 2))
+                };
+                let (lo, hi) = (
+                    lo.and_then(|k| self.order_of(k)),
+                    hi.and_then(|k| self.order_of(k)),
+                );
+                if hi.is_none() && lo.is_none() {
+                    continue;
+                }
+                if let Some(o) = between(lo.as_deref(), hi.as_deref()) {
+                    ops.push(Op::Move {
+                        id,
+                        parent: Some(par),
+                        order: o,
+                    });
+                }
+                continue;
+            }
+            let (Some(r), o) = (self.rect(&id), self.origin(&par)) else {
+                continue;
+            };
+            if dx != 0.0 {
+                ops.push(set(&id, "x", json!(round2(r.left - o.0 + dx))));
+            }
+            if dy != 0.0 {
+                ops.push(set(&id, "y", json!(round2(r.top - o.1 + dy))));
+            }
+        }
+        self.commit(&ops, &HashMap::new())
+    }
+}
+
+/// Keep the tree in step with a committed batch of moves and adds (re-deriving it costs ~30 ms at 5 000 nodes).
+/// Local moves never make a cycle, so only the parent map and the ordered child lists change.
+fn tree_apply(t: &mut Forest, m: &Doc, ops: &[Op]) {
+    let key = |id: &str| (m.nodes.get(id).map(|n| n.order.clone()), id.to_string());
+    for op in ops {
+        let (id, parent) = match op {
+            Op::Move {
+                id,
+                parent: Some(p),
+                ..
+            }
+            | Op::Add {
+                id,
+                parent: Some(p),
+                ..
+            } => (id, p),
+            _ => continue,
+        };
+        if let Some(old) = t.parent.insert(id.clone(), parent.clone())
+            && let Some(k) = t.children.get_mut(&old)
+        {
+            k.retain(|c| c != id);
+        }
+        let kids = t.children.entry(parent.clone()).or_default();
+        let at = kids.partition_point(|c| key(c) < key(id));
+        kids.insert(at, id.clone());
+    }
+}
+
+fn op_id(op: &Op) -> Option<String> {
+    match op {
+        Op::Add { id, .. } => Some(id.clone()),
+        _ => None,
+    }
+}
