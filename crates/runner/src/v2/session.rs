@@ -611,9 +611,9 @@ async fn open(
             "ssh is off on this runner (it follows exec.run: --enable-exec)",
         )
     })?;
-    pty.check_ssh(req).await?;
+    let slot = pty.check_ssh(req).await?;
     let launch = ssh.terminal_launch(target).await?;
-    pty.open_with(req, Some(launch)).await
+    pty.open_with(req, Some(launch), Some(slot)).await
 }
 
 impl Session {

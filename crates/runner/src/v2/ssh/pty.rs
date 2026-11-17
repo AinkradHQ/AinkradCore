@@ -26,20 +26,33 @@
 //!   once, closing the channel. A host that stops answering is dropped after about two minutes
 //!   (keepalive every 30 s, three missed).
 //!
+//! - **Where a lease can be spent for nothing.** The runner checks the request and reserves a
+//!   capacity slot before any lease is redeemed (`PtyDriver::check_ssh`), so a refused or full
+//!   runner redeems nothing. A lease is still spent when the terminal host fails to start after the
+//!   keys were redeemed, when a hop's host key is refused, or when authentication fails: the Core
+//!   re-leases for the next attempt.
+//! - **Accepted gaps.** Keyboard-interactive answers are handed to russh as `String`s that it and
+//!   we do not wipe (russh's API takes them by value); the typed answer's own buffer is wiped. The
+//!   copies russh and `ssh-key` make while parsing and signing are as in `ssh.exec`.
+//! - **Unattended prompts end.** A password or keyboard-interactive prompt waits `PROMPT_TIMEOUT`
+//!   (120 s) for an answer and ends when the connection closes, so an abandoned terminal frees its
+//!   slot.
+//!
 //! Not covered: the terminal sandbox's network (`--terminal-network`) and `--terminal-user` change
 //! what a terminal may reach; an ssh terminal refuses to start under either (see `PtyDriver`).
 
 use std::collections::VecDeque;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::os::fd::AsFd;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ainkrad_proto::v2::{
     ErrorCode, MAX_SSH_HOPS, SSH_PTY_EXIT_AUTH_FAILED, SSH_PTY_EXIT_FAILED,
     SSH_PTY_EXIT_HOST_KEY_CHANGED, SSH_PTY_EXIT_HOST_KEY_UNKNOWN, SshHop, SshTerminal, StreamError,
 };
-use ainkrad_ptyhost::pty::{FD3_MAX, Hidden};
+use ainkrad_ptyhost::pty::{Capped, FD3_MAX, Hidden};
 use russh::ChannelMsg;
 use russh::MethodKind;
 use russh::client::{AuthResult, Handle, KeyboardInteractiveAuthResponse};
@@ -54,6 +67,9 @@ use super::{
     parse_key,
 };
 
+/// How long a prompt waits for an answer before the terminal gives up (a prompt nobody answers
+/// would hold a terminal slot for ever).
+pub(crate) const PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
 /// Password or keyboard-interactive attempts per hop before giving up.
 const ATTEMPTS: usize = 3;
 /// Longest a typed answer may be.
@@ -151,22 +167,6 @@ impl SshDriver {
     }
 }
 
-/// A writer into a `Vec` that fails rather than grow it.
-struct Capped<'a>(&'a mut Vec<u8>);
-
-impl Write for Capped<'_> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if self.0.len() + buf.len() > self.0.capacity() {
-            return Err(std::io::Error::other("too large"));
-        }
-        self.0.extend_from_slice(buf);
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 /// The person's side of the terminal: bytes typed, bytes shown, size changes, and a stop.
 pub(crate) struct Term<O> {
     pub input: mpsc::UnboundedReceiver<Vec<u8>>,
@@ -176,6 +176,8 @@ pub(crate) struct Term<O> {
     pub resize: mpsc::UnboundedReceiver<(u16, u16)>,
     /// The `TERM` the remote pty asks for.
     pub name: String,
+    /// How long one prompt waits for its answer.
+    pub prompt_timeout: Duration,
 }
 
 /// Unicode format characters (category Cf) and line/paragraph separators: invisible, and able to
@@ -208,15 +210,36 @@ impl<O: AsyncWrite + Unpin> Term<O> {
 
     /// A line typed by the person, with echo on or off. `None`: cancelled (Ctrl-C, Ctrl-D, or the
     /// terminal went away). The answer is wiped when dropped.
-    pub(super) async fn ask(&mut self, prompt: &str, echo: bool) -> Option<Zeroizing<String>> {
+    pub(super) async fn ask(
+        &mut self,
+        prompt: &str,
+        echo: bool,
+        closed: &(dyn Fn() -> bool + Sync),
+    ) -> Option<Zeroizing<String>> {
         // What was typed before the prompt was shown is not an answer to it.
         while self.input.try_recv().is_ok() {}
         let p = clean(prompt);
         self.show(&p).await;
         let mut line = Zeroizing::new(Vec::<u8>::new());
         let mut escape = Esc::None;
+        let deadline = tokio::time::Instant::now() + self.prompt_timeout;
         loop {
-            let chunk = self.input.recv().await?;
+            // A closed connection or an unanswered prompt ends the question, so the terminal ends
+            // too and frees its slot.
+            let chunk = loop {
+                tokio::select! {
+                    c = self.input.recv() => break c?,
+                    () = tokio::time::sleep_until(deadline) => {
+                        self.show("\r\ntimed out waiting for an answer\r\n").await;
+                        return None;
+                    }
+                    () = tokio::time::sleep(Duration::from_secs(1)) => {
+                        if closed() {
+                            return None;
+                        }
+                    }
+                }
+            };
             for b in chunk {
                 match escape {
                     Esc::None => {}
@@ -344,7 +367,10 @@ impl<O: AsyncWrite + Unpin + Send> HopAuth for PromptAuth<'_, O> {
                 self.keyboard(handle, hop, index).await?
             } else {
                 tries -= 1;
-                let answer = (self.term.ask("Password: ", false).await)
+                let answer = (self
+                    .term
+                    .ask("Password: ", false, &|| handle.is_closed())
+                    .await)
                     .ok_or_else(|| denied(index, "cancelled"))?;
                 handle
                     .authenticate_password(&hop.user, answer.as_str())
@@ -392,7 +418,10 @@ impl<O: AsyncWrite + Unpin + Send> PromptAuth<'_, O> {
                     let mut answers = Vec::with_capacity(prompts.len());
                     let mut wipe = Vec::with_capacity(prompts.len());
                     for p in &prompts {
-                        let a = (self.term.ask(&p.prompt, p.echo).await)
+                        let a = (self
+                            .term
+                            .ask(&p.prompt, p.echo, &|| handle.is_closed())
+                            .await)
                             .ok_or_else(|| denied(index, "cancelled"))?;
                         answers.push(a.to_string());
                         wipe.push(a);
@@ -649,6 +678,7 @@ pub async fn pty_main() -> ExitCode {
         size: size((24, 80)),
         resize,
         name: std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_owned()),
+        prompt_timeout: PROMPT_TIMEOUT,
     };
     let code = run(params, term, stop).await;
     drop(raw);

@@ -273,3 +273,25 @@ async fn an_ssh_terminal_works_under_the_terminal_sandbox() {
             .collect::<Vec<_>>()
     );
 }
+
+/// Capacity is reserved before any key lease is redeemed and held until the open is done: with
+/// room for one more, two opens cannot both pass.
+#[tokio::test]
+async fn ssh_capacity_is_reserved_while_a_terminal_is_being_set_up() {
+    let dir = tmp();
+    let _reap = Reap(dir.clone());
+    let s = shell(true, false, false).await;
+    let pty = driver(&dir, true); // capacity 4
+    let Body::Command(Command::PtyOpen(o)) = open_ssh(s.hop("me", "l_1")) else {
+        unreachable!()
+    };
+    let slots = [
+        pty.check_ssh(&o).await.unwrap(),
+        pty.check_ssh(&o).await.unwrap(),
+        pty.check_ssh(&o).await.unwrap(),
+        pty.check_ssh(&o).await.unwrap(),
+    ];
+    assert_eq!(pty.check_ssh(&o).await.err().unwrap().code, ErrorCode::Busy);
+    drop(slots);
+    assert!(pty.check_ssh(&o).await.is_ok(), "the slots were released");
+}

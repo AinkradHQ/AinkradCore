@@ -131,9 +131,8 @@ pub async fn launch(bin: &Path, dir: &Path, id: &str, spec: &Spec) -> io::Result
         .stdout
         .take()
         .ok_or_else(|| io::Error::other("no stdout"))?;
-    stdin
-        .write_all(&serde_json::to_vec(spec).map_err(io::Error::other)?)
-        .await?;
+    // One fixed buffer, wiped on drop: `fd3` holds keys.
+    stdin.write_all(&crate::pty::spec_bytes(spec)?).await?;
     drop(stdin);
     let line = tokio::time::timeout(START, BufReader::new(stdout).lines().next_line())
         .await

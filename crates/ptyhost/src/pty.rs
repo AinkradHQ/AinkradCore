@@ -64,6 +64,34 @@ impl Drop for Hidden {
     }
 }
 
+/// The most bytes a serialized [`Spec`] may take (it carries the key handoff, so it is read and
+/// written through one fixed buffer, never grown).
+pub const SPEC_MAX: usize = 256 * 1024;
+
+/// A writer into a `Vec` that fails rather than grow it: growing would leave an unwiped copy of
+/// what was written (keys) behind in freed memory.
+pub struct Capped<'a>(pub &'a mut Vec<u8>);
+
+impl Write for Capped<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.0.len() + buf.len() > self.0.capacity() {
+            return Err(io::Error::other("too large"));
+        }
+        self.0.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// `spec` as the host reads it on stdin, in a buffer of `SPEC_MAX` bytes that is wiped on drop.
+pub fn spec_bytes(spec: &Spec) -> io::Result<zeroize::Zeroizing<Vec<u8>>> {
+    let mut buf = zeroize::Zeroizing::new(Vec::with_capacity(SPEC_MAX));
+    serde_json::to_writer(Capped(&mut buf), spec).map_err(io::Error::other)?;
+    Ok(buf)
+}
+
 /// The most bytes `Spec::fd3` may carry: well inside a pipe's capacity on both OSes, so filling it
 /// never blocks.
 pub const FD3_MAX: usize = 12 * 1024;

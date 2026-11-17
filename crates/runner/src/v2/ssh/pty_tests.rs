@@ -299,6 +299,7 @@ impl Rig {
             size: (24, 80),
             resize,
             name: "xterm-256color".to_owned(),
+            prompt_timeout: Duration::from_secs(60),
         };
         Self {
             typed,
@@ -595,6 +596,7 @@ fn bare_term(
         size: (24, 80),
         resize,
         name: "xterm".to_owned(),
+        prompt_timeout: Duration::from_secs(60),
     };
     (term, typed)
 }
@@ -605,7 +607,7 @@ fn bare_term(
 async fn escape_sequences_typed_at_a_prompt_are_dropped_whole() {
     let (out, _keep) = tokio::io::duplex(4096);
     let (mut term, typed) = bare_term(out);
-    let ask = tokio::spawn(async move { term.ask("P: ", true).await });
+    let ask = tokio::spawn(async move { term.ask("P: ", true, &|| false).await });
     // `ask` drains what is queued when the prompt is shown: type after it is.
     tokio::time::sleep(Duration::from_millis(100)).await;
     for chunk in [&b"ab\x1b[1;5Dc\x1bOAd\x1bxe"[..], b"\x1b", b"[Af\r"] {
@@ -621,7 +623,7 @@ async fn input_queued_before_a_prompt_is_drained() {
     let (out, mut shown) = tokio::io::duplex(4096);
     let (mut term, typed) = bare_term(out);
     typed.send(b"queued-junk\r".to_vec()).unwrap();
-    let ask = tokio::spawn(async move { term.ask("P: ", false).await });
+    let ask = tokio::spawn(async move { term.ask("P: ", false, &|| false).await });
     let mut buf = [0u8; 3];
     shown.read_exact(&mut buf).await.unwrap();
     assert_eq!(&buf, b"P: ");
@@ -647,4 +649,57 @@ async fn password_and_keyboard_interactive_share_three_tries() {
     typist.abort();
     let tries = s.log.passwords.lock().unwrap().len() + s.log.codes.lock().unwrap().len();
     assert!((1..=3).contains(&tries), "{tries} answers sent");
+}
+
+/// A prompt nobody answers ends after its deadline (the terminal then ends and frees its slot), and
+/// a connection that closed ends it too.
+#[tokio::test]
+async fn an_unanswered_prompt_times_out_and_a_closed_connection_ends_it() {
+    use std::sync::atomic::AtomicBool;
+    let (out, _keep) = tokio::io::duplex(4096);
+    let (mut term, _typed) = bare_term(out);
+    term.prompt_timeout = Duration::from_millis(200);
+    assert!(term.ask("P: ", false, &|| false).await.is_none());
+    let (out, _keep) = tokio::io::duplex(4096);
+    let (mut term, _typed) = bare_term(out);
+    let closed = AtomicBool::new(false);
+    let is_closed = || closed.load(SeqCst);
+    let ask = term.ask("P: ", false, &is_closed);
+    let flip = async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        closed.store(true, SeqCst);
+    };
+    let (got, ()) = tokio::join!(ask, flip);
+    assert!(got.is_none(), "the closed connection ended the prompt");
+}
+
+/// What the key handoff can hold (`FD3_MAX`): RSA keys cannot reach this path (the `rsa` feature is
+/// off, so `parse_key` refuses them before a terminal exists), so a full chain, three jumps and
+/// the target, of the biggest keys that can (ECDSA P-521, ed25519) must fit.
+#[test]
+fn a_full_chain_of_the_biggest_usable_keys_fits_the_handoff() {
+    use russh::keys::ssh_key::{Algorithm, EcdsaCurve, PrivateKey};
+    let big = PrivateKey::random(
+        &mut rand::rng(),
+        Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP521,
+        },
+    )
+    .unwrap();
+    let h = SshHop {
+        host: "a".repeat(255),
+        port: 22,
+        user: "u".repeat(32),
+        pinned_keys: vec![format!("SHA256:{}", "x".repeat(43)); 4],
+        lease: String::new(),
+    };
+    let small = new_key();
+    let p = Params {
+        hops: (0..=MAX_SSH_HOPS)
+            .map(|i| hop(&h, if i % 2 == 0 { &big } else { &small }))
+            .collect(),
+    };
+    let mut buf = Vec::with_capacity(ainkrad_ptyhost::pty::FD3_MAX);
+    serde_json::to_writer(ainkrad_ptyhost::pty::Capped(&mut buf), &p).expect("fits FD3_MAX");
+    assert!(buf.len() < ainkrad_ptyhost::pty::FD3_MAX);
 }

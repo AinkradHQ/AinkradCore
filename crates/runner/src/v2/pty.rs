@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -109,6 +109,18 @@ pub struct PtyDriver {
     /// The Core key (SPKI) the last connection proved, and this runner's device id: told to every
     /// host it connects to, so the host's local socket can check the Core's grants.
     trust: Mutex<Option<(Vec<u8>, String)>>,
+    /// Ssh terminals whose keys are being redeemed (see `check_ssh`): they count against capacity.
+    reserved: Arc<AtomicUsize>,
+}
+
+/// A capacity slot held for an ssh terminal from `check_ssh` until its host has started (or the
+/// open failed): two opens cannot both pass the capacity check and both redeem leases.
+pub struct SshSlot(Arc<AtomicUsize>);
+
+impl Drop for SshSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 fn now_ms() -> u64 {
@@ -201,6 +213,7 @@ impl PtyDriver {
             budget: AtomicU64::new(SCROLLBACK_BUDGET.2),
             clients: Mutex::default(),
             trust: Mutex::default(),
+            reserved: Arc::default(),
         }
     }
 
@@ -358,20 +371,23 @@ impl PtyDriver {
     /// Everything about an ssh terminal request that can be refused without its keys: enabled, the
     /// shape, and (best effort: `open_with` checks again) room for another terminal. Called before
     /// any key lease is redeemed, so a refused request redeems nothing.
-    pub async fn check_ssh(&self, req: &PtyOpen) -> Result<(), StreamError> {
+    pub async fn check_ssh(&self, req: &PtyOpen) -> Result<SshSlot, StreamError> {
         self.enabled()?;
         self.ssh_shape(req)?;
         let live = scan(&self.config.dir).await.len();
-        if live >= self.config.capacity as usize {
+        // Reserved first, then checked: two concurrent opens cannot both see room for one.
+        let before = self.reserved.fetch_add(1, Ordering::SeqCst);
+        let slot = SshSlot(Arc::clone(&self.reserved));
+        if live + before >= self.config.capacity as usize {
             let cap = self.config.capacity;
             return Err(err(ErrorCode::Busy, format!("pty is at capacity ({cap})")));
         }
-        Ok(())
+        Ok(slot)
     }
 
     /// Starts a host for `req`; its terminal id.
     pub async fn open(&self, req: &PtyOpen) -> Result<String, StreamError> {
-        self.open_with(req, None).await
+        self.open_with(req, None, None).await
     }
 
     /// `open`, with `ssh` (from `SshDriver::terminal_launch`, for a `PtyOpen::ssh`) as the terminal's
@@ -380,6 +396,7 @@ impl PtyDriver {
         &self,
         req: &PtyOpen,
         ssh: Option<super::SshLaunch>,
+        slot: Option<SshSlot>,
     ) -> Result<String, StreamError> {
         self.enabled()?;
         let invalid = |m: &str| err(ErrorCode::InvalidArgs, m);
@@ -404,8 +421,10 @@ impl PtyDriver {
             ),
             None => None,
         };
+        // Other ssh terminals being set up hold a slot each; ours (if any) is not counted twice.
+        let others = self.reserved.load(Ordering::SeqCst) - usize::from(slot.is_some());
         let live = scan(&self.config.dir).await.len();
-        if live >= self.config.capacity as usize {
+        if live + others >= self.config.capacity as usize {
             let cap = self.config.capacity;
             return Err(err(ErrorCode::Busy, format!("pty is at capacity ({cap})")));
         }
