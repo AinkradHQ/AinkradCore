@@ -7,9 +7,6 @@ all-features = true
 version = 2
 yanked = "deny"
 ignore = [
-  # RUSTSEC-2026-0543 (chrono, unmaintained): reached only through russh-sftp (runner SFTP, Y2-03), used for file mtimes.
-  # No advisory beyond "unmaintained". Drop when russh-sftp moves off chrono.
-  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained: via russh-sftp, mtime formatting only" },
   # E2-19 (iroh): "unmaintained", a compile-time macro crate reached through netlink-packet-core (netwatch, the
   # Linux/Android network-change monitor). No runtime code, no untrusted input. Drop when iroh's netwatch moves off it.
   { id = "RUSTSEC-2024-0436", reason = "paste: macro only, via iroh -> netwatch -> netlink-packet-core" },
@@ -18,6 +15,9 @@ ignore = [
   # sqlx-sqlite 0.9.0 caps libsqlite3-sys at <0.38 (fix is >=0.39). Remove when sqlx ships 0.39 support.
   # Time-boxed: re-check by 2026-12-09.
   { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys: hostile -wal needed, own databases only; blocked on sqlx-sqlite <0.38 cap; re-check 2026-12-09" },
+  # RUSTSEC-2026-0543 (chrono, "unmaintained", no vulnerability): reached through ainkrad-core-server; date formatting only.
+  # Drop when the dependents move to jiff/time. Time-boxed: re-check by 2026-12-08.
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained (no vulnerability): date formatting only; re-check 2026-12-08" },
 ]
 
 [licenses]

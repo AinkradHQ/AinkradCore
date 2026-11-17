@@ -1204,6 +1204,8 @@
           "leyline.host.changed",
           "leyline.host.created",
           "leyline.host.deleted",
+          "leyline.key.created",
+          "leyline.key.deleted",
           "notify.token_pruned",
           "pairing.approved",
           "pairing.burned",
@@ -1241,6 +1243,7 @@
           "secret.master_rotated",
           "secret.redeemed",
           "secret.rotated",
+          "secret.runners_changed",
           "secret.used",
           "secret_group.created",
           "secret_group.deleted",
@@ -2420,6 +2423,7 @@
           "audit",
           "connection.health",
           "leyline.host",
+          "leyline.key",
           "notify.delivery",
           "project.archived",
           "project.created",
@@ -2458,6 +2462,7 @@
           "audit": "admin",
           "connection.health": "admin",
           "leyline.host": "read",
+          "leyline.key": "read",
           "notify.delivery": "admin",
           "project.archived": "read",
           "project.created": "read",
@@ -2999,6 +3004,30 @@
         ],
         "type": "object"
       },
+      "ImportKey": {
+        "description": "No `Debug`: nothing may print it.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "passphrase": {
+            "description": "Only for an encrypted key. Used once to decrypt, then dropped; never stored.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "private_key": {
+            "description": "An OpenSSH private key (`-----BEGIN OPENSSH PRIVATE KEY-----`), at most 16 KiB.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "private_key"
+        ],
+        "type": "object"
+      },
       "InstallToolBody": {
         "additionalProperties": false,
         "properties": {
@@ -3054,6 +3083,57 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "KeyDeleted": {
+        "properties": {
+          "deleted": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "KeyView": {
+        "properties": {
+          "algo": {
+            "description": "`ed25519`, `ecdsa-p256` or `ecdsa-p384`.",
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "description": "`SHA256:...`, as `ssh-keygen -l` prints it.",
+            "type": "string"
+          },
+          "id": {
+            "description": "`k_` and 16 hex characters.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "origin": {
+            "description": "`generated` or `imported`.",
+            "type": "string"
+          },
+          "public_key": {
+            "description": "The OpenSSH one-line public key.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "algo",
+          "public_key",
+          "fingerprint",
+          "origin",
+          "created_at"
+        ],
         "type": "object"
       },
       "KindAuthMethod": {
@@ -3902,6 +3982,17 @@
               "type": "string"
             },
             "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "NewKey": {
+        "properties": {
+          "name": {
+            "type": "string"
           }
         },
         "required": [
@@ -16174,6 +16265,259 @@
           "leyline"
         ],
         "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/leyline/v1/keys": {
+      "get": {
+        "operationId": "leylineListKeys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/KeyView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every key by name: public data only"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "leyline"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "post": {
+        "operationId": "leylineGenerateKey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyView"
+                }
+              }
+            },
+            "description": "A new ed25519 key, generated in the Core and sealed (audited as `leyline.key.created`). The private half is never returned. 409 `secrets_disabled` (`secrets.mode` 0), `real_secret_refused` (mode 1: a real key waits for mode 2), `conflict`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "leyline"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/leyline/v1/keys/import": {
+      "post": {
+        "operationId": "leylineImportKey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyView"
+                }
+              }
+            },
+            "description": "The imported key, sealed (step-up; audited as `leyline.key.created`). ed25519 and ECDSA P-256/P-384 only; RSA and DSA are refused (400). The passphrase is used once and discarded; the private half is never returned"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "leyline"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/leyline/v1/keys/{key}": {
+      "delete": {
+        "operationId": "leylineDeleteKey",
+        "parameters": [
+          {
+            "description": "Key id",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyDeleted"
+                }
+              }
+            },
+            "description": "Deleted with its sealed private half (step-up; audited as `leyline.key.deleted`); 409 while a host uses it"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "leyline"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      },
+      "get": {
+        "operationId": "leylineGetKey",
+        "parameters": [
+          {
+            "description": "Key id",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyView"
+                }
+              }
+            },
+            "description": "The key: public data only"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "leyline"
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/modules/leyline/v1/tags": {

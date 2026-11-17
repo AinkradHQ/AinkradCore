@@ -1,0 +1,17 @@
+# The Design module (V1-02): its own workspace like `modules/brain` and `modules/leyline`,
+# `make build-design` / `make test-design`. Later stories add `render`, `ffi` and `module` here.
+[workspace]
+resolver = "3"
+members = ["model"]
+exclude = ["model/fuzz"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
