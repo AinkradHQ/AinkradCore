@@ -16,6 +16,8 @@
 package ainkrad.client.apis
 
 import ainkrad.client.models.ErrorBody
+import ainkrad.client.models.GithubRepoList
+import ainkrad.client.models.NewGithubProject
 import ainkrad.client.models.NewProject
 import ainkrad.client.models.NewProjectRepo
 import ainkrad.client.models.ProjectInfo
@@ -139,6 +141,39 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * POST /api/v1/projects/from-github
+        * 
+        * 
+         * @param newGithubProject  
+         * @return ProjectInfo
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun createProjectFromGithub(newGithubProject: NewGithubProject): HttpResponse<ProjectInfo> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = newGithubProject
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/projects/from-github",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * GET /api/v1/projects/{id}
         * 
         * 
@@ -160,6 +195,49 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.GET,
             "/api/v1/projects/{id}".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/projects/github/repos
+        * 
+        * 
+         * @param connection A connection id; default the project&#39;s, else the workspace default. (optional)
+         * @param project The project&#39;s id, to prefer the connection bound to it. (optional)
+         * @param q Case-insensitive text in &#x60;owner/name&#x60;. (optional)
+         * @param page From 1; default 1. (optional)
+         * @param perPage 1-100; default 30. (optional)
+         * @return GithubRepoList
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun listGithubRepos(connection: kotlin.Long?, project: kotlin.String?, q: kotlin.String?, page: kotlin.Long?, perPage: kotlin.Long?): HttpResponse<GithubRepoList> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+            connection?.apply { localVariableQuery["connection"] = listOf("$connection") }
+            project?.apply { localVariableQuery["project"] = listOf("$project") }
+            q?.apply { localVariableQuery["q"] = listOf("$q") }
+            page?.apply { localVariableQuery["page"] = listOf("$page") }
+            perPage?.apply { localVariableQuery["per_page"] = listOf("$perPage") }
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/projects/github/repos",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

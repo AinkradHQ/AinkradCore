@@ -1304,6 +1304,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/from-github": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createProjectFromGithub"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/github/repos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listGithubRepos"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}": {
         parameters: {
             query?: never;
@@ -2994,6 +3026,40 @@ export interface components {
             /** Format: int64 */
             user_id: number;
         };
+        GithubOwner: {
+            /** @description The user or organisation. */
+            owner: string;
+            repos: components["schemas"]["GithubRepo"][];
+        };
+        GithubRepo: {
+            default_branch: string;
+            description: string;
+            /** @description `owner/name`. */
+            full_name: string;
+            name: string;
+            private: boolean;
+        };
+        GithubRepoList: {
+            /**
+             * Format: int64
+             * @description The connection the repos were read with.
+             */
+            connection_id: number;
+            has_more: boolean;
+            /** @description This page's repos grouped by owner; owners and repos by name. */
+            owners: components["schemas"]["GithubOwner"][];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /**
+             * Format: int64
+             * @description Repos matching `q`, over all pages.
+             */
+            total: number;
+            /** @description GitHub has more repos than Core reads (1000); use `q` to narrow. */
+            truncated: boolean;
+        };
         /** @description One lease of a group's grant: hand `lease` to the runner. No `Debug`. */
         GroupLease: {
             expires_at: components["schemas"]["Timestamp"];
@@ -3438,6 +3504,22 @@ export interface components {
             installation_id?: number | null;
             site?: string | null;
             token?: string | null;
+        };
+        NewGithubProject: {
+            /**
+             * Format: int64
+             * @description Default: the workspace's GitHub default.
+             */
+            connection_id?: number | null;
+            /** @description Default: the first repo's name. */
+            name?: string | null;
+            /** @description 1-10 repos as `owner/name`; the first is primary. */
+            repos: string[];
+            /**
+             * @description Default: made from the name; a taken or reserved one gets `-2`, `-3`, ... An explicit slug
+             *     that is taken is 409 `conflict`.
+             */
+            slug?: string | null;
         };
         NewGroupLease: {
             /** @description The runner's device id, `d_…`. */
@@ -7978,6 +8060,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createProjectFromGithub: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewGithubProject"];
+            };
+        };
+        responses: {
+            /** @description Created with source `github` (audited and emitted as `project.created`), its repos added with GitHub's names and default branches, and the connection bound to it (scope `project`, audited `connection.bound`). 400 for a bad repo, name or slug; 404 for a repo the connection cannot see; 409 `conflict` for a taken explicit slug or a repeated repo, `no_connection` when none is set up */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listGithubRepos: {
+        parameters: {
+            query?: {
+                /** @description A connection id; default the project's, else the workspace default. */
+                connection?: number;
+                /** @description The project's id, to prefer the connection bound to it. */
+                project?: string;
+                /** @description Case-insensitive text in `owner/name`. */
+                q?: string;
+                /** @description From 1; default 1. */
+                page?: number;
+                /** @description 1-100; default 30. */
+                per_page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The repos visible to the project's GitHub connection (else the workspace default), grouped by owner, searchable and paged. 409 `no_connection` when none is set up; GitHub's own failures are `auth_failed` or `unreachable` (502) and `rate_limited` (429), each a fixed sentence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubRepoList"];
                 };
             };
             400: components["responses"]["BadRequest"];
