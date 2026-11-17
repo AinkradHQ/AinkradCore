@@ -1,0 +1,20 @@
+# The Leyline module (Y1-01): its own workspace like `modules/brain` and `modules/toy`,
+# `make build-leyline` / `make test-leyline`. The released Core carries it through `modules/brain/bin`.
+[workspace]
+resolver = "3"
+members = ["module"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Same age fork as the root workspace, so the release is reproducible like the others.
+[patch.crates-io]
+age = { git = "https://github.com/AinkradHQ/rage", rev = "794958a40fd3471e8ea75be0acdf9761191b2a46" }

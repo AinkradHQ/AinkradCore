@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: build-brain test-brain test-brain-linux check-env install-test perf test-web e1-exit e1-exit-faults e2-exit e2-exit-faults e2-soak soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel build-toy test-toy release-dry release-repro release-test fuzz-smoke audit-fuzz
+.PHONY: build-leyline test-leyline build-brain test-brain test-brain-linux check-env install-test perf test-web e1-exit e1-exit-faults e2-exit e2-exit-faults e2-soak soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel build-toy test-toy release-dry release-repro release-test fuzz-smoke audit-fuzz
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check check-env ; scripts/api-minor-check.sh && $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -67,6 +67,10 @@ BRAIN = --manifest-path modules/brain/Cargo.toml --workspace
 build-brain: ; $(CARGO) build $(BRAIN)
 test-brain: ; $(CARGO) test $(BRAIN)
 test-brain-linux: ; $(call DOCKER_RUN,arm64) --platform linux/arm64 $(RUST_IMAGE) sh -c 'rustup show >/dev/null && cargo test $(BRAIN)'
+# The Leyline module (Y1-01): its own workspace; the released Core carries it through modules/brain/bin.
+LEYLINE = --manifest-path modules/leyline/Cargo.toml --workspace
+build-leyline: ; $(CARGO) build $(LEYLINE)
+test-leyline: ; $(CARGO) test $(LEYLINE)
 # Local run (E1-01.5): state in ./state (gitignored); `Run/run.sh run` comes here. The default listener is a
 # Unix socket (state/core.sock); for HTTP on loopback use `make run LISTEN=loopback:7700`.
 LISTEN ?= unix:state/core.sock
