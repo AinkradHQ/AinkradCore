@@ -26,11 +26,15 @@ use serde_json::{Map as JMap, Number, Value};
 use yrs::undo::{Options as UndoOptions, UndoManager};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
-use yrs::{Any, Doc as YDoc, GetString, Map, MapRef, Origin, Out, ReadTxn, StateVector, Transact};
+use yrs::{
+    Any, Doc as YDoc, GetString, Map, MapRef, Origin, Out, ReadTxn, StateVector, Transact, Update,
+};
 
 mod decode;
 mod ops;
 mod presence;
+#[cfg(test)]
+mod reset_tests;
 
 pub use ops::{MAX_OPS, MAX_OPS_BYTES, Op, parse_ops};
 pub use presence::{ClockFn, MAX_PEERS, MAX_PRESENCE_BYTES, PEER_TTL_MS, Presence};
@@ -50,10 +54,17 @@ pub enum Error {
     Malformed(String),
     /// An op the validators refused; nothing was written.
     Refused(String),
-    /// Applying a remote update failed inside yrs; the replica was replaced by an empty one. Resync from the Core
-    /// (send the state vector, apply the full diff).
+    /// yrs failed on a remote update; the replica was replaced by a fresh one holding only the unsent local edits.
+    /// Resync from the Core (send the state vector, apply the full diff).
     Reset,
+    /// `MAX_RESETS` resets within `RESET_WINDOW_MS`: remote updates are no longer applied (no resync loop). Local
+    /// edits still work and still go out; close the design and open it again.
+    Halted,
 }
+
+/// The reset breaker: this many resets within the window halts remote updates.
+pub const MAX_RESETS: usize = 3;
+pub const RESET_WINDOW_MS: u64 = 60_000;
 
 pub struct Live {
     presence: Presence,
@@ -62,6 +73,9 @@ pub struct Live {
     tokens: MapRef,
     undo: UndoManager<()>,
     outbox: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// When the last resets happened (ms, the presence clock), for the breaker.
+    resets: Vec<u64>,
+    halted: bool,
 }
 
 impl Default for Live {
@@ -75,13 +89,16 @@ impl Live {
         Live::with_clock(std::sync::Arc::new(presence::system_clock))
     }
 
-    /// `clock` = milliseconds for presence expiry (tests pass a fake one).
+    /// `clock` = milliseconds for presence expiry and the reset breaker (tests pass a fake one).
     pub fn with_clock(clock: presence::ClockFn) -> Live {
+        Live::build(clock, Arc::default())
+    }
+
+    fn build(clock: presence::ClockFn, outbox: Arc<Mutex<Vec<Vec<u8>>>>) -> Live {
         let doc = YDoc::new();
         let nodes = doc.get_or_insert_map("nodes");
         let meta = doc.get_or_insert_map("meta");
         let tokens = doc.get_or_insert_map("tokens");
-        let outbox: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
         let ob = outbox.clone();
         let remote = Origin::from(REMOTE);
         // Everything this replica did (edits, undo, redo) goes out; what came in does not echo back.
@@ -104,6 +121,8 @@ impl Live {
             tokens,
             undo,
             outbox,
+            resets: vec![],
+            halted: false,
         }
     }
 
@@ -116,28 +135,75 @@ impl Live {
         if update.len() > MAX_UPDATE_BYTES {
             return Err(Error::TooLarge);
         }
-        let u = decode::update(update)?;
-        // A panic inside yrs while integrating must not unwind through the open transaction: its drop commits, and a
-        // second panic there would abort. The inner catch ends the first panic before the transaction drops; the
-        // outer one catches a panic in that commit. Either way the replica may be half-applied, so it is replaced by
-        // an empty one and the host resyncs from the Core (local edits not yet sent are lost; the Core has the rest).
+        if self.halted {
+            return Err(Error::Halted);
+        }
+        let (u, refs) = decode::update(update)?;
+        self.no_gap(&u, &refs)?;
+        let r = self.integrate(u);
+        if r == Err(Error::Reset) {
+            self.reset();
+        }
+        r
+    }
+
+    /// Refuse a remote update that yrs would have to keep as "pending": one whose blocks for some client start past
+    /// what this replica has, that refers to a block (origin, parent) neither this replica nor the update holds, or
+    /// that deletes beyond both. The Core relays updates in order and a diff starts at our state vector, so an honest
+    /// update never needs pending; the host answers this error with a resync. yrs's pending path is where the
+    /// use-after-free and the re-encode panics live (fuzz target `apply`, `fuzz/regressions/*`), so remote bytes never
+    /// reach it.
+    fn no_gap(&self, u: &Update, refs: &[yrs::ID]) -> Result<(), Error> {
+        let have = self.doc().transact().state_vector();
+        let upper = u.state_vector();
+        let limit = |c: &yrs::ClientID| have.get(c).max(upper.get(c));
+        if u.state_vector_lower()
+            .iter()
+            .any(|(c, lower)| *lower > have.get(c))
+            || refs.iter().any(|id| id.clock >= limit(&id.client))
+            || u.delete_set()
+                .iter()
+                .any(|(c, rs)| rs.iter().any(|r| r.end > limit(c)))
+        {
+            return Err(Error::Malformed(
+                "update does not follow this replica's state; resync".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Apply `u` (remote origin). A panic inside yrs is reported as `Error::Reset`; the caller resets.
+    fn integrate(&mut self, u: Update) -> Result<(), Error> {
+        // A panic while integrating must not unwind through the open transaction: its drop commits, and a second
+        // panic there would abort. The inner catch ends the first panic before the transaction drops; the outer one
+        // catches a panic in that commit or in the probe.
         let mut panicked = false;
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut txn = self.doc().transact_mut_with(REMOTE);
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| txn.apply_update(u))) {
+            let r = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                txn.apply_update(u)
+            })) {
                 Ok(r) => r.map_err(|e| Error::Malformed(e.to_string())),
                 Err(_) => {
                     panicked = true;
                     Err(Error::Reset)
                 }
+            };
+            drop(txn);
+            // Probe: yrs keeps updates it cannot integrate yet as "pending" and re-encodes them later, which panics
+            // for some it accepted. Do that now, so a bad pending update resets here, attributed to the remote
+            // update, and not on the user's next edit or sync. Cheap: only the pending part is encoded.
+            if !panicked {
+                let t = self.doc().transact();
+                if t.has_missing_updates() {
+                    let _ = t.encode_state_as_update_v1(&t.state_vector());
+                }
             }
+            r
         }));
         match r {
             Ok(r) if !panicked => r,
-            _ => {
-                self.reset();
-                Err(Error::Reset)
-            }
+            _ => Err(Error::Reset),
         }
     }
 
@@ -156,9 +222,31 @@ impl Live {
         self.recover(|l| Ok(l.doc().transact().encode_state_as_update_v1(&sv)))
     }
 
-    /// Replace a replica yrs left inconsistent by an empty one; the host resyncs from the Core.
-    fn reset(&mut self) {
-        *self = Live::with_clock(self.presence.clock());
+    /// Replace a replica yrs left inconsistent by a fresh one. The unsent local edits survive: the fresh replica
+    /// keeps the same outbox (they still go out) and holds them as its own content (pending until the resync brings
+    /// what they build on). The undo history and presence peers do not survive. The old document is leaked, not
+    /// dropped: a panic may have left it half-integrated, and dropping such a yrs store is a known use-after-free;
+    /// the breaker bounds the leak to `MAX_RESETS` documents per window.
+    pub(crate) fn reset(&mut self) {
+        let clock = self.presence.clock();
+        let now = clock();
+        let mut resets = std::mem::take(&mut self.resets);
+        resets.retain(|t| now.saturating_sub(*t) < RESET_WINDOW_MS);
+        resets.push(now);
+        let queued = self
+            .outbox
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let mut fresh = Live::build(clock, self.outbox.clone());
+        for q in &queued {
+            if let Ok((u, _)) = decode::update(q) {
+                let _ = fresh.integrate(u);
+            }
+        }
+        fresh.halted = self.halted || resets.len() >= MAX_RESETS;
+        fresh.resets = resets;
+        std::mem::forget(std::mem::replace(self, fresh));
     }
 
     /// Run `f`; a panic inside yrs resets the replica (`Error::Reset`) instead of reaching the caller.

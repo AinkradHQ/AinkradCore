@@ -24,6 +24,7 @@ pub fn code(e: Error) -> i32 {
         Error::TooLarge => DE_ERR_TOO_LARGE,
         Error::Malformed(_) | Error::Refused(_) => DE_ERR_INVALID,
         Error::Reset => DE_ERR_RESET,
+        Error::Halted => DE_ERR_HALTED,
     }
 }
 
