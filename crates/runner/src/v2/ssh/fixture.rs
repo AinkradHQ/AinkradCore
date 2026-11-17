@@ -37,6 +37,10 @@ pub(super) struct Seen {
     pub(super) auth: AtomicUsize,
     /// `direct-tcpip` channels it carried.
     pub(super) forwards: AtomicUsize,
+    /// `exec` requests received: a cancelled op must leave this at 0.
+    pub(super) execs: AtomicUsize,
+    /// Channel `signal` requests (the best-effort KILL).
+    pub(super) signals: AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -116,6 +120,16 @@ impl russh::server::Handler for Fixture {
         Ok(())
     }
 
+    async fn signal(
+        &mut self,
+        _: ChannelId,
+        _: russh::Sig,
+        _: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.seen.signals.fetch_add(1, SeqCst);
+        Ok(())
+    }
+
     async fn exec_request(
         &mut self,
         channel: ChannelId,
@@ -123,6 +137,7 @@ impl russh::server::Handler for Fixture {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let cmd = String::from_utf8_lossy(data).into_owned();
+        self.seen.execs.fetch_add(1, SeqCst);
         session.channel_success(channel)?;
         let (h, name) = (session.handle(), self.name);
         tokio::spawn(async move {
@@ -144,6 +159,12 @@ impl russh::server::Handler for Fixture {
                     }
                 }
                 "sleep" => tokio::time::sleep(Duration::from_secs(30)).await,
+                // Ends the channel without saying how the command ended.
+                "noexit" => {
+                    let _ = h.eof(channel).await;
+                    let _ = h.close(channel).await;
+                    return;
+                }
                 _ => code = 127,
             }
             let _ = h.exit_status_request(channel, code).await;
@@ -216,6 +237,8 @@ pub(super) async fn start(
 pub(super) struct Leases {
     pub(super) keys: Arc<Mutex<HashMap<String, String>>>,
     pub(super) redeemed: Arc<AtomicUsize>,
+    /// How long a redemption takes (the Core answering slowly).
+    pub(super) delay: Arc<Mutex<Duration>>,
 }
 
 impl Leases {
@@ -235,6 +258,8 @@ impl Leases {
             let this = this.clone();
             Box::pin(async move {
                 this.redeemed.fetch_add(1, SeqCst);
+                let delay = *this.delay.lock().unwrap();
+                tokio::time::sleep(delay).await;
                 let pem = this.keys.lock().unwrap().get(&lease).cloned();
                 let pem = pem.ok_or_else(|| "no such lease".to_owned())?;
                 use base64::Engine;

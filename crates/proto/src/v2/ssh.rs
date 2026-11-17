@@ -15,7 +15,7 @@ pub const OP_SSH_EXEC: &str = "ssh.exec";
 pub const MAX_SSH_HOPS: usize = 3;
 
 /// One machine on the path: where, as whom, which host keys are trusted, and which key to prove with.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SshHop {
     pub host: String,
     #[serde(default = "default_port")]
@@ -32,6 +32,19 @@ pub struct SshHop {
 
 fn default_port() -> u16 {
     22
+}
+
+/// Not derived: a lease names a secret, and no log line or panic message should carry it.
+impl std::fmt::Debug for SshHop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshHop")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("pinned_keys", &self.pinned_keys)
+            .field("lease", &"[hidden]")
+            .finish()
+    }
 }
 
 /// Runs `run` on `target`, through `hops` (jump hosts, first to last), and answers with the exit and

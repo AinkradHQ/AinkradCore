@@ -18,11 +18,18 @@
 //!   is a `direct-tcpip` channel through the previous one, so a hop is only asked to carry traffic
 //!   after it passed both checks. At most `MAX_SSH_HOPS` jumps.
 //! - **What the host returns** is data: capped, redacted, lossy UTF-8, like `exec.run`'s output.
-//! - **Pool.** A connection is reused only by an op that redeemed the same target key (the pool key
-//!   holds its fingerprint) and whose pins still list every hop's key. Unused 5 minutes: closed.
+//! - **Pool.** Every op redeems every lease of its chain, so a connection is reused only by an op that
+//!   holds every hop's key (the pool key is the chain's addresses plus each key's fingerprint) and
+//!   whose pins still list the key each hop presented. A connection idle 5 minutes is closed by a
+//!   sweeper; none is closed under a running command (no russh inactivity timeout).
+//! - **Cancel and time.** One deadline (the clamped timeout) covers redeem, dial and run; a cancel
+//!   (fired or dropped) at any point stops the op, and the command is never sent after one. On a
+//!   timeout or cancel of a running command the runner sends a best-effort `KILL` signal and closes
+//!   the channel; sshd may ignore the signal (OpenSSH before 7.9 does), the channel close still ends
+//!   the remote session.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -34,13 +41,15 @@ use russh::client::{self, Handle, Handler};
 use russh::keys::{
     Algorithm, EcdsaCurve, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate,
 };
-use russh::{ChannelMsg, Preferred};
+use russh::{ChannelMsg, Preferred, Sig};
 use tokio::net::TcpStream;
-use tokio::sync::{OwnedSemaphorePermit, oneshot};
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::oneshot::{self, error::TryRecvError};
 use zeroize::Zeroizing;
 
 use super::agent::secrets::{Form, Redeem};
 use super::exec::{ExecDriver, Raw};
+use pool::{Conn, InUse, Pool, pool_key};
 
 pub const DRIVER: &str = "ssh";
 
@@ -49,7 +58,7 @@ const IDLE: Duration = Duration::from_secs(300);
 /// Connecting, key exchange and authentication of the whole chain.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Pooled connections kept at once; the least recently used goes first.
-const POOL_MAX: usize = 32;
+pub(super) const POOL_MAX: usize = 32;
 const MAX_RUN_BYTES: usize = 64 * 1024;
 
 /// Host-key algorithms offered: no RSA, so no `ssh-rsa` (SHA-1); no DSA.
@@ -66,7 +75,7 @@ const HOST_KEYS: &[Algorithm] = &[
     },
 ];
 
-fn config(idle: Duration) -> Arc<client::Config> {
+fn config() -> Arc<client::Config> {
     Arc::new(client::Config {
         // kex, ciphers, MACs and compression stay russh's defaults (SHA-2, AEAD/CTR, none); a test
         // pins that no SHA-1/CBC/DSA name is in them.
@@ -74,13 +83,15 @@ fn config(idle: Duration) -> Arc<client::Config> {
             key: Cow::Borrowed(HOST_KEYS),
             ..Preferred::DEFAULT
         },
-        inactivity_timeout: Some(idle),
+        // No russh inactivity timeout: it would drop a command that is silent for longer than it,
+        // under the exec ceiling. Idle connections are closed by the pool's sweeper.
+        inactivity_timeout: None,
         ..client::Config::default()
     })
 }
 
 /// Checks one hop's host key against its pins, and remembers what it saw.
-struct Verify {
+pub(super) struct Verify {
     pinned: Vec<String>,
     seen: Arc<Mutex<Option<String>>>,
 }
@@ -103,22 +114,13 @@ impl Handler for Verify {
     }
 }
 
-/// A verified, authenticated chain. `_jumps` stay open for as long as `handle` runs over them.
-struct Conn {
-    handle: Handle<Verify>,
-    _jumps: Vec<Handle<Verify>>,
-    /// The host key each hop presented, in chain order: re-checked against the pins on every use.
-    host_keys: Vec<String>,
-    used: Mutex<Instant>,
-}
-
 pub struct SshDriver {
     exec: Arc<ExecDriver>,
     redeem: Redeem,
-    /// Keyed by the chain's addresses and the target key's fingerprint.
+    /// Keyed by the chain's addresses and every hop key's fingerprint.
     // ponytail: two ops that miss together dial twice and the later one wins; a per-key dial lock
     // if that ever costs.
-    pool: Mutex<HashMap<String, Arc<Conn>>>,
+    pool: Pool,
     idle: Duration,
 }
 
@@ -134,8 +136,24 @@ fn plain(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && !s.chars().any(|c| c.is_control() || c.is_whitespace())
 }
 
+/// A hostname, IPv4 or IPv6 literal: nothing that could read as another field.
+fn host_ok(h: &str) -> bool {
+    !h.is_empty()
+        && h.len() <= 253
+        && !h.starts_with('-')
+        && (h.bytes()).all(|b| b.is_ascii_alphanumeric() || b".-:_".contains(&b))
+}
+
+/// A portable POSIX user name.
+fn user_ok(u: &str) -> bool {
+    !u.is_empty()
+        && u.len() <= 32
+        && !u.starts_with('-')
+        && (u.bytes()).all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+
 fn check_hop(h: &SshHop) -> Result<(), StreamError> {
-    if !plain(&h.host, 253) || !plain(&h.user, 64) || h.port == 0 || !plain(&h.lease, 256) {
+    if !host_ok(&h.host) || !user_ok(&h.user) || h.port == 0 || !plain(&h.lease, 256) {
         return Err(invalid("a hop needs a host, a port, a user and a lease"));
     }
     if !h
@@ -146,12 +164,6 @@ fn check_hop(h: &SshHop) -> Result<(), StreamError> {
         return Err(invalid("pinned_keys are SHA256:<base64> fingerprints"));
     }
     Ok(())
-}
-
-fn pool_key(req: &SshExec, key_fp: &str) -> String {
-    let at = |h: &SshHop| format!("{}@{}:{}", h.user, h.host, h.port);
-    let chain: Vec<String> = req.hops.iter().chain([&req.target]).map(at).collect();
-    format!("{}#{key_fp}", chain.join(">"))
 }
 
 fn host_key_refusal(hop: usize, first_contact: bool, fingerprint: String) -> StreamError {
@@ -174,7 +186,7 @@ impl SshDriver {
         Self {
             exec,
             redeem,
-            pool: Mutex::new(HashMap::new()),
+            pool: Pool::default(),
             idle: IDLE,
         }
     }
@@ -204,11 +216,12 @@ impl SshDriver {
         self.exec.slot()
     }
 
-    /// Runs `req` to its end, its timeout, or `cancel` (fired or dropped).
+    /// Runs `req` to its end, its timeout, or `cancel` (fired or dropped). One deadline covers the
+    /// lease redemption, the dial and the command; the command is never sent after a cancel.
     pub async fn run(
         &self,
         req: &SshExec,
-        cancel: oneshot::Receiver<()>,
+        mut cancel: oneshot::Receiver<()>,
     ) -> Result<ExecResult, StreamError> {
         if req.hops.len() > MAX_SSH_HOPS {
             return Err(invalid("at most 3 jump hosts"));
@@ -222,26 +235,34 @@ impl SshDriver {
         let (timeout, cap) = self.exec.clamp(&req.limits);
         tracing::debug!(hops = req.hops.len(), "ssh.exec");
         let started = Instant::now();
-        // The target's key first: its fingerprint is the pool key, so a pooled connection is only
-        // ever reused by an op that holds the key.
-        let key = self.load_key(&req.target.lease).await?;
-        let fp = key.public_key().fingerprint(HashAlg::Sha256).to_string();
-        let name = pool_key(req, &fp);
-        let conn = match self.pooled(&name, req) {
-            Some(conn) => conn,
-            None => {
-                let dial = self.dial(req, key);
-                let conn = tokio::time::timeout(CONNECT_TIMEOUT, dial)
-                    .await
-                    .map_err(|_| fail(ErrorCode::SshFailed, "timed out connecting"))??;
-                self.pool_put(name, Arc::new(conn))
+        let end = tokio::time::Instant::now() + timeout;
+        let setup = tokio::time::timeout(CONNECT_TIMEOUT, self.connect(req));
+        let conn = tokio::select! {
+            c = setup => c.map_err(|_| fail(ErrorCode::SshFailed, "timed out connecting"))??,
+            () = tokio::time::sleep_until(end) => {
+                return Err(fail(ErrorCode::SshFailed, "timed out before the command started"));
             }
+            _ = &mut cancel => return Err(cancelled()),
         };
-        let result = self.run_on(&conn, &req.run, timeout, cap, cancel).await;
-        *conn.used.lock().unwrap() = Instant::now();
-        let mut result = result?;
+        let mut result = self.run_on(&conn.0, &req.run, end, cap, cancel).await?;
         result.duration_ms = started.elapsed().as_millis() as u64;
         Ok(result)
+    }
+
+    /// Every hop's key redeemed (so an op that cannot produce them never rides a pooled
+    /// connection), then a pooled connection for exactly those keys, or a fresh one.
+    async fn connect(&self, req: &SshExec) -> Result<InUse, StreamError> {
+        let chain: Vec<&SshHop> = req.hops.iter().chain([&req.target]).collect();
+        let mut keys = Vec::with_capacity(chain.len());
+        for hop in &chain {
+            keys.push(self.load_key(&hop.lease).await?);
+        }
+        let name = pool_key(req, &keys);
+        if let Some(conn) = self.pooled(&name, &chain) {
+            return Ok(conn);
+        }
+        let conn = self.dial(&chain, keys).await?;
+        Ok(self.pool_put(name, Arc::new(conn)))
     }
 
     /// A key from its lease, parsed. Never logged; errors are fixed text.
@@ -267,47 +288,12 @@ impl SshDriver {
             .map_err(|_| auth("the leased key is not a usable unencrypted private key".into()))
     }
 
-    fn pooled(&self, name: &str, req: &SshExec) -> Option<Arc<Conn>> {
-        let mut pool = self.pool.lock().unwrap();
-        pool.retain(|_, c| !c.handle.is_closed() && c.used.lock().unwrap().elapsed() < self.idle);
-        let conn = pool.get(name)?;
-        // Every hop's pins must still list the key it presented when the chain was dialled.
-        let pinned = req.hops.iter().chain([&req.target]);
-        let holds = conn
-            .host_keys
-            .iter()
-            .zip(pinned)
-            .all(|(k, h)| h.pinned_keys.contains(k));
-        if !holds {
-            pool.remove(name);
-            return None;
-        }
-        *conn.used.lock().unwrap() = Instant::now();
-        Some(Arc::clone(conn))
-    }
-
-    fn pool_put(&self, name: String, conn: Arc<Conn>) -> Arc<Conn> {
-        let mut pool = self.pool.lock().unwrap();
-        if pool.len() >= POOL_MAX
-            && let Some(oldest) = pool
-                .iter()
-                .min_by_key(|(_, c)| *c.used.lock().unwrap())
-                .map(|(k, _)| k.clone())
-        {
-            pool.remove(&oldest);
-        }
-        pool.insert(name, Arc::clone(&conn));
-        conn
-    }
-
     /// Connects hop by hop; each hop's host key is verified before its authentication.
-    async fn dial(&self, req: &SshExec, target_key: PrivateKey) -> Result<Conn, StreamError> {
-        let chain: Vec<&SshHop> = req.hops.iter().chain([&req.target]).collect();
-        let cfg = config(self.idle);
-        let mut target_key = Some(target_key);
+    async fn dial(&self, chain: &[&SshHop], keys: Vec<PrivateKey>) -> Result<Conn, StreamError> {
+        let cfg = config();
         let mut handles: Vec<Handle<Verify>> = Vec::new();
         let mut host_keys = Vec::new();
-        for (i, hop) in chain.iter().enumerate() {
+        for (i, (hop, key)) in chain.iter().zip(keys).enumerate() {
             let at = |m: String| {
                 let m = self.exec.redact(&format!("hop {i}: {m}"));
                 fail(ErrorCode::SshFailed, m)
@@ -351,11 +337,6 @@ impl SshDriver {
             };
             // Only reachable after `check_server_key` accepted this hop.
             host_keys.extend(seen.lock().unwrap().clone());
-            let key = match i + 1 == chain.len() {
-                true => target_key.take(),
-                false => Some(self.load_key(&hop.lease).await?),
-            };
-            let key = key.ok_or_else(|| fail(ErrorCode::Internal, "no key for the target"))?;
             self.authenticate(&mut handle, &hop.user, key, i).await?;
             handles.push(handle);
         }
@@ -367,6 +348,7 @@ impl SshDriver {
             _jumps: handles,
             host_keys,
             used: Mutex::new(Instant::now()),
+            busy: AtomicUsize::new(0),
         })
     }
 
@@ -387,27 +369,35 @@ impl SshDriver {
         }
     }
 
+    /// The command on `conn`, to its end, `end`, or `cancel`.
     async fn run_on(
         &self,
         conn: &Conn,
         run: &str,
-        timeout: Duration,
+        end: tokio::time::Instant,
         cap: usize,
         mut cancel: oneshot::Receiver<()>,
     ) -> Result<ExecResult, StreamError> {
         let failed = |m: &str| fail(ErrorCode::SshFailed, m.to_owned());
-        let mut ch = conn
-            .handle
-            .channel_open_session()
-            .await
-            .map_err(|_| failed("cannot open a channel"))?;
+        let mut ch = tokio::select! {
+            ch = conn.handle.channel_open_session() => {
+                ch.map_err(|_| failed("cannot open a channel"))?
+            }
+            () = tokio::time::sleep_until(end) => {
+                return Err(failed("timed out before the command started"));
+            }
+            _ = &mut cancel => return Err(cancelled()),
+        };
+        // Nothing is sent once a cancel has fired or its sender was dropped.
+        if !matches!(cancel.try_recv(), Err(TryRecvError::Empty)) {
+            let _ = ch.close().await;
+            return Err(cancelled());
+        }
         ch.exec(true, run.as_bytes().to_vec())
             .await
             .map_err(|_| failed("cannot send the command"))?;
         let (mut out, mut err) = (Raw::new(cap), Raw::new(cap));
-        let (mut exit_code, mut timed_out) = (None, false);
-        let deadline = tokio::time::sleep(timeout);
-        tokio::pin!(deadline);
+        let (mut exit_code, mut timed_out, mut exited) = (None, false, false);
         loop {
             tokio::select! {
                 msg = ch.wait() => match msg {
@@ -415,22 +405,33 @@ impl SshDriver {
                     Some(ChannelMsg::ExtendedData { data, ext: 1 }) => err.push(&data),
                     Some(ChannelMsg::ExitStatus { exit_status }) => {
                         exit_code = i32::try_from(exit_status).ok();
+                        exited = true;
                     }
+                    // Killed by a signal: no exit code, but an end.
+                    Some(ChannelMsg::ExitSignal { .. }) => exited = true,
                     Some(ChannelMsg::Failure) => return Err(failed("the host refused the command")),
                     Some(ChannelMsg::Close) | None => break,
                     Some(_) => {}
                 },
-                () = &mut deadline => {
+                () = tokio::time::sleep_until(end) => {
                     timed_out = true;
                     break;
                 }
                 _ = &mut cancel => {
-                    let _ = ch.close().await;
-                    return Err(fail(ErrorCode::Cancelled, "cancelled"));
+                    stop(&ch).await;
+                    return Err(cancelled());
                 }
             }
         }
-        let _ = ch.close().await;
+        if timed_out {
+            stop(&ch).await;
+        } else {
+            let _ = ch.close().await;
+            if !exited {
+                // A dropped connection, or a host that ended the channel without saying how.
+                return Err(failed("the channel ended before the command's exit status"));
+            }
+        }
         Ok(ExecResult {
             exit_code: exit_code.filter(|_| !timed_out),
             timed_out,
@@ -441,7 +442,21 @@ impl SshDriver {
     }
 }
 
+fn cancelled() -> StreamError {
+    fail(ErrorCode::Cancelled, "cancelled")
+}
+
+/// Best effort: ask the remote command to die, then close the channel. sshd may ignore the signal
+/// (OpenSSH before 7.9); the close still ends the session on the host's side.
+async fn stop(ch: &russh::Channel<client::Msg>) {
+    let _ = ch.signal(Sig::KILL).await;
+    let _ = ch.close().await;
+}
+
 #[cfg(test)]
 mod fixture;
+mod pool;
+#[cfg(test)]
+mod safety_tests;
 #[cfg(test)]
 mod tests;

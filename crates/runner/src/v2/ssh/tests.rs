@@ -224,7 +224,7 @@ async fn sha1_kex_and_sha1_host_keys_are_refused() {
     assert_eq!(e.code, ErrorCode::SshFailed);
     assert_eq!(s.seen.auth.load(SeqCst), 0);
     // The client never offers SHA-1, CBC or DSA of any kind.
-    let c = super::config(IDLE);
+    let c = super::config();
     let names: Vec<String> = c
         .preferred
         .key
