@@ -152,6 +152,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ainkrad-embed"
+version = "0.8.11"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "rayon",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokenizers 0.22.2",
+ "tracing",
+]
+
+[[package]]
 name = "ainkrad-proto"
 version = "0.8.11"
 dependencies = [
@@ -560,22 +574,18 @@ version = "0.1.0"
 dependencies = [
  "ainkrad-core",
  "ainkrad-core-server",
+ "ainkrad-embed",
  "ainkrad-proto",
  "axum",
  "brain-model",
  "brain-module",
- "candle-core",
- "candle-nn",
- "candle-transformers",
  "getrandom 0.4.3",
  "libsqlite3-sys",
- "rayon",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
  "tempfile",
- "tokenizers 0.22.2",
  "tokio",
  "tower",
  "tracing",
