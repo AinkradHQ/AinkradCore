@@ -17,11 +17,13 @@
 //! - **Panics never cross.** Every function runs inside `catch_unwind`; a panic returns `DE_ERR_PANIC`, and the
 //!   engine whose lock it held is poisoned: every later call on it returns `DE_ERR_POISONED` until it is freed.
 //!   (The crate must build with `panic = "unwind"`, the default; `tests/abi.rs` proves the catch.) A stack overflow
-//!   or out-of-memory is an abort, not a panic: sizes are capped for that reason, and remote sync bytes come only
-//!   from the Core relay, which must refuse deeply nested values (yrs recurses on them; see `design-doc`). Any
-//!   single Rust allocation over 256 MiB is refused (`Capped`), so a hostile length fails a decode, not the process.
+//!   or out-of-memory is an abort, not a panic: sizes are capped for that reason, `design-doc` depth-caps nested
+//!   values in remote bytes, and any single Rust allocation over 256 MiB is refused (`Capped`), so a hostile length
+//!   fails a decode, not the process. Skia decodes images in C++, outside that cap: `design-render` refuses images
+//!   claiming more than 64 MP before they are drawn.
 //! - **Metal objects** (`de_attach_metal`, `de_draw_metal`) are the one thing taken on trust: they must be live
-//!   `id<MTLDevice>` / `id<MTLCommandQueue>` / `id<MTLTexture>` (BGRA8, `w` x `h`). Skia's GPU context is used under
+//!   `id<MTLDevice>` / `id<MTLCommandQueue>` / `id<MTLTexture>`; the texture's size and format are read from it and
+//!   checked, never taken from the caller. Skia's GPU context is used under
 //!   the engine's mutex only; free an engine on the thread that drew with it, after `de_detach`.
 //! - The engine has no network, file or process access; fonts and images arrive as bytes and are decoded by Skia.
 #![allow(unsafe_code)]
@@ -563,28 +565,35 @@ pub extern "C" fn de_needs_frame(h: u64) -> i32 {
     with(h, |e| Ok(e.needs_frame() as i32))
 }
 
-/// Draw a frame into the drawable's texture and submit it.
+/// Draw a frame into the drawable's texture and submit it. Size and pixel format are read from the texture itself
+/// (they can change under a live resize); anything but a BGRA8 render target in range is `DE_ERR_ARG`.
 ///
 /// # Safety
-/// `texture` is a live `id<MTLTexture>`, BGRA8, `w` x `h` pixels, usable as a render target.
+/// `texture` is a live `id<MTLTexture>`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn de_draw_metal(
-    h: u64,
-    texture: *mut std::ffi::c_void,
-    w: i32,
-    height: i32,
-) -> i32 {
+pub unsafe extern "C" fn de_draw_metal(h: u64, texture: *mut std::ffi::c_void) -> i32 {
     with(h, |e| {
-        let lim = (crate::host::MAX_VIEW * crate::host::MAX_SCALE) as i32;
-        if texture.is_null() || !(1..=lim).contains(&w) || !(1..=lim).contains(&height) {
+        if texture.is_null() {
             return Err(DE_ERR_ARG);
         }
         #[cfg(all(feature = "metal", target_os = "macos"))]
         {
+            use metal::foreign_types::ForeignTypeRef;
+            // SAFETY: the caller's contract above; borrowed for this call only, never retained or released.
+            let t = unsafe { metal::TextureRef::from_ptr(texture.cast()) };
+            let lim = (crate::host::MAX_VIEW * crate::host::MAX_SCALE) as u64;
+            let (w, height) = (t.width(), t.height());
+            if !(1..=lim).contains(&w)
+                || !(1..=lim).contains(&height)
+                || t.pixel_format() != metal::MTLPixelFormat::BGRA8Unorm
+                || !t.usage().contains(metal::MTLTextureUsage::RenderTarget)
+            {
+                return Err(DE_ERR_ARG);
+            }
             let drawn = e
                 .with_metal(|m, r| {
-                    // SAFETY: the caller's contract above.
-                    unsafe { m.draw_texture(r, texture, w, height, false) }.is_some()
+                    // SAFETY: a live BGRA8 render target of exactly `w` x `height`, checked above.
+                    unsafe { m.draw_texture(r, texture, w as i32, height as i32, false) }.is_some()
                 })
                 .ok_or(DE_ERR_NO_SURFACE)?;
             if drawn { Ok(DE_OK) } else { Err(DE_ERR_GPU) }

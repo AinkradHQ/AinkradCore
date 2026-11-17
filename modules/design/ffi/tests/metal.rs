@@ -24,10 +24,7 @@ fn attach_draw_detach() {
     let mut h = 0u64;
     unsafe {
         assert_eq!(de_engine_new(b"dd_metal".as_ptr(), 8, &mut h), DE_OK);
-        assert_eq!(
-            de_draw_metal(h, tex.as_ptr().cast(), 320, 200),
-            DE_ERR_NO_SURFACE
-        );
+        assert_eq!(de_draw_metal(h, tex.as_ptr().cast()), DE_ERR_NO_SURFACE);
         assert_eq!(
             de_attach_metal(h, dev.as_ptr().cast(), q.as_ptr().cast()),
             DE_OK
@@ -35,12 +32,26 @@ fn attach_draw_detach() {
         assert_eq!(de_edit(h, ops.as_ptr(), ops.len()), DE_OK);
         assert_eq!(de_resize(h, 160.0, 100.0, 2.0), DE_OK);
         assert_eq!(de_needs_frame(h), 1);
-        assert_eq!(de_draw_metal(h, tex.as_ptr().cast(), 320, 200), DE_OK);
+        assert_eq!(de_draw_metal(h, tex.as_ptr().cast()), DE_OK);
+        // the texture's own format and usage decide, not the caller: RGBA8, or one that cannot be a render target
+        let rgba = metal::TextureDescriptor::new();
+        rgba.set_pixel_format(metal::MTLPixelFormat::RGBA8Unorm);
+        rgba.set_width(320);
+        rgba.set_height(200);
+        rgba.set_usage(metal::MTLTextureUsage::RenderTarget);
+        let bad = dev.new_texture(&rgba);
+        assert_eq!(de_draw_metal(h, bad.as_ptr().cast()), DE_ERR_ARG);
+        td.set_usage(metal::MTLTextureUsage::ShaderRead);
+        let read_only = dev.new_texture(&td);
+        assert_eq!(de_draw_metal(h, read_only.as_ptr().cast()), DE_ERR_ARG);
+        // a live resize: a bigger drawable is drawn at its own size
+        td.set_usage(metal::MTLTextureUsage::RenderTarget);
+        td.set_width(640);
+        td.set_height(400);
+        let big = dev.new_texture(&td);
+        assert_eq!(de_draw_metal(h, big.as_ptr().cast()), DE_OK);
         assert_eq!(de_detach(h), DE_OK);
-        assert_eq!(
-            de_draw_metal(h, tex.as_ptr().cast(), 320, 200),
-            DE_ERR_NO_SURFACE
-        );
+        assert_eq!(de_draw_metal(h, tex.as_ptr().cast()), DE_ERR_NO_SURFACE);
     }
     assert_eq!(de_engine_free(h), DE_OK);
 }

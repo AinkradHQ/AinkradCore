@@ -27,6 +27,15 @@ fn random_calls() {
     }
 }
 
+/// Inputs the fuzz target once crashed on (`fuzz/regressions/`), replayed on every test run.
+#[test]
+fn fuzz_regressions() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fuzz/regressions");
+    for f in std::fs::read_dir(dir).unwrap() {
+        program::run(&std::fs::read(f.unwrap().path()).unwrap());
+    }
+}
+
 fn get(f: impl Fn(*mut u8, usize, *mut usize) -> i32) -> Vec<u8> {
     let mut n = 0usize;
     assert_eq!(
@@ -116,7 +125,7 @@ fn a_session_through_the_abi() {
     assert_eq!(de_key(a, DE_KEY_DELETE, 0), DE_OK);
     assert_eq!(gets(|o, c, l| unsafe { de_selection(a, o, c, l) }), "[]");
     assert_eq!(
-        unsafe { de_draw_metal(a, std::ptr::null_mut(), 1, 1) },
+        unsafe { de_draw_metal(a, std::ptr::null_mut()) },
         DE_ERR_ARG
     );
     assert_eq!(de_engine_free(a), DE_OK);

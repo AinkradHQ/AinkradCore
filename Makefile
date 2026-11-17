@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: build-design test-design fuzz-design audit-design engine engine-header fuzz-design-ffi miri-design build-lore test-lore fuzz-lore audit-lore build-leyline test-leyline build-brain test-brain test-brain-linux check-env install-test perf test-web e1-exit e1-exit-faults e2-exit e2-exit-faults e2-soak soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel build-toy test-toy release-dry release-repro release-test fuzz-smoke audit-fuzz
+.PHONY: build-design test-design fuzz-design audit-design engine engine-header fuzz-design-doc fuzz-design-ffi miri-design build-lore test-lore fuzz-lore audit-lore build-leyline test-leyline build-brain test-brain test-brain-linux check-env install-test perf test-web e1-exit e1-exit-faults e2-exit e2-exit-faults e2-soak soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel build-toy test-toy release-dry release-repro release-test fuzz-smoke audit-fuzz
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check check-env ; scripts/api-minor-check.sh && $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -83,6 +83,7 @@ audit-design: ; $(CARGO) deny --manifest-path modules/design/Cargo.toml --config
 # anything that creates a yrs doc cannot run there (yrs 0.28.1 is UB under Miri when it creates root types).
 engine: ; scripts/design-engine.sh check-header && scripts/design-engine.sh build
 engine-header: ; scripts/design-engine.sh header
+fuzz-design-doc: ; cd modules/design/doc/fuzz && mkdir -p corpus/apply && cargo +nightly fuzz run apply corpus/apply seeds/apply regressions -- -max_len=262144 -rss_limit_mb=2048 -max_total_time=$${FUZZ_SECS:-30}
 fuzz-design-ffi: ; cd modules/design/ffi/fuzz && mkdir -p corpus/abi && cargo +nightly fuzz run abi corpus/abi -- -max_len=8192 -rss_limit_mb=2048 -max_total_time=$${FUZZ_SECS:-30}
 miri-design: ; MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test --manifest-path modules/design/Cargo.toml -p design-ffi --lib
 # The Lore module (R1-03): its own workspace, pure Rust. The parser fuzz target is nightly only, like fuzz-design.

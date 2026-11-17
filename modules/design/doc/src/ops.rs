@@ -198,14 +198,16 @@ impl Live {
         for (i, op) in ops.iter().enumerate() {
             plan.push(check(&mut m, i, op)?);
         }
-        {
-            let mut txn = self.doc().transact_mut_with(LOCAL);
+        // a commit that trips over a bad pending remote update panics in yrs: reset, do not poison the engine
+        self.recover(|l| {
+            let mut txn = l.doc().transact_mut_with(LOCAL);
             for p in &plan {
-                write(&self.nodes, &mut txn, p);
+                write(&l.nodes, &mut txn, p);
             }
-        }
-        self.undo.reset();
-        Ok(())
+            drop(txn);
+            l.undo.reset();
+            Ok(())
+        })
     }
 }
 

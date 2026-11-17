@@ -14,6 +14,9 @@ pub const DE_ERR_PANIC: i32 = -7;
 /// A panic happened inside this engine earlier; free it and make a new one.
 pub const DE_ERR_POISONED: i32 = -8;
 pub const DE_ERR_GPU: i32 = -9;
+/// A remote update failed inside yrs and the document was reset to empty: send the state vector again and apply the
+/// full diff from the Core. Local edits not yet sent are lost.
+pub const DE_ERR_RESET: i32 = -10;
 
 /// `de_sync_apply` targets.
 pub const DE_DOC: u32 = 0;

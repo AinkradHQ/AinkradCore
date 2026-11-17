@@ -11,28 +11,29 @@
 //! awareness). Everything read from the CRDT is treated as hostile: a node with a missing or malformed field is
 //! skipped, prop JSON is depth-capped, and the model's resolver bounds the rest.
 //!
-//! Trust note: yrs decodes, encodes and drops nested `Any` values recursively, so a deeply nested value in a remote
-//! update can exhaust the stack (an abort, not a panic). Remote bytes therefore come only from the Core relay, which
-//! must refuse such updates before it applies, stores or relays them (V1-03).
+//! Trust note: yrs decodes, encodes, converts and drops nested values recursively, so nesting is where a hostile
+//! update could exhaust the stack (an abort, not a panic). Two guards: every `Any` in a remote update is decoded
+//! through `decode` (depth-capped at `MAX_JSON_DEPTH`, no collection longer than the bytes), and a node whose props
+//! hold a nested yrs map, array or text (no op writes one) is never read. A panic inside yrs while applying resets the
+//! replica (`Error::Reset`) instead of aborting. The Core (V1-03) reuses `apply_remote` and gets the same guards; it
+//! must still trial-apply an update before it stores or relays it.
 
 use std::sync::{Arc, Mutex};
 
 use design_model::limits::{MAX_DOC_BYTES, MAX_NODES, MAX_TOKENS};
 use design_model::{Doc, Meta, Node, NodeType, Token};
 use serde_json::{Map as JMap, Number, Value};
-use yrs::types::ToJson;
 use yrs::undo::{Options as UndoOptions, UndoManager};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
-use yrs::{
-    Any, Doc as YDoc, GetString, Map, MapRef, Origin, Out, ReadTxn, StateVector, Transact, Update,
-};
+use yrs::{Any, Doc as YDoc, GetString, Map, MapRef, Origin, Out, ReadTxn, StateVector, Transact};
 
+mod decode;
 mod ops;
 mod presence;
 
 pub use ops::{MAX_OPS, MAX_OPS_BYTES, Op, parse_ops};
-pub use presence::{MAX_PEERS, MAX_PRESENCE_BYTES, Presence};
+pub use presence::{ClockFn, MAX_PEERS, MAX_PRESENCE_BYTES, PEER_TTL_MS, Presence};
 
 /// A remote update or a full state: the document cap plus framing room.
 pub const MAX_UPDATE_BYTES: usize = MAX_DOC_BYTES + (1 << 20);
@@ -49,6 +50,9 @@ pub enum Error {
     Malformed(String),
     /// An op the validators refused; nothing was written.
     Refused(String),
+    /// Applying a remote update failed inside yrs; the replica was replaced by an empty one. Resync from the Core
+    /// (send the state vector, apply the full diff).
+    Reset,
 }
 
 pub struct Live {
@@ -68,6 +72,11 @@ impl Default for Live {
 
 impl Live {
     pub fn new() -> Live {
+        Live::with_clock(std::sync::Arc::new(presence::system_clock))
+    }
+
+    /// `clock` = milliseconds for presence expiry (tests pass a fake one).
+    pub fn with_clock(clock: presence::ClockFn) -> Live {
         let doc = YDoc::new();
         let nodes = doc.get_or_insert_map("nodes");
         let meta = doc.get_or_insert_map("meta");
@@ -89,7 +98,7 @@ impl Live {
         undo.expand_scope(&doc, &meta);
         undo.include_origin(Origin::from(LOCAL));
         Live {
-            presence: Presence::new(doc),
+            presence: Presence::new(doc, clock),
             nodes,
             meta,
             tokens,
@@ -107,10 +116,29 @@ impl Live {
         if update.len() > MAX_UPDATE_BYTES {
             return Err(Error::TooLarge);
         }
-        let u = decode(|| Update::decode_v1(update))?;
-        let mut txn = self.doc().transact_mut_with(REMOTE);
-        txn.apply_update(u)
-            .map_err(|e| Error::Malformed(e.to_string()))
+        let u = decode::update(update)?;
+        // A panic inside yrs while integrating must not unwind through the open transaction: its drop commits, and a
+        // second panic there would abort. The inner catch ends the first panic before the transaction drops; the
+        // outer one catches a panic in that commit. Either way the replica may be half-applied, so it is replaced by
+        // an empty one and the host resyncs from the Core (local edits not yet sent are lost; the Core has the rest).
+        let mut panicked = false;
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut txn = self.doc().transact_mut_with(REMOTE);
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| txn.apply_update(u))) {
+                Ok(r) => r.map_err(|e| Error::Malformed(e.to_string())),
+                Err(_) => {
+                    panicked = true;
+                    Err(Error::Reset)
+                }
+            }
+        }));
+        match r {
+            Ok(r) if !panicked => r,
+            _ => {
+                self.reset();
+                Err(Error::Reset)
+            }
+        }
     }
 
     pub fn state_vector(&self) -> Vec<u8> {
@@ -118,13 +146,33 @@ impl Live {
     }
 
     /// Everything this replica has that a peer at state vector `sv` lacks (empty `sv` = the full state).
-    pub fn diff(&self, sv: &[u8]) -> Result<Vec<u8>, Error> {
+    pub fn diff(&mut self, sv: &[u8]) -> Result<Vec<u8>, Error> {
         let sv = if sv.is_empty() {
             StateVector::default()
         } else {
-            decode(|| StateVector::decode_v1(sv))?
+            decode::caught(|| StateVector::decode_v1(sv))?
         };
-        Ok(self.doc().transact().encode_state_as_update_v1(&sv))
+        // yrs re-decodes pending (not yet integrable) remote updates here and panics on some it accepted earlier
+        self.recover(|l| Ok(l.doc().transact().encode_state_as_update_v1(&sv)))
+    }
+
+    /// Replace a replica yrs left inconsistent by an empty one; the host resyncs from the Core.
+    fn reset(&mut self) {
+        *self = Live::with_clock(self.presence.clock());
+    }
+
+    /// Run `f`; a panic inside yrs resets the replica (`Error::Reset`) instead of reaching the caller.
+    pub(crate) fn recover<T>(
+        &mut self,
+        f: impl FnOnce(&mut Live) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
+            Ok(r) => r,
+            Err(_) => {
+                self.reset();
+                Err(Error::Reset)
+            }
+        }
     }
 
     /// Local updates not yet sent, merged into one (empty when there are none). `take` = drain them.
@@ -133,20 +181,28 @@ impl Live {
         if o.is_empty() {
             return vec![];
         }
-        let merged =
-            yrs::merge_updates_v1(o.iter().map(Vec::as_slice)).unwrap_or_else(|_| o.concat());
-        if take {
-            o.clear();
+        match yrs::merge_updates_v1(o.iter().map(Vec::as_slice)) {
+            Ok(merged) => {
+                if take {
+                    o.clear();
+                }
+                merged
+            }
+            // never send bytes that are not one update: fall back to the oldest one, the rest stay queued
+            Err(_) if take => o.remove(0),
+            Err(_) => o[0].clone(),
         }
-        merged
     }
 
+    /// `false` also when yrs failed and the replica was reset (the next sync call reports it).
     pub fn undo(&mut self) -> bool {
-        self.undo.undo_blocking()
+        self.recover(|l| Ok(l.undo.undo_blocking()))
+            .unwrap_or(false)
     }
 
     pub fn redo(&mut self) -> bool {
-        self.undo.redo_blocking()
+        self.recover(|l| Ok(l.undo.redo_blocking()))
+            .unwrap_or(false)
     }
 
     pub fn presence(&mut self) -> &mut Presence {
@@ -182,18 +238,6 @@ impl Live {
     }
 }
 
-/// yrs decoders panic on some malformed input (e.g. a client id over 53 bits). Decoding touches no shared state, so a
-/// panic there is caught and reported as malformed bytes instead of poisoning the engine.
-pub(crate) fn decode<T, E: std::fmt::Display>(
-    f: impl FnOnce() -> Result<T, E>,
-) -> Result<T, Error> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(e)) => Err(Error::Malformed(e.to_string())),
-        Err(_) => Err(Error::Malformed("undecodable".into())),
-    }
-}
-
 fn read_node<T: ReadTxn>(txn: &T, v: Out) -> Option<Node> {
     let Out::YMap(m) = v else { return None };
     let s = |k: &str| match m.get(txn, k) {
@@ -210,12 +254,19 @@ fn read_node<T: ReadTxn>(txn: &T, v: Out) -> Option<Node> {
         Some(Out::Any(a)) => u64::try_from(int(&a)?).ok()?,
         _ => 0,
     };
+    // Props hold plain values only. A nested yrs map, array or text here (which no op writes) would be read by yrs's
+    // recursive `to_json`, and a chain of them, built one small update per level, would exhaust the stack: refuse it.
     let props = match m.get(txn, "props") {
-        Some(Out::YMap(p)) => match any_json(&p.to_json(txn), 0)? {
-            Value::Object(o) => o,
-            _ => return None,
-        },
-        _ => JMap::new(),
+        Some(Out::YMap(p)) => {
+            let mut o = JMap::new();
+            for (k, v) in p.iter(txn) {
+                let Out::Any(a) = v else { return None };
+                o.insert(k.to_string(), any_json(&a, 0)?);
+            }
+            o
+        }
+        None => JMap::new(),
+        _ => return None,
     };
     let text = match m.get(txn, "text") {
         Some(Out::YText(t)) => Some(t.get_string(txn)),

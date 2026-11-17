@@ -68,7 +68,7 @@ fn edit_json(i: &mut In) -> String {
     format!("[{}]", ops.join(","))
 }
 
-const KNOWN: [i32; 12] = [
+const KNOWN: [i32; 13] = [
     0,
     1,
     DE_ERR_HANDLE,
@@ -80,6 +80,7 @@ const KNOWN: [i32; 12] = [
     DE_ERR_PANIC,
     DE_ERR_POISONED,
     DE_ERR_GPU,
+    DE_ERR_RESET,
     -100,
 ];
 
@@ -175,7 +176,7 @@ pub fn run(data: &[u8]) {
                 24 => de_engine_free(if i.u8() % 8 == 0 { h } else { freed }),
                 25 => de_attach_metal(h, std::ptr::null_mut(), std::ptr::null_mut()),
                 26 => de_detach(h),
-                27 => de_draw_metal(h, std::ptr::null_mut(), 10, 10),
+                27 => de_draw_metal(h, std::ptr::null_mut()),
                 28 => match i.u8() % 5 {
                     0 => de_hit(h, x, y, op, cap, ol),
                     1 => de_needs_frame(h),

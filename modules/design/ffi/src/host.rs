@@ -23,6 +23,7 @@ pub fn code(e: Error) -> i32 {
     match e {
         Error::TooLarge => DE_ERR_TOO_LARGE,
         Error::Malformed(_) | Error::Refused(_) => DE_ERR_INVALID,
+        Error::Reset => DE_ERR_RESET,
     }
 }
 
@@ -92,22 +93,26 @@ impl Host {
     // ---- sync -------------------------------------------------------------------------------------------------
 
     pub fn sync_apply(&mut self, target: u32, bytes: &[u8]) -> Result<(), i32> {
-        match target {
+        let r = match target {
             DE_DOC => self.live.apply_remote(bytes),
             DE_SYSTEM => self.system.apply_remote(bytes),
             _ => return Err(DE_ERR_ARG),
-        }
-        .map_err(code)?;
+        };
+        // a reset replica changed too
         self.changed();
-        Ok(())
+        r.map_err(code)
     }
 
     pub fn state_vector(&self) -> Vec<u8> {
         self.live.state_vector()
     }
 
-    pub fn diff(&self, sv: &[u8]) -> Result<Vec<u8>, i32> {
-        self.live.diff(sv).map_err(code)
+    pub fn diff(&mut self, sv: &[u8]) -> Result<Vec<u8>, i32> {
+        let r = self.live.diff(sv);
+        if r == Err(Error::Reset) {
+            self.changed();
+        }
+        r.map_err(code)
     }
 
     pub fn outbox(&self, take: bool) -> Vec<u8> {
@@ -118,9 +123,10 @@ impl Host {
 
     pub fn edit(&mut self, json: &[u8]) -> Result<(), i32> {
         let ops = parse_ops(json).map_err(code)?;
-        self.live.apply_ops(&ops).map_err(code)?;
+        let r = self.live.apply_ops(&ops);
+        // also after a refusal: an `Error::Reset` emptied the document
         self.changed();
-        Ok(())
+        r.map_err(code)
     }
 
     /// `true` when something was undone / redone.
@@ -130,9 +136,7 @@ impl Host {
         } else {
             self.live.undo()
         };
-        if did {
-            self.changed();
-        }
+        self.changed();
         did
     }
 
