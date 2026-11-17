@@ -8179,7 +8179,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The Core fetched the repo's remote now ("Fetch now"); the project as it now is. A fetch that failed is still 200: the repo's `mirror.error` says why and `mirror.head` is the older head, kept. 404 for no such project or repo; 409 `conflict` for an archived project; 503 `mirrors_unavailable` when this Core keeps no repo copies */
+            /** @description The Core fetched the repo's remote now ("Fetch now"); the project as it now is. A fetch that failed is still 200: the repo's `mirror.error` says why and `mirror.head` is the older head, kept. A fetch already running for the repo is not started again nor waited for: the state as it is comes back. 404 for no such project or repo; 409 `conflict` for an archived project; 503 `mirrors_unavailable` when this Core keeps no repo copies */
             200: {
                 headers: {
                     [name: string]: unknown;
