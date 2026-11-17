@@ -22,6 +22,9 @@ if [ "$out" = "api" ]; then
   # And the Leyline module (Y1-01): modules/leyline/api/openapi.core.json.
   cargo run -q --manifest-path modules/leyline/Cargo.toml -p leyline-module --example contract > "$t/leyline.core.json"
   mkdir -p modules/leyline/api && cp "$t/leyline.core.json" modules/leyline/api/openapi.core.json
+  # And the Lore module (R1-01): modules/lore/api/openapi.core.json.
+  cargo run -q --manifest-path modules/lore/Cargo.toml -p lore-module --example contract > "$t/lore.core.json"
+  mkdir -p modules/lore/api && cp "$t/lore.core.json" modules/lore/api/openapi.core.json
   # And the Design module (V1-01): modules/design/api/openapi.core.json.
   cargo run -q --manifest-path modules/design/Cargo.toml -p design-module --example contract > "$t/design.core.json"
   mkdir -p modules/design/api && cp "$t/design.core.json" modules/design/api/openapi.core.json

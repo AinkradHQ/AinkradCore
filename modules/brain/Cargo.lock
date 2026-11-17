@@ -109,6 +109,7 @@ dependencies = [
  "brain-module",
  "design-module",
  "leyline-module",
+ "lore-module",
  "reqwest 0.12.28",
  "tokio",
 ]
@@ -1289,6 +1290,15 @@ name = "diatomic-waker"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab03c107fafeb3ee9f5925686dbb7a73bc76e3932abb0d2b365cb64b169cf04c"
+
+[[package]]
+name = "diffy"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b545b8c50194bdd008283985ab0b31dba153cfd5b3066a92770634fbc0d7d291"
+dependencies = [
+ "nu-ansi-term",
+]
 
 [[package]]
 name = "digest"
@@ -2818,6 +2828,29 @@ dependencies = [
  "scoped-tls",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "lore-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "lore-module"
+version = "0.1.0"
+dependencies = [
+ "ainkrad-core",
+ "ainkrad-core-server",
+ "axum",
+ "diffy",
+ "getrandom 0.4.3",
+ "lore-model",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "utoipa",
 ]
 
 [[package]]
