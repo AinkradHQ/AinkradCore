@@ -171,7 +171,11 @@ async fn capacity_is_the_exec_drivers() {
     let d = SshDriver::new(Arc::new(driver(1)), leases.redeem());
     let _held = d.slot().unwrap();
     assert_eq!(d.slot().unwrap_err().code, ErrorCode::Busy);
-    assert_eq!(d.info().unwrap().commands, [OP_SSH_EXEC]);
+    let commands = d.info().unwrap().commands;
+    assert_eq!(commands[0], OP_SSH_EXEC);
+    // ... and the sftp ops (Y2-03), all of them.
+    assert_eq!(commands.len(), 1 + 7);
+    assert!(commands[1..].iter().all(|c| c.starts_with("ssh.sftp.")));
 }
 
 #[tokio::test]

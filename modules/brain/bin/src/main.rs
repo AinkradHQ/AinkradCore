@@ -1,4 +1,4 @@
-//! The released Core: `ainkrad-core-brain serve ...` mounts the Brain, Leyline and Lore by default (no flag needed, so the
+//! The released Core: `ainkrad-core-brain serve ...` mounts the Brain, Leyline, Lore and Design by default (no flag needed, so the
 //! unit and existing installs are unchanged). The release ships this binary under the name
 //! `ainkrad-core-server`. No Core crate may depend on `modules/`, so this crate hands `cli::run` the
 //! module. Built by `make build-brain`.
@@ -12,8 +12,9 @@ async fn main() -> std::process::ExitCode {
             Arc::new(brain_module::Brain::default()),
             Arc::new(leyline_module::Leyline),
             Arc::new(lore_module::Lore::default()),
+            Arc::new(design_module::Design),
         ],
-        &["brain", "leyline", "lore"],
+        &["brain", "leyline", "lore", "design"],
     )
     .await
 }
