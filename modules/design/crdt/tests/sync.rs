@@ -351,6 +351,82 @@ fn an_update_with_missing_dependencies_is_refused() {
     let (_, second) = c.edit(|e| e.set_prop(&id(1), "x", Some(&Value::from(1))));
     let mut s = client_of(&server);
     assert_eq!(s.apply_remote(&second), Err(Refused::Pending));
+    // refused BEFORE yrs integrated anything (it would park it as pending, and a later overlapping update is a
+    // use-after-free there): the replica is untouched and not poisoned, and the dependency then the update apply
+    assert_eq!(s.read().unwrap(), server.read().unwrap());
+    assert!(s.apply_remote(&_first).unwrap().is_some());
+    assert!(s.apply_remote(&second).unwrap().is_some());
+    // a delete beyond the known state, and an origin the replica lacks, are the same refusal
+    let mut c2 = client_of(&server);
+    let (_, a) = c2.edit(|e| {
+        e.insert_node(
+            &id(2),
+            NodeType::Frame,
+            Some(PAGE),
+            "a",
+            "f",
+            &json!({}),
+            None,
+        )
+    });
+    let (_, del) = c2.edit(|e| e.remove_node(&id(2)));
+    let (_, b) = c2.edit(|e| {
+        e.insert_node(
+            &id(3),
+            NodeType::Frame,
+            Some(PAGE),
+            "b",
+            "f",
+            &json!({}),
+            None,
+        )
+    });
+    let mut s2 = client_of(&server);
+    assert_eq!(
+        s2.apply_remote(&del),
+        Err(Refused::Pending),
+        "delete of unknown blocks"
+    );
+    assert_eq!(
+        s2.apply_remote(&b),
+        Err(Refused::Pending),
+        "starts past the state vector"
+    );
+    for u in [&a, &del, &b] {
+        assert!(s2.apply_remote(u).is_ok(), "in order they apply");
+    }
+}
+
+#[test]
+fn the_dependency_scan_counts_blocks_like_yrs_does() {
+    // multi-byte and astral text, deep any values and deletes: honest in-order updates always pass the dependency
+    // check (a wrong block length would make an honest client look like it depends on missing state)
+    let mut server = server_with_page();
+    let mut c = client_of(&server);
+    let text = "h\u{e9}llo \u{1f600} \u{4e16}\u{754c}";
+    let (_, u) = c.edit(|e| {
+        e.insert_node(
+            &id(1),
+            NodeType::Text,
+            Some(PAGE),
+            "a",
+            "t",
+            &json!({"w": 5, "fill": [{"type": "solid", "color": "#ff0000"}]}),
+            Some(text),
+        )
+    });
+    assert!(server.apply_remote(&u).unwrap().is_some());
+    for chunk in ["\u{1f680}", "x", "\u{e9}"] {
+        let (_, u) = c.edit(|e| {
+            e.insert_text(&id(1), 3, chunk);
+        });
+        assert!(server.apply_remote(&u).is_ok(), "{chunk}");
+    }
+    let (_, u) = c.edit(|e| {
+        e.set_prop(&id(1), "w", None);
+    });
+    assert!(server.apply_remote(&u).is_ok());
+    assert_eq!(server.read().unwrap(), c.read().unwrap());
 }
 
 #[test]

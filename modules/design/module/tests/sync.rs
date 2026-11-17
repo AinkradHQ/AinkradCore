@@ -669,3 +669,66 @@ async fn a_refused_update_is_quarantined_and_never_reaches_another_device() {
     );
     assert_eq!(b.read().unwrap(), via_cursor.read().unwrap());
 }
+
+#[tokio::test]
+async fn an_update_that_depends_on_missing_state_asks_for_a_resync_and_nothing_is_stored() {
+    let fx = boot(Limits::default()).await;
+    let (mut wa, mut a) = client(&fx).await;
+    let first = first_edit(&mut a);
+    let second = a
+        .edit(|e| {
+            e.set_prop("n_aaaaaaaaaaab", "w", Some(&json!(1)));
+        })
+        .1;
+    // the second update arrives without the first: the Core cannot place it, so the client must resync
+    send(&mut wa, &second).await;
+    assert!(matches!(next(&mut wa).await, F::Closed(4412)));
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM design_updates")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "nothing stored");
+    // resync: reconnect (snapshot), resend in order: the Core accepts both
+    let (mut wb, _) = client(&fx).await;
+    assert_eq!(push(&mut wb, &first).await, 1);
+    assert_eq!(push(&mut wb, &second).await, 2);
+}
+
+#[tokio::test]
+async fn incremental_edits_from_one_device_are_all_accepted() {
+    // the shape of real use: one client, a run of small edits, each building on the last (insert, text, prop, move,
+    // delete); the dependency rule must never mistake them for missing state
+    let fx = boot(Limits::default()).await;
+    let (mut w, mut a) = client(&fx).await;
+    push(&mut w, &first_edit(&mut a)).await;
+    let mut seq = 1;
+    for step in 0..5 {
+        let u = a
+            .edit(|e| match step {
+                0 => e.insert_node(
+                    "n_aaaaaaaaaaac",
+                    NodeType::Text,
+                    Some(PAGE),
+                    "b",
+                    "t",
+                    &json!({}),
+                    Some("h\u{e9}llo"),
+                ),
+                1 => {
+                    e.insert_text("n_aaaaaaaaaaac", 2, "\u{1f600}");
+                }
+                2 => {
+                    e.set_prop("n_aaaaaaaaaaab", "w", Some(&json!(7)));
+                }
+                3 => {
+                    let _ = e.move_node("n_aaaaaaaaaaac", Some("n_aaaaaaaaaaab"), "a");
+                }
+                _ => e.remove_node("n_aaaaaaaaaaac"),
+            })
+            .1;
+        seq += 1;
+        assert_eq!(push(&mut w, &u).await, seq, "step {step}");
+    }
+    let (_, fresh) = client(&fx).await;
+    assert_eq!(fresh.read().unwrap(), a.read().unwrap());
+}

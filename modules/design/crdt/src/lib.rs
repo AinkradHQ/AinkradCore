@@ -8,7 +8,9 @@
 //!   it from storage. It is never "skip this update and carry on": an honest client cannot send any of these, and a
 //!   skipped update would let replicas drift.
 //! - Order of checks: size cap -> `guard::scan` of the raw bytes (bounded nesting, declared counts, accepted content
-//!   kinds; yrs recurses on nested values and a crafted one aborts the process) -> decode (panics caught = invalid) -> integrate -> no pending (missing dependencies) -> no
+//!   kinds; yrs recurses on nested values and a crafted one aborts the process) -> the update must not depend on
+//!   state the replica lacks (yrs parks such updates as pending and a later overlapping update is a use-after-free;
+//!   refused as `Pending` = resync, not a violation) -> decode (panics caught = invalid) -> integrate -> no pending (missing dependencies) -> no
 //!   foreign root types or sub-documents -> every node the update touched is read strictly (`read`) and validated by
 //!   the model crate (`design_model::validate`) -> clock cap -> node and token budgets. Only touched nodes are checked,
 //!   found through yrs deep observers on the three roots, so a check costs the size of the update, not of the document.
@@ -48,7 +50,8 @@ const EMPTY_UPDATE: [u8; 2] = [0, 0];
 pub enum Refused {
     TooLarge,
     Malformed,
-    /// It builds on state this replica does not have.
+    /// It builds on state this replica does not have: the peer must resync. Refused before anything was integrated,
+    /// so the replica is untouched; not a violation.
     Pending,
     /// Out of schema; the first violation (`path: message`).
     Invalid(String),
@@ -179,8 +182,12 @@ impl Replica {
         if update.len() > MAX_UPDATE_BYTES {
             return Err(Refused::TooLarge);
         }
-        // Before yrs sees a byte: bounded structure and nesting (see `guard`).
-        guard::scan(update)?;
+        // Before yrs sees a byte: bounded structure and nesting, and nothing it depends on missing (see `guard`).
+        let facts = guard::scan_facts(update)?;
+        {
+            let sv = self.doc.transact().state_vector();
+            facts.check_known(|c| u64::from(sv.get(&yrs::ClientID::new(c))))?;
+        }
         *self.dirty.lock().unwrap_or_else(|e| e.into_inner()) = Dirty::default();
         // From here the document may hold unverified content until `verify` passes.
         self.poisoned = true;

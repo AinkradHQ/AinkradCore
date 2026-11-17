@@ -9122,6 +9122,10 @@
             },
             "type": "array"
           },
+          "room": {
+            "$ref": "#/components/schemas/ProjectRoom",
+            "description": "The linked Brain room; null when the Brain is off or the project has none."
+          },
           "slug": {
             "description": "A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name.",
             "type": "string"
@@ -9256,6 +9260,22 @@
           "remote_url",
           "default_branch",
           "is_primary"
+        ],
+        "type": "object"
+      },
+      "ProjectRoom": {
+        "description": "The Brain room linked to a project (strictly 1:1).",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "room_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "room_id",
+          "name"
         ],
         "type": "object"
       },
@@ -13636,7 +13656,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.87.0"
+    "version": "1.89.0"
   },
   "openapi": "3.1.0",
   "paths": {

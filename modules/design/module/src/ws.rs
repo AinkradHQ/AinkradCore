@@ -11,7 +11,7 @@
 //! older than the compacted log or newer than the head, the client is sent a snapshot first. The client sends its
 //! own unsent updates as `01` frames after connecting; applying a repeat is harmless.
 //! Close codes: 1008 protocol violation, 1009 too large / document full, 1011 server error, 1013 too slow (resume
-//! from the last seq), 4001 revoked, 4003 scopes changed, 4409 archived, 4429 too many updates, 1001 server stopping.
+//! from the last seq), 4001 revoked, 4003 scopes changed, 4409 archived, 4412 resync needed (the update depends on state the Core lacks: reconnect without a cursor), 4429 too many updates, 1001 server stopping.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -127,6 +127,7 @@ fn refusal_close(r: &Refusal) -> Message {
         Refusal::Violation(design_crdt::Refused::TooLarge) => close(1009, "update too large"),
         Refusal::Violation(e) => close(1008, &e.to_string().chars().take(100).collect::<String>()),
         Refusal::DocFull => close(1009, "document full"),
+        Refusal::Resync => close(4412, "resync needed"),
         Refusal::Archived => close(4409, "design archived"),
         Refusal::Store => close(1011, "server error"),
     }
@@ -135,7 +136,7 @@ fn refusal_close(r: &Refusal) -> Message {
 #[utoipa::path(get, path = "/docs/{doc}/sync", operation_id = "designSyncDoc", tag = "design",
     params(("doc" = String, Path, description = "Design id"),
         ("Last-Update-Seq" = Option<i64>, Header, description = "The last update seq this client applied; absent or out of the log: a snapshot first")),
-    responses((status = 101, description = "A WebSocket: the live document of a `design` or `system` doc (binary frames `01` update, `02` snapshot, `03` ack; text frames are presence JSON). Every update is validated before it is stored or relayed; a refused one closes the socket (1008, 1009 too large, 4429 rate). Also 1013 (too slow: resume from the last seq), 4001 (revoked), 4003 (scopes changed), 4409 (archived)"),
+    responses((status = 101, description = "A WebSocket: the live document of a `design` or `system` doc (binary frames `01` update, `02` snapshot, `03` ack; text frames are presence JSON). Every update is validated before it is stored or relayed; a refused one closes the socket (1008, 1009 too large, 4429 rate). Also 1013 (too slow: resume from the last seq), 4001 (revoked), 4003 (scopes changed), 4409 (archived), 4412 (the update depends on state the Core lacks: reconnect without a cursor and resend)"),
         (status = 404, description = "No such design, or a mockup (no live document)"),
         (status = 409, description = "The design is archived")))]
 pub(crate) async fn sync(

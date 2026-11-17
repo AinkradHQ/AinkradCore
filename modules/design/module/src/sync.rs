@@ -76,6 +76,8 @@ pub enum Refusal {
     /// A protocol violation by the peer.
     Violation(Refused),
     DocFull,
+    /// The update builds on state the document lacks: the client resyncs (a fresh connection, snapshot first).
+    Resync,
     Archived,
     /// Storage failed; the peer did nothing wrong.
     Store,
@@ -204,6 +206,8 @@ impl Actor {
         let diff = match st.replica.apply_remote(bytes) {
             Ok(None) => return Ok(st.last_seq),
             Ok(Some(d)) => d,
+            // Refused before yrs integrated anything: the replica is untouched, nothing was stored.
+            Err(Refused::Pending) => return Err(Refusal::Resync),
             Err(e) => {
                 self.rebuild(&mut st).await;
                 return Err(Refusal::Violation(e));

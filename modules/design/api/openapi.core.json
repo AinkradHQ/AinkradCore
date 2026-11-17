@@ -4513,6 +4513,10 @@
             },
             "type": "array"
           },
+          "room": {
+            "$ref": "#/components/schemas/ProjectRoom",
+            "description": "The linked Brain room; null when the Brain is off or the project has none."
+          },
           "slug": {
             "description": "A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name.",
             "type": "string"
@@ -4577,6 +4581,22 @@
           "remote_url",
           "default_branch",
           "is_primary"
+        ],
+        "type": "object"
+      },
+      "ProjectRoom": {
+        "description": "The Brain room linked to a project (strictly 1:1).",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "room_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "room_id",
+          "name"
         ],
         "type": "object"
       },
@@ -6612,7 +6632,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.87.0"
+    "version": "1.89.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16133,7 +16153,7 @@
         ],
         "responses": {
           "101": {
-            "description": "A WebSocket: the live document of a `design` or `system` doc (binary frames `01` update, `02` snapshot, `03` ack; text frames are presence JSON). Every update is validated before it is stored or relayed; a refused one closes the socket (1008, 1009 too large, 4429 rate). Also 1013 (too slow: resume from the last seq), 4001 (revoked), 4003 (scopes changed), 4409 (archived)"
+            "description": "A WebSocket: the live document of a `design` or `system` doc (binary frames `01` update, `02` snapshot, `03` ack; text frames are presence JSON). Every update is validated before it is stored or relayed; a refused one closes the socket (1008, 1009 too large, 4429 rate). Also 1013 (too slow: resume from the last seq), 4001 (revoked), 4003 (scopes changed), 4409 (archived), 4412 (the update depends on state the Core lacks: reconnect without a cursor and resend)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
