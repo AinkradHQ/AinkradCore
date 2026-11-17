@@ -171,7 +171,12 @@ async fn capacity_is_the_exec_drivers() {
     let d = SshDriver::new(Arc::new(driver(1)), leases.redeem());
     let _held = d.slot().unwrap();
     assert_eq!(d.slot().unwrap_err().code, ErrorCode::Busy);
-    assert_eq!(d.info().unwrap().commands, [OP_SSH_EXEC, FEATURE_PTY_SSH]);
+    let commands = d.info().unwrap().commands;
+    assert_eq!(commands[0], OP_SSH_EXEC);
+    // ... the sftp ops (Y2-03), all of them, and the feature flag of interactive terminals (Y2-02).
+    assert_eq!(commands.len(), 1 + 7 + 1);
+    assert!(commands[1..8].iter().all(|c| c.starts_with("ssh.sftp.")));
+    assert_eq!(commands[8], FEATURE_PTY_SSH);
 }
 
 #[tokio::test]

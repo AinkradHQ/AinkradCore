@@ -12,6 +12,7 @@ use tokio::net::TcpListener;
 
 use super::super::agent::secrets::Leased;
 use super::super::exec::tests::{RUNNER_KEY, driver};
+use super::sftp_fixture::{Fs, MemFs, Sftp};
 use super::*;
 
 pub(in crate::v2) fn never() -> oneshot::Receiver<()> {
@@ -48,13 +49,20 @@ pub(in crate::v2) struct Fixture {
     name: &'static str,
     accept: bool,
     seen: Arc<Seen>,
+    /// What the `sftp` subsystem serves.
+    fs: Fs,
+    /// Session channels of this connection, until a subsystem request takes one.
+    chans: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
 }
 
 impl russh::server::Server for Fixture {
     type Handler = Self;
     fn new_client(&mut self, _: Option<std::net::SocketAddr>) -> Self {
         self.seen.conns.fetch_add(1, SeqCst);
-        self.clone()
+        Self {
+            chans: Arc::default(),
+            ..self.clone()
+        }
     }
 }
 
@@ -90,11 +98,29 @@ impl russh::server::Handler for Fixture {
 
     async fn channel_open_session(
         &mut self,
-        _: Channel<Msg>,
+        channel: Channel<Msg>,
         reply: russh::server::ChannelOpenHandle,
         _: &mut Session,
     ) -> Result<(), Self::Error> {
+        self.chans.lock().unwrap().insert(channel.id(), channel);
         reply.accept().await;
+        Ok(())
+    }
+
+    async fn subsystem_request(
+        &mut self,
+        channel: ChannelId,
+        name: &str,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let taken = self.chans.lock().unwrap().remove(&channel);
+        match (name, taken) {
+            ("sftp", Some(ch)) => {
+                session.channel_success(channel)?;
+                russh_sftp::server::run(ch.into_stream(), Sftp::new(Arc::clone(&self.fs))).await;
+            }
+            _ => session.channel_failure(channel)?,
+        }
         Ok(())
     }
 
@@ -179,6 +205,7 @@ pub(in crate::v2) struct Server {
     pub(in crate::v2) port: u16,
     pub(in crate::v2) host_key: PrivateKey,
     pub(in crate::v2) seen: Arc<Seen>,
+    pub(in crate::v2) fs: Fs,
 }
 
 impl Server {
@@ -216,10 +243,13 @@ pub(in crate::v2) async fn start(
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let seen = Arc::new(Seen::default());
+    let fs = MemFs::with_root();
     let mut fixture = Fixture {
         name,
         accept,
         seen: Arc::clone(&seen),
+        fs: Arc::clone(&fs),
+        chans: Arc::default(),
     };
     tokio::spawn(async move {
         let _ = fixture.run_on_socket(Arc::new(config), &listener).await;
@@ -228,6 +258,7 @@ pub(in crate::v2) async fn start(
         port,
         host_key,
         seen,
+        fs,
     }
 }
 

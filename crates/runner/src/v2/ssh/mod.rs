@@ -128,13 +128,15 @@ pub struct SshDriver {
     idle: Duration,
     /// The runner binary `ssh-pty` terminals start; unset, this process's own executable.
     bin: Option<std::path::PathBuf>,
+    /// The most bytes one SFTP transfer moves (`SFTP_MAX_BYTES`; a test lowers it).
+    cap: u64,
 }
 
-fn fail(code: ErrorCode, m: impl Into<String>) -> StreamError {
+pub(super) fn fail(code: ErrorCode, m: impl Into<String>) -> StreamError {
     StreamError::new(code, m)
 }
 
-fn invalid(m: &str) -> StreamError {
+pub(super) fn invalid(m: &str) -> StreamError {
     fail(ErrorCode::InvalidArgs, m)
 }
 
@@ -159,7 +161,7 @@ fn user_ok(u: &str) -> bool {
         && (u.bytes()).all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
-fn check_hop(h: &SshHop) -> Result<(), StreamError> {
+pub(super) fn check_hop(h: &SshHop) -> Result<(), StreamError> {
     if !host_ok(&h.host) || !user_ok(&h.user) || h.port == 0 || !plain(&h.lease, 256) {
         return Err(invalid("a hop needs a host, a port, a user and a lease"));
     }
@@ -196,6 +198,7 @@ impl SshDriver {
             pool: Pool::default(),
             idle: IDLE,
             bin: None,
+            cap: ainkrad_proto::v2::SFTP_MAX_BYTES,
         }
     }
 
@@ -203,6 +206,12 @@ impl SshDriver {
     #[cfg(test)]
     pub(in crate::v2) fn with_bin(mut self, bin: std::path::PathBuf) -> Self {
         self.bin = Some(bin);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_cap(mut self, cap: u64) -> Self {
+        self.cap = cap;
         self
     }
 
@@ -220,7 +229,11 @@ impl SshDriver {
             .any(|c| c == OP_EXEC_RUN)
             .then(|| DriverInfo {
                 name: DRIVER.to_owned(),
-                commands: vec![OP_SSH_EXEC.to_owned(), FEATURE_PTY_SSH.to_owned()],
+                commands: std::iter::once(OP_SSH_EXEC)
+                    .chain(sftp::OPS)
+                    .chain([FEATURE_PTY_SSH])
+                    .map(str::to_owned)
+                    .collect(),
                 capacity: e.capacity,
                 ..DriverInfo::default()
             })
@@ -251,7 +264,7 @@ impl SshDriver {
         tracing::debug!(hops = req.hops.len(), "ssh.exec");
         let started = Instant::now();
         let end = tokio::time::Instant::now() + timeout;
-        let setup = tokio::time::timeout(CONNECT_TIMEOUT, self.connect(req));
+        let setup = tokio::time::timeout(CONNECT_TIMEOUT, self.connect(&req.target, &req.hops));
         let conn = tokio::select! {
             c = setup => c.map_err(|_| fail(ErrorCode::SshFailed, "timed out connecting"))??,
             () = tokio::time::sleep_until(end) => {
@@ -266,13 +279,13 @@ impl SshDriver {
 
     /// Every hop's key redeemed (so an op that cannot produce them never rides a pooled
     /// connection), then a pooled connection for exactly those keys, or a fresh one.
-    async fn connect(&self, req: &SshExec) -> Result<InUse, StreamError> {
-        let chain: Vec<&SshHop> = req.hops.iter().chain([&req.target]).collect();
+    async fn connect(&self, target: &SshHop, hops: &[SshHop]) -> Result<InUse, StreamError> {
+        let chain: Vec<&SshHop> = hops.iter().chain([target]).collect();
         let mut keys = Vec::with_capacity(chain.len());
         for hop in &chain {
             keys.push(self.load_key(&hop.lease).await?);
         }
-        let name = pool_key(req, &keys);
+        let name = pool_key(&chain, &keys);
         if let Some(conn) = self.pooled(&name, &chain) {
             return Ok(conn);
         }
@@ -507,7 +520,7 @@ async fn dial_chain(
     })
 }
 
-fn cancelled() -> StreamError {
+pub(super) fn cancelled() -> StreamError {
     fail(ErrorCode::Cancelled, "cancelled")
 }
 
@@ -526,5 +539,10 @@ pub mod pty;
 pub(in crate::v2) mod pty_tests;
 #[cfg(test)]
 mod safety_tests;
+mod sftp;
+#[cfg(test)]
+mod sftp_fixture;
+#[cfg(test)]
+mod sftp_tests;
 #[cfg(test)]
 mod tests;

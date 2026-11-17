@@ -499,6 +499,13 @@ impl Session {
                 });
                 None
             }
+            Command::SshSftpList(_)
+            | Command::SshSftpStat(_)
+            | Command::SshSftpRead(_)
+            | Command::SshSftpWrite(_)
+            | Command::SshSftpMkdir(_)
+            | Command::SshSftpRename(_)
+            | Command::SshSftpRemove(_) => self.start_sftp(stream, command, h),
             Command::PtyOpen(_) | Command::PtyAttach(_) | Command::PtyClose(_) => {
                 self.start_pty(stream, command, h)
             }
@@ -607,6 +614,47 @@ async fn open(
     pty.check_ssh(req).await?;
     let launch = ssh.terminal_launch(target).await?;
     pty.open_with(req, Some(launch)).await
+}
+
+impl Session {
+    /// An `ssh.sftp.*` command: one task; a read or write also gets the stream's inbox (credit,
+    /// the Core's bytes and `eof`) and sends its frames as they are made.
+    fn start_sftp(&self, stream: u64, command: Command, h: &mut Held) -> Option<Body> {
+        let Some(ssh) = self.ssh.as_ref().filter(|s| s.info().is_some()) else {
+            return Some(Body::Error(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                "ssh is off on this runner (it follows exec.run: --enable-exec)",
+            )));
+        };
+        let slot = match ssh.slot() {
+            Ok(slot) => slot,
+            Err(e) => return Some(Body::Error(e)),
+        };
+        let (cancel_tx, cancel) = oneshot::channel();
+        h.cancel = Some(cancel_tx);
+        let (ssh, done) = (Arc::clone(ssh), self.done_tx.clone());
+        let (inbox_tx, inbox) = mpsc::unbounded_channel();
+        let frames = done.clone();
+        let send = move |b: Body| drop(frames.send((stream, b)));
+        if matches!(command, Command::SshSftpRead(_) | Command::SshSftpWrite(_)) {
+            h.inbox = Some(inbox_tx);
+        }
+        tokio::spawn(async move {
+            let answer = match &command {
+                Command::SshSftpRead(r) => {
+                    (ssh.sftp_read(r, send, inbox, cancel).await).map(Reply::SshSftpRead)
+                }
+                Command::SshSftpWrite(r) => {
+                    (ssh.sftp_write(r, send, inbox, cancel).await).map(Reply::SshSftpWrite)
+                }
+                _ => ssh.sftp_unary(&command, cancel).await,
+            };
+            drop(slot);
+            let body = answer.map_or_else(Body::Error, Body::Result);
+            let _ = done.send((stream, body));
+        });
+        None
+    }
 }
 
 impl Session {

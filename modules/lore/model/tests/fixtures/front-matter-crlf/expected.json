@@ -1,0 +1,28 @@
+{
+  "attachments": [],
+  "headings": [],
+  "links": [],
+  "tags": [
+    "alpha",
+    "beta",
+    "gamma",
+    "inline"
+  ],
+  "tasks": [
+    {
+      "done": false,
+      "line": 9,
+      "text": "one"
+    },
+    {
+      "done": true,
+      "line": 10,
+      "text": "two #inline"
+    }
+  ],
+  "title": "Plain first line wins, no heading",
+  "title_norm": "plain first line wins, no heading",
+  "truncated": false,
+  "wikilinks": [],
+  "words": 10
+}
