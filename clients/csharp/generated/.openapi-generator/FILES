@@ -167,6 +167,7 @@ src/Ainkrad.Client/Model/Pool.cs
 src/Ainkrad.Client/Model/PriceBookEntry.cs
 src/Ainkrad.Client/Model/ProjectInfo.cs
 src/Ainkrad.Client/Model/ProjectRepo.cs
+src/Ainkrad.Client/Model/ProjectRoom.cs
 src/Ainkrad.Client/Model/Provider.cs
 src/Ainkrad.Client/Model/ProviderAccount.cs
 src/Ainkrad.Client/Model/PushKinds.cs
