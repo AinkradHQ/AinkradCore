@@ -406,7 +406,7 @@ impl SshDriver {
             ));
         }
         // ponytail: replacing is remove then rename (SFTP v3 renames do not replace), so a crash
-        // between them leaves the data in the part file; posix-rename@openssh.com if it matters.
+        // between them leaves the data in the part file; the posix-rename extension if it matters.
         if sftp.symlink_metadata(&req.path).await.is_ok() {
             or_cancel(cancel, async {
                 sftp.remove_file(&req.path).await.map_err(sftp_err)
