@@ -49,6 +49,9 @@ pub struct ModuleSetting {
     pub description: &'static str,
 }
 
+/// The most a module route may ask of `Module::body_limits`.
+pub const MAX_MODULE_BODY: usize = 64 * 1024 * 1024;
+
 /// A boxed future, so the hooks below stay object-safe.
 pub type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -175,6 +178,13 @@ pub trait Module: Send + Sync + 'static {
     /// paging and filters). Any other name is a 400 at the gate, so a key never ends up in a URL.
     /// Names that carry a secret (`token`, `key`, ...) are refused at `mount`.
     fn query_names(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Routes whose signed body may be larger than the platform's 1 MiB: `(method, template, max
+    /// bytes)`, templates relative to `/modules/<id>/v1`. A bigger body is a 413. The platform
+    /// clamps every value to [`MAX_MODULE_BODY`]. None by default.
+    fn body_limits(&self) -> &'static [(&'static str, &'static str, usize)] {
         &[]
     }
 
