@@ -92,14 +92,23 @@ fn deeply_nested_values_are_refused_at_decode() {
         v
     };
     let (d, log) = hostile();
-    log.lock().unwrap().clear();
     let meta = d.get_or_insert_map("meta");
     meta.insert(&mut d.transact_mut(), "ok", nest(10));
     meta.insert(&mut d.transact_mut(), "deep", nest(100));
     let u = log.lock().unwrap().clone();
+    let (deep, u) = u.split_last().unwrap();
     let mut l = Live::new();
-    l.apply_remote(&u[0]).unwrap();
-    assert!(matches!(l.apply_remote(&u[1]), Err(Error::Malformed(_))));
+    for x in u {
+        l.apply_remote(x).unwrap();
+    }
+    match l.apply_remote(deep) {
+        Err(Error::Malformed(m)) => assert!(
+            !m.contains("resync"),
+            "refused for its depth, not a gap: {m}"
+        ),
+        r => panic!("{r:?}"),
+    }
+    let u = &u[u.len() - 1..];
     // a collection claiming more elements than there are bytes: 0x75 (array) with length 2^40
     let mut lie = u[0].clone();
     if let Some(p) = lie.windows(2).position(|w| w == [117, 1]) {
@@ -118,6 +127,78 @@ fn an_update_listing_a_client_twice_is_refused() {
     let before = l.read();
     assert!(matches!(l.apply_remote(bad), Err(Error::Malformed(_))));
     assert_eq!(l.read(), before);
+}
+
+/// yrs would keep this update as pending and then panic re-encoding it (`merge_pending_v1` unwrap; found by mutating
+/// real updates). It starts past what the replica has, so it is refused before yrs sees it.
+const PENDING_BAD: &[u8] = include_bytes!("../fuzz/regressions/pending-merge-panic");
+const BASE: &[u8] = include_bytes!("../fuzz/seeds/apply/base");
+
+#[test]
+fn bad_pending_updates_are_refused_and_local_edits_survive() {
+    let mut l = Live::new();
+    let set_w = |l: &mut Live, w: u32| {
+        let op = json!([{"op": "set", "id": FRAME, "key": "w", "value": w}]);
+        l.apply_ops(&parse_ops(op.to_string().as_bytes()).unwrap())
+    };
+    l.apply_remote(BASE).unwrap();
+    assert!(matches!(
+        l.apply_remote(PENDING_BAD),
+        Err(Error::Malformed(_))
+    ));
+    set_w(&mut l, 777).unwrap();
+    assert!(matches!(
+        l.apply_remote(PENDING_BAD),
+        Err(Error::Malformed(_))
+    ));
+    set_w(&mut l, 778).unwrap();
+    assert_eq!(l.read().nodes[FRAME].props["w"], json!(778));
+    let mut peer = Live::new();
+    peer.apply_remote(BASE).unwrap();
+    peer.apply_remote(&l.outbox(true)).unwrap();
+    assert_eq!(peer.read().nodes[FRAME].props["w"], json!(778));
+}
+
+/// The `apply` fuzz target's input format (`[0xf0 | k, a, b, rest]`, cut into 3 updates): the second update starts
+/// a client at clock 1 with nothing before it (pending in yrs), the third overlaps it, and yrs's pending merge then
+/// used freed memory (ASan). Both are refused before yrs sees them.
+#[test]
+fn overlapping_pending_updates_are_refused() {
+    let d = include_bytes!("../fuzz/regressions/split-pending-uaf");
+    let (k, a, b, rest) = (d[0], d[1], d[2], &d[3..]);
+    assert!(k >= 0xf0 && k & 1 == 1);
+    let at = |f: u8| rest.len() * f as usize / 256;
+    let (x, y) = (at(a).min(at(b)), at(a).max(at(b)));
+    let mut l = Live::new();
+    l.apply_remote(BASE).unwrap();
+    assert!(l.apply_remote(&rest[..x]).is_err());
+    assert!(matches!(
+        l.apply_remote(&rest[x..y]),
+        Err(Error::Malformed(_))
+    ));
+    assert!(matches!(
+        l.apply_remote(&rest[y..]),
+        Err(Error::Malformed(_))
+    ));
+    assert_eq!(l.read().nodes.len(), 3);
+}
+
+#[test]
+fn an_update_with_a_gap_is_refused_until_the_resync() {
+    let mut a = Live::new();
+    a.apply_remote(BASE).unwrap();
+    let op = json!([{"op": "name", "id": FRAME, "name": "Home"}]);
+    a.apply_ops(&parse_ops(op.to_string().as_bytes()).unwrap())
+        .unwrap();
+    let later = a.outbox(true);
+    let mut b = Live::new();
+    assert!(
+        matches!(b.apply_remote(&later), Err(Error::Malformed(_))),
+        "it builds on BASE, which b lacks"
+    );
+    b.apply_remote(BASE).unwrap();
+    b.apply_remote(&later).unwrap();
+    assert_eq!(b.read().nodes[FRAME].name, "Home");
 }
 
 fn peers(first: u64, n: u64) -> Vec<u8> {

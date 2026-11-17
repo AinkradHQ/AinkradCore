@@ -68,7 +68,7 @@ fn edit_json(i: &mut In) -> String {
     format!("[{}]", ops.join(","))
 }
 
-const KNOWN: [i32; 13] = [
+const KNOWN: [i32; 14] = [
     0,
     1,
     DE_ERR_HANDLE,
@@ -81,6 +81,7 @@ const KNOWN: [i32; 13] = [
     DE_ERR_POISONED,
     DE_ERR_GPU,
     DE_ERR_RESET,
+    DE_ERR_HALTED,
     -100,
 ];
 

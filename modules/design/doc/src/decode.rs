@@ -16,8 +16,9 @@ use yrs::{Any, ClientID, ID, Number, Update};
 
 use crate::{Error, MAX_JSON_DEPTH};
 
-/// The yrs decoder, the input length, and the clients whose blocks were read so far.
-struct Guarded<'a>(DecoderV1<'a>, usize, HashSet<u64>);
+/// The yrs decoder, the input length, the clients whose blocks were read so far, and every block id the update
+/// refers to (origins and parents: what it builds on).
+struct Guarded<'a>(DecoderV1<'a>, usize, HashSet<u64>, Vec<ID>);
 
 impl Guarded<'_> {
     fn any(&mut self, depth: usize) -> Result<Any, ReadError> {
@@ -86,10 +87,14 @@ impl Decoder for Guarded<'_> {
         self.0.read_ds_len()
     }
     fn read_left_id(&mut self) -> Result<ID, ReadError> {
-        self.0.read_left_id()
+        let id = self.0.read_left_id()?;
+        self.3.push(id);
+        Ok(id)
     }
     fn read_right_id(&mut self) -> Result<ID, ReadError> {
-        self.0.read_right_id()
+        let id = self.0.read_right_id()?;
+        self.3.push(id);
+        Ok(id)
     }
     /// Only the block section reads clients this way (the delete set reads plain varints).
     fn read_client(&mut self) -> Result<ClientID, ReadError> {
@@ -138,13 +143,9 @@ pub(crate) fn caught<T, E: std::fmt::Display>(
     }
 }
 
-/// A v1 update, with every `Any` in it depth- and length-checked.
-pub(crate) fn update(bytes: &[u8]) -> Result<Update, Error> {
-    caught(|| {
-        Update::decode(&mut Guarded(
-            DecoderV1::from(bytes),
-            bytes.len(),
-            HashSet::new(),
-        ))
-    })
+/// A v1 update, with every `Any` in it depth- and length-checked, and the ids it refers to.
+pub(crate) fn update(bytes: &[u8]) -> Result<(Update, Vec<ID>), Error> {
+    let mut g = Guarded(DecoderV1::from(bytes), bytes.len(), HashSet::new(), vec![]);
+    let u = caught(|| Update::decode(&mut g))?;
+    Ok((u, g.3))
 }

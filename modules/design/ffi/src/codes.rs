@@ -14,9 +14,12 @@ pub const DE_ERR_PANIC: i32 = -7;
 /// A panic happened inside this engine earlier; free it and make a new one.
 pub const DE_ERR_POISONED: i32 = -8;
 pub const DE_ERR_GPU: i32 = -9;
-/// A remote update failed inside yrs and the document was reset to empty: send the state vector again and apply the
-/// full diff from the Core. Local edits not yet sent are lost.
+/// A remote update failed inside yrs and the document was reset: send the state vector again and apply the full diff
+/// from the Core. Unsent local edits are kept and still go out; the undo history is cleared.
 pub const DE_ERR_RESET: i32 = -10;
+/// Three resets within a minute: remote updates are no longer applied. Local edits still work and still go out; free
+/// the engine and open the design again.
+pub const DE_ERR_HALTED: i32 = -11;
 
 /// `de_sync_apply` targets.
 pub const DE_DOC: u32 = 0;

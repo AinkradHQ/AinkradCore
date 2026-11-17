@@ -30,9 +30,13 @@
 
 #define DE_ERR_GPU -9
 
-// A remote update failed inside yrs and the document was reset to empty: send the state vector again and apply the
-// full diff from the Core. Local edits not yet sent are lost.
+// A remote update failed inside yrs and the document was reset: send the state vector again and apply the full diff
+// from the Core. Unsent local edits are kept and still go out; the undo history is cleared.
 #define DE_ERR_RESET -10
+
+// Three resets within a minute: remote updates are no longer applied. Local edits still work and still go out; free
+// the engine and open the design again.
+#define DE_ERR_HALTED -11
 
 // `de_sync_apply` targets.
 #define DE_DOC 0
