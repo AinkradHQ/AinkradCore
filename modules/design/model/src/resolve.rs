@@ -9,11 +9,11 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::ids::parse_component_ref;
+use crate::ids::{is_node_id, parse_component_ref};
 use crate::limits::*;
 use crate::schema::{Doc, Node, NodeType, Token};
 use crate::tree::{Forest, forest};
-use crate::validate::{self, Cx, token_ref};
+use crate::validate::{self, Cx, clip_n, token_ref};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -81,6 +81,7 @@ struct Rx<'a> {
     toks: Option<&'a BTreeMap<String, Token>>,
     theme: Theme,
     count: usize,
+    bytes: usize,
     diags: Vec<Diagnostic>,
 }
 
@@ -92,6 +93,8 @@ pub fn resolve(
     system: Option<(&str, &Doc)>,
     theme: Theme,
 ) -> Result<Resolved, ResolveError> {
+    // Only the system the design names is readable; a different document handed in is ignored.
+    let system = system.filter(|(id, _)| doc.meta.system.as_deref() == Some(*id));
     let own_f = forest(doc);
     let sys_f = system.map(|(_, d)| forest(d));
     let mut rx = Rx {
@@ -108,6 +111,7 @@ pub fn resolve(
         toks: None,
         theme,
         count: 0,
+        bytes: 0,
         diags: vec![],
     };
     match (&doc.meta.system, rx.sys) {
@@ -139,11 +143,25 @@ pub fn resolve(
         (&own_f.detached, &mut out.detached),
     ] {
         for id in ids {
-            dst.push(rx.node(own, id, "", 0, &[], &mut vec![])?);
+            dst.extend(rx.node(own, id, "", 0, &[], &mut vec![])?);
         }
     }
     out.diagnostics = rx.diags;
     Ok(out)
+}
+
+/// Approximate bytes a JSON value costs when cloned into the output.
+fn vbytes(v: &Value) -> usize {
+    match v {
+        Value::String(s) => s.len() + 8,
+        Value::Array(a) => 8 + a.iter().map(vbytes).sum::<usize>(),
+        Value::Object(m) => 8 + mbytes(m),
+        _ => 8,
+    }
+}
+
+fn mbytes(m: &Map<String, Value>) -> usize {
+    m.iter().map(|(k, x)| k.len() + 8 + vbytes(x)).sum()
 }
 
 fn kids<'a>(c: Ctx<'a>, i: &str) -> &'a [String] {
@@ -167,12 +185,21 @@ fn descend<'a>(scopes: &[Scope<'a>], child: &str) -> Vec<Scope<'a>> {
 impl<'a> Rx<'a> {
     fn diag(&mut self, code: &'static str, node: &str, msg: impl Into<String>) {
         if self.diags.len() < 1000 {
+            // ids and refs are attacker-sized strings: keep every diagnostic small
             self.diags.push(Diagnostic {
                 code,
-                node: node.to_string(),
-                msg: msg.into(),
+                node: clip_n(node, 256),
+                msg: clip_n(&msg.into(), 256),
             });
         }
+    }
+
+    fn charge(&mut self, n: usize) -> Result<(), ResolveError> {
+        self.bytes = self.bytes.saturating_add(n);
+        if self.bytes > MAX_RESOLVED_BYTES {
+            return Err(ResolveError::TooLarge);
+        }
+        Ok(())
     }
 
     /// A component node reachable from this resolve: in this doc or in its design system, never elsewhere.
@@ -292,13 +319,21 @@ impl<'a> Rx<'a> {
         depth: usize,
         scopes: &[Scope<'a>],
         stack: &mut Vec<String>,
-    ) -> Result<ResolvedNode, ResolveError> {
+    ) -> Result<Option<ResolvedNode>, ResolveError> {
+        if !is_node_id(id) {
+            self.diag("node.id", id, "node skipped: its id is not a valid node id");
+            return Ok(None);
+        }
         self.count += 1;
         if self.count > MAX_RESOLVED_NODES {
             return Err(ResolveError::TooLarge);
         }
         let rid = format!("{prefix}{id}");
         let n: &'a Node = &cx.doc.nodes[id];
+        // charge before cloning: a hostile document is refused without first copying its strings
+        self.charge(
+            rid.len() + n.name.len() + n.text.as_ref().map_or(0, String::len) + mbytes(&n.props),
+        )?;
         let mut raw = n.props.clone();
         let mut text = n.text.clone();
         let mut component = None;
@@ -309,6 +344,9 @@ impl<'a> Rx<'a> {
             raw.remove("overrides");
             match n.props.get("component").and_then(Value::as_str) {
                 None => self.diag("instance.component", &rid, "instance names no component"),
+                Some(r) if parse_component_ref(r).is_none() => {
+                    self.diag("instance.component", &rid, "component ref is malformed")
+                }
                 Some(r) => {
                     component = Some(r.to_string());
                     if stack.iter().any(|s| s == r) {
@@ -321,6 +359,7 @@ impl<'a> Rx<'a> {
                         self.diag("instance.depth", &rid, "instances are nested too deeply");
                     } else if let Some((ccx, cid)) = self.lookup(r) {
                         // the component's props, minus its canvas position, under the instance's own props
+                        self.charge(mbytes(&ccx.doc.nodes[cid].props))?;
                         let mut base = ccx.doc.nodes[cid].props.clone();
                         base.remove("x");
                         base.remove("y");
@@ -349,6 +388,7 @@ impl<'a> Rx<'a> {
             );
         }
         for m in layers {
+            self.charge(mbytes(m))?;
             self.apply_override(&rid, n.ty, &mut raw, &mut text, m);
         }
         let props = self.finish_props(&rid, n.ty, raw);
@@ -376,7 +416,7 @@ impl<'a> Rx<'a> {
             let child_prefix = format!("{rid}/");
             stack.push(component.clone().unwrap_or_default());
             for k in kids(ccx, cid) {
-                children.push(self.node(
+                children.extend(self.node(
                     ccx,
                     k,
                     &child_prefix,
@@ -388,7 +428,7 @@ impl<'a> Rx<'a> {
             stack.pop();
         } else if n.ty.is_container() {
             for k in kids(cx, id) {
-                children.push(self.node(cx, k, prefix, depth + 1, &descend(scopes, k), stack)?);
+                children.extend(self.node(cx, k, prefix, depth + 1, &descend(scopes, k), stack)?);
             }
         } else if !kids(cx, id).is_empty() {
             self.diag(
@@ -397,7 +437,7 @@ impl<'a> Rx<'a> {
                 "a leaf node cannot have children; they are not drawn",
             );
         }
-        Ok(ResolvedNode {
+        Ok(Some(ResolvedNode {
             id: rid,
             ty: n.ty,
             name: n.name.clone(),
@@ -405,6 +445,6 @@ impl<'a> Rx<'a> {
             text,
             component,
             children,
-        })
+        }))
     }
 }

@@ -76,7 +76,7 @@ test-leyline: ; $(CARGO) test $(LEYLINE)
 DESIGN = --manifest-path modules/design/Cargo.toml --workspace
 build-design: ; $(CARGO) build $(DESIGN)
 test-design: ; $(CARGO) test $(DESIGN)
-fuzz-design: ; cd modules/design/model/fuzz && mkdir -p corpus/validators && cargo +nightly fuzz run validators corpus/validators seeds/validators -- -max_total_time=$${FUZZ_SECS:-30}
+fuzz-design: ; cd modules/design/model/fuzz && mkdir -p corpus/validators && cargo +nightly fuzz run validators corpus/validators seeds/validators -- -max_len=1048576 -rss_limit_mb=1024 -max_total_time=$${FUZZ_SECS:-30}
 audit-design: ; $(CARGO) deny --manifest-path modules/design/Cargo.toml --config deny.toml check
 # Local run (E1-01.5): state in ./state (gitignored); `Run/run.sh run` comes here. The default listener is a
 # Unix socket (state/core.sock); for HTTP on loopback use `make run LISTEN=loopback:7700`.

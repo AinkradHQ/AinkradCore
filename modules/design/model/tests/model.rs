@@ -388,12 +388,11 @@ fn deep_nesting_is_cut_not_overflowed() {
     let mut parent = PAGE.to_string();
     for i in 0..5000 {
         let me = format!(
-            "n_aaaaaaaa{}{}",
+            "n_aaaaaaaaa{}{}",
             (b'a' + (i / 26 % 26) as u8) as char,
             (b'a' + (i % 26) as u8) as char
         );
         let me = format!("{me}{}", (b'a' + (i / 676) as u8) as char);
-        let me = me.chars().take(14).collect::<String>();
         d.nodes
             .insert(me.clone(), n(NodeType::Frame, &parent, "a", json!({})));
         parent = me;

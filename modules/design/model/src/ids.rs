@@ -108,6 +108,37 @@ pub fn between(lo: Option<&str>, hi: Option<&str>) -> Option<String> {
     }
 }
 
+/// `n` evenly spaced valid orders in increasing order (fixed-width base 36, gaps of at least 4), for renumbering a
+/// sibling list after `between` ran out of room. `None` above `MAX_NODES` siblings.
+pub fn rebalance(n: usize) -> Option<Vec<String>> {
+    if n > crate::limits::MAX_NODES {
+        return None;
+    }
+    let slots = (n as u64 + 1) * 4;
+    let (mut width, mut cap) = (1u32, 36u64);
+    while cap < slots {
+        width += 1;
+        cap *= 36;
+    }
+    let step = cap / (n as u64 + 1);
+    Some(
+        (1..=n as u64)
+            .map(|i| {
+                let mut v = i * step;
+                if v.is_multiple_of(36) {
+                    v += 1; // never end in 0; the gap is at least 4, so the order stays below the next
+                }
+                let mut digits = vec![0u32; width as usize];
+                for d in digits.iter_mut().rev() {
+                    *d = (v % 36) as u32;
+                    v /= 36;
+                }
+                digits.into_iter().map(ch).collect()
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

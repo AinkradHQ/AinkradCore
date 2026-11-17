@@ -1,4 +1,4 @@
-{
+ß{
   "meta": {
     "system": "dd_sys",
     "version": 1
@@ -196,6 +196,149 @@
         "component": "dd_main/n_compaaaaaaaa"
       },
       "type": "instance"
+    }
+  }
+}
+{
+  "meta": {
+    "version": 1
+  },
+  "nodes": {
+    "n_bgaaaaaaaaaa": {
+      "clock": 1,
+      "name": "bg",
+      "order": "a",
+      "parent": "n_buttonaaaaaa",
+      "props": {
+        "fill": [
+          {
+            "color": {
+              "token": "color.bg"
+            },
+            "type": "solid"
+          }
+        ],
+        "material": {
+          "token": "material.glass"
+        },
+        "radius": {
+          "token": "radius.control"
+        }
+      },
+      "type": "rect"
+    },
+    "n_buttonaaaaaa": {
+      "clock": 1,
+      "name": "Button",
+      "order": "a",
+      "parent": "n_syspageaaaaa",
+      "props": {
+        "layout": {
+          "dir": "row",
+          "gap": {
+            "token": "space.gap"
+          },
+          "pad": [
+            8,
+            12,
+            8,
+            12
+          ]
+        },
+        "x": 40,
+        "y": 40
+      },
+      "type": "component"
+    },
+    "n_labelaaaaaaa": {
+      "clock": 1,
+      "name": "label",
+      "order": "b",
+      "parent": "n_buttonaaaaaa",
+      "props": {
+        "fill": [
+          {
+            "color": {
+              "token": "color.text"
+            },
+            "type": "solid"
+          }
+        ],
+        "type": {
+          "token": "type.body"
+        }
+      },
+      "text": "Button",
+      "type": "text"
+    },
+    "n_syspageaaaaa": {
+      "clock": 1,
+      "name": "Components",
+      "order": "a",
+      "parent": null,
+      "props": {},
+      "type": "page"
+    }
+  },
+  "tokens": {
+    "color.bg": {
+      "day": "#ffffff",
+      "kind": "color",
+      "night": "#101014"
+    },
+    "color.text": {
+      "day": "#111111",
+      "kind": "color",
+      "night": "#f2f2f2"
+    },
+    "material.glass": {
+      "day": "glass",
+      "kind": "material",
+      "night": "well"
+    },
+    "radius.control": {
+      "day": 8,
+      "kind": "radius",
+      "night": 8
+    },
+    "shadow.card": {
+      "day": [
+        {
+          "blur": 8,
+          "color": "#00000033",
+          "spread": 0,
+          "x": 0,
+          "y": 2
+        }
+      ],
+      "kind": "shadow",
+      "night": [
+        {
+          "blur": 8,
+          "color": "#000000aa",
+          "spread": 0,
+          "x": 0,
+          "y": 2
+        }
+      ]
+    },
+    "space.gap": {
+      "day": 8,
+      "kind": "space",
+      "night": 12
+    },
+    "type.body": {
+      "day": {
+        "font": "system",
+        "size": 13,
+        "weight": 400
+      },
+      "kind": "type",
+      "night": {
+        "font": "system",
+        "size": 13,
+        "weight": 500
+      }
     }
   }
 }

@@ -59,8 +59,13 @@ impl Cx {
     }
 }
 
-fn clip(s: &str) -> String {
-    s.chars().take(40).collect()
+/// Untrusted text in a message or a path: at most 40 characters.
+pub(crate) fn clip(s: &str) -> String {
+    clip_n(s, 40)
+}
+
+pub(crate) fn clip_n(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
 }
 
 /// `{"token": "<name>"}` and nothing else.
@@ -191,10 +196,12 @@ fn font_ref(v: &Value) -> R {
     )?;
     if let Some(f) = m.get("family")
         && !f.as_str().is_some_and(|s| {
-            (1..=MAX_NAME_CHARS).contains(&s.chars().count()) && !s.chars().any(char::is_control)
+            (1..=MAX_NAME_CHARS).contains(&s.len())
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'_' | b'-'))
         })
     {
-        return Err("family: expected 1..=100 printable characters".into());
+        return Err("family: expected 1..=100 characters from A-Z a-z 0-9 space _ -".into());
     }
     m.get("weight")
         .map_or(Ok(()), |w| at("weight", int_range(w, 1, 1000)))
@@ -433,16 +440,6 @@ fn text(v: &Value) -> R {
     }
 }
 
-pub fn text_str(s: &str) -> R {
-    if s.chars().count() > MAX_TEXT_CHARS {
-        return Err("text too long".into());
-    }
-    if s.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
-        return Err("control characters are not allowed".into());
-    }
-    Ok(())
-}
-
 /// One prop of a node of type `ty`: known key, applies to the type, value in schema.
 pub fn prop(ty: NodeType, key: &str, v: &Value, cx: &mut Cx) -> R {
     match applies(key, ty) {
@@ -469,4 +466,6 @@ pub fn props(ty: NodeType, m: &Map<String, Value>, cx: &mut Cx) -> Vec<Violation
 }
 
 mod document;
+mod strings;
 pub use document::{doc, token};
+pub use strings::{is_format_char, name_str, text_str};

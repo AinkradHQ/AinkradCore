@@ -31,6 +31,11 @@ pub mod limits {
     pub const MAX_INSTANCE_DEPTH: usize = 16;
     /// Nodes in a resolved tree; instances can multiply the node count, so this is the real bound.
     pub const MAX_RESOLVED_NODES: usize = 50_000;
+    /// Bytes of names, text, ids and prop JSON in a resolved tree. The node cap alone is not enough: one instance
+    /// of a component holding a 100 000-character text, expanded 500 times, is 50 MB from a 100 KB document.
+    pub const MAX_RESOLVED_BYTES: usize = 64 * 1024 * 1024;
+    /// How far above the document's highest clock a move may be (a hostile u64::MAX clock would pin a node forever).
+    pub const MAX_CLOCK_JUMP: u64 = 1 << 20;
     pub const MAX_NAME_CHARS: usize = 100;
     pub const MAX_TEXT_CHARS: usize = 100_000;
     pub const MAX_OVERRIDES: usize = 256;

@@ -1,8 +1,8 @@
 //! Whole-document validation: limits, every node, every token.
 
 use super::{
-    Cx, R, Violation, at, clip, color, material_value, num, props, shadow_value, text_str,
-    type_value,
+    Cx, R, Violation, at, clip, color, material_value, name_str, num, props, shadow_value,
+    text_str, type_value,
 };
 use crate::ids::{is_doc_id, is_node_id, is_order, is_token_name};
 use crate::limits::*;
@@ -27,6 +27,7 @@ pub fn token(t: &Token) -> R {
 }
 
 fn node(id: &str, n: &Node, out: &mut Vec<Violation>) {
+    let id = &clip(id); // an id can be any length until it is refused
     let mut push = |path: &str, msg: String| {
         if out.len() < MAX_REPORTED {
             out.push(Violation {
@@ -44,8 +45,8 @@ fn node(id: &str, n: &Node, out: &mut Vec<Violation>) {
     if n.parent.as_deref().is_some_and(|p| !is_node_id(p)) {
         push(".parent", "bad parent id".into());
     }
-    if n.name.chars().count() > MAX_NAME_CHARS || n.name.chars().any(char::is_control) {
-        push(".name", "name: 0..=100 printable characters".into());
+    if let Err(e) = name_str(&n.name) {
+        push(".name", e);
     }
     match (&n.text, n.ty) {
         (Some(t), NodeType::Text) => {

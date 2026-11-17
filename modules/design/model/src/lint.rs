@@ -6,12 +6,13 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::ids::is_node_id;
 use crate::ids::{is_sha256, parse_component_ref};
 use crate::limits::*;
 use crate::resolve::{Theme, resolve};
 use crate::schema::{Doc, NodeType};
 use crate::tree::{Forest, forest};
-use crate::validate;
+use crate::validate::{self, clip, clip_n};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -57,8 +58,8 @@ fn find(
     Finding {
         rule,
         severity,
-        node: node.map(str::to_string),
-        msg: msg.into(),
+        node: node.map(|n| clip_n(n, 64)),
+        msg: clip_n(&msg.into(), 256),
         fix: fix_for(rule),
     }
 }
@@ -72,6 +73,8 @@ pub fn lint(
     assets: Option<&BTreeSet<String>>,
 ) -> Vec<Finding> {
     use Severity::*;
+    // same rule as the resolver: only the system the design names
+    let system = system.filter(|(id, _)| doc.meta.system.as_deref() == Some(*id));
     let mut out = vec![];
     for v in validate::doc(doc) {
         let node = v
@@ -80,8 +83,17 @@ pub fn lint(
             .and_then(|r| r.split('.').next());
         out.push(find("schema.invalid", Error, node, v.msg));
     }
-    if doc.nodes.len() > MAX_NODES {
-        return out; // too big to walk; the schema finding says so
+    // Too big to walk, or ids that are not ids (a 1 MB id would be copied into every finding): the schema findings
+    // above already say so, and nothing below can be trusted to stay small.
+    let bad_ids = doc
+        .nodes
+        .iter()
+        .any(|(id, n)| !is_node_id(id) || n.parent.as_deref().is_some_and(|p| !is_node_id(p)));
+    if doc.nodes.len() > MAX_NODES || bad_ids {
+        out.sort();
+        out.dedup();
+        out.truncate(MAX_FINDINGS);
+        return out;
     }
     let f = forest(doc);
     for id in &f.broken {
@@ -92,7 +104,11 @@ pub fn lint(
             "a move cycle was cut here",
         ));
     }
-    for id in f.detached.iter().filter(|i| !f.broken.contains(i)) {
+    for id in f
+        .detached
+        .iter()
+        .filter(|i| f.broken.binary_search(i).is_err())
+    {
         out.push(find(
             "tree.detached",
             Error,
@@ -150,7 +166,7 @@ pub fn lint(
                 "link.target",
                 Error,
                 Some(id),
-                format!("link points at {to}, which does not exist"),
+                format!("link points at {}, which does not exist", clip(to)),
             ));
         }
         if let Some(known) = assets {
@@ -171,13 +187,16 @@ pub fn lint(
                 n.props.get("overrides"),
             )
         {
-            for p in ov.keys().filter(|p| p.as_str() != ".") {
+            for p in ov.keys().filter(|p| p.as_str() != ".").take(MAX_OVERRIDES) {
                 if !override_target_exists(doc_id, doc, &f, system, sys_f.as_ref(), r, p) {
                     out.push(find(
                         "override.dangling",
                         Warning,
                         Some(id),
-                        format!("override path {p} matches no child of the component"),
+                        format!(
+                            "override path {} matches no child of the component",
+                            clip(p)
+                        ),
                     ));
                 }
             }
@@ -284,11 +303,7 @@ fn override_target_exists(
         None => return false,
     };
     for seg in path.split('/') {
-        if !fo
-            .children
-            .get(&cur)
-            .is_some_and(|k| k.iter().any(|c| c == seg))
-        {
+        if fo.parent.get(seg).map(String::as_str) != Some(cur.as_str()) {
             return false;
         }
         cur = seg.to_string();
