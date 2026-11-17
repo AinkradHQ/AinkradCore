@@ -1288,6 +1288,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listProjects"];
+        put?: never;
+        post: operations["createProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getProject"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateProject"];
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["archiveProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/repos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["addProjectRepo"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/repos/{repo}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["removeProjectRepo"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/repos/{repo}/primary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["setProjectRepoPrimary"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/push-token": {
         parameters: {
             query?: never;
@@ -3187,6 +3283,14 @@ export interface components {
             device: components["schemas"]["Named"];
             versions: components["schemas"]["Versions"];
         };
+        /** @description The Core's copy of a repo. */
+        MirrorState: {
+            /** @description Why the last fetch failed; the older head is kept. */
+            error?: string | null;
+            fetched_at?: components["schemas"]["Timestamp"];
+            /** @description The commit the last fetch ended at. */
+            head?: string | null;
+        };
         ModelPrice: {
             id: string;
             /**
@@ -3389,6 +3493,23 @@ export interface components {
             name: string;
             /** @description `anthropic`, `openai` or `google`. */
             provider: string;
+        };
+        NewProject: {
+            /** @description Default empty. */
+            description?: string | null;
+            /** @description One line, 1-100 characters. */
+            name: string;
+            /** @description See `ProjectInfo.slug`; it is the project's public host name. */
+            slug: string;
+        };
+        NewProjectRepo: {
+            default_branch: string;
+            /** @description The folder name: 1-100 of `[A-Za-z0-9._-]`, not starting with `.` or `-`. */
+            name: string;
+            /** @description Make it the primary repo (the first repo always is). */
+            primary?: boolean | null;
+            /** @description An `https://`, `ssh://` or scp-style remote with no credential in it. */
+            remote_url: string;
         };
         /** @description A new account. Deliberately no `Debug`. */
         NewProviderAccount: {
@@ -3599,6 +3720,42 @@ export interface components {
             provider: string;
             /** Format: int64 */
             version: number;
+        };
+        ProjectInfo: {
+            /** Format: double */
+            cpu_limit: number;
+            created_at: components["schemas"]["Timestamp"];
+            description: string;
+            /** @description Whether the running project gets a public link. */
+            expose: boolean;
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            idle_minutes: number;
+            /** Format: int64 */
+            mem_limit_mb: number;
+            name: string;
+            /** @description The primary repo first, then by name. */
+            repos: components["schemas"]["ProjectRepo"][];
+            /** @description A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name. */
+            slug: string;
+            /** @description `manual` or `github`. */
+            source: string;
+            /** @description `active` or `archived`. */
+            state: string;
+            updated_at: components["schemas"]["Timestamp"];
+        };
+        ProjectRepo: {
+            default_branch: string;
+            /** Format: int64 */
+            id: number;
+            is_primary: boolean;
+            /** @description None until the Core has tried to fetch it. */
+            mirror?: components["schemas"]["MirrorState"];
+            /** @description The folder name in a multi-repo checkout. */
+            name: string;
+            /** @description The source of truth; never carries a credential. */
+            remote_url: string;
         };
         /** @description A provider definition: a built-in, or user data validated before it is stored. */
         Provider: {
@@ -4315,6 +4472,12 @@ export interface components {
             /** @description The admin's off switch. */
             disabled?: boolean | null;
             label?: string | null;
+            name?: string | null;
+        };
+        /** @description What changes; an omitted field is kept. */
+        UpdateProject: {
+            description?: string | null;
+            expose?: boolean | null;
             name?: string | null;
         };
         /** @description What changes; an omitted field is kept. */
@@ -7754,6 +7917,259 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PriceBookEntry"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listProjects: {
+        parameters: {
+            query?: {
+                /** @description Include archived projects; default false. */
+                archived?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projects by slug, each with its repos and their mirror state; archived ones only with `archived=true` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewProject"];
+            };
+        };
+        responses: {
+            /** @description Created as a manual project (audited and emitted as `project.created`). 400 `bad_request` for a bad or reserved slug or a bad name; 409 `conflict` when the slug is taken */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project with its repos and their mirror state; 404 for no such project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateProject"];
+            };
+        };
+        responses: {
+            /** @description Changed (audited and emitted as `project.updated`). 404 for no such project; 409 `conflict` when it is archived; 400 for a bad name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    archiveProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Archived; its repos, mirrors and sessions stay (audited and emitted as `project.archived`). 404 for no such project; 409 `conflict` when it already is */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    addProjectRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewProjectRepo"];
+            };
+        };
+        responses: {
+            /** @description Added (audited as `project.repo_added`); the project as it now is. 400 for a bad name, remote or branch; 404 for no such project; 409 `conflict` for an archived project or a repeated name or remote */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    removeProjectRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The repo's id */
+                repo: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed with its mirror row (audited as `project.repo_removed`); the project as it now is. 404 for no such project or repo; 409 `conflict` for an archived project or the primary while others remain */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setProjectRepoPrimary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The repo's id */
+                repo: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The repo is the one primary (audited as `project.repo_primary_set`); the project as it now is. 404 for no such project or repo; 409 `conflict` for an archived project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"];
                 };
             };
             400: components["responses"]["BadRequest"];
