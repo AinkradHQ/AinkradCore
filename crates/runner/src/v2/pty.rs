@@ -329,8 +329,39 @@ impl PtyDriver {
 
     /// Starts a host for `req`; its terminal id.
     pub async fn open(&self, req: &PtyOpen) -> Result<String, StreamError> {
+        self.open_with(req, None).await
+    }
+
+    /// `open`, with `ssh` (from `SshDriver::terminal_launch`, for a `PtyOpen::ssh`) as the terminal's
+    /// program: the runner's own `ssh-pty`, whose keys arrive on descriptor 3.
+    pub async fn open_with(
+        &self,
+        req: &PtyOpen,
+        ssh: Option<super::SshLaunch>,
+    ) -> Result<String, StreamError> {
         self.enabled()?;
         let invalid = |m: &str| err(ErrorCode::InvalidArgs, m);
+        if ssh.is_some() {
+            if req.program.is_some()
+                || !req.args.is_empty()
+                || req.cwd.is_some()
+                || req.session.is_some()
+                || !req.env.is_empty()
+                || !req.env_pass.is_empty()
+            {
+                return Err(invalid(
+                    "an ssh terminal takes no program, folder, session or env",
+                ));
+            }
+            // The key handoff is an inherited descriptor, which `sudo` closes; and a locked network
+            // cannot reach the host. Refused here, not left to fail inside the terminal.
+            if self.config.user.is_some() {
+                return Err(invalid("an ssh terminal cannot run under --terminal-user"));
+            }
+            if self.config.net != super::termbox::Net::Host {
+                return Err(invalid("an ssh terminal needs --terminal-network=host"));
+            }
+        }
         if !req.size.valid() {
             return Err(invalid("size must be 1 to 1000 rows and columns"));
         }
@@ -366,9 +397,15 @@ impl PtyDriver {
             ),
             size: req.size,
             scrollback_bytes: req.scrollback_bytes.map(|b| clamp(SCROLLBACK_BYTES, b)),
+            fd3: None,
         };
+        if let Some(l) = ssh {
+            spec.program = Some(l.program);
+            spec.args = l.args;
+            spec.fd3 = Some(l.fd3);
+        }
         // No program asked for: the Ainkrad shell, so a terminal looks the same on every runner (N20).
-        if req.program.is_none() && req.args.is_empty() {
+        if spec.program.is_none() && req.args.is_empty() {
             match self.ainkrad_shell() {
                 Ok((zsh, dir)) => {
                     spec.program = Some(zsh);

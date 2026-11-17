@@ -40,7 +40,33 @@ pub struct Spec {
     /// absent: `store::CAP_DEFAULT`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollback_bytes: Option<u64>,
+    /// Bytes the child gets as an inherited pipe on descriptor 3 (standard base64 here): the
+    /// runner's key handoff to `ainkrad-runner ssh-pty`. Never argv, env or disk; wiped from the
+    /// host's memory once the child is started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fd3: Option<Hidden>,
 }
+
+/// A secret in a [`Spec`]: wiped when dropped, never printed.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Hidden(pub String);
+
+impl std::fmt::Debug for Hidden {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[hidden]")
+    }
+}
+
+impl Drop for Hidden {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.0);
+    }
+}
+
+/// The most bytes `Spec::fd3` may carry: well inside a pipe's capacity on both OSes, so filling it
+/// never blocks.
+pub const FD3_MAX: usize = 12 * 1024;
 
 /// How a child ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +119,54 @@ pub fn environment(
     );
     env.extend(set.iter().map(|(k, v)| (k.clone(), v.clone())));
     env
+}
+
+/// Starts `spec` on the PTY at `tty` with `secret` (base64) readable from an inherited pipe on
+/// descriptor 3. `portable-pty`'s own spawn closes every descriptor above 2, so it cannot pass one:
+/// the child is started here, the same way (own session, the PTY as controlling terminal, the
+/// spec's environment only), plus the pipe. The pipe is filled and its write end closed before the
+/// spawn, so the child reads the bytes and then EOF.
+fn spawn_with_fd3(
+    spec: &Spec,
+    secret: &Hidden,
+    tty: Option<std::path::PathBuf>,
+) -> io::Result<std::process::Child> {
+    use base64::Engine;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(secret.0.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "fd3 is not base64"))?;
+    let bytes = zeroize::Zeroizing::new(bytes);
+    if bytes.len() > FD3_MAX {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "fd3 is too large",
+        ));
+    }
+    let program = spec
+        .program
+        .as_deref()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "fd3 needs a program"))?;
+    let tty = tty.ok_or_else(|| io::Error::other("the PTY has no name"))?;
+    let open = || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOCTTY)
+            .open(&tty)
+    };
+    let (reader, mut writer) = std::io::pipe()?;
+    writer.write_all(&bytes)?;
+    drop(writer);
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(&spec.args).env_clear().envs(&spec.env);
+    if let Some(dir) = spec.cwd.as_ref().or_else(|| spec.env.get("HOME")) {
+        cmd.current_dir(dir);
+    }
+    cmd.stdin(open()?).stdout(open()?).stderr(open()?);
+    ainkrad_sys::pty_child_on_exec(&mut cmd, reader.as_raw_fd());
+    cmd.spawn()
 }
 
 fn pty_size(s: Size) -> PtySize {
@@ -164,7 +238,10 @@ impl Pty {
                 }
             }
         }
-        let child = pair.slave.spawn_command(cmd).map_err(io_err)?;
+        let child: Box<dyn portable_pty::Child + Send + Sync> = match &spec.fd3 {
+            None => pair.slave.spawn_command(cmd).map_err(io_err)?,
+            Some(secret) => Box::new(spawn_with_fd3(spec, secret, pair.master.tty_name())?),
+        };
         // Our slave fd stays open until the exit is announced (see `Pty::slave`).
         let pid = child
             .process_id()

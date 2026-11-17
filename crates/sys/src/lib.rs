@@ -31,6 +31,18 @@ pub const INVENTORY: &[(&str, &str)] = &[
         "close_fds_on_exec",
         "pre_exec closure: one raw close_range syscall with integer arguments",
     ),
+    (
+        "pty_child_on_exec",
+        "pre_exec closure: setsid, ioctl(TIOCSCTTY), fcntl, dup2 and close_range with integer arguments",
+    ),
+    (
+        "tty_size",
+        "libc::ioctl(TIOCGWINSZ) into a winsize we own, on a borrowed descriptor",
+    ),
+    (
+        "raw_mode",
+        "libc::tcgetattr, cfmakeraw and tcsetattr on a termios we own, on a borrowed descriptor",
+    ),
 ];
 
 /// Makes the calling process the leader of a new session and process group, with no
@@ -83,6 +95,92 @@ pub fn close_fds_on_exec(cmd: &mut std::process::Command) {
     }
     #[cfg(not(target_os = "linux"))]
     let _ = cmd;
+}
+
+/// Makes the PTY slave on stdin the child's controlling terminal and hands it `fd` as descriptor 3
+/// (the key handoff of `ssh-pty`: a pipe the parent filled and closed), with every other
+/// descriptor above 3 marked close-on-exec (Linux). Unlike `portable-pty`'s own spawn, which closes
+/// everything above 2, so no descriptor could be passed through it.
+#[allow(unsafe_code)]
+pub fn pty_child_on_exec(cmd: &mut std::process::Command, fd: std::os::fd::RawFd) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: `pre_exec` is unsafe because its closure runs between fork and exec. This one only
+    // makes integer-argument syscalls (setsid, ioctl, fcntl, dup2, close_range): it allocates
+    // nothing, takes no lock and touches no memory of ours, so it is async-signal-safe.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::setsid() == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            #[allow(clippy::cast_lossless)]
+            if libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            if fd == 3 {
+                // Already in place; `dup2` onto itself would keep close-on-exec set.
+                if libc::fcntl(3, libc::F_SETFD, 0) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+            } else if libc::dup2(fd, 3) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            #[cfg(target_os = "linux")]
+            let _ = libc::syscall(libc::SYS_close_range, 4u32, u32::MAX, 4u32);
+            Ok(())
+        });
+    }
+}
+
+/// The size of the terminal on `fd`, as `(rows, cols)`.
+#[allow(unsafe_code)]
+pub fn tty_size(fd: std::os::fd::BorrowedFd<'_>) -> io::Result<(u16, u16)> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: an all-zero `winsize` is a valid value (integers only).
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    // SAFETY: TIOCGWINSZ writes one `winsize` through the pointer, which is ours and live; `fd` is
+    // borrowed, so open for the call.
+    if unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCGWINSZ as _, &mut ws) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((ws.ws_row, ws.ws_col))
+}
+
+/// The terminal settings of a descriptor, put back on drop.
+pub struct RawMode {
+    fd: std::os::fd::RawFd,
+    saved: libc::termios,
+}
+
+/// Switches the terminal on `fd` to raw mode (no echo, no line editing, no signals from keys):
+/// bytes go through as typed. The returned guard restores the old settings on drop.
+#[allow(unsafe_code)]
+pub fn raw_mode(fd: std::os::fd::BorrowedFd<'_>) -> io::Result<RawMode> {
+    use std::os::fd::AsRawFd;
+    let fd = fd.as_raw_fd();
+    // SAFETY: an all-zero `termios` is a valid value (integers only); tcgetattr fills it.
+    let mut t: libc::termios = unsafe { std::mem::zeroed() };
+    // SAFETY: tcgetattr writes one `termios` through a pointer that is ours and live; failure
+    // (not a terminal) is reported.
+    if unsafe { libc::tcgetattr(fd, &mut t) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let saved = t;
+    // SAFETY: cfmakeraw only edits the `termios` we own.
+    unsafe { libc::cfmakeraw(&mut t) };
+    // SAFETY: tcsetattr reads one `termios` through a pointer that is ours and live.
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &t) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(RawMode { fd, saved })
+}
+
+impl Drop for RawMode {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        // SAFETY: tcsetattr reads the `termios` we saved; the descriptor is stdin, open for the
+        // life of the process. A failure leaves the terminal as it is.
+        unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &self.saved) };
+    }
 }
 
 /// Sends `signal` to every process in the group `pgid`. `Ok(false)` when the group is gone

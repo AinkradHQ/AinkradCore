@@ -541,6 +541,7 @@ impl Session {
             )));
         };
         let (pty, done) = (Arc::clone(pty), self.done_tx.clone());
+        let ssh = self.ssh.clone();
         let (cancel_tx, cancel_rx) = oneshot::channel();
         h.cancel = Some(cancel_tx);
         if let Command::PtyClose(req) = command {
@@ -558,7 +559,7 @@ impl Session {
         h.inbox = Some(inbox_tx);
         tokio::spawn(async move {
             let (op, terminal, seq, watch) = match command {
-                Command::PtyOpen(req) => match pty.open(&req).await {
+                Command::PtyOpen(req) => match open(&pty, ssh.as_deref(), &req).await {
                     Ok(id) => (Op::Open, id, 0, req.watch),
                     Err(e) => {
                         tracing::warn!(code = ?e.code, "a terminal did not open: {}", e.message);
@@ -585,6 +586,26 @@ impl Session {
         });
         None
     }
+}
+
+/// `pty.open`; for an ssh terminal (`PtyOpen::ssh`) the keys are redeemed first, so a lease that
+/// cannot be redeemed ends the open before any terminal exists.
+async fn open(
+    pty: &super::pty::PtyDriver,
+    ssh: Option<&SshDriver>,
+    req: &ainkrad_proto::v2::PtyOpen,
+) -> Result<String, StreamError> {
+    let Some(target) = &req.ssh else {
+        return pty.open(req).await;
+    };
+    let ssh = ssh.filter(|s| s.info().is_some()).ok_or_else(|| {
+        StreamError::new(
+            ErrorCode::UnsupportedCommand,
+            "ssh is off on this runner (it follows exec.run: --enable-exec)",
+        )
+    })?;
+    let launch = ssh.terminal_launch(target).await?;
+    pty.open_with(req, Some(launch)).await
 }
 
 impl Session {

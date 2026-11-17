@@ -275,7 +275,10 @@
 /// 86: Leyline runner SSH (Y2-01). Runner wire protocol only (`runner.schema.json`): op `ssh.exec` (`SshExec` ->
 ///    `ExecResult`), error codes `host_key_unknown`, `host_key_changed`, `ssh_auth_failed`, `ssh_failed`, and
 ///    `StreamError.host_key`; no route yet. (84 and 85 are taken by other open changes.)
-pub const API_MINOR: u32 = 86;
+/// 87: Leyline interactive SSH (Y2-02). Runner wire protocol only (`runner.schema.json`): `PtyOpen.ssh`
+///    (`SshTerminal`: the runner starts its own `ssh-pty` as the terminal's program, keys over an inherited pipe).
+///    No route yet.
+pub const API_MINOR: u32 = 87;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

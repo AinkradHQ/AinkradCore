@@ -94,6 +94,7 @@ impl LoginDriver {
             env: child_env(&runner_env(), scratch),
             size: SIZE,
             scrollback_bytes: None,
+            fd3: None,
         };
         let Ok(spawned) = Pty::spawn(&spec) else {
             return End::Fail("claude could not be started".to_owned());

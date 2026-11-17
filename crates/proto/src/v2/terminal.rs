@@ -68,6 +68,11 @@ pub struct PtyOpen {
     /// terminals; the runner clamps it. Absent: unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollback_budget: Option<u64>,
+    /// An interactive SSH terminal (Leyline): the runner starts its own `ssh-pty` as the terminal's
+    /// program, handing it the redeemed keys over an inherited pipe. Then `program`, `args`,
+    /// `cwd`, `session`, `env` and `env_pass` must be empty (`invalid_args`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<super::SshTerminal>,
 }
 
 /// The bounds the runner clamps a terminal's scrollback cap and its disk budget to; the

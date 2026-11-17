@@ -69,3 +69,23 @@ pub struct HostKeyEvidence {
     /// `SHA256:<base64>` of the presented host key.
     pub fingerprint: String,
 }
+
+/// The machine an interactive SSH terminal (`PtyOpen::ssh`) reaches, through `hops` (first to last):
+/// the same hops, pins and key leases as `ssh.exec`, and the same rules (at most `MAX_SSH_HOPS`).
+/// The runner redeems the leases and passes the keys to `ssh-pty`; a password or keyboard-interactive
+/// prompt is answered by the person typing in the terminal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SshTerminal {
+    pub target: SshHop,
+    #[serde(default)]
+    pub hops: Vec<SshHop>,
+}
+
+/// How `ainkrad-runner ssh-pty` ends (its exit code, visible as the terminal's exit): the remote
+/// shell's own code, or one of these. A host-key refusal prints the fingerprint on the terminal
+/// as `host key unknown: SHA256:…` / `host key changed: SHA256:…`, before any authentication.
+pub const SSH_PTY_EXIT_HOST_KEY_UNKNOWN: i32 = 70;
+pub const SSH_PTY_EXIT_HOST_KEY_CHANGED: i32 = 71;
+pub const SSH_PTY_EXIT_AUTH_FAILED: i32 = 72;
+/// Could not connect, the connection dropped, or the key handoff failed.
+pub const SSH_PTY_EXIT_FAILED: i32 = 255;

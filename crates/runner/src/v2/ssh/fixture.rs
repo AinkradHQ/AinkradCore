@@ -14,37 +14,37 @@ use super::super::agent::secrets::Leased;
 use super::super::exec::tests::{RUNNER_KEY, driver};
 use super::*;
 
-pub(super) fn never() -> oneshot::Receiver<()> {
+pub(in crate::v2) fn never() -> oneshot::Receiver<()> {
     let (tx, rx) = oneshot::channel();
     std::mem::forget(tx);
     rx
 }
 
-pub(super) fn fp(key: &PrivateKey) -> String {
+pub(in crate::v2) fn fp(key: &PrivateKey) -> String {
     key.public_key().fingerprint(HashAlg::Sha256).to_string()
 }
 
-pub(super) fn new_key() -> PrivateKey {
+pub(in crate::v2) fn new_key() -> PrivateKey {
     PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap()
 }
 
 /// What a fixture server saw.
 #[derive(Default)]
-pub(super) struct Seen {
+pub(in crate::v2) struct Seen {
     /// Connections accepted.
-    pub(super) conns: AtomicUsize,
+    pub(in crate::v2) conns: AtomicUsize,
     /// Any authentication traffic at all (none, offered, or signed).
-    pub(super) auth: AtomicUsize,
+    pub(in crate::v2) auth: AtomicUsize,
     /// `direct-tcpip` channels it carried.
-    pub(super) forwards: AtomicUsize,
+    pub(in crate::v2) forwards: AtomicUsize,
     /// `exec` requests received: a cancelled op must leave this at 0.
-    pub(super) execs: AtomicUsize,
+    pub(in crate::v2) execs: AtomicUsize,
     /// Channel `signal` requests (the best-effort KILL).
-    pub(super) signals: AtomicUsize,
+    pub(in crate::v2) signals: AtomicUsize,
 }
 
 #[derive(Clone)]
-pub(super) struct Fixture {
+pub(in crate::v2) struct Fixture {
     name: &'static str,
     accept: bool,
     seen: Arc<Seen>,
@@ -175,18 +175,18 @@ impl russh::server::Handler for Fixture {
     }
 }
 
-pub(super) struct Server {
-    pub(super) port: u16,
-    pub(super) host_key: PrivateKey,
-    pub(super) seen: Arc<Seen>,
+pub(in crate::v2) struct Server {
+    pub(in crate::v2) port: u16,
+    pub(in crate::v2) host_key: PrivateKey,
+    pub(in crate::v2) seen: Arc<Seen>,
 }
 
 impl Server {
-    pub(super) fn pin(&self) -> Vec<String> {
+    pub(in crate::v2) fn pin(&self) -> Vec<String> {
         vec![fp(&self.host_key)]
     }
 
-    pub(super) fn hop(&self, user: &str, lease: &str) -> SshHop {
+    pub(in crate::v2) fn hop(&self, user: &str, lease: &str) -> SshHop {
         SshHop {
             host: "127.0.0.1".to_owned(),
             port: self.port,
@@ -197,7 +197,7 @@ impl Server {
     }
 }
 
-pub(super) async fn serve(name: &'static str, accept: bool) -> Server {
+pub(in crate::v2) async fn serve(name: &'static str, accept: bool) -> Server {
     let config = russh::server::Config {
         keys: vec![new_key()],
         auth_rejection_time: Duration::from_millis(5),
@@ -207,7 +207,7 @@ pub(super) async fn serve(name: &'static str, accept: bool) -> Server {
     start(name, accept, config).await
 }
 
-pub(super) async fn start(
+pub(in crate::v2) async fn start(
     name: &'static str,
     accept: bool,
     config: russh::server::Config,
@@ -234,25 +234,25 @@ pub(super) async fn start(
 /// Leases handed out by the fake Core: lease id to the key's OpenSSH text, as a `file` secret
 /// (base64 of the bytes), like the Core's `leyline-keys` secrets.
 #[derive(Clone, Default)]
-pub(super) struct Leases {
-    pub(super) keys: Arc<Mutex<HashMap<String, String>>>,
-    pub(super) redeemed: Arc<AtomicUsize>,
+pub(in crate::v2) struct Leases {
+    pub(in crate::v2) keys: Arc<Mutex<HashMap<String, String>>>,
+    pub(in crate::v2) redeemed: Arc<AtomicUsize>,
     /// How long a redemption takes (the Core answering slowly).
-    pub(super) delay: Arc<Mutex<Duration>>,
+    pub(in crate::v2) delay: Arc<Mutex<Duration>>,
 }
 
 impl Leases {
-    pub(super) fn add(&self, lease: &str, pem: &str) {
+    pub(in crate::v2) fn add(&self, lease: &str, pem: &str) {
         self.keys.lock().unwrap().insert(lease.into(), pem.into());
     }
 
-    pub(super) fn key(&self, lease: &str) -> PrivateKey {
+    pub(in crate::v2) fn key(&self, lease: &str) -> PrivateKey {
         let k = new_key();
         self.add(lease, &k.to_openssh(LineEnding::LF).unwrap());
         k
     }
 
-    pub(super) fn redeem(&self) -> Redeem {
+    pub(in crate::v2) fn redeem(&self) -> Redeem {
         let this = self.clone();
         Arc::new(move |lease: String| {
             let this = this.clone();
@@ -277,11 +277,11 @@ impl Leases {
     }
 }
 
-pub(super) fn ssh(leases: &Leases) -> SshDriver {
+pub(in crate::v2) fn ssh(leases: &Leases) -> SshDriver {
     SshDriver::new(Arc::new(driver(4)), leases.redeem())
 }
 
-pub(super) fn req(target: SshHop, hops: Vec<SshHop>, run: &str) -> SshExec {
+pub(in crate::v2) fn req(target: SshHop, hops: Vec<SshHop>, run: &str) -> SshExec {
     SshExec {
         target,
         hops,
@@ -293,6 +293,6 @@ pub(super) fn req(target: SshHop, hops: Vec<SshHop>, run: &str) -> SshExec {
     }
 }
 
-pub(super) fn text(r: &ExecResult) -> &str {
+pub(in crate::v2) fn text(r: &ExecResult) -> &str {
     &r.stdout.text
 }
