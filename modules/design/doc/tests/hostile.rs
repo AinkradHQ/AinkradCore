@@ -183,6 +183,96 @@ fn overlapping_pending_updates_are_refused() {
     assert_eq!(l.read().nodes.len(), 3);
 }
 
+fn op(l: &mut Live, v: serde_json::Value) {
+    l.apply_ops(&parse_ops(v.to_string().as_bytes()).unwrap())
+        .unwrap();
+}
+
+#[test]
+fn incremental_edits_relay_one_at_a_time() {
+    let (mut a, mut b) = (Live::new(), Live::new());
+    a.apply_remote(BASE).unwrap();
+    b.apply_remote(BASE).unwrap();
+    for (i, id) in [
+        "n_ffffffffffff",
+        "n_gggggggggggg",
+        "n_hhhhhhhhhhhh",
+        "n_iiiiiiiiiiii",
+        "n_jjjjjjjjjjjj",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        // a new node with a props map (refers to its parent and to blocks of this same update), an edit of an
+        // existing node, and a node added and deleted in the same batch (a delete of this update's own blocks)
+        op(
+            &mut a,
+            json!([
+                {"op": "add", "id": id, "type": "frame", "parent": FRAME, "order": format!("b{}", i + 1),
+                 "props": {"w": 10 + i, "h": 20}},
+                {"op": "set", "id": FRAME, "key": "w", "value": 400 + i},
+                {"op": "add", "id": "n_zzzzzzzzzzzz", "type": "rect", "parent": FRAME, "order": "z"},
+                {"op": "delete", "id": "n_zzzzzzzzzzzz"},
+            ]),
+        );
+        b.apply_remote(&a.outbox(true))
+            .unwrap_or_else(|e| panic!("edit {i}: {e:?}"));
+        assert_eq!(b.read(), a.read(), "edit {i}");
+    }
+}
+
+#[test]
+fn a_state_vector_resync_after_an_out_of_order_update() {
+    let (mut a, mut b) = (Live::new(), Live::new());
+    a.apply_remote(BASE).unwrap();
+    b.apply_remote(BASE).unwrap();
+    op(
+        &mut a,
+        json!([{"op": "set", "id": FRAME, "key": "w", "value": 1}]),
+    );
+    let first = a.outbox(true);
+    op(
+        &mut a,
+        json!([{"op": "add", "id": "n_ffffffffffff", "type": "frame", "parent": FRAME, "order": "b",
+                       "props": {"w": 5}}]),
+    );
+    let second = a.outbox(true);
+    assert!(
+        matches!(b.apply_remote(&second), Err(Error::Malformed(_))),
+        "arrived before the first"
+    );
+    b.apply_remote(&a.diff(&b.state_vector()).unwrap()).unwrap();
+    assert_eq!(b.read(), a.read());
+    b.apply_remote(&first).unwrap(); // the late one is already held
+    assert_eq!(b.read(), a.read());
+}
+
+#[test]
+fn skip_blocks_are_refused() {
+    let mut a = Live::new();
+    a.apply_remote(BASE).unwrap();
+    let mut parts = vec![];
+    for w in [1, 2, 3] {
+        op(
+            &mut a,
+            json!([{"op": "set", "id": FRAME, "key": "w", "value": w}]),
+        );
+        parts.push(a.outbox(true));
+    }
+    // merging the first and third leaves a skip where the second was
+    let merged = yrs::merge_updates_v1([parts[0].as_slice(), parts[2].as_slice()]).unwrap();
+    let mut b = Live::new();
+    b.apply_remote(BASE).unwrap();
+    match b.apply_remote(&merged) {
+        Err(Error::Malformed(m)) => assert!(!m.contains("resync"), "refused at decode: {m}"),
+        r => panic!("{r:?}"),
+    }
+    for p in &parts {
+        b.apply_remote(p).unwrap();
+    }
+    assert_eq!(b.read(), a.read());
+}
+
 #[test]
 fn an_update_with_a_gap_is_refused_until_the_resync() {
     let mut a = Live::new();
