@@ -72,6 +72,20 @@ pub struct Daemon {
 }
 
 impl Daemon {
+    /// `ssh.exec`, redeeming key leases with this runner's own signed requests; offered where
+    /// `exec.run` is (`SshDriver::info`).
+    fn ssh_driver(&self) -> Option<Arc<super::SshDriver>> {
+        let url = self.enrolment.lock().unwrap().url.clone();
+        let client = Arc::new(Client::new(&url, self.tls.clone()).ok()?);
+        let redeem = super::agent::secrets::http_redeem(
+            client,
+            Arc::clone(&self.key),
+            Arc::clone(&self.enrolment),
+        );
+        let ssh = super::SshDriver::new(Arc::clone(&self.exec), redeem);
+        ssh.info().map(|_| Arc::new(ssh))
+    }
+
     /// Runs until `stop` turns true (`Ok`) or a configuration error (`Err`).
     pub async fn run(self, mut stop: watch::Receiver<bool>) -> Result<(), LinkError> {
         let mut session = Session::new(Arc::clone(&self.exec));
@@ -86,6 +100,9 @@ impl Daemon {
         }
         if let Some(control) = &self.control {
             session = session.with_control(Arc::clone(control));
+        }
+        if let Some(ssh) = self.ssh_driver() {
+            session = session.with_ssh(ssh);
         }
         let mut delay = self.backoff.min;
         let mut refused = 0;

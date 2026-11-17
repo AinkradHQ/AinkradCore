@@ -32,6 +32,11 @@ rustls = { version = "0.23.46", default-features = false, features = ["ring", "s
 # Agent sessions (E2-08): their state on disk.
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+# SSH client (Y2-01, plan T1): host-key callback, jump chains, exec. Pinned exactly; 0.65.1 has strict-kex
+# (Terrapin). `ring` (already in the tree), not aws-lc. No `rsa` (its only release, 0.10.0-rc.18, carries
+# RUSTSEC-2023-0071, the Marvin timing attack, and signing with an RSA key is observable by the host), no `dsa`,
+# no zlib: Ed25519 and ECDSA only. Add `rsa` back (rsa-sha2, never SHA-1) once a patched `rsa` is released.
+russh = { version = "=0.65.1", default-features = false, features = ["ring"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 webpki-roots = "1.0.10"
 tokio = { version = "1.54.0", features = ["macros", "io-std", "io-util", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
@@ -46,3 +51,6 @@ zeroize = "1.9.1"
 tokio = { version = "1.54.0", features = ["test-util"] }
 ainkrad-gitfixture = { path = "../gitfixture" }
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+# ssh.exec tests: fixture host keys, and the `log` records russh emits.
+rand = "0.10"
+log = "0.4"
