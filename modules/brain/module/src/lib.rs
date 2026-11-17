@@ -43,6 +43,7 @@ mod overview;
 pub mod overview_select;
 pub mod overview_write;
 mod policy;
+mod project_rooms;
 pub mod propose;
 mod review;
 pub mod rooms;
@@ -100,6 +101,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0007_brain_overview.up.sql"),
         down: include_str!("../migrations/0007_brain_overview.down.sql"),
     },
+    Migration {
+        version: 8,
+        name: "brain_project_rooms",
+        up: include_str!("../migrations/0008_brain_project_rooms.up.sql"),
+        down: include_str!("../migrations/0008_brain_project_rooms.down.sql"),
+    },
 ];
 
 /// Employer and client rooms commit like any other room. Ahmed, 2026-11-15: "no need to hold the import bcz of backup".
@@ -137,6 +144,8 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/rooms/{room}/inbox/{id}"),
     ("PUT", "/sources/{id}"),
     ("POST", "/ai/rooms/{room}/propose"),
+    ("PUT", "/projects/{project}/room"),
+    ("DELETE", "/projects/{project}/room"),
 ];
 /// `module.brain.semantic.strength`: how many sorting suggestions the local model makes.
 const SETTINGS: &[ModuleSetting] = &[
@@ -492,6 +501,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         overview::instructions,
         policy::get,
         policy::patch,
+        project_rooms::link_route,
+        project_rooms::unlink_route,
         access::get,
         access::put,
         ai::rooms,
@@ -569,6 +580,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         policy::PolicyView,
         policy::PolicyPatch,
         policy::PolicyAccount,
+        project_rooms::ProjectRoomLink,
+        project_rooms::LinkRoom,
         access::RoomAccess,
         ai::AiRoom,
         ai::AiHit,
@@ -645,6 +658,10 @@ impl Module for Brain {
                 get(policy::get).patch(policy::patch),
             )
             .route("/rooms/{room}/access", get(access::get).put(access::put))
+            .route(
+                "/projects/{project}/room",
+                put(project_rooms::link_route).delete(project_rooms::unlink_route),
+            )
             .route("/ai/rooms", get(ai::rooms))
             .route("/ai/search", get(ai::search))
             .route("/ai/rooms/{room}/records/{id}", get(ai::one))
@@ -697,6 +714,8 @@ impl Module for Brain {
             "brain.overview.failed",
             "brain.overview.instructions",
             "brain.room.access",
+            "brain.room.linked",
+            "brain.room.unlinked",
             "brain.ai.proposed",
             "brain.ai.refused",
             "brain.alias.set",
@@ -714,6 +733,7 @@ impl Module for Brain {
             index::job(self),
             distil::job(self),
             overview::job(self),
+            project_rooms::job(self),
         ]
     }
 
