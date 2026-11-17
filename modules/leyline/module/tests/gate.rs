@@ -692,3 +692,175 @@ fn the_contract_marks_scope_and_step_up_and_carries_no_key_material_routes() {
     );
     assert!(p["/modules/leyline/v1/hosts/{host}"]["patch"]["x-ainkrad-destructive"].is_null());
 }
+
+fn who() -> ainkrad_core_server::store::projects::Who<'static> {
+    ainkrad_core_server::store::projects::Who {
+        by_device: "d_test",
+        actor: ainkrad_core_server::api::v1::BY,
+        now: "2026-11-17T00:00:00Z",
+    }
+}
+
+async fn project(fx: &Fx, slug: &str) -> i64 {
+    ainkrad_core_server::store::projects::create(&fx.app.pool, slug, slug, "", "manual", who())
+        .await
+        .unwrap()
+        .id
+}
+
+#[tokio::test]
+async fn projects_attach_hosts_with_a_role_and_both_sides_list_them() {
+    let fx = fx().await;
+    let reader = enroll(&fx.app, "reader", &["read"]).await;
+    let (p, q) = (project(&fx, "alpha").await, project(&fx, "beta").await);
+    let a = add(&fx, host("a")).await["id"].as_str().unwrap().to_owned();
+    let path = format!("/projects/{p}/hosts/{a}");
+    let staging = || Some(json!({"role": "staging"}));
+    let (s, b) = call(&fx, &reader, Method::PUT, &path, staging()).await;
+    assert_eq!(
+        (s, &b["code"]),
+        (StatusCode::FORBIDDEN, &json!("forbidden_scope"))
+    );
+    for bad in ["prod", ""] {
+        let (s, _) = call(
+            &fx,
+            &fx.admin,
+            Method::PUT,
+            &path,
+            Some(json!({"role": bad})),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+    let (s, b) = call(&fx, &fx.admin, Method::PUT, &path, staging()).await;
+    assert_eq!(
+        (s, b["role"].as_str()),
+        (StatusCode::OK, Some("staging")),
+        "{b}"
+    );
+    // a label addresses the host; re-attaching changes the role, not the count
+    let by_label = format!("/projects/{p}/hosts/a");
+    let (s, _) = call(
+        &fx,
+        &fx.admin,
+        Method::PUT,
+        &by_label,
+        Some(json!({"role": "production"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let other = format!("/projects/{q}/hosts/{a}");
+    call(
+        &fx,
+        &fx.admin,
+        Method::PUT,
+        &other,
+        Some(json!({"role": "other"})),
+    )
+    .await;
+    let (s, l) = call(
+        &fx,
+        &reader,
+        Method::GET,
+        &format!("/projects/{p}/hosts"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        l,
+        json!([{"host_id": a, "name": "a", "role": "production"}])
+    );
+    let (_, h) = call(&fx, &reader, Method::GET, &format!("/hosts/{a}"), None).await;
+    assert_eq!(
+        h["projects"],
+        json!([{"project": p.to_string(), "role": "production"}, {"project": q.to_string(), "role": "other"}])
+    );
+    let (_, all) = call(&fx, &reader, Method::GET, "/hosts", None).await;
+    assert_eq!(all[0]["projects"].as_array().unwrap().len(), 2);
+    // archiving a project leaves its attachments
+    ainkrad_core_server::store::projects::archive(&fx.app.pool, p, who())
+        .await
+        .unwrap();
+    assert_eq!(count(&fx, "leyline_project_hosts").await, 2);
+    let (s, _) = call(&fx, &fx.admin, Method::DELETE, &path, None).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = call(&fx, &fx.admin, Method::DELETE, &path, None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    // deleting the host takes the rest
+    call(&fx, &fx.admin, Method::DELETE, &format!("/hosts/{a}"), None).await;
+    assert_eq!(count(&fx, "leyline_project_hosts").await, 0);
+}
+
+#[tokio::test]
+async fn an_unknown_project_is_refused_and_attach_detach_are_audited() {
+    let fx = fx().await;
+    let a = add(&fx, host("a")).await["id"].as_str().unwrap().to_owned();
+    let staging = || Some(json!({"role": "staging"}));
+    for p in ["999", "0", "-1", "x", "1;2"] {
+        let (s, _) = call(
+            &fx,
+            &fx.admin,
+            Method::PUT,
+            &format!("/projects/{p}/hosts/{a}"),
+            staging(),
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{p}");
+        let (s, _) = call(
+            &fx,
+            &fx.admin,
+            Method::GET,
+            &format!("/projects/{p}/hosts"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+    }
+    let p = project(&fx, "alpha").await;
+    let (s, _) = call(
+        &fx,
+        &fx.admin,
+        Method::PUT,
+        &format!("/projects/{p}/hosts/nope"),
+        staging(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(count(&fx, "leyline_project_hosts").await, 0);
+    assert_eq!(
+        count(&fx, "audit_events WHERE action = 'leyline.host.attached'").await,
+        0
+    );
+    call(
+        &fx,
+        &fx.admin,
+        Method::PUT,
+        &format!("/projects/{p}/hosts/{a}"),
+        staging(),
+    )
+    .await;
+    call(
+        &fx,
+        &fx.admin,
+        Method::DELETE,
+        &format!("/projects/{p}/hosts/{a}"),
+        None,
+    )
+    .await;
+    let actions: Vec<String> = sqlx::query_scalar(
+        "SELECT action FROM audit_events WHERE action IN ('leyline.host.attached','leyline.host.detached') ORDER BY rowid",
+    )
+    .fetch_all(&fx.app.pool)
+    .await
+    .unwrap();
+    assert_eq!(actions, ["leyline.host.attached", "leyline.host.detached"]);
+    let ev = format!(
+        "{:?}",
+        events::list_events(&fx.app.pool, 0, 1000).await.unwrap()
+    );
+    assert!(
+        ev.contains("attached") && ev.contains("detached") && !ev.contains("example.com"),
+        "{ev}"
+    );
+}
