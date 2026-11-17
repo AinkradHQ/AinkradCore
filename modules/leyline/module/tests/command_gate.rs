@@ -454,13 +454,15 @@ async fn a_fleet_with_ask_hosts_asks_once_and_refuses_the_read_only_one() {
 async fn a_code_mode_caller_is_an_ai_session_and_only_that() {
     let fx = fx().await;
     let ai = Principal::of(&caller(&fx, &fx.admin.id, "code_mode:as_x").await);
-    let me = Principal::of(&caller(&fx, &fx.admin.id, "code_mode:").await);
+    let empty = Principal::of(&caller(&fx, &fx.admin.id, "code_mode:").await);
     let plain = person(&fx).await;
     assert_eq!(format!("{ai:?}"), r#"Principal(Session("as_x"))"#);
-    assert!(
-        format!("{me:?}").contains("Person"),
-        "an empty id is no session"
+    assert_eq!(
+        format!("{empty:?}"),
+        r#"Principal(Session(""))"#,
+        "an empty id fails closed as a session"
     );
+    assert!(authorize(&fx.app, &empty, "nope", &exec()).await.is_err());
     assert!(format!("{plain:?}").contains("Person"));
 }
 
@@ -606,7 +608,7 @@ async fn an_approval_is_void_when_the_host_changes_while_it_waits() {
         add(&fx, &format!("w-{n}"), "ask").await;
         let (req, why) = approved_after(&fx, &format!("w-{n}"), session_id, rule_change).await;
         assert_eq!(why, "a host changed while it waited", "{rule_change}");
-        // Nothing was spent for it, and the run is denied.
+        // Not spent, and void: it can never be found or spent later.
         assert_eq!(
             states(
                 &fx,
@@ -614,7 +616,7 @@ async fn an_approval_is_void_when_the_host_changes_while_it_waits() {
                 &req
             )
             .await,
-            ["approved"]
+            ["void"]
         );
         assert_eq!(
             states(

@@ -2,9 +2,7 @@
 
 use ainkrad_core::audit::{AuditOrigin, OriginKind};
 use ainkrad_core_server::api::v1::Caller;
-
-/// Code Mode runs a session's call as its creator device with this session prefix.
-const CODE_MODE: &str = "code_mode:";
+use ainkrad_core_server::ops_catalog::SESSION_PREFIX;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Who {
@@ -23,10 +21,10 @@ pub struct Principal(pub(crate) Who);
 
 impl Principal {
     /// The principal of an authenticated request: a Code Mode call (its session id carries the
-    /// `code_mode:` prefix, which only the Core sets) is that AI session, anything else is the
+    /// `code_mode:` prefix, which only the Core sets) is that AI session, even with an empty id (it fails closed: no such live session), anything else is the
     /// person behind the device.
     pub fn of(me: &Caller) -> Self {
-        match me.session.strip_prefix(CODE_MODE).filter(|s| !s.is_empty()) {
+        match me.session.strip_prefix(SESSION_PREFIX) {
             Some(s) => Self(Who::Session(s.to_owned())),
             None => Self(Who::Person(me.device.id.clone())),
         }

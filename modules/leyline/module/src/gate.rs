@@ -45,7 +45,7 @@ use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::ApiError;
 use ainkrad_core_server::ops_catalog::{
     Outcome, Waiting, consume_approval, create_approval, new_approval_id, session_principal,
-    wait_approval,
+    void_approval, wait_approval,
 };
 use ainkrad_core_server::store::connections::access;
 use ainkrad_core_server::store::{begin_write, settings};
@@ -312,6 +312,10 @@ async fn park_and_settle(
         };
         // One approval, one execution: spent, for exactly what is there now, before anything runs.
         let spent = by.is_some() && consume_approval(&app.pool, &id, session, &fresh_hash).await?;
+        if by.is_some() && !spent {
+            // Approved for something that is no longer there: never spendable later.
+            void_approval(&app.pool, &id, session).await?;
+        }
         let why = match (&outcome, spent) {
             (Outcome::Approved(_), true) => None,
             (Outcome::Approved(_), false) if !all_same => Some("a host changed while it waited"),

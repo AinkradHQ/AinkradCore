@@ -357,7 +357,7 @@ async fn send(app: &App, op: &Op, req: &Req<'_>, lim: &Limits, method: &Method) 
         .header(header::HOST, &app.host)
         .extension(Caller {
             device: principal.device,
-            session: format!("code_mode:{session}"),
+            session: format!("{}{session}", super::SESSION_PREFIX),
         })
         .extension(Client("code_mode".to_owned()));
     if req.body.is_some() {
