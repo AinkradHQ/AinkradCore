@@ -43,6 +43,7 @@ async fn plain_serve_mounts_the_brain() {
     let brain = get("/modules/brain/v1/status").await;
     let leyline = get("/modules/leyline/v1/hosts").await;
     let lore = get("/modules/lore/v1/notes").await;
+    let design = get("/modules/design/v1/docs").await;
     let _ = child.kill().await;
     let log = std::fs::read_to_string(dir.join("server.log")).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&dir);
@@ -55,4 +56,8 @@ async fn plain_serve_mounts_the_brain() {
         "leyline not mounted by default; server log:\n{log}"
     );
     assert_eq!(lore, 401, "lore not mounted by default; server log:\n{log}");
+    assert_eq!(
+        design, 401,
+        "design not mounted by default; server log:\n{log}"
+    );
 }
