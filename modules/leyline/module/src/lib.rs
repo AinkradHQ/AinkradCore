@@ -29,14 +29,19 @@ pub static MIGRATIONS: &[Migration] = &[Migration {
     down: include_str!("../migrations/0001_leyline.down.sql"),
 }];
 
-const DESTRUCTIVE: &[(&str, &str)] = &[("DELETE", "/hosts/{host}"), ("DELETE", "/keys/{key}")];
+// A key write is a secret write: importing needs the step-up like the Core's own secret writes.
+// Generating does not (the Core makes the key; nothing of the caller's is stored).
+const DESTRUCTIVE: &[(&str, &str)] = &[
+    ("DELETE", "/hosts/{host}"),
+    ("DELETE", "/keys/{key}"),
+    ("POST", "/keys/import"),
+];
 // ponytail: a PATCH can repoint a host's address/key/runner without a step-up; Y4-01 (the gate)
 // decides whether that needs one, with the `allowed` rule.
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/hosts"),
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
-    ("POST", "/keys/import"),
 ];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts", "read"),
@@ -119,6 +124,7 @@ impl Module for Leyline {
             "leyline.host.deleted",
             "leyline.key.created",
             "leyline.key.deleted",
+            "leyline.key.runners",
         ]
     }
 

@@ -10,9 +10,17 @@
 //! - Nothing below logs, audits, publishes or returns them: the view, the audit row and the event
 //!   carry the id, the public key and the fingerprint. Every refusal is a fixed sentence.
 //!
-//! The group's runner list is the set of runners that may be leased a Leyline key: the `via_runner`
-//! of every host that has a key or a jump hop (a hop's key goes to the host's runner), the Core's
-//! built-in runner standing for an unset `via_runner` (`sync_runners`).
+//! Who may be leased a key: each key's secret carries its own runner list (`sync_runners`): the
+//! active `via_runner` of every host that uses the key directly, and of every host that has a host
+//! using it as a jump hop (the built-in runner stands for an unset `via_runner`). A key no host
+//! uses has no runner. The group's own list stays empty.
+//!
+//! ECDSA keys are parsed, not validated: the `ssh-key` curve features (`p256`, `p384`) pull
+//! `crypto-bigint` 0.5 (RUSTSEC-2026-0387), so a private scalar that does not match its public point
+//! is not caught here. It fails safe at use: the runner's `ring` backend refuses a mismatched pair.
+//!
+//! The private key is stored with delivery `file`; the lease path (Y2) must hand it to `ssh` over an
+//! inherited fd, never write it to disk.
 
 use ainkrad_core::audit::NewAuditEvent;
 use ainkrad_core_server::api::App;
@@ -29,7 +37,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{Row, SqliteConnection};
 use ssh_key::private::{Ed25519Keypair, KeypairData};
-use ssh_key::{Algorithm, EcdsaCurve, HashAlg, LineEnding, PrivateKey};
+use ssh_key::{Algorithm, EcdsaCurve, HashAlg, Kdf, LineEnding, PrivateKey};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use utoipa::ToSchema;
 use zeroize::Zeroizing;
 
@@ -44,6 +53,8 @@ const UNSUPPORTED: &str = "RSA keys are not supported; generate an ed25519 key (
                            accepted; DSA is refused too";
 const PEM_MAX: usize = 16 * 1024;
 const PASS_MAX: usize = 1024;
+/// `ssh-keygen` writes 16; each round is milliseconds of CPU, so a hostile count is a DoS.
+const BCRYPT_ROUNDS_MAX: u32 = 1024;
 
 #[derive(Serialize, ToSchema)]
 pub struct KeyView {
@@ -108,18 +119,22 @@ fn algo_of(a: &Algorithm) -> Option<&'static str> {
     }
 }
 
-/// An importable key, decrypted. The algorithm is public even on an encrypted key, so an RSA or
-/// DSA key is refused before the passphrase is touched.
+/// An importable key, decrypted. The algorithm and the hashing cost are public even on an
+/// encrypted key, so an RSA or DSA key and a hostile cost are refused before the passphrase is
+/// used. CPU-bound: call it from `spawn_blocking`.
 fn parse(pem: &str, pass: Option<&str>) -> Result<PrivateKey, ApiError> {
     if pem.len() > PEM_MAX || pass.is_some_and(|p| p.len() > PASS_MAX) {
         return Err(refuse(INVALID));
     }
-    let key = PrivateKey::from_openssh(pem).map_err(|_| refuse(UNSUPPORTED))?;
+    let key = PrivateKey::from_openssh(pem).map_err(|_| refuse(INVALID))?;
     if algo_of(&key.algorithm()).is_none() {
         return Err(refuse(UNSUPPORTED));
     }
     if !key.is_encrypted() {
         return Ok(key);
+    }
+    if matches!(key.kdf(), Kdf::Bcrypt { rounds, .. } if *rounds > BCRYPT_ROUNDS_MAX) {
+        return Err(refuse("the key's password hashing cost is too high"));
     }
     let pass = pass
         .filter(|p| !p.is_empty())
@@ -175,8 +190,9 @@ async fn store(
         return Err(refuse(INVALID));
     }
     let sealer = sealer(app)?;
-    // The group exists (with the right runners) before a member joins it.
-    sync_runners(app).await?;
+    // The mode gate first, so a refused store leaves nothing; then the (empty) group exists.
+    secrets::require_enabled(&app.pool).await?;
+    ensure_group(app).await?;
     key.set_comment("");
     let pem = Zeroizing::new(
         key.to_openssh(LineEnding::LF)
@@ -222,6 +238,7 @@ async fn store(
         .await?;
     let out = view(&row)?;
     tx.commit().await?;
+    sync_runners(app).await?;
     Ok(Json(out))
 }
 
@@ -240,7 +257,7 @@ pub(crate) async fn generate(
 }
 
 #[utoipa::path(post, path = "/keys/import", operation_id = "leylineImportKey", tag = "leyline", request_body = ImportKey,
-    responses((status = 200, description = "The imported key, sealed (audited as `leyline.key.created`). ed25519 and ECDSA P-256/P-384 only; RSA and DSA are refused (400). The passphrase is used once and discarded; the private half is never returned", body = KeyView)))]
+    responses((status = 200, description = "The imported key, sealed (step-up; audited as `leyline.key.created`). ed25519 and ECDSA P-256/P-384 only; RSA and DSA are refused (400). The passphrase is used once and discarded; the private half is never returned", body = KeyView)))]
 pub(crate) async fn import(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -251,9 +268,12 @@ pub(crate) async fn import(
         private_key,
         passphrase,
     } = req;
-    let key = parse(&private_key, passphrase.as_deref().map(String::as_str))?;
-    drop(passphrase);
-    drop(private_key);
+    // Both secrets move into the closure and are dropped (zeroized) when it ends.
+    let key = tokio::task::spawn_blocking(move || {
+        parse(&private_key, passphrase.as_deref().map(String::as_str))
+    })
+    .await
+    .map_err(|_| refuse(INVALID))??;
     store(&app, &me, &name, key, "imported").await
 }
 
@@ -331,37 +351,20 @@ pub(crate) async fn remove(
 }
 
 /// One sync at a time: each reads the hosts afresh after taking the lock, so the last to run
-/// leaves the list that matches the latest hosts.
+/// leaves the lists that match the latest hosts.
 static SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Makes the `leyline-keys` group exist and list exactly the active runners a Leyline key may be
-/// leased to: the `via_runner` of every host with a key or a jump hop, the built-in runner for a
-/// host with none. Idempotent; hosts call it after every change. ponytail: group-wide (every key
-/// to every listed runner); per-key runner lists would narrow it, at the cost of a sync per key.
-pub(crate) async fn sync_runners(app: &App) -> Result<(), ApiError> {
+/// The `leyline-keys` group exists, with no runner of its own: a key's own list decides.
+async fn ensure_group(app: &App) -> Result<(), ApiError> {
     let _one = SYNC.lock().await;
-    let wanted: Vec<String> = sqlx::query_scalar(
-        "SELECT d.id FROM core_devices d \
-         WHERE d.kind = 'runner' AND d.status = 'active' AND d.revoked_at IS NULL AND ( \
-           d.id IN (SELECT via_runner FROM leyline_hosts \
-                    WHERE via_runner IS NOT NULL AND (key_id IS NOT NULL OR jump_chain <> '[]')) \
-           OR (EXISTS (SELECT 1 FROM leyline_hosts \
-                       WHERE via_runner IS NULL AND (key_id IS NOT NULL OR jump_chain <> '[]')) \
-               AND d.id IN (SELECT device_id FROM core_pairings \
-                            WHERE kind = 'runner' AND sas = ? AND device_id IS NOT NULL))) \
-         ORDER BY d.id",
-    )
-    .bind(LOCAL_ENROL_SAS)
-    .fetch_all(&app.pool)
-    .await?;
     let current = {
         let mut conn = app.pool.acquire().await?;
         secret_groups::find(&mut conn, GROUP).await
     };
     let now = app.clock.now();
     match current {
-        Ok(g) if g.runners == wanted => Ok(()),
-        Ok(_) => secret_groups::update(&app.pool, GROUP, None, Some(&wanted), "leyline", BY, &now)
+        Ok(g) if g.runners.is_empty() => Ok(()),
+        Ok(_) => secret_groups::update(&app.pool, GROUP, None, Some(&[]), "leyline", BY, &now)
             .await
             .map(drop),
         Err(Error::Refused {
@@ -370,7 +373,7 @@ pub(crate) async fn sync_runners(app: &App) -> Result<(), ApiError> {
             &app.pool,
             GROUP,
             "Leyline SSH keys",
-            &wanted,
+            &[],
             "leyline",
             BY,
             &now,
@@ -380,6 +383,85 @@ pub(crate) async fn sync_runners(app: &App) -> Result<(), ApiError> {
         Err(e) => Err(e),
     }
     .map_err(ApiError::from)
+}
+
+/// Sets each key's secret to the runners that may be leased it (see the module doc). Idempotent;
+/// hosts call it after every change, in one transaction. A changed list drops the key's
+/// outstanding leases and is audited as `leyline.key.runners`.
+///
+/// ponytail: this writes `core_secrets.runners` (and drops the leases) directly: the broker has no
+/// runners-only update, and `rotate` would need the plaintext inside the Core process. A
+/// `secrets::set_runners_in` in the broker would replace it.
+pub(crate) async fn sync_runners(app: &App) -> Result<(), ApiError> {
+    let _one = SYNC.lock().await;
+    let mut tx = begin_write(&app.pool).await?;
+    let active: HashSet<String> = sqlx::query_scalar(
+        "SELECT id FROM core_devices WHERE kind = 'runner' AND status = 'active' AND revoked_at IS NULL",
+    )
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .collect();
+    let built_in: Vec<String> = sqlx::query_scalar(
+        "SELECT device_id FROM core_pairings WHERE kind = 'runner' AND sas = ? AND device_id IS NOT NULL",
+    )
+    .bind(LOCAL_ENROL_SAS)
+    .fetch_all(&mut *tx)
+    .await?;
+    // (key secret, runner of a host that uses the key, or has it as a jump hop's key).
+    let uses: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT k.secret, h.via_runner FROM leyline_keys k, leyline_hosts h WHERE h.key_id = k.id \
+         UNION \
+         SELECT k.secret, h.via_runner FROM leyline_keys k, leyline_hosts hop, leyline_hosts h, \
+                json_each(h.jump_chain) j WHERE hop.key_id = k.id AND j.value = hop.id",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut want: HashMap<&str, BTreeSet<&String>> = HashMap::new();
+    for (secret, via) in &uses {
+        let set = want.entry(secret).or_default();
+        match via {
+            Some(r) => set.extend(active.get(r)),
+            None => set.extend(built_in.iter().filter(|b| active.contains(*b))),
+        }
+    }
+    let keys: Vec<(String, String)> = sqlx::query_as(
+        "SELECT k.secret, s.runners FROM leyline_keys k JOIN core_secrets s ON s.name = k.secret",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for (secret, have) in keys {
+        let wanted: Vec<&String> = want
+            .get(secret.as_str())
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+        let have: Vec<String> = serde_json::from_str(&have).unwrap_or_default();
+        if have.iter().eq(wanted.iter().copied()) {
+            continue;
+        }
+        sqlx::query("UPDATE core_secrets SET runners = ? WHERE name = ?")
+            .bind(json!(wanted).to_string())
+            .bind(&secret)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "DELETE FROM core_secret_leases WHERE secret_id = (SELECT id FROM core_secrets WHERE name = ?)",
+        )
+        .bind(&secret)
+        .execute(&mut *tx)
+        .await?;
+        let id = secret.strip_prefix("leyline.").unwrap_or(&secret);
+        let row = NewAuditEvent {
+            actor: BY,
+            action: "leyline.key.runners".to_owned(),
+            entity: None,
+            details: json!({"key": id, "runners": wanted}).to_string(),
+        };
+        audit::append(&mut tx, &row).await?;
+        events::append(&mut tx, "leyline.key", &json!({"op": "runners", "id": id})).await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 #[cfg(test)]

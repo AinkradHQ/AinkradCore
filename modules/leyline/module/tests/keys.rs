@@ -204,20 +204,35 @@ async fn count(fx: &Fx, table: &str) -> i64 {
         .unwrap()
 }
 
-async fn group_runners(fx: &Fx) -> Vec<String> {
-    let json: String =
+/// The runners the key's own secret lists; the group's own list must stay empty.
+async fn key_runners(fx: &Fx, key_id: &str) -> Vec<String> {
+    let group: String =
         sqlx::query_scalar("SELECT runners FROM core_secret_groups WHERE name = 'leyline-keys'")
             .fetch_one(&fx.app.pool)
             .await
             .unwrap();
+    assert_eq!(group, "[]");
+    let json: String = sqlx::query_scalar("SELECT runners FROM core_secrets WHERE name = ?")
+        .bind(format!("leyline.{key_id}"))
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
     serde_json::from_str(&json).unwrap()
 }
 
 /// The runner leases the key's secret through the Core's own lease path and redeems it once.
 /// Returns the redeemed key, or the status that refused.
 async fn lease_and_redeem(fx: &Fx, key_id: &str) -> Result<PrivateKey, StatusCode> {
+    lease_and_redeem_as(fx, key_id, &fx.runner).await
+}
+
+async fn lease_and_redeem_as(
+    fx: &Fx,
+    key_id: &str,
+    runner: &TestDevice,
+) -> Result<PrivateKey, StatusCode> {
     let secret = format!("leyline.{key_id}");
-    let body = json!({"runner": fx.runner.id, "ttl_secs": 60});
+    let body = json!({"runner": runner.id, "ttl_secs": 60});
     let uri = format!("/api/v1/secrets/{secret}/leases");
     let (s, v) = send(fx, &fx.admin, Method::POST, &uri, Some(body), true).await;
     if s != StatusCode::OK {
@@ -225,13 +240,13 @@ async fn lease_and_redeem(fx: &Fx, key_id: &str) -> Result<PrivateKey, StatusCod
     }
     let body = json!({"lease": v["lease"]});
     let uri = "/api/v1/secret-leases/redeem";
-    let (s, v) = send(fx, &fx.runner, Method::POST, uri, Some(body.clone()), false).await;
+    let (s, v) = send(fx, runner, Method::POST, uri, Some(body.clone()), false).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["kind"], "file");
     assert_eq!(v["file_name"], "id_leyline");
     assert_eq!(v["file_mode"], "0600");
     // A lease is one redemption.
-    let (again, _) = send(fx, &fx.runner, Method::POST, uri, Some(body), false).await;
+    let (again, _) = send(fx, runner, Method::POST, uri, Some(body), false).await;
     assert_eq!(again, StatusCode::GONE);
     let pem = STANDARD.decode(v["value"].as_str().unwrap()).unwrap();
     Ok(PrivateKey::from_openssh(&pem).unwrap())
@@ -268,16 +283,16 @@ async fn a_generated_key_is_sealed_and_leases_only_to_the_runner_of_a_host_that_
             "public_key"
         ]
     );
-    // The group exists, with no runner yet: nobody can be leased the key.
-    assert!(group_runners(&fx).await.is_empty());
+    // No host uses the key yet: nobody can be leased it.
+    assert!(key_runners(&fx, &id).await.is_empty());
     assert_eq!(
         lease_and_redeem(&fx, &id).await.err(),
         Some(StatusCode::BAD_REQUEST)
     );
-    // A host that uses the key through the runner brings the runner into the list.
+    // A host that uses the key through the runner puts the runner on the key.
     let h = host_with(&fx, "web", &id, Some(&fx.runner.id)).await;
     assert_eq!(
-        group_runners(&fx).await,
+        key_runners(&fx, &id).await,
         std::slice::from_ref(&fx.runner.id)
     );
     let key = lease_and_redeem(&fx, &id).await.unwrap();
@@ -297,7 +312,7 @@ async fn a_generated_key_is_sealed_and_leases_only_to_the_runner_of_a_host_that_
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    assert!(group_runners(&fx).await.is_empty());
+    assert!(key_runners(&fx, &id).await.is_empty());
     let (s, _) = call(
         &fx,
         Method::PATCH,
@@ -307,11 +322,11 @@ async fn a_generated_key_is_sealed_and_leases_only_to_the_runner_of_a_host_that_
     .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(
-        group_runners(&fx).await,
+        key_runners(&fx, &id).await,
         std::slice::from_ref(&fx.runner.id)
     );
     call(&fx, Method::DELETE, &format!("/hosts/{h}"), None).await;
-    assert!(group_runners(&fx).await.is_empty());
+    assert!(key_runners(&fx, &id).await.is_empty());
 }
 
 #[tokio::test]
@@ -713,4 +728,144 @@ async fn scopes_step_up_and_the_contract_expose_public_data_only() {
             .all(|k| !k.contains("private") && !k.contains("pass")),
         "{view:?}"
     );
+}
+
+/// `pem` (an encrypted key) with its bcrypt round count replaced.
+fn with_rounds(pem: &str, rounds: u32) -> String {
+    let body: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
+    let mut raw = STANDARD.decode(body).unwrap();
+    let at = raw.windows(6).position(|w| w == b"bcrypt").unwrap();
+    // "bcrypt", then the options string: its length, the salt string (length + 16), the rounds.
+    let rounds_at = at + 6 + 4 + 4 + 16;
+    raw[rounds_at..rounds_at + 4].copy_from_slice(&rounds.to_be_bytes());
+    let mut out = String::from("-----BEGIN OPENSSH PRIVATE KEY-----\n");
+    for chunk in STANDARD.encode(&raw).as_bytes().chunks(70) {
+        out += std::str::from_utf8(chunk).unwrap();
+        out.push('\n');
+    }
+    out + "-----END OPENSSH PRIVATE KEY-----\n"
+}
+
+#[tokio::test]
+async fn a_hostile_bcrypt_cost_is_refused_at_once_and_junk_is_only_invalid() {
+    let fx = fx().await;
+    for rounds in [u32::MAX, 1025] {
+        let started = std::time::Instant::now();
+        let (s, v) = import(&fx, "slow", &with_rounds(ED_ENC, rounds), Some(PASS)).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{rounds}");
+        assert!(
+            v["message"].as_str().unwrap().contains("hashing cost"),
+            "{v}"
+        );
+        assert!(
+            started.elapsed().as_secs() < 2,
+            "{rounds} was not refused up front"
+        );
+    }
+    // A key that does not parse is "not valid"; only a refused algorithm is "unsupported".
+    let (s, v) = import(&fx, "junk", "not a key", None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(v["message"], "the key is not valid");
+    let (_, v) = import(&fx, "rsa", RSA, None).await;
+    assert!(
+        v["message"]
+            .as_str()
+            .unwrap()
+            .contains("RSA keys are not supported"),
+        "{v}"
+    );
+}
+
+#[tokio::test]
+async fn importing_needs_the_step_up_and_generating_does_not() {
+    let fx = fx().await;
+    let laptop = enroll(&fx.app, "laptop", "device", &["admin"]).await; // admin, not elevated
+    let uri = format!("{BASE}/keys/import");
+    let body = json!({"name": "i", "private_key": ED});
+    let (s, v) = send(&fx, &laptop, Method::POST, &uri, Some(body), true).await;
+    assert_eq!(
+        (s, v["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("step_up_required"))
+    );
+    assert_eq!(
+        count(&fx, "leyline_keys").await + count(&fx, "core_secrets").await,
+        0
+    );
+    let uri = format!("{BASE}/keys");
+    let (s, _) = send(
+        &fx,
+        &laptop,
+        Method::POST,
+        &uri,
+        Some(json!({"name": "g"})),
+        true,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    import_ok(&fx, "i", ED, None).await; // the elevated admin
+    let spec: Value =
+        serde_json::from_str(&ainkrad_core_server::api::v1::spec::json_for(&[Arc::new(
+            Leyline,
+        )]))
+        .unwrap();
+    let p = &spec["paths"];
+    assert_eq!(
+        p["/modules/leyline/v1/keys/import"]["post"]["x-ainkrad-destructive"],
+        true
+    );
+    assert!(p["/modules/leyline/v1/keys"]["post"]["x-ainkrad-destructive"].is_null());
+}
+
+#[tokio::test]
+async fn each_key_is_leasable_only_to_the_runners_of_the_hosts_that_use_it() {
+    let fx = fx().await;
+    let r1 = &fx.runner;
+    let r2 = enroll(&fx.app, "runner-2", "runner", &["runner"]).await;
+    let mut ids = Vec::new();
+    for name in ["a", "b", "c"] {
+        ids.push(generate(&fx, name).await["id"].as_str().unwrap().to_owned());
+    }
+    let (a, b, c) = (&ids[0], &ids[1], &ids[2]);
+    // A is used by a host on R2 only: R2 may be leased it, R1 may not. B has no host: no one.
+    host_with(&fx, "on-r2", a, Some(&r2.id)).await;
+    assert_eq!(key_runners(&fx, a).await, std::slice::from_ref(&r2.id));
+    assert!(key_runners(&fx, b).await.is_empty());
+    assert_eq!(
+        lease_and_redeem_as(&fx, a, r1).await.err(),
+        Some(StatusCode::BAD_REQUEST)
+    );
+    assert!(lease_and_redeem_as(&fx, a, &r2).await.is_ok());
+    for r in [r1, &r2] {
+        assert_eq!(
+            lease_and_redeem_as(&fx, b, r).await.err(),
+            Some(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            lease_and_redeem_as(&fx, c, r).await.err(),
+            Some(StatusCode::BAD_REQUEST)
+        );
+    }
+    // C is the key of a jump host on R1; a host on R2 jumps through it: both runners need C.
+    let hop = host_with(&fx, "hop", c, Some(&r1.id)).await;
+    let body = json!({"name": "behind", "address": "b.example.com", "username": "deploy",
+                      "key_id": a, "via_runner": r2.id, "jump_chain": [hop]});
+    let (s, v) = call(&fx, Method::POST, "/hosts", Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let behind = v["id"].as_str().unwrap().to_owned();
+    let mut both = vec![r1.id.clone(), r2.id.clone()];
+    both.sort();
+    assert_eq!(key_runners(&fx, c).await, both);
+    assert_eq!(key_runners(&fx, a).await, std::slice::from_ref(&r2.id));
+    assert!(lease_and_redeem_as(&fx, c, r1).await.is_ok());
+    assert!(lease_and_redeem_as(&fx, c, &r2).await.is_ok());
+    // The jumping host goes: C is back to its own host's runner. The audit rows say so.
+    call(&fx, Method::DELETE, &format!("/hosts/{behind}"), None).await;
+    assert_eq!(key_runners(&fx, c).await, std::slice::from_ref(&r1.id));
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action = 'leyline.key.runners'",
+    )
+    .fetch_one(&fx.app.pool)
+    .await
+    .unwrap();
+    assert!(n >= 3, "{n}");
 }

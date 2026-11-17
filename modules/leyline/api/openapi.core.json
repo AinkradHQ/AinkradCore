@@ -1206,6 +1206,7 @@
           "leyline.host.deleted",
           "leyline.key.created",
           "leyline.key.deleted",
+          "leyline.key.runners",
           "notify.token_pruned",
           "pairing.approved",
           "pairing.burned",
@@ -15713,7 +15714,7 @@
                 }
               }
             },
-            "description": "The imported key, sealed (audited as `leyline.key.created`). ed25519 and ECDSA P-256/P-384 only; RSA and DSA are refused (400). The passphrase is used once and discarded; the private half is never returned"
+            "description": "The imported key, sealed (step-up; audited as `leyline.key.created`). ed25519 and ECDSA P-256/P-384 only; RSA and DSA are refused (400). The passphrase is used once and discarded; the private half is never returned"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -15740,6 +15741,7 @@
         "tags": [
           "leyline"
         ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
