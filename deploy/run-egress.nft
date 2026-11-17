@@ -1,0 +1,11 @@
+# Written by deploy/install-linux.sh --with-run (loaded by ainkrad-run-egress.service). Idempotent: the table is
+# replaced as a whole. Loopback stays open (DNS goes to the host's resolver there).
+table inet ainkrad_run_egress
+delete table inet ainkrad_run_egress
+table inet ainkrad_run_egress {
+  chain out {
+    type filter hook output priority 0; policy accept;
+    meta skuid "ainkrad-run" ip daddr { 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 } reject
+    meta skuid "ainkrad-run" ip6 daddr { fc00::/7, fe80::/10 } reject
+  }
+}

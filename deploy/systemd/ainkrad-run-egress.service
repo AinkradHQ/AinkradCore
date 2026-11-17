@@ -1,0 +1,17 @@
+# Project containers reach the internet but not the cloud metadata service (169.254.169.254) or the host's private
+# ranges (Core 0.9 Projects, P5-02). Rootless Podman's outbound traffic leaves the host from processes of the
+# ainkrad-run user (pasta), so one nftables table matches that uid: deploy/run-egress.nft, installed by --with-run.
+# Note: a `flush ruleset` (e.g. a restart of nftables.service) removes the table; restart this unit afterwards.
+[Unit]
+Description=Ainkrad project runs: egress block for the ainkrad-run user
+Documentation=https://github.com/AinkradHQ/AinkradCore
+Before=ainkrad-runner.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/ainkrad-runner/run-egress.nft
+ExecStop=/usr/sbin/nft delete table inet ainkrad_run_egress
+
+[Install]
+WantedBy=multi-user.target

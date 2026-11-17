@@ -81,6 +81,12 @@ pub enum Command {
     SshSftpRename(super::SftpRename),
     #[serde(rename = "ssh.sftp.remove")]
     SshSftpRemove(super::SftpRemove),
+    #[serde(rename = "run.start")]
+    RunStart(super::RunStart),
+    #[serde(rename = "run.stop")]
+    RunStop(super::RunStop),
+    #[serde(rename = "run.status")]
+    RunStatus(super::RunStatusReq),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -122,6 +128,9 @@ impl Command {
             Self::SshSftpMkdir(_) => super::OP_SFTP_MKDIR,
             Self::SshSftpRename(_) => super::OP_SFTP_RENAME,
             Self::SshSftpRemove(_) => super::OP_SFTP_REMOVE,
+            Self::RunStart(_) => super::OP_RUN_START,
+            Self::RunStop(_) => super::OP_RUN_STOP,
+            Self::RunStatus(_) => super::OP_RUN_STATUS,
             Self::Unknown => "unknown",
         }
     }
@@ -235,6 +244,13 @@ pub enum Reply {
     SshSftpRename(super::SftpDone),
     #[serde(rename = "ssh.sftp.remove")]
     SshSftpRemove(super::SftpDone),
+    /// `run.start` and `run.stop` answer with the run's state; `run.status` with every run asked for.
+    #[serde(rename = "run.start")]
+    RunStart(super::RunInfo),
+    #[serde(rename = "run.stop")]
+    RunStop(super::RunInfo),
+    #[serde(rename = "run.status")]
+    RunStatus(super::RunList),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

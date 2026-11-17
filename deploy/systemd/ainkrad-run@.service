@@ -1,0 +1,31 @@
+# One run op, as ainkrad-run, for one connection to ainkrad-run.socket (the connected socket is standard input).
+# `ainkrad-runner run-helper` reads one request (start, stop or status of a run), builds every podman argument itself from
+# the re-validated spec (isolated network per project, capped containers, loopback-only ports, no privileged/host
+# network/host paths) and answers one line. Containers live in the ainkrad-run user manager (linger), not in this unit.
+#
+# Hardening is deliberately light: rootless Podman needs the setuid newuidmap/newgidmap (so no NoNewPrivileges or
+# RestrictSUIDSGID) and its own namespaces. KillMode=process: Podman's helpers (conmon, pasta, rootlessport) must outlive
+# the op that started them.
+[Unit]
+Description=Ainkrad project run helper (rootless Podman as ainkrad-run)
+Documentation=https://github.com/AinkradHQ/AinkradCore
+After=ainkrad-run-egress.service
+Requires=ainkrad-run-egress.service
+
+[Service]
+Type=exec
+User=ainkrad-run
+Group=ainkrad-run
+WorkingDirectory=/var/lib/ainkrad-run
+Environment=HOME=/var/lib/ainkrad-run
+# XDG_RUNTIME_DIR and the user bus are set by the helper from its own uid (%U would name root's here).
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+ExecStart=/usr/local/bin/ainkrad-runner run-helper
+StandardInput=socket
+StandardOutput=journal
+StandardError=journal
+KillMode=process
+RuntimeMaxSec=1800
+# 0022: a checkout mounted at /repo/<name> must be readable by the container's own non-root users (nginx, node).
+# Host users still cannot reach it: each run dir is 0700, and env files are written 0600 in a 0700 dir.
+UMask=0022
