@@ -292,3 +292,14 @@ fn the_crate_has_only_the_reviewed_dependencies() {
         );
     }
 }
+
+#[test]
+fn rename_rewrites_wikilinks_only_where_they_are_links() {
+    use lore_model::rename_wikilinks as rw;
+    let t = "---\ntags: [[Old]]\n---\r\n[[Old]] [[old#H|a]] `[[Old]]` \\[[Old]] [[Older]]\r\n~~~\n[[Old]]\n~~~\n> [[ OLD ]]";
+    let want = "---\ntags: [[Old]]\n---\r\n[[New]] [[New#H|a]] `[[Old]]` \\[[Old]] [[Older]]\r\n~~~\n[[Old]]\n~~~\n> [[New]]";
+    assert_eq!(rw(t, "Old", "New").as_deref(), Some(want));
+    assert_eq!(rw("[[Other]]", "Old", "New"), None);
+    assert_eq!(rw("[[Old]]", "Old", "a|b"), None);
+    assert_eq!(rw("[[Old]]", "Old", ""), None);
+}

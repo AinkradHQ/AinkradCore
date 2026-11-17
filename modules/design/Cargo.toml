@@ -12,6 +12,8 @@ publish = false
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# cargo-fuzz builds with --cfg fuzzing (design-doc runs its big-stack work inline there)
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

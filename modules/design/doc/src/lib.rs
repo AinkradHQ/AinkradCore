@@ -14,7 +14,8 @@
 //! Trust note: yrs decodes, encodes, converts and drops nested values recursively, so nesting is where a hostile
 //! update could exhaust the stack (an abort, not a panic). Two guards: every `Any` in a remote update is decoded
 //! through `decode` (depth-capped at `MAX_JSON_DEPTH`, no collection longer than the bytes), and a node whose props
-//! hold a nested yrs map, array or text (no op writes one) is never read. A panic inside yrs while applying resets the
+//! hold a nested yrs map, array or text (no op writes one) is never read, and `layout` refuses any remote block outside
+//! the T1 layout before yrs integrates it (nesting depth, list-side content, clock wrap). A panic inside yrs while applying resets the
 //! replica (`Error::Reset`) instead of aborting. The Core (V1-03) reuses `apply_remote` and gets the same guards; it
 //! must still trial-apply an update before it stores or relays it.
 
@@ -31,10 +32,14 @@ use yrs::{
 };
 
 mod decode;
+#[cfg(test)]
+mod layered_tests;
+mod layout;
 mod ops;
 mod presence;
 #[cfg(test)]
 mod reset_tests;
+mod trial;
 
 pub use ops::{MAX_GESTURE_OPS, MAX_OPS, MAX_OPS_BYTES, Op, parse_ops};
 pub use presence::{ClockFn, MAX_PEERS, MAX_PRESENCE_BYTES, PEER_TTL_MS, Presence};
@@ -73,6 +78,12 @@ pub struct Live {
     tokens: MapRef,
     undo: UndoManager<()>,
     outbox: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// What the replica holds, placed in the T1 layout (fed by every committed update; gates remote ones).
+    shadow: Arc<Mutex<layout::Shadow>>,
+    /// Committed updates the shadow could not place (should stay 0; each one is logged).
+    shadow_misses: Arc<std::sync::atomic::AtomicU64>,
+    /// The trial copy remote updates are tried on first (`trial`).
+    trial: Option<trial::Trial>,
     /// When the last resets happened (ms, the presence clock), for the breaker.
     resets: Vec<u64>,
     halted: bool,
@@ -100,9 +111,23 @@ impl Live {
         let meta = doc.get_or_insert_map("meta");
         let tokens = doc.get_or_insert_map("tokens");
         let ob = outbox.clone();
+        let shadow: Arc<Mutex<layout::Shadow>> = Arc::default();
+        let sh = shadow.clone();
+        let shadow_misses: Arc<std::sync::atomic::AtomicU64> = Arc::default();
+        let misses = shadow_misses.clone();
         let remote = Origin::from(REMOTE);
-        // Everything this replica did (edits, undo, redo) goes out; what came in does not echo back.
+        // Everything this replica did (edits, undo, redo) goes out; what came in does not echo back. Everything
+        // committed, either way, is placed in the shadow layout.
         doc.observe_update_v1("outbox", move |txn, e| {
+            if let Ok(mut sh) = sh.lock() {
+                match sh.check(&e.update, txn.before_state()) {
+                    Ok(l) => sh.learn(l),
+                    Err(err) => {
+                        misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        eprintln!("design-doc: the layout shadow could not place a committed update: {err}");
+                    }
+                }
+            }
             if txn.origin() != Some(&remote)
                 && let Ok(mut o) = ob.lock()
             {
@@ -121,6 +146,9 @@ impl Live {
             tokens,
             undo,
             outbox,
+            shadow,
+            shadow_misses,
+            trial: None,
             resets: vec![],
             halted: false,
         }
@@ -140,7 +168,29 @@ impl Live {
         }
         let (u, refs) = decode::update(update)?;
         self.no_gap(&u, &refs)?;
-        let r = self.integrate(u);
+        let have = self.doc().transact().state_vector();
+        self.shadow
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .check(update, &have)
+            .map_err(Error::Malformed)?;
+        // second, independent layer: the update on a trial copy, on a big stack, then a walk of what yrs built
+        let since = self
+            .trial
+            .as_ref()
+            .map_or_else(StateVector::default, |t| t.sv.clone());
+        let base = self.doc().transact().encode_state_as_update_v1(&since);
+        self.trial = trial::run(self.trial.take(), base, update);
+        if self.trial.is_none() {
+            return Err(Error::Malformed(
+                "the update fails the layout on a trial copy".into(),
+            ));
+        }
+        // and the real apply on a big stack too, so nothing yrs does with remote content recurses on ours
+        let r = trial::big_stack(|| self.integrate(u)).unwrap_or(Err(Error::Reset));
+        if r.is_err() {
+            self.trial = None; // it holds the update; rebuild from the replica next time
+        }
         if r == Err(Error::Reset) {
             self.reset();
         }
@@ -309,6 +359,17 @@ impl Live {
     pub fn redo(&mut self) -> bool {
         self.recover(|l| Ok(l.undo.redo_blocking()))
             .unwrap_or(false)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn state_vector_struct(&self) -> StateVector {
+        self.doc().transact().state_vector()
+    }
+
+    /// Committed updates the layout shadow could not place since this replica was made (0 in a healthy replica).
+    pub fn shadow_misses(&self) -> u64 {
+        self.shadow_misses
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn presence(&mut self) -> &mut Presence {
