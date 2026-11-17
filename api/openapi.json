@@ -1238,6 +1238,7 @@
           "secret.master_rotated",
           "secret.redeemed",
           "secret.rotated",
+          "secret.runners_changed",
           "secret.used",
           "secret_group.created",
           "secret_group.deleted",
@@ -6295,7 +6296,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.84.0"
+    "version": "1.85.0"
   },
   "openapi": "3.1.0",
   "paths": {
