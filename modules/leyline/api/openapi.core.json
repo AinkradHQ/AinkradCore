@@ -1204,6 +1204,10 @@
           "leyline.host.changed",
           "leyline.host.created",
           "leyline.host.deleted",
+          "leyline.run.allowed",
+          "leyline.run.approval",
+          "leyline.run.refused",
+          "leyline.run.requested",
           "notify.token_pruned",
           "pairing.approved",
           "pairing.burned",
@@ -1221,6 +1225,12 @@
           "pool.member_removed",
           "pool.unbound",
           "price.set",
+          "project.archived",
+          "project.created",
+          "project.repo_added",
+          "project.repo_primary_set",
+          "project.repo_removed",
+          "project.updated",
           "provider.created",
           "provider.deleted",
           "provider.updated",
@@ -2415,6 +2425,9 @@
           "connection.health",
           "leyline.host",
           "notify.delivery",
+          "project.archived",
+          "project.created",
+          "project.updated",
           "runner.connected",
           "runner.degraded",
           "runner.disconnected",
@@ -2450,6 +2463,9 @@
           "connection.health": "admin",
           "leyline.host": "read",
           "notify.delivery": "admin",
+          "project.archived": "read",
+          "project.created": "read",
+          "project.updated": "read",
           "runner.connected": "read",
           "runner.degraded": "read",
           "runner.disconnected": "read",
@@ -2894,7 +2910,7 @@
             "type": "string"
           },
           "ai_rule": {
-            "description": "`read_only` or `ask` (`allowed` arrives with the gate story, Y4-01).",
+            "description": "`read_only`, `ask` or `allowed` (what an AI session may do on it; see the gate).",
             "type": "string"
           },
           "created_at": {
@@ -3784,7 +3800,7 @@
             "type": "string"
           },
           "ai_rule": {
-            "description": "`read_only` or `ask` (the default).",
+            "description": "`read_only`, `ask` (the default) or `allowed`; `allowed` needs a step-up.",
             "type": [
               "string",
               "null"
@@ -6556,7 +6572,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.82.0"
+    "version": "1.84.0"
   },
   "openapi": "3.1.0",
   "paths": {

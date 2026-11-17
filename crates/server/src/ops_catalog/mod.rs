@@ -3,7 +3,8 @@
 //! document ([`build`]), a typed definition per operation ([`render`]) and the search a session
 //! asks for ([`search`], served by [`serve`]). `call` (E2) runs the read-only ones for a session.
 
-mod approval;
+/// Public so a module's gate (Leyline Y4-01) parks its own calls through the same Core-held approval.
+pub mod approval;
 mod args;
 mod build;
 mod call;

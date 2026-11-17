@@ -1,13 +1,15 @@
 //! The Leyline module (Y1-01): the Core's address book of SSH hosts. This story is the store and
 //! the API only: hosts, groups and tags, label addressing, the validation that keeps argv-injection
 //! text out (API and table), `leyline.*` events and audit. Keys (Y1-02), attachments (Y1-03), SSH
-//! itself (Y2+) and the command gate (Y4) come later; no secret is handled here.
+//! itself (Y2+) come later; the command gate (`gate`, Y4-01) is here; no secret is handled here.
 //!
 //! Module off, the Core is unchanged: the tables are its own `leyline_` namespace, no Core
 //! migration, no Core crate names this module.
 
 mod address;
+pub mod gate;
 mod hosts;
+mod policy;
 mod valid;
 
 use ainkrad_core_server::api::App;
@@ -20,16 +22,24 @@ use utoipa::OpenApi;
 
 pub const MODULE: &str = "leyline";
 
-pub static MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "0001_leyline",
-    up: include_str!("../migrations/0001_leyline.up.sql"),
-    down: include_str!("../migrations/0001_leyline.down.sql"),
-}];
+pub static MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "0001_leyline",
+        up: include_str!("../migrations/0001_leyline.up.sql"),
+        down: include_str!("../migrations/0001_leyline.down.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "0002_runs",
+        up: include_str!("../migrations/0002_runs.up.sql"),
+        down: include_str!("../migrations/0002_runs.down.sql"),
+    },
+];
 
 const DESTRUCTIVE: &[(&str, &str)] = &[("DELETE", "/hosts/{host}")];
-// ponytail: a PATCH can repoint a host's address/key/runner without a step-up; Y4-01 (the gate)
-// decides whether that needs one, with the `allowed` rule.
+// POST and PATCH need a step-up only for what widens an AI's reach or repoints a host (`allowed`,
+// address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[("POST", "/hosts"), ("PATCH", "/hosts/{host}")];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts", "read"),
@@ -96,6 +106,10 @@ impl Module for Leyline {
             "leyline.host.created",
             "leyline.host.changed",
             "leyline.host.deleted",
+            "leyline.run.requested",
+            "leyline.run.approval",
+            "leyline.run.allowed",
+            "leyline.run.refused",
         ]
     }
 
