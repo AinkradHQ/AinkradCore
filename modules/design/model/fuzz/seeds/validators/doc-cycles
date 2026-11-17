@@ -1,0 +1,201 @@
+{
+  "meta": {
+    "system": "dd_sys",
+    "version": 1
+  },
+  "nodes": {
+    "n_aframeaaaaaa": {
+      "clock": 5,
+      "name": "A",
+      "order": "a",
+      "parent": "n_bframeaaaaaa",
+      "props": {
+        "h": 100,
+        "w": 100
+      },
+      "type": "frame"
+    },
+    "n_badaaaaaaaaa": {
+      "clock": 1,
+      "name": "Bad props",
+      "order": "a",
+      "parent": "n_goodaaaaaaaa",
+      "props": {
+        "bogus": 1,
+        "fill": [
+          {
+            "color": {
+              "token": "color.nope"
+            },
+            "type": "solid"
+          }
+        ],
+        "h": 20,
+        "opacity": 0.5,
+        "radius": {
+          "token": "color.bg"
+        },
+        "w": -5,
+        "x": 1e+300
+      },
+      "type": "rect"
+    },
+    "n_bframeaaaaaa": {
+      "clock": 5,
+      "name": "B",
+      "order": "a",
+      "parent": "n_aframeaaaaaa",
+      "props": {
+        "h": 50,
+        "w": 50
+      },
+      "type": "frame"
+    },
+    "n_compaaaaaaaa": {
+      "clock": 1,
+      "name": "C1",
+      "order": "b",
+      "parent": "n_pageaaaaaaaa",
+      "props": {
+        "h": 80,
+        "w": 80
+      },
+      "type": "component"
+    },
+    "n_compbaaaaaaa": {
+      "clock": 1,
+      "name": "C2",
+      "order": "c",
+      "parent": "n_pageaaaaaaaa",
+      "props": {
+        "h": 60,
+        "w": 60
+      },
+      "type": "component"
+    },
+    "n_dangleaaaaaa": {
+      "clock": 1,
+      "name": "dangling override",
+      "order": "d",
+      "parent": "n_goodaaaaaaaa",
+      "props": {
+        "component": "dd_sys/n_buttonaaaaaa",
+        "overrides": {
+          "n_labelaaaaaaa": {
+            "w": 4
+          },
+          "n_nopeaaaaaaaa": {
+            "opacity": 0.5
+          }
+        }
+      },
+      "type": "instance"
+    },
+    "n_foreignaaaaa": {
+      "clock": 1,
+      "name": "foreign doc",
+      "order": "c",
+      "parent": "n_goodaaaaaaaa",
+      "props": {
+        "component": "dd_other/n_buttonaaaaaa"
+      },
+      "type": "instance"
+    },
+    "n_goodaaaaaaaa": {
+      "clock": 1,
+      "name": "Good",
+      "order": "a",
+      "parent": "n_pageaaaaaaaa",
+      "props": {
+        "h": 10,
+        "w": 10
+      },
+      "type": "frame"
+    },
+    "n_inabaaaaaaaa": {
+      "clock": 1,
+      "name": "C1 holds C2",
+      "order": "a",
+      "parent": "n_compaaaaaaaa",
+      "props": {
+        "component": "dd_main/n_compbaaaaaaa"
+      },
+      "type": "instance"
+    },
+    "n_inbaaaaaaaaa": {
+      "clock": 1,
+      "name": "C2 holds C1",
+      "order": "a",
+      "parent": "n_compbaaaaaaa",
+      "props": {
+        "component": "dd_main/n_compaaaaaaaa"
+      },
+      "type": "instance"
+    },
+    "n_inneraaaaaaa": {
+      "clock": 1,
+      "name": "inner",
+      "order": "a",
+      "parent": "n_bframeaaaaaa",
+      "props": {},
+      "text": "kept with B",
+      "type": "text"
+    },
+    "n_kidaaaaaaaaa": {
+      "clock": 1,
+      "name": "child of leaf",
+      "order": "a",
+      "parent": "n_leafaaaaaaaa",
+      "props": {},
+      "type": "rect"
+    },
+    "n_leafaaaaaaaa": {
+      "clock": 1,
+      "name": "leaf with child",
+      "order": "e",
+      "parent": "n_goodaaaaaaaa",
+      "props": {},
+      "text": "x",
+      "type": "text"
+    },
+    "n_noneaaaaaaaa": {
+      "clock": 1,
+      "name": "no component",
+      "order": "b",
+      "parent": "n_goodaaaaaaaa",
+      "props": {
+        "component": "dd_main/n_comp7aaaaaaa"
+      },
+      "type": "instance"
+    },
+    "n_orphanaaaaaa": {
+      "clock": 1,
+      "name": "Orphan",
+      "order": "a",
+      "parent": "n_gone2222222a",
+      "props": {
+        "h": 5,
+        "w": 5
+      },
+      "type": "rect"
+    },
+    "n_pageaaaaaaaa": {
+      "clock": 1,
+      "name": "Main",
+      "order": "a",
+      "parent": null,
+      "props": {},
+      "type": "page"
+    },
+    "n_useaaaaaaaaa": {
+      "clock": 1,
+      "name": "uses C1",
+      "order": "d",
+      "parent": "n_pageaaaaaaaa",
+      "props": {
+        "component": "dd_main/n_compaaaaaaaa"
+      },
+      "type": "instance"
+    }
+  }
+}

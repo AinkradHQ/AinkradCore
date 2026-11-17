@@ -1,6 +1,6 @@
 CARGO ?= cargo
 
-.PHONY: build-leyline test-leyline build-brain test-brain test-brain-linux check-env install-test perf test-web e1-exit e1-exit-faults e2-exit e2-exit-faults e2-soak soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel build-toy test-toy release-dry release-repro release-test fuzz-smoke audit-fuzz
+.PHONY: build-design test-design fuzz-design audit-design build-leyline test-leyline build-brain test-brain test-brain-linux check-env install-test perf test-web e1-exit e1-exit-faults e2-exit e2-exit-faults e2-soak soak clients clients-check clients-smoke schema-compat schema-compat-selftest build test lint format format-check contract audit test-linux-arm64 build-linux-x86_64 clean-linux run build-citadel test-citadel build-toy test-toy release-dry release-repro release-test fuzz-smoke audit-fuzz
 build: lint ; $(CARGO) build --workspace
 test: lint ; $(CARGO) test --workspace
 lint: format-check check-env ; scripts/api-minor-check.sh && $(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -71,6 +71,13 @@ test-brain-linux: ; $(call DOCKER_RUN,arm64) --platform linux/arm64 $(RUST_IMAGE
 LEYLINE = --manifest-path modules/leyline/Cargo.toml --workspace
 build-leyline: ; $(CARGO) build $(LEYLINE)
 test-leyline: ; $(CARGO) test $(LEYLINE)
+# The Design module (V1-02): its own workspace, pure Rust (no Skia, no Docker). The validator fuzz target is nightly
+# only, like fuzz/ (`make fuzz-design FUZZ_SECS=60`); seeds are committed, the corpus is not.
+DESIGN = --manifest-path modules/design/Cargo.toml --workspace
+build-design: ; $(CARGO) build $(DESIGN)
+test-design: ; $(CARGO) test $(DESIGN)
+fuzz-design: ; cd modules/design/model/fuzz && mkdir -p corpus/validators && cargo +nightly fuzz run validators corpus/validators seeds/validators -- -max_total_time=$${FUZZ_SECS:-30}
+audit-design: ; $(CARGO) deny --manifest-path modules/design/Cargo.toml --config deny.toml check
 # Local run (E1-01.5): state in ./state (gitignored); `Run/run.sh run` comes here. The default listener is a
 # Unix socket (state/core.sock); for HTTP on loopback use `make run LISTEN=loopback:7700`.
 LISTEN ?= unix:state/core.sock

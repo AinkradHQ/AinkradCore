@@ -1,0 +1,322 @@
+{
+  "detached": [],
+  "diagnostics": [],
+  "doc": "dd_main",
+  "pages": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "children": [],
+              "id": "n_titleaaaaaaa",
+              "name": "Title",
+              "props": {
+                "fill": [
+                  {
+                    "color": "#111111",
+                    "type": "solid"
+                  }
+                ],
+                "type": {
+                  "font": "system",
+                  "size": 13,
+                  "weight": 400
+                }
+              },
+              "text": "Hello",
+              "type": "text"
+            },
+            {
+              "children": [],
+              "id": "n_cardaaaaaaaa",
+              "name": "Card",
+              "props": {
+                "blend": "normal",
+                "fill": [
+                  {
+                    "color": "#111111",
+                    "type": "solid"
+                  }
+                ],
+                "h": 80,
+                "opacity": 0.9,
+                "radius": [
+                  12,
+                  12,
+                  6,
+                  6
+                ],
+                "shadow": [
+                  {
+                    "blur": 8,
+                    "color": "#00000033",
+                    "spread": 0,
+                    "x": 0,
+                    "y": 2
+                  }
+                ],
+                "stroke": {
+                  "color": "#111111",
+                  "role": "chart",
+                  "width": 1
+                },
+                "w": 200
+              },
+              "type": "rect"
+            },
+            {
+              "children": [],
+              "id": "n_dotaaaaaaaaa",
+              "name": "Dot",
+              "props": {
+                "fill": [
+                  {
+                    "angle": 90,
+                    "stops": [
+                      {
+                        "at": 0,
+                        "color": "#ff0000"
+                      },
+                      {
+                        "at": 1,
+                        "color": "#111111"
+                      }
+                    ],
+                    "type": "linear"
+                  }
+                ],
+                "h": 10,
+                "w": 10
+              },
+              "type": "ellipse"
+            },
+            {
+              "children": [],
+              "id": "n_imageaaaaaaa",
+              "name": "Photo",
+              "props": {
+                "asset": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "fit": "fill",
+                "h": 64,
+                "radius": 8,
+                "w": 64
+              },
+              "type": "image"
+            },
+            {
+              "children": [],
+              "id": "n_vectoraaaaaa",
+              "name": "Arrow",
+              "props": {
+                "fill": [
+                  {
+                    "color": "#336699",
+                    "type": "solid"
+                  }
+                ],
+                "path": "M0 0L10 0L10 10z",
+                "visible": true
+              },
+              "type": "vector"
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "id": "n_instaaaaaaaa/n_bgaaaaaaaaaa",
+                  "name": "bg",
+                  "props": {
+                    "fill": [
+                      {
+                        "color": "#111111",
+                        "type": "solid"
+                      }
+                    ],
+                    "material": "glass",
+                    "radius": 8
+                  },
+                  "type": "rect"
+                },
+                {
+                  "children": [],
+                  "id": "n_instaaaaaaaa/n_labelaaaaaaa",
+                  "name": "label",
+                  "props": {
+                    "fill": [
+                      {
+                        "color": "#111111",
+                        "type": "solid"
+                      }
+                    ],
+                    "type": {
+                      "font": "system",
+                      "size": 13,
+                      "weight": 400
+                    }
+                  },
+                  "text": "Save",
+                  "type": "text"
+                }
+              ],
+              "component": "dd_sys/n_buttonaaaaaa",
+              "id": "n_instaaaaaaaa",
+              "name": "Save",
+              "props": {
+                "layout": {
+                  "dir": "row",
+                  "gap": 8,
+                  "pad": [
+                    8,
+                    12,
+                    8,
+                    12
+                  ]
+                },
+                "link": {
+                  "to": "n_screen2aaaaa",
+                  "transition": "fade"
+                },
+                "w": 120,
+                "x": 16,
+                "y": 200
+              },
+              "type": "instance"
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "id": "n_inst2aaaaaaa/n_bgaaaaaaaaaa",
+                  "name": "bg",
+                  "props": {
+                    "fill": [
+                      {
+                        "color": "#ffffff",
+                        "type": "solid"
+                      }
+                    ],
+                    "material": "clear",
+                    "radius": 8
+                  },
+                  "type": "rect"
+                },
+                {
+                  "children": [],
+                  "id": "n_inst2aaaaaaa/n_labelaaaaaaa",
+                  "name": "label",
+                  "props": {
+                    "type": {
+                      "font": "system",
+                      "size": 13,
+                      "weight": 400
+                    }
+                  },
+                  "text": "Cancel",
+                  "type": "text"
+                }
+              ],
+              "component": "dd_sys/n_buttonaaaaaa",
+              "id": "n_inst2aaaaaaa",
+              "name": "Cancel",
+              "props": {
+                "layout": {
+                  "dir": "row",
+                  "gap": 8,
+                  "pad": [
+                    8,
+                    12,
+                    8,
+                    12
+                  ]
+                },
+                "x": 150,
+                "y": 200
+              },
+              "type": "instance"
+            }
+          ],
+          "id": "n_screenaaaaaa",
+          "name": "Screen",
+          "props": {
+            "clip": true,
+            "fill": [
+              {
+                "color": "#ffffff",
+                "type": "solid"
+              }
+            ],
+            "h": 844,
+            "layout": {
+              "align": "start",
+              "dir": "column",
+              "gap": 8,
+              "justify": "start",
+              "pad": [
+                16,
+                16,
+                16,
+                16
+              ],
+              "wrap": false
+            },
+            "material": "glass",
+            "radius": [
+              8,
+              8,
+              16,
+              16
+            ],
+            "role": "pane",
+            "sizing": {
+              "h": "fixed",
+              "w": "fixed"
+            },
+            "w": 390,
+            "x": 0,
+            "y": 0
+          },
+          "type": "frame"
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "id": "n_text2aaaaaaa",
+              "name": "Body",
+              "props": {
+                "type": {
+                  "font": "system",
+                  "size": 15
+                }
+              },
+              "text": "Second screen",
+              "type": "text"
+            }
+          ],
+          "id": "n_screen2aaaaa",
+          "name": "Screen 2",
+          "props": {
+            "h": 844,
+            "w": 390,
+            "x": 500,
+            "y": 0
+          },
+          "type": "frame"
+        }
+      ],
+      "id": "n_pageaaaaaaaa",
+      "name": "Main",
+      "props": {
+        "fill": [
+          {
+            "color": "#ffffff",
+            "type": "solid"
+          }
+        ]
+      },
+      "type": "page"
+    }
+  ],
+  "theme": "day"
+}

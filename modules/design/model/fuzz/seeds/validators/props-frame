@@ -1,0 +1,1 @@
+{"layout": {"dir": "row", "gap": 8, "pad": [1, 2, 3, 4]}, "radius": [6, 8, 12, {"token": "radius.control"}], "fill": [{"type": "solid", "color": "#aabbcc"}]}
