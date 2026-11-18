@@ -6,7 +6,7 @@
 //! rooms. See `docs/Plans/2026-11-11-brain-phase1-import-plan.md` §5.
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicI64};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ainkrad_core::audit::{NewAuditEvent, OriginKind};
@@ -28,6 +28,7 @@ mod ai_semantic;
 mod aliases;
 mod answer;
 mod answer_turns;
+mod auto_distil;
 mod backfill;
 mod change_routes;
 pub mod changes;
@@ -229,6 +230,9 @@ struct Inner {
     rooms: rooms::Rooms,
     syncing: AtomicBool,
     distilling: AtomicBool,
+    /// Set while the automatic distil triggers run (`auto_distil`), and when they last scanned the rooms.
+    auto_busy: AtomicBool,
+    auto_scan: AtomicI64,
     overviewing: AtomicBool,
     /// Rooms held for a backup before 0.8.5 were imported this process (`commit::release_held`).
     held_released: AtomicBool,
@@ -750,6 +754,7 @@ impl Module for Brain {
             "brain.room.policy",
             "brain.inbox.decided",
             "brain.distil.queued",
+            "brain.distil.capped",
             "brain.distil.done",
             "brain.distil.rejected",
             "brain.overview.queued",
@@ -779,6 +784,7 @@ impl Module for Brain {
             sync::job(self),
             index::job(self),
             distil::job(self),
+            auto_distil::job(self),
             overview::job(self),
             project_rooms::job(self),
             changes::job(self),

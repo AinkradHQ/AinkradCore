@@ -4,6 +4,7 @@
 mod ai;
 mod ai_semantic;
 mod ai_write;
+mod auto_distil;
 mod changes;
 mod backfill;
 mod claim;
