@@ -470,7 +470,7 @@ impl Hub {
 
     /// Design helper ops (V6-01): the runner runs its own fixed `ainkrad-design` helper, or headless
     /// Chromium, in a sandbox with no network, on data the Core sends; no program or path the caller
-    /// chooses runs. So a module may send them without a step-up. Only the five design commands pass.
+    /// chooses runs. So a module may send them without a step-up. Only the design commands pass.
     pub fn dispatch_design(
         self: &Arc<Self>,
         runner: &str,
@@ -483,6 +483,8 @@ impl Hub {
                 | Command::DesignReview(_)
                 | Command::DesignCheck(_)
                 | Command::DesignShot(_)
+                | Command::DesignExport(_)
+                | Command::DesignFidelity(_)
         );
         if !design {
             return Err(err(

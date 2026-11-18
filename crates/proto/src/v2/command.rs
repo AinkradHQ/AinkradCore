@@ -91,6 +91,10 @@ pub enum Command {
     DesignCheck(super::DesignCheck),
     #[serde(rename = "design.shot")]
     DesignShot(super::DesignShot),
+    #[serde(rename = "design.export")]
+    DesignExport(super::DesignExport),
+    #[serde(rename = "design.fidelity")]
+    DesignFidelity(super::DesignFidelity),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -137,6 +141,8 @@ impl Command {
             Self::DesignReview(_) => super::OP_DESIGN_REVIEW,
             Self::DesignCheck(_) => super::OP_DESIGN_CHECK,
             Self::DesignShot(_) => super::OP_DESIGN_SHOT,
+            Self::DesignExport(_) => super::OP_DESIGN_EXPORT,
+            Self::DesignFidelity(_) => super::OP_DESIGN_FIDELITY,
             Self::Unknown => "unknown",
         }
     }
@@ -260,6 +266,10 @@ pub enum Reply {
     DesignCheck(super::DesignChecked),
     #[serde(rename = "design.shot")]
     DesignShot(super::DesignImage),
+    #[serde(rename = "design.export")]
+    DesignExport(super::DesignExported),
+    #[serde(rename = "design.fidelity")]
+    DesignFidelity(super::DesignFidelityScore),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

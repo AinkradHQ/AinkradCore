@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use ainkrad_proto::v2::{
-    Command, DesignCheck, DesignDoc, DesignFile, DesignRender, DesignShot, DesignShotFile,
-    ErrorCode, Reply,
+    Command, DesignCheck, DesignDoc, DesignExport, DesignFidelity, DesignFile, DesignRender,
+    DesignShot, DesignShotFile, ErrorCode, OP_DESIGN_EXPORT, OP_DESIGN_FIDELITY, Reply,
 };
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -464,4 +464,61 @@ fetch('https://example.com/').then(() => document.body.style.background = '#f00'
     let Reply::DesignShot(i) = r else { panic!() };
     assert_eq!((i.width, i.height), (128, 96));
     assert!(STANDARD.decode(i.png).unwrap().starts_with(b"\x89PNG"));
+}
+
+/// V6-03: `design.export` and `design.fidelity` are offered, run in the same sandbox, and their answers are parsed
+/// into their own reply types (a helper that answers one op with the other's shape is refused).
+#[tokio::test]
+async fn export_and_fidelity_are_offered_and_their_answers_are_typed() {
+    let (dir, p) = helper(
+        "export",
+        r#"if [[ $(<"$1") == *'"design.fidelity"'* ]]; then
+  echo '{"percent":0.5,"changed":5,"total":1000,"width":100,"height":10}'
+else
+  echo '{"screen":"n_aaaaaaaaaaab","html":"<p>","css":"","fonts":[],"images":[],"width":10,"height":20}'
+fi"#,
+    );
+    let d = driver(p);
+    let ops = d.info().commands;
+    assert!(
+        ops.iter().any(|o| o == OP_DESIGN_EXPORT) && ops.iter().any(|o| o == OP_DESIGN_FIDELITY)
+    );
+    let export = Command::DesignExport(DesignExport {
+        doc: DesignDoc {
+            doc_id: "dd_t".into(),
+            doc: serde_json::json!({}),
+            system_id: None,
+            system: None,
+            theme: "day".into(),
+            page: 0,
+            fonts: vec![],
+            images: vec![],
+            fallback_font: None,
+        },
+        screen: None,
+    });
+    match run(&d, &export).await.unwrap() {
+        Reply::DesignExport(x) => assert_eq!(
+            (x.screen.as_str(), x.width, x.height),
+            ("n_aaaaaaaaaaab", 10, 20)
+        ),
+        other => panic!("{other:?}"),
+    }
+    let fid = Command::DesignFidelity(DesignFidelity {
+        a: "AA==".into(),
+        b: "AA==".into(),
+    });
+    match run(&d, &fid).await.unwrap() {
+        Reply::DesignFidelity(s) => assert_eq!((s.changed, s.total), (5, 1000)),
+        other => panic!("{other:?}"),
+    }
+    // the export answer is not a fidelity score
+    let (dir2, p2) = helper(
+        "export-wrong",
+        r#"echo '{"screen":"x","html":"","css":"","fonts":[],"images":[],"width":1,"height":1}'"#,
+    );
+    let e = run(&driver(p2), &fid).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::DesignFailed, "{e:?}");
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(dir2).unwrap();
 }

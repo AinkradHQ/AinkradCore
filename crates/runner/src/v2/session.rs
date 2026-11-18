@@ -526,7 +526,9 @@ impl Session {
             | Command::DesignMeasure(_)
             | Command::DesignReview(_)
             | Command::DesignCheck(_)
-            | Command::DesignShot(_) => self.start_design(stream, command, h),
+            | Command::DesignShot(_)
+            | Command::DesignExport(_)
+            | Command::DesignFidelity(_) => self.start_design(stream, command, h),
             Command::AgentStart(_)
             | Command::AgentRead(_)
             | Command::AgentSend(_)
