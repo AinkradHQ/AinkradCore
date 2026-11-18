@@ -197,6 +197,7 @@ mod tests {
         agents: false,
         agent_capacity: 2,
         share_history: false,
+        runs: false,
     };
 
     #[test]
@@ -209,6 +210,7 @@ mod tests {
             agents: false,
             agent_capacity: 5,
             share_history: false,
+            runs: false,
         };
         save(&d, &p).unwrap();
         assert_eq!(load(&d), Some(p));

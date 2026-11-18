@@ -43,6 +43,7 @@ mod provider_url;
 pub mod providers;
 pub mod redact;
 pub mod run_specs;
+pub mod runs;
 pub mod secret_groups;
 pub mod secrets;
 mod secrets_user;

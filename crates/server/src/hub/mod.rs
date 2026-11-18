@@ -52,6 +52,13 @@ pub mod connect;
 #[derive(Debug, Clone, Copy)]
 pub struct Elevated(());
 
+/// The only commands [`Hub::dispatch_run_housekeeping`] sends.
+#[derive(Debug)]
+pub enum RunHousekeeping {
+    Stop(ainkrad_proto::v2::RunStop),
+    Status(ainkrad_proto::v2::RunStatusReq),
+}
+
 impl Elevated {
     /// For tests that drive the hub directly.
     #[cfg(any(test, feature = "test-support"))]
@@ -403,6 +410,22 @@ impl Hub {
     /// cap. Callers check the session names their module; the module's operator enabled it.
     pub(crate) fn module_elevation(&self) -> Elevated {
         Elevated(())
+    }
+
+    /// The project run orchestrator's own housekeeping (`runs`): `run.stop` and `run.status` for
+    /// the idle stop, reconciliation and cleanup of a failed start. The type admits nothing else,
+    /// so no elevation leaves here: a `run.start` only goes out through
+    /// [`Hub::dispatch_elevated`] with the proof of the admin route that asked.
+    pub(crate) fn dispatch_run_housekeeping(
+        self: &Arc<Self>,
+        runner: &str,
+        op: RunHousekeeping,
+    ) -> Result<Dispatched, StreamError> {
+        let command = match op {
+            RunHousekeeping::Stop(s) => Command::RunStop(s),
+            RunHousekeeping::Status(s) => Command::RunStatus(s),
+        };
+        self.send_command(runner, command)
     }
 
     /// The capability of the wake queue's job (`agents::wake`): the route that queued the wake

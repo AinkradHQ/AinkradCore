@@ -1,0 +1,19 @@
+# Written by deploy/install-linux.sh --with-run (loaded by ainkrad-run-egress.service, and again as root by
+# ainkrad-run@.service before every run op). Idempotent: the table is replaced as a whole, in one transaction.
+# Matches the ainkrad-run uid: rootless Podman's outbound traffic leaves the host from that user's processes (pasta).
+table inet ainkrad_run_egress
+delete table inet ainkrad_run_egress
+table inet ainkrad_run_egress {
+  chain out {
+    type filter hook output priority 0; policy accept;
+    # Replies on connections others opened (a published port on 127.0.0.1) stay open; nothing new passes here.
+    meta skuid "ainkrad-run" ct state established,related accept
+    # DNS to the host's resolver (systemd-resolved's stub), the one local service a container may reach.
+    meta skuid "ainkrad-run" ip daddr 127.0.0.53 meta l4proto { tcp, udp } th dport 53 accept
+    # Every other address of the host itself (loopback, its own private and public addresses).
+    meta skuid "ainkrad-run" fib daddr type local reject
+    # Cloud metadata (169.254.169.254), private and special-purpose ranges.
+    meta skuid "ainkrad-run" ip daddr { 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15 } reject
+    meta skuid "ainkrad-run" ip6 daddr { fc00::/7, fe80::/10 } reject
+  }
+}

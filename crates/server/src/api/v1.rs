@@ -428,6 +428,20 @@ pub fn router(app: App) -> Router {
             "/api/v1/projects/{id}/spec/versions",
             get(projects::run_spec::versions),
         )
+        .route("/api/v1/projects/{id}/run", get(projects::runs::status))
+        .route(
+            "/api/v1/projects/{id}/run/start",
+            post(projects::runs::start),
+        )
+        .route("/api/v1/projects/{id}/run/stop", post(projects::runs::stop))
+        .route(
+            "/api/v1/projects/{id}/run/restart",
+            post(projects::runs::restart),
+        )
+        .route(
+            "/api/v1/projects/{id}/run/activity",
+            post(projects::runs::activity),
+        )
         .route(
             "/api/v1/projects/{id}/spec/versions/{version}",
             get(projects::run_spec::version),

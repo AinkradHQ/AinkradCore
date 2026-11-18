@@ -259,6 +259,7 @@ async fn migration_round_trips_over_data() {
             "core_project_mirrors",
             "core_project_repos",
             "core_project_run_specs",
+            "core_project_runs",
             "core_projects"
         ]
     );

@@ -197,6 +197,11 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/mirrors/{repo}/info/refs", "runner"),
     ("POST", "/api/v1/mirrors/{repo}/git-upload-pack", "runner"),
     ("POST", "/api/v1/mirrors/{repo}/git-receive-pack", "runner"),
+    ("GET", "/api/v1/projects/{id}/run", "read"),
+    ("POST", "/api/v1/projects/{id}/run/start", "admin"),
+    ("POST", "/api/v1/projects/{id}/run/stop", "admin"),
+    ("POST", "/api/v1/projects/{id}/run/restart", "admin"),
+    ("POST", "/api/v1/projects/{id}/run/activity", "read"),
     ("GET", "/api/v1/secrets", "admin"),
     ("POST", "/api/v1/secrets", "admin"),
     ("PUT", "/api/v1/secrets/{id}", "admin"),
@@ -281,6 +286,10 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/repos/{repo}/primary"),
     // Run spec (P4-01): it decides what containers run on a runner.
     ("PUT", "/api/v1/projects/{id}/spec"),
+    // Project runs (P5-03): they start and stop containers on a runner.
+    ("POST", "/api/v1/projects/{id}/run/start"),
+    ("POST", "/api/v1/projects/{id}/run/stop"),
+    ("POST", "/api/v1/projects/{id}/run/restart"),
     // Project secrets (P4-04): a write stores or removes a credential a run will be given.
     ("PUT", "/api/v1/projects/{id}/secrets/{name}"),
     ("DELETE", "/api/v1/projects/{id}/secrets/{name}"),
