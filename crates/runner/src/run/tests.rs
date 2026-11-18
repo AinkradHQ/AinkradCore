@@ -520,6 +520,7 @@ fn builds_stay_in_their_checkout_mount_it_read_only_and_leave_no_image() {
         r.checkouts = vec![ainkrad_proto::v2::RunCheckout {
             repo: "web".into(),
             dir: "/unused".into(),
+            from_core: None,
         }];
         r
     };

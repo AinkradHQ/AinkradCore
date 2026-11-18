@@ -152,6 +152,8 @@ pub(super) fn run_caps(
         cpus,
         mem_mb,
         isolate: major(&p.version) >= 5,
+        // Set by the session, which knows whether the agent driver is on.
+        can_clone: false,
     })
 }
 
@@ -245,7 +247,8 @@ mod tests {
             Some(RunCaps {
                 cpus: 2,
                 mem_mb: 11900,
-                isolate: true
+                isolate: true,
+                can_clone: false
             })
         );
         // Each missing prerequisite: podman stays reported, run_caps goes.

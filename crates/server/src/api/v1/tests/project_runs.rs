@@ -5,7 +5,7 @@
 use std::sync::Mutex;
 
 use ainkrad_core::audit::{AuditActor, AuditOrigin, OriginKind};
-use ainkrad_proto::v2::{RunCheckout, RunInfo, RunList, RunPhase, RunStart};
+use ainkrad_proto::v2::{RunInfo, RunList, RunPhase, RunStart};
 use axum::http::Method;
 use serde_json::json;
 
@@ -29,19 +29,25 @@ pub(super) struct Fake {
     pub(super) held: Mutex<Vec<String>>,
     pub(super) stops: Mutex<Vec<String>>,
     pub(super) seen: Mutex<Option<Presence>>,
+    /// Every `run.start` it got.
+    pub(super) started: Mutex<Vec<RunStart>>,
     /// Seconds the Core says it has been up.
     pub(super) uptime: Mutex<i64>,
+    /// Runners that cannot clone project repos (`run_caps.can_clone` off).
+    pub(super) cannot_clone: Mutex<Vec<String>>,
 }
 
 impl Fake {
     pub(super) fn new() -> Self {
         Self {
             uptime: Mutex::new(0),
+            cannot_clone: Mutex::default(),
             runners: vec![RUNNER.to_owned()],
             start: Mutex::new(Ok(RunPhase::Running)),
             listed: Mutex::default(),
             held: Mutex::default(),
             stops: Mutex::default(),
+            started: Mutex::default(),
             seen: Mutex::new(Some(Presence {
                 online: true,
                 last_seen: 0,
@@ -69,6 +75,14 @@ impl Link for Fake {
     fn runners(&self) -> Vec<String> {
         self.runners.clone()
     }
+    fn can_clone(&self, runner: &str) -> bool {
+        !self
+            .cannot_clone
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r == runner)
+    }
     fn presence(&self, _: &str) -> Option<Presence> {
         *self.seen.lock().unwrap()
     }
@@ -82,6 +96,7 @@ impl Link for Fake {
         _: Elevated,
     ) -> Fut<'a, Result<RunInfo, LinkError>> {
         Box::pin(async move {
+            self.started.lock().unwrap().push(req.clone());
             match self.start.lock().unwrap().clone() {
                 Ok(p) => {
                     if p == RunPhase::Running {
@@ -111,14 +126,6 @@ impl Link for Fake {
             };
             Ok(RunList { runs })
         })
-    }
-    fn checkouts<'a>(
-        &'a self,
-        _: &'a str,
-        _: &'a str,
-        _: &'a [String],
-    ) -> Fut<'a, Result<Vec<RunCheckout>, String>> {
-        Box::pin(async { Ok(vec![]) })
     }
 }
 

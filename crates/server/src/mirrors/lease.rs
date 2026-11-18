@@ -51,11 +51,14 @@ impl Mirrors {
         Ok(())
     }
 
-    fn revoke(&self, device: &str, repo: i64) {
-        self.leases
-            .lock()
-            .expect("leases")
-            .remove(&(device.to_owned(), repo));
+    /// Ends `device`'s lease on each of `repos` now (a project run ended: P5-05). One lease is
+    /// per (device, repo), so this also ends a session's on the same runner; that session has
+    /// cloned at launch, and a resume or restart leases again.
+    pub fn revoke(&self, device: &str, repos: &[i64]) {
+        let mut leases = self.leases.lock().expect("leases");
+        for &repo in repos {
+            leases.remove(&(device.to_owned(), repo));
+        }
     }
 
     fn holds(&self, device: &str, repo: i64, key: &str, now: i64) -> bool {
@@ -142,9 +145,12 @@ pub async fn release_session(app: &App, s: &crate::store::agents::Session) {
     else {
         return;
     };
+    // A live run of the project on that runner may still be cloning from the same copies.
     let busy: Result<i64, _> = sqlx::query_scalar(
-        "SELECT count(*) FROM core_agent_sessions WHERE runner = ? AND project_id = ? \
-         AND id != ? AND state NOT IN ('ended', 'lost')",
+        "SELECT (SELECT count(*) FROM core_agent_sessions WHERE runner = ?1 AND project_id = ?2 \
+         AND id != ?3 AND state NOT IN ('ended', 'lost')) \
+         + (SELECT count(*) FROM core_project_runs WHERE runner = ?1 AND project_id = ?2 \
+         AND state IN ('starting', 'running', 'stopping'))",
     )
     .bind(&s.runner)
     .bind(project)
@@ -153,9 +159,31 @@ pub async fn release_session(app: &App, s: &crate::store::agents::Session) {
     .await;
     // On a read failure the leases stay: they expire on their own.
     if busy == Ok(0) {
-        for repo in std::iter::once(&w).chain(&w.also).filter_map(|w| w.mirror) {
-            mirrors.revoke(&s.runner, repo);
-        }
+        let repos: Vec<i64> = std::iter::once(&w)
+            .chain(&w.also)
+            .filter_map(|w| w.mirror)
+            .collect();
+        mirrors.revoke(&s.runner, &repos);
+    }
+}
+
+/// Takes back the leases a project run held on `runner` for `repos` (P5-05), unless a live
+/// session of the project runs there and needs them (a lease is per device and repo, not per
+/// holder). The run itself is not counted: it calls this once it no longer needs the copies.
+pub async fn release_run(app: &App, runner: &str, project: i64, repos: &[i64]) {
+    let Some(mirrors) = app.mirrors.as_ref() else {
+        return;
+    };
+    let busy: Result<i64, _> = sqlx::query_scalar(
+        "SELECT count(*) FROM core_agent_sessions WHERE runner = ? AND project_id = ? \
+         AND state NOT IN ('ended', 'lost')",
+    )
+    .bind(runner)
+    .bind(project)
+    .fetch_one(&app.pool)
+    .await;
+    if busy == Ok(0) {
+        mirrors.revoke(runner, repos);
     }
 }
 

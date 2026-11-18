@@ -203,6 +203,10 @@ pub struct RunCaps {
     pub mem_mb: u64,
     /// Project networks can be isolated from each other (`--opt isolate=true`).
     pub isolate: bool,
+    /// Can clone a project repo from the Core's copies (agent driver on): a spec that builds
+    /// from or mounts repos is placed on such a runner first (P5-05).
+    #[serde(default)]
+    pub can_clone: bool,
 }
 
 /// The state of `/dev/kvm` on a runner, for the microvm tier (E8a-09).

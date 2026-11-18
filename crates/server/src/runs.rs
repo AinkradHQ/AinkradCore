@@ -4,7 +4,8 @@
 //! `Elevated` proof of the admin route that asked (`POST /projects/{id}/run/start|restart`, a
 //! step-up); stop, status and reconcile are the Core's own housekeeping and can only remove
 //! containers the runner lists under a run label. Secrets leave as single-use leases, never as
-//! values. A project has one live run (409 on a second start); a start that fails stops what it
+//! values. A run's repos are leased to its runner for the clone (`mirrors::for_session`, active
+//! projects only) and the leases end with the run, whichever way it ends. A project has one live run (409 on a second start); a start that fails stops what it
 //! started before it is marked failed.
 //!
 //! The runner is reached through [`Link`], so the state machine is tested without a runner.
@@ -18,8 +19,8 @@ use std::time::Duration;
 
 use ainkrad_core::audit::{AuditActor, AuditOrigin, OriginKind};
 use ainkrad_proto::v2::{
-    Body, Command, DRIVER_RUN, ErrorCode, Reply, RunCheckout, RunInfo, RunLimits, RunList,
-    RunPhase, RunSecret, RunStart, RunStatusReq, RunStop,
+    Body, Command, DRIVER_RUN, ErrorCode, Reply, RunCheckout, RunClone, RunInfo, RunLimits,
+    RunList, RunPhase, RunSecret, RunStart, RunStatusReq, RunStop,
 };
 
 use crate::api::App;
@@ -91,6 +92,10 @@ pub trait Link: Send + Sync {
     /// Seconds this Core has been orchestrating (a runner never met since is only lost after
     /// the grace has passed on the Core's own clock).
     fn uptime_secs(&self) -> i64;
+    /// Whether the runner can clone a project repo from the Core's copies (`run_caps`).
+    fn can_clone(&self, _runner: &str) -> bool {
+        true
+    }
     fn start<'a>(
         &'a self,
         runner: &'a str,
@@ -99,13 +104,6 @@ pub trait Link: Send + Sync {
     ) -> Fut<'a, Result<RunInfo, LinkError>>;
     fn stop<'a>(&'a self, runner: &'a str, run: &'a str) -> Fut<'a, Result<RunInfo, LinkError>>;
     fn status<'a>(&'a self, runner: &'a str) -> Fut<'a, Result<RunList, LinkError>>;
-    /// The checkouts of `repos` for a run, prepared on the runner.
-    fn checkouts<'a>(
-        &'a self,
-        runner: &'a str,
-        run: &'a str,
-        repos: &'a [String],
-    ) -> Fut<'a, Result<Vec<RunCheckout>, String>>;
 }
 
 /// The runner hub as a [`Link`].
@@ -171,6 +169,15 @@ impl Link for HubLink {
         out
     }
 
+    fn can_clone(&self, runner: &str) -> bool {
+        self.0
+            .facts()
+            .get(runner)
+            .and_then(|(facts, _)| facts.as_ref())
+            .and_then(|f| f.run_caps.as_ref())
+            .is_some_and(|c| c.can_clone)
+    }
+
     fn presence(&self, runner: &str) -> Option<Presence> {
         self.0.runners().get(runner).map(|s| Presence {
             online: s.online,
@@ -218,23 +225,6 @@ impl Link for HubLink {
                 Reply::RunStatus(l) => Ok(l),
                 _ => Err(LinkError::Failed("not a run.status answer".into())),
             }
-        })
-    }
-
-    fn checkouts<'a>(
-        &'a self,
-        _runner: &'a str,
-        _run: &'a str,
-        _repos: &'a [String],
-    ) -> Fut<'a, Result<Vec<RunCheckout>, String>> {
-        // ponytail: no runner op clones a project's repos for a run yet (P3-02 clones for AI
-        // sessions only), so a spec that mounts or builds from a repo cannot start. Add the op
-        // (clone from the Core copy under a lease, answer the dirs) and fill this in.
-        Box::pin(async {
-            Err(
-                "run checkouts are not available yet: the runner cannot prepare project repos"
-                    .into(),
-            )
         })
     }
 }
@@ -286,9 +276,12 @@ pub async fn begin_start(
             scopes.push(secrets::effective_runners(&app.pool, &stored).await?);
         }
     }
+    // A spec that builds from or mounts repos needs a runner that can clone them (P5-05).
+    let uses_repos = !spec::repo_refs(&spec.spec).is_empty();
     let Some(runner) = link.runners().into_iter().min_by_key(|r| {
         let out = scopes.iter().filter(|s| !s.contains(r)).count();
-        (out, load.get(r).copied().unwrap_or(0))
+        let cannot = uses_repos && !link.can_clone(r);
+        (cannot, out, load.get(r).copied().unwrap_or(0))
     }) else {
         return refused(
             "no_runner",
@@ -363,10 +356,7 @@ async fn try_start(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let checkouts = match repos.is_empty() {
-        true => Vec::new(),
-        false => link.checkouts(&run.runner, &run.id, &repos).await?,
-    };
+    let (checkouts, repo_ids) = checkouts(app, p, &repos).await?;
     let json = serde_json::to_value(&p.spec.spec).map_err(|e| e.to_string())?;
     let mut req = RunStart {
         run: run.id.clone(),
@@ -384,6 +374,9 @@ async fn try_start(
     // the secrets).
     if let Some(why) = req.problem() {
         return Err(why);
+    }
+    if !repo_ids.is_empty() {
+        crate::mirrors::for_session(app, &run.runner, p.project.id, &repo_ids).await?;
     }
     for name in spec::secret_refs(&p.spec.spec) {
         // Only a member of the project's own group (never a same-named secret outside it).
@@ -403,7 +396,10 @@ async fn try_start(
         leases.push(lease.clone());
         req.secrets.push(RunSecret { name, lease });
     }
-    match link.start(&run.runner, req, proof).await {
+    let started = link.start(&run.runner, req, proof).await;
+    // The runner clones inside `run.start`: the copies are not needed after it returns.
+    crate::mirrors::release_run(app, &run.runner, p.project.id, &repo_ids).await;
+    match started {
         Ok(i) if i.phase == RunPhase::Running => Ok(()),
         Ok(i) => Err(match (i.failed_service, i.reason) {
             (Some(s), Some(r)) => format!("{s}: {r}"),
@@ -414,6 +410,70 @@ async fn try_start(
         Err(LinkError::Offline) => Err("the runner went offline".into()),
         Err(LinkError::Failed(m)) => Err(m),
     }
+}
+
+/// The checkouts of the spec's repos (by name), and their repo ids. The caller leases those ids
+/// to the run's runner (`mirrors::for_session`: only repos of this ACTIVE project, fetched now);
+/// the runner clones from the Core's copies when it gets `run.start` (P5-05).
+async fn checkouts(
+    app: &App,
+    p: &Pending,
+    names: &[String],
+) -> Result<(Vec<RunCheckout>, Vec<i64>), String> {
+    if names.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let mut conn = app.pool.acquire().await.map_err(|e| e.to_string())?;
+    let all = projects::repos(&mut conn, p.project.id)
+        .await
+        .map_err(|e| e.to_string())?;
+    drop(conn);
+    let mut ids = Vec::new();
+    let mut out = Vec::new();
+    for n in names {
+        let r = all.iter().find(|r| &r.name == n).ok_or_else(|| {
+            format!("the spec names the repo {n}, which is not one of the project's")
+        })?;
+        ids.push(r.id);
+        out.push(RunCheckout {
+            repo: r.name.clone(),
+            dir: String::new(),
+            from_core: Some(RunClone {
+                mirror: r.id,
+                remote: r.remote_url.clone(),
+                base: r.default_branch.clone(),
+            }),
+        });
+    }
+    Ok((out, ids))
+}
+
+/// Ends a run's leases on its project's repo copies, on its runner (unless a live session of the
+/// project there needs them).
+async fn revoke(app: &App, run: &Run) {
+    let Ok(mut conn) = app.pool.acquire().await else {
+        return;
+    };
+    if let Ok(repos) = projects::repos(&mut conn, run.project_id).await {
+        drop(conn);
+        let ids: Vec<i64> = repos.iter().map(|r| r.id).collect();
+        crate::mirrors::release_run(app, &run.runner, run.project_id, &ids).await;
+    }
+}
+
+/// `runs::finish`; the run's repo leases end with it, but only when this call ended the run: a
+/// late finish of an old run must not revoke a newer run's lease (stop, fail, runner lost, crash).
+pub(crate) async fn finish(
+    app: &App,
+    run: &Run,
+    end: End<'_>,
+    who: Who<'_>,
+) -> Result<bool, Error> {
+    let done = runs::finish(&app.pool, &run.id, end, who).await?;
+    if done {
+        revoke(app, run).await;
+    }
+    Ok(done)
 }
 
 /// Stops what a failed start left on the runner, then marks the run `failed`.
@@ -429,7 +489,7 @@ async fn fail_start(app: &App, link: &dyn Link, run: &Run, why: &str, leases: &[
         reason: Some("start_failed"),
         error: Some(why),
     };
-    if let Err(e) = runs::finish(&app.pool, &run.id, end, system(&now)).await {
+    if let Err(e) = finish(app, run, end, system(&now)).await {
         tracing::error!(error = %e, run = run.id, "ending a failed start failed");
     }
 }
@@ -472,7 +532,7 @@ async fn settle_stop(
         reason: gone,
         error: gone.map(|_| "the runner was offline when the run was stopped"),
     };
-    runs::finish(&app.pool, &run.id, end, who).await?;
+    finish(app, &run, end, who).await?;
     runs::get(&app.pool, &run.id).await
 }
 
@@ -545,7 +605,7 @@ pub async fn reconcile(app: &App, link: &dyn Link, runner: &str) {
                 reason,
                 error: error.as_deref(),
             };
-            let _ = runs::finish(&app.pool, &r.id, end, system(&now)).await;
+            let _ = finish(app, r, end, system(&now)).await;
         }
     }
     let known: HashSet<&str> = mine.iter().map(|r| r.id.as_str()).collect();
@@ -618,7 +678,7 @@ pub async fn sweep(app: &App, link: &dyn Link) {
                         reason: Some("runner_lost"),
                         error: Some("the runner has been offline too long"),
                     };
-                    let _ = runs::finish(&app.pool, &r.id, end, system(&now)).await;
+                    let _ = finish(app, &r, end, system(&now)).await;
                 }
             }
         }
