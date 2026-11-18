@@ -2,13 +2,22 @@
 //! lines, and its services' latest metrics.
 //!
 //! Security model. A container's output is untrusted text and may hold a secret the run was
-//! given. Every line is redacted before it is kept (`Redactor`: the values of the leases this
-//! runner redeemed for the run, learnt in `RunDriver::prepare`, then key shapes, and a PEM block
-//! is dropped whole across lines), and cut to [`LOG_LINE_MAX`]. Memory is bounded whatever the
-//! containers write: the helper reads each service through a window of its newest lines, the ring
-//! holds at most [`RING_BYTES`] per run and [`MAX_RUNS`] runs are watched; a flood loses the
-//! oldest lines (`lost`), never memory. A run is watched only while the Core keeps asking
-//! ([`IDLE`]); Podman keeps its own capped copy of the log meanwhile.
+//! given. Every line is cleaned, then redacted, then cut, in that order, before it is kept:
+//! [`sanitize`] drops terminal escapes (CSI, OSC), control and bidi characters and the Podman
+//! stamps `podman logs --timestamps` puts inside a line joined from partial chunks (so nothing
+//! can split a secret); `Redactor` masks the values of the leases this runner redeemed for the
+//! run (learnt in `RunDriver::prepare`) and key shapes, and a PEM block is dropped whole across
+//! lines; only then is the text cut to [`LOG_LINE_MAX`]. The helper reads a line through a raw
+//! window of [`LOG_LINE_MAX`] plus the longest secret (`crate::run::observe::raw_window`).
+//! Memory is bounded whatever the containers write: that window, [`RING_BYTES`] per run and
+//! [`MAX_RUNS`] runs actually watched; a flood loses the oldest lines (`lost`), never memory. A
+//! run is watched only while the Core keeps asking ([`IDLE`]); Podman keeps its own capped copy
+//! of the log meanwhile. A run that was forgotten (stopped, lost) is refused, not re-created.
+//!
+//! Limits: a secret under 8 bytes is not known to the redactor; one rotated across a runner
+//! restart is only masked by the Core's second pass; a multi-line secret that is not a PEM block
+//! is masked line by line only if each line matches a key shape; a secret longer than the raw
+//! window cap less [`LOG_LINE_MAX`] can be cut in the window.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -23,7 +32,7 @@ use ainkrad_proto::v2::{
 };
 
 use crate::run::helper::{self, Request};
-use crate::run::observe::{Observed, RawLine, stamp_key};
+use crate::run::observe::{Observed, RawLine, raw_window, stamp_key};
 
 /// What one run's ring holds, in bytes of text and bookkeeping.
 pub const RING_BYTES: usize = 1 << 20;
@@ -36,6 +45,125 @@ const IDLE: Duration = Duration::from_secs(30);
 
 /// Per-line bookkeeping charged against the ring (the struct and the strings' headers).
 const LINE_OVERHEAD: usize = 64;
+/// The redactor ignores values shorter than this (`ainkrad_proto::redact`).
+const MIN_KNOWN: usize = 8;
+/// A secret's longest masked form (`\uXXXX` per character) in bytes per secret byte.
+const ENCODED_MAX: usize = 6;
+/// Forgotten run ids remembered; past it the list starts over (a run id is not reused anyway).
+// ponytail: a plain cap; an LRU if forgetting ever outruns this between restarts.
+const MAX_FORGOTTEN: usize = 4096;
+
+/// The end of a Podman stamp (`2026-11-18T10:00:00.5+00:00 `, the space included) at the start of
+/// `b`, if there is one. `podman logs --timestamps` prints one before every chunk of a line that
+/// was written in parts (the `P` records of the log file), so a joined line holds them inside.
+fn stamp_len(b: &[u8]) -> Option<usize> {
+    let d = |i: usize| b.get(i).is_some_and(u8::is_ascii_digit);
+    let at = |i: usize, c: u8| b.get(i) == Some(&c);
+    let date = [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18];
+    if !(date.iter().all(|i| d(*i))
+        && at(4, b'-')
+        && at(7, b'-')
+        && at(10, b'T')
+        && at(13, b':')
+        && at(16, b':'))
+    {
+        return None;
+    }
+    let mut i = 19;
+    if at(i, b'.') {
+        i += 1;
+        let from = i;
+        while d(i) {
+            i += 1;
+        }
+        if i == from {
+            return None;
+        }
+    }
+    if at(i, b'Z') {
+        i += 1;
+    } else if (at(i, b'+') || at(i, b'-'))
+        && d(i + 1)
+        && d(i + 2)
+        && at(i + 3, b':')
+        && d(i + 4)
+        && d(i + 5)
+    {
+        i += 6;
+    } else {
+        return None;
+    }
+    Some(i + usize::from(at(i, b' ')))
+}
+
+/// `raw` as plain text: no terminal escape sequences (CSI, OSC and the other string escapes), no
+/// control characters (C0, DEL, C1; a tab stays), no bidi controls, and no Podman stamp inside
+/// the line. Done before redaction, so none of it can break up a secret, and before the ring, so a
+/// viewer's terminal or page cannot be driven by what a container prints.
+pub fn sanitize(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let b = raw.as_bytes();
+    let mut chars = raw.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if c.is_ascii_digit() {
+            if let Some(n) = stamp_len(&b[i..]) {
+                // All ASCII, so `i + n` is a boundary; skip what the stamp covered.
+                while chars.peek().is_some_and(|(j, _)| *j < i + n) {
+                    chars.next();
+                }
+                continue;
+            }
+        }
+        match c {
+            '\x1b' => match chars.peek().map(|(_, n)| *n) {
+                Some('[') => {
+                    chars.next();
+                    skip_csi(&mut chars);
+                }
+                Some(']' | 'P' | 'X' | '^' | '_') => {
+                    chars.next();
+                    skip_string(&mut chars);
+                }
+                // Any other escape: the ESC goes, the character after it stays text.
+                _ => {}
+            },
+            '\u{9b}' => skip_csi(&mut chars),
+            '\u{9d}' | '\u{90}' | '\u{98}' | '\u{9e}' | '\u{9f}' => skip_string(&mut chars),
+            '\t' => out.push(c),
+            c if c.is_control() => {}
+            '\u{61c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}' => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Past the parameters and intermediates of a CSI, and its final byte (0x40-0x7e).
+fn skip_csi(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) {
+    for (_, c) in chars {
+        if ('\u{40}'..='\u{7e}').contains(&c) {
+            return;
+        }
+    }
+}
+
+/// Past a string escape (OSC and its kin): to BEL, ST (`ESC \` or U+009C) or the end of the line.
+fn skip_string(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) {
+    while let Some((_, c)) = chars.next() {
+        match c {
+            '\u{7}' | '\u{9c}' => return,
+            '\x1b' if chars.peek().is_some_and(|(_, n)| *n == '\\') => {
+                chars.next();
+                return;
+            }
+            _ => {}
+        }
+    }
+}
 
 #[derive(Default)]
 pub(super) struct Ring {
@@ -105,6 +233,14 @@ pub(super) struct RunObs {
     asked: Instant,
     watching: bool,
     metrics: Vec<ServiceMetrics>,
+    /// The longest masked form of any secret known, in bytes: what the raw window must add.
+    longest: usize,
+    /// How many secrets are known (an entry that has none is dropped when idle).
+    secrets: usize,
+    /// The first poll of this run is in flight; no second one starts beside it.
+    first_polling: bool,
+    /// Until when an admin route has asked for the services' health checks to run.
+    check_until: Option<Instant>,
 }
 
 impl RunObs {
@@ -119,11 +255,38 @@ impl RunObs {
             asked: Instant::now(),
             watching: false,
             metrics: Vec::new(),
+            longest: 0,
+            secrets: 0,
+            first_polling: false,
+            check_until: None,
         }
+    }
+
+    /// Everything but the secrets: what an idle, unwatched run keeps.
+    fn reset(&mut self) {
+        let last = self.ring.last;
+        self.ring = Ring::default();
+        self.ring.last = last;
+        self.in_pem.clear();
+        self.newest = None;
+        self.since = None;
+        self.at_newest.clear();
+        self.metrics.clear();
+        self.check_until = None;
+    }
+
+    fn learn(&mut self, name: &str, value: &str) {
+        let n = value.trim().len();
+        if n >= MIN_KNOWN {
+            self.secrets += 1;
+            self.longest = self.longest.max(n * ENCODED_MAX);
+        }
+        self.redactor.known(name, value);
     }
 
     /// Redacts one line; `None` while inside a PEM block.
     fn clean(&mut self, service: &str, raw: &str) -> Option<String> {
+        let raw = &sanitize(raw);
         if self.in_pem.contains(service) {
             if raw.contains("-----END ") {
                 self.in_pem.remove(service);
@@ -179,7 +342,32 @@ impl RunObs {
 
 pub struct Observers {
     socket: PathBuf,
+    /// Lock order: `runs`, then `forgotten`.
     runs: Mutex<HashMap<String, RunObs>>,
+    /// Runs that ended: `observe` refuses them, so a late or hostile ask cannot re-create one.
+    forgotten: Mutex<HashSet<String>>,
+}
+
+/// Drops the unwatched, idle runs: whole when they hold no secret, else down to their secrets.
+fn sweep(runs: &mut HashMap<String, RunObs>) {
+    runs.retain(|_, r| {
+        if r.watching || r.asked.elapsed() < IDLE {
+            return true;
+        }
+        r.reset();
+        r.secrets > 0
+    });
+}
+
+/// Clears `first_polling` when the first poll ends, however it ends (an error, a cancel).
+struct FirstPoll<'a>(&'a Observers, String);
+
+impl Drop for FirstPoll<'_> {
+    fn drop(&mut self) {
+        if let Some(r) = self.0.runs.lock().unwrap().get_mut(&self.1) {
+            r.first_polling = false;
+        }
+    }
 }
 
 impl Observers {
@@ -187,36 +375,51 @@ impl Observers {
         Self {
             socket: socket.into(),
             runs: Mutex::default(),
+            forgotten: Mutex::default(),
         }
     }
 
-    /// A value the run was given: every line of it is redacted from now on.
+    /// A value the run was given: every line of it is redacted from now on. A start is the one
+    /// thing that makes a forgotten run id watchable again.
     pub fn know(&self, run: &str, name: &str, value: &str) {
         let mut runs = self.runs.lock().unwrap();
+        sweep(&mut runs);
+        self.forgotten.lock().unwrap().remove(run);
         runs.entry(run.to_owned())
             .or_insert_with(RunObs::new)
-            .redactor
-            .known(name, value);
+            .learn(name, value);
     }
 
-    /// The run is over: its ring, metrics and redaction values are dropped.
+    /// The run is over: its ring, metrics and redaction values are dropped, and it is refused.
     pub fn forget(&self, run: &str) {
-        self.runs.lock().unwrap().remove(run);
+        let mut runs = self.runs.lock().unwrap();
+        runs.remove(run);
+        let mut gone = self.forgotten.lock().unwrap();
+        if gone.len() >= MAX_FORGOTTEN {
+            gone.clear();
+        }
+        gone.insert(run.to_owned());
     }
 
     /// One poll of the helper: new lines (and metrics, when asked) into the ring.
     async fn poll(&self, run: &str, metrics: bool) -> Result<(), String> {
-        let since = self
-            .runs
-            .lock()
-            .unwrap()
-            .get(run)
-            .and_then(|r| r.since.clone());
+        let (since, line_max, check) = {
+            let runs = self.runs.lock().unwrap();
+            let r = runs.get(run);
+            (
+                r.and_then(|r| r.since.clone()),
+                raw_window(r.map_or(0, |r| r.longest)),
+                r.and_then(|r| r.check_until)
+                    .is_some_and(|t| t > Instant::now()),
+            )
+        };
         let req = Request::Observe {
             run: run.to_owned(),
             service: None,
             since,
             metrics,
+            line_max,
+            check,
         };
         let v = helper::call(&self.socket, &req, &[]).await?;
         let got: Observed = serde_json::from_value(v).map_err(|e| e.to_string())?;
@@ -257,21 +460,34 @@ impl Observers {
         }
         let (start_watch, first) = {
             let mut runs = self.runs.lock().unwrap();
-            if !runs.contains_key(&req.run) && runs.len() >= MAX_RUNS {
+            sweep(&mut runs);
+            if self.forgotten.lock().unwrap().contains(&req.run) {
+                return Err(bad(ErrorCode::InvalidArgs, "the run has ended".to_owned()));
+            }
+            // Only runs being watched count; entries kept for their secrets cost no polling.
+            let watched = runs.values().filter(|r| r.watching).count();
+            if !runs.get(&req.run).is_some_and(|r| r.watching) && watched >= MAX_RUNS {
                 return Err(bad(ErrorCode::Busy, "too many runs are watched".to_owned()));
             }
             let r = runs.entry(req.run.clone()).or_insert_with(RunObs::new);
             r.asked = Instant::now();
-            let first = r.metrics.is_empty() && r.newest.is_none();
+            if req.health {
+                r.check_until = Some(r.asked + IDLE);
+            }
+            // One first poll in flight per run: a second ask reads what the ring holds.
+            let first = r.metrics.is_empty() && r.newest.is_none() && !r.first_polling;
+            r.first_polling |= first;
             (!std::mem::replace(&mut r.watching, true), first)
         };
+        // Spawned before the first poll: an ask that is cancelled mid-poll still leaves a watcher.
+        if start_watch {
+            tokio::spawn(Arc::clone(self).watch(req.run.clone()));
+        }
         if first {
+            let _guard = FirstPoll(self, req.run.clone());
             self.poll(&req.run, true)
                 .await
                 .map_err(|e| bad(ErrorCode::Internal, e))?;
-        }
-        if start_watch {
-            tokio::spawn(Arc::clone(self).watch(req.run.clone()));
         }
         let limit = req
             .limit
@@ -378,5 +594,149 @@ mod tests {
         assert_eq!(only_db.len(), 1);
         let (rest, ..) = r.ring.read(2, None, 50);
         assert_eq!(rest.len(), 1);
+    }
+
+    fn texts(r: &RunObs) -> Vec<String> {
+        r.ring
+            .read(0, None, 50)
+            .0
+            .into_iter()
+            .map(|l| l.text)
+            .collect()
+    }
+
+    #[test]
+    fn terminal_escapes_controls_and_bidi_are_stripped_before_redaction() {
+        let dirty = "a\x1b[31mred\x1b[0m\x1b]0;title\x07 b\x1b]8;;http://x\x1b\\link\x07\u{9b}1;2Hc\td\r\x00\u{85}\u{202e}e\u{2066}f\u{200f}";
+        assert_eq!(sanitize(dirty), "ared blinkc\tdef");
+        // A secret broken up by an escape, a control or a bidi mark is still found.
+        let mut r = RunObs::new();
+        r.learn("db", "hunter2-very-secret");
+        for (n, split) in [
+            "hunter2-\x1b[1mvery-secret",
+            "hunter2-\x07very-secret",
+            "hunter2-\u{202e}very-secret",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            r.ingest(Observed {
+                services: Vec::new(),
+                lines: vec![raw("web", n as u64 + 1, &format!("k={split}!"))],
+            });
+        }
+        assert_eq!(texts(&r), ["k=[redacted:db]!"; 3]);
+    }
+
+    #[test]
+    fn partial_chunks_joined_by_podman_lose_their_inner_stamps() {
+        // `podman logs --timestamps` of a line written in two parts (log records `P` then `F`):
+        //   <stamp> <text of P><stamp> <text of F>
+        // and the outer stamp is already split off, so the text still holds the inner one.
+        let joined = "key=hunter2-very2026-11-18T10:00:00.250000000+00:00 -secret done";
+        assert_eq!(sanitize(joined), "key=hunter2-very-secret done");
+        assert_eq!(sanitize("t=2026-11-18T10:00:00Z x"), "t=x");
+        // Not a stamp: no offset, or a date alone.
+        assert_eq!(
+            sanitize("2026-11-18T10:00:00 x 2026-11-18"),
+            "2026-11-18T10:00:00 x 2026-11-18"
+        );
+        let mut r = RunObs::new();
+        r.learn("db", "hunter2-very-secret");
+        r.ingest(Observed {
+            services: Vec::new(),
+            lines: vec![raw("web", 1, joined)],
+        });
+        assert_eq!(texts(&r), ["key=[redacted:db] done"]);
+    }
+
+    #[test]
+    fn a_secret_past_the_cut_is_redacted_before_the_line_is_cut() {
+        let secret = "s3cr3t-".repeat(20);
+        let mut r = RunObs::new();
+        r.learn("tok", &secret);
+        assert!(r.longest >= secret.len());
+        let line = format!("{}{secret}tail", "a".repeat(LOG_LINE_MAX - 30));
+        r.ingest(Observed {
+            services: Vec::new(),
+            lines: vec![raw("web", 1, &line)],
+        });
+        let got = &texts(&r)[0];
+        assert!(
+            got.len() <= LOG_LINE_MAX && !got.contains("s3cr3t"),
+            "{got}"
+        );
+        assert!(got.contains("[redacted:tok]"), "{got}");
+    }
+
+    fn aged(secrets: usize) -> RunObs {
+        let mut r = RunObs::new();
+        r.asked = Instant::now()
+            .checked_sub(IDLE + Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        r.secrets = secrets;
+        r.ring.push("web", "", "x".into());
+        r
+    }
+
+    #[test]
+    fn idle_unwatched_runs_are_dropped_and_only_watched_ones_count() {
+        let mut runs = HashMap::new();
+        runs.insert("none".to_owned(), aged(0));
+        runs.insert("keeps".to_owned(), aged(1));
+        let mut busy = aged(0);
+        busy.watching = true;
+        runs.insert("busy".to_owned(), busy);
+        sweep(&mut runs);
+        assert!(!runs.contains_key("none"));
+        // Kept for its secrets, but its lines are gone and its seq goes on.
+        assert!(runs["keeps"].ring.bytes() == 0 && runs["keeps"].ring.last == 1);
+        assert!(runs.contains_key("busy"));
+    }
+
+    #[tokio::test]
+    async fn a_forgotten_run_is_refused_and_a_start_arms_it_again() {
+        let o = Arc::new(Observers::new("/nonexistent/run.sock"));
+        let ask = |run: &str| RunObserveReq {
+            run: run.to_owned(),
+            ..Default::default()
+        };
+        o.forget("r1");
+        let e = o.observe(ask("r1")).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidArgs);
+        assert!(!o.runs.lock().unwrap().contains_key("r1"));
+        o.know("r1", "db", "hunter2-very-secret");
+        assert!(o.runs.lock().unwrap().contains_key("r1"));
+        assert_ne!(
+            o.observe(ask("r1")).await.unwrap_err().code,
+            ErrorCode::InvalidArgs
+        );
+    }
+
+    #[tokio::test]
+    async fn watched_runs_are_capped_and_one_first_poll_runs_per_run() {
+        let o = Arc::new(Observers::new("/nonexistent/run.sock"));
+        {
+            let mut runs = o.runs.lock().unwrap();
+            for n in 0..MAX_RUNS {
+                let mut r = RunObs::new();
+                r.watching = true;
+                runs.insert(format!("w{n}"), r);
+            }
+            // An entry kept for secrets is not watched and does not count.
+            runs.insert("kept".to_owned(), RunObs::new());
+        }
+        let ask = |run: &str| RunObserveReq {
+            run: run.to_owned(),
+            ..Default::default()
+        };
+        let e = o.observe(ask("another")).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::Busy);
+        // A first poll is already in flight for w0: this ask does not start a second one (the
+        // socket does not exist, so a started one would answer with an error).
+        o.runs.lock().unwrap().get_mut("w0").unwrap().first_polling = true;
+        assert!(o.observe(ask("w0")).await.is_ok());
+        // Its flag is the other poll's to clear.
+        assert!(o.runs.lock().unwrap()["w0"].first_polling);
     }
 }

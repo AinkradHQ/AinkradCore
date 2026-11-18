@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 use ainkrad_proto::runner::Workspace;
 use ainkrad_proto::v2::{
     Command, DRIVER_RUN, DriverInfo, ErrorCode, OP_PORT_OPEN, OP_RUN_OBSERVE, OP_RUN_START,
-    OP_RUN_STATUS, OP_RUN_STOP, PortOpen, Reply, RunList, RunStart, StreamError,
+    OP_RUN_STATUS, OP_RUN_STOP, PortOpen, Reply, RunList, RunPhase, RunStart, StreamError,
 };
 use zeroize::Zeroizing;
 
@@ -263,7 +263,13 @@ impl RunDriver {
             }
             Command::RunStatus(req) => {
                 let v = helper::call(&self.socket, &Request::Status { run: req.run }, &[]).await;
-                Ok(Reply::RunStatus(de(v.map_err(internal)?)?))
+                let list: RunList = de(v.map_err(internal)?)?;
+                // A run with no container left is over (stopped, or lost and swept): its ring and
+                // redaction values go, and it cannot be observed again.
+                for i in list.runs.iter().filter(|i| i.phase == RunPhase::Stopped) {
+                    self.observers.forget(&i.run);
+                }
+                Ok(Reply::RunStatus(list))
             }
             Command::RunObserve(req) => Ok(Reply::RunObserve(self.observers.observe(req).await?)),
             _ => Err(StreamError::new(

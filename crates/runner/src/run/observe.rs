@@ -36,6 +36,18 @@ pub struct Observed {
     pub lines: Vec<RawLine>,
 }
 
+/// The raw bytes kept of one line: [`LOG_LINE_MAX`] and the Podman stamp, plus room for the
+/// longest secret the runner will redact out of it, so a secret that starts inside the kept text
+/// ends inside the window. At most [`RAW_LINE_CAP`].
+pub fn raw_window(longest_secret: usize) -> usize {
+    (LOG_LINE_MAX + STAMP_ROOM + longest_secret).min(RAW_LINE_CAP)
+}
+/// What the raw window may never exceed, whatever the secrets (a secret longer than the cap less
+/// [`LOG_LINE_MAX`] can be cut by it; see `v2::observe`).
+pub const RAW_LINE_CAP: usize = 16 * 1024;
+/// A `--timestamps` prefix, with room to spare.
+const STAMP_ROOM: usize = 64;
+
 /// The newest `keep` lines of `r`, each cut to `max_line` bytes; the rest is read and dropped, so
 /// memory stays at `keep * max_line` whatever `r` holds.
 pub fn newest_lines(mut r: impl BufRead, keep: usize, max_line: usize) -> VecDeque<String> {
@@ -148,8 +160,9 @@ pub fn parse_stats(json: &str) -> BTreeMap<String, (Option<f64>, u64, u64)> {
     out
 }
 
-/// A container's `podman inspect`: its restarts, and whether its spec has a health check.
-pub fn parse_inspect(json: &str) -> BTreeMap<String, (u32, bool)> {
+/// A container's `podman inspect`: its restarts, whether its spec has a health check, and the
+/// health Podman last recorded (`starting` until a check has run).
+pub fn parse_inspect(json: &str) -> BTreeMap<String, (u32, bool, ServiceHealth)> {
     let list: Vec<Value> = serde_json::from_str(json).unwrap_or_default();
     list.iter()
         .filter_map(|v| {
@@ -160,7 +173,15 @@ pub fn parse_inspect(json: &str) -> BTreeMap<String, (u32, bool)> {
                 .unwrap_or(0);
             let test = v["Config"]["Healthcheck"]["Test"].as_array();
             let has = test.is_some_and(|t| !t.is_empty() && t[0].as_str() != Some("NONE"));
-            Some((name, (u32::try_from(restarts).unwrap_or(u32::MAX), has)))
+            let cached = match v["State"]["Health"]["Status"].as_str() {
+                Some("healthy") => ServiceHealth::Healthy,
+                Some("unhealthy") => ServiceHealth::Unhealthy,
+                _ => ServiceHealth::Starting,
+            };
+            Some((
+                name,
+                (u32::try_from(restarts).unwrap_or(u32::MAX), has, cached),
+            ))
         })
         .collect()
 }
@@ -168,7 +189,12 @@ pub fn parse_inspect(json: &str) -> BTreeMap<String, (u32, bool)> {
 /// `cmd`'s output, its stdout and stderr together (`podman logs` writes a container's stderr to
 /// its own), as the newest `keep` lines. In its own process group, killed with the helper and
 /// after `timeout`.
-fn logs_of(mut cmd: Command, timeout: Duration, keep: usize) -> Result<VecDeque<String>, String> {
+fn logs_of(
+    mut cmd: Command,
+    timeout: Duration,
+    keep: usize,
+    window: usize,
+) -> Result<VecDeque<String>, String> {
     let (r, w) = std::io::pipe().map_err(|e| e.to_string())?;
     cmd.stdin(Stdio::null())
         .stdout(w.try_clone().map_err(|e| e.to_string())?)
@@ -187,7 +213,7 @@ fn logs_of(mut cmd: Command, timeout: Duration, keep: usize) -> Result<VecDeque<
             }
         }
     });
-    let lines = newest_lines(BufReader::new(r), keep, LOG_LINE_MAX + 64);
+    let lines = newest_lines(BufReader::new(r), keep, window);
     let _ = child.wait();
     drop(done);
     let _ = dog.join();
@@ -220,14 +246,17 @@ impl Engine {
         only: Option<&str>,
         since: Option<&str>,
         metrics: bool,
+        line_max: usize,
+        check: bool,
     ) -> Result<Observed, String> {
         let Some((project, services)) = self.run_services(run)? else {
             return Ok(Observed::default());
         };
+        let window = line_max.clamp(raw_window(0), RAW_LINE_CAP);
         let names: Vec<String> = services.iter().map(|(s, _)| container(run, s)).collect();
         let mut out = Observed::default();
         if metrics {
-            out.services = self.metrics(project, &services, &names);
+            out.services = self.metrics(project, &services, &names, check);
         }
         let mut lines: Vec<(String, RawLine)> = Vec::new();
         for ((service, _), ctr) in services.iter().zip(&names) {
@@ -240,7 +269,8 @@ impl Engine {
                 args.extend(["--since", s]);
             }
             args.push(ctr);
-            let got = logs_of(self.podman_cmd(project, &args), LOGS_MAX, TAIL).unwrap_or_default();
+            let got = logs_of(self.podman_cmd(project, &args), LOGS_MAX, TAIL, window)
+                .unwrap_or_default();
             for l in got {
                 let (at, text) = split_stamp(&l);
                 lines.push((
@@ -264,6 +294,7 @@ impl Engine {
         project: u64,
         services: &[(String, String)],
         names: &[String],
+        check: bool,
     ) -> Vec<ServiceMetrics> {
         let deadline = Instant::now() + QUICK;
         let refs = |first: &[&'static str]| -> Vec<&str> {
@@ -291,16 +322,22 @@ impl Engine {
             .map(|((name, state), ctr)| {
                 let (cpu, memory_bytes, memory_limit_bytes) =
                     stats.get(ctr).copied().unwrap_or((None, 0, 0));
-                let (restarts, has_health) = inspected.get(ctr).copied().unwrap_or((0, false));
+                let (restarts, has_health, cached) =
+                    inspected
+                        .get(ctr)
+                        .copied()
+                        .unwrap_or((0, false, ServiceHealth::None));
                 let running = state == "running";
-                // Our health checks are not on a timer (`--health-interval disable`): run it now.
+                // Our health checks are not on a timer (`--health-interval disable`). Only an
+                // admin route (`check`) runs one; everyone else sees what Podman last recorded.
                 let health = match (running, has_health) {
-                    (true, true) => {
+                    (true, true) if check => {
                         match self.podman(project, &["healthcheck", "run", ctr], deadline) {
                             Ok(_) => ServiceHealth::Healthy,
                             Err(_) => ServiceHealth::Unhealthy,
                         }
                     }
+                    (true, true) => cached,
                     _ => ServiceHealth::None,
                 };
                 ServiceMetrics {
@@ -379,10 +416,23 @@ mod tests {
     #[test]
     fn inspect_reads_restarts_and_health_checks() {
         let json = r#"[{"Name":"ainkrad-r1-db","RestartCount":2,
+                        "State":{"Health":{"Status":"healthy"}},
                         "Config":{"Healthcheck":{"Test":["CMD-SHELL","pg_isready"]}}},
                        {"Name":"ainkrad-r1-web","Config":{"Healthcheck":{"Test":["NONE"]}}}]"#;
         let i = parse_inspect(json);
-        assert_eq!(i["ainkrad-r1-db"], (2, true));
-        assert_eq!(i["ainkrad-r1-web"], (0, false));
+        assert_eq!(i["ainkrad-r1-db"], (2, true, ServiceHealth::Healthy));
+        assert_eq!(i["ainkrad-r1-web"], (0, false, ServiceHealth::Starting));
+    }
+
+    #[test]
+    fn the_raw_window_grows_with_the_longest_secret_up_to_a_cap() {
+        assert_eq!(raw_window(0), LOG_LINE_MAX + 64);
+        assert_eq!(raw_window(100), LOG_LINE_MAX + 64 + 100);
+        assert_eq!(raw_window(1 << 20), RAW_LINE_CAP);
+        // A secret that starts at the last kept byte still ends inside the window.
+        let secret = "s".repeat(300);
+        let line = format!("{}{secret}tail", "a".repeat(LOG_LINE_MAX - 1));
+        let got = newest_lines(Cursor::new(line), 1, raw_window(secret.len()));
+        assert!(got[0].contains(&secret));
     }
 }

@@ -46,6 +46,12 @@ pub enum Request {
         service: Option<String>,
         since: Option<String>,
         metrics: bool,
+        /// Raw bytes kept of a line before the runner redacts it (0: the default); clamped.
+        #[serde(default)]
+        line_max: usize,
+        /// Run the services' health checks now; without it health is what Podman recorded.
+        #[serde(default)]
+        check: bool,
     },
 }
 
@@ -118,6 +124,8 @@ fn handle(engine: &Engine, stream: &mut UnixStream, req: Request) -> Result<Valu
             service,
             since,
             metrics,
+            line_max,
+            check,
         } if ainkrad_proto::v2::valid_run_id(&run)
             && service
                 .as_deref()
@@ -126,7 +134,14 @@ fn handle(engine: &Engine, stream: &mut UnixStream, req: Request) -> Result<Valu
                 .as_deref()
                 .is_none_or(|s| s.len() <= 40 && !s.starts_with('-')) =>
         {
-            v(engine.observe(&run, service.as_deref(), since.as_deref(), metrics))
+            v(engine.observe(
+                &run,
+                service.as_deref(),
+                since.as_deref(),
+                metrics,
+                line_max,
+                check,
+            ))
         }
         _ => Err("not a run id".to_owned()),
     }

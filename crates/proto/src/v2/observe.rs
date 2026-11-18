@@ -26,6 +26,10 @@ pub struct RunObserveReq {
     /// At most this many lines (default and most [`OBSERVE_LINES_MAX`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// The caller is an admin route: the runner may run the services' health checks (`podman
+    /// healthcheck run`) for this run. Without it, health is only what Podman last recorded.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub health: bool,
 }
 
 impl RunObserveReq {

@@ -7,7 +7,17 @@
 //! current secrets (opened only here, only into a `Redactor`) and the shared key shapes, so a
 //! runner restarted mid-run, or an older one, cannot leak what it forgot. Services (health, CPU,
 //! memory, restarts) are `read`; logs and their WebSocket are `admin`. Nothing here starts or
-//! stops anything: it only reads through the runner's read-only `run.observe`.
+//! stops anything: it only reads through the runner's read-only `run.observe`. Health checks
+//! (`podman healthcheck run`) are the one thing a poll can cost the runner, so only the admin
+//! routes ask for them (`health`); `services` reports what Podman last recorded. A device holds
+//! at most [`MAX_LOGS_PER_DEVICE`] log sockets, and the upgrade is refused before it happens for
+//! a bad request, a missing run or a full device.
+//!
+//! Limits of the masking: a secret under 8 bytes is not known to a `Redactor`; the values of the
+//! secrets here are read once, when a socket opens, so one rotated while it is open is masked
+//! only by the runner's pass (it is reopened on the next connect); a multi-line secret is masked
+//! line by line, only where a line matches a key shape. The values live in the socket's
+//! `Redactor`, which wipes them when it drops, and in `Zeroizing` strings while they are read.
 //!
 //! Field names for the app's Run page (`ProjectRunService`, ainkrad-core-app #156): its service
 //! row is `name`, `state` (`up`/`down`/`exited` there; here Podman's `running`/`exited`/...),
@@ -15,6 +25,8 @@
 //! (here `health`: `none`/`starting`/`healthy`/`unhealthy`); a log line is `service` and `text`
 //! (as here, plus `seq` and `at`).
 
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::redact::Redactor;
@@ -26,6 +38,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+use zeroize::Zeroizing;
 
 use super::super::{ApiError, ApiResult, Caller};
 use super::num;
@@ -38,6 +51,40 @@ use crate::store::runs::{self as store, Run};
 const ANY_TIME: &str = "9999-12-31T23:59:59Z";
 const TICK: Duration = Duration::from_millis(1500);
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+/// Log sockets one device may hold open at once: each polls the runner every tick.
+const MAX_LOGS_PER_DEVICE: u32 = 4;
+
+// ponytail: one process-wide table of open log sockets per device; move it into `App` if another
+// feature needs the same kind of cap.
+static OPEN: LazyLock<Mutex<HashMap<String, u32>>> = LazyLock::new(Mutex::default);
+
+/// One open log socket of a device; released on drop (the socket ended, however it ended).
+struct LogSlot(String);
+
+impl LogSlot {
+    /// A slot for `device`, or `None` at [`MAX_LOGS_PER_DEVICE`].
+    fn reserve(device: &str) -> Option<Self> {
+        let mut open = OPEN.lock().unwrap();
+        let n = open.entry(device.to_owned()).or_default();
+        if *n >= MAX_LOGS_PER_DEVICE {
+            return None;
+        }
+        *n += 1;
+        Some(Self(device.to_owned()))
+    }
+}
+
+impl Drop for LogSlot {
+    fn drop(&mut self) {
+        let mut open = OPEN.lock().unwrap();
+        if let Some(n) = open.get_mut(&self.0) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                open.remove(&self.0);
+            }
+        }
+    }
+}
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ServiceInfo {
@@ -152,6 +199,7 @@ async fn scrubber(app: &App, project: i64) -> Redactor {
         .await
         {
             for (_, value) in opened {
+                let value = Zeroizing::new(value);
                 red.known(&name, &value);
             }
         }
@@ -196,6 +244,8 @@ pub async fn services(State(app): State<App>, Path(id): Path<String>) -> ApiResu
         after: 0,
         service: None,
         limit: Some(0),
+        // Read scope: what Podman last recorded, never a health check run on this ask.
+        health: false,
     };
     let o = link(&app)
         .observe(&run.runner, req)
@@ -244,6 +294,7 @@ pub async fn logs(
         after: u64::try_from(q.after.unwrap_or(0)).unwrap_or(0),
         service: q.service,
         limit: q.limit,
+        health: true,
     };
     if let Some(why) = req.problem() {
         return Err(ApiError::bad_request(why));
@@ -279,9 +330,26 @@ pub async fn logs_ws(
         Ok(None) => return ApiError::not_found("the project has no live run").into_response(),
         Err(e) => return e.into_response(),
     };
+    // Refused before the upgrade: a bad service name, and a device that has its sockets open.
+    let probe = RunObserveReq {
+        run: run.id.clone(),
+        service: q.service.clone(),
+        ..Default::default()
+    };
+    if let Some(why) = probe.problem() {
+        return ApiError::bad_request(why).into_response();
+    }
+    let Some(slot) = LogSlot::reserve(&me.device.id) else {
+        return ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too_many_attaches",
+            "this device already has its log streams open",
+        )
+        .into_response();
+    };
     let after = u64::try_from(q.after.unwrap_or(0)).unwrap_or(0);
     let red = scrubber(&app, project).await;
-    ws.on_upgrade(move |socket| tail(app, socket, project, run, q.service, after, red, me))
+    ws.on_upgrade(move |socket| tail(app, socket, project, run, q.service, after, red, me, slot))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -294,6 +362,7 @@ async fn tail(
     mut after: u64,
     red: Redactor,
     me: Caller,
+    _slot: LogSlot,
 ) {
     let link = link(&app);
     let mut tick = tokio::time::interval(TICK);
@@ -327,6 +396,7 @@ async fn tail(
                     after,
                     service: service.clone(),
                     limit: None,
+                    health: true,
                 };
                 // A runner that cannot answer this time is tried again at the next tick.
                 let Ok(o) = link.observe(&run.runner, req).await else { continue };
@@ -376,5 +446,37 @@ mod tests {
             "dsn=[redacted:db] key=[redacted:openai_key]"
         );
         assert_eq!((p.next, p.lost), (4, 0));
+    }
+
+    #[test]
+    fn a_device_holds_four_log_sockets_and_a_slot_frees_on_drop() {
+        let slots: Vec<_> = (0..MAX_LOGS_PER_DEVICE)
+            .map(|_| LogSlot::reserve("dev-cap-test").expect("under the cap"))
+            .collect();
+        assert!(LogSlot::reserve("dev-cap-test").is_none());
+        // Another device is not affected.
+        assert!(LogSlot::reserve("dev-cap-other").is_some());
+        drop(slots);
+        assert!(LogSlot::reserve("dev-cap-test").is_some());
+        assert!(!OPEN.lock().unwrap().contains_key("dev-cap-other"));
+    }
+
+    #[test]
+    fn a_request_with_a_bad_service_is_refused_before_the_upgrade() {
+        let probe = RunObserveReq {
+            run: "r1".into(),
+            service: Some("a b".into()),
+            ..Default::default()
+        };
+        assert!(probe.problem().is_some());
+    }
+
+    #[test]
+    fn the_runner_is_asked_for_health_checks_only_by_the_admin_routes() {
+        // The admin routes set `health: true`; `/run/services` leaves it off (see `services`).
+        let read = RunObserveReq::default();
+        assert!(!read.health);
+        let json = serde_json::to_string(&read).unwrap();
+        assert!(!json.contains("health"), "{json}");
     }
 }
