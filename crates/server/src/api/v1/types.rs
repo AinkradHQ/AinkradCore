@@ -282,7 +282,6 @@
 ///    `StreamError.host_key`; no route yet. (84 and 85 are the runner Podman facts and the projects API.)
 /// 87: the `secret.runners_changed` audit action (a secret's runner scope changed on its own, with its
 ///    leases dropped); the Leyline key runner sync (Y1-02) is its first user.
-<<<<<<< HEAD
 /// 92: Project run spec (P4-01). `GET/PUT /projects/{id}/spec` (`getProjectSpec`, `saveProjectSpec`: a save is a new
 ///    version, step-up), `GET /projects/{id}/spec/versions` (`listProjectSpecVersions`) and
 ///    `GET /projects/{id}/spec/versions/{version}` (`getProjectSpecVersion`). 400 `invalid_spec` names the bad field.
@@ -294,11 +293,6 @@
 ///    fetches a repo's remote into the Core's copy now; a failed fetch is still 200 with `mirror.error` set and the older
 ///    `mirror.head` kept. The copy is served to `runner` devices as git smart HTTP, upload side only
 ///    (`/mirrors/{repo}/info/refs`, `/git-upload-pack`; `/git-receive-pack` is always 403 `read_only`): not in the contract.
-=======
-/// 94: project runs (P5-02). Runner wire protocol only (`runner.schema.json`): driver `run` with ops `run.start`
-///    (`RunStart` -> `RunInfo`), `run.stop` (`RunStop` -> `RunInfo`) and `run.status` (`RunStatusReq` -> `RunList`);
-///    no route yet. (90-93 are taken by open PRs.)
->>>>>>> origin/feat/projects-orchestration
 pub const API_MINOR: u32 = 94;
 
 use serde::{Deserialize, Serialize};
