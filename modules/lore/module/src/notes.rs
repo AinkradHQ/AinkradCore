@@ -534,7 +534,7 @@ pub async fn sweep(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
         events::append(&mut tx, "lore.note.purged", &json!({"id": id})).await?;
     }
     tx.commit().await?;
-    Ok(ids.len() as u64)
+    Ok(ids.len() as u64 + crate::attachments::sweep(pool).await?)
 }
 
 #[cfg(test)]
