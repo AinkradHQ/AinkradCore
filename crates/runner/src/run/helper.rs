@@ -103,7 +103,7 @@ fn handle(engine: &Engine, stream: &mut UnixStream, req: Request) -> Result<Valu
         }
         Request::Stop { run } if ainkrad_proto::v2::valid_run_id(&run) => v(engine.stop(&run)),
         Request::Status { run: Some(run) } if ainkrad_proto::v2::valid_run_id(&run) => v(engine
-            .status(&run, 0)
+            .find(&run)
             .map(|r| ainkrad_proto::v2::RunList { runs: vec![r] })),
         Request::Status { run: None } => v(engine.list()),
         _ => Err("not a run id".to_owned()),
@@ -147,6 +147,8 @@ pub fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
+    // A helper killed mid-build (RuntimeMaxSec, a crash) leaves its build slice behind.
+    engine.reap_build_slices();
     let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
     serve(
         &engine,

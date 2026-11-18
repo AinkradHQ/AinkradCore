@@ -1,0 +1,14 @@
+# Every minute, re-apply the project-run egress table (ainkrad-run-egress-apply.service), so a `flush ruleset` that no
+# unit saw leaves project containers open for at most a minute, and the runner's marker goes stale if nft keeps failing.
+[Unit]
+Description=Ainkrad project runs: re-apply the egress block every minute
+Documentation=https://github.com/AinkradHQ/AinkradCore
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Unit=ainkrad-run-egress-apply.service
+
+[Install]
+WantedBy=timers.target
