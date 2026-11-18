@@ -63,7 +63,7 @@ pub struct SessionView {
     pub started_at: String,
 }
 
-fn refuse(code: &'static str, why: &'static str) -> ApiError {
+pub(crate) fn refuse(code: &'static str, why: &'static str) -> ApiError {
     ApiError::new(StatusCode::CONFLICT, code, why)
 }
 
@@ -83,16 +83,16 @@ async fn runner_of(conn: &mut SqliteConnection, via: Option<String>) -> Result<S
 }
 
 /// One machine on the path as stored: where, who, which key, and the fingerprints pinned.
-struct Stop {
-    address: String,
-    port: u16,
-    user: String,
-    secret: String,
-    pinned: Vec<String>,
+pub(crate) struct Stop {
+    pub(crate) address: String,
+    pub(crate) port: u16,
+    pub(crate) user: String,
+    pub(crate) secret: String,
+    pub(crate) pinned: Vec<String>,
 }
 
 /// Reads one machine of the path; no lease yet. A host with no key is refused here.
-async fn stop(app: &App, host: &str) -> Result<Stop, ApiError> {
+pub(crate) async fn stop(app: &App, host: &str) -> Result<Stop, ApiError> {
     let mut conn = app.pool.acquire().await?;
     let r = sqlx::query(
         "SELECT h.address, h.port, h.username, k.secret FROM leyline_hosts h \

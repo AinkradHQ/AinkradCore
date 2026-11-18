@@ -446,7 +446,28 @@ impl Hub {
         command: Command,
         _proof: Elevated,
     ) -> Result<Dispatched, StreamError> {
+        // The agent ops have their own entry, for the module that holds the gate's proof.
+        if matches!(command, Command::SshAgentLoad(_) | Command::SshAgentDrop(_)) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "ssh.agent.* is not sent through dispatch_elevated",
+            ));
+        }
         self.send_command(runner, command)
+    }
+
+    /// `ssh.agent.load` / `ssh.agent.drop` (Leyline Mac-direct) for a module that runs its own gate
+    /// first. This takes NO proof: the Hub cannot see a module's gate, so nothing here checks one.
+    /// The only caller allowed is Leyline's `modules/leyline/module/src/direct.rs`, whose entry
+    /// points take the gate's `Authorized`; a test (`tests/ssh_agent_callers.rs`) fails if any other
+    /// file calls it. Neither op carries a key (the runner redeems leases), and only these two
+    /// commands can be sent here.
+    pub fn dispatch_ssh_agent(
+        self: &Arc<Self>,
+        runner: &str,
+        command: ainkrad_proto::v2::SshAgentCommand,
+    ) -> Result<Dispatched, StreamError> {
+        self.send_command(runner, command.into())
     }
 
     /// The sole non-code agent operation. Transcript reads do not need elevation, but are

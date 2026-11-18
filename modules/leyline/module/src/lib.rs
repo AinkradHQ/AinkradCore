@@ -3,18 +3,20 @@
 //! text out (API and table), `leyline.*` events and audit; and keys (Y1-02): generated or imported,
 //! sealed in the Core's secret store, public data only in the API; and project attachments (Y1-03).
 //! SSH itself runs on a runner (Y2); the command gate (`gate`, Y4-01), host terminals and host-key
-//! trust (Y3-01) are here.
+//! trust (Y3-01), and Mac-direct agent leases (`direct`, Y6-01) are here.
 //!
 //! Module off, the Core is unchanged: the tables are its own `leyline_` namespace, no Core
 //! migration, no Core crate names this module.
 
 mod address;
 mod attach;
+mod direct;
 pub mod gate;
 pub mod hostkeys;
 mod hosts;
 mod keys;
 mod policy;
+mod ready;
 mod terminal;
 mod valid;
 
@@ -47,6 +49,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0003_sessions.up.sql"),
         down: include_str!("../migrations/0003_sessions.down.sql"),
     },
+    Migration {
+        version: 4,
+        name: "0004_direct",
+        up: include_str!("../migrations/0004_direct.up.sql"),
+        down: include_str!("../migrations/0004_direct.down.sql"),
+    },
 ];
 
 // A key write is a secret write: importing needs the step-up like the Core's own secret writes.
@@ -59,6 +67,8 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     // decision that could point a session at an impostor.
     ("POST", "/hosts/{host}/terminals"),
     ("POST", "/hosts/{host}/host-keys/replace"),
+    // A Mac-direct lease hands a key to a runner on the person's machine: Touch ID, like a terminal.
+    ("POST", "/hosts/{host}/direct"),
 ];
 // POST and PATCH need a step-up only for what widens an AI's reach or repoints a host (`allowed`,
 // address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
@@ -67,6 +77,8 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
     ("POST", "/hosts/{host}/host-keys/trust"),
+    // Ending a lease only takes access away.
+    ("POST", "/hosts/{host}/direct/revoke"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
 ];
@@ -81,6 +93,8 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts/{host}/host-keys", "read"),
     // The terminal scope, as the Core's own terminal routes.
     ("POST", "/hosts/{host}/terminals", "terminal"),
+    ("POST", "/hosts/{host}/direct", "terminal"),
+    ("POST", "/hosts/{host}/direct/revoke", "terminal"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -107,7 +121,9 @@ pub struct Leyline;
         hostkeys::list,
         hostkeys::trust_route,
         hostkeys::replace_route,
-        terminal::open
+        terminal::open,
+        direct::lease,
+        direct::revoke_route
     ),
     components(schemas(
         hosts::HostView,
@@ -126,7 +142,10 @@ pub struct Leyline;
         hostkeys::HostKeyView,
         hostkeys::Pick,
         terminal::NewSession,
-        terminal::SessionView
+        terminal::SessionView,
+        direct::NewDirect,
+        direct::DirectView,
+        direct::DirectEnded
     ))
 )]
 struct Doc;
@@ -143,6 +162,10 @@ impl Module for Leyline {
             rt.spawn(async move {
                 if terminal::close_orphans(&app).await.is_err() {
                     tracing::warn!("leyline sessions left open could not be closed");
+                }
+                // Mac-direct leases outlive the Core: their timers start again.
+                if direct::resume(&app).await.is_err() {
+                    tracing::warn!("leyline direct leases left open could not be watched");
                 }
             });
         }
@@ -162,6 +185,8 @@ impl Module for Leyline {
                 post(hostkeys::replace_route),
             )
             .route("/hosts/{host}/terminals", post(terminal::open))
+            .route("/hosts/{host}/direct", post(direct::lease))
+            .route("/hosts/{host}/direct/revoke", post(direct::revoke_route))
             .route("/groups", get(hosts::groups))
             .route("/tags", get(hosts::tags))
             .route("/keys", get(keys::list).post(keys::generate))
@@ -184,6 +209,7 @@ impl Module for Leyline {
             "leyline.key",
             "leyline.session",
             "leyline.hostkey",
+            "leyline.direct",
         ]
     }
 
@@ -207,6 +233,10 @@ impl Module for Leyline {
             "leyline.hostkey.replaced",
             "leyline.session.opened",
             "leyline.session.ended",
+            "leyline.direct.leased",
+            "leyline.direct.revoked",
+            "leyline.direct.expired",
+            "leyline.direct.failed",
             "leyline.run.requested",
             "leyline.run.approval",
             "leyline.run.allowed",
