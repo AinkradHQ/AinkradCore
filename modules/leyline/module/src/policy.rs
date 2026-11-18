@@ -30,8 +30,7 @@ impl Principal {
         }
     }
 
-    /// The health prober (Y5). Not public: a route cannot claim it.
-    #[allow(dead_code)] // first caller arrives with Y5-01
+    /// The health prober (Y5-01). Not public: a route cannot claim it.
     pub(crate) fn health() -> Self {
         Self(Who::Health)
     }

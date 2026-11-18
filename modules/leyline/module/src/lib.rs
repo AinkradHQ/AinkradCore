@@ -12,12 +12,14 @@ mod attach;
 mod commands;
 mod exec;
 pub mod gate;
+mod health;
 mod hosts;
 mod keys;
 mod policy;
 mod valid;
 
 use ainkrad_core_server::api::App;
+use ainkrad_core_server::jobs::Job;
 use ainkrad_core_server::module::Module;
 use ainkrad_core_server::store::Migration;
 use axum::Router;
@@ -45,6 +47,12 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0003_commands",
         up: include_str!("../migrations/0003_commands.up.sql"),
         down: include_str!("../migrations/0003_commands.down.sql"),
+    },
+    Migration {
+        version: 4,
+        name: "0004_health",
+        up: include_str!("../migrations/0004_health.up.sql"),
+        down: include_str!("../migrations/0004_health.down.sql"),
     },
 ];
 
@@ -220,6 +228,14 @@ impl Module for Leyline {
 
     fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
         Some(NON_DESTRUCTIVE)
+    }
+
+    fn jobs(&self) -> Vec<Job> {
+        health::jobs()
+    }
+
+    fn attach(&self, app: &App) {
+        health::attach(app);
     }
 
     fn openapi(&self) -> Value {

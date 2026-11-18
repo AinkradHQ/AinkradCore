@@ -102,33 +102,42 @@ fn cut(s: String) -> String {
 
 /// One `ssh.exec` of `step` on the authorised host: leases, hops, dispatch, the answer.
 async fn one(app: &App, auth: &Authorized, step: &str) -> Result<ExecResult, String> {
-    let fixed = |s: &str| s.to_owned();
-    let (target, hops, runner) = chain(app, auth.host_id()).await.map_err(|e| fixed(e))?;
-    let (target, hops) = (hop(app, auth, &runner, target).await?, {
-        let mut v = Vec::new();
-        for h in hops {
-            v.push(hop(app, auth, &runner, h).await?);
-        }
-        v
-    });
-    let exec = SshExec {
-        target,
-        hops,
-        run: step.to_owned(),
-        limits: ExecLimits {
-            timeout_ms: Some(u64::try_from(STEP_TIMEOUT.as_millis()).unwrap_or(u64::MAX)),
-            max_output_bytes: Some(KEPT as u64),
-        },
-    };
+    let (runner, exec) = build(app, auth, step, STEP_TIMEOUT).await?;
     let sent = app
         .hub
         .dispatch_ssh_exec(&runner, exec)
         .map_err(|e| why(e.code))?;
     match sent.outcome().await {
         Ok(Body::Result(Reply::SshExec(r))) => Ok(r),
-        Ok(_) => Err(fixed("the runner answered something else")),
+        Ok(_) => Err("the runner answered something else".to_owned()),
         Err(e) => Err(why(e.code)),
     }
+}
+
+/// The runner that connects and the `ssh.exec` for `step`, with a one-use lease per hop. Shared with
+/// the health prober (Y5-01), which dispatches it itself to tell "host down" from "runner away".
+pub(crate) async fn build(
+    app: &App,
+    auth: &Authorized,
+    step: &str,
+    timeout: Duration,
+) -> Result<(String, SshExec), String> {
+    let (target, hops, runner) = chain(app, auth.host_id()).await.map_err(str::to_owned)?;
+    let target = hop(app, auth, &runner, target).await?;
+    let mut leased = Vec::new();
+    for h in hops {
+        leased.push(hop(app, auth, &runner, h).await?);
+    }
+    let exec = SshExec {
+        target,
+        hops: leased,
+        run: step.to_owned(),
+        limits: ExecLimits {
+            timeout_ms: Some(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)),
+            max_output_bytes: Some(KEPT as u64),
+        },
+    };
+    Ok((runner, exec))
 }
 
 fn why(c: ErrorCode) -> String {
@@ -147,7 +156,7 @@ fn why(c: ErrorCode) -> String {
 }
 
 /// A machine on the path before its lease: host, port, user, its key's secret, its trusted keys.
-struct Stop {
+pub(crate) struct Stop {
     host: String,
     port: u16,
     user: String,
@@ -157,7 +166,10 @@ struct Stop {
 
 /// The target, its jump hosts in order, and the runner that connects (the host's `via_runner`, else
 /// the Core machine's built-in one).
-async fn chain(app: &App, host: &str) -> Result<(Stop, Vec<Stop>, String), &'static str> {
+pub(crate) async fn chain(
+    app: &App,
+    host: &str,
+) -> Result<(Stop, Vec<Stop>, String), &'static str> {
     const NO: &str = "the host cannot be read";
     let mut conn = app.pool.acquire().await.map_err(|_| NO)?;
     let r = sqlx::query("SELECT jump_chain, via_runner FROM leyline_hosts WHERE id = ?")

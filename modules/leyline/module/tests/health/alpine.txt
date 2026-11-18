@@ -1,0 +1,15 @@
+@uname
+Linux
+@load
+1.20 0.80 0.50 2/98 9921
+@cpus
+2
+@mem
+MemTotal:        1015528 kB
+MemAvailable:     507764 kB
+@disk
+Filesystem           1024-blocks    Used Available Capacity Mounted on
+overlay                 20511312 5000000  14462000  26% /
+tmpfs                      65536       0     65536   0% /dev
+/dev/vda1               20511312 5000000  14462000  26% /etc/hosts
+shm                        65536       0     65536   0% /dev/shm
