@@ -146,7 +146,7 @@ pub(crate) async fn start(
         "queued"
     };
     let mut tx = begin_write(&app.pool).await?;
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO brain_distils (id, room, state, requested_by, sources, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
@@ -157,7 +157,15 @@ pub(crate) async fn start(
     .bind(app.clock.now())
     .bind(app.clock.now())
     .execute(&mut *tx)
-    .await?;
+    .await;
+    // The unique index (one open distil per room) decides a race with an automatic trigger.
+    if let Err(e) = inserted {
+        return Err(if e.as_database_error().is_some_and(|d| d.is_unique_violation()) {
+            code(409, "distil_open", "a distillation of this room is already open")
+        } else {
+            e.into()
+        });
+    }
     record(
         &mut tx,
         "brain.distil.queued",
