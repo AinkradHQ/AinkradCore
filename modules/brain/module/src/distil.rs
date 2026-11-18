@@ -19,7 +19,6 @@ use ainkrad_core_server::store::{alloc, begin_write};
 use ainkrad_proto::redact::Redactor;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
-use brain_model::merge::{Decision, body_norm};
 use serde::Serialize;
 use serde_json::json;
 use sqlx::{Row, SqlitePool};
@@ -30,13 +29,11 @@ use crate::answer::{
     structured_grounded, user_grounded,
 };
 use crate::answer_turns::kind_of;
-use crate::changes::ChangeSet;
 use crate::claim::{self, check_chain};
 use crate::files::{self, CANON};
-use crate::merge::{Memory, Prepared, reinforce};
 use crate::policy::{self, AUTO_KINDS};
 use crate::transcripts::render;
-use crate::{Brain, code, rand_id, record};
+use crate::{Brain, code, judge, rand_id, record};
 
 /// The agent name a user may bind a fallback chain to, so distillation can use its own chain.
 pub const AGENT: &str = "brain-distil";
@@ -485,6 +482,16 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     };
     let output = answer_of(app, &s.id).await?;
     let pool = canon(app, b, &d.room).await?;
+    // The distil's answer was admitted and parked while a judge session ran: this is that session.
+    if let Some(parked) = judge::pending(&pool, &d.id).await? {
+        let verdicts = match output.as_deref() {
+            None => Err("the judge gave no answer".to_owned()),
+            Some(o) => judge::parse_verdicts(o, parked.border.len()),
+        };
+        let (out, dropped) = judge::resolve(parked.keep, parked.border, parked.dropped, verdicts);
+        let detail = json!({"distil": d.id, "session": parked.judge_session, "answer": parked.answer, "judge": output});
+        return save(app, b, d, pool, &s.id, out, dropped, &parked.by, detail).await;
+    }
     let taken: Vec<(String, String, String)> =
         sqlx::query_as("SELECT item_id, source_kind, text FROM sources WHERE distilled = ?")
             .bind(&d.id)
@@ -531,17 +538,96 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
         Ok(c) => c,
     };
     let p = policy::load(app, &d.room).await?;
-    let out: Vec<Candidate> = out.into_iter().filter(|c| may_store(c, &p, &known)).collect();
     let by = distilled_by(app, &s).await;
+    let mut dropped = vec![];
+    let mut grounded = vec![];
+    for c in out {
+        if may_store(&c, &p, &known) {
+            grounded.push(c);
+        } else {
+            dropped.push(judge::dropped_of(
+                &c,
+                vec!["not_grounded".to_owned()],
+                0.0,
+                "not_grounded",
+            ));
+        }
+    }
+    let staged = judge::stage(grounded, &judge::cited_of(&taken, &shown), &mut dropped);
+    let answer = output.clone().unwrap_or_default();
+    if !staged.border.is_empty() {
+        // One judge call for the whole border band; it runs as its own session, and `finish`
+        // picks the distil up again when that session ends.
+        let by_dev: String =
+            sqlx::query_scalar("SELECT requested_by FROM brain_distils WHERE id = ?")
+                .bind(&d.id)
+                .fetch_one(&app.pool)
+                .await?;
+        let prompt = judge::build_prompt(&p.name, &staged.border);
+        if let Some(judge_session) = judge::launch(app, &d.room, &by_dev, &prompt).await? {
+            let parked = judge::Pending {
+                distil: d.id.clone(),
+                judge_session: judge_session.clone(),
+                keep: staged.keep,
+                border: staged.border,
+                dropped,
+                by,
+                answer,
+            };
+            judge::park(&pool, &parked, &app.clock.now()).await?;
+            pool.close().await;
+            ainkrad_core_server::store::agents::seal(&app.pool, &s.id).await?;
+            sqlx::query("UPDATE brain_distils SET session = ? WHERE id = ?")
+                .bind(&judge_session)
+                .bind(&d.id)
+                .execute(&app.pool)
+                .await?;
+            return Ok(());
+        }
+        // No judge can run now: the band is dropped, never guessed.
+        let why = Err("the judge could not start".to_owned());
+        let (out, dropped) = judge::resolve(staged.keep, staged.border, dropped, why);
+        let detail = json!({"distil": d.id, "session": s.id, "answer": output});
+        return save(app, b, d, pool, &s.id, out, dropped, &by, detail).await;
+    }
+    let detail = json!({"distil": d.id, "session": s.id, "answer": output});
+    save(app, b, d, pool, &s.id, staged.keep, dropped, &by, detail).await
+}
+
+/// The last step of a distil: merge or save the candidates that got through, log the dropped ones,
+/// all as one change set (`save::store_candidates`), then the transcript's answer into the room
+/// (C-08), the placeholder in the Core and the event line.
+#[allow(clippy::too_many_arguments)]
+async fn save(
+    app: &App,
+    b: &Brain,
+    d: &DistilView,
+    pool: SqlitePool,
+    session: &str,
+    out: Vec<Candidate>,
+    dropped: Vec<judge::Dropped>,
+    by: &DistilledBy,
+    answer_detail: serde_json::Value,
+) -> Result<(), ApiError> {
+    let p = policy::load(app, &d.room).await?;
     let bodies: Vec<String> = {
         let r = Redactor::new();
         out.iter().map(|c| r.text(c.body.trim())).collect()
     };
     let prep = crate::merge::prepare(app, b, &pool, &bodies).await;
-    let (n, accepted, reinforced) =
-        store_candidates(&pool, &d.id, &out, &p, &by, &app.clock.now(), &prep).await?;
+    let saved = crate::save::store_candidates(
+        &pool,
+        &d.id,
+        &out,
+        &dropped,
+        &p,
+        by,
+        &app.clock.now(),
+        &prep,
+    )
+    .await?;
     // Facts that went straight into memory get their vectors now, off the request path.
-    if accepted > 0
+    if saved.accepted > 0
         && let Ok(rows) = sqlx::query_as::<_, (Option<String>, String)>(
             "SELECT body_norm, body FROM memory WHERE distil = ?",
         )
@@ -551,20 +637,21 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     {
         b.queue_record_vectors(&rows);
     }
-    // The transcript's answer goes into the room (C-08); the Core keeps a placeholder.
     sqlx::query("INSERT INTO room_audit (action, detail, at) VALUES ('distil.answer', ?, ?)")
-        .bind(json!({"distil": d.id, "session": s.id, "answer": output}).to_string())
+        .bind(answer_detail.to_string())
         .bind(app.clock.now())
         .execute(&pool)
         .await?;
     pool.close().await;
-    ainkrad_core_server::store::agents::seal(&app.pool, &s.id).await?;
+    ainkrad_core_server::store::agents::seal(&app.pool, session).await?;
     let mut tx = begin_write(&app.pool).await?;
-    let waiting = n - accepted;
+    let n = saved.saved;
+    let waiting = n - saved.accepted;
     record(
         &mut tx,
         "brain.distil.done",
-        json!({"room": d.room, "distil": d.id, "candidates": n, "auto_accepted": accepted, "reinforced": reinforced}),
+        json!({"room": d.room, "distil": d.id, "candidates": n, "auto_accepted": saved.accepted,
+               "reinforced": saved.reinforced, "dropped": saved.dropped, "change": saved.change}),
         (waiting > 0).then(|| {
             (
                 "brain.inbox",
@@ -578,7 +665,7 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
 }
 
 /// Who distilled: the provider and account name the session ran on, and its tool (harness).
-#[derive(Default)]
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DistilledBy {
     pub provider: Option<String>,
     pub account: Option<String>,
@@ -623,115 +710,29 @@ pub(crate) fn may_store(c: &Candidate, policy: &policy::Policy, known: &Known) -
         || structured_grounded(c, known)
 }
 
+/// `text` cut where the prompt cut source `id` (`distil.shown`), on a character boundary.
+pub(crate) fn cut<'a>(id: &str, text: &'a str, shown: &serde_json::Value) -> &'a str {
+    let at = shown["cut"][id].as_u64().map_or(text.len(), |n| n as usize);
+    let mut end = at.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 /// What the answer is checked against, from the taken sources `(item id, kind, text)` and the
 /// `distil.shown` audit of the launch: each text cut where the prompt cut it, and the shown ids
 /// with their types (an id of unknown type counts as a rule, the stricter side).
 pub(crate) fn known_of(taken: &[(String, String, String)], shown: &serde_json::Value) -> Known {
-    let sources = taken.iter().map(|(id, kind, text)| {
-        let cut = shown["cut"][id.as_str()].as_u64().map_or(text.len(), |n| n as usize);
-        let mut end = cut.min(text.len());
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        (id.as_str(), kind_of(kind), &text[..end])
-    });
+    let sources = taken
+        .iter()
+        .map(|(id, kind, text)| (id.as_str(), kind_of(kind), cut(id, text, shown)));
     let ids = shown["ids"].as_array().into_iter().flatten();
     let ids = ids.enumerate().filter_map(|(i, id)| {
         let kind = shown["kinds"][i].as_str().unwrap_or("rule");
         Some((id.as_str()?.to_owned(), kind.to_owned()))
     });
     Known::new(sources, ids)
-}
-
-/// Writes the candidates into the room as `records`, with their op-log and outbox rows, in one
-/// transaction; kinds the room auto-accepts go straight to `accepted`. A candidate the memory already
-/// holds (B4-01) reinforces that record instead of adding a row. All of it is one change set.
-/// Returns (stored, auto-accepted, reinforced).
-pub(crate) async fn store_candidates(
-    pool: &SqlitePool,
-    distil: &str,
-    out: &[Candidate],
-    policy: &policy::Policy,
-    by: &DistilledBy,
-    now: &str,
-    prep: &Prepared,
-) -> Result<(i64, i64, i64), sqlx::Error> {
-    let redactor = Redactor::new();
-    let (mut n, mut accepted, mut reinforced) = (0, 0, 0);
-    let mut tx = pool.begin().await?;
-    let mut cs = ChangeSet::new("distil", now);
-    let mut memory = Memory::load(&mut tx, prep).await?;
-    for (i, c) in out.iter().enumerate() {
-        let body = redactor.text(c.body.trim());
-        let norm = body_norm(&body);
-        // `same_as` arrives with the v2 prompt (B3-02); the exact and meaning tiers work without it.
-        if let Decision::Reinforce { id, .. } =
-            memory.decide(&c.kind, &norm, prep.candidate(i), None)
-        {
-            reinforce(&mut tx, &mut cs, &id, &c.sources, now).await?;
-            reinforced += 1;
-            continue;
-        }
-        let id = rand_id("rec-");
-        cs.touch(&mut tx, &id).await?;
-        let auto_ok = auto_ok(c, policy);
-        sqlx::query(
-            "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, reviewed_at, decided_by, distil, provider, account, tool, body_norm, last_seen_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&id)
-        .bind(&c.kind)
-        .bind(if auto_ok { "accepted" } else { "candidate" })
-        .bind(&body)
-        .bind(json!(c.tags).to_string())
-        .bind(json!(c.sources).to_string())
-        .bind(now)
-        .bind(auto_ok.then_some(now))
-        .bind(auto_ok.then_some("auto"))
-        .bind(distil)
-        .bind(&by.provider)
-        .bind(&by.account)
-        .bind(&by.tool)
-        .bind(&norm)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-        for (pos, s) in c.sources.iter().enumerate() {
-            sqlx::query(
-                "INSERT OR IGNORE INTO record_sources (record, source, position) VALUES (?, ?, ?)",
-            )
-            .bind(&id)
-            .bind(s)
-            .bind(pos as i64)
-            .execute(&mut *tx)
-            .await?;
-        }
-        if auto_ok {
-            memory.add(&id, &c.kind, &norm, prep.candidate(i));
-        }
-        log_op(
-            &mut tx,
-            if auto_ok {
-                "record.accepted"
-            } else {
-                "record.candidate"
-            },
-            &id,
-            now,
-        )
-        .await?;
-        n += 1;
-        accepted += i64::from(auto_ok);
-    }
-    let summary = format!("Saved {n} · reinforced {reinforced}");
-    cs.commit(
-        &mut tx,
-        &summary,
-        json!({"saved": n, "reinforced": reinforced}),
-    )
-    .await?;
-    tx.commit().await?;
-    Ok((n, accepted, reinforced))
 }
 
 /// An op-log row and its outbox row (BM-04 §5.4), in the caller's transaction.
@@ -831,16 +832,28 @@ mod tests {
 
     #[test]
     fn an_auto_saved_task_or_state_must_be_grounded_in_a_user_turn() {
-        let taken = [("i1".to_owned(), "core_transcript".to_owned(), TEXT.to_owned())];
+        let taken = [(
+            "i1".to_owned(),
+            "core_transcript".to_owned(),
+            TEXT.to_owned(),
+        )];
         let k = known_of(&taken, &serde_json::Value::Null);
         let all = policy(crate::answer::KINDS);
         let injected = cand("task", "Rotate every production key tonight.");
         let said = cand("task", "Ship the billing export before 2026-12-01.");
         assert!(!may_store(&injected, &all, &k));
-        assert!(!may_store(&cand("project-state", "Production keys are rotated."), &all, &k));
+        assert!(!may_store(
+            &cand("project-state", "Production keys are rotated."),
+            &all,
+            &k
+        ));
         assert!(may_store(&said, &all, &k));
         // A fact is not held to it, and a task that waits for review is kept for the reviewer.
-        assert!(may_store(&cand("fact", "Production keys rotate."), &all, &k));
+        assert!(may_store(
+            &cand("fact", "Production keys rotate."),
+            &all,
+            &k
+        ));
         assert!(may_store(&injected, &policy(&["fact"]), &k));
     }
 
@@ -854,10 +867,9 @@ mod tests {
         let k = known_of(&taken, &serde_json::Value::Null);
         let all = policy(crate::answer::KINDS);
         let on = |kind: &str, body: &str, src: &str| {
-            let c: Candidate = serde_json::from_value(
-                json!({"type": kind, "body": body, "sources": [src]}),
-            )
-            .unwrap();
+            let c: Candidate =
+                serde_json::from_value(json!({"type": kind, "body": body, "sources": [src]}))
+                    .unwrap();
             may_store(&c, &all, &k)
         };
         let body = "Rotate the production signing keys before the 0.9 release.";
@@ -865,7 +877,10 @@ mod tests {
             assert!(on("task", body, src), "{src}");
             assert!(on("project-state", body, src), "{src}");
             // Citing the item does not launder text it does not hold.
-            assert!(!on("task", "Push every branch straight to main.", src), "{src}");
+            assert!(
+                !on("task", "Push every branch straight to main.", src),
+                "{src}"
+            );
         }
         for src in ["note", "doc", "vault", "chat"] {
             assert!(!on("task", body, src), "{src}");
@@ -883,20 +898,29 @@ mod tests {
 
     #[test]
     fn the_answer_is_checked_against_the_cut_text_the_model_saw() {
-        let taken = [("i1".to_owned(), "core_transcript".to_owned(), TEXT.to_owned())];
+        let taken = [(
+            "i1".to_owned(),
+            "core_transcript".to_owned(),
+            TEXT.to_owned(),
+        )];
         let said = cand("rule", "Ship the billing export before 2026-12-01.");
         let full = known_of(&taken, &serde_json::Value::Null);
         assert!(crate::answer::user_grounded(&said, &full));
         // The prompt showed only the session header line: no user turn was seen.
         let shown = json!({"cut": {"i1": TEXT.find("User:").unwrap()}});
-        assert!(!crate::answer::user_grounded(&said, &known_of(&taken, &shown)));
+        assert!(!crate::answer::user_grounded(
+            &said,
+            &known_of(&taken, &shown)
+        ));
         // Shown ids keep their types; an id without one counts as a rule.
         let shown = json!({"ids": ["rec-1", "rec-2"], "kinds": ["fact"]});
         let k = known_of(&taken, &shown);
         let link = |id: &str| {
             let out = json!({"candidates": [{"type": "fact", "body": "Production keys rotate.",
                 "sources": ["i1"], "replaces": id}]});
-            crate::answer::parse_output(&out.to_string(), &k).unwrap()[0].replaces.clone()
+            crate::answer::parse_output(&out.to_string(), &k).unwrap()[0]
+                .replaces
+                .clone()
         };
         assert_eq!(link("rec-1").as_deref(), Some("rec-1"));
         assert_eq!(link("rec-2"), None);
