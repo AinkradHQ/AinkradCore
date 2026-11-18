@@ -46,9 +46,8 @@ pub struct Reply {
     pub body: tokio::sync::mpsc::Receiver<Result<Vec<u8>, String>>,
 }
 
-pub type Upstream = Arc<
-    dyn Fn(Call) -> Pin<Box<dyn Future<Output = Result<Reply, String>> + Send>> + Send + Sync,
->;
+pub type Upstream =
+    Arc<dyn Fn(Call) -> Pin<Box<dyn Future<Output = Result<Reply, String>> + Send>> + Send + Sync>;
 
 pub struct Relay {
     port: u16,
@@ -95,9 +94,7 @@ impl Relay {
 }
 
 async fn status(conn: &mut TcpStream, code: u16, why: &str) {
-    let head = format!(
-        "HTTP/1.1 {code} {why}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
-    );
+    let head = format!("HTTP/1.1 {code} {why}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
     let _ = conn.write_all(head.as_bytes()).await;
 }
 
@@ -143,7 +140,11 @@ async fn serve(mut conn: TcpStream, up: &Upstream, token: &str, allowed: &[i64])
         if parts.next()? != token || parts.next()? != "mirrors" {
             return None;
         }
-        let id: i64 = parts.next()?.parse().ok().filter(|id| allowed.contains(id))?;
+        let id: i64 = parts
+            .next()?
+            .parse()
+            .ok()
+            .filter(|id| allowed.contains(id))?;
         match (method.as_str(), parts.next()?, query) {
             ("GET", "info/refs", "service=git-upload-pack") => Some((id, "GET", "info/refs")),
             ("POST", "git-upload-pack", "") => Some((id, "POST", "git-upload-pack")),
@@ -153,7 +154,12 @@ async fn serve(mut conn: TcpStream, up: &Upstream, token: &str, allowed: &[i64])
     let Some((id, method, tail)) = routed else {
         return status(&mut conn, 404, "Not Found").await;
     };
-    let header = |name: &str| headers.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
+    let header = |name: &str| {
+        headers
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.clone())
+    };
     if method == "POST" {
         if header("transfer-encoding").is_some() {
             return status(&mut conn, 411, "Length Required").await;

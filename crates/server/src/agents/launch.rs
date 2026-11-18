@@ -292,7 +292,10 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
     // The repo copies a project session clones are leased to this runner now, at every start.
     if let Err(why) = project_mirrors(app, s).await {
         fail(app, s, &why).await;
-        return Err(Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why)));
+        return Err(Refusal::Runner(StreamError::new(
+            ErrorCode::InvalidArgs,
+            why,
+        )));
     }
     let wait = app.agents.config.answer;
     let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();

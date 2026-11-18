@@ -15,7 +15,9 @@ fn core(copy: PathBuf, seen: Arc<Mutex<Vec<String>>>) -> Upstream {
     Arc::new(move |call: Call| {
         let (copy, seen) = (copy.clone(), Arc::clone(&seen));
         Box::pin(async move {
-            seen.lock().unwrap().push(format!("{} {}", call.method, call.path));
+            seen.lock()
+                .unwrap()
+                .push(format!("{} {}", call.method, call.path));
             let advertise = call.method == "GET";
             let mut cmd = tokio::process::Command::new("git");
             cmd.args(["upload-pack", "--stateless-rpc"])
@@ -28,10 +30,19 @@ fn core(copy: PathBuf, seen: Arc<Mutex<Vec<String>>>) -> Upstream {
             }
             let mut child = cmd.spawn().map_err(|e| e.to_string())?;
             let mut stdin = child.stdin.take().unwrap();
-            stdin.write_all(&call.body).await.map_err(|e| e.to_string())?;
+            stdin
+                .write_all(&call.body)
+                .await
+                .map_err(|e| e.to_string())?;
             drop(stdin);
             let mut out = Vec::new();
-            child.stdout.take().unwrap().read_to_end(&mut out).await.map_err(|e| e.to_string())?;
+            child
+                .stdout
+                .take()
+                .unwrap()
+                .read_to_end(&mut out)
+                .await
+                .map_err(|e| e.to_string())?;
             let mut body = Vec::new();
             if advertise {
                 body.extend_from_slice(b"001e# service=git-upload-pack\n0000");
@@ -74,14 +85,23 @@ async fn a_project_checkout_is_cloned_from_the_core_copy_and_cannot_touch_it() {
         .await
         .unwrap();
     assert!(path.join("README.md").is_file());
-    assert_eq!(git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(), "ainkrad/s1");
+    assert_eq!(
+        git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+        "ainkrad/s1"
+    );
     let seen = seen.lock().unwrap().clone();
-    assert!(seen.iter().all(|c| c.contains("/api/v1/mirrors/7/")), "{seen:?}");
+    assert!(
+        seen.iter().all(|c| c.contains("/api/v1/mirrors/7/")),
+        "{seen:?}"
+    );
     assert!(seen.iter().any(|c| c.starts_with("POST ")), "{seen:?}");
 
     // The checkout's origin is the real remote: nothing of the relay, its port or its token.
     let config = std::fs::read_to_string(path.join(".git/config")).unwrap();
-    assert!(config.contains(REMOTE) && !config.contains("127.0.0.1"), "{config}");
+    assert!(
+        config.contains(REMOTE) && !config.contains("127.0.0.1"),
+        "{config}"
+    );
     assert!(!path.join(".git/objects/info/alternates").exists());
 
     // What a session does in its checkout never reaches the copy.
@@ -93,7 +113,11 @@ async fn a_project_checkout_is_cloned_from_the_core_copy_and_cannot_touch_it() {
     git(&path, &["update-ref", "refs/heads/main", "HEAD"]);
     assert_eq!(git(&copy, &["for-each-ref"]), refs_before);
     assert!(!copy.join("hooks/post-commit").exists());
-    assert!(!std::fs::read_to_string(copy.join("config")).unwrap().contains("alias"));
+    assert!(
+        !std::fs::read_to_string(copy.join("config"))
+            .unwrap()
+            .contains("alias")
+    );
 }
 
 fn script_hook(path: &Path) {
@@ -114,7 +138,12 @@ async fn a_mirror_with_no_way_to_reach_the_core_is_refused() {
 
 /// What the relay answers a raw request with (its status line).
 async fn ask(port_url: &str, request: &str) -> String {
-    let addr = port_url.strip_prefix("http://").unwrap().split('/').next().unwrap();
+    let addr = port_url
+        .strip_prefix("http://")
+        .unwrap()
+        .split('/')
+        .next()
+        .unwrap();
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
     s.write_all(request.as_bytes()).await.unwrap();
     let mut out = String::new();
@@ -127,7 +156,9 @@ async fn the_relay_answers_only_the_granted_repos_upload_pack_with_its_token() {
     let dir = scratch("mirror-relay");
     let copy = PathBuf::from(origin(&dir));
     let up = core(copy, Arc::default());
-    let relay = crate::workspace::relay::Relay::start(up, vec![7]).await.unwrap();
+    let relay = crate::workspace::relay::Relay::start(up, vec![7])
+        .await
+        .unwrap();
     let url = relay.url(7);
     let (base, tail) = url.split_once("/mirrors/").unwrap();
     let token = base.rsplit('/').next().unwrap();
@@ -145,10 +176,24 @@ async fn the_relay_answers_only_the_granted_repos_upload_pack_with_its_token() {
     ] {
         assert!(ask(&url, &get(&bad)).await.contains("404"), "{bad}");
     }
-    let push = format!("POST /{token}/mirrors/{tail}/git-upload-pack HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n");
+    let push = format!(
+        "POST /{token}/mirrors/{tail}/git-upload-pack HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n"
+    );
     assert!(ask(&url, &push).await.contains("411"));
-    let big = format!("POST /{token}/mirrors/{tail}/git-upload-pack HTTP/1.1\r\ncontent-length: 99999999\r\n\r\n");
+    let big = format!(
+        "POST /{token}/mirrors/{tail}/git-upload-pack HTTP/1.1\r\ncontent-length: 99999999\r\n\r\n"
+    );
     assert!(ask(&url, &big).await.contains("413"));
     drop(relay);
-    assert!(tokio::net::TcpStream::connect(url.strip_prefix("http://").unwrap().split('/').next().unwrap()).await.is_err());
+    assert!(
+        tokio::net::TcpStream::connect(
+            url.strip_prefix("http://")
+                .unwrap()
+                .split('/')
+                .next()
+                .unwrap()
+        )
+        .await
+        .is_err()
+    );
 }

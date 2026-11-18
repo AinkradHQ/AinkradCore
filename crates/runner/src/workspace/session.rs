@@ -92,10 +92,7 @@ impl Workspaces {
                 ];
                 match source {
                     Some(_) => self.git_relay(&self.root, &clone).await,
-                    None => {
-                        self.git_with_credentials(&self.root, &clone, helper)
-                            .await
-                    }
+                    None => self.git_with_credentials(&self.root, &clone, helper).await,
                 }
                 .map_err(|_| "git clone failed (credentials or transport)".to_owned())?;
                 if source.is_some() {

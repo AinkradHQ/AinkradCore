@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::super::{ApiError, Caller};
 use crate::api::App;
 use crate::store::agents::{self as store, Session};
-use crate::store::projects as projects;
+use crate::store::projects;
 
 /// What only the Core may write into a workspace: a mirror (a repo copy the runner clones from).
 /// A client's own `workspace` may name none, or it could ask the Core to lease what it likes.
@@ -75,7 +75,10 @@ pub(super) async fn attach(
 ) -> Result<(), ApiError> {
     store::set_project(&app.pool, &s.id, project).await?;
     for module in app.modules.iter() {
-        if let Err(why) = module.project_session(app, &s.id, project, &me.device.id).await {
+        if let Err(why) = module
+            .project_session(app, &s.id, project, &me.device.id)
+            .await
+        {
             let now = app.clock.now();
             store::set_state(&app.pool, &s.id, "ended", &why, false, &now).await?;
             return Err(why_to_error(&why));

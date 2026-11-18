@@ -58,7 +58,9 @@ async fn the_core_builds_the_workspace_and_a_client_cannot_name_a_mirror() {
     let id = project(&fx, "shop").await;
     let new = |extra: Value| {
         let mut b = json!({"runner": vm.id, "harness": "claude"});
-        b.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        b.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
         b
     };
     // Refused before any session exists.
@@ -70,7 +72,9 @@ async fn the_core_builds_the_workspace_and_a_client_cannot_name_a_mirror() {
     );
     let ws = json!({"repo": "https://github.com/acme/web.git", "base": "main", "branch": "b"});
     assert_eq!(
-        create(&fx, new(json!({"project_id": id, "workspace": ws}))).await.0,
+        create(&fx, new(json!({"project_id": id, "workspace": ws})))
+            .await
+            .0,
         StatusCode::BAD_REQUEST
     );
     let mut mirrored = ws.clone();
@@ -87,8 +91,21 @@ async fn the_core_builds_the_workspace_and_a_client_cannot_name_a_mirror() {
         StatusCode::BAD_REQUEST
     );
     let archived = project(&fx, "old").await;
-    add(&fx, archived, "web", "https://github.com/acme/web.git", true).await;
-    let r = admin(&fx, Method::POST, &format!("/api/v1/projects/{archived}/archive"), Value::Null).await;
+    add(
+        &fx,
+        archived,
+        "web",
+        "https://github.com/acme/web.git",
+        true,
+    )
+    .await;
+    let r = admin(
+        &fx,
+        Method::POST,
+        &format!("/api/v1/projects/{archived}/archive"),
+        Value::Null,
+    )
+    .await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
     assert_eq!(
         code(&create(&fx, new(json!({"project_id": archived}))).await),
@@ -97,15 +114,25 @@ async fn the_core_builds_the_workspace_and_a_client_cannot_name_a_mirror() {
 
     // One repo is the folder itself; several are `<folder>/<name>`, the primary first.
     let web = add(&fx, id, "web", "https://github.com/acme/web.git", true).await;
-    let w = super::super::agents::project::workspace_for(&fx.app, id).await.unwrap();
-    assert_eq!((w["mirror"].as_i64(), w["name"].as_str()), (Some(web), Some("web")));
+    let w = super::super::agents::project::workspace_for(&fx.app, id)
+        .await
+        .unwrap();
+    assert_eq!(
+        (w["mirror"].as_i64(), w["name"].as_str()),
+        (Some(web), Some("web"))
+    );
     assert!(w["also"].is_null());
     let api = add(&fx, id, "api", "https://github.com/acme/api.git", false).await;
-    let w = super::super::agents::project::workspace_for(&fx.app, id).await.unwrap();
+    let w = super::super::agents::project::workspace_for(&fx.app, id)
+        .await
+        .unwrap();
     assert_eq!(w["name"], "web");
     assert_eq!(w["also"][0]["name"], "api");
     assert_eq!(w["also"][0]["mirror"].as_i64(), Some(api));
-    assert_eq!(w["branch"], w["also"][0]["branch"], "one branch for the session");
+    assert_eq!(
+        w["branch"], w["also"][0]["branch"],
+        "one branch for the session"
+    );
     assert_eq!(w["base"], "main");
     let parsed: ainkrad_proto::runner::Workspace = serde_json::from_value(w).unwrap();
     assert!(parsed.problem().is_none());
@@ -126,7 +153,12 @@ async fn a_session_leases_only_its_own_active_projects_copies_to_its_runner() {
     let m = fx.app.mirrors.clone().unwrap();
     let may = |dev: &str, repo: i64| {
         let (app, m, dev) = (fx.app.clone(), m.clone(), dev.to_owned());
-        async move { crate::mirrors::servable(&app, &m, &dev, repo).await.unwrap().is_some() }
+        async move {
+            crate::mirrors::servable(&app, &m, &dev, repo)
+                .await
+                .unwrap()
+                .is_some()
+        }
     };
     assert!(!may(&vm.id, repo).await, "no lease before a launch");
 
@@ -136,18 +168,37 @@ async fn a_session_leases_only_its_own_active_projects_copies_to_its_runner() {
     assert!(!may(&vm.id, repo).await && !may(&vm.id, other).await);
 
     // The launch fetches the copy and leases it to this runner, and to no other.
-    crate::mirrors::for_session(&fx.app, &vm.id, mine, &[repo]).await.unwrap();
-    let state = crate::store::projects::mirror(&fx.app.pool, repo).await.unwrap().unwrap();
-    assert_eq!(state.head.as_deref(), Some(head.as_str()), "fetched at launch");
+    crate::mirrors::for_session(&fx.app, &vm.id, mine, &[repo])
+        .await
+        .unwrap();
+    let state = crate::store::projects::mirror(&fx.app.pool, repo)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        state.head.as_deref(),
+        Some(head.as_str()),
+        "fetched at launch"
+    );
     assert!(may(&vm.id, repo).await);
     assert!(!may(&stranger.id, repo).await);
     assert!(!may(&vm.id, other).await, "the lease is for one repo");
 
     // An archived project's session cannot start, and its open lease serves nothing.
-    let r = admin(&fx, Method::POST, &format!("/api/v1/projects/{mine}/archive"), Value::Null).await;
+    let r = admin(
+        &fx,
+        Method::POST,
+        &format!("/api/v1/projects/{mine}/archive"),
+        Value::Null,
+    )
+    .await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
     assert!(!may(&vm.id, repo).await);
-    assert!(crate::mirrors::for_session(&fx.app, &vm.id, mine, &[repo]).await.is_err());
+    assert!(
+        crate::mirrors::for_session(&fx.app, &vm.id, mine, &[repo])
+            .await
+            .is_err()
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -170,12 +221,20 @@ async fn a_session_takes_a_project_once_and_only_before_it_starts() {
     let sys = ainkrad_core::audit::AuditActor::System;
     let s = store::create(&fx.app.pool, &new, sys, NOW).await.unwrap();
     assert!(store::set_project(&fx.app.pool, &s.id, a).await.unwrap());
-    assert!(!store::set_project(&fx.app.pool, &s.id, b).await.unwrap(), "once");
+    assert!(
+        !store::set_project(&fx.app.pool, &s.id, b).await.unwrap(),
+        "once"
+    );
     let got = store::get(&fx.app.pool, &s.id).await.unwrap().unwrap();
     assert_eq!(got.project_id, Some(a));
     let s2 = store::create(&fx.app.pool, &new, sys, NOW).await.unwrap();
-    store::set_state(&fx.app.pool, &s2.id, "running", "t", false, NOW).await.unwrap();
-    assert!(!store::set_project(&fx.app.pool, &s2.id, a).await.unwrap(), "not once started");
+    store::set_state(&fx.app.pool, &s2.id, "running", "t", false, NOW)
+        .await
+        .unwrap();
+    assert!(
+        !store::set_project(&fx.app.pool, &s2.id, a).await.unwrap(),
+        "not once started"
+    );
 }
 
 #[tokio::test]
@@ -214,7 +273,12 @@ async fn a_launch_leases_nothing_for_a_workspace_that_names_copies_it_has_no_pro
     let m = fx.app.mirrors.clone().unwrap();
     let may = |repo: i64| {
         let (app, m, dev) = (fx.app.clone(), m.clone(), vm.id.clone());
-        async move { crate::mirrors::servable(&app, &m, &dev, repo).await.unwrap().is_some() }
+        async move {
+            crate::mirrors::servable(&app, &m, &dev, repo)
+                .await
+                .unwrap()
+                .is_some()
+        }
     };
     // A workspace written without a project (a module's, say) opens nothing.
     let s = session(repo).await;

@@ -39,7 +39,10 @@ impl Mirrors {
             leases.retain(|_, (until, _)| *until > now);
         }
         if leases.len() < MAX_LEASES || leases.contains_key(&(device.to_owned(), repo)) {
-            leases.insert((device.to_owned(), repo), (now + LEASE_SECS, key.to_owned()));
+            leases.insert(
+                (device.to_owned(), repo),
+                (now + LEASE_SECS, key.to_owned()),
+            );
         }
     }
 

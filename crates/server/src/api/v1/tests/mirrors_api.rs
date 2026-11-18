@@ -414,14 +414,27 @@ async fn a_copy_is_served_only_to_a_device_with_a_live_lease_while_its_project_i
     let body = want(&head);
     let read = |dev| read_both(&fx, dev, repo, &body);
     // No lease: a runner reads nothing, and cannot tell it from a repo that does not exist.
-    let none = raw(&fx, Some(&vm), Method::GET, "/api/v1/mirrors/999/info/refs?service=git-upload-pack", b"").await;
-    assert_eq!(read(&vm).await, (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND));
+    let none = raw(
+        &fx,
+        Some(&vm),
+        Method::GET,
+        "/api/v1/mirrors/999/info/refs?service=git-upload-pack",
+        b"",
+    )
+    .await;
+    assert_eq!(
+        read(&vm).await,
+        (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND)
+    );
     assert_eq!(none.0, StatusCode::NOT_FOUND);
 
     // A lease is one device's and one repo's.
     crate::mirrors::grant_now(&fx.app, &vm.id, repo).await;
     assert_eq!(read(&vm).await, (StatusCode::OK, StatusCode::OK));
-    assert_eq!(read(&other).await, (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND));
+    assert_eq!(
+        read(&other).await,
+        (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND)
+    );
     let second: i64 = sqlx::query_scalar(
         "INSERT INTO core_project_repos (project_id, name, remote_url, default_branch, is_primary) \
          VALUES (?, 'api', ?, 'main', 0) RETURNING id",
@@ -431,23 +444,50 @@ async fn a_copy_is_served_only_to_a_device_with_a_live_lease_while_its_project_i
     .fetch_one(&fx.app.pool)
     .await
     .unwrap();
-    let r = raw(&fx, Some(&vm), Method::GET, &format!("/api/v1/mirrors/{second}/info/refs?service=git-upload-pack"), b"").await;
-    assert_eq!(r.0, StatusCode::NOT_FOUND, "a lease for one repo opens no other");
+    let r = raw(
+        &fx,
+        Some(&vm),
+        Method::GET,
+        &format!("/api/v1/mirrors/{second}/info/refs?service=git-upload-pack"),
+        b"",
+    )
+    .await;
+    assert_eq!(
+        r.0,
+        StatusCode::NOT_FOUND,
+        "a lease for one repo opens no other"
+    );
 
     // It runs out.
     let mirrors = fx.app.mirrors.as_ref().unwrap();
-    mirrors.grant(&vm.id, repo, &crate::mirrors::key(id, &dir.join("remote").to_string_lossy()), fx.app.clock.unix() - crate::mirrors::LEASE_SECS - 1);
-    assert_eq!(read(&vm).await, (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND));
+    mirrors.grant(
+        &vm.id,
+        repo,
+        &crate::mirrors::key(id, &dir.join("remote").to_string_lossy()),
+        fx.app.clock.unix() - crate::mirrors::LEASE_SECS - 1,
+    );
+    assert_eq!(
+        read(&vm).await,
+        (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND)
+    );
 
     // An archived project's copy is closed, lease or not.
     crate::mirrors::grant_now(&fx.app, &vm.id, repo).await;
     assert_eq!(read(&vm).await, (StatusCode::OK, StatusCode::OK));
     let r = send(
         &fx.app,
-        req(Method::POST, &format!("/api/v1/projects/{id}/archive"), Some(&fx.dev), None),
+        req(
+            Method::POST,
+            &format!("/api/v1/projects/{id}/archive"),
+            Some(&fx.dev),
+            None,
+        ),
     )
     .await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
-    assert_eq!(read(&vm).await, (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND));
+    assert_eq!(
+        read(&vm).await,
+        (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND)
+    );
     let _ = std::fs::remove_dir_all(dir);
 }

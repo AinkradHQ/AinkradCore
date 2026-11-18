@@ -96,7 +96,9 @@ pub fn canonical(
     nonce: &str,
     body: &[u8],
 ) -> Vec<u8> {
-    canonical_query(core_fp, device, session, method, path, "", timestamp, nonce, body)
+    canonical_query(
+        core_fp, device, session, method, path, "", timestamp, nonce, body,
+    )
 }
 
 /// [`canonical`] for a request with a query (the raw text after `?`).

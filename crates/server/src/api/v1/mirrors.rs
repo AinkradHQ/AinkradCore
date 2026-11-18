@@ -6,8 +6,8 @@
 //! A copy is served only to a device holding a lease for that repo, while its project is active
 //! (P3-02, `crate::mirrors::servable`): the one answer to anything else is 404 `no such repo`.
 
-use axum::body::Body;
 use axum::Extension;
+use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
