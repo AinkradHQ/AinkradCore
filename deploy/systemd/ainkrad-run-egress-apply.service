@@ -1,0 +1,9 @@
+# Re-applies the project-run egress table (deploy/run-egress.nft) and refreshes /run/ainkrad-run-egress.ok; started every
+# minute by ainkrad-run-egress.timer. Idempotent: the .nft file replaces the table as a whole, in one transaction.
+[Unit]
+Description=Ainkrad project runs: re-apply the egress block
+Documentation=https://github.com/AinkradHQ/AinkradCore
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '/usr/sbin/nft -f /etc/ainkrad-runner/run-egress.nft && /usr/sbin/nft list table inet ainkrad_run_egress >/dev/null && touch /run/ainkrad-run-egress.ok'

@@ -20,7 +20,7 @@ use std::time::Duration;
 use ainkrad_core::audit::{AuditActor, AuditOrigin, OriginKind};
 use ainkrad_proto::v2::{
     Body, Command, DRIVER_RUN, ErrorCode, Reply, RunCheckout, RunClone, RunInfo, RunLimits,
-    RunList, RunPhase, RunSecret, RunStart, RunStatusReq, RunStop,
+    RunList, RunObserve, RunObserveReq, RunPhase, RunSecret, RunStart, RunStatusReq, RunStop,
 };
 
 use crate::api::App;
@@ -37,6 +37,8 @@ use crate::store::secrets::{self, Error};
 pub const START_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 /// `run.stop` is `podman stop -t 10` per container.
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+/// `run.observe` asks the helper for a few `podman` calls.
+pub const OBSERVE_TIMEOUT: Duration = Duration::from_secs(30);
 pub const SWEEP_EVERY: Duration = Duration::from_secs(30);
 /// A runner offline this long (unix seconds) has lost its runs.
 pub const RUNNER_LOST_AFTER: i64 = 10 * 60;
@@ -104,6 +106,14 @@ pub trait Link: Send + Sync {
     ) -> Fut<'a, Result<RunInfo, LinkError>>;
     fn stop<'a>(&'a self, runner: &'a str, run: &'a str) -> Fut<'a, Result<RunInfo, LinkError>>;
     fn status<'a>(&'a self, runner: &'a str) -> Fut<'a, Result<RunList, LinkError>>;
+    /// Service metrics and new log lines of a run (P5-04); read-only.
+    fn observe<'a>(
+        &'a self,
+        _runner: &'a str,
+        _req: RunObserveReq,
+    ) -> Fut<'a, Result<RunObserve, LinkError>> {
+        Box::pin(async { Err(LinkError::Failed("this link cannot observe runs".into())) })
+    }
 }
 
 /// The runner hub as a [`Link`].
@@ -224,6 +234,20 @@ impl Link for HubLink {
             match self.housekeeping(runner, op, STOP_TIMEOUT).await? {
                 Reply::RunStatus(l) => Ok(l),
                 _ => Err(LinkError::Failed("not a run.status answer".into())),
+            }
+        })
+    }
+
+    fn observe<'a>(
+        &'a self,
+        runner: &'a str,
+        req: RunObserveReq,
+    ) -> Fut<'a, Result<RunObserve, LinkError>> {
+        Box::pin(async move {
+            let op = RunHousekeeping::Observe(req);
+            match self.housekeeping(runner, op, OBSERVE_TIMEOUT).await? {
+                Reply::RunObserve(o) => Ok(o),
+                _ => Err(LinkError::Failed("not a run.observe answer".into())),
             }
         })
     }

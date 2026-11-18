@@ -5,11 +5,12 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use ainkrad_proto::runner::Workspace;
 use ainkrad_proto::v2::{
-    Command, DRIVER_RUN, DriverInfo, ErrorCode, OP_PORT_OPEN, OP_RUN_START, OP_RUN_STATUS,
-    OP_RUN_STOP, PortOpen, Reply, RunList, RunStart, StreamError,
+    Command, DRIVER_RUN, DriverInfo, ErrorCode, OP_PORT_OPEN, OP_RUN_OBSERVE, OP_RUN_START,
+    OP_RUN_STATUS, OP_RUN_STOP, PortOpen, Reply, RunList, RunPhase, RunStart, StreamError,
 };
 use zeroize::Zeroizing;
 
@@ -20,11 +21,14 @@ use crate::run::helper::{self, Request};
 pub struct RunDriver {
     socket: PathBuf,
     redeem: Redeem,
-    /// Where this runner's own checkouts live; a run's `checkouts.dir` must resolve under it.
+    /// Where this runner's own checkouts live; a run's `checkouts.dir` must resolve under its
+    /// project's part of it, `<checkouts>/projects/<project>/` ([`checkout_dir`]).
     checkouts: PathBuf,
     /// Clones a run's repos from the Core's copies (the agent driver's mirror path); without it a
     /// run that builds from a repo cannot start here.
     clones: Option<Arc<super::agent::AgentDriver>>,
+    /// Logs and metrics of the runs watched (P5-04), and the values to redact from them.
+    observers: Arc<super::observe::Observers>,
     /// One `run.status` per run per [`STATUS_TTL`], shared by all of the run's port streams.
     status: tokio::sync::Mutex<BTreeMap<String, (std::time::Instant, Result<RunList, String>)>>,
 }
@@ -46,27 +50,54 @@ fn helper_failed(what: &str, detail: impl std::fmt::Display) -> StreamError {
 /// The unit that loads `deploy/run-egress.nft` (and re-loads it with nftables.service).
 pub const EGRESS_UNIT: &str = "ainkrad-run-egress.service";
 
-/// Whether the egress block is up. The runner cannot read nftables itself (no `CAP_NET_ADMIN`), so it
-/// asks systemd; the helper unit re-loads the table as root before every op and does not start
-/// without it (`ExecStartPre=+nft -f`), which is the check that holds at the moment of a start.
+/// Touched by root right after the egress table is loaded and listed back: by [`EGRESS_UNIT`], its
+/// one-minute timer (`ainkrad-run-egress.timer`) and the helper unit's `ExecStartPre`.
+pub const EGRESS_MARKER: &str = "/run/ainkrad-run-egress.ok";
+/// The marker's age past which the table is not trusted (the timer refreshes it every 60 s).
+const EGRESS_FRESH: Duration = Duration::from_secs(150);
+
+/// Whether the egress block is really loaded. The runner cannot read nftables itself (no
+/// `CAP_NET_ADMIN`), so it reads the marker root leaves each time `nft list table` found the table;
+/// the helper unit also re-loads the table as root before every op and does not start without it.
 pub fn egress_active() -> bool {
-    std::process::Command::new("systemctl")
-        .args(["is-active", "--quiet", EGRESS_UNIT])
-        .stdin(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    egress_fresh(Path::new(EGRESS_MARKER), SystemTime::now())
 }
 
-/// `dir`, resolved, when it lies under `root` (also resolved); `Err` otherwise.
-pub(super) fn checkout_dir(root: &Path, dir: &str) -> Result<PathBuf, String> {
-    let bad = || format!("the checkout {dir} is not one of this runner's");
-    let root = root.canonicalize().map_err(|_| bad())?;
-    let d = Path::new(dir).canonicalize().map_err(|_| bad())?;
-    if d.starts_with(&root) && d != root {
-        Ok(d)
-    } else {
-        Err(bad())
+/// `marker` exists and was touched at most [`EGRESS_FRESH`] before `now` (not after it).
+pub(super) fn egress_fresh(marker: &Path, now: SystemTime) -> bool {
+    std::fs::metadata(marker)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| now.duration_since(t).is_ok_and(|age| age <= EGRESS_FRESH))
+}
+
+/// A run's checkout `dir` of `project`, resolved, when it lies under `<root>/projects/<project>/`
+/// (also resolved) and is a plain repo: `.git` and `.git/objects` real directories (not a `gitdir:`
+/// file or a symlink), and no `objects/info/alternates` or `commondir`, either of which would let
+/// git read another repo's objects into the bundle. Answers the `.git` dir (`--git-dir`).
+pub(super) fn checkout_dir(root: &Path, project: u64, dir: &str) -> Result<PathBuf, String> {
+    let bad = |why: &str| format!("the checkout {dir} is not one of this project's: {why}");
+    let root = root
+        .join("projects")
+        .join(project.to_string())
+        .canonicalize()
+        .map_err(|_| bad("the project has no checkouts here"))?;
+    let d = Path::new(dir)
+        .canonicalize()
+        .map_err(|_| bad("it does not exist"))?;
+    if !d.starts_with(&root) || d == root {
+        return Err(bad("it is outside the project's checkout root"));
     }
+    let real_dir = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
+    let git = d.join(".git");
+    if !real_dir(&git) || !real_dir(&git.join("objects")) {
+        return Err(bad(".git is not a plain directory"));
+    }
+    for f in ["objects/info/alternates", "commondir"] {
+        if std::fs::symlink_metadata(git.join(f)).is_ok() {
+            return Err(bad(&format!(".git/{f} is not allowed")));
+        }
+    }
+    Ok(git)
 }
 
 /// Fills every `${secret:NAME}` in `v` from `values`; `Err` names a secret it does not have.
@@ -92,8 +123,10 @@ pub(super) fn fill(
 
 impl RunDriver {
     pub fn new(socket: impl Into<PathBuf>, redeem: Redeem, checkouts: impl Into<PathBuf>) -> Self {
+        let socket: PathBuf = socket.into();
         Self {
-            socket: socket.into(),
+            observers: Arc::new(super::observe::Observers::new(socket.clone())),
+            socket,
             redeem,
             checkouts: checkouts.into(),
             clones: None,
@@ -183,7 +216,7 @@ impl RunDriver {
     pub fn info(&self) -> Option<DriverInfo> {
         self.socket.exists().then(|| DriverInfo {
             name: DRIVER_RUN.to_owned(),
-            commands: [OP_RUN_START, OP_RUN_STOP, OP_RUN_STATUS]
+            commands: [OP_RUN_START, OP_RUN_STOP, OP_RUN_STATUS, OP_RUN_OBSERVE]
                 .map(str::to_owned)
                 .into(),
             capacity: 4,
@@ -224,13 +257,21 @@ impl RunDriver {
                 self.start_bundled(req).await
             }
             Command::RunStop(req) => {
+                self.observers.forget(&req.run);
                 let v = helper::call(&self.socket, &Request::Stop { run: req.run }, &[]).await;
                 Ok(Reply::RunStop(de(v.map_err(internal)?)?))
             }
             Command::RunStatus(req) => {
                 let v = helper::call(&self.socket, &Request::Status { run: req.run }, &[]).await;
-                Ok(Reply::RunStatus(de(v.map_err(internal)?)?))
+                let list: RunList = de(v.map_err(internal)?)?;
+                // A run with no container left is over (stopped, or lost and swept): its ring and
+                // redaction values go, and it cannot be observed again.
+                for i in list.runs.iter().filter(|i| i.phase == RunPhase::Stopped) {
+                    self.observers.forget(&i.run);
+                }
+                Ok(Reply::RunStatus(list))
             }
+            Command::RunObserve(req) => Ok(Reply::RunObserve(self.observers.observe(req).await?)),
             _ => Err(StreamError::new(
                 ErrorCode::UnsupportedCommand,
                 "not a run op",
@@ -334,6 +375,8 @@ impl RunDriver {
             if leased.form != Form::Text || leased.value.contains(['\n', '\r', '\0']) {
                 return Err(invalid(format!("{} is not a one-line text secret", s.name)));
             }
+            // Before any container exists: its logs are redacted of this value from the first line.
+            self.observers.know(&req.run, &s.name, &leased.value);
             values.insert(s.name, leased.value);
         }
         for svc in req.spec.services.values_mut() {
@@ -377,12 +420,13 @@ fn tempdir() -> Result<Tmp, StreamError> {
     Ok(Tmp(p))
 }
 
-/// `git bundle create <to> HEAD` of a checkout: the file and its length.
-async fn bundle(dir: &Path, to: &Path) -> Result<(PathBuf, u64), StreamError> {
+/// `git --git-dir <git_dir> bundle create <to> HEAD` of a checkout (no repo discovery, no work
+/// tree): the file and its length.
+async fn bundle(git_dir: &Path, to: &Path) -> Result<(PathBuf, u64), StreamError> {
     let bad = |e: String| StreamError::new(ErrorCode::InvalidArgs, e);
     let out = tokio::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
+        .arg("--git-dir")
+        .arg(git_dir)
         .args(["bundle", "create", "-q"])
         .arg(to)
         .arg("HEAD")
@@ -394,7 +438,7 @@ async fn bundle(dir: &Path, to: &Path) -> Result<(PathBuf, u64), StreamError> {
     if !out.status.success() {
         return Err(bad(format!(
             "bundling the checkout {}: {}",
-            dir.display(),
+            git_dir.display(),
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }
@@ -439,30 +483,7 @@ mod tests {
                 .is_none()
         );
     }
-
-    #[test]
-    fn a_checkout_must_resolve_under_the_runners_root() {
-        let base = std::env::temp_dir().join(format!("run-checkouts-{}", std::process::id()));
-        let (root, other) = (base.join("root"), base.join("other"));
-        std::fs::create_dir_all(root.join("s1/web")).unwrap();
-        std::fs::create_dir_all(&other).unwrap();
-        std::os::unix::fs::symlink(&other, root.join("s1/link")).unwrap();
-        let ok = checkout_dir(&root, root.join("s1/web").to_str().unwrap()).unwrap();
-        assert_eq!(ok, root.canonicalize().unwrap().join("s1/web"));
-        for bad in [
-            root.join("s1/link"),
-            root.join("s1/web/../../../other"),
-            root.clone(),
-            other.clone(),
-            PathBuf::from("/etc"),
-            root.join("missing"),
-        ] {
-            assert!(
-                checkout_dir(&root, bad.to_str().unwrap()).is_err(),
-                "{}",
-                bad.display()
-            );
-        }
-        let _ = std::fs::remove_dir_all(&base);
-    }
 }
+
+#[cfg(test)]
+mod tests_review2;
