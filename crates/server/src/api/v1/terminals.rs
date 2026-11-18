@@ -384,20 +384,47 @@ fn abandon(app: &App, runner: &str, terminal: &str) {
     });
 }
 
-/// Watches `terminal` on `d` until it exits, then records the exit.
-fn monitor(app: &App, terminal: String, mut d: Dispatched) {
+/// Watches `terminal` on `d` until it exits, then records the exit. `tap`, when given, is told
+/// how it ended (after the row is settled) and what it printed first.
+fn monitor(
+    app: &App,
+    terminal: String,
+    mut d: Dispatched,
+    tap: Option<tokio::sync::oneshot::Sender<Ended>>,
+) {
     let a = app.clone();
     let id = terminal.clone();
     let task = tokio::spawn(async move {
+        let mut head: Vec<u8> = Vec::new();
+        let mut seen = |b64: &str| {
+            if head.len() < HEAD_BYTES
+                && let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64)
+            {
+                head.extend_from_slice(&bytes[..bytes.len().min(HEAD_BYTES - head.len())]);
+            }
+        };
+        let mut end = Ended {
+            lost: true,
+            ..Ended::default()
+        };
         while let Some(body) = d.next().await {
             match body {
+                Body::Output(o) => seen(&o.data),
+                Body::Control(Control::Snapshot(s)) => seen(&s.data),
                 Body::Result(Reply::PtyOpen(exit) | Reply::PtyAttach(exit)) => {
+                    end.lost = false;
+                    end.exit_code = exit.exit_code;
+                    end.signal = exit.signal.clone();
                     ended(&a, &id, exit.exit_code, exit.signal).await;
                     break;
                 }
                 Body::Error(_) => break,
                 _ => {}
             }
+        }
+        if let Some(tap) = tap {
+            end.head = String::from_utf8_lossy(&head).into_owned();
+            let _ = tap.send(end);
         }
     });
     app.terminals
@@ -774,7 +801,7 @@ fn ensure_monitor(app: &App, t: &Terminal) {
         app.hub
             .dispatch_elevated(&t.runner, attach, app.hub.continue_terminal_elevation())
     {
-        monitor(app, t.id.clone(), d);
+        monitor(app, t.id.clone(), d, None);
     }
 }
 
@@ -831,93 +858,125 @@ pub async fn create(
         }
         (None, cwd) => cwd,
     };
+    let spec = Spec {
+        program: req.program,
+        args: req.args.unwrap_or_default(),
+        cwd,
+        // Only this path names a session: the runner then lets the shell into that session's
+        // folder, inside its hidden state, once it has checked it is the folder it recorded.
+        session,
+        env: req.env.unwrap_or_default(),
+        ssh: None,
+    };
+    match open(&app, &me, &req.runner, req.size, spec, None).await {
+        Ok(t) => (axum::http::StatusCode::CREATED, Json(t)).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// What a terminal starts as.
+struct Spec {
+    program: Option<String>,
+    args: Vec<String>,
+    cwd: Option<String>,
+    session: Option<String>,
+    env: BTreeMap<String, String>,
+    ssh: Option<ainkrad_proto::v2::SshTerminal>,
+}
+
+/// How a terminal ended, as its monitor saw it, handed to whoever asked to be told
+/// ([`open_ssh`]): the exit, or `lost` when the stream failed (the runner went) with no exit seen.
+#[derive(Debug, Clone, Default)]
+pub struct Ended {
+    pub exit_code: Option<i32>,
+    pub signal: Option<String>,
+    pub lost: bool,
+    /// The first bytes the terminal printed (at most `HEAD_BYTES`), lossily decoded.
+    pub head: String,
+}
+
+/// Enough for the one line `ssh-pty` prints before it ends on a host-key refusal.
+const HEAD_BYTES: usize = 4096;
+
+/// Opens a terminal on `runner` for `me`: the caps, the runner's `pty.open`, the row, the audit
+/// row and the monitor. The route that calls it passed the terminal scope and the step-up.
+async fn open(
+    app: &App,
+    me: &Caller,
+    runner: &str,
+    size: TerminalSize,
+    spec: Spec,
+    tap: Option<tokio::sync::oneshot::Sender<Ended>>,
+) -> Result<Terminal, ApiError> {
+    if !(1..=1000).contains(&size.rows) || !(1..=1000).contains(&size.cols) {
+        return Err(ApiError::bad_request("terminal size is out of range"));
+    }
     // The caps are counted and used up under one lock, so concurrent creates cannot overshoot.
     let _turn = app.terminals.create.lock().await;
-    if let Err(e) = reap(&app).await {
-        return e.into_response();
-    }
-    let mine = match sqlx::query_scalar::<_, i64>(
+    reap(app).await?;
+    let mine = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM core_terminals WHERE opened_by=? AND status IN ('created','running')",
     )
     .bind(&me.device.id)
     .fetch_one(&app.pool)
-    .await
-    {
-        Ok(n) => n,
-        Err(e) => return ApiError::from(e).into_response(),
-    };
-    let (per_device, per_runner) = match (
-        store::settings::value(&app.pool, Key::TerminalMaxPerDevice, Scope::Server).await,
-        store::settings::value(&app.pool, Key::TerminalMaxPerRunner, Scope::Server).await,
-    ) {
-        (Ok(a), Ok(b)) => (a, b),
-        (Err(e), _) | (_, Err(e)) => return ApiError::from(e).into_response(),
-    };
+    .await?;
+    let per_device =
+        store::settings::value(&app.pool, Key::TerminalMaxPerDevice, Scope::Server).await?;
+    let per_runner =
+        store::settings::value(&app.pool, Key::TerminalMaxPerRunner, Scope::Server).await?;
     if mine >= per_device {
-        return ApiError::new(
+        return Err(ApiError::new(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "terminal_limit",
             "device terminal limit reached",
-        )
-        .into_response();
+        ));
     }
-    let runner = match gov::get_device(&app.pool, &req.runner).await {
-        Ok(Some(d)) if d.kind == "runner" && d.usable() => d,
-        Ok(_) => return ApiError::not_found("no such runner").into_response(),
-        Err(e) => return ApiError::from(e).into_response(),
+    let runner = match gov::get_device(&app.pool, runner).await? {
+        Some(d) if d.kind == "runner" && d.usable() => d,
+        _ => return Err(ApiError::not_found("no such runner")),
     };
-    let count = match sqlx::query_scalar::<_, i64>(
+    let count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM core_terminals WHERE runner=? AND status IN ('created','running')",
     )
     .bind(&runner.id)
     .fetch_one(&app.pool)
-    .await
-    {
-        Ok(n) => n,
-        Err(e) => return ApiError::from(e).into_response(),
-    };
+    .await?;
     if count >= per_runner {
-        return ApiError::new(
+        return Err(ApiError::new(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "terminal_limit",
             "runner terminal limit reached",
-        )
-        .into_response();
+        ));
     }
-    let scrollback = match (
-        store::settings::value(&app.pool, Key::TerminalScrollbackBytes, Scope::Server).await,
-        store::settings::value(&app.pool, Key::TerminalScrollbackBudget, Scope::Server).await,
-    ) {
-        (Ok(a), Ok(b)) => (a, b),
-        (Err(e), _) | (_, Err(e)) => return ApiError::from(e).into_response(),
-    };
+    let scrollback = (
+        store::settings::value(&app.pool, Key::TerminalScrollbackBytes, Scope::Server).await?,
+        store::settings::value(&app.pool, Key::TerminalScrollbackBudget, Scope::Server).await?,
+    );
     // The gate passed scope and step-up for this route; only now is the token minted.
-    let mut d = match app.hub.dispatch_elevated(
-        &runner.id,
-        Command::PtyOpen(PtyOpen {
-            program: req.program,
-            args: req.args.unwrap_or_default(),
-            cwd,
-            // Only this path names a session: the runner then lets the shell into that session's
-            // folder, inside its hidden state, once it has checked it is the folder it recorded.
-            session,
-            env: req.env.unwrap_or_default(),
-            env_pass: Vec::new(),
-            size: ainkrad_proto::v2::Size {
-                rows: req.size.rows,
-                cols: req.size.cols,
-            },
-            // The Core's own stream only watches for the exit; clients attach separately.
-            watch: true,
-            scrollback_bytes: u64::try_from(scrollback.0).ok(),
-            scrollback_budget: u64::try_from(scrollback.1).ok(),
-            ssh: None,
-        }),
-        app.hub.terminal_elevation(&me),
-    ) {
-        Ok(d) => d,
-        Err(e) => return failed(&e).into_response(),
-    };
+    let mut d = app
+        .hub
+        .dispatch_elevated(
+            &runner.id,
+            Command::PtyOpen(PtyOpen {
+                program: spec.program,
+                args: spec.args,
+                cwd: spec.cwd,
+                session: spec.session,
+                env: spec.env,
+                env_pass: Vec::new(),
+                size: ainkrad_proto::v2::Size {
+                    rows: size.rows,
+                    cols: size.cols,
+                },
+                // The Core's own stream only watches for the exit; clients attach separately.
+                watch: true,
+                scrollback_bytes: u64::try_from(scrollback.0).ok(),
+                scrollback_budget: u64::try_from(scrollback.1).ok(),
+                ssh: spec.ssh,
+            }),
+            app.hub.terminal_elevation(me),
+        )
+        .map_err(|e| failed(&e))?;
     let info = match opened(&mut d).await {
         Ok(i) => i,
         Err(e) => {
@@ -938,18 +997,52 @@ pub async fn create(
                     abandon(&app, &runner, &i.terminal);
                 }
             });
-            return e.into_response();
+            return Err(e);
         }
     };
-    if let Err(e) = register(&app, &me, &runner.id, &info).await {
-        abandon(&app, &runner.id, &info.terminal);
-        return e.into_response();
+    if let Err(e) = register(app, me, &runner.id, &info).await {
+        abandon(app, &runner.id, &info.terminal);
+        return Err(e);
     }
-    monitor(&app, info.terminal.clone(), d);
-    match row(&app, &info.terminal).await {
-        Ok(t) => (axum::http::StatusCode::CREATED, Json(t)).into_response(),
-        Err(e) => e.into_response(),
+    monitor(app, info.terminal.clone(), d, tap);
+    row(app, &info.terminal).await
+}
+
+/// An interactive SSH terminal for a module (Leyline): the same open as `POST /terminals` (caps,
+/// row, audit, monitor), with `ssh` as the `PtyOpen`. The caller's route passed the module's gate;
+/// this needs the caller to hold the `terminal` scope, like the terminal routes. The answer is the
+/// terminal and a channel that says how it ended. The hub refuses `ssh` to a runner that does not
+/// list `pty.ssh` (it would open a local shell), whoever asks.
+///
+/// # Errors
+///
+/// 403 without the `terminal` scope; the open's own errors (caps, runner, `terminal_failed`).
+pub async fn open_ssh(
+    app: &App,
+    me: &Caller,
+    runner: &str,
+    ssh: ainkrad_proto::v2::SshTerminal,
+    size: TerminalSize,
+) -> Result<(Terminal, tokio::sync::oneshot::Receiver<Ended>), ApiError> {
+    if !me.device.scopes.iter().any(|s| s == "terminal") {
+        return Err(ApiError::new(
+            axum::http::StatusCode::FORBIDDEN,
+            "forbidden_scope",
+            "this device may not open terminals",
+        ));
     }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let spec = Spec {
+        program: None,
+        args: Vec::new(),
+        cwd: None,
+        session: None,
+        env: BTreeMap::new(),
+        ssh: Some(ssh),
+    };
+    open(app, me, runner, size, spec, Some(tx))
+        .await
+        .map(|t| (t, rx))
 }
 
 /// Records an opened terminal: its row, the audit row and the event, in one transaction.

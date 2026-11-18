@@ -2,7 +2,8 @@
 //! the API only: hosts, groups and tags, label addressing, the validation that keeps argv-injection
 //! text out (API and table), `leyline.*` events and audit; and keys (Y1-02): generated or imported,
 //! sealed in the Core's secret store, public data only in the API; and project attachments (Y1-03).
-//! SSH itself (Y2+) comes later; the command gate (`gate`, Y4-01) is here.
+//! SSH itself runs on a runner (Y2); the command gate (`gate`, Y4-01), host terminals and host-key
+//! trust (Y3-01) are here.
 //!
 //! Module off, the Core is unchanged: the tables are its own `leyline_` namespace, no Core
 //! migration, no Core crate names this module.
@@ -10,9 +11,11 @@
 mod address;
 mod attach;
 pub mod gate;
+pub mod hostkeys;
 mod hosts;
 mod keys;
 mod policy;
+mod terminal;
 mod valid;
 
 use ainkrad_core_server::api::App;
@@ -38,6 +41,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0002_runs.up.sql"),
         down: include_str!("../migrations/0002_runs.down.sql"),
     },
+    Migration {
+        version: 3,
+        name: "0003_sessions",
+        up: include_str!("../migrations/0003_sessions.up.sql"),
+        down: include_str!("../migrations/0003_sessions.down.sql"),
+    },
 ];
 
 // A key write is a secret write: importing needs the step-up like the Core's own secret writes.
@@ -46,6 +55,10 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     ("DELETE", "/hosts/{host}"),
     ("DELETE", "/keys/{key}"),
     ("POST", "/keys/import"),
+    // A terminal needs the step-up like the Core's own; replacing a pinned host key is a trust
+    // decision that could point a session at an impostor.
+    ("POST", "/hosts/{host}/terminals"),
+    ("POST", "/hosts/{host}/host-keys/replace"),
 ];
 // POST and PATCH need a step-up only for what widens an AI's reach or repoints a host (`allowed`,
 // address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
@@ -53,6 +66,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/hosts"),
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
+    ("POST", "/hosts/{host}/host-keys/trust"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
 ];
@@ -64,6 +78,9 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/keys", "read"),
     ("GET", "/keys/{key}", "read"),
     ("GET", "/projects/{project}/hosts", "read"),
+    ("GET", "/hosts/{host}/host-keys", "read"),
+    // The terminal scope, as the Core's own terminal routes.
+    ("POST", "/hosts/{host}/terminals", "terminal"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -86,7 +103,11 @@ pub struct Leyline;
         keys::remove,
         attach::list,
         attach::attach,
-        attach::detach
+        attach::detach,
+        hostkeys::list,
+        hostkeys::trust_route,
+        hostkeys::replace_route,
+        terminal::open
     ),
     components(schemas(
         hosts::HostView,
@@ -101,7 +122,11 @@ pub struct Leyline;
         attach::ProjectHost,
         attach::HostProject,
         attach::Role,
-        attach::Detached
+        attach::Detached,
+        hostkeys::HostKeyView,
+        hostkeys::Pick,
+        terminal::NewSession,
+        terminal::SessionView
     ))
 )]
 struct Doc;
@@ -118,6 +143,13 @@ impl Module for Leyline {
                 "/hosts/{host}",
                 get(hosts::get).patch(hosts::patch).delete(hosts::remove),
             )
+            .route("/hosts/{host}/host-keys", get(hostkeys::list))
+            .route("/hosts/{host}/host-keys/trust", post(hostkeys::trust_route))
+            .route(
+                "/hosts/{host}/host-keys/replace",
+                post(hostkeys::replace_route),
+            )
+            .route("/hosts/{host}/terminals", post(terminal::open))
             .route("/groups", get(hosts::groups))
             .route("/tags", get(hosts::tags))
             .route("/keys", get(keys::list).post(keys::generate))
@@ -135,7 +167,12 @@ impl Module for Leyline {
     }
 
     fn event_kinds(&self) -> &'static [&'static str] {
-        &["leyline.host", "leyline.key"]
+        &[
+            "leyline.host",
+            "leyline.key",
+            "leyline.session",
+            "leyline.hostkey",
+        ]
     }
 
     /// Ids only, so a read-only device may see them.
@@ -152,6 +189,12 @@ impl Module for Leyline {
             "leyline.host.detached",
             "leyline.key.created",
             "leyline.key.deleted",
+            "leyline.hostkey.seen",
+            "leyline.hostkey.changed",
+            "leyline.hostkey.trusted",
+            "leyline.hostkey.replaced",
+            "leyline.session.opened",
+            "leyline.session.ended",
             "leyline.run.requested",
             "leyline.run.approval",
             "leyline.run.allowed",

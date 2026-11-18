@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 ainkrad-core = { path = "../../../crates/core" }
 ainkrad-core-server = { path = "../../../crates/server" }
+ainkrad-proto = { path = "../../../crates/proto" }
 axum = "0.8.9"
 base64 = "0.22.1"
 getrandom = "0.4.3"
