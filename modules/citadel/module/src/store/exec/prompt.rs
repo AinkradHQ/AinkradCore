@@ -122,6 +122,7 @@ async fn workspace_in(
         name,
         also: vec![],
         expected_head: None,
+        mirror: None,
     });
     Ok(all.next().map(|mut first| {
         first.also = all.collect();

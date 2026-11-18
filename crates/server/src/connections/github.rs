@@ -27,6 +27,7 @@ pub mod http;
 pub mod install;
 pub mod ops;
 pub mod outcome;
+pub mod repos;
 
 pub use guard::BuildError;
 pub use http::{Rate, Transport};
@@ -158,6 +159,8 @@ pub struct Github {
     transport: Arc<Transport>,
     /// The GitHub App's key and the renewal locks (C5): shared by every clone.
     installer: Arc<install::Installer>,
+    /// Each connection's full repo list for a minute (P2-01): shared by every clone.
+    repo_cache: repos::Cache,
 }
 
 fn scrub(mut body: Vec<u8>, secrets: &[&str]) -> Vec<u8> {
@@ -181,6 +184,7 @@ impl Github {
         Self {
             transport,
             installer: Arc::default(),
+            repo_cache: Arc::default(),
         }
     }
 
@@ -195,6 +199,7 @@ impl Github {
         Self {
             transport,
             installer: Arc::new(installer),
+            repo_cache: Arc::default(),
         }
     }
 

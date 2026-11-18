@@ -247,6 +247,29 @@ pub(crate) async fn context(
             "too many context calls; wait a second",
         ));
     }
+    build(&app, &b, &session, q, Opts::default())
+        .await
+        .map(Json)
+}
+
+/// How the Core itself asks for a bundle (B8-02, `project_rooms::instructions_for_session`).
+#[derive(Default)]
+pub(crate) struct Opts {
+    /// Read no room, only the me card: a session with no project.
+    pub me_only: bool,
+    /// Leave out the room's approved instructions: the caller already sends them as plain text.
+    pub no_instructions: bool,
+}
+
+/// The op itself, for a Code Mode call and for the Core's own session start. Everything in the
+/// security model above holds for both: same gate, same ledger, same envelope.
+pub(crate) async fn build(
+    app: &App,
+    b: &Brain,
+    session: &str,
+    q: AiContextQuery,
+    opts: Opts,
+) -> Result<AiContext, ApiError> {
     let start = match q.mode.as_str() {
         "start" => true,
         "prompt" => false,
@@ -266,17 +289,21 @@ pub(crate) async fn context(
         Q_PROMPT_TOKENS
     };
     if q.budget == Some(0) {
-        return Ok(Json(AiContext {
+        return Ok(AiContext {
             mode: q.mode,
             text: String::new(),
             ids: vec![],
             tokens: 0,
             complete: false,
-        }));
+        });
     }
     let tokens = (q.budget.map_or(max, |n| n as usize)).clamp(50, max);
-    let named = q.room.is_some();
-    let (rooms, rooms_cut) = scope(&app, &session, q.room.as_deref()).await?;
+    let named = q.room.is_some() && !opts.me_only;
+    let (rooms, rooms_cut) = if opts.me_only {
+        (vec![], false)
+    } else {
+        scope(app, session, q.room.as_deref()).await?
+    };
     let solo = rooms.len() == 1;
     let (open, closed) = open_all(&app, &b, rooms, named).await?;
 
@@ -304,7 +331,7 @@ pub(crate) async fn context(
             )
             .fetch_optional(a.pool())
             .await?;
-            if let Some(t) = ins.filter(|t| !t.trim().is_empty()) {
+            if let Some(t) = ins.filter(|t| !opts.no_instructions && !t.trim().is_empty()) {
                 let (t, was_cut) = cut(&t, INSTRUCTION_TOKENS * CHARS_PER_TOKEN);
                 body.complete &= !was_cut;
                 body.put(&format!("Instructions:\n{t}\n"), &[]);
@@ -400,13 +427,13 @@ pub(crate) async fn context(
     }
 
     if body.at.is_empty() && body.text.is_empty() {
-        return Ok(Json(AiContext {
+        return Ok(AiContext {
             mode: q.mode,
             text: String::new(),
             ids: vec![],
             tokens: 0,
             complete: body.complete,
-        }));
+        });
     }
 
     // The ledger and the audit first; no text leaves if they fail.
@@ -443,11 +470,11 @@ pub(crate) async fn context(
         .filter(|x| seen_ids.insert(x.1.clone()))
         .map(|x| x.1.clone())
         .collect();
-    Ok(Json(AiContext {
+    Ok(AiContext {
         text: wrap(&format!("Brain memory | {}", q.mode), &body.text),
         mode: q.mode,
         ids,
         tokens: n,
         complete: body.complete,
-    }))
+    })
 }

@@ -197,7 +197,7 @@ impl Listener {
                     let io = tokio::io::join(recv, send);
                     let (app, limits) = (app.clone(), Arc::clone(&limits));
                     tokio::spawn(async move {
-                        serve_conn(io, false, peer, app, &limits, w).await;
+                        serve_conn(io, false, peer, app, &limits, w, None).await;
                         drop(slot);
                     });
                 }

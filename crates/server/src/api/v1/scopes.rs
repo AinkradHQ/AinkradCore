@@ -23,8 +23,9 @@
 //! - `terminal`: opening, attaching, signalling and closing a terminal (listing is `read`).
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise),
 //!   or the scope its `Module::route_scopes` declares for that route (`module_scope`).
-//! - A `runner` device holds only `runner`, which only `POST /api/v1/secret-leases/redeem`
-//!   takes: it can call nothing else here (the runner hub is E1-11).
+//! - A `runner` device holds only `runner`, which only `POST /api/v1/secret-leases/redeem` and
+//!   the read side of the Core's repo copies (`/api/v1/mirrors/{repo}/…`, P3-01) take: it can call
+//!   nothing else here (the runner hub is E1-11).
 //!
 //! **Destructive routes** (spec §8, E1-09.6) are listed in [`DESTRUCTIVE`] (a module's in
 //! `Module::destructive`): on top of its scope, such a route needs a session elevated by a
@@ -167,6 +168,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PUT", "/api/v1/prices", "admin"),
     ("GET", "/api/v1/projects", "read"),
     ("POST", "/api/v1/projects", "admin"),
+    // It reads private repo names with the connection's token.
+    ("GET", "/api/v1/projects/github/repos", "admin"),
+    ("POST", "/api/v1/projects/from-github", "admin"),
     ("GET", "/api/v1/projects/{id}", "read"),
     ("PATCH", "/api/v1/projects/{id}", "admin"),
     ("POST", "/api/v1/projects/{id}/archive", "admin"),
@@ -177,6 +181,32 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
         "/api/v1/projects/{id}/repos/{repo}/primary",
         "admin",
     ),
+    ("GET", "/api/v1/projects/{id}/spec", "read"),
+    ("PUT", "/api/v1/projects/{id}/spec", "admin"),
+    ("POST", "/api/v1/projects/{id}/run/spec/draft", "admin"),
+    ("GET", "/api/v1/projects/{id}/spec/versions", "read"),
+    (
+        "GET",
+        "/api/v1/projects/{id}/spec/versions/{version}",
+        "read",
+    ),
+    ("GET", "/api/v1/projects/{id}/secrets", "admin"),
+    ("PUT", "/api/v1/projects/{id}/secrets/{name}", "admin"),
+    ("DELETE", "/api/v1/projects/{id}/secrets/{name}", "admin"),
+    ("POST", "/api/v1/projects/{id}/repos/{repo}/fetch", "admin"),
+    // The Core's repo copies, to runners: upload side only; receive-pack answers 403 `read_only`.
+    ("GET", "/api/v1/mirrors/{repo}/info/refs", "runner"),
+    ("POST", "/api/v1/mirrors/{repo}/git-upload-pack", "runner"),
+    ("POST", "/api/v1/mirrors/{repo}/git-receive-pack", "runner"),
+    ("GET", "/api/v1/projects/{id}/run", "read"),
+    ("POST", "/api/v1/projects/{id}/run/start", "admin"),
+    ("POST", "/api/v1/projects/{id}/run/stop", "admin"),
+    ("POST", "/api/v1/projects/{id}/run/restart", "admin"),
+    ("POST", "/api/v1/projects/{id}/run/activity", "read"),
+    ("GET", "/api/v1/projects/{id}/run/services", "read"),
+    // Logs are what the project's code printed (redacted, but still its own words): admin.
+    ("GET", "/api/v1/projects/{id}/run/logs", "admin"),
+    ("GET", "/api/v1/projects/{id}/run/logs/ws", "admin"),
     ("GET", "/api/v1/secrets", "admin"),
     ("POST", "/api/v1/secrets", "admin"),
     ("PUT", "/api/v1/secrets/{id}", "admin"),
@@ -253,11 +283,22 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("GET", "/api/v1/system/logs/backup"),
     // Projects (P1-02): every write decides what the Core fetches and which repos a session gets.
     ("POST", "/api/v1/projects"),
+    ("POST", "/api/v1/projects/from-github"),
     ("PATCH", "/api/v1/projects/{id}"),
     ("POST", "/api/v1/projects/{id}/archive"),
     ("POST", "/api/v1/projects/{id}/repos"),
     ("DELETE", "/api/v1/projects/{id}/repos/{repo}"),
     ("POST", "/api/v1/projects/{id}/repos/{repo}/primary"),
+    // Run spec (P4-01): it decides what containers run on a runner.
+    ("PUT", "/api/v1/projects/{id}/spec"),
+    ("POST", "/api/v1/projects/{id}/run/spec/draft"),
+    // Project runs (P5-03): they start and stop containers on a runner.
+    ("POST", "/api/v1/projects/{id}/run/start"),
+    ("POST", "/api/v1/projects/{id}/run/stop"),
+    ("POST", "/api/v1/projects/{id}/run/restart"),
+    // Project secrets (P4-04): a write stores or removes a credential a run will be given.
+    ("PUT", "/api/v1/projects/{id}/secrets/{name}"),
+    ("DELETE", "/api/v1/projects/{id}/secrets/{name}"),
     // Secrets (E2-07): every write, and a lease, the only way a value leaves the Core.
     ("POST", "/api/v1/secrets"),
     ("PUT", "/api/v1/secrets/{id}"),

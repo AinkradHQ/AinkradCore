@@ -180,6 +180,7 @@ pub(super) async fn run_runner<E: Executor>(
             max: Duration::from_millis(200),
             refused: Duration::from_millis(200),
         },
+        run_checkouts: std::path::PathBuf::from("/nonexistent"),
     };
     let (stop, stopped) = watch::channel(false);
     let task = tokio::spawn(async move {

@@ -59,7 +59,10 @@ struct Held {
     received: u64,
     /// Runner frames sent and not known to be received, from `seq` `base` on.
     sent: VecDeque<Frame>,
+    /// `seq` of `sent`'s first frame (the next `seq` when it is empty).
     base: u64,
+    /// The next `seq` to number a frame with.
+    next: u64,
     /// Output bytes the Core's credit acknowledged and not yet matched to a dropped frame.
     acked: u64,
     /// While the command runs.
@@ -82,8 +85,28 @@ fn credited(f: &Frame) -> Option<u64> {
 
 impl Held {
     fn frame(&mut self, stream: u64, body: Body) -> Frame {
-        let f = Frame::new(stream, self.base + self.sent.len() as u64, body);
-        self.sent.push_back(f.clone());
+        let f = Frame::new(stream, self.next, body);
+        self.next += 1;
+        // Trailing credit frames are kept as one: a long upload with no reply must not grow `sent`.
+        // ponytail: a link drop between the two merged frames re-grants the first one's bytes; the
+        // Core then sends past its window and the stream is cut off (fails closed).
+        let n = |f: &Frame| f.payload.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
+        let mut merged = false;
+        if f.kind == FrameKind::Credit
+            && let Some(last) = self.sent.back_mut().filter(|l| l.kind == FrameKind::Credit)
+        {
+            let sum = n(&*last).saturating_add(n(&f));
+            *last = Frame::new(
+                stream,
+                f.seq,
+                Body::Credit(ainkrad_proto::v2::Credit { bytes: sum }),
+            );
+            merged = true;
+        }
+        if !merged {
+            self.sent.push_back(f.clone());
+        }
+        self.base = self.sent.front().map_or(self.next, |f| f.seq);
         f
     }
 
@@ -105,7 +128,7 @@ impl Held {
             cut = i + 1;
         }
         self.sent.drain(..cut);
-        self.base += cut as u64;
+        self.base = self.sent.front().map_or(self.next, |f| f.seq);
         self.acked -= spent;
     }
 }
@@ -115,6 +138,8 @@ pub struct Session {
     pty: Option<Arc<PtyDriver>>,
     /// `ssh.exec` (Leyline), offered where `exec.run` is.
     ssh: Option<Arc<SshDriver>>,
+    /// Project runs (P5-02), where the run helper is installed.
+    run: Option<Arc<super::RunDriver>>,
     /// Agent sessions (`--enable-agents`), if offered.
     agent: Option<Arc<AgentDriver>>,
     /// The sandboxed design helper and Chromium (V6-01), where the host has them.
@@ -138,6 +163,7 @@ impl Session {
             exec,
             pty: None,
             ssh: None,
+            run: None,
             agent: None,
             design: None,
             login: None,
@@ -173,6 +199,12 @@ impl Session {
     /// Offers the `design` driver too.
     pub fn with_design(mut self, design: Arc<super::design::DesignDriver>) -> Self {
         self.design = Some(design);
+        self
+    }
+
+    /// Offers the `run` driver too.
+    pub fn with_run(mut self, run: Arc<super::RunDriver>) -> Self {
+        self.run = Some(run);
         self
     }
 
@@ -240,6 +272,10 @@ impl Session {
             tokio::task::spawn_blocking(move || super::facts::gather(&versions, active, own))
                 .await
                 .unwrap_or_default();
+        let can_clone = self.agent.is_some();
+        if let Some(caps) = facts.run_caps.as_mut() {
+            caps.can_clone = can_clone;
+        }
         if let Some(s) = shell {
             facts.tools.insert("terminal shell".to_owned(), s);
         }
@@ -250,6 +286,8 @@ impl Session {
             drivers: std::iter::once(self.exec.info())
                 .chain(pty_info)
                 .chain(self.ssh.as_ref().and_then(|s| s.info()))
+                .chain(self.run.as_ref().and_then(|r| r.info()))
+                .chain(self.run.as_ref().and_then(|r| r.port_info()))
                 .chain(agent_info)
                 .chain(self.design.as_ref().map(|d| d.info()))
                 .chain(
@@ -297,12 +335,7 @@ impl Session {
             self.forget(id);
         }
         for (id, h) in &self.streams {
-            let skip = listed[id].saturating_sub(h.base);
-            for f in h
-                .sent
-                .iter()
-                .skip(usize::try_from(skip).unwrap_or(usize::MAX))
-            {
+            for f in h.sent.iter().filter(|f| f.seq >= listed[id]) {
                 send(&mut sink, f.clone()).await?;
             }
         }
@@ -547,6 +580,44 @@ impl Session {
             | Command::AgentAttach(_)
             | Command::AgentSubagentStop(_)
             | Command::GatewayTest(_) => self.start_agent(stream, command),
+            Command::RunStart(_)
+            | Command::RunStop(_)
+            | Command::RunStatus(_)
+            | Command::RunObserve(_) => {
+                let Some(run) = self.run.as_ref().filter(|r| r.info().is_some()) else {
+                    return Some(Body::Error(StreamError::new(
+                        ErrorCode::UnsupportedCommand,
+                        "project runs are not set up on this runner (install it with --with-run)",
+                    )));
+                };
+                let (run, done) = (Arc::clone(run), self.done_tx.clone());
+                tokio::spawn(async move {
+                    let body = match run.handle(command).await {
+                        Ok(reply) => Body::Result(reply),
+                        Err(e) => Body::Error(e),
+                    };
+                    let _ = done.send((stream, body));
+                });
+                None
+            }
+            Command::PortOpen(req) => {
+                let Some(run) = self.run.as_ref().filter(|r| r.info().is_some()) else {
+                    return Some(Body::Error(StreamError::new(
+                        ErrorCode::UnsupportedCommand,
+                        "project runs are not set up on this runner (install it with --with-run)",
+                    )));
+                };
+                let (run, done) = (Arc::clone(run), self.done_tx.clone());
+                let (cancel_tx, cancel) = oneshot::channel();
+                let (inbox_tx, inbox) = mpsc::unbounded_channel();
+                h.cancel = Some(cancel_tx);
+                h.inbox = Some(inbox_tx);
+                tokio::spawn(async move {
+                    let last = run.port(req, stream, inbox, cancel, done.clone()).await;
+                    let _ = done.send((stream, last));
+                });
+                None
+            }
             Command::RunnerPolicy(_) | Command::ToolsInstall(_) | Command::ToolsStatus(_) => {
                 self.start_control(stream, command)
             }
@@ -803,6 +874,9 @@ impl Session {
         None
     }
 }
+
+#[cfg(test)]
+mod review_tests;
 
 #[cfg(test)]
 mod tests {

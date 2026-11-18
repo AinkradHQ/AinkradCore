@@ -26,6 +26,43 @@ impl Cidr {
         Self(IpAddr::V6(Ipv6Addr::LOCALHOST), 128),
     ];
 
+    /// Cloudflare's edge, as published at <https://www.cloudflare.com/ips-v4> and
+    /// <https://www.cloudflare.com/ips-v6> (checked 2026-11-18). The Host router (P6-02) trusts
+    /// only these, plus `serve --trusted-proxy`, for `CF-Connecting-IP`, and by default refuses
+    /// project hosts from any other peer. Update from those two lists when Cloudflare changes them.
+    pub const CLOUDFLARE: [Self; 22] = [
+        Self::v4(173, 245, 48, 0, 20),
+        Self::v4(103, 21, 244, 0, 22),
+        Self::v4(103, 22, 200, 0, 22),
+        Self::v4(103, 31, 4, 0, 22),
+        Self::v4(141, 101, 64, 0, 18),
+        Self::v4(108, 162, 192, 0, 18),
+        Self::v4(190, 93, 240, 0, 20),
+        Self::v4(188, 114, 96, 0, 20),
+        Self::v4(197, 234, 240, 0, 22),
+        Self::v4(198, 41, 128, 0, 17),
+        Self::v4(162, 158, 0, 0, 15),
+        Self::v4(104, 16, 0, 0, 13),
+        Self::v4(104, 24, 0, 0, 14),
+        Self::v4(172, 64, 0, 0, 13),
+        Self::v4(131, 0, 72, 0, 22),
+        Self::v6(0x2400, 0xcb00, 32),
+        Self::v6(0x2606, 0x4700, 32),
+        Self::v6(0x2803, 0xf800, 32),
+        Self::v6(0x2405, 0xb500, 32),
+        Self::v6(0x2405, 0x8100, 32),
+        Self::v6(0x2a06, 0x98c0, 29),
+        Self::v6(0x2c0f, 0xf248, 32),
+    ];
+
+    const fn v4(a: u8, b: u8, c: u8, d: u8, len: u8) -> Self {
+        Self(IpAddr::V4(Ipv4Addr::new(a, b, c, d)), len)
+    }
+
+    const fn v6(a: u16, b: u16, len: u8) -> Self {
+        Self(IpAddr::V6(Ipv6Addr::new(a, b, 0, 0, 0, 0, 0, 0)), len)
+    }
+
     pub fn contains(self, ip: IpAddr) -> bool {
         let bits = |n: u128, width: u32| match u32::from(self.1) {
             0 => 0,
@@ -189,6 +226,39 @@ mod tests {
                 .unwrap()
                 .contains(ip("192.0.2.8"))
         );
+    }
+
+    #[test]
+    fn the_cloudflare_ranges_are_the_published_ones() {
+        let published = [
+            "173.245.48.0/20",
+            "103.21.244.0/22",
+            "103.22.200.0/22",
+            "103.31.4.0/22",
+            "141.101.64.0/18",
+            "108.162.192.0/18",
+            "190.93.240.0/20",
+            "188.114.96.0/20",
+            "197.234.240.0/22",
+            "198.41.128.0/17",
+            "162.158.0.0/15",
+            "104.16.0.0/13",
+            "104.24.0.0/14",
+            "172.64.0.0/13",
+            "131.0.72.0/22",
+            "2400:cb00::/32",
+            "2606:4700::/32",
+            "2803:f800::/32",
+            "2405:b500::/32",
+            "2405:8100::/32",
+            "2a06:98c0::/29",
+            "2c0f:f248::/32",
+        ];
+        let parsed: Vec<Cidr> = published.iter().map(|c| c.parse().unwrap()).collect();
+        assert_eq!(parsed, Cidr::CLOUDFLARE);
+        let cf = |s| Cidr::CLOUDFLARE.iter().any(|c| c.contains(ip(s)));
+        assert!(cf("104.16.1.2") && cf("::ffff:172.64.0.9") && cf("2a06:98c7::1"));
+        assert!(!cf("203.0.113.9") && !cf("127.0.0.1") && !cf("2a06:98c8::1"));
     }
 
     #[test]

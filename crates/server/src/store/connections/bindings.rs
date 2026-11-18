@@ -7,6 +7,7 @@
 
 use serde_json::json;
 use sqlx::Row;
+use sqlx::SqliteConnection;
 use sqlx::sqlite::{SqlitePool, SqliteRow};
 
 use super::{MAX_BINDINGS, Who, audit, find, refused, valid_ref};
@@ -62,10 +63,22 @@ pub async fn set(
     (scope_kind, scope_ref): (&str, &str),
     who: Who<'_>,
 ) -> Result<Binding, Error> {
+    let mut tx = crate::store::begin_write(pool).await?;
+    let b = set_in(&mut tx, connection_id, (scope_kind, scope_ref), who).await?;
+    tx.commit().await?;
+    Ok(b)
+}
+
+/// [`set`] inside the caller's write transaction.
+pub async fn set_in(
+    tx: &mut SqliteConnection,
+    connection_id: i64,
+    (scope_kind, scope_ref): (&str, &str),
+    who: Who<'_>,
+) -> Result<Binding, Error> {
     check_scope(scope_kind, scope_ref)?;
     let user_id = who.workspace;
-    let mut tx = crate::store::begin_write(pool).await?;
-    let c = find(&mut tx, user_id, connection_id).await?;
+    let c = find(tx, user_id, connection_id).await?;
     let previous: Option<i64> = sqlx::query_scalar(
         "SELECT connection_id FROM core_connection_bindings WHERE user_id = ? AND kind = ? \
          AND scope_kind = ? AND scope_ref = ?",
@@ -103,7 +116,7 @@ pub async fn set(
     .await?;
     let b = binding(&r)?;
     audit(
-        &mut tx,
+        tx,
         who.actor,
         "connection.bound",
         connection_id,
@@ -111,7 +124,6 @@ pub async fn set(
                "by_device": who.by_device}),
     )
     .await?;
-    tx.commit().await?;
     Ok(b)
 }
 

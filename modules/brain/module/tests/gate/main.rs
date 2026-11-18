@@ -30,6 +30,7 @@ mod rooms;
 mod runner_history;
 mod schema_v2;
 mod semantic;
+mod session_start;
 mod sorting;
 mod supersede;
 mod sync;

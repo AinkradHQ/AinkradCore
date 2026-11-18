@@ -5,7 +5,6 @@
 //! machine, so a repo has at most one mirror row.
 
 use ainkrad_core::audit::{AuditActor, AuditEntity, NewAuditEvent};
-use ainkrad_proto::runner::{branch_name_ok, repo_url_problem};
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::{Row, SqliteConnection};
@@ -21,8 +20,12 @@ pub struct Who<'a> {
     pub now: &'a str,
 }
 
+/// Also every module name (`modules/*`): a secret named `<module>.…` is that module's to open
+/// (`secrets::open_for_module`), so no project may own that prefix. Add a module here when it
+/// is added under `modules/`.
 pub const RESERVED: &[&str] = &[
-    "www", "api", "core", "signin", "admin", "mail", "app", "status", "docs",
+    "www", "api", "core", "signin", "admin", "mail", "app", "status", "docs", "brain", "citadel",
+    "design", "leyline", "lore", "toy",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -127,6 +130,23 @@ pub async fn get(conn: &mut SqliteConnection, id: i64) -> Result<Project, Error>
     }
 }
 
+/// The project a public host label names (P6-02): the one whose slug is `label`, else the one
+/// with the longest slug that `label` starts with followed by `-` (`<slug>-<service>`). Active,
+/// exposed ones only, filtered before the `LIMIT`: an archived or hidden `shop-api` never shadows
+/// `shop`'s `api` service. One query, whatever the label.
+pub async fn for_host(pool: &SqlitePool, label: &str) -> Result<Option<Project>, sqlx::Error> {
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "{SELECT} WHERE state = 'active' AND expose != 0 \
+         AND (slug = ?1 OR substr(?1, 1, length(slug) + 1) = slug || '-') \
+         ORDER BY length(slug) DESC LIMIT 1"
+    )))
+    .bind(label)
+    .fetch_optional(pool)
+    .await?
+    .map(project)
+    .transpose()
+}
+
 /// Projects by slug; archived ones only when `archived` is set.
 pub async fn list(pool: &SqlitePool, archived: bool) -> Result<Vec<Project>, sqlx::Error> {
     sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -155,7 +175,7 @@ pub async fn repos(conn: &mut SqliteConnection, project_id: i64) -> Result<Vec<R
 }
 
 /// Audit row plus, for `project.created/updated/archived`, the event, in the caller's transaction.
-async fn record(
+pub(super) async fn record(
     conn: &mut SqliteConnection,
     actor: AuditActor,
     action: &str,
@@ -191,6 +211,11 @@ fn line(text: &str, max: usize, what: &str) -> Result<(), Error> {
     }
 }
 
+/// A project name: one line of 1-100 characters.
+pub fn name_ok(name: &str) -> Result<(), Error> {
+    line(name, 100, "a name")
+}
+
 pub async fn create(
     pool: &SqlitePool,
     slug: &str,
@@ -207,6 +232,20 @@ pub async fn create(
         return refused("bad_request", "a source is manual or github");
     }
     let mut tx = super::begin_write(pool).await?;
+    let p = create_in(&mut tx, slug, name, description, source, who).await?;
+    tx.commit().await?;
+    Ok(p)
+}
+
+/// [`create`] inside the caller's write transaction.
+async fn create_in(
+    tx: &mut SqliteConnection,
+    slug: &str,
+    name: &str,
+    description: &str,
+    source: &str,
+    who: Who<'_>,
+) -> Result<Project, Error> {
     let taken: i64 = sqlx::query_scalar("SELECT count(*) FROM core_projects WHERE slug = ?")
         .bind(slug)
         .fetch_one(&mut *tx)
@@ -227,10 +266,23 @@ pub async fn create(
     .fetch_one(&mut *tx)
     .await?;
     let details = json!({"slug": slug, "name": name, "source": source, "by_device": who.by_device});
-    record(&mut tx, who.actor, "project.created", id, details, true).await?;
-    let p = get(&mut tx, id).await?;
-    tx.commit().await?;
-    Ok(p)
+    record(tx, who.actor, "project.created", id, details, true).await?;
+    let p = get(tx, id).await?;
+    super::project_secrets::ensure_group(tx, &p, who).await?;
+    get(tx, id).await
+}
+
+/// What [`change`] may set; `None` keeps the field.
+#[derive(Default)]
+pub struct Change<'a> {
+    pub name: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub expose: Option<bool>,
+    /// The link name (`<slug>.ainkrad.io`).
+    pub slug: Option<&'a str>,
+    pub idle_minutes: Option<i64>,
+    pub cpu_limit: Option<f64>,
+    pub mem_limit_mb: Option<i64>,
 }
 
 /// Changes name, description and/or public exposure (`None` keeps it). An archived project is
@@ -243,26 +295,85 @@ pub async fn update(
     expose: Option<bool>,
     who: Who<'_>,
 ) -> Result<Project, Error> {
+    let c = Change {
+        name,
+        description,
+        expose,
+        ..Change::default()
+    };
+    change(pool, id, &c, who).await
+}
+
+/// [`update`] with the link name and the run limits too (P7-05). The link name is the slug: it
+/// is taken only while the project has no live run and no secrets (their stored names carry the
+/// slug), and must be a free, valid, unreserved one.
+pub async fn change(
+    pool: &SqlitePool,
+    id: i64,
+    c: &Change<'_>,
+    who: Who<'_>,
+) -> Result<Project, Error> {
     let mut tx = super::begin_write(pool).await?;
     let old = get(&mut tx, id).await?;
     if old.state == "archived" {
         return refused("conflict", "the project is archived");
     }
-    let name = name.unwrap_or(&old.name);
+    let name = c.name.unwrap_or(&old.name);
     line(name, 100, "a name")?;
-    let description = description.unwrap_or(&old.description);
-    let expose = expose.unwrap_or(old.expose);
+    let description = c.description.unwrap_or(&old.description);
+    let expose = c.expose.unwrap_or(old.expose);
+    let idle = c.idle_minutes.unwrap_or(old.idle_minutes);
+    let cpu = c.cpu_limit.unwrap_or(old.cpu_limit);
+    let mem = c.mem_limit_mb.unwrap_or(old.mem_limit_mb);
+    if !(5..=1440).contains(&idle) {
+        return refused("bad_request", "idle stop is 5 to 1440 minutes");
+    }
+    if !(cpu.is_finite() && (0.1..=16.0).contains(&cpu)) {
+        return refused("bad_request", "CPUs are 0.1 to 16");
+    }
+    if !(64..=32768).contains(&mem) {
+        return refused("bad_request", "memory is 64 to 32768 MB");
+    }
+    let slug = c.slug.unwrap_or(&old.slug);
+    if slug != old.slug {
+        if let Some(why) = slug_problem(slug) {
+            return refused("bad_request", why);
+        }
+        let busy: i64 = sqlx::query_scalar(
+            "SELECT (SELECT count(*) FROM core_projects WHERE slug = ?1) \
+             + (SELECT count(*) FROM core_project_runs WHERE project_id = ?2 \
+                AND state IN ('starting', 'running', 'stopping')) \
+             + (SELECT count(*) FROM core_secrets WHERE group_id = ?3)",
+        )
+        .bind(slug)
+        .bind(id)
+        .bind(old.secret_group)
+        .fetch_one(&mut *tx)
+        .await?;
+        if busy > 0 {
+            return refused(
+                "conflict",
+                "the link name is taken, or the project is running or holds secrets",
+            );
+        }
+    }
     sqlx::query(
-        "UPDATE core_projects SET name = ?, description = ?, expose = ?, updated_at = ? WHERE id = ?",
+        "UPDATE core_projects SET slug = ?, name = ?, description = ?, expose = ?, \
+         idle_minutes = ?, cpu_limit = ?, mem_limit_mb = ?, updated_at = ? WHERE id = ?",
     )
+    .bind(slug)
     .bind(name)
     .bind(description)
     .bind(expose)
+    .bind(idle)
+    .bind(cpu)
+    .bind(mem)
     .bind(who.now)
     .bind(id)
     .execute(&mut *tx)
     .await?;
-    let details = json!({"name": name, "expose": expose, "by_device": who.by_device});
+    let details = json!({"name": name, "slug": slug, "expose": expose, "idle_minutes": idle,
+        "cpu_limit": cpu, "mem_limit_mb": mem, "by_device": who.by_device});
     record(&mut tx, who.actor, "project.updated", id, details, true).await?;
     let p = get(&mut tx, id).await?;
     tx.commit().await?;
@@ -289,207 +400,11 @@ pub async fn archive(pool: &SqlitePool, id: i64, who: Who<'_>) -> Result<Project
     Ok(p)
 }
 
-fn repo_name_ok(name: &str) -> bool {
-    (1..=100).contains(&name.len())
-        && !name.starts_with(['.', '-'])
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-}
-
-/// Adds a repo to an active project. The first one is primary; `primary` makes a later one
-/// primary (the old one steps down).
-pub async fn add_repo(
-    pool: &SqlitePool,
-    project_id: i64,
-    name: &str,
-    remote_url: &str,
-    default_branch: &str,
-    primary: bool,
-    who: Who<'_>,
-) -> Result<Repo, Error> {
-    if !repo_name_ok(name) {
-        return refused(
-            "bad_request",
-            "a repo name is 1-100 of [A-Za-z0-9._-], not starting with . or -",
-        );
-    }
-    if let Some(why) = repo_url_problem(remote_url) {
-        return refused("bad_request", &why);
-    }
-    if !branch_name_ok(default_branch) {
-        return refused("bad_request", "bad default branch name");
-    }
-    let mut tx = super::begin_write(pool).await?;
-    if get(&mut tx, project_id).await?.state == "archived" {
-        return refused("conflict", "the project is archived");
-    }
-    let dup: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM core_project_repos WHERE project_id = ? AND (name = ? OR remote_url = ?)",
-    )
-    .bind(project_id)
-    .bind(name)
-    .bind(remote_url)
-    .fetch_one(&mut *tx)
-    .await?;
-    if dup > 0 {
-        return refused("conflict", "the project has a repo of that name or remote");
-    }
-    let first = repos(&mut tx, project_id).await?.is_empty();
-    let primary = primary || first;
-    if primary {
-        sqlx::query("UPDATE core_project_repos SET is_primary = 0 WHERE project_id = ?")
-            .bind(project_id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO core_project_repos (project_id, name, remote_url, default_branch, is_primary) \
-         VALUES (?, ?, ?, ?, ?) RETURNING id",
-    )
-    .bind(project_id)
-    .bind(name)
-    .bind(remote_url)
-    .bind(default_branch)
-    .bind(primary)
-    .fetch_one(&mut *tx)
-    .await?;
-    let details = json!({"repo": name, "primary": primary, "by_device": who.by_device});
-    record(
-        &mut tx,
-        who.actor,
-        "project.repo_added",
-        project_id,
-        details,
-        false,
-    )
-    .await?;
-    let r = repos(&mut tx, project_id)
-        .await?
-        .into_iter()
-        .find(|r| r.id == id);
-    tx.commit().await?;
-    r.ok_or_else(|| Error::Db(sqlx::Error::RowNotFound))
-}
-
-/// Removes a repo (and its mirror row). The primary goes last: while others remain, name a new
-/// primary first.
-pub async fn remove_repo(
-    pool: &SqlitePool,
-    project_id: i64,
-    repo_id: i64,
-    who: Who<'_>,
-) -> Result<(), Error> {
-    let mut tx = super::begin_write(pool).await?;
-    if get(&mut tx, project_id).await?.state == "archived" {
-        return refused("conflict", "the project is archived");
-    }
-    let all = repos(&mut tx, project_id).await?;
-    let Some(old) = all.iter().find(|r| r.id == repo_id) else {
-        return refused("not_found", "no such repo in the project");
-    };
-    if old.is_primary && all.len() > 1 {
-        return refused(
-            "conflict",
-            "set another repo primary before removing this one",
-        );
-    }
-    sqlx::query("DELETE FROM core_project_repos WHERE id = ?")
-        .bind(repo_id)
-        .execute(&mut *tx)
-        .await?;
-    let details = json!({"repo": old.name, "by_device": who.by_device});
-    record(
-        &mut tx,
-        who.actor,
-        "project.repo_removed",
-        project_id,
-        details,
-        false,
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(())
-}
-
-/// Makes `repo_id` the project's one primary repo.
-pub async fn set_primary(
-    pool: &SqlitePool,
-    project_id: i64,
-    repo_id: i64,
-    who: Who<'_>,
-) -> Result<(), Error> {
-    let mut tx = super::begin_write(pool).await?;
-    if get(&mut tx, project_id).await?.state == "archived" {
-        return refused("conflict", "the project is archived");
-    }
-    let all = repos(&mut tx, project_id).await?;
-    let Some(new) = all.iter().find(|r| r.id == repo_id) else {
-        return refused("not_found", "no such repo in the project");
-    };
-    // Clear first: the partial unique index is checked per row, not per statement.
-    sqlx::query("UPDATE core_project_repos SET is_primary = 0 WHERE project_id = ?")
-        .bind(project_id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("UPDATE core_project_repos SET is_primary = 1 WHERE id = ?")
-        .bind(repo_id)
-        .execute(&mut *tx)
-        .await?;
-    let details = json!({"repo": new.name, "by_device": who.by_device});
-    record(
-        &mut tx,
-        who.actor,
-        "project.repo_primary_set",
-        project_id,
-        details,
-        false,
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(())
-}
-
-/// Records the state of a repo's mirror on the Core machine: the head it fetched, or why it could
-/// not. Not audited: a fetch is routine, like a usage tick.
-pub async fn set_mirror(
-    pool: &SqlitePool,
-    repo_id: i64,
-    head: Option<&str>,
-    fetched_at: Option<&str>,
-    error: Option<&str>,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO core_project_mirrors (repo_id, head, fetched_at, error) VALUES (?, ?, ?, ?) \
-         ON CONFLICT (repo_id) DO UPDATE SET head = excluded.head, \
-         fetched_at = excluded.fetched_at, error = excluded.error",
-    )
-    .bind(repo_id)
-    .bind(head)
-    .bind(fetched_at)
-    .bind(error)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-pub async fn mirror(pool: &SqlitePool, repo_id: i64) -> Result<Option<Mirror>, sqlx::Error> {
-    let row = sqlx::query(
-        "SELECT repo_id, head, fetched_at, error FROM core_project_mirrors WHERE repo_id = ?",
-    )
-    .bind(repo_id)
-    .fetch_optional(pool)
-    .await?;
-    row.map(|r| {
-        Ok(Mirror {
-            repo_id: r.try_get("repo_id")?,
-            head: r.try_get("head")?,
-            fetched_at: r.try_get("fetched_at")?,
-            error: r.try_get("error")?,
-        })
-    })
-    .transpose()
-}
+mod github;
+mod repos;
+pub use github::{NewGithubRepo, create_from_github};
+use repos::add_repo_in;
+pub use repos::{add_repo, mirror, remove_repo, set_mirror, set_primary};
 
 #[cfg(test)]
 mod tests;

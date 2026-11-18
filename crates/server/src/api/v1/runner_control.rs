@@ -62,6 +62,10 @@ pub struct RunnerPolicyBody {
     /// runner's current setting stays; `false` turns it off.
     #[serde(default)]
     pub share_history: Option<bool>,
+    /// The runner takes project runs. Omitted: the runner's current setting stays (off for a
+    /// runner that never had one). Runs are placed only on runners with it on.
+    #[serde(default)]
+    pub runs: Option<bool>,
 }
 
 impl From<RunnerPolicy> for RunnerPolicyBody {
@@ -71,6 +75,7 @@ impl From<RunnerPolicy> for RunnerPolicyBody {
             agents: p.agents,
             agent_capacity: p.agent_capacity,
             share_history: Some(p.share_history),
+            runs: Some(p.runs),
         }
     }
 }
@@ -261,18 +266,20 @@ pub async fn set_policy(
             "agent_capacity must be from 1 to {MAX_AGENT_CAPACITY}"
         )));
     }
+    let current = app
+        .hub
+        .facts()
+        .get(&id)
+        .and_then(|(f, _)| f.as_ref().and_then(|f| f.policy));
     let policy = RunnerPolicy {
         terminals: b.terminals,
         agents: b.agents,
         agent_capacity: b.agent_capacity,
         // Unchanged when absent: the App's other runner edits send no such field.
-        share_history: b.share_history.unwrap_or_else(|| {
-            app.hub
-                .facts()
-                .get(&id)
-                .and_then(|(f, _)| f.as_ref().and_then(|f| f.policy))
-                .is_some_and(|p| p.share_history)
-        }),
+        share_history: b
+            .share_history
+            .unwrap_or_else(|| current.is_some_and(|p| p.share_history)),
+        runs: b.runs.unwrap_or_else(|| current.is_some_and(|p| p.runs)),
     };
     let proof = app.hub.admin_elevation(&me);
     let applied = match ask(&app, &id, Command::RunnerPolicy(policy), proof, POLICY_WAIT).await {

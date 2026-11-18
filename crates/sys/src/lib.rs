@@ -60,6 +60,10 @@ pub const INVENTORY: &[(&str, &str)] = &[
         "join_cgroup",
         "pre_exec closure: one write(2) of a static one-byte buffer to a descriptor we own",
     ),
+    (
+        "die_with_parent",
+        "pre_exec closure: prctl(PR_SET_PDEATHSIG) and getppid, integer arguments only",
+    ),
 ];
 
 /// Makes the calling process the leader of a new session and process group, with no
@@ -351,6 +355,34 @@ pub fn join_cgroup(cmd: &mut std::process::Command, procs: &std::fs::File) {
     let _ = (cmd, procs);
 }
 
+/// Has the child `cmd` starts killed (SIGKILL) when the thread that spawned it dies, so a helper
+/// that is itself killed leaves no `git`/`podman` behind. Linux only; elsewhere a no-op. A child
+/// whose parent died before the call exits at once.
+#[allow(unsafe_code)]
+pub fn die_with_parent(cmd: &mut std::process::Command) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        let parent = i32::try_from(std::process::id()).unwrap_or(0);
+        // SAFETY: the closure runs between fork and exec. prctl(2) with integer arguments and
+        // getppid(2) allocate nothing, take no lock and touch no memory of ours, so they are
+        // async-signal-safe; an error is reported back to `spawn`.
+        unsafe {
+            cmd.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::getppid() != parent {
+                    return Err(io::Error::other("the parent is gone"));
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = cmd;
+}
+
 /// Sends `signal` to every process in the group `pgid`. `Ok(false)` when the group is gone
 /// (ESRCH). A `pgid` of 0 or 1 is refused: those mean "my own group" and "every process".
 #[allow(unsafe_code)]
@@ -562,6 +594,23 @@ mod tests {
         cmd.args(["-c", "exit 7"]);
         close_fds_on_exec(&mut cmd);
         assert_eq!(cmd.status().unwrap().code(), Some(7));
+    }
+
+    /// The death signal follows the thread that spawned the child (what the run helper relies on
+    /// when it is killed mid-op).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_child_dies_with_the_thread_that_spawned_it() {
+        use std::os::unix::process::ExitStatusExt;
+        let mut child = std::thread::spawn(|| {
+            let mut cmd = std::process::Command::new("sleep");
+            cmd.arg("60");
+            die_with_parent(&mut cmd);
+            cmd.spawn().unwrap()
+        })
+        .join()
+        .unwrap();
+        assert_eq!(child.wait().unwrap().signal(), Some(libc::SIGKILL));
     }
 
     #[test]
