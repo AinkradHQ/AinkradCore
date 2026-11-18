@@ -9,12 +9,13 @@
 //! migration, no Core crate names this module.
 
 mod address;
+mod alerts;
 mod attach;
 mod commands;
 mod exec;
 pub mod gate;
-pub mod hostkeys;
 mod health;
+pub mod hostkeys;
 mod hosts;
 mod keys;
 mod policy;
@@ -24,7 +25,9 @@ mod valid;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::jobs::Job;
 use ainkrad_core_server::module::Module;
+use ainkrad_core_server::push::Notification;
 use ainkrad_core_server::store::Migration;
+use ainkrad_core_server::store::events::StoredEvent;
 use axum::Router;
 use axum::routing::{get, post, put};
 use serde_json::Value;
@@ -62,6 +65,12 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0005_health",
         up: include_str!("../migrations/0005_health.up.sql"),
         down: include_str!("../migrations/0005_health.down.sql"),
+    },
+    Migration {
+        version: 6,
+        name: "0006_alerts",
+        up: include_str!("../migrations/0006_alerts.up.sql"),
+        down: include_str!("../migrations/0006_alerts.down.sql"),
     },
 ];
 
@@ -233,6 +242,7 @@ impl Module for Leyline {
             "leyline.session",
             "leyline.hostkey",
             "leyline.command",
+            "leyline.alert",
         ]
     }
 
@@ -259,6 +269,8 @@ impl Module for Leyline {
             "leyline.command.created",
             "leyline.command.changed",
             "leyline.command.deleted",
+            "leyline.alert.opened",
+            "leyline.alert.resolved",
             "leyline.run.requested",
             "leyline.run.approval",
             "leyline.run.allowed",
@@ -284,6 +296,14 @@ impl Module for Leyline {
 
     fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
         Some(NON_DESTRUCTIVE)
+    }
+
+    fn notification_kinds(&self) -> &'static [(&'static str, &'static str)] {
+        alerts::KINDS
+    }
+
+    fn classify(&self, e: &StoredEvent) -> Option<Notification> {
+        alerts::classify(e)
     }
 
     fn jobs(&self) -> Vec<Job> {

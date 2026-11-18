@@ -157,6 +157,8 @@ fn why(c: ErrorCode) -> String {
 
 /// A machine on the path before its lease: host, port, user, its key's secret, its trusted keys.
 pub(crate) struct Stop {
+    /// The leyline host id (its row), as `host` is the address to dial.
+    pub(crate) id: String,
     host: String,
     port: u16,
     user: String,
@@ -216,6 +218,7 @@ pub(crate) async fn chain(
         .await
         .map_err(|_| NO)?;
         stops.push(Stop {
+            id: id.to_owned(),
             host: h.try_get("address").map_err(|_| NO)?,
             port: u16::try_from(h.try_get::<i64, _>("port").map_err(|_| NO)?).map_err(|_| NO)?,
             user: h.try_get("username").map_err(|_| NO)?,

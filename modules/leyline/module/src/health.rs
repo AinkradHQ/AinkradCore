@@ -10,7 +10,7 @@
 //!   never trust or replace a host key, and runs no text but the constant `PROBE`.
 //! - A host whose key (or any jump hop's) has no TRUSTED host key is not probed at all, and a runner
 //!   that answers `host_key_unknown` / `host_key_changed` records nothing: "we could not verify the
-//!   host" is never "the host is down" (the changed key is Y5-02's alert).
+//!   host" is never "the host is down" (a changed key raises the `host_key_changed` alert, `hostkeys::saw`).
 //! - Only a failed connect (or a probe that timed out) is DOWN. A runner that is away, busy or too
 //!   old, or a refused run, records nothing either.
 //! - At most `PER_RUNNER` probes are in flight per runner (the Core's small box is the relay).
@@ -28,8 +28,10 @@ use sqlx::{Row, SqlitePool};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
+use crate::alerts;
 use crate::exec;
 use crate::gate::{Action, Authorized, Principal, authorize_many, finish, still_valid};
+use crate::hostkeys;
 
 /// Probes in flight on one runner.
 const PER_RUNNER: usize = 4;
@@ -206,7 +208,7 @@ enum Seen {
 }
 
 async fn measure(app: &App, limits: &Limits, auth: &Authorized) -> Seen {
-    let Ok((_, _, runner)) = exec::chain(app, auth.host_id()).await else {
+    let Ok((target, hops, runner)) = exec::chain(app, auth.host_id()).await else {
         return Seen::Unknown;
     };
     let Ok(_permit) = limits.of(&runner).acquire_owned().await else {
@@ -230,6 +232,19 @@ async fn measure(app: &App, limits: &Limits, auth: &Authorized) -> Seen {
         // The host answered the connection but refused the key: it is up.
         Err(e) if e.code == ErrorCode::SshAuthFailed => Seen::Up(Facts::default(), ms),
         Err(e) if e.code == ErrorCode::SshFailed => Seen::Down,
+        // Not down, not a sample: the host (or a jump hop) presented another key. The hop's own
+        // host id is alerted, and `saw` stores the fingerprint for a person to compare.
+        Err(e) if e.code == ErrorCode::HostKeyChanged => {
+            if let Some(k) = e
+                .host_key
+                .filter(|k| hostkeys::fingerprint_ok(&k.fingerprint))
+                && let Some(stop) = hops.iter().chain([&target]).nth(usize::from(k.hop))
+                && let Err(err) = hostkeys::saw(app, &stop.id, &k.fingerprint, true).await
+            {
+                tracing::error!(error = %err.message, "recording a changed host key failed");
+            }
+            Seen::Unknown
+        }
         _ => Seen::Unknown,
     }
 }
@@ -274,6 +289,10 @@ async fn probe(app: App, limits: Limits, auth: Authorized) {
     let seen = measure(&app, &limits, &auth).await;
     if let Err(e) = store(&app, auth.host_id(), &seen).await {
         tracing::error!(error = %e, "storing a leyline health sample failed");
+    } else if !matches!(seen, Seen::Unknown)
+        && let Err(e) = alerts::evaluate(&app, auth.host_id()).await
+    {
+        tracing::error!(error = %e, "evaluating leyline health alerts failed");
     }
     let ok = matches!(seen, Seen::Up(..));
     if let Err(e) = finish(&app, auth, ok).await {
@@ -369,6 +388,10 @@ async fn sweep_runs(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+    // Alerts of a host that is gone have nothing left to resolve them.
+    sqlx::query("DELETE FROM leyline_alerts WHERE host_id NOT IN (SELECT id FROM leyline_hosts)")
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
