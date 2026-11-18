@@ -13,6 +13,7 @@ pub mod host;
 pub mod hub;
 pub mod jobs;
 pub mod live;
+pub mod mirrors;
 pub mod module;
 pub mod ops;
 pub mod ops_catalog;

@@ -204,6 +204,11 @@ pub trait Executor: Send + Sync + 'static {
         async { Err("this runner has no git workspace service".to_owned()) }
     }
 
+    /// How a project repo's copy on the Core is read (P3-02): signed calls for the clone relay.
+    fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream) {
+        let _ = up;
+    }
+
     /// Removes all worktrees owned by an agent session.
     fn cleanup_agent_workspace(
         &self,

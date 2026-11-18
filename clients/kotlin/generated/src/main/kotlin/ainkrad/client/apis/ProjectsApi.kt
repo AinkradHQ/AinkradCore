@@ -139,6 +139,41 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * POST /api/v1/projects/{id}/repos/{repo}/fetch
+        * 
+        * 
+         * @param id The project&#39;s id 
+         * @param repo The repo&#39;s id 
+         * @return ProjectInfo
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun fetchProjectRepo(id: kotlin.String, repo: kotlin.String): HttpResponse<ProjectInfo> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/projects/{id}/repos/{repo}/fetch".replace("{" + "id" + "}", "$id").replace("{" + "repo" + "}", "$repo"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * GET /api/v1/projects/{id}
         * 
         * 

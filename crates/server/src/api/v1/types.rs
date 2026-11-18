@@ -282,7 +282,11 @@
 ///    `StreamError.host_key`; no route yet. (84 and 85 are the runner Podman facts and the projects API.)
 /// 87: the `secret.runners_changed` audit action (a secret's runner scope changed on its own, with its
 ///    leases dropped); the Leyline key runner sync (Y1-02) is its first user.
-pub const API_MINOR: u32 = 89;
+/// 91: Core-held repo mirrors (P3-01). `POST /projects/{id}/repos/{repo}/fetch` (`fetchProjectRepo`, `admin`, no step-up)
+///    fetches a repo's remote into the Core's copy now; a failed fetch is still 200 with `mirror.error` set and the older
+///    `mirror.head` kept. The copy is served to `runner` devices as git smart HTTP, upload side only
+///    (`/mirrors/{repo}/info/refs`, `/git-upload-pack`; `/git-receive-pack` is always 403 `read_only`): not in the contract.
+pub const API_MINOR: u32 = 91;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -444,6 +444,10 @@ impl Executor for HarnessExecutor {
         self.workspaces.held()
     }
 
+    fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream) {
+        self.workspaces.set_mirror_upstream(up);
+    }
+
     async fn prepare_agent_workspace(
         &self,
         session: &str,
@@ -456,12 +460,14 @@ impl Executor for HarnessExecutor {
             reference: workspace.base.clone(),
             branch: workspace.branch.clone(),
             name: workspace.name.clone(),
+            mirror: workspace.mirror,
         }];
         requests.extend(workspace.also.iter().map(|w| SessionWorkspace {
             repo: w.repo.clone(),
             reference: w.base.clone(),
             branch: w.branch.clone(),
             name: w.name.clone(),
+            mirror: w.mirror,
         }));
         let path = self
             .workspaces

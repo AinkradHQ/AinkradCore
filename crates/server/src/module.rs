@@ -252,6 +252,18 @@ pub trait Module: Send + Sync + 'static {
         Box::pin(async { None })
     }
 
+    /// A new agent session was created for `project` (P3-02), not started yet; `by` is its
+    /// creating device. `Err` refuses the session with that reason (it is ended unstarted).
+    fn project_session<'a>(
+        &'a self,
+        _app: &'a App,
+        _session: &'a str,
+        _project: i64,
+        _by: &'a str,
+    ) -> BoxFut<'a, Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Credentials for the agent session `session` this module owns, minted fresh at every
     /// launch (start and resume). `Err` fails the launch with that reason (never a value).
     fn credentials<'a>(
