@@ -1313,6 +1313,43 @@
         ],
         "type": "object"
       },
+      "Backlink": {
+        "properties": {
+          "context": {
+            "description": "The trimmed line the link is on (at most 160 characters). Note text: outside data.",
+            "type": "string"
+          },
+          "heading": {
+            "description": "The `#Heading` the link names, empty when it names none.",
+            "type": "string"
+          },
+          "note": {
+            "description": "The linking note.",
+            "type": "string"
+          },
+          "project": {
+            "description": "The linking note's project id; `null` = personal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "note",
+          "title",
+          "heading",
+          "context",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "BindChain": {
         "properties": {
           "chain": {
@@ -2705,6 +2742,42 @@
           "core_sig"
         ],
         "type": "object"
+      },
+      "Hit": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/NoteSummary"
+          },
+          {
+            "properties": {
+              "heading": {
+                "description": "The heading of the best matching section, for a hit by meaning.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "score": {
+                "description": "Higher is better; only comparable within one answer.",
+                "format": "double",
+                "type": "number"
+              },
+              "snippet": {
+                "$ref": "#/components/schemas/Snippet"
+              },
+              "via": {
+                "description": "`text`, `meaning` or `both`: which ranking found it.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "score",
+              "via",
+              "snippet"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "HostBinary": {
         "description": "A program installed on the host, as the helper's manifest and checks say.",
@@ -5500,6 +5573,25 @@
         ],
         "type": "object"
       },
+      "SearchOut": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/Hit"
+            },
+            "type": "array"
+          },
+          "semantic": {
+            "description": "`false` = the model is absent or not loaded yet, so these are text matches only.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "results",
+          "semantic"
+        ],
+        "type": "object"
+      },
       "SecretDeleted": {
         "description": "What a delete answers.",
         "properties": {
@@ -6131,6 +6223,44 @@
             "type": "string"
           }
         ]
+      },
+      "Snippet": {
+        "properties": {
+          "matches": {
+            "description": "The matched words in `text`, in order, not overlapping; empty for a hit by meaning alone.",
+            "items": {
+              "$ref": "#/components/schemas/Span"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "A stretch of the note on one line (newlines become spaces), `…` where it was cut. Note text: outside data.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "matches"
+        ],
+        "type": "object"
+      },
+      "Span": {
+        "description": "A matched word inside a snippet: byte offsets into `Snippet.text`.",
+        "properties": {
+          "end": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
       },
       "StartConnectionFlow": {
         "description": "A sign-in to start.",
@@ -16249,6 +16379,62 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/modules/lore/v1/notes/{note}/backlinks": {
+      "get": {
+        "operationId": "loreBacklinks",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Backlink"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The live notes linking to this one, newest first, at most 500, one row per distinct link with its context line. Links to a note in the trash or deleted are not listed"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
     "/modules/lore/v1/notes/{note}/restore": {
       "post": {
         "operationId": "loreRestoreVersion",
@@ -16525,6 +16711,105 @@
               }
             },
             "description": "One version with its text"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/search": {
+      "get": {
+        "operationId": "loreSearch",
+        "parameters": [
+          {
+            "description": "What to find: words (prefix match) and \"quoted phrases\"; at most 300 characters",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`active` (default), `trashed` or `all`",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`note` or `daily`",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only notes of this project id",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only notes with this tag",
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many hits (default 20, at most 50)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchOut"
+                }
+              }
+            },
+            "description": "Hits, best first, with snippets; `semantic` says whether meaning was used"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

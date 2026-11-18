@@ -170,7 +170,7 @@ pub struct NoteView {
     pub text: String,
 }
 
-fn summary(r: &sqlx::sqlite::SqliteRow) -> Result<NoteSummary, sqlx::Error> {
+pub(crate) fn summary(r: &sqlx::sqlite::SqliteRow) -> Result<NoteSummary, sqlx::Error> {
     let text = |c: &str| r.try_get::<String, _>(c);
     Ok(NoteSummary {
         id: text("id")?,
@@ -376,6 +376,7 @@ pub(crate) async fn today(
             if trashed.is_some() {
                 let rev = restore_row(&mut tx, &id).await?;
                 record(&mut tx, "restored", "changed", &id, rev, "person", None).await?;
+                crate::save::relink(&mut tx, &id, None).await?;
             }
             id
         }
@@ -497,6 +498,8 @@ pub(crate) async fn patch(
         let rev = restore_row(&mut tx, &note).await?;
         record(&mut tx, "restored", "changed", &note, rev, "person", None).await?;
     }
+    // A move changes which note a link prefers; a trash or restore changes whether it can be a target.
+    crate::save::relink(&mut tx, &note, None).await?;
     let out = view(&mut tx, &note).await?;
     tx.commit().await?;
     Ok(Json(out))
