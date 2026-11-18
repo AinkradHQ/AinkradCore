@@ -25,8 +25,10 @@
 //!    `brain.me_card.served` (record ids only). No text is audited.
 //! 7. Budget: the body is capped (`Q_START_TOKENS` / `Q_PROMPT_TOKENS`, chars / 4); a caller may only
 //!    lower it. `complete: false` says something was cut.
-//! 8. Support is counted as distinct cited sources in `record_sources` (`SUPPORT_SQL`), never the
-//!    raw `support` counter.
+//! 8. Support is counted as distinct cited sources in `record_sources` that are not echoes
+//!    (`SUPPORT_SQL`, `echo = 0`), never the raw `support` counter.
+//! 9. Rate: each session gets a burst of 10 calls, then one a second (429 past that); a budget of 0
+//!    answers empty.
 
 use std::collections::HashSet;
 
@@ -74,8 +76,7 @@ const MAX_QUEUE: usize = 100;
 const NOT_CONTESTED: &str = "contests IS NULL";
 /// Distinct cited sources of a record. Raw `support` is not used (it is being changed to count
 /// origins, B5-02), and this reads the same facts directly.
-const SUPPORT_SQL: &str =
-    "(SELECT count(DISTINCT rs.source) FROM record_sources rs WHERE rs.record = memory.id)";
+const SUPPORT_SQL: &str = "(SELECT count(DISTINCT rs.source) FROM record_sources rs WHERE rs.record = memory.id AND rs.echo = 0)";
 
 #[derive(Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -239,6 +240,13 @@ pub(crate) async fn context(
     Query(q): Query<AiContextQuery>,
 ) -> ApiResult<AiContext> {
     let session = session_of(&me)?;
+    if !b.context_allowed(&session) {
+        return Err(crate::code(
+            429,
+            "rate_limited",
+            "too many context calls; wait a second",
+        ));
+    }
     build(&app, &b, &session, q, Opts::default())
         .await
         .map(Json)
@@ -280,15 +288,24 @@ pub(crate) async fn build(
     } else {
         Q_PROMPT_TOKENS
     };
+    if q.budget == Some(0) {
+        return Ok(AiContext {
+            mode: q.mode,
+            text: String::new(),
+            ids: vec![],
+            tokens: 0,
+            complete: false,
+        });
+    }
     let tokens = (q.budget.map_or(max, |n| n as usize)).clamp(50, max);
     let named = q.room.is_some() && !opts.me_only;
-    let (rooms, _) = if opts.me_only {
+    let (rooms, rooms_cut) = if opts.me_only {
         (vec![], false)
     } else {
         scope(app, session, q.room.as_deref()).await?
     };
     let solo = rooms.len() == 1;
-    let (open, _closed) = open_all(&app, &b, rooms, named).await?;
+    let (open, closed) = open_all(app, b, rooms, named).await?;
 
     let mut body = Body {
         text: String::new(),
@@ -319,26 +336,24 @@ pub(crate) async fn build(
                 body.complete &= !was_cut;
                 body.put(&format!("Instructions:\n{t}\n"), &[]);
             }
-            let c = card::build(&app, a.pool(), &v.id, &now).await?;
+            let c = card::build(app, a.pool(), &v.id, &now).await?;
             body.complete &= c.complete;
             let at: Vec<(String, String)> = c.ids.iter().map(|i| (v.id.clone(), i.clone())).collect();
             body.put(&c.text, &at);
         }
-        if start {
-            if let Some((c, at)) = me_card::build_located(&app, &b, &session).await {
-                body.complete &= c.complete;
-                if body.put(&c.text, &at) {
-                    me_ids = c.ids.clone();
-                }
+        if start && let Some((c, at)) = me_card::build_located(app, b, session).await {
+            body.complete &= c.complete;
+            if body.put(&c.text, &at) {
+                me_ids = c.ids.clone();
             }
         }
         used.extend(body.at.iter().map(|x| x.1.clone()));
         if !start {
-            used.extend(loaded_ids(&app, &session).await?);
+            used.extend(loaded_ids(app, session).await?);
         }
         let k = if start { Q_START_K } else { Q_PROMPT_K };
         for (v, a) in &open {
-            let cutoff = stale_cutoff(&app, &v.id).await;
+            let cutoff = stale_cutoff(app, &v.id).await;
             let mut all = fetch(a.pool(), &v.id, &cutoff, BY_NEWEST, MAX_SCORED + 1).await?;
             if all.len() > MAX_SCORED {
                 all.truncate(MAX_SCORED);
@@ -360,12 +375,12 @@ pub(crate) async fn build(
     result?;
     by_support.sort_by(|a, b| (a.demote, b.support, &b.seen).cmp(&(b.demote, a.support, &a.seen)));
     by_recent.sort_by(|a, b| (a.demote, &b.seen).cmp(&(b.demote, &a.seen)));
-    body.complete &= !capped;
+    body.complete &= !capped && !rooms_cut && closed == 0;
 
     // Choose the records: by meaning, by support, then the newest for the rest of the quota.
     let k = if start { Q_START_K } else { Q_PROMPT_K };
     let meaning = match &prompt {
-        Some(p) => by_meaning(&app, &b, p, &newest).await,
+        Some(p) => by_meaning(app, b, p, &newest).await,
         None => None,
     };
     let mut seen: HashSet<&str> = HashSet::new();
@@ -422,7 +437,7 @@ pub(crate) async fn build(
     // The ledger and the audit first; no text leaves if they fail.
     let mut tx = begin_write(&app.pool).await?;
     for (room, id) in &body.at {
-        crate::loaded::record_in(&mut tx, &session, room, std::slice::from_ref(id)).await?;
+        crate::loaded::record_in(&mut tx, session, room, std::slice::from_ref(id)).await?;
     }
     let mut rooms_used: Vec<&str> = body.at.iter().map(|x| x.0.as_str()).collect();
     rooms_used.sort_unstable();

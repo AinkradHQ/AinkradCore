@@ -111,6 +111,7 @@ pub struct PolicyView {
     /// Sources older than this many days that are fully distilled lose their text and keep a citation stub. Null (the default) keeps everything.
     pub retention_days: Option<u32>,
     /// Automatic distils a day for the room: 0 is off, the most is 50 (default 12).
+    #[schema(required = false)]
     pub daily_distils: u32,
 }
 

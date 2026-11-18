@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_core::audit::AuditActor;
-use ainkrad_core_server::store::modsettings::ModuleSettings;
 use ainkrad_core::untrusted::OPEN;
+use ainkrad_core_server::store::modsettings::ModuleSettings;
 use brain_module::Brain;
 use brain_module::semantic::Embedder;
 use serde_json::{Value, json};
@@ -62,10 +62,26 @@ impl Fake {
 async fn setup(brain: Brain) -> (Fx, String, String) {
     let fx = fx_with(brain, 1).await;
     let alpha = committed_room_named(&fx, "Alpha", &[("Keys", "SRCMARK-7f3a ang=20 ")]).await;
-    put_record(&fx, &alpha, "r1", "fact", "accepted", "rotate the signing keys ang=10 ").await;
+    put_record(
+        &fx,
+        &alpha,
+        "r1",
+        "fact",
+        "accepted",
+        "rotate the signing keys ang=10 ",
+    )
+    .await;
     put_record(&fx, &alpha, "r2", "fact", "accepted", "pasta menu ang=90 ").await;
     // Not memory: a candidate (and the source above is never searched by meaning).
-    put_record(&fx, &alpha, "r3", "fact", "candidate", "ang=20 credentials draft ").await;
+    put_record(
+        &fx,
+        &alpha,
+        "r3",
+        "fact",
+        "candidate",
+        "ang=20 credentials draft ",
+    )
+    .await;
     let s = session(&fx, ALPHA, &["anthropic"]).await;
     open_room(&fx, &alpha).await;
     (fx, alpha, s)

@@ -209,14 +209,14 @@ async fn a_good_answer_is_stored_with_counted_sources_and_instructions_round_tri
     );
     assert!(v["instructions_approved_at"].is_null());
     assert!(v["written_at"].is_string());
-    // `State` and `Last activity` come from the items' dates (the newest made-up one is 2026-11-02),
+    // `State` and `Last activity` come from the items' dates (the newest made-up one is 2026-11-07),
     // never from the model's "active" / "today".
     let f = &v["overview"]["facts"];
     assert!(
         f["last_activity"]
             .as_str()
             .unwrap()
-            .starts_with("2026-11-02 ("),
+            .starts_with("2026-11-07 ("),
         "{f}"
     );
     assert_ne!(f["last_activity"], "today");

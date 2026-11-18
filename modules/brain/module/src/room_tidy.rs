@@ -16,7 +16,7 @@
 //!     superseded: tidy has no supersede;
 //!   * a merge is within one kind, and outside task/project-state/summary only identical words
 //!     merge; the kept record is chosen in code (a person's, then better supported, then older);
-//!   * at most `ARCHIVE_MAX` records are archived per tidy;
+//!   * at most `ARCHIVE_MAX` records are archived per tidy (merge-drops of task, state and summary included);
 //!   * a merge is within one kind. When the kept record is a person's it is left untouched and only
 //!     the duplicate is archived;
 //!   * a contested record, or one another record contests, is left alone.
@@ -268,10 +268,14 @@ pub(crate) async fn apply(
     let mut tx = pool.begin().await?;
     let mut cs = ChangeSet::new("tidy", now);
     let (mut archived, mut merged, mut contested, mut refused) = (0, 0, 0, 0);
+    // Merge-drops of the time-bound kinds archive a record too: they count against the same cap.
+    let mut dropped_timed = 0;
     for x in &a.archive {
         match live(&mut tx, &x.id).await? {
             Some(l)
-                if !l.locked && ARCHIVABLE.contains(&l.kind.as_str()) && archived < ARCHIVE_MAX =>
+                if !l.locked
+                    && ARCHIVABLE.contains(&l.kind.as_str())
+                    && archived + dropped_timed < ARCHIVE_MAX =>
             {
                 archive(&mut tx, &mut cs, &x.id, now).await?;
                 archived += 1;
@@ -307,7 +311,11 @@ pub(crate) async fn apply(
             // Outside the time-bound kinds only the same words merge (the model cannot fold two
             // different rules or facts into one). ponytail: exact words only; the by-meaning tier of
             // `merge::decide` needs vectors tidy does not load.
-            if l.locked || (!ARCHIVABLE.contains(&kind.as_str()) && l.norm != w.norm) {
+            let timed = ARCHIVABLE.contains(&kind.as_str());
+            if l.locked
+                || (!timed && l.norm != w.norm)
+                || (timed && archived + dropped_timed >= ARCHIVE_MAX)
+            {
                 refused += 1;
                 continue;
             }
@@ -334,6 +342,7 @@ pub(crate) async fn apply(
                 .await?;
             }
             archive(&mut tx, &mut cs, d, now).await?;
+            dropped_timed += i64::from(timed);
             merged += 1;
         }
     }

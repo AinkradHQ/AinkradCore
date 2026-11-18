@@ -12,7 +12,7 @@ async fn main() -> std::process::ExitCode {
             Arc::new(brain_module::Brain::default()),
             Arc::new(leyline_module::Leyline),
             Arc::new(lore_module::Lore::default()),
-            Arc::new(design_module::Design),
+            Arc::new(design_module::Design::default()),
         ],
         &["brain", "leyline", "lore", "design"],
     )

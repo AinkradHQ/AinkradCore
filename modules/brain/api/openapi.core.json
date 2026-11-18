@@ -1031,14 +1031,85 @@
         },
         "type": "object"
       },
+      "AiContext": {
+        "properties": {
+          "complete": {
+            "description": "False when the budget (or a card's own cap) cut something.",
+            "type": "boolean"
+          },
+          "ids": {
+            "description": "The ids of the records in the bundle.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "text": {
+            "description": "The bundle, wrapped once as outside data; empty when there is nothing to add. Every record\nline starts with its id in brackets.",
+            "type": "string"
+          },
+          "tokens": {
+            "description": "Tokens of the bundle body (characters / 4).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "mode",
+          "text",
+          "ids",
+          "tokens",
+          "complete"
+        ],
+        "type": "object"
+      },
+      "AiEvidence": {
+        "properties": {
+          "compacted": {
+            "description": "The source's text was removed by retention; only the citation remains.",
+            "type": "boolean"
+          },
+          "record": {
+            "description": "The citing record.",
+            "type": "string"
+          },
+          "room": {
+            "type": "string"
+          },
+          "source": {
+            "description": "The cited source's item id.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The source's start of text, inside the outside-text envelope; empty when `compacted`.",
+            "type": "string"
+          },
+          "truncated": {
+            "description": "The snippet was cut at 2000 characters.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "room",
+          "record",
+          "source",
+          "text",
+          "truncated",
+          "compacted"
+        ],
+        "type": "object"
+      },
       "AiHit": {
         "properties": {
           "id": {
-            "description": "The record id, or the source's item id.",
+            "description": "The record id.",
             "type": "string"
           },
           "kind": {
-            "description": "`record` (an accepted record, listed first) or `source`.",
+            "description": "Always `record`: a fact in force. Sources are read through `brainAiEvidence` only.",
             "type": "string"
           },
           "room": {
@@ -1063,6 +1134,13 @@
       },
       "AiHits": {
         "properties": {
+          "complete": {
+            "description": "False when a cap (rooms per search, records per room for meaning) cut what was read, so a\nmissing hit may exist. Always set; optional in the schema for the same reason as `ranked_by`.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "hits": {
             "items": {
               "$ref": "#/components/schemas/AiHit"
@@ -1093,10 +1171,48 @@
         ],
         "type": "object"
       },
+      "AiPast": {
+        "description": "A record a current one replaced. `text` is outside data, like every record text.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "valid_from": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valid_to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "type": "object"
+      },
       "AiRecord": {
         "properties": {
           "created_at": {
             "type": "string"
+          },
+          "history": {
+            "description": "Only `brainAiRecord`: what this record replaced, newest first (B4-02), so \"what was true in\nMarch\" stays answerable. A replaced record is reachable only through its successor in memory.",
+            "items": {
+              "$ref": "#/components/schemas/AiPast"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           },
           "id": {
             "type": "string"
@@ -1326,10 +1442,16 @@
           "auth.lockout",
           "auth.lockout_cleared",
           "auth.step_up",
+          "brain.ai.checkpoint_requested",
+          "brain.ai.context",
+          "brain.ai.evidence",
+          "brain.ai.outcome",
           "brain.ai.proposed",
           "brain.ai.refused",
           "brain.alias.removed",
           "brain.alias.set",
+          "brain.change.undone",
+          "brain.distil.capped",
           "brain.distil.done",
           "brain.distil.queued",
           "brain.distil.rejected",
@@ -1339,16 +1461,24 @@
           "brain.import.started",
           "brain.inbox.decided",
           "brain.inbox.notice",
+          "brain.me_card.served",
           "brain.overview.failed",
           "brain.overview.instructions",
           "brain.overview.queued",
           "brain.overview.written",
+          "brain.redistil.cancelled",
+          "brain.redistil.done",
+          "brain.redistil.failed",
+          "brain.redistil.previewed",
+          "brain.redistil.started",
           "brain.room.access",
           "brain.room.centroid_backfilled",
+          "brain.room.compacted",
           "brain.room.created",
           "brain.room.linked",
           "brain.room.opened",
           "brain.room.policy",
+          "brain.room.purged",
           "brain.room.refused",
           "brain.room.unlinked",
           "brain.rule.changed",
@@ -1357,6 +1487,9 @@
           "brain.session.claimed",
           "brain.session.refused",
           "brain.source.changed",
+          "brain.tidy.done",
+          "brain.tidy.rejected",
+          "brain.tidy.started",
           "budget.created",
           "budget.deleted",
           "budget.exhausted",
@@ -1639,6 +1772,30 @@
         ],
         "type": "object"
       },
+      "Card": {
+        "properties": {
+          "complete": {
+            "description": "False when the budget cut a record that would have made it.",
+            "type": "boolean"
+          },
+          "ids": {
+            "description": "The records on the card, in order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "ids",
+          "complete"
+        ],
+        "type": "object"
+      },
       "Chain": {
         "description": "An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first\nentry that has one to give.",
         "properties": {
@@ -1765,6 +1922,103 @@
         ],
         "type": "object"
       },
+      "Change": {
+        "properties": {
+          "at": {
+            "description": "RFC 3339.",
+            "type": "string"
+          },
+          "counts": {
+            "description": "Counts by outcome, for example `{\"saved\": 5, \"reinforced\": 3}`.",
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "`distil`, `checkpoint`, `ai`, `tidy`, `purge` or `archive`.",
+            "type": "string"
+          },
+          "rows": {
+            "description": "Records the set changed (a purge keeps none).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "summary": {
+            "description": "The line the App shows, such as \"Saved 5 · reinforced 3 · replaced 1\".",
+            "type": "string"
+          },
+          "undone_at": {
+            "description": "When Undo ran; none while it can still be undone.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "summary",
+          "counts",
+          "at",
+          "rows"
+        ],
+        "type": "object"
+      },
+      "ChangeDetail": {
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/Change"
+          },
+          "more": {
+            "description": "More rows follow: ask again with `after` set to the last `seq`.",
+            "type": "boolean"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeRow"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "change",
+          "rows",
+          "more"
+        ],
+        "type": "object"
+      },
+      "ChangeRow": {
+        "properties": {
+          "after": {
+            "description": "The record as the change left it; none: the change removed it.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "before": {
+            "description": "The record as it was (the `records` columns and `_sources`); none: it did not exist.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "record": {
+            "type": "string"
+          },
+          "seq": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "record"
+        ],
+        "type": "object"
+      },
       "Changed": {
         "properties": {
           "changed": {
@@ -1775,6 +2029,25 @@
         },
         "required": [
           "changed"
+        ],
+        "type": "object"
+      },
+      "CheckpointAsked": {
+        "properties": {
+          "reason": {
+            "description": "Why not: `rate_limited`, `busy` or `not_eligible`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested": {
+            "description": "True when the request was taken. The Core acts on it at its next tick, under its caps;\nnothing is distilled in this call.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requested"
         ],
         "type": "object"
       },
@@ -5741,6 +6014,15 @@
               "null"
             ]
           },
+          "daily_distils": {
+            "description": "Automatic distils a day: 0 turns auto-distil off for the room, the most is 50. A person only (an AI session is refused); no step-up, it only bounds cost.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "min_sources": {
             "description": "1 to 20: the fewest sources an auto-accepted candidate must cite.",
             "format": "int32",
@@ -5754,6 +6036,15 @@
             "description": "`cloud` or `local_only`.",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "retention_days": {
+            "description": "Compaction is permanent. 1 to 3650 turns it on (step-up; a person only); 0 turns it off (keep). Check `GET /rooms/{room}/retention` first for what it would compact.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
               "null"
             ]
           }
@@ -5799,6 +6090,12 @@
             },
             "type": "array"
           },
+          "daily_distils": {
+            "description": "Automatic distils a day for the room: 0 is off, the most is 50 (default 12).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "lease_hours": {
             "format": "int64",
             "type": "integer"
@@ -5819,6 +6116,15 @@
           "model": {
             "description": "`cloud` (the approved provider) or `local_only`.",
             "type": "string"
+          },
+          "retention_days": {
+            "description": "Sources older than this many days that are fully distilled lose their text and keep a citation stub. Null (the default) keeps everything.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "review_days": {
             "format": "int64",
@@ -6354,8 +6660,15 @@
             "description": "One self-contained statement, 1 to 2000 characters.",
             "type": "string"
           },
+          "replaces": {
+            "description": "A memory record this one disagrees with. An AI may not contest memory: a proposal that sets\nit is dropped (`contests_memory`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "sources": {
-            "description": "Item ids of sources in the same room (at most 20).",
+            "description": "Item ids of sources this session read through `brainAiEvidence` (at most 20). A proposal\nthat cites none is dropped.",
             "items": {
               "type": "string"
             },
@@ -6369,7 +6682,7 @@
             "type": "array"
           },
           "type": {
-            "description": "`decision`, `fact`, `preference`, `rule`, `project-state`, `task` or `summary`.",
+            "description": "`fact` or `summary`; a `decision` is saved only when a user turn says it. `task` and\n`project-state` are dropped for now. Never `rule` or `preference`.",
             "type": "string"
           }
         },
@@ -6382,17 +6695,25 @@
       "Proposed": {
         "properties": {
           "duplicate": {
-            "description": "The same statement was already in the room: nothing was added.",
+            "description": "True when memory already held the statement (`status` is `reinforced`).",
             "type": "boolean"
           },
           "id": {
+            "description": "The new record's id when `status` is `saved`; empty otherwise.",
             "type": "string"
+          },
+          "reason": {
+            "description": "The first reason code of a drop.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "room": {
             "type": "string"
           },
           "status": {
-            "description": "Always `candidate`: a person decides in the Inbox.",
+            "description": "`saved` (in memory, with Undo for the person), `reinforced` (memory already held it) or\n`dropped` (it did not pass the checks; nothing is queued).",
             "type": "string"
           }
         },
@@ -6671,6 +6992,91 @@
         ],
         "type": "object"
       },
+      "RedistilView": {
+        "properties": {
+          "archived": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "change": {
+            "description": "The change set to Undo (`POST /rooms/{room}/changes/{id}/undo`); none for a dry run.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "description": "Why it waits or failed.",
+            "type": "string"
+          },
+          "dry_run": {
+            "description": "A dry run reads and counts, and writes no memory.",
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kept": {
+            "description": "Facts that stay (re-derived, or protected), facts written, and old facts archived. Set when `done`.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "new_facts": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "read": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "room": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "state": {
+            "description": "`running`, `committing`, `done`, `failed` (start it again within 24 hours to resume) or\n`cancelled`.",
+            "type": "string"
+          },
+          "summary": {
+            "description": "\"Kept 84 facts, archived 1,203 items\" (a dry run: \"Would keep ...\"). Set when `done`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "Sources the run reads, and how many it has read.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "room",
+          "dry_run",
+          "state",
+          "total",
+          "read",
+          "detail",
+          "started_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "Regrouped": {
         "properties": {
           "dropped": {
@@ -6770,6 +7176,37 @@
         },
         "required": [
           "request_id"
+        ],
+        "type": "object"
+      },
+      "RetentionPreview": {
+        "properties": {
+          "chars": {
+            "description": "Characters of text that would be dropped.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "days": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "room": {
+            "type": "string"
+          },
+          "would_compact": {
+            "description": "Sources that would lose their text if retention were set to `days` now.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "room",
+          "days",
+          "would_compact",
+          "chars"
         ],
         "type": "object"
       },
@@ -9475,6 +9912,38 @@
         },
         "type": "object"
       },
+      "UndoResult": {
+        "properties": {
+          "already_undone": {
+            "description": "True when it had been undone before; nothing changed now.",
+            "type": "boolean"
+          },
+          "change": {
+            "type": "string"
+          },
+          "restored": {
+            "description": "Records put back as they were.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "description": "Records changed since this change set, left as they are.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "change",
+          "restored",
+          "skipped",
+          "already_undone"
+        ],
+        "type": "object"
+      },
       "UpdateConnection": {
         "description": "What to change about a connection; at least one field.",
         "properties": {
@@ -9771,7 +10240,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.93.0"
+    "version": "1.94.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -20032,6 +20501,130 @@
         ]
       }
     },
+    "/modules/brain/v1/ai/checkpoint": {
+      "post": {
+        "operationId": "brainAiCheckpoint",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckpointAsked"
+                }
+              }
+            },
+            "description": "Asks the Core to distil this AI session's new turns now. It only requests: the Core's caps still decide (1 request per 10 minutes per session), and it never names a room or text. A refusal is a normal answer, not an error."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/modules/brain/v1/ai/context": {
+      "get": {
+        "operationId": "brainAiContext",
+        "parameters": [
+          {
+            "description": "`start` or `prompt`.",
+            "in": "query",
+            "name": "mode",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One room; none means the rooms this session may see.",
+            "in": "query",
+            "name": "room",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The user's prompt (`prompt` mode, required) or the task in a few words (`start`, optional).",
+            "in": "query",
+            "name": "prompt",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Tokens; a caller may lower the cap, never raise it.",
+            "in": "query",
+            "name": "budget",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiContext"
+                }
+              }
+            },
+            "description": "Memory for this session, from memory only (never raw sources, never contested records), wrapped once as outside data, every record line carrying its id. `start`: approved instructions, the room card, the me card and about 10 records. `prompt`: the few records that match the prompt and were not given to this session before; empty is the normal answer. Every record id is recorded as loaded for this session. `complete` is false when a budget cut something."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
     "/modules/brain/v1/ai/decisions": {
       "get": {
         "operationId": "brainAiDecisions",
@@ -20066,7 +20659,7 @@
                 }
               }
             },
-            "description": "Accepted decisions of the rooms this AI session may see, newest first, as outside data"
+            "description": "Current (memory) decisions of the rooms this AI session may see, newest first, as outside data"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -20130,7 +20723,7 @@
                 }
               }
             },
-            "description": "Accepted project-state records, tasks (open threads) and rules (landmines) of the rooms this AI session may see, newest first, as outside data"
+            "description": "Current (memory) project-state records, tasks (open threads) and rules (landmines) of the rooms this AI session may see, newest first, as outside data"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -20238,7 +20831,7 @@
                 }
               }
             },
-            "description": "The proposal waits in the room's Inbox as a candidate (never accepted automatically; a repeat of the same statement is `duplicate`; 20 per session per room)"
+            "description": "The proposal goes through the same grounding, admission, merge and save steps as a distilled fact and is saved with Undo (`saved`), merged into a fact memory already holds (`reinforced`) or `dropped`; never queued. Only a fact, a summary, or a decision a user turn says; never a rule or preference, never a replaces. It must be grounded in a user turn or a person's document this session read, unchanged since; 20 per session and 60 per room per hour"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -20300,7 +20893,78 @@
                 }
               }
             },
-            "description": "One accepted record of a room this AI session may see, whole, as outside data; a candidate or rejected one is a 404"
+            "description": "One memory record (current, not archived) of a room this AI session may see, whole, as outside data; a candidate, rejected, superseded or archived one is a 404"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/brain/v1/ai/rooms/{room}/records/{id}/sources/{source}": {
+      "get": {
+        "operationId": "brainAiEvidence",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The memory record that cites the source",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Item id of the cited source",
+            "in": "path",
+            "name": "source",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiEvidence"
+                }
+              }
+            },
+            "description": "The start (2000 characters) of a source that a current memory record cites, as outside data. The only op that returns raw source text. A source the record does not cite is a 404."
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -20382,7 +21046,7 @@
                 }
               }
             },
-            "description": "Hits across the rooms this AI session may see: accepted records first, then sources best first. Every text is wrapped as outside data."
+            "description": "Memory records (current, not archived) across the rooms this AI session may see, best first. Never raw sources: those come through brainAiEvidence for a record that cites them. Every text is wrapped as outside data."
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -21928,6 +22592,278 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/modules/brain/v1/rooms/{room}/card": {
+      "get": {
+        "operationId": "brainRoomCard",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Card"
+                }
+              }
+            },
+            "description": "The room card as text, with the ids of the records on it (person only; the room must be open). An AI session gets the card through `brainAiContext`."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/changes": {
+      "get": {
+        "operationId": "brainChangeSets",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Change id to continue after (the list is newest first).",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Change"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The room's change sets, newest first (person only)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/changes/{id}": {
+      "get": {
+        "operationId": "brainChangeSet",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Change id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Row `seq` to continue after.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeDetail"
+                }
+              }
+            },
+            "description": "One change set with its before and after rows (person only)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/changes/{id}/undo": {
+      "post": {
+        "operationId": "brainUndoChange",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Change id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UndoResult"
+                }
+              }
+            },
+            "description": "Rows put back; rows changed since are kept and listed. A second call changes nothing. A purge, or a change older than 30 days, is a 409 (person only)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/modules/brain/v1/rooms/{room}/claims": {
       "post": {
         "operationId": "brainClaimRoom",
@@ -22663,6 +23599,287 @@
           "brain"
         ],
         "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/redistil": {
+      "get": {
+        "operationId": "brainRedistils",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RedistilView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The room's last ten runs, newest first (counts only; person only)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "post": {
+        "operationId": "brainRedistil",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedistilView"
+                }
+              }
+            },
+            "description": "Starts, or resumes, the real re-distil of the room: every source is read again in the background, then new facts are written and every old fact nothing re-derived is archived, as one change set with Undo (step-up; person only; one room at a time). 409 `nothing_to_redistil`, `redistil_busy`, `redistil_open`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/redistil/cancel": {
+      "post": {
+        "operationId": "brainRedistilCancel",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedistilView"
+                }
+              }
+            },
+            "description": "Cancels the room's open run, real or dry: its waiting batch is dropped and what it staged and marked is cleared; nothing is archived (person only). 404 when no run is open; 409 `redistil_committing` while the run writes its result"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/redistil/dry-run": {
+      "post": {
+        "operationId": "brainRedistilDryRun",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedistilView"
+                }
+              }
+            },
+            "description": "Starts, or resumes, the dry run: the same pass, counted and rolled back. It writes no memory and reports counts only (person only)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/rooms/{room}/retention": {
+      "get": {
+        "operationId": "brainRetentionPreview",
+        "parameters": [
+          {
+            "description": "Room id",
+            "in": "path",
+            "name": "room",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Days to preview; the room's current setting when omitted.",
+            "in": "path",
+            "name": "days",
+            "required": true,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionPreview"
+                }
+              }
+            },
+            "description": "Dry run: how many sources retention would compact now, from counts only; writes nothing (person only)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
         "x-ainkrad-scope": "admin"
       }
     },

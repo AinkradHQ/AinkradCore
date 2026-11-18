@@ -154,7 +154,7 @@ async fn merges_stay_inside_one_kind_and_leave_a_person_record_alone() {
     same_words(&p, &["f1", "f2", "mine", "f3"]).await;
     // Across kinds: refused. Into a person's record: only the duplicate goes, the person's row is
     // not written. Within a kind: support moves to the kept record.
-    let a = r#"{"merge":[{"keep":"f1","drop":["pref"]},{"keep":"mine","drop":["f3"]},{"keep":"f1","drop":["f2"]}]}"#;
+    let a = r#"{"merge":[{"keep":"f1","drop":["pref","f2"]},{"keep":"mine","drop":["f3"]}]}"#;
     let mine = image(&mut p.acquire().await.unwrap(), "mine")
         .await
         .unwrap();
@@ -182,8 +182,10 @@ async fn a_contradiction_gets_a_mark_and_is_never_resolved() {
     seed(&p, "mine", "rule", "2026-11-06T00:00:00Z", true).await;
     seed(&p, "other", "rule", "2026-11-02T00:00:00Z", false).await;
     seed(&p, "mine2", "rule", "2026-11-02T00:00:00Z", true).await;
-    let ids = ["old", "new", "mine", "other", "mine2"];
-    let a = r#"{"contested":[{"a":"old","b":"new"},{"a":"mine","b":"other"},{"a":"mine","b":"mine2"}]}"#;
+    seed(&p, "mine3", "rule", "2026-11-02T00:00:00Z", true).await;
+    let ids = ["old", "new", "mine", "other", "mine2", "mine3"];
+    // Each id appears once in an answer, so two person records are a pair of their own.
+    let a = r#"{"contested":[{"a":"old","b":"new"},{"a":"mine","b":"other"},{"a":"mine2","b":"mine3"}]}"#;
     let done = run(&p, a, &ids).await.unwrap();
     assert_eq!((done.contested, done.refused), (2, 1));
     let q = |id: &'static str| {
@@ -210,13 +212,14 @@ async fn a_contradiction_gets_a_mark_and_is_never_resolved() {
     // A contested record is left alone by a later tidy: the pair is not shown again and an archive
     // or a second mark on either side is refused.
     let mut c = p.acquire().await.unwrap();
-    let again: Vec<String> = shown_in(&mut c)
+    let mut again: Vec<String> = shown_in(&mut c)
         .await
         .unwrap()
         .into_iter()
         .map(|s| s.id)
         .collect();
-    assert_eq!(again, vec!["mine2".to_owned()]);
+    again.sort();
+    assert_eq!(again, vec!["mine2".to_owned(), "mine3".to_owned()]);
     drop(c);
     seed(&p, "t", "task", "2026-11-01T00:00:00Z", false).await;
     let done = run(&p, r#"{"contested":[{"a":"new","b":"t"}]}"#, &["new", "t"])

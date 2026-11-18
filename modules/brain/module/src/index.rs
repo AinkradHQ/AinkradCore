@@ -101,12 +101,13 @@ pub(crate) async fn ensure(
         sqlx::query("DELETE FROM rec_fts").execute(&mut *tx).await?;
         let mut after = String::new();
         loop {
-            let rows =
-                sqlx::query("SELECT id, type, body, tags FROM memory WHERE id > ? ORDER BY id LIMIT ?")
-                    .bind(&after)
-                    .bind(PAGE)
-                    .fetch_all(canon)
-                    .await?;
+            let rows = sqlx::query(
+                "SELECT id, type, body, tags FROM memory WHERE id > ? ORDER BY id LIMIT ?",
+            )
+            .bind(&after)
+            .bind(PAGE)
+            .fetch_all(canon)
+            .await?;
             let Some(last) = rows.last() else { break };
             after = last.try_get("id")?;
             for r in &rows {
@@ -120,7 +121,10 @@ pub(crate) async fn ensure(
             }
         }
     }
-    for (k, v, on) in [("stamp", &stamp, src_behind), ("rec_stamp", &rec_stamp, rec_behind)] {
+    for (k, v, on) in [
+        ("stamp", &stamp, src_behind),
+        ("rec_stamp", &rec_stamp, rec_behind),
+    ] {
         if on {
             sqlx::query(
                 "INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",

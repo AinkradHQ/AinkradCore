@@ -175,9 +175,11 @@ fn borderline_goes_to_the_judge() {
             )
         },
         // Specific and grounded, but the model says it is not durable.
+        // (The source says only part of it: a fully grounded, specific line still scores above the bar.)
         Case {
             durable: Some(false),
             confidence: Some(0.8),
+            source: Some("User: the e5 model runs inside the Core"),
             reason: Some(Reason::ModelNotDurable),
             ..row(
                 "fact",

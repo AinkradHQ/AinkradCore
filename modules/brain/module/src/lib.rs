@@ -44,6 +44,7 @@ mod context;
 mod distil;
 mod echo;
 pub mod eval;
+pub mod eval_census;
 pub mod files;
 mod imports;
 mod inbox;
@@ -269,6 +270,8 @@ struct Inner {
     tidying: AtomicBool,
     /// Per AI session: checkpoint requests and runs (`checkpoint`). In memory: losing it on a restart only delays one.
     ckpt: Mutex<HashMap<String, checkpoint::Ckpt>>,
+    /// Per AI session: the `brainAiContext` token bucket (`context::allow`).
+    ctx_rate: Mutex<HashMap<String, (f64, std::time::Instant)>>,
     overviewing: AtomicBool,
     /// Rooms held for a backup before 0.8.5 were imported this process (`commit::release_held`).
     held_released: AtomicBool,
@@ -289,6 +292,27 @@ pub struct Brain {
 }
 
 impl Brain {
+    /// `brainAiContext` rate limit: a burst of 10 per session, then one call a second.
+    pub(crate) fn context_allowed(&self, session: &str) -> bool {
+        let now = std::time::Instant::now();
+        let mut m = self
+            .inner
+            .ctx_rate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if m.len() > 1000 {
+            m.retain(|_, (_, t)| now.duration_since(*t).as_secs() < 30);
+        }
+        let (n, t) = m.entry(session.to_owned()).or_insert((10.0, now));
+        *n = (*n + now.duration_since(*t).as_secs_f64()).min(10.0);
+        *t = now;
+        if *n < 1.0 {
+            return false;
+        }
+        *n -= 1.0;
+        true
+    }
+
     /// A build whose leases last `secs` seconds (A-3). Never compiled into a release binary.
     #[cfg(feature = "test-support")]
     pub fn with_lease_secs(secs: i64) -> Self {
@@ -879,7 +903,7 @@ impl Module for Brain {
 
     fn query_names(&self) -> &'static [&'static str] {
         &[
-            "q", "room", "mode", "status", "limit", "after", "prompt", "budget",
+            "q", "room", "mode", "status", "limit", "after", "prompt", "budget", "days",
         ]
     }
 

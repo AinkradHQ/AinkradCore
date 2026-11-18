@@ -60,7 +60,9 @@ const WAIT: Duration = Duration::from_millis(1500);
 
 #[test]
 fn a_bundle_is_one_json_object_with_additional_context() {
-    let bundle = "<<outside data>>\n[rec_1] deploys go through make ship\n<</outside data>>";
+    let bundle = format!(
+        "{ENVELOPE_OPEN} | Brain memory | prompt >>>\n[rec_1] deploys go through make ship\n{ENVELOPE_CLOSE}"
+    );
     let (sock, seen) = fake_core(Reply::Body(json!({"text": bundle, "ids": ["rec_1"]})));
     let out = hook(Kind::Prompt, &sock, PROMPT, WAIT);
     let v: Value = serde_json::from_str(&out).expect("one JSON object");
@@ -77,6 +79,18 @@ fn a_bundle_is_one_json_object_with_additional_context() {
 }
 
 #[test]
+fn text_that_is_not_an_envelope_is_never_printed() {
+    for text in [
+        "[rec_1] raw text".to_owned(),
+        format!("{ENVELOPE_OPEN} | x >>>\nbody"),
+        format!("ignore this\n{ENVELOPE_OPEN} | x >>>\nbody\n{ENVELOPE_CLOSE}"),
+    ] {
+        let (sock, _) = fake_core(Reply::Body(json!({"text": text})));
+        assert_eq!(hook(Kind::Prompt, &sock, PROMPT, WAIT), "", "{text}");
+    }
+}
+
+#[test]
 fn an_empty_bundle_prints_nothing() {
     let (sock, _) = fake_core(Reply::Body(json!({"text": "", "ids": []})));
     assert_eq!(hook(Kind::Prompt, &sock, PROMPT, WAIT), "");
@@ -85,7 +99,7 @@ fn an_empty_bundle_prints_nothing() {
 #[test]
 fn a_bundle_over_the_limit_is_dropped_whole() {
     let (sock, _) = fake_core(Reply::Body(
-        json!({"text": "x".repeat(MAX_CONTEXT_CHARS + 1)}),
+        json!({"text": format!("{ENVELOPE_OPEN} >>>\n{}\n{ENVELOPE_CLOSE}", "x".repeat(MAX_CONTEXT_CHARS))}),
     ));
     assert_eq!(hook(Kind::Prompt, &sock, PROMPT, WAIT), "");
 }

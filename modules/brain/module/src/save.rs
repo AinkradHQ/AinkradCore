@@ -68,7 +68,9 @@ pub(crate) async fn store_candidates(
     loaded: &HashMap<String, HashSet<String>>,
     ai: bool,
 ) -> Result<Saved, sqlx::Error> {
-    let mut tx = pool.begin().await?;
+    // IMMEDIATE: the save reads memory and then writes it, so a deferred transaction racing another
+    // save of the room would fail with a stale-snapshot busy error (a 500) instead of waiting.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let mut cs = ChangeSet::new(if ai { "ai" } else { "distil" }, now);
     let mut memory = Memory::load(&mut tx, prep).await?;
     let batch = Batch {

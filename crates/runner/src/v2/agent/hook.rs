@@ -14,6 +14,7 @@
 //! 4. `prompt` hands the model the bundle ONLY as `additionalContext`, verbatim: it is already the
 //!    outside-data envelope `brainAiContext` wrapped, so it is neither re-wrapped nor edited, and a
 //!    bundle over [`MAX_CONTEXT_CHARS`] is dropped whole, never cut (a cut would lose the closing marker).
+//!    Text that does not start and end as the envelope does is never printed.
 //!    The prompt is only the lookup key: it is sent to the Core and not kept.
 //! 5. `checkpoint` is a request: it prints nothing (PreCompact's stdout would become instructions
 //!    for the compaction summary) and the Core's caps decide whether it distils.
@@ -35,6 +36,10 @@ pub const MAX_CONTEXT_CHARS: usize = 10_000;
 const MAX_STDIN: u64 = 1 << 20;
 /// The most bytes of one reply line.
 const MAX_REPLY: u64 = 256 * 1024;
+/// The envelope markers of `ainkrad_core::untrusted` (this crate does not depend on the Core). The
+/// shim prints only text that starts and ends as an envelope does, so nothing else can reach a prompt.
+const ENVELOPE_OPEN: &str = "<<<OUTSIDE TEXT";
+const ENVELOPE_CLOSE: &str = "<<<END OUTSIDE TEXT>>>";
 /// The Core's channel for any allow-listed op (the same one the `ainkrad` CLI uses).
 const CALL: &str = "ainkrad_call";
 
@@ -72,7 +77,12 @@ fn output(kind: Kind, answer: &Value) -> String {
         return String::new();
     }
     let text = answer["text"].as_str().unwrap_or_default();
-    if text.trim().is_empty() || text.chars().count() > MAX_CONTEXT_CHARS {
+    let text = text.trim();
+    if text.is_empty()
+        || text.chars().count() > MAX_CONTEXT_CHARS
+        || !text.starts_with(ENVELOPE_OPEN)
+        || !text.ends_with(ENVELOPE_CLOSE)
+    {
         return String::new();
     }
     json!({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}})

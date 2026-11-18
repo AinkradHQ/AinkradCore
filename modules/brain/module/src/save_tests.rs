@@ -33,6 +33,8 @@ fn policy() -> policy::Policy {
         min_sources: 1,
         lease_hours: 1,
         review_days: 1,
+        retention_days: None,
+        daily_distils: 0,
     }
 }
 
@@ -254,9 +256,10 @@ async fn a_contested_record_is_not_related_and_never_reinforced() {
     let related = crate::distil::related_in(&pool).await.unwrap();
     assert!(related.iter().any(|r| r.id == old));
     assert!(related.iter().all(|r| r.id != contested));
-    // A later save of the same wording does not reinforce it either.
+    // A later save of the same wording reinforces the plain twin the batch saved (the second
+    // candidate had no `replaces`), never the contested record.
     let s = save(&pool, &[cand("fact", body)], &[]).await;
-    assert_eq!(s.reinforced, 0);
+    assert_eq!(s.reinforced, 1);
     let support: i64 = sqlx::query_scalar("SELECT support FROM records WHERE id = ?")
         .bind(&contested)
         .fetch_one(&pool)

@@ -231,8 +231,10 @@ async fn a_weakly_grounded_replaces_of_any_kind_only_contests() {
             .unwrap();
         tx.commit().await.unwrap();
         assert_eq!(contests(&p, "new").await, None, "{kind}");
-        assert!(run(&p, "old", "new").await.0, "{kind}");
-        assert!(!in_memory(&p, "old").await, "{kind}");
+        // Only a task or project-state may be superseded (round 4); the prose kinds stay contested.
+        let may = matches!(kind, "task" | "project-state");
+        assert_eq!(run(&p, "old", "new").await.0, may, "{kind}");
+        assert_eq!(!in_memory(&p, "old").await, may, "{kind}");
     }
 }
 
@@ -245,7 +247,11 @@ async fn a_replaces_of_a_rule_preference_decision_or_fact_always_contests() {
             let (_d, p) = pool().await;
             record(&p, "old", kind, T0).await;
             record(&p, "new", kind, NOW).await;
-            assert_eq!(run_g(&p, "old", "new", g).await.0, Replace::Contested, "{kind}");
+            assert_eq!(
+                run_g(&p, "old", "new", g).await.0,
+                Replace::Contested,
+                "{kind}"
+            );
             assert!(in_memory(&p, "old").await, "{kind}");
             assert_eq!(contests(&p, "new").await.as_deref(), Some("old"), "{kind}");
         }
@@ -367,9 +373,9 @@ async fn undo_all(p: &SqlitePool, change: &str) -> Vec<String> {
 #[tokio::test]
 async fn a_target_outside_memory_or_the_record_itself_is_ignored() {
     let (_d, p) = pool().await;
-    record(&p, "a", "fact", T0).await;
-    record(&p, "b", "fact", NOW).await;
-    record(&p, "c", "fact", NOW).await;
+    record(&p, "a", "task", T0).await;
+    record(&p, "b", "task", NOW).await;
+    record(&p, "c", "task", NOW).await;
     assert_eq!(run_g(&p, "a", "a", USER).await.0, Replace::Ignored);
     assert_eq!(run_g(&p, "nope", "b", USER).await.0, Replace::Ignored);
     // Already superseded: a second replace of the same target does nothing.
@@ -382,7 +388,7 @@ async fn a_target_outside_memory_or_the_record_itself_is_ignored() {
         .execute(&p)
         .await
         .unwrap();
-    record(&p, "d", "fact", NOW).await;
+    record(&p, "d", "task", NOW).await;
     assert_eq!(run_g(&p, "c", "d", USER).await.0, Replace::Ignored);
 }
 
@@ -522,7 +528,13 @@ async fn a_contested_label_stays_when_its_target_is_gone() {
     p.close().await;
     open_room(&fx, &room).await;
     let s = session(&fx, ALPHA, &["anthropic"]).await;
-    let one = read(&fx, &s, "brainAiRecord", json!({"room": room, "id": "rec-a"})).await;
+    let one = read(
+        &fx,
+        &s,
+        "brainAiRecord",
+        json!({"room": room, "id": "rec-a"}),
+    )
+    .await;
     let label = "contests record rec-c (gone), unresolved";
     assert!(one["text"].as_str().unwrap().contains(label), "{one}");
 }

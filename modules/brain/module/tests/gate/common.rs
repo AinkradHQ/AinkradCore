@@ -340,10 +340,11 @@ pub async fn committed_room_named(fx: &Fx, name: &str, texts: &[(&str, &str)]) -
         Some(json!({"state": "accepted"})),
     )
     .await;
-    let room = ok(fx, Method::POST, &format!("/imports/{run}/commit"), None).await["rooms"][0]["room"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let room =
+        ok(fx, Method::POST, &format!("/imports/{run}/commit"), None).await["rooms"][0]["room"]
+            .as_str()
+            .unwrap()
+            .to_owned();
     // New rooms auto-save (Brain v2); the tests built on this helper are about the review path.
     sqlx::query("UPDATE brain_room_policy SET auto_accept = '[]' WHERE room = ?")
         .bind(&room)

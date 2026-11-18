@@ -223,8 +223,7 @@ pub struct AiHit {
 
 /// The kind of the record a `memory` row contests (B4-02 round 3), for its label (`record_of`);
 /// NULL when that record is archived or purged, which the label shows as "(gone)".
-pub(crate) const CONTESTS_KIND: &str =
-    "(SELECT t.type FROM records t WHERE t.id = memory.contests AND t.archived_at IS NULL) AS contests_kind";
+pub(crate) const CONTESTS_KIND: &str = "(SELECT t.type FROM records t WHERE t.id = memory.contests AND t.archived_at IS NULL) AS contests_kind";
 
 #[derive(Serialize, ToSchema)]
 pub struct AiHits {
@@ -298,7 +297,7 @@ pub(crate) async fn search(
     let (rooms, rooms_cut) = scope(&app, &session, q.room.as_deref()).await?;
     let (open, closed) = open_all(&app, &b, rooms, named).await?;
     let key = b.key(&app).await?;
-    let mut recs: Vec<(bool, f64, AiHit)> = vec![];
+    let mut recs: Vec<(i64, f64, AiHit)> = vec![];
     for (v, a) in &open {
         let cutoff = stale_cutoff(&app, &v.id).await;
         for (rank, id) in rec_fts(&app, &key, a, limit, &expr).await? {
@@ -340,7 +339,12 @@ pub(crate) async fn search(
     let capped = rooms_cut || meaning.as_ref().is_some_and(|m| m.1);
     let meaning = meaning.map(|m| m.0);
     if let (Some(m), "meaning") = (&meaning, mode) {
-        note_loaded(&app, &session, m.iter().map(|h| (h.room.as_str(), h.id.as_str()))).await?;
+        note_loaded(
+            &app,
+            &session,
+            m.iter().map(|h| (h.room.as_str(), h.id.as_str())),
+        )
+        .await?;
         return Ok(Json(AiHits {
             hits: m.clone(),
             rooms_searched: open.len(),
@@ -361,7 +365,12 @@ pub(crate) async fn search(
     if let Some(m) = meaning {
         hits = crate::ai_semantic::fuse(hits, m, limit as usize);
     }
-    note_loaded(&app, &session, hits.iter().map(|h| (h.room.as_str(), h.id.as_str()))).await?;
+    note_loaded(
+        &app,
+        &session,
+        hits.iter().map(|h| (h.room.as_str(), h.id.as_str())),
+    )
+    .await?;
     Ok(Json(AiHits {
         hits,
         rooms_searched: open.len(),

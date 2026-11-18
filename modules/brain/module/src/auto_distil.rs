@@ -236,7 +236,10 @@ pub(crate) async fn queue(
     match inserted {
         Ok(_) => {}
         // A manual start won the race (one open distil per room, by index): coalesce into it.
-        Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+        Err(e)
+            if e.as_database_error()
+                .is_some_and(|d| d.is_unique_violation()) =>
+        {
             return Ok(Queued::Coalesced);
         }
         Err(e) => return Err(e.into()),
@@ -292,10 +295,11 @@ async fn session_ended(
             .bind(session)
             .fetch_optional(&app.pool)
             .await?;
-    let claimed: i64 = sqlx::query_scalar("SELECT count(*) FROM brain_session_rooms WHERE session = ?")
-        .bind(session)
-        .fetch_one(&app.pool)
-        .await?;
+    let claimed: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM brain_session_rooms WHERE session = ?")
+            .bind(session)
+            .fetch_one(&app.pool)
+            .await?;
     // A Brain session (distil, judge, tidy) is never a trigger; an unknown session is nothing.
     match owner {
         Some(o) if o.as_deref() != Some(MODULE) && claimed == 0 => {}

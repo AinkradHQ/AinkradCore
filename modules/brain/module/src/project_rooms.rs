@@ -165,8 +165,17 @@ pub(crate) async fn instructions_for_session(
             .await
             .ok()
             .flatten();
+    // The approved instructions go only to a session that may see the room now (the same gate as
+    // the op), so a link made while it could, or one the policy chain no longer allows, sends none.
+    let visible = match &room {
+        Some(r) => matches!(
+            crate::access::visible_room(app, session, r).await,
+            Ok(Some(_))
+        ),
+        None => false,
+    };
     let plain = match &room {
-        Some(room) => match crate::distil::canon(app, b, room).await {
+        Some(room) if visible => match crate::distil::canon(app, b, room).await {
             Ok(pool) => {
                 let text = approved_instructions(&pool).await;
                 pool.close().await;
@@ -174,7 +183,7 @@ pub(crate) async fn instructions_for_session(
             }
             Err(_) => None,
         },
-        None => None,
+        _ => None,
     };
     let bundle = start_bundle(app, b, session, room.as_deref()).await;
     join(plain, bundle)
@@ -182,6 +191,13 @@ pub(crate) async fn instructions_for_session(
 
 /// The wrapped start bundle, or `None` when there is nothing to add or the op failed.
 async fn start_bundle(app: &App, b: &Brain, session: &str, room: Option<&str>) -> Option<String> {
+    // The op's own scope, checked as `ainkrad_call` would: the creator's current `read` scope.
+    let scopes = ainkrad_core_server::ops_catalog::session_scopes(&app.pool, session)
+        .await
+        .ok()?;
+    if !scopes.iter().any(|s| s == "read") {
+        return None;
+    }
     let q = crate::context::AiContextQuery {
         mode: "start".to_owned(),
         room: room.map(str::to_owned),

@@ -317,7 +317,7 @@ pub(crate) async fn decide(
             .await?;
     tx.commit().await?;
     if to == "accepted" {
-        b.queue_record_vectors(&[(None, raw.body.clone())]);
+        b.queue_record_vectors(&[(None, raw.0.body.clone())]);
     }
     let out = fill(access.pool(), &room, vec![raw])
         .await?
