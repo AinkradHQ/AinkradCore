@@ -28,3 +28,8 @@ runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/ExecResult/prope
 runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/SftpTransferred/properties/op
 runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/SftpDone/properties/op
 runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/SftpDone/properties/op
+
+# Design (V6-01): `DesignImage` is the reply of both `design.render` and `design.shot`, so its `op` tag recurs in two
+# reply variants and the positional comparison reads it as changed against any baseline, an unchanged schema included
+# (like the terminal, agent and SFTP replies above). It stays for as long as that reply exists.
+runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/DesignImage/properties/op
