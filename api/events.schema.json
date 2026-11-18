@@ -79,6 +79,7 @@
     "notify.delivery",
     "project.archived",
     "project.created",
+    "project.spec_saved",
     "project.updated",
     "runner.connected",
     "runner.degraded",
