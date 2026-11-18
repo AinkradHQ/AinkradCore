@@ -490,6 +490,26 @@ impl Hub {
         self.send_command(runner, Command::SshExec(exec))
     }
 
+    /// The reading SFTP ops (`ssh.sftp.list`, `stat`, `read`) for a module holding its gate's proof,
+    /// as [`Hub::dispatch_ssh_exec`]: they carry no key, only one-use leases. Anything else is
+    /// refused (`invalid_args`) and never sent; writes are not a module's to send yet.
+    pub fn dispatch_ssh_sftp_read(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+    ) -> Result<Dispatched, StreamError> {
+        if !matches!(
+            command,
+            Command::SshSftpList(_) | Command::SshSftpStat(_) | Command::SshSftpRead(_)
+        ) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "only the reading sftp ops use this path",
+            ));
+        }
+        self.send_command(runner, command)
+    }
+
     fn send_command(
         self: &Arc<Self>,
         runner: &str,

@@ -15,8 +15,11 @@ use std::time::Duration;
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::BY;
+use ainkrad_core_server::hub::Dispatched;
 use ainkrad_core_server::store::secrets;
-use ainkrad_proto::v2::{Body, ErrorCode, ExecLimits, ExecResult, Reply, SshExec, SshHop};
+use ainkrad_proto::v2::{
+    Body, Command, ErrorCode, ExecLimits, ExecResult, Reply, SshExec, SshHop, SshRoute,
+};
 use tokio::sync::watch;
 
 use crate::gate::{Authorized, Link, Stop, checked, finish, redact_text};
@@ -126,28 +129,52 @@ fn cut(s: String) -> String {
     format!("{}\n[output cut]", &s[..n])
 }
 
+/// `link`'s target and jump hops, each with a fresh one-use lease for its runner.
+async fn leased(
+    app: &App,
+    auth: &Authorized,
+    link: Link,
+) -> Result<(SshHop, Vec<SshHop>, String), String> {
+    let Link {
+        target,
+        hops,
+        runner,
+    } = link;
+    let target = hop(app, auth, &runner, target).await?;
+    let mut v = Vec::new();
+    for h in hops {
+        v.push(hop(app, auth, &runner, h).await?);
+    }
+    Ok((target, v, runner))
+}
+
+/// One reading SFTP op (Y7-01: list, stat, read) on the authorised host: the gate re-checked
+/// (`checked`) right before it is sent, with exactly the connection it compared. Like `ssh.exec`,
+/// only this file sends it, and only with an `Authorized` in hand.
+pub(crate) async fn sftp(
+    app: &App,
+    auth: &Authorized,
+    make: impl FnOnce(SshRoute) -> Command,
+) -> Result<(Dispatched, String), String> {
+    let link = checked(app, auth).await.map_err(|e| e.message)?;
+    let (target, hops, runner) = leased(app, auth, link).await?;
+    let d = app
+        .hub
+        .dispatch_ssh_sftp_read(&runner, make(SshRoute { target, hops }))
+        .map_err(|e| why(e.code))?;
+    Ok((d, runner))
+}
+
 /// The runner that connects and the `ssh.exec` for `step`, with a one-use lease per hop. `link` is
-/// the very read `checked` compared: nothing is read again after the check. Shared with the health
-/// prober (Y5-01), which dispatches it itself to tell "host down" from "runner away".
-pub(crate) async fn build(
+/// the very read `checked` compared: nothing is read again after the check.
+async fn build(
     app: &App,
     auth: &Authorized,
     step: &str,
     timeout: Duration,
     link: Link,
 ) -> Result<(String, SshExec), String> {
-    let Link {
-        target,
-        hops,
-        runner,
-    } = link;
-    let (target, hops) = (hop(app, auth, &runner, target).await?, {
-        let mut v = Vec::new();
-        for h in hops {
-            v.push(hop(app, auth, &runner, h).await?);
-        }
-        v
-    });
+    let (target, hops, runner) = leased(app, auth, link).await?;
     let exec = SshExec {
         target,
         hops,
@@ -158,6 +185,21 @@ pub(crate) async fn build(
         },
     };
     Ok((runner, exec))
+}
+
+/// The health probe's (Y5-01) `ssh.exec` of `step`, sent from `link` (the very read `checked`
+/// compared). The prober waits on the answer itself to tell "host down" from "runner away".
+pub(crate) async fn probe(
+    app: &App,
+    auth: &Authorized,
+    step: &str,
+    timeout: Duration,
+    link: Link,
+) -> Result<Dispatched, String> {
+    let (runner, exec) = build(app, auth, step, timeout, link).await?;
+    app.hub
+        .dispatch_ssh_exec(&runner, exec)
+        .map_err(|e| why(e.code))
 }
 
 /// One `ssh.exec` of `step` on the authorised host: leases, hops, dispatch, the answer.
@@ -188,7 +230,7 @@ async fn one(
     }
 }
 
-fn why(c: ErrorCode) -> String {
+pub(crate) fn why(c: ErrorCode) -> String {
     match c {
         ErrorCode::Offline => "the runner is not connected",
         ErrorCode::Busy => "the runner is busy",

@@ -9,6 +9,7 @@
 //! migration, no Core crate names this module.
 
 mod address;
+mod ai;
 mod alerts;
 mod attach;
 mod commands;
@@ -110,6 +111,16 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/hosts/{host}/host-keys/trust"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
+    ("POST", "/ai/hosts/{host}/exec"),
+    ("POST", "/ai/commands/{command}/run"),
+];
+// The AI routes that reach a host ask a person through the gate itself (T10), never twice, and
+// may wait for that person inside the call.
+const SELF_APPROVED: &[(&str, &str)] = &[
+    ("GET", "/ai/hosts/{host}/files"),
+    ("GET", "/ai/hosts/{host}/file"),
+    ("POST", "/ai/hosts/{host}/exec"),
+    ("POST", "/ai/commands/{command}/run"),
 ];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts", "read"),
@@ -122,6 +133,13 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/commands", "read"),
     ("GET", "/commands/{command}", "read"),
     ("GET", "/runs/{run}", "admin"),
+    // Code Mode (Y7-01): a session acts as its creator without `admin`, so these name scopes a
+    // creator holds. They answer only a session's own calls (`ai::session_only`).
+    ("GET", "/ai/runs/{run}", "agent"),
+    ("GET", "/ai/hosts/{host}/files", "agent"),
+    ("GET", "/ai/hosts/{host}/file", "agent"),
+    ("POST", "/ai/hosts/{host}/exec", "agent"),
+    ("POST", "/ai/commands/{command}/run", "agent"),
     ("GET", "/hosts/{host}/host-keys", "read"),
     // The terminal scope, as the Core's own terminal routes.
     ("POST", "/hosts/{host}/terminals", "terminal"),
@@ -158,6 +176,11 @@ pub struct Leyline;
         commands::get_run,
         fleet::start,
         fleet::cancel,
+        ai::exec,
+        ai::get_run,
+        ai::run_command,
+        ai::list_files,
+        ai::read_file,
         hostkeys::list,
         hostkeys::trust_route,
         hostkeys::replace_route,
@@ -190,6 +213,10 @@ pub struct Leyline;
         fleet::FleetRequest,
         fleet::FleetStarted,
         fleet::Cancelled,
+        ai::ExecRequest,
+        ai::AiRunRequest,
+        ai::FileList,
+        ai::FileText,
         hostkeys::HostKeyView,
         hostkeys::Pick,
         terminal::NewSession,
@@ -214,6 +241,7 @@ impl Module for Leyline {
                 }
             });
         }
+        health::attach(app);
     }
 
     fn routes(&self) -> Router<App> {
@@ -247,6 +275,11 @@ impl Module for Leyline {
             .route("/runs/{run}", get(commands::get_run))
             .route("/runs/{run}/cancel", post(fleet::cancel))
             .route("/fleet/runs", post(fleet::start))
+            .route("/ai/hosts/{host}/exec", post(ai::exec))
+            .route("/ai/runs/{run}", get(ai::get_run))
+            .route("/ai/hosts/{host}/files", get(ai::list_files))
+            .route("/ai/hosts/{host}/file", get(ai::read_file))
+            .route("/ai/commands/{command}/run", post(ai::run_command))
             .route("/projects/{project}/hosts", get(attach::list))
             .route(
                 "/projects/{project}/hosts/{host}",
@@ -304,7 +337,7 @@ impl Module for Leyline {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["group", "tag"]
+        &["group", "tag", "path"]
     }
 
     fn scope(&self) -> &'static str {
@@ -323,6 +356,10 @@ impl Module for Leyline {
         Some(NON_DESTRUCTIVE)
     }
 
+    fn self_approved(&self) -> &'static [(&'static str, &'static str)] {
+        SELF_APPROVED
+    }
+
     fn notification_kinds(&self) -> &'static [(&'static str, &'static str)] {
         alerts::KINDS
     }
@@ -333,10 +370,6 @@ impl Module for Leyline {
 
     fn jobs(&self) -> Vec<Job> {
         health::jobs()
-    }
-
-    fn attach(&self, app: &App) {
-        health::attach(app);
     }
 
     fn openapi(&self) -> Value {
