@@ -428,6 +428,10 @@ pub fn router(app: App) -> Router {
             "/api/v1/projects/{id}/spec/versions",
             get(projects::run_spec::versions),
         )
+        .route(
+            "/api/v1/projects/{id}/run/spec/draft",
+            post(projects::run_spec::draft),
+        )
         .route("/api/v1/projects/{id}/run", get(projects::runs::status))
         .route(
             "/api/v1/projects/{id}/run/start",
