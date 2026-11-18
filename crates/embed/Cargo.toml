@@ -1,0 +1,22 @@
+[package]
+name = "ainkrad-embed"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+sha2 = { version = "0.10.9", optional = true }
+serde_json = { version = "1.0.154", optional = true }
+tracing = { version = "0.1", optional = true }
+candle-core = { version = "0.11.1", optional = true }
+candle-nn = { version = "0.11.1", optional = true }
+candle-transformers = { version = "0.11.1", optional = true }
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"], optional = true }
+rayon = { version = "1.12", optional = true }
+
+[features]
+# The local multilingual-e5-small model on candle, CPU only. Off by default.
+semantic = ["dep:sha2", "dep:serde_json", "dep:tracing", "dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers", "dep:rayon"]

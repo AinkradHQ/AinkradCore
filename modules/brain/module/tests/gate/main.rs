@@ -13,6 +13,7 @@ mod distil;
 mod index;
 mod intake;
 mod keys;
+mod lore;
 mod overview;
 mod project_rooms;
 mod query;

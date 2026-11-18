@@ -2,6 +2,7 @@
 //! grouping of items into proposed rooms (E2-2) and the refusal rules (E1-4). It depends on no Core
 //! crate and does no I/O, so every rule here is a plain function with a plain test.
 
+pub mod admit;
 pub mod group;
 pub mod item;
 pub mod rules;
