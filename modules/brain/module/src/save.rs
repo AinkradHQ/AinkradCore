@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use ainkrad_proto::redact::Redactor;
 use brain_model::merge::{Decision, Grounding, Tier, body_norm, may_supersede};
 use serde_json::json;
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::answer::Candidate;
 use crate::changes::ChangeSet;
@@ -38,6 +38,9 @@ pub(crate) struct Saved {
     pub dropped: i64,
     /// The change set, when anything changed.
     pub change: Option<String>,
+    /// Records a candidate matched by meaning or named in `same_as`, also when that match did not
+    /// end as a reinforce (a re-distil never archives these, B6-01).
+    pub matched: Vec<String>,
 }
 
 /// Writes `out` into the room as `records` with their op-log and outbox rows, in one transaction;
@@ -65,12 +68,86 @@ pub(crate) async fn store_candidates(
     loaded: &HashMap<String, HashSet<String>>,
     ai: bool,
 ) -> Result<Saved, sqlx::Error> {
-    let none = HashSet::new();
-    let redactor = Redactor::new();
-    let (mut n, mut accepted, mut reinforced, mut replaced, mut contested) = (0, 0, 0, 0, 0);
     let mut tx = pool.begin().await?;
     let mut cs = ChangeSet::new(if ai { "ai" } else { "distil" }, now);
     let mut memory = Memory::load(&mut tx, prep).await?;
+    let batch = Batch {
+        distil,
+        out,
+        dropped,
+        by,
+        prep,
+        grounded,
+        loaded,
+        ai,
+    };
+    let mut saved = save_into(&mut tx, &mut cs, &mut memory, policy, now, &batch).await?;
+    drop_pending(&mut tx, distil).await?;
+    let (n, k) = (saved.saved, saved.dropped);
+    let mut summary = format!("Saved {n} · reinforced {} · dropped {k}", saved.reinforced);
+    if saved.replaced > 0 {
+        summary.push_str(&format!(" · replaced {}", saved.replaced));
+    }
+    let counts = json!({"saved": n, "reinforced": saved.reinforced, "dropped": k,
+        "replaced": saved.replaced, "contested": saved.contested});
+    saved.change = cs.commit(&mut tx, &summary, counts).await?;
+    tx.commit().await?;
+    Ok(saved)
+}
+
+/// One distil's answer, ready to save.
+pub(crate) struct Batch<'a> {
+    pub distil: &'a str,
+    pub out: &'a [Candidate],
+    pub dropped: &'a [Dropped],
+    pub by: &'a DistilledBy,
+    pub prep: &'a Prepared,
+    pub grounded: &'a [Grounding],
+    /// Record id -> sessions the Brain gave it to (`loaded::of_room`).
+    pub loaded: &'a HashMap<String, HashSet<String>>,
+    /// A proposal from an AI session (`ai_propose.rs`).
+    pub ai: bool,
+}
+
+/// Removes the distil's parked judge state, so a rerun can never save twice.
+pub(crate) async fn drop_pending(
+    conn: &mut SqliteConnection,
+    distil: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM room_audit WHERE action = 'distil.pending' \
+         AND json_extract(detail, '$.distil') = ?",
+    )
+    .bind(distil)
+    .execute(conn)
+    .await
+    .map(drop)
+}
+
+/// The writes of `store_candidates` into the caller's transaction and change set (B6-01 saves
+/// several staged batches into one change set). `Saved::change` is none: the caller commits.
+pub(crate) async fn save_into(
+    conn: &mut SqliteConnection,
+    cs: &mut ChangeSet,
+    memory: &mut Memory,
+    policy: &policy::Policy,
+    now: &str,
+    batch: &Batch<'_>,
+) -> Result<Saved, sqlx::Error> {
+    let Batch {
+        distil,
+        out,
+        dropped,
+        by,
+        prep,
+        grounded,
+        loaded,
+        ai,
+    } = *batch;
+    let none = HashSet::new();
+    let redactor = Redactor::new();
+    let (mut n, mut accepted, mut reinforced, mut replaced, mut contested) = (0, 0, 0, 0, 0);
+    let mut matched = vec![];
     for (i, c) in out.iter().enumerate() {
         let body = redactor.text(c.body.trim());
         let norm = body_norm(&body);
@@ -79,19 +156,23 @@ pub(crate) async fn store_candidates(
         // A near-identical wording of the record it `replaces` is a changed fact ("Fridays" ->
         // "Mondays"), not a repeat: the model's `replaces` beats the meaning tier, but only when the
         // supersede is allowed (the meaning tier only matches one kind); else the reinforce stands.
-        if let Decision::Reinforce { id, tier } =
-            memory.decide(&c.kind, &norm, prep.candidate(i), same_as)
+        let decision = memory.decide(&c.kind, &norm, prep.candidate(i), same_as);
+        if let Decision::Reinforce { id, .. } = &decision {
+            matched.push(id.clone());
+        }
+        matched.extend(same_as.map(str::to_owned));
+        if let Decision::Reinforce { id, tier } = decision
             && !(tier == Tier::Meaning
                 && c.replaces.as_deref() == Some(id.as_str())
                 && may_supersede(&c.kind, &c.kind, g))
         {
             let loaded_by = loaded.get(&id).unwrap_or(&none);
-            reinforce(&mut tx, &mut cs, &id, &c.sources, distil, loaded_by, now).await?;
+            reinforce(&mut *conn, cs, &id, &c.sources, distil, loaded_by, now).await?;
             reinforced += 1;
             continue;
         }
         let id = rand_id("rec-");
-        cs.touch(&mut tx, &id).await?;
+        cs.touch(&mut *conn, &id).await?;
         let auto_ok = auto_ok(c, policy);
         sqlx::query(
             "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, reviewed_at, decided_by, distil, provider, account, tool, body_norm, last_seen_at, origin) \
@@ -113,7 +194,7 @@ pub(crate) async fn store_candidates(
         .bind(&norm)
         .bind(now)
         .bind(if ai { "ai" } else { "distil" })
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
         for (pos, s) in c.sources.iter().enumerate() {
             sqlx::query(
@@ -123,16 +204,16 @@ pub(crate) async fn store_candidates(
             .bind(s)
             .bind(pos as i64)
             .bind(distil)
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await?;
         }
         // Two sessions stating it in one batch are two origins.
-        recount(&mut tx, &id).await?;
+        recount(&mut *conn, &id).await?;
         let mut skip_add = false;
         if auto_ok {
             // Only a fact that really entered memory may retire another.
             if let Some(old) = &c.replaces {
-                match supersede(&mut tx, &mut cs, old, &id, g, now).await? {
+                match supersede(&mut *conn, cs, old, &id, g, now).await? {
                     Replace::Superseded => {
                         memory.remove(old);
                         replaced += 1;
@@ -150,7 +231,7 @@ pub(crate) async fn store_candidates(
             }
         }
         log_op(
-            &mut tx,
+            &mut *conn,
             if auto_ok {
                 "record.accepted"
             } else {
@@ -175,24 +256,9 @@ pub(crate) async fn store_candidates(
                     .to_string(),
             )
             .bind(now)
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await?;
     }
-    sqlx::query(
-        "DELETE FROM room_audit WHERE action = 'distil.pending' \
-         AND json_extract(detail, '$.distil') = ?",
-    )
-    .bind(distil)
-    .execute(&mut *tx)
-    .await?;
-    let mut summary = format!("Saved {n} · reinforced {reinforced} · dropped {k}");
-    if replaced > 0 {
-        summary.push_str(&format!(" · replaced {replaced}"));
-    }
-    let counts = json!({"saved": n, "reinforced": reinforced, "dropped": k,
-        "replaced": replaced, "contested": contested});
-    let change = cs.commit(&mut tx, &summary, counts).await?;
-    tx.commit().await?;
     Ok(Saved {
         saved: n,
         accepted,
@@ -200,7 +266,8 @@ pub(crate) async fn store_candidates(
         replaced,
         contested,
         dropped: k,
-        change,
+        change: None,
+        matched,
     })
 }
 

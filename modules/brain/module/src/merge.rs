@@ -33,8 +33,19 @@ pub(crate) async fn prepare(
     pool: &SqlitePool,
     bodies: &[String],
 ) -> Prepared {
+    try_prepare(app, b, pool, bodies).await.unwrap_or_default()
+}
+
+/// As `prepare`, but None when the model is off or fails (a re-distil must not archive on exact
+/// matches alone, B6-01).
+pub(crate) async fn try_prepare(
+    app: &App,
+    b: &Brain,
+    pool: &SqlitePool,
+    bodies: &[String],
+) -> Option<Prepared> {
     if !crate::ai_semantic::available(app, b).await {
-        return Prepared::default();
+        return None;
     }
     let run = async {
         let rows: Vec<(Option<String>, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
@@ -72,10 +83,26 @@ pub(crate) async fn prepare(
             .collect();
         Some(Prepared { cand, stored })
     };
-    run.await.unwrap_or_default()
+    run.await
 }
 
 impl Prepared {
+    /// No candidates, and the stored vectors of every one of `preps` (the memory of a whole run).
+    pub(crate) fn stored_of(preps: &[Prepared]) -> Self {
+        Self {
+            cand: vec![],
+            stored: preps
+                .iter()
+                .flat_map(|p| p.stored.iter().map(|(k, v)| (k.clone(), v.clone())))
+                .collect(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn of(cand: Vec<Option<Vec<f32>>>, stored: HashMap<String, Vec<f32>>) -> Self {
+        Self { cand, stored }
+    }
+
     /// The unit vector of candidate `i`, when there is one.
     pub(crate) fn candidate(&self, i: usize) -> Option<&[f32]> {
         self.cand.get(i)?.as_deref()
@@ -116,6 +143,15 @@ impl Memory {
                 })
                 .collect(),
         ))
+    }
+
+    /// The facts without a stored vector: no candidate can match them by meaning.
+    pub(crate) fn unvectored(&self) -> Vec<String> {
+        self.0
+            .iter()
+            .filter(|r| r.vec.is_none())
+            .map(|r| r.id.clone())
+            .collect()
     }
 
     pub(crate) fn decide(

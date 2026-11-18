@@ -161,11 +161,19 @@ pub(crate) async fn start(
     .await;
     // The unique index (one open distil per room) decides a race with an automatic trigger.
     if let Err(e) = inserted {
-        return Err(if e.as_database_error().is_some_and(|d| d.is_unique_violation()) {
-            code(409, "distil_open", "a distillation of this room is already open")
-        } else {
-            e.into()
-        });
+        return Err(
+            if e.as_database_error()
+                .is_some_and(|d| d.is_unique_violation())
+            {
+                code(
+                    409,
+                    "distil_open",
+                    "a distillation of this room is already open",
+                )
+            } else {
+                e.into()
+            },
+        );
     }
     record(
         &mut tx,
@@ -290,11 +298,18 @@ pub(crate) async fn related_in(pool: &SqlitePool) -> Result<Vec<Related>, sqlx::
         .collect()
 }
 
-async fn sources_for(pool: &SqlitePool) -> Result<Vec<Source>, sqlx::Error> {
+/// The next sources to read: the room's undistilled ones, or, for a re-distil batch of `run`
+/// (B6-01), the ones that run has not read yet. A text longer than what is left of the prompt is
+/// cut; the cut length goes into `distil.shown`, and a re-distil counts a cut source as unread, so
+/// nothing citing it is archived (`read_in_full`).
+async fn sources_for(pool: &SqlitePool, run: Option<&str>) -> Result<Vec<Source>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT item_id, source_kind, title, text, started_at FROM sources WHERE distilled IS NULL AND pointer = 0 \
-         ORDER BY started_at, item_id LIMIT ?",
+        "SELECT item_id, source_kind, title, text, started_at FROM sources WHERE pointer = 0 AND \
+         CASE WHEN ?1 IS NULL THEN distilled IS NULL \
+              ELSE text <> '' AND item_id IN (SELECT item_id FROM redistil_sources WHERE run = ?1 AND batch IS NULL) END \
+         ORDER BY started_at, item_id LIMIT ?2",
     )
+    .bind(run)
     .bind(MAX_SOURCES)
     .fetch_all(pool)
     .await?;
@@ -355,7 +370,12 @@ async fn launch(app: &App, b: &Brain, d: &DistilView, by: &str) -> Result<(), Ap
         .await?);
     };
     let pool = canon(app, b, &d.room).await?;
-    let sources = sources_for(&pool).await?;
+    let run = crate::redistil::run_of(app, &d.id).await?;
+    if let Some(run) = &run {
+        // A launch that died after taking its sources: they are free again.
+        crate::redistil::release(&pool, run, &d.id).await?;
+    }
+    let sources = sources_for(&pool, run.as_deref()).await?;
     if sources.is_empty() {
         pool.close().await;
         return Ok(set_state(
@@ -402,13 +422,19 @@ async fn launch(app: &App, b: &Brain, d: &DistilView, by: &str) -> Result<(), Ap
         return Ok(set_state(app, &d.id, "waiting", &e.message, None).await?);
     }
     // Mark the sources taken, so a second run never reads them again; a failed run gives them back.
+    // A re-distil batch never touches `sources`: the run records what the batch took.
     let mut tx = pool.begin().await?;
-    for s in &sources {
-        sqlx::query("UPDATE sources SET distilled = ? WHERE item_id = ?")
-            .bind(&d.id)
-            .bind(&s.item_id)
-            .execute(&mut *tx)
-            .await?;
+    match &run {
+        Some(run) => crate::redistil::take(&mut tx, run, &d.id, &sources).await?,
+        None => {
+            for s in &sources {
+                sqlx::query("UPDATE sources SET distilled = ? WHERE item_id = ?")
+                    .bind(&d.id)
+                    .bind(&s.item_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
     }
     // The memory ids (and types) the prompt showed: the answer's `same_as`/`replaces` are checked
     // against them. And how much of each source it showed, so the answer is checked against the
@@ -604,11 +630,15 @@ async fn taken_shown(
     pool: &SqlitePool,
     distil: &str,
 ) -> Result<(Vec<(String, String, String)>, serde_json::Value), sqlx::Error> {
-    let taken: Vec<(String, String, String)> =
-        sqlx::query_as("SELECT item_id, source_kind, text FROM sources WHERE distilled = ?")
-            .bind(distil)
-            .fetch_all(pool)
-            .await?;
+    // A re-distil batch took its sources without marking them (`redistil::take`).
+    let taken: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT item_id, source_kind, text FROM sources WHERE distilled = ?1 OR item_id IN \
+         (SELECT s.item_id FROM redistil_sources s JOIN redistil_batches b ON b.run = s.run AND b.seq = s.batch \
+          WHERE b.distil = ?1)",
+    )
+    .bind(distil)
+    .fetch_all(pool)
+    .await?;
     let shown: serde_json::Value = sqlx::query_scalar(
         "SELECT detail FROM room_audit WHERE action = 'distil.shown' \
          AND json_extract(detail, '$.distil') = ? ORDER BY id DESC LIMIT 1",
@@ -637,11 +667,6 @@ async fn save(
     answer_detail: serde_json::Value,
 ) -> Result<(), ApiError> {
     let p = policy::load(app, &d.room).await?;
-    let bodies: Vec<String> = {
-        let r = Redactor::new();
-        out.iter().map(|c| r.text(c.body.trim())).collect()
-    };
-    let prep = crate::merge::prepare(app, b, &pool, &bodies).await;
     // What backs each candidate, for its `replaces` (B4-02): re-read here, so a distil resumed after
     // its judge session is checked the same way. The strict test (round 3): lexical overlap cannot
     // read meaning, so anything short of it is saved as contested, never as a supersede.
@@ -654,6 +679,20 @@ async fn save(
             structured_item: fields_supported(c, &known),
         })
         .collect();
+    // A re-distil batch is staged, not saved: the run writes every batch in one change set (B6-01).
+    if let Some(run) = crate::redistil::run_of(app, &d.id).await? {
+        let n = out.len();
+        let read = read_in_full(&taken, &shown, &out, &dropped);
+        crate::redistil::stage(&pool, &run, &d.id, &out, &dropped, by, &grounded, &read).await?;
+        pool.close().await;
+        ainkrad_core_server::store::agents::seal(&app.pool, session).await?;
+        return Ok(set_state(app, &d.id, "done", "", Some(("candidates", n as i64))).await?);
+    }
+    let bodies: Vec<String> = {
+        let r = Redactor::new();
+        out.iter().map(|c| r.text(c.body.trim())).collect()
+    };
+    let prep = crate::merge::prepare(app, b, &pool, &bodies).await;
     let saved = crate::save::store_candidates(
         &pool,
         &d.id,
@@ -751,6 +790,31 @@ pub(crate) fn may_store(c: &Candidate, policy: &policy::Policy, known: &Known) -
     !(matches!(c.kind.as_str(), "task" | "project-state") && auto_ok(c, policy))
         || user_grounded(c, known)
         || structured_grounded(c, known)
+}
+
+/// The taken sources a re-distil may count as read (B6-01): the prompt showed the whole text (its
+/// `distil.shown` cut is the full length; no cut recorded is not read), and an admitted candidate
+/// cites it, and no candidate citing it was dropped by grounding (`not_grounded`) or the judge (a no,
+/// or a judge that failed or could not start): the fact that candidate re-derived may be an old one
+/// that must not be archived. A drop by admission score alone does not make a source unread. So one
+/// empty or hostile batch cannot archive the facts of the sources around it.
+pub(crate) fn read_in_full(
+    taken: &[(String, String, String)],
+    shown: &serde_json::Value,
+    out: &[Candidate],
+    dropped: &[judge::Dropped],
+) -> Vec<String> {
+    taken
+        .iter()
+        .filter(|(id, _, text)| {
+            shown["cut"][id.as_str()].as_u64() == Some(text.len() as u64)
+                && out.iter().any(|c| c.sources.contains(id))
+                && !dropped.iter().any(|d| {
+                    matches!(d.stage.as_str(), "not_grounded" | "judge") && d.sources.contains(id)
+                })
+        })
+        .map(|(id, _, _)| id.clone())
+        .collect()
 }
 
 /// `text` cut where the prompt cut source `id` (`distil.shown`), on a character boundary.
@@ -1028,6 +1092,38 @@ mod tests {
         assert_eq!(
             ainkrad_core_server::agents::account_policy_problem(&p),
             None
+        );
+    }
+
+    /// B6-01 re-check: source S has F2 kept and F1 (which re-derives an old record R1) dropped by the
+    /// judge, a "no" or a judge that could not start. S is unread, so R1 is never archived. A drop by
+    /// admission score alone leaves S read.
+    #[test]
+    fn a_source_with_a_judge_dropped_candidate_is_unread() {
+        let taken = [(
+            "i1".to_owned(),
+            "core_transcript".to_owned(),
+            TEXT.to_owned(),
+        )];
+        let shown = json!({"cut": {"i1": TEXT.len()}});
+        let f2 = cand("fact", "Ship the billing export before 2026-12-01.");
+        let f1 = judge::Border {
+            c: cand("fact", "The billing export ships in December."),
+            reasons: vec![],
+            score: 0.5,
+        };
+        for verdicts in [Ok(vec![false]), Err("the judge could not start".to_owned())] {
+            let (out, dropped) =
+                judge::resolve(vec![f2.clone()], vec![f1.clone()], vec![], verdicts);
+            assert_eq!(out.len(), 1);
+            assert!(read_in_full(&taken, &shown, &out, &dropped).is_empty());
+        }
+        let not_grounded = judge::dropped_of(&f1.c, vec![], 0.0, "not_grounded");
+        assert!(read_in_full(&taken, &shown, &[f2.clone()], &[not_grounded]).is_empty());
+        let by_score = judge::dropped_of(&f1.c, vec![], 0.1, "admit");
+        assert_eq!(
+            read_in_full(&taken, &shown, &[f2], &[by_score]),
+            vec!["i1".to_owned()]
         );
     }
 }

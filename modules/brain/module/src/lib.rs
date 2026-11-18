@@ -26,22 +26,21 @@ mod access;
 mod ai;
 mod ai_propose;
 mod ai_semantic;
-mod context;
 mod aliases;
 mod answer;
 mod answer_turns;
 mod auto_distil;
 mod backfill;
 pub mod card;
-pub mod me_card;
 mod change_routes;
-mod checkpoint;
 pub mod changes;
+mod checkpoint;
 pub mod cipher;
 mod claim;
 pub mod clean;
 pub mod collectors;
 mod commit;
+mod context;
 mod distil;
 mod echo;
 pub mod eval;
@@ -50,9 +49,10 @@ mod imports;
 mod inbox;
 mod index;
 mod judge;
-mod loaded;
 pub mod key;
+mod loaded;
 mod lore;
+pub mod me_card;
 pub mod merge;
 mod overview;
 pub mod overview_select;
@@ -60,16 +60,18 @@ pub mod overview_write;
 mod policy;
 mod project_rooms;
 pub mod propose;
+mod redistil;
+mod redistil_routes;
 pub mod retention;
 mod review;
+mod room_tidy;
+mod room_tidy_run;
 pub mod rooms;
 mod rules_api;
 mod save;
 pub mod semantic;
 mod suggest;
 mod sync;
-mod room_tidy;
-mod room_tidy_run;
 mod tidy;
 pub use tidy::{TidyChange, TidySummary};
 mod transcripts;
@@ -138,6 +140,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0010_brain_one_open_distil.up.sql"),
         down: include_str!("../migrations/0010_brain_one_open_distil.down.sql"),
     },
+    Migration {
+        version: 11,
+        name: "brain_redistil",
+        up: include_str!("../migrations/0011_brain_redistil.up.sql"),
+        down: include_str!("../migrations/0011_brain_redistil.down.sql"),
+    },
 ];
 
 /// Employer and client rooms commit like any other room. Ahmed, 2026-11-15: "no need to hold the import bcz of backup".
@@ -151,6 +159,7 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/rooms/{room}/claims"),
     ("PATCH", "/rooms/{room}/policy"),
     ("PUT", "/rooms/{room}/access"),
+    ("POST", "/rooms/{room}/redistil"),
 ];
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports"),
@@ -174,6 +183,8 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("PATCH", "/rooms/{room}/overview/instructions"),
     ("POST", "/rooms/{room}/inbox/{id}"),
     ("POST", "/rooms/{room}/changes/{id}/undo"),
+    ("POST", "/rooms/{room}/redistil/dry-run"),
+    ("POST", "/rooms/{room}/redistil/cancel"),
     ("PUT", "/sources/{id}"),
     ("POST", "/ai/rooms/{room}/propose"),
     ("POST", "/ai/checkpoint"),
@@ -251,6 +262,8 @@ struct Inner {
     /// Set while the automatic distil triggers run (`auto_distil`), and when they last scanned the rooms.
     auto_busy: AtomicBool,
     auto_scan: AtomicI64,
+    /// Set while the re-distil job looks at its run (`redistil`).
+    redistilling: AtomicBool,
     /// Set while a room tidy step runs (`room_tidy`).
     tidying: AtomicBool,
     /// Per AI session: checkpoint requests and runs (`checkpoint`). In memory: losing it on a restart only delays one.
@@ -543,6 +556,10 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         change_routes::one,
         change_routes::undo_route,
         retention::preview,
+        redistil_routes::apply,
+        redistil_routes::dry_run,
+        redistil_routes::cancel,
+        redistil_routes::list,
         distil::start,
         distil::list,
         overview::get,
@@ -636,6 +653,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         change_routes::ChangeDetail,
         change_routes::UndoResult,
         retention::RetentionPreview,
+        redistil_routes::RedistilView,
         policy::PolicyView,
         policy::PolicyPatch,
         policy::PolicyAccount,
@@ -713,6 +731,18 @@ impl Module for Brain {
                 post(change_routes::undo_route),
             )
             .route("/rooms/{room}/retention", get(retention::preview))
+            .route(
+                "/rooms/{room}/redistil",
+                get(redistil_routes::list).post(redistil_routes::apply),
+            )
+            .route(
+                "/rooms/{room}/redistil/dry-run",
+                post(redistil_routes::dry_run),
+            )
+            .route(
+                "/rooms/{room}/redistil/cancel",
+                post(redistil_routes::cancel),
+            )
             .route("/rooms/{room}/distil", post(distil::start))
             .route("/rooms/{room}/distils", get(distil::list))
             .route("/rooms/{room}/overview", get(overview::get))
@@ -808,11 +838,18 @@ impl Module for Brain {
             "brain.change.undone",
             "brain.room.purged",
             "brain.room.compacted",
+            "brain.redistil.started",
+            "brain.redistil.done",
+            "brain.redistil.previewed",
+            "brain.redistil.failed",
+            "brain.redistil.cancelled",
         ]
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["q", "room", "mode", "status", "limit", "after", "prompt", "budget"]
+        &[
+            "q", "room", "mode", "status", "limit", "after", "prompt", "budget",
+        ]
     }
 
     fn jobs(&self) -> Vec<Job> {
@@ -825,6 +862,7 @@ impl Module for Brain {
             project_rooms::job(self),
             changes::job(self),
             retention::job(self),
+            redistil::job(self),
             room_tidy_run::job(self),
         ]
     }

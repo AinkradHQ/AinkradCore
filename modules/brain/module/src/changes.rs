@@ -236,19 +236,43 @@ pub struct Undone {
     pub already_undone: bool,
 }
 
-/// Undoes `change` in the caller's transaction. None: no such change set. Err(()): a purge, which
-/// holds no row images and cannot be undone.
+/// Why a change set cannot be undone.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Refused {
+    /// A purge holds no row images.
+    Purge,
+    /// Older than its Undo window (`undo_days`): the evidence of what it archived may be compacted or
+    /// purged by now.
+    Expired,
+}
+
+/// How long a change set of `kind` may be undone: a room tidy for `PURGE_DAYS + TIDY_EXTRA_DAYS`
+/// (90; its archived records are kept that long, `purge_room`, and so is their evidence,
+/// `retention`), every other kind for `PURGE_DAYS` (30).
+pub fn undo_days(kind: &str) -> i64 {
+    if kind == "tidy" {
+        PURGE_DAYS + TIDY_EXTRA_DAYS
+    } else {
+        PURGE_DAYS
+    }
+}
+
+/// Undoes `change` in the caller's transaction. None: no such change set. Err: it cannot be undone
+/// (`Refused`); a change set is undoable for `undo_days(kind)` after it was made.
 pub async fn undo(
     tx: &mut SqliteConnection,
     change: &str,
     now: &str,
-) -> Result<Option<Result<Undone, ()>>, sqlx::Error> {
+) -> Result<Option<Result<Undone, Refused>>, sqlx::Error> {
     // The claim is the first write, so two Undo calls cannot both restore.
     let claimed = sqlx::query(
-        "UPDATE changes SET undone_at = ? WHERE id = ? AND undone_at IS NULL AND kind <> 'purge'",
+        "UPDATE changes SET undone_at = ?1 WHERE id = ?2 AND undone_at IS NULL AND kind <> 'purge' \
+         AND julianday(at) >= julianday(?1) - CASE WHEN kind = 'tidy' THEN ?3 + ?4 ELSE ?3 END",
     )
     .bind(now)
     .bind(change)
+    .bind(PURGE_DAYS)
+    .bind(TIDY_EXTRA_DAYS)
     .execute(&mut *tx)
     .await?
     .rows_affected();
@@ -259,13 +283,15 @@ pub async fn undo(
             .await?;
         return Ok(row.map(|r| {
             if r.get::<String, _>("kind") == "purge" {
-                Err(())
-            } else {
+                Err(Refused::Purge)
+            } else if r.get::<Option<String>, _>("undone_at").is_some() {
                 Ok(Undone {
                     restored: vec![],
                     skipped: vec![],
                     already_undone: true,
                 })
+            } else {
+                Err(Refused::Expired)
             }
         }));
     }
