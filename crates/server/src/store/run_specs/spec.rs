@@ -130,7 +130,7 @@ pub fn validate(spec: &RunSpec) -> Result<(), Problem> {
     cycle(spec)
 }
 
-fn service_name_ok(n: &str) -> bool {
+pub fn service_name_ok(n: &str) -> bool {
     let b = n.as_bytes();
     (1..=20).contains(&b.len())
         && b[0].is_ascii_lowercase()
