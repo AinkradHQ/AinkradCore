@@ -1269,8 +1269,10 @@ dependencies = [
  "ainkrad-core-server",
  "axum",
  "getrandom 0.4.3",
+ "quick-xml",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "utoipa",
 ]
@@ -2839,6 +2841,7 @@ dependencies = [
  "lore-model",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "utoipa",
 ]
