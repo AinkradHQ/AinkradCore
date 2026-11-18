@@ -4,7 +4,7 @@
 # It survives nftables.service: a restart of it (its `flush ruleset`) restarts this unit after it (PartOf + After), and a
 # reload of it reloads this one (ReloadPropagatedFrom). Anything else that removes the table (a `flush ruleset` by hand)
 # is undone within a minute by ainkrad-run-egress.timer, and ainkrad-run@.service re-loads it before every run op.
-# Stopping this unit never removes the table (no ExecStop): fail closed.
+# Stopping this unit never removes the table (it has no stop command): fail closed.
 # Every load that is then listed back touches /run/ainkrad-run-egress.ok; the runner (no CAP_NET_ADMIN, it cannot read
 # nftables) reports run_caps and starts runs only while that marker is fresh (crates/runner/src/v2/run.rs).
 [Unit]

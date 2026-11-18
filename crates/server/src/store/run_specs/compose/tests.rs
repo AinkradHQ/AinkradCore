@@ -76,7 +76,8 @@ fn full_file_converts_and_lists_what_it_dropped() {
     assert_eq!(web.workdir.as_deref(), Some("/repo/web"));
     assert_eq!(web.env.get("PLAIN").map(String::as_str), Some("1"));
     assert!(!web.env.contains_key("HOST_TOKEN"));
-    assert_eq!(web.volumes["node_modules"], "/repo/web/node_modules");
+    // A volume over the checkout is refused by the validator, so it is listed instead.
+    assert!(web.volumes.is_empty());
     let mut deps = web.depends_on.clone();
     deps.sort();
     assert_eq!(deps, ["cache", "db"]);

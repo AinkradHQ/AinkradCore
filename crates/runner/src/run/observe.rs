@@ -130,7 +130,7 @@ pub fn parse_size(s: &str) -> Option<u64> {
         "tib" => 1099511627776.0,
         _ => return None,
     };
-    Some((n * mult) as u64)
+    Some((n * mult).round() as u64)
 }
 
 /// What `podman stats --no-stream --format json` says per container name: (CPU percent, memory

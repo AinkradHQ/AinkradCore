@@ -552,6 +552,12 @@ fn volumes(at: &str, v: &Value, s: &mut Service, n: &mut Notes) {
                 here,
                 "a host bind mount is not converted; use a named volume or the repo checkout (/repo/<name>)",
             ),
+            // The validator refuses a volume over the checkouts; the service must survive without it.
+            ("volume", Some(_))
+                if target == "/" || target == "/repo" || target.starts_with("/repo/") =>
+            {
+                n.add(here, "a volume cannot cover / or the /repo checkouts; not converted");
+            }
             ("volume", Some(src)) if !target.is_empty() => {
                 let name = src.to_ascii_lowercase().replace('.', "-");
                 if s.volumes.insert(name, target).is_some() {
