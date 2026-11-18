@@ -713,7 +713,7 @@ pub async fn serve(
             changed = exit_rx.changed(), if st.exit.is_none() => {
                 if changed.is_err() {
                     // The waiter thread is gone without a status: treat as an exit.
-                    st.exit = Some(Exit { code: None, signal: Some("lost".to_owned()) });
+                    st.exit = Some(Exit { code: None, signal: Some("lost".to_owned()), host_key: None });
                 } else {
                     st.exit = exit_rx.borrow().clone();
                 }
