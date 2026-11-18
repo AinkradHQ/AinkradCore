@@ -63,7 +63,7 @@ pub mod ticket;
 mod trace;
 pub use runner_control::ToolOps;
 pub use terminals::{
-    Ended, Rooms, Terminal, TerminalSize, check_ssh_open, open_ssh,
+    Ended, OutputTap, Rooms, Terminal, TerminalSize, check_ssh_open, open_ssh,
     reconcile as reconcile_terminals, sweep as sweep_terminals, sweep_loop as terminal_sweep_loop,
 };
 pub use trace::{ApiError, ApiResult, error_id};

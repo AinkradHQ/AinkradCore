@@ -8,6 +8,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+age = { version = "0.11", default-features = false }
 ainkrad-core = { path = "../../../crates/core" }
 ainkrad-core-server = { path = "../../../crates/server" }
 ainkrad-proto = { path = "../../../crates/proto" }
@@ -19,10 +20,12 @@ serde_json = "1.0.154"
 sha2 = "0.10.9"
 # No `rsa`/`dsa` feature (RUSTSEC-2023-0071) and no `p256`/`p384` (they pull crypto-bigint 0.5, RUSTSEC-2026-0387).
 ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "ecdsa", "encryption"] }
-tokio = { version = "1.54.0", features = ["rt", "sync"] }
+tokio = { version = "1.54.0", features = ["rt", "sync", "time", "macros"] }
 tracing = "0.1.44"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
 utoipa = "6.0.0"
+# Recording blocks (Y3-02) are zstd-compressed before they are age-encrypted: the one new crate (needs `cargo deny check`).
+zstd = { version = "0.13.3", default-features = false }
 zeroize = { version = "1.9.1", features = ["serde"] }
 
 [dev-dependencies]
@@ -30,3 +33,7 @@ ainkrad-core-server = { path = "../../../crates/server", features = ["test-suppo
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5.3", features = ["util"] }
 tracing-subscriber = "0.3.23"
+
+[[bench]]
+name = "relay_tap"
+harness = false

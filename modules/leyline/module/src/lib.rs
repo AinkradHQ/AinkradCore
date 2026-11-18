@@ -3,18 +3,22 @@
 //! text out (API and table), `leyline.*` events and audit; and keys (Y1-02): generated or imported,
 //! sealed in the Core's secret store, public data only in the API; and project attachments (Y1-03).
 //! SSH itself runs on a runner (Y2); the command gate (`gate`, Y4-01), host terminals and host-key
-//! trust (Y3-01) are here.
+//! trust (Y3-01) are here; so are session history, recording and replay (Y3-02).
 //!
 //! Module off, the Core is unchanged: the tables are its own `leyline_` namespace, no Core
 //! migration, no Core crate names this module.
 
 mod address;
 mod attach;
+mod cast;
 pub mod gate;
+mod history;
 pub mod hostkeys;
 mod hosts;
 mod keys;
 mod policy;
+/// Terminal recording; public so `benches/relay_tap.rs` can time the relay's tap.
+pub mod record;
 mod terminal;
 mod valid;
 
@@ -47,6 +51,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0003_sessions.up.sql"),
         down: include_str!("../migrations/0003_sessions.down.sql"),
     },
+    Migration {
+        version: 4,
+        name: "0004_recordings",
+        up: include_str!("../migrations/0004_recordings.up.sql"),
+        down: include_str!("../migrations/0004_recordings.down.sql"),
+    },
 ];
 
 // A key write is a secret write: importing needs the step-up like the Core's own secret writes.
@@ -67,6 +77,8 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
     ("POST", "/hosts/{host}/host-keys/trust"),
+    // Turning recording on needs a step-up (checked in the handler); turning it off does not.
+    ("PUT", "/hosts/{host}/recording"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
 ];
@@ -81,6 +93,10 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts/{host}/host-keys", "read"),
     // The terminal scope, as the Core's own terminal routes.
     ("POST", "/hosts/{host}/terminals", "terminal"),
+    ("GET", "/hosts/{host}/sessions", "read"),
+    ("GET", "/projects/{project}/sessions", "read"),
+    // A recording is terminal content: the terminal scope, and a step-up in the handler.
+    ("GET", "/sessions/{session}/recording", "terminal"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -107,7 +123,11 @@ pub struct Leyline;
         hostkeys::list,
         hostkeys::trust_route,
         hostkeys::replace_route,
-        terminal::open
+        terminal::open,
+        history::host_sessions,
+        history::project_sessions,
+        history::set_recording,
+        history::replay
     ),
     components(schemas(
         hosts::HostView,
@@ -126,7 +146,10 @@ pub struct Leyline;
         hostkeys::HostKeyView,
         hostkeys::Pick,
         terminal::NewSession,
-        terminal::SessionView
+        terminal::SessionView,
+        history::SessionRow,
+        history::NewRecording,
+        history::HostRecording
     ))
 )]
 struct Doc;
@@ -137,6 +160,7 @@ impl Module for Leyline {
     }
 
     fn attach(&self, app: &App) {
+        history::attach(app);
         // A host terminal's monitor lives in the process: rows left open by the last one are over.
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let app = app.clone();
@@ -146,6 +170,10 @@ impl Module for Leyline {
                 }
             });
         }
+    }
+
+    fn jobs(&self) -> Vec<ainkrad_core_server::jobs::Job> {
+        history::jobs()
     }
 
     fn routes(&self) -> Router<App> {
@@ -162,6 +190,13 @@ impl Module for Leyline {
                 post(hostkeys::replace_route),
             )
             .route("/hosts/{host}/terminals", post(terminal::open))
+            .route("/hosts/{host}/sessions", get(history::host_sessions))
+            .route("/hosts/{host}/recording", put(history::set_recording))
+            .route(
+                "/projects/{project}/sessions",
+                get(history::project_sessions),
+            )
+            .route("/sessions/{session}/recording", get(history::replay))
             .route("/groups", get(hosts::groups))
             .route("/tags", get(hosts::tags))
             .route("/keys", get(keys::list).post(keys::generate))
@@ -207,6 +242,10 @@ impl Module for Leyline {
             "leyline.hostkey.replaced",
             "leyline.session.opened",
             "leyline.session.ended",
+            "leyline.recording.on",
+            "leyline.recording.off",
+            "leyline.recording.replayed",
+            "leyline.recording.pruned",
             "leyline.run.requested",
             "leyline.run.approval",
             "leyline.run.allowed",
@@ -215,7 +254,7 @@ impl Module for Leyline {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["group", "tag"]
+        &["group", "tag", "limit"]
     }
 
     fn scope(&self) -> &'static str {

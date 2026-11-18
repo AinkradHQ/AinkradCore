@@ -51,9 +51,27 @@ const ACK_EXITED_AFTER: i64 = KEEP_EXITED - 300;
 /// How often the idle reaper looks (`sweep_loop`).
 const SWEEP_EVERY: Duration = Duration::from_secs(30);
 
+/// A listener on the output a terminal relays to its clients (Leyline recording, Y3-02). It sees
+/// the runner-to-client direction only: what a client types never reaches it. It is called on the
+/// relay's hot path, so an implementation must only queue the bytes and return.
+pub trait OutputTap: Send + Sync {
+    /// `b64` (standard base64, as on the wire) is the terminal's output starting at byte `offset`.
+    /// The same bytes may arrive again (a client attaching afresh is replayed the history); the
+    /// offset says where they belong.
+    fn output(&self, offset: u64, b64: &str);
+}
+
+/// Bytes a standard base64 string decodes to (padding counted, validity not checked).
+fn b64_len(s: &str) -> u64 {
+    let pad = s.bytes().rev().take(2).filter(|b| *b == b'=').count();
+    (s.len() / 4 * 3).saturating_sub(pad) as u64
+}
+
 /// What the terminal service keeps in memory (never terminal content).
 #[derive(Default)]
 pub struct Rooms {
+    /// Listeners on a terminal's output, set by a module when it opens the terminal.
+    taps: Mutex<HashMap<String, std::sync::Arc<dyn OutputTap>>>,
     /// One create at a time, so the caps are checked and used up under one lock.
     // ponytail: a global create lock; per-runner locks if create latency ever matters.
     create: tokio::sync::Mutex<()>,
@@ -120,6 +138,22 @@ impl Drop for AttachSlot {
 }
 
 impl Rooms {
+    /// Listens to `terminal`'s relayed output until [`untap`](Self::untap). Set before the
+    /// terminal's id is handed to any client, so no attach misses it.
+    pub fn tap(&self, terminal: &str, tap: std::sync::Arc<dyn OutputTap>) {
+        self.taps.lock().unwrap().insert(terminal.to_owned(), tap);
+    }
+
+    /// Stops listening; a tap with no other holder is dropped.
+    pub fn untap(&self, terminal: &str) {
+        self.taps.lock().unwrap().remove(terminal);
+    }
+
+    /// The tap on `terminal`, if any: looked up once per attach, not per frame.
+    pub fn tap_of(&self, terminal: &str) -> Option<std::sync::Arc<dyn OutputTap>> {
+        self.taps.lock().unwrap().get(terminal).cloned()
+    }
+
     /// A slot for one more attach of `terminal` by `device`, or `None` at either cap.
     fn reserve(self: &std::sync::Arc<Self>, terminal: &str, device: &str) -> Option<AttachSlot> {
         let mut s = self.slots.lock().unwrap();
@@ -1322,6 +1356,7 @@ pub async fn attach(
         .unwrap_or(app.clock.unix());
     let terminal_id = id.clone();
     let by_device = me.device.id.clone();
+    let from = q.after.unwrap_or(0);
     ws.protocols([super::ticket::PROTOCOL])
         .max_message_size(MAX_WS_MESSAGE)
         .max_frame_size(MAX_WS_MESSAGE)
@@ -1337,6 +1372,7 @@ pub async fn attach(
                 revoked,
                 rescoped,
                 slot,
+                from,
             )
         })
 }
@@ -1352,8 +1388,13 @@ async fn stream(
     revoked: impl std::future::Future<Output = ()>,
     rescoped: impl std::future::Future<Output = ()>,
     _slot: AttachSlot,
+    from: u64,
 ) {
     let client = app.terminals.join(&terminal);
+    // Looked up once; each frame then costs one `Option` check (no lock) when nobody listens.
+    let tap = app.terminals.tap_of(&terminal);
+    // Where the next output byte of this stream belongs: the attach point, moved by a snapshot.
+    let mut at = from;
     touch(&app, &terminal).await;
     tokio::pin!(revoked);
     tokio::pin!(rescoped);
@@ -1377,7 +1418,12 @@ async fn stream(
         ()=&mut revoked=>{close_socket(&mut socket,4001,"revoked",cap).await;break},
         ()=&mut rescoped=>{close_socket(&mut socket,4003,"scope changed",cap).await;break},
         ()=&mut expiry=>{close_socket(&mut socket,4003,"step-up expired",cap).await;break},
-        next=d.next()=>match next{Some(body)=>{let f=Frame::new(0,seq,body);seq=seq.saturating_add(1);if send(&mut socket,f,cap).await.is_err(){break}},None=>break},
+        next=d.next()=>match next{Some(body)=>{
+                if let Some(t)=&tap{match &body{
+                    Body::Output(o)=>{t.output(at,&o.data);at=at.saturating_add(b64_len(&o.data))}
+                    Body::Control(Control::Snapshot(s))=>at=s.seq,
+                    _=>{}}}
+                let f=Frame::new(0,seq,body);seq=seq.saturating_add(1);if send(&mut socket,f,cap).await.is_err(){break}},None=>break},
         msg=socket.recv()=>match msg{
             Some(Ok(Message::Text(t)))=>{
                 let Ok(f)=serde_json::from_str::<Frame>(&t) else {continue};
