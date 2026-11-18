@@ -21,7 +21,8 @@ pub(crate) fn render(body: &Value) -> Option<String> {
     };
     if let Some(who) = core {
         let text = body["text"].as_str()?.trim();
-        return (!text.is_empty()).then(|| format!("{who}: {text}"));
+        return (!text.is_empty())
+            .then(|| format!("{who}: {}", crate::answer_turns::defuse_author_lines(text)));
     }
     let role = body["message"]["role"]
         .as_str()
@@ -49,7 +50,7 @@ pub(crate) fn render(body: &Value) -> Option<String> {
         _ => return None,
     };
     let text = text.trim();
-    (!text.is_empty()).then(|| format!("{who}: {text}"))
+    (!text.is_empty()).then(|| format!("{who}: {}", crate::answer_turns::defuse_author_lines(text)))
 }
 
 pub(crate) fn ulid(now_ms: u64) -> String {
