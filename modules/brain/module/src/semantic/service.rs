@@ -29,6 +29,21 @@ pub struct Service {
     pending: Arc<Mutex<HashSet<String>>>,
 }
 
+/// The hashes `queue_embed` holds as queued; they leave the set when this is dropped.
+struct Pending {
+    set: Arc<Mutex<HashSet<String>>>,
+    hashes: Vec<String>,
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        let mut p = self.set.lock().unwrap_or_else(|x| x.into_inner());
+        for h in &self.hashes {
+            p.remove(h);
+        }
+    }
+}
+
 impl Service {
     pub fn embedder(&self) -> Option<Arc<dyn Embedder>> {
         self.embedder
@@ -152,12 +167,15 @@ impl Brain {
             return;
         }
         let (b, app) = (self.clone(), app.clone());
+        // A drop guard, not a line after the await: a panic, a cancelled job or a closed channel
+        // still frees the hashes.
+        let guard = Pending {
+            set: pending,
+            hashes: items.iter().map(|i| i.0.clone()).collect(),
+        };
         self.inner.sem.enqueue(async move {
+            let _guard = guard;
             let _ = b.embed_now(&app, e, &items).await;
-            let mut p = pending.lock().unwrap_or_else(|x| x.into_inner());
-            for i in &items {
-                p.remove(&i.0);
-            }
         });
     }
 

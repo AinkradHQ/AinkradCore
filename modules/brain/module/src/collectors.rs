@@ -147,13 +147,15 @@ pub(crate) fn adf_text(v: &Value, out: &mut String) {
     }
 }
 
-/// A tool item's author is a person unless the tool says an app or bot filed it: what a bot or a
-/// session writes may carry instructions, so it is never grounded as the person's word.
-fn kind_of(is_bot: bool) -> AuthorKind {
-    if is_bot {
-        AuthorKind::Agent
-    } else {
+/// A tool item's author is an agent unless the tool positively says a person: Jira `accountType`
+/// `atlassian`, GitHub `user.type` `User`. A missing or unknown value, a Jira `customer` or `app`,
+/// a GitHub `Bot` or `Organization` are all agents (fail closed): what a bot or a session writes may
+/// carry instructions, so it is never grounded as the person's word.
+fn kind_of(person: bool) -> AuthorKind {
+    if person {
         AuthorKind::Person
+    } else {
+        AuthorKind::Agent
     }
 }
 
@@ -298,7 +300,7 @@ fn jira_item(issue: &Value, updated: i64, now_ms: u64) -> Option<Item> {
         None,
         (
             &name(&["reporter", "displayName"]),
-            kind_of(str_of(f, &["reporter", "accountType"]) == Some("app")),
+            kind_of(str_of(f, &["reporter", "accountType"]) == Some("atlassian")),
         ),
         format!("{key} {summary}"),
         text,
@@ -410,7 +412,7 @@ fn pr_item(repo: &str, pr: &Value, reviews: &Value, updated: i64, now_ms: u64) -
         Some(format!("github.com/{repo}")),
         (
             author,
-            kind_of(str_of(pr, &["user", "type"]) == Some("Bot") || author.ends_with("[bot]")),
+            kind_of(str_of(pr, &["user", "type"]) == Some("User") && !author.ends_with("[bot]")),
         ),
         format!("{repo}#{number} {title}"),
         text,
@@ -547,6 +549,41 @@ mod tests {
             tool_fields(&item.text),
             "acme/app#7: Add export\nState: merged\nAssignee: dana"
         );
+    }
+
+    #[test]
+    fn only_a_tool_confirmed_person_is_a_person_everything_else_is_an_agent() {
+        let jira = |ty: Option<&str>| {
+            let mut r = json!({"displayName": "Lee"});
+            if let Some(t) = ty {
+                r["accountType"] = json!(t);
+            }
+            let issue = json!({"key": "KAN-1", "fields": {"summary": "S", "reporter": r}});
+            jira_item(&issue, 1_762_768_800, 0).unwrap().author.kind
+        };
+        assert_eq!(jira(Some("atlassian")), AuthorKind::Person);
+        for t in [Some("app"), Some("customer"), Some("odd"), None] {
+            assert_eq!(jira(t), AuthorKind::Agent, "{t:?}");
+        }
+        let gh = |login: &str, ty: Option<&str>| {
+            let mut u = json!({"login": login});
+            if let Some(t) = ty {
+                u["type"] = json!(t);
+            }
+            let pr = json!({"number": 1, "title": "T", "state": "open", "user": u});
+            pr_item("acme/app", &pr, &json!([]), 1_762_768_800, 0)
+                .author
+                .kind
+        };
+        assert_eq!(gh("lee", Some("User")), AuthorKind::Person);
+        for (l, t) in [
+            ("lee", Some("Bot")),
+            ("lee", Some("Organization")),
+            ("lee", None),
+            ("x[bot]", Some("User")),
+        ] {
+            assert_eq!(gh(l, t), AuthorKind::Agent, "{l} {t:?}");
+        }
     }
 
     #[test]
