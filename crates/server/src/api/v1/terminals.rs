@@ -28,6 +28,8 @@ use utoipa::ToSchema;
 
 mod local;
 pub use local::*;
+mod ssh_ops;
+pub use ssh_ops::{MAX_SMALL_FILE, SftpJob, sftp_job, type_into};
 
 const MAX_INPUT: usize = 64 * 1024;
 /// One WebSocket message: base64 of the largest input, with its frame around it.

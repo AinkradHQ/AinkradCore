@@ -74,6 +74,8 @@ pub enum Action {
     Direct,
     /// Trusting a host key. Person only.
     Trust,
+    /// Installing a runner on the host (Y8-01). Person only.
+    MakeRunner,
 }
 
 impl Action {
@@ -90,6 +92,7 @@ impl Action {
             Self::Probe => "leylineHostHealth",
             Self::Direct => "leylineDirect",
             Self::Trust => "leylineTrust",
+            Self::MakeRunner => "leylineMakeRunner",
         }
     }
 
@@ -133,13 +136,13 @@ pub(crate) enum Verdict {
 
 /// The whole policy, in one table.
 pub(crate) fn verdict(who: &Principal, rule: Rule, action: &Action) -> Verdict {
-    use Action::{Direct, FileList, FileRead, Preset, Probe, Trust};
+    use Action::{Direct, FileList, FileRead, MakeRunner, Preset, Probe, Trust};
     match &who.0 {
         Who::Person(_) => Verdict::Allow,
         Who::Health if *action == Probe => Verdict::Allow,
         Who::Health => Verdict::Deny("health may only probe"),
         Who::Session(_) => match (action, rule) {
-            (Direct | Trust, _) => Verdict::Deny("only a person may do that"),
+            (Direct | Trust | MakeRunner, _) => Verdict::Deny("only a person may do that"),
             (_, Rule::Allowed) => Verdict::Allow,
             (_, Rule::Ask) => Verdict::Ask,
             (Probe | FileList(_) | FileRead(_), Rule::ReadOnly)
@@ -186,6 +189,7 @@ mod tests {
             Action::Probe,
             Action::Direct,
             Action::Trust,
+            Action::MakeRunner,
         ];
         for rule in [ReadOnly, AskR, Allowed] {
             for a in &all {
@@ -196,7 +200,7 @@ mod tests {
                 assert_eq!(h == Allow, *a == Action::Probe, "{rule:?} {a:?}");
                 // An AI never trusts a key or leases Mac-direct, on any rule.
                 let v = verdict(&ai, rule, a);
-                if matches!(a, Action::Direct | Action::Trust) {
+                if matches!(a, Action::Direct | Action::Trust | Action::MakeRunner) {
                     assert!(matches!(v, Deny(_)), "{rule:?} {a:?}");
                     continue;
                 }

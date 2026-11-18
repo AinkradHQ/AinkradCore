@@ -367,6 +367,17 @@ impl SshDriver {
             sftp.open_with_flags(tmp, flags).await.map_err(sftp_err)
         })
         .await?;
+        // Before the first byte: a file meant for its owner alone is never readable by others.
+        if let Some(mode) = req.mode {
+            let attrs = FileAttributes {
+                permissions: Some(mode & 0o7777),
+                ..FileAttributes::default()
+            };
+            or_cancel(cancel, async {
+                file.set_metadata(attrs).await.map_err(sftp_err)
+            })
+            .await?;
+        }
         // The sender may send one window before any grant; each write hands its bytes back.
         let (mut allowed, mut owed, mut total) = (STREAM_WINDOW, 0u64, 0u64);
         loop {

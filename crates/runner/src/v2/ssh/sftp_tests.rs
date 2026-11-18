@@ -93,6 +93,7 @@ fn write_req(s: &Server, path: &str, overwrite: bool, size: Option<u64>) -> Sftp
         path: path.into(),
         overwrite,
         size,
+        mode: None,
     }
 }
 
@@ -577,6 +578,7 @@ async fn real_openssh_sftp_roundtrip_hostile_names_cap_and_cancel() {
             path: path.clone(),
             overwrite: false,
             size: Some(body.len() as u64),
+            mode: None,
         };
         let mut x = start_write(&d, w);
         feed(&mut x, &body, 16_384).await;
@@ -617,6 +619,7 @@ async fn real_openssh_sftp_roundtrip_hostile_names_cap_and_cancel() {
         path: format!("{base}/cancelled"),
         overwrite: false,
         size: None,
+        mode: None,
     };
     let x = start_write(&d, w);
     x.core.send(data(&pattern(40_000))).unwrap();
