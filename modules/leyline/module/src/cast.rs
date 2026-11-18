@@ -106,8 +106,10 @@ impl Cast {
         } else {
             if offset > self.next && !self.paused {
                 // Bytes were lost (a full queue, or a snapshot): say so, never glue lines together.
-                let held = self.scrub.gap();
-                self.event(at, &held);
+                // The held line's rest was lost, so it cannot be scrubbed: drop it, like a pause.
+                if !self.scrub.gap().is_empty() {
+                    self.event(at, "[redacted:gap]");
+                }
                 self.event(at, GAP);
             }
             data
@@ -345,6 +347,19 @@ mod tests {
         assert!(all.contains("[gap]"), "{all}");
         assert!(all.contains("[recording paused]") && all.contains("[recording resumed]"));
         assert!(!all.contains("hidden"), "{all}");
+    }
+
+    #[test]
+    fn a_gap_drops_the_held_line() {
+        let mut c = Cast::new(SIZE, 0);
+        c.push(0, b"export TOKEN=abc", 0.1); // no newline: held
+        c.push(100, b"def\r\n", 0.2); // the rest never arrived
+        let all = texts(&c.take()).join("");
+        assert!(
+            all.contains("[redacted:gap]") && all.contains("[gap]"),
+            "{all}"
+        );
+        assert!(!all.contains("abc") && !all.contains("TOKEN"), "{all}");
     }
 
     #[test]

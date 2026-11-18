@@ -567,15 +567,17 @@ async fn an_exec_line_with_a_control_or_bidi_character_is_refused_before_the_gat
         assert!(!ok, "{line:?}");
         assert_eq!(code, "bad_args", "{line:?}");
     }
-    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM leyline_runs WHERE principal = 'session:as_bidi'")
-        .fetch_one(&fx.app.pool)
-        .await
-        .unwrap();
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM leyline_runs WHERE principal = 'session:as_bidi'")
+            .fetch_one(&fx.app.pool)
+            .await
+            .unwrap();
     assert_eq!(n, 0, "refused before any run row or approval");
 }
 
 async fn ask_call(app: &App, runner: &str, s: &str, wait_ms: Option<u64>) -> bool {
-    let mut args = json!({"op": "leylineExec", "args": {"host": "ask1", "body": {"command": "uptime"}}});
+    let mut args =
+        json!({"op": "leylineExec", "args": {"host": "ask1", "body": {"command": "uptime"}}});
     if let Some(ms) = wait_ms {
         args["wait_ms"] = json!(ms);
     }
@@ -594,12 +596,18 @@ async fn the_gate_approval_does_not_outlive_the_callers_wait() {
     let fx = fx().await;
     let (s, runner) = session(&fx, "as_wait").await;
     let started = std::time::Instant::now();
-    let ok = tokio::time::timeout(Duration::from_secs(20), ask_call(&fx.app, &runner, &s, Some(1500)))
-        .await
-        .expect("the call ended with the caller's wait, not the settings' approval time");
+    let ok = tokio::time::timeout(
+        Duration::from_secs(20),
+        ask_call(&fx.app, &runner, &s, Some(1500)),
+    )
+    .await
+    .expect("the call ended with the caller's wait, not the settings' approval time");
     assert!(!ok);
     assert!(started.elapsed() < Duration::from_secs(15));
-    assert!(pending(&fx.app, &s).await.unwrap().is_empty(), "nothing is left to approve");
+    assert!(
+        pending(&fx.app, &s).await.unwrap().is_empty(),
+        "nothing is left to approve"
+    );
 }
 
 /// Review follow-up, LOW: a call dropped while it waits voids its approval.
@@ -642,7 +650,14 @@ async fn a_dropped_file_read_finishes_its_run_row() {
     let (s, runner) = session(&fx, "as_file").await;
     let (app, r2, s2) = (fx.app.clone(), runner.clone(), s.clone());
     let h = tokio::spawn(async move {
-        op(&app, &r2, &s2, "leylineReadFile", json!({"host": "ro", "path": "/etc/hostname"})).await
+        op(
+            &app,
+            &r2,
+            &s2,
+            "leylineReadFile",
+            json!({"host": "ro", "path": "/etc/hostname"}),
+        )
+        .await
     });
     tokio::task::yield_now().await;
     h.abort();

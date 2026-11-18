@@ -211,3 +211,16 @@ pub async fn as_caller(
     let raw = to_bytes(res.into_body(), 1 << 22).await.unwrap();
     (status, serde_json::from_slice(&raw).unwrap_or(Value::Null))
 }
+
+/// Runs command `cmd` on `host` as the stepped-up admin, confirmed.
+pub async fn run_of(fx: &Fx, cmd: &str, host: &str) -> (StatusCode, Value) {
+    let body = json!({"host": host, "confirm": true});
+    call(
+        fx,
+        &fx.admin,
+        Method::POST,
+        &format!("/commands/{cmd}/run"),
+        Some(body),
+    )
+    .await
+}

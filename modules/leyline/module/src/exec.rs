@@ -14,12 +14,13 @@
 use std::time::Duration;
 
 use ainkrad_core_server::api::App;
-use ainkrad_core_server::api::v1::BY;
+use ainkrad_core_server::api::v1::{ApiError, BY, Caller, SftpJob, sftp_job};
 use ainkrad_core_server::hub::Dispatched;
 use ainkrad_core_server::store::secrets;
 use ainkrad_proto::v2::{
     Body, Command, ErrorCode, ExecLimits, ExecResult, Reply, SshExec, SshHop, SshRoute,
 };
+use axum::http::StatusCode;
 use tokio::sync::watch;
 
 use crate::gate::{Authorized, Link, Stop, checked, finish, redact_text};
@@ -163,6 +164,30 @@ pub(crate) async fn sftp(
         .dispatch_ssh_sftp_read(&runner, make(SshRoute { target, hops }))
         .map_err(|e| why(e.code))?;
     Ok((d, runner))
+}
+
+/// A person's file upload (the host page): the gate re-checked right before, a one-use lease per
+/// hop, then the server's credited SFTP write (it needs the caller's `terminal` scope; the route
+/// needs a live step-up). The file replaces the target whole, or leaves nothing behind.
+pub(crate) async fn sftp_put(
+    app: &App,
+    me: &Caller,
+    auth: &Authorized,
+    path: &str,
+    bytes: &[u8],
+) -> Result<(), ApiError> {
+    let link = checked(app, auth).await?;
+    let (target, hops, runner) = leased(app, auth, link)
+        .await
+        .map_err(|why| ApiError::new(StatusCode::BAD_GATEWAY, "host_unavailable", why))?;
+    sftp_job(
+        app,
+        me,
+        &runner,
+        SshRoute { target, hops },
+        SftpJob::Upload { path, bytes },
+    )
+    .await
 }
 
 /// The runner that connects and the `ssh.exec` for `step`, with a one-use lease per hop. `link` is

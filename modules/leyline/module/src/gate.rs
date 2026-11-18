@@ -47,8 +47,8 @@ use ainkrad_core::settings::{Key, Scope};
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::ApiError;
 use ainkrad_core_server::ops_catalog::{
-    Outcome, Waiting, abandon_approval, approval_left, consume_approval, create_approval,
-    new_approval_id, session_principal, void_approval, wait_approval,
+    Outcome, Waiting, approval_left, consume_approval, create_approval, new_approval_id,
+    session_principal, void_approval, wait_approval,
 };
 use ainkrad_core_server::store::connections::access;
 use ainkrad_core_server::store::{begin_write, gov, settings};
@@ -58,7 +58,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqliteConnection};
 
-use crate::commands::{Cmd, Scope, load_cmd};
+use crate::commands::{Cmd, Scope as CmdScope, load_cmd};
 use crate::hosts::find;
 pub use crate::policy::{Action, Principal};
 use crate::policy::{Rule, Verdict, Who, verdict};
@@ -443,7 +443,28 @@ async fn host_row(conn: &mut SqliteConnection, id: &str) -> Result<Option<H>, sq
         }),
         Err(e) => json!(e),
     };
+    // The hops' own connections count even when the path cannot be built (no runner yet): a hop that
+    // changes is a different host either way.
+    let mut hops = Vec::new();
+    for id in serde_json::from_str::<Vec<String>>(&jump_chain).unwrap_or_default() {
+        let h =
+            sqlx::query("SELECT address, port, username, key_id FROM leyline_hosts WHERE id = ?")
+                .bind(&id)
+                .fetch_optional(&mut *conn)
+                .await?;
+        hops.push(match h {
+            Some(h) => json!([
+                id,
+                h.try_get::<String, _>("address")?,
+                h.try_get::<i64, _>("port")?,
+                h.try_get::<String, _>("username")?,
+                h.try_get::<Option<String>, _>("key_id")?
+            ]),
+            None => json!([id]),
+        });
+    }
     let tuple = json!([
+        hops,
         rule,
         r.try_get::<String, _>("address")?,
         r.try_get::<i64, _>("port")?,
@@ -537,7 +558,7 @@ async fn for_host(app: &App, cmd: Option<&Cmd>, host: &str) -> Result<bool, sqlx
 /// Whether `host` (an id) is one of the hosts `scope` names.
 async fn in_scope(
     conn: &mut SqliteConnection,
-    scope: &Option<Scope>,
+    scope: &Option<CmdScope>,
     host: &str,
 ) -> Result<bool, sqlx::Error> {
     let Some(s) = scope else {
@@ -702,6 +723,7 @@ pub(crate) fn shows_whole(s: &str) -> bool {
 }
 
 /// Parks the approval of the `ask` hosts and waits for the person.
+#[allow(clippy::too_many_arguments)] // one call site; a struct would only rename them
 async fn ask(
     app: &App,
     (id, session, runner): (&str, &str, &str),

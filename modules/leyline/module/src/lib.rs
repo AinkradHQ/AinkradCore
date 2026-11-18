@@ -17,6 +17,7 @@ mod cast;
 mod commands;
 mod direct;
 mod exec;
+mod files;
 mod fleet;
 pub mod gate;
 mod health;
@@ -118,6 +119,8 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     // Recording on or off both need it: turning it off hides what happens on a host. Resuming a
     // paused recording too; pausing does not (a person who sees one can stop it at once).
     ("PUT", "/hosts/{host}/recording"),
+    // Writing a file on a host: a person at a live step-up, like a terminal.
+    ("PUT", "/hosts/{host}/files/content"),
     ("POST", "/sessions/{session}/recording/resume"),
     // Installs software as root on a host and pairs it: a person at a live step-up.
     ("POST", "/hosts/{host}/runner"),
@@ -170,6 +173,11 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("POST", "/ai/hosts/{host}/exec", "agent"),
     ("POST", "/ai/commands/{command}/run", "agent"),
     ("GET", "/hosts/{host}/host-keys", "read"),
+    ("GET", "/hosts/{host}/health", "read"),
+    // A file on a host is host content: the terminal scope; the gate decides again per call.
+    ("GET", "/hosts/{host}/files", "terminal"),
+    ("GET", "/hosts/{host}/files/content", "terminal"),
+    ("PUT", "/hosts/{host}/files/content", "terminal"),
     // The terminal scope, as the Core's own terminal routes.
     ("POST", "/hosts/{host}/terminals", "terminal"),
     ("POST", "/hosts/{host}/direct", "terminal"),
@@ -196,6 +204,10 @@ pub struct Leyline;
         hosts::remove,
         hosts::groups,
         hosts::tags,
+        health::read,
+        files::list,
+        files::read,
+        files::write,
         keys::list,
         keys::generate,
         keys::import,
@@ -273,7 +285,12 @@ pub struct Leyline;
         history::NewRecording,
         history::HostRecording,
         history::Paused,
-        makerunner::Install
+        makerunner::Install,
+        health::HealthView,
+        health::HealthPoint,
+        files::RemoteFile,
+        files::Chunk,
+        files::Put
     ))
 )]
 struct Doc;
@@ -299,7 +316,6 @@ impl Module for Leyline {
                 }
             });
         }
-        health::attach(app);
     }
 
     fn routes(&self) -> Router<App> {
@@ -308,6 +324,12 @@ impl Module for Leyline {
             .route(
                 "/hosts/{host}",
                 get(hosts::get).patch(hosts::patch).delete(hosts::remove),
+            )
+            .route("/hosts/{host}/health", get(health::read))
+            .route("/hosts/{host}/files", get(files::list))
+            .route(
+                "/hosts/{host}/files/content",
+                get(files::read).put(files::write),
             )
             .route("/hosts/{host}/host-keys", get(hostkeys::list))
             .route("/hosts/{host}/host-keys/trust", post(hostkeys::trust_route))

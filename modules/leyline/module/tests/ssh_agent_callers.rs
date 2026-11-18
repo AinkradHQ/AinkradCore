@@ -13,7 +13,10 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
         let p = e.unwrap().path();
         if p.is_dir() {
             let name = p.file_name().unwrap_or_default();
-            if name == "target" || name == ".git" || name == "node_modules" || p.join(".git").exists()
+            if name == "target"
+                || name == ".git"
+                || name == "node_modules"
+                || p.join(".git").exists()
             {
                 continue;
             }
@@ -40,7 +43,12 @@ fn only_direct_rs_in_the_workspace_takes_the_agent_line() {
             let text = std::fs::read_to_string(f).unwrap_or_default();
             text.contains(needle) || text.contains(old)
         })
-        .map(|f| f.strip_prefix(&root).unwrap().to_string_lossy().into_owned())
+        .map(|f| {
+            f.strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
     callers.sort();
     // This file takes the line of a hub of its own (below), never an App's.

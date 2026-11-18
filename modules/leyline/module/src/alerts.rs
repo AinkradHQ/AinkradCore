@@ -74,6 +74,7 @@ pub(crate) fn decide(recent: &[Sample], open: &[String]) -> Vec<Op> {
 /// Reads the host's newest raw samples and its open alerts, and opens or closes what the rules say.
 pub(crate) async fn evaluate(app: &App, host: &str) -> Result<(), sqlx::Error> {
     let mut tx = begin_write(&app.pool).await?;
+    #[allow(clippy::type_complexity)] // one row of the sample query, read once
     let rows: Vec<(i64, Option<f64>, Option<f64>, Option<i64>)> = sqlx::query_as(
         "SELECT up, mem_pct, disk_pct, failed_units FROM leyline_health_samples \
          WHERE host_id = ? AND rolled = 0 ORDER BY at DESC LIMIT 5",

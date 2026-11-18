@@ -350,7 +350,12 @@ pub(crate) async fn create(
     Extension(me): Extension<Caller>,
     In(req): In<NewHost>,
 ) -> ApiResult<HostView> {
-    if req.ai_rule.as_deref() == Some("allowed") && !elevated(&app, &me) {
+    // Naming a key, a jump chain or a runner points credentials and traffic somewhere (a runner
+    // named with an existing key is handed that key): the same step-up as changing them (#283).
+    let points = req.key_id.is_some()
+        || req.via_runner.is_some()
+        || req.jump_chain.as_ref().is_some_and(|j| !j.is_empty());
+    if (points || req.ai_rule.as_deref() == Some("allowed")) && !elevated(&app, &me) {
         return Err(step_up_required());
     }
     let f = Fields {

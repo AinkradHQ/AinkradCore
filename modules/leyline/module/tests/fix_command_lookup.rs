@@ -45,7 +45,7 @@ async fn unreadable_steps_are_an_error_not_an_empty_list() {
     let fx = fx().await;
     let c = mk(&fx, json!({"name": "c", "steps": ["true"]})).await;
     let id = c["id"].as_str().unwrap();
-    sqlx::query("UPDATE leyline_commands SET steps = '{\"not\":\"a list\"}' WHERE id = ?")
+    sqlx::query("UPDATE leyline_commands SET steps = '[1]' WHERE id = ?")
         .bind(id)
         .execute(&fx.app.pool)
         .await

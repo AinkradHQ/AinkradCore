@@ -60,7 +60,7 @@ fn session_only(me: &Caller) -> Result<(), ApiError> {
     })
 }
 
-fn host_err(why: String) -> ApiError {
+pub(crate) fn host_err(why: String) -> ApiError {
     ApiError::new(StatusCode::BAD_GATEWAY, "host_unavailable", why)
 }
 
@@ -73,7 +73,8 @@ pub(crate) async fn get_run(
     Path(id): Path<String>,
 ) -> ApiResult<RunView> {
     session_only(&me)?;
-    let Json(mut run) = crate::commands::get_run(State(app), Extension(me.clone()), Path(id)).await?;
+    let Json(mut run) =
+        crate::commands::get_run(State(app), Extension(me.clone()), Path(id)).await?;
     own_run(&me, &mut run)?;
     Ok(Json(run))
 }
@@ -99,17 +100,17 @@ fn own_run(me: &Caller, run: &mut RunView) -> Result<(), ApiError> {
 
 /// A file call's run row: closed by `end`, or as failed in the background when the call is dropped
 /// (the caller timed out), so a run is never left `queued`.
-struct Open {
-    app: App,
-    auth: Option<Authorized>,
+pub(crate) struct Open {
+    pub(crate) app: App,
+    pub(crate) auth: Option<Authorized>,
 }
 
 impl Open {
-    fn auth(&self) -> &Authorized {
+    pub(crate) fn auth(&self) -> &Authorized {
         self.auth.as_ref().expect("open until it ends")
     }
 
-    async fn end(mut self, ok: bool) -> Result<(), ApiError> {
+    pub(crate) async fn end(mut self, ok: bool) -> Result<(), ApiError> {
         let auth = self.auth.take().expect("open until it ends");
         finish(&self.app, auth, ok).await
     }
@@ -195,7 +196,7 @@ pub struct PathQuery {
     pub path: String,
 }
 
-fn path_of(q: Result<Query<PathQuery>, QueryRejection>) -> Result<String, ApiError> {
+pub(crate) fn path_of(q: Result<Query<PathQuery>, QueryRejection>) -> Result<String, ApiError> {
     let bad = || ApiError::bad_request("the path is not valid");
     let Query(q) = q.map_err(|_| bad())?;
     if q.path.is_empty() || q.path.len() > SFTP_MAX_PATH || q.path.contains('\0') {
@@ -290,7 +291,11 @@ pub(crate) async fn read_file(
     }))
 }
 
-async fn list(app: &App, auth: &Authorized, path: String) -> Result<SftpEntries, String> {
+pub(crate) async fn list(
+    app: &App,
+    auth: &Authorized,
+    path: String,
+) -> Result<SftpEntries, String> {
     let (d, _) = sftp(app, auth, |route| {
         Command::SshSftpList(SftpList { route, path })
     })

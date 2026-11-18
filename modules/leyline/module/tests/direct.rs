@@ -45,6 +45,23 @@ impl Drop for Fx {
     }
 }
 
+/// The next frame that is not a `close`: the Core closes the stream of a finished terminal or request, and that
+/// must not be mistaken for the command a test waits for.
+async fn next_open(
+    rx: &mut Receiver<Frame>,
+    secs: u64,
+) -> Result<Option<Frame>, tokio::time::error::Elapsed> {
+    tokio::time::timeout(Duration::from_secs(secs), async {
+        loop {
+            let f = rx.recv().await?;
+            if !matches!(f.body(), Ok(Some(Body::Close(_)))) {
+                return Some(f);
+            }
+        }
+    })
+    .await
+}
+
 async fn enroll(app: &App, name: &str, kind: &str, scopes: &[&str]) -> TestDevice {
     let clock = Arc::new(SystemClock);
     let dev = TestDevice::enroll_keys(
@@ -215,12 +232,12 @@ fn online_as(fx: &Fx, runner: &str, agent: bool) -> Receiver<Frame> {
 
 /// Takes the next command the Core sends and answers it.
 async fn serve(fx: &Fx, rx: &mut Receiver<Frame>, answer: Body) -> Command {
-    let f = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+    let f = next_open(rx, 10)
         .await
         .expect("the Core sent nothing")
         .expect("the runner link closed");
     let Some(Body::Command(c)) = f.body().unwrap() else {
-        panic!("not a command")
+        panic!("not a command: {:?}", f.body())
     };
     fx.app
         .hub
@@ -242,19 +259,14 @@ async fn lease(
     h: &str,
     answer: Body,
 ) -> (StatusCode, Value, Option<Command>) {
-    let ask = call(
-        fx,
-        dev,
-        Method::POST,
-        &format!("/hosts/{h}/direct"),
-        Some(json!({})),
-    );
+    let path = format!("/hosts/{h}/direct");
+    let ask = call(fx, dev, Method::POST, &path, Some(json!({})));
     let (a, c) = tokio::join!(ask, async {
         // Only an answered request has a command to serve: wait briefly for one.
-        match tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
+        match next_open(rx, 2).await {
             Ok(Some(f)) => {
                 let Some(Body::Command(c)) = f.body().unwrap() else {
-                    panic!("not a command")
+                    panic!("not a command: {:?}", f.body())
                 };
                 fx.app
                     .hub
@@ -427,13 +439,8 @@ async fn a_load_the_runner_refuses_leaves_no_open_lease_and_no_lease_behind() {
     let h = host(&fx, "alpha", None).await;
     trust_row(&fx, &h, &fp('A'), "trusted").await;
     let refused = Body::Error(StreamError::new(ErrorCode::SshAuthFailed, "secret detail"));
-    let ask = call(
-        &fx,
-        &fx.admin,
-        Method::POST,
-        &format!("/hosts/{h}/direct"),
-        Some(json!({})),
-    );
+    let path = format!("/hosts/{h}/direct");
+    let ask = call(&fx, &fx.admin, Method::POST, &path, Some(json!({})));
     let runner = async {
         serve(&fx, &mut rx, refused).await;
         // The Core makes sure nothing was left running.
@@ -519,15 +526,10 @@ async fn a_lease_mints_a_single_use_key_for_the_mac_without_widening_the_key_sco
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{own}");
-    let ask = call(
-        &fx,
-        &fx.admin,
-        Method::POST,
-        &format!("/hosts/{h}/direct"),
-        Some(json!({})),
-    );
+    let path = format!("/hosts/{h}/direct");
+    let ask = call(&fx, &fx.admin, Method::POST, &path, Some(json!({})));
     let runner = async {
-        let f = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+        let f = next_open(&mut rx, 10)
             .await
             .expect("the Core sent nothing")
             .expect("the link closed");
@@ -536,8 +538,20 @@ async fn a_lease_mints_a_single_use_key_for_the_mac_without_widening_the_key_sco
         };
         let lease = load.keys[0].lease.clone();
         // The Mac redeems it: the key's OpenSSH text, once.
-        let first = core_call(&fx, &mac, "/api/v1/secret-leases/redeem", json!({"lease": lease})).await;
-        let again = core_call(&fx, &mac, "/api/v1/secret-leases/redeem", json!({"lease": lease})).await;
+        let first = core_call(
+            &fx,
+            &mac,
+            "/api/v1/secret-leases/redeem",
+            json!({"lease": lease}),
+        )
+        .await;
+        let again = core_call(
+            &fx,
+            &mac,
+            "/api/v1/secret-leases/redeem",
+            json!({"lease": lease}),
+        )
+        .await;
         fx.app
             .hub
             .fake_reply(&mac.id, Frame::new(f.stream_id, 0, loaded()));

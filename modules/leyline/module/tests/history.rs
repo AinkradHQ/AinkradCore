@@ -50,6 +50,23 @@ impl Drop for Fx {
     }
 }
 
+/// The next frame that is not a `close`: the Core closes the stream of a finished terminal or request, and that
+/// must not be mistaken for the command a test waits for.
+async fn next_open(
+    rx: &mut Receiver<Frame>,
+    secs: u64,
+) -> Result<Option<Frame>, tokio::time::error::Elapsed> {
+    tokio::time::timeout(Duration::from_secs(secs), async {
+        loop {
+            let f = rx.recv().await?;
+            if !matches!(f.body(), Ok(Some(Body::Close(_)))) {
+                return Some(f);
+            }
+        }
+    })
+    .await
+}
+
 async fn enroll(app: &App, name: &str, kind: &str, scopes: &[&str]) -> TestDevice {
     let clock = Arc::new(SystemClock);
     let dev = TestDevice::enroll_keys(
@@ -230,12 +247,10 @@ async fn open_terminal(
     let path = format!("/hosts/{host}/terminals");
     let ask = call(fx, &fx.admin, Method::POST, &path, body);
     let serve = async {
-        let f = tokio::time::timeout(Duration::from_secs(10), rx.recv())
-            .await
-            .ok()??;
+        let f = next_open(rx, 10).await.ok()??;
         let terminal = format!("t_{}", f.stream_id);
         let Some(Body::Command(Command::PtyOpen(open))) = f.body().unwrap() else {
-            panic!("not a pty.open")
+            panic!("not a pty.open: {:?}", f.body())
         };
         let info = TerminalInfo {
             terminal: terminal.clone(),

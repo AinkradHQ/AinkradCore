@@ -389,7 +389,11 @@ async fn one_action_installs_and_the_claim_links_the_runner_without_the_invite_l
     // The invite is one 0600 file in the user's cache, whole, and the one place it is.
     assert_eq!(puts.len(), 1);
     let p = v["pairing"].as_str().unwrap().to_owned();
-    assert_eq!(puts[0].0, path(&p), "a per-pairing file, straight in the home");
+    assert_eq!(
+        puts[0].0,
+        path(&p),
+        "a per-pairing file, straight in the home"
+    );
     assert!(
         !commands.iter().any(|c| c.contains("SshSftpMkdir")),
         "no directory is created or trusted"
@@ -402,8 +406,11 @@ async fn one_action_installs_and_the_claim_links_the_runner_without_the_invite_l
         assert!(!c.contains(&secret), "a command carries the invite");
     }
     assert!(!typed.contains(&secret));
-    assert!(typed.contains("--runner") && typed.contains(&path(&p))
-            && typed.contains("--proto =https --tlsv1.3"));
+    assert!(
+        typed.contains("--runner")
+            && typed.contains(&path(&p))
+            && typed.contains("--proto =https --tlsv1.3")
+    );
     assert!(typed.starts_with("sudo sh -c '"), "{typed}");
     assert!(!v.to_string().contains(&secret));
     assert!(
@@ -474,7 +481,10 @@ async fn one_action_installs_and_the_claim_links_the_runner_without_the_invite_l
         "SELECT coalesce(group_concat(payload), '') FROM events WHERE payload LIKE '%runner_install%'",
     ] {
         let t = text(&fx, sql).await;
-        assert!(t.contains("\"claimer\"") && t.contains(&fx.runner.id), "{t}");
+        assert!(
+            t.contains("\"claimer\"") && t.contains(&fx.runner.id),
+            "{t}"
+        );
     }
     // Already a runner: no second install, and no second invite.
     let (s, b) = make(&fx, &fx.admin, &h).await;

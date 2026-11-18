@@ -32,9 +32,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use ainkrad_core::audit::NewAuditEvent;
+use ainkrad_core_server::agents::Ephemeral;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY, Caller};
-use ainkrad_core_server::agents::Ephemeral;
 use ainkrad_core_server::hub::{Dispatched, RunnerState, SshAgentLine};
 use ainkrad_core_server::scheduler::iso_of_unix;
 use ainkrad_core_server::store::{audit, begin_write, events, secrets};
@@ -219,11 +219,7 @@ pub(crate) async fn lease(
     Ok(Json(done?))
 }
 
-async fn start(
-    app: &App,
-    auth: &Authorized,
-    req: NewDirect,
-) -> Result<DirectView, ApiError> {
+async fn start(app: &App, auth: &Authorized, req: NewDirect) -> Result<DirectView, ApiError> {
     let host = auth.host_id();
     let ttl = req.ttl_secs.unwrap_or(DEFAULT_TTL);
     if !(MIN_TTL..=SSH_AGENT_MAX_TTL_SECS).contains(&ttl) {
@@ -401,7 +397,10 @@ async fn mint(app: &App, secret: &str, runner: &str) -> Result<String, ApiError>
         expires: now + MINT_SECS,
     };
     if !app.agents.stash(&lease, held, now) {
-        return Err(wrong("runner_busy", "too many credentials await redemption"));
+        return Err(wrong(
+            "runner_busy",
+            "too many credentials await redemption",
+        ));
     }
     Ok(lease)
 }

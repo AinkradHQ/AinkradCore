@@ -47,7 +47,8 @@ impl Drop for Abandon {
         {
             let (pool, id, session) = (self.pool.clone(), self.id.clone(), self.session.clone());
             h.spawn(async move {
-                let _ = ainkrad_core_server::ops_catalog::abandon_approval(&pool, &id, &session).await;
+                let _ =
+                    ainkrad_core_server::ops_catalog::abandon_approval(&pool, &id, &session).await;
             });
         }
     }
@@ -201,7 +202,14 @@ pub(crate) fn literal_secret(s: &str) -> bool {
             None => s.ends_with(r).then(|| s.len() - r.len()),
         };
         match end {
-            Some(e) if e >= i && only_refs(&s[i..e]) => i = e,
+            // The masker may stop inside `${NAME}` at its closing brace: that brace belongs to the reference.
+            Some(e)
+                if e >= i
+                    && (only_refs(&s[i..e])
+                        || (s[e..].starts_with('}') && only_refs(&s[i..=e]))) =>
+            {
+                i = e
+            }
             _ => return true,
         }
     }
@@ -382,7 +390,24 @@ pub async fn finish(app: &App, done: Authorized, ok: bool) -> Result<(), ApiErro
 
 #[cfg(test)]
 mod tests {
-    use super::redacted;
+    use super::{literal_secret, redacted};
+
+    /// A `$NAME` or `${NAME}` reference is not a secret written out; the literal value is.
+    #[test]
+    fn variable_references_are_not_literal_secrets() {
+        for ok in [
+            "export DB_PASSWORD=$DB_PASSWORD",
+            "curl -H \"Authorization: Bearer ${TOKEN}\" x",
+        ] {
+            assert!(!literal_secret(ok), "{ok} -> {}", redacted(ok));
+        }
+        for bad in [
+            "export DB_PASSWORD=hunter2",
+            "curl -H \"Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789\" x",
+        ] {
+            assert!(literal_secret(bad), "{bad} -> {}", redacted(bad));
+        }
+    }
 
     /// Plain-text output is masked by the NAME, not only by shape (Y4-02 review, MEDIUM).
     #[test]

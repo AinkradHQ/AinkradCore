@@ -26,6 +26,7 @@ const BASE: &str = "/modules/leyline/v1";
 struct Fx {
     app: App,
     admin: TestDevice,
+    #[allow(dead_code)]
     weak: TestDevice,
     dir: PathBuf,
 }

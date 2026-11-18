@@ -21,9 +21,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use ainkrad_core_server::api::App;
+use ainkrad_core_server::api::v1::ApiResult;
 use ainkrad_core_server::jobs::{Done, Job, JobHandler, Missed, Run, Schedule};
+use ainkrad_core_server::scheduler::iso_of_unix;
 use ainkrad_core_server::store::begin_write;
 use ainkrad_proto::v2::{Body, ErrorCode, Reply};
+use axum::Json;
+use axum::extract::{Path, State};
 use sqlx::{Row, SqlitePool};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -455,6 +459,90 @@ pub(crate) fn jobs() -> Vec<Job> {
         )),
         skip(Job::new("rollup", Schedule::Every(3600), Arc::new(Rollup))),
     ]
+}
+
+/// The newest sample is "now" for this long; after it the host's state is unknown.
+const FRESH_SECS: i64 = 300;
+/// Samples the host page draws as its sparklines.
+const SERIES: i64 = 30;
+
+/// One point of the host page's sparklines.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct HealthPoint {
+    pub load1: Option<f64>,
+    pub cpus: Option<i64>,
+    pub mem_pct: Option<f64>,
+    pub disk_pct: Option<f64>,
+}
+
+/// A host's latest health and its last samples (numbers only: no remote text).
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct HealthView {
+    /// `up`, `down`, or `unknown` (never probed, not verifiable, or the newest sample is old).
+    pub state: String,
+    pub checked_at: Option<String>,
+    pub load1: Option<f64>,
+    pub cpus: Option<i64>,
+    pub mem_pct: Option<f64>,
+    pub disk_pct: Option<f64>,
+    pub failed_units: Option<i64>,
+    /// Oldest first.
+    pub history: Vec<HealthPoint>,
+}
+
+#[utoipa::path(get, path = "/hosts/{host}/health", operation_id = "leylineHostHealth", tag = "leyline",
+    params(("host" = String, Path, description = "Host id, else its unique label")),
+    responses((status = 200, description = "The stored samples of the host's last probes; reads the table, probes nothing", body = HealthView)))]
+pub(crate) async fn read(
+    State(app): State<App>,
+    Path(host): Path<String>,
+) -> ApiResult<HealthView> {
+    let id = {
+        let mut conn = app.pool.acquire().await?;
+        crate::hosts::find(&mut conn, &host).await?
+    };
+    let rows = sqlx::query(
+        "SELECT at, up, load1, cpus, mem_pct, disk_pct, failed_units FROM leyline_health_samples \
+         WHERE host_id = ? ORDER BY at DESC LIMIT ?",
+    )
+    .bind(&id)
+    .bind(SERIES)
+    .fetch_all(&app.pool)
+    .await?;
+    let point = |r: &sqlx::sqlite::SqliteRow| HealthPoint {
+        load1: r.get("load1"),
+        cpus: r.get("cpus"),
+        mem_pct: r.get("mem_pct"),
+        disk_pct: r.get("disk_pct"),
+    };
+    let mut out = HealthView {
+        state: "unknown".to_owned(),
+        checked_at: None,
+        load1: None,
+        cpus: None,
+        mem_pct: None,
+        disk_pct: None,
+        failed_units: None,
+        history: rows.iter().rev().map(point).collect(),
+    };
+    if let Some(r) = rows.first() {
+        let at: i64 = r.get("at");
+        out.checked_at = Some(iso_of_unix(at));
+        if app.clock.unix() - at <= FRESH_SECS {
+            out.state = if r.get::<i64, _>("up") == 1 {
+                "up"
+            } else {
+                "down"
+            }
+            .to_owned();
+        }
+        out.load1 = r.get("load1");
+        out.cpus = r.get("cpus");
+        out.mem_pct = r.get("mem_pct");
+        out.disk_pct = r.get("disk_pct");
+        out.failed_units = r.get("failed_units");
+    }
+    Ok(Json(out))
 }
 
 #[cfg(test)]

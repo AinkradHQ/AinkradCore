@@ -530,7 +530,8 @@ async fn a_card_that_would_be_cut_is_never_parked() {
     add(&fx, "long", "ask").await;
     let (ai, _) = session(&fx, "as_long").await;
     for (cmd, why) in [
-        ("x".repeat(201), "too long to show for approval"),
+        // words, not one long run: development's redactor reads a 201-character run of one letter as a secret
+        ("echo hello ".repeat(19), "too long to show for approval"),
         (
             "echo Bearer abcdefghijklmnopqrstuvwxyz0123456789".to_owned(),
             "the command contains a secret",

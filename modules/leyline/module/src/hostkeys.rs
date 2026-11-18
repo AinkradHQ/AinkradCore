@@ -154,6 +154,7 @@ pub(crate) async fn list(
 ) -> ApiResult<Vec<HostKeyView>> {
     let mut conn = app.pool.acquire().await?;
     let id = find(&mut conn, &host).await?;
+    #[allow(clippy::type_complexity)] // one row of the host-key query, read once
     let rows: Vec<(String, String, String, Option<String>, Option<String>)> =
         sqlx::query_as(rows!(" WHERE host_id = ? ORDER BY first_seen, fingerprint"))
             .bind(id)

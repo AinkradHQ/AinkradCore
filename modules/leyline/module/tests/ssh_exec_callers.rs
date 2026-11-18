@@ -29,6 +29,8 @@ fn callers(needle: &str) -> Vec<String> {
     assert!(files.len() > 50, "the walk found the source tree");
     let mut found: Vec<String> = files
         .iter()
+        // This file names the dispatches in its own test names: it is the checker, not a caller.
+        .filter(|f| !f.ends_with("tests/ssh_exec_callers.rs"))
         .filter(|f| {
             std::fs::read_to_string(f).is_ok_and(|s| {
                 s.lines()
