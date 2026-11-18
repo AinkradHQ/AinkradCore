@@ -592,11 +592,17 @@ async fn take_over_and_resume_flip_ai_paused_once_each() {
     let d = add(&fx, doc("pause-me")).await;
     let id = d["id"].as_str().unwrap().to_owned();
     assert_eq!(d["ai_paused"], json!(false));
-    let (take, resume) = (format!("/docs/{id}/take-over"), format!("/docs/{id}/resume"));
+    let (take, resume) = (
+        format!("/docs/{id}/take-over"),
+        format!("/docs/{id}/resume"),
+    );
     // a read-only device cannot pause or resume
     for url in [&take, &resume] {
         let (s, b) = call(&fx, &reader, Method::POST, url, None).await;
-        assert_eq!((s, &b["code"]), (StatusCode::FORBIDDEN, &json!("forbidden_scope")));
+        assert_eq!(
+            (s, &b["code"]),
+            (StatusCode::FORBIDDEN, &json!("forbidden_scope"))
+        );
     }
     for _ in 0..2 {
         let (s, v) = call(&fx, &fx.admin, Method::POST, &take, None).await;
@@ -617,7 +623,14 @@ async fn take_over_and_resume_flip_ai_paused_once_each() {
         assert_eq!(n, want, "{action} is recorded once");
     }
     // an archived design cannot be paused
-    call(&fx, &fx.admin, Method::POST, &format!("/docs/{id}/archive"), None).await;
+    call(
+        &fx,
+        &fx.admin,
+        Method::POST,
+        &format!("/docs/{id}/archive"),
+        None,
+    )
+    .await;
     assert_eq!(
         call(&fx, &fx.admin, Method::POST, &take, None).await.0,
         StatusCode::CONFLICT

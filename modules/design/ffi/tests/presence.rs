@@ -99,7 +99,10 @@ fn peers_show_as_markers_and_expire_with_gone() {
         "a node that does not exist has no outline"
     );
     let l = list(h);
-    assert_eq!((&l[0]["kind"], &l[1]["kind"]), (&json!("person"), &json!("ai")));
+    assert_eq!(
+        (&l[0]["kind"], &l[1]["kind"]),
+        (&json!("person"), &json!("ai"))
+    );
     // the peer's selection follows the node when it is gone from the document
     let del = json!([{"op": "delete", "id": R}]).to_string();
     unsafe { de_edit(h, del.as_ptr(), del.len()) };
@@ -162,8 +165,14 @@ fn hostile_messages_change_nothing() {
         DE_ERR_TOO_LARGE
     );
     assert!(testing::peer_marks(h).is_empty());
-    assert_eq!(unsafe { de_presence_remote(0, std::ptr::null(), 3) }, DE_ERR_HANDLE);
-    assert_eq!(unsafe { de_presence_remote(h, std::ptr::null(), 3) }, DE_ERR_ARG);
+    assert_eq!(
+        unsafe { de_presence_remote(0, std::ptr::null(), 3) },
+        DE_ERR_HANDLE
+    );
+    assert_eq!(
+        unsafe { de_presence_remote(h, std::ptr::null(), 3) },
+        DE_ERR_ARG
+    );
     assert_eq!(unsafe { de_follow(h, std::ptr::null(), 3) }, DE_ERR_ARG);
     de_engine_free(h);
 }

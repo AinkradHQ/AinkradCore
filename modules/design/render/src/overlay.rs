@@ -204,12 +204,7 @@ fn draw_peer(canvas: &Canvas, cam: &Camera, p: &PeerMark) {
         );
     }
     if let Some(f) = &font {
-        canvas.draw_str(
-            &p.label,
-            (chip.left + pad + mark, chip.top + 11.5),
-            f,
-            &ink,
-        );
+        canvas.draw_str(&p.label, (chip.left + pad + mark, chip.top + 11.5), f, &ink);
     }
 }
 
@@ -226,6 +221,10 @@ mod tests {
         assert_eq!(visible_outlines(&[off, on, off], &cam, clip).len(), 1);
         let many = vec![on; MAX_PEER_OUTLINES + 20];
         assert_eq!(visible_outlines(&many, &cam, clip).len(), MAX_PEER_OUTLINES);
-        assert_eq!(visible_outlines(&[off], &cam, None).len(), 1, "no clip, no culling");
+        assert_eq!(
+            visible_outlines(&[off], &cam, None).len(),
+            1,
+            "no clip, no culling"
+        );
     }
 }

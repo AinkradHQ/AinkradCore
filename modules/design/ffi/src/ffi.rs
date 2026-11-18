@@ -381,7 +381,9 @@ pub unsafe extern "C" fn de_presence_list(
 /// `peer..+len` readable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn de_follow(h: u64, peer: *const u8, len: usize) -> i32 {
-    with(h, |e| ok(e.follow(unsafe { text(peer, len, DE_MAX_ID_BYTES) }?)))
+    with(h, |e| {
+        ok(e.follow(unsafe { text(peer, len, DE_MAX_ID_BYTES) }?))
+    })
 }
 
 // ---- edits --------------------------------------------------------------------------------------------------------
