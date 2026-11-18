@@ -14,8 +14,6 @@
 //! ponytail: an upload batch sent twice counts its refused/ignored entries twice; the numbers are informational.
 //! ponytail: a matched note keeps its project; a project chosen in review applies to notes this run creates.
 
-use std::path::PathBuf;
-
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
 use ainkrad_core_server::store::{begin_write, projects};
@@ -112,7 +110,7 @@ pub(crate) async fn create(
         });
         repo_id = Some(repo.id.to_string());
         target = Some(MirrorRef {
-            dir: PathBuf::from(root).join(format!("{}.git", repo.id)),
+            dir: root.join(format!("{}.git", repo.id)),
             project: pid,
             remote: repo.remote_url.clone(),
             branch: repo.default_branch.clone(),
@@ -278,7 +276,10 @@ pub(crate) async fn add_zip(
     }
     // At most 2 zips inflate at once: each can hold 64 MiB of text in memory.
     static ZIPS: Semaphore = Semaphore::const_new(2);
-    let _slot = ZIPS.acquire().await.map_err(|_| ApiError::bad_request("the zip is not valid"))?;
+    let _slot = ZIPS
+        .acquire()
+        .await
+        .map_err(|_| ApiError::bad_request("the zip is not valid"))?;
     let scan = tokio::task::spawn_blocking(move || read_zip(&body))
         .await
         .map_err(|_| ApiError::bad_request("the zip is not valid"))?

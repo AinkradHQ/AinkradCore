@@ -97,6 +97,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0005_lore_search.up.sql"),
         down: include_str!("../migrations/0005_lore_search.down.sql"),
     },
+    Migration {
+        version: 6,
+        name: "0006_lore_import",
+        up: include_str!("../migrations/0006_lore_import.up.sql"),
+        down: include_str!("../migrations/0006_lore_import.down.sql"),
+    },
 ];
 
 // The trash is reversible (every row is kept for 30 days), so no person's write needs a step-up. The one

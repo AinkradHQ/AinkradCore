@@ -162,6 +162,12 @@ pub(crate) async fn search(
         .tag
         .as_deref()
         .map(|t| t.trim().trim_start_matches('#').to_owned());
+    if tag
+        .as_ref()
+        .is_some_and(|t| t.chars().count() > lore_model::limits::MAX_TAG_CHARS)
+    {
+        return Err(bad());
+    }
     let rows = sqlx::query(
         "SELECT n.id, n.kind, n.title, n.text, n.updated_at \
          FROM lore_fts JOIN lore_notes n ON n.rowid = lore_fts.rowid \
@@ -332,7 +338,7 @@ pub struct LoreAiText {
 }
 
 fn text_ok(t: &str) -> Result<(), ApiError> {
-    if t.trim().is_empty() || t.len() > WRITE_MAX {
+    if t.trim().is_empty() || t.chars().count() > WRITE_MAX {
         return Err(bad());
     }
     Ok(())
@@ -364,7 +370,8 @@ async fn put(
     .bind(&who)
     .fetch_optional(&mut *conn)
     .await?;
-    if kept.is_none() {
+    // Also when a person edited since this session's first edit: that text would otherwise go unkept.
+    if kept.is_none() || h.updated_by != who {
         versions::snapshot(conn, h, "auto", None, &who).await?;
     }
     let w = write_text(conn, h, text, &who, "session", Snap::Never).await?;
@@ -445,7 +452,10 @@ pub(crate) async fn edit(
     In(req): In<LoreAiEdit>,
 ) -> ApiResult<LoreAiWrote> {
     let s = scope_of(&app, &me).await?;
-    if req.find.is_empty() || req.find.len() > FIND_MAX || req.replace.len() > WRITE_MAX {
+    if req.find.is_empty()
+        || req.find.chars().count() > FIND_MAX
+        || req.replace.chars().count() > WRITE_MAX
+    {
         return Err(bad());
     }
     let mut tx = begin_write(&app.pool).await?;

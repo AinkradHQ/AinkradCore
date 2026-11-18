@@ -72,7 +72,9 @@ pub(crate) fn classify_path(raw: &str) -> PathClass {
     if raw.is_empty()
         || raw.len() > PATH_MAX
         || raw.starts_with('/')
-        || raw.chars().any(|c| c.is_control() || is_format(c) || c == '\\')
+        || raw
+            .chars()
+            .any(|c| c.is_control() || is_format(c) || c == '\\')
     {
         return PathClass::Refused;
     }
@@ -145,7 +147,10 @@ pub(crate) fn read_zip(bytes: &[u8]) -> Result<Scan, &'static str> {
             scan.refused += 1;
             continue;
         };
-        let name = f.name().to_owned();
+        let Ok(name) = f.name().map(|n| n.into_owned()) else {
+            scan.refused += 1;
+            continue;
+        };
         if f.is_dir() || name.ends_with('/') {
             continue;
         }

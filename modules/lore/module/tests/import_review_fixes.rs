@@ -95,7 +95,10 @@ async fn send(
         b = b.header(name, value);
     }
     if !body.is_empty() {
-        b = b.header(header::CONTENT_TYPE, ctype);
+        // A bulk route (the zip) needs the declared length, as every real client sends it.
+        b = b
+            .header(header::CONTENT_TYPE, ctype)
+            .header(header::CONTENT_LENGTH, body.len());
     }
     let res = router(fx.app.clone())
         .oneshot(b.body(Body::from(body)).unwrap())
@@ -189,7 +192,6 @@ fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
     }
     z.finish().unwrap().into_inner()
 }
-
 
 fn git(dir: &std::path::Path, args: &[&str]) {
     let out = Command::new("git")
