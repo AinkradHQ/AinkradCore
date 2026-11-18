@@ -325,7 +325,13 @@ pub async fn remove_repo(
 ) -> ApiResult<ProjectInfo> {
     let id = num(&id, "project")?;
     let now = app.clock.now();
-    store::remove_repo(&app.pool, id, num(&repo, "repo")?, who(&me, &now)).await?;
+    let repo = num(&repo, "repo")?;
+    store::remove_repo(&app.pool, id, repo, who(&me, &now)).await?;
+    // The Core's copy goes with the repo (its id can be handed out again), in a task a dropped
+    // request cannot cancel; the mirror's marker covers a cleanup that never ran.
+    if let Some(mirrors) = app.mirrors.clone() {
+        let _ = tokio::spawn(async move { mirrors.forget(repo).await }).await;
+    }
     current(&app, id).await
 }
 
@@ -345,4 +351,45 @@ pub async fn set_primary(
     let now = app.clock.now();
     store::set_primary(&app.pool, id, num(&repo, "repo")?, who(&me, &now)).await?;
     current(&app, id).await
+}
+
+#[utoipa::path(post, path = "/api/v1/projects/{id}/repos/{repo}/fetch",
+    operation_id = "fetchProjectRepo", tag = "projects",
+    params(("id" = String, Path, description = "The project's id"),
+           ("repo" = String, Path, description = "The repo's id")),
+    responses((status = 200, description = "The Core fetched the repo's remote now (\"Fetch now\"); \
+        the project as it now is. A fetch that failed is still 200: the repo's `mirror.error` says \
+        why and `mirror.head` is the older head, kept. A fetch already running for the repo is not \
+        started again nor waited for: the state as it is comes back. 404 for no such project or repo; 409 \
+        `conflict` for an archived project; 503 `mirrors_unavailable` when this Core keeps no repo \
+        copies", body = ProjectInfo)))]
+pub async fn fetch_now(
+    State(app): State<App>,
+    Path((id, repo)): Path<(String, String)>,
+) -> ApiResult<ProjectInfo> {
+    use crate::mirrors::{Refused, fetch_now as fetch};
+    let (id, repo) = (num(&id, "project")?, num(&repo, "repo")?);
+    let mut conn = app.pool.acquire().await?;
+    let found = store::repos(&mut conn, id)
+        .await?
+        .iter()
+        .any(|r| r.id == repo);
+    drop(conn);
+    if !found {
+        return Err(ApiError::not_found("no such repo"));
+    }
+    match fetch(&app, repo).await {
+        Ok(_) => current(&app, id).await,
+        Err(Refused::Off) => Err(super::mirrors::mirrors(&app).err().expect("off")),
+        Err(Refused::Archived) => Err(ApiError::conflict("the project is archived")),
+        Err(Refused::NoRepo) => Err(ApiError::not_found("no such repo")),
+        Err(Refused::Db(why)) => {
+            tracing::error!(why, "fetching a repo");
+            Err(ApiError::new(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                "could not fetch",
+            ))
+        }
+    }
 }
