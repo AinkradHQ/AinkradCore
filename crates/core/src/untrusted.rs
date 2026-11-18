@@ -77,13 +77,13 @@ mod tests {
     }
 
     #[test]
-    fn an_at_import_is_broken_but_an_email_is_not() {
-        let w = wrap("l", "@config/mcp_config.json\nsee @a/b and x@y.com\n  @c");
+    fn an_at_import_is_broken_but_an_inline_at_is_not() {
+        let w = wrap("l", "@config/mcp_config.json\nsee @a/b and name@host\n  @c");
         assert!(
             !w.contains("@config") && !w.contains(" @a") && !w.contains("  @c"),
             "{w}"
         );
-        assert!(w.contains("x@y.com"), "{w}");
+        assert!(w.contains("name@host"), "{w}");
         assert!(w.starts_with(OPEN) && w.ends_with(CLOSE));
     }
 
