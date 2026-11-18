@@ -24,6 +24,7 @@ use utoipa::{OpenApi, ToSchema};
 
 mod access;
 mod ai;
+mod ai_propose;
 mod ai_semantic;
 mod aliases;
 mod answer;
@@ -534,7 +535,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         ai::evidence,
         ai::decisions,
         ai::project_state,
-        ai::propose
+        ai_propose::propose
     ),
     components(schemas(
         BrainStatus,
@@ -617,8 +618,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         ai::AiRecord,
         ai::AiRecords,
         ai::AiEvidence,
-        ai::Propose,
-        ai::Proposed
+        ai_propose::Propose,
+        ai_propose::Proposed
     ))
 )]
 struct Doc;
@@ -706,7 +707,7 @@ impl Module for Brain {
             )
             .route("/ai/decisions", get(ai::decisions))
             .route("/ai/project-state", get(ai::project_state))
-            .route("/ai/rooms/{room}/propose", post(ai::propose))
+            .route("/ai/rooms/{room}/propose", post(ai_propose::propose))
             .route("/sources", get(sync::sources))
             .route("/sources/{id}", put(sync::put_source))
             .route("/sync", get(sync::status).post(sync::sync_now))

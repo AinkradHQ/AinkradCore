@@ -58,6 +58,7 @@ async fn save(pool: &SqlitePool, out: &[Candidate], dropped: &[Dropped]) -> Save
         &DistilledBy::default(),
         NOW,
         &Prepared::default(),
+        false,
     )
     .await
     .unwrap()

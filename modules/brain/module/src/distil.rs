@@ -624,6 +624,7 @@ async fn save(
         by,
         &app.clock.now(),
         &prep,
+        false,
     )
     .await?;
     // Facts that went straight into memory get their vectors now, off the request path.

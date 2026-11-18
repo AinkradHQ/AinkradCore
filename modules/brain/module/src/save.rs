@@ -40,7 +40,9 @@ pub(crate) struct Saved {
 /// (B4-01) reinforces that record instead of adding a row. `dropped` is logged as one
 /// `admit.dropped` audit row, and the distil's parked judge state (`distil.pending`) is removed in
 /// the same transaction, so a rerun can never save twice. One change set: "Saved N · reinforced M ·
-/// dropped K".
+/// dropped K". `ai` marks a proposal from an AI session (`ai_propose.rs`): its rows get
+/// `origin = 'ai'` and its change set is of kind `ai`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn store_candidates(
     pool: &SqlitePool,
     distil: &str,
@@ -50,11 +52,12 @@ pub(crate) async fn store_candidates(
     by: &DistilledBy,
     now: &str,
     prep: &Prepared,
+    ai: bool,
 ) -> Result<Saved, sqlx::Error> {
     let redactor = Redactor::new();
     let (mut n, mut accepted, mut reinforced) = (0, 0, 0);
     let mut tx = pool.begin().await?;
-    let mut cs = ChangeSet::new("distil", now);
+    let mut cs = ChangeSet::new(if ai { "ai" } else { "distil" }, now);
     let mut memory = Memory::load(&mut tx, prep).await?;
     for (i, c) in out.iter().enumerate() {
         let body = redactor.text(c.body.trim());
@@ -71,8 +74,8 @@ pub(crate) async fn store_candidates(
         cs.touch(&mut tx, &id).await?;
         let auto_ok = auto_ok(c, policy);
         sqlx::query(
-            "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, reviewed_at, decided_by, distil, provider, account, tool, body_norm, last_seen_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, reviewed_at, decided_by, distil, provider, account, tool, body_norm, last_seen_at, origin) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&c.kind)
@@ -89,6 +92,7 @@ pub(crate) async fn store_candidates(
         .bind(&by.tool)
         .bind(&norm)
         .bind(now)
+        .bind(if ai { "ai" } else { "distil" })
         .execute(&mut *tx)
         .await?;
         for (pos, s) in c.sources.iter().enumerate() {

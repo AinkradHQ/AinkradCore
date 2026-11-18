@@ -1,7 +1,8 @@
 //! The Brain as AI sessions see it through Code Mode (plan E4): read operations over the rooms a
-//! session may see (`access::visible_rooms`, plan D3) and `brain.propose`, which drops a candidate
-//! into a room's Inbox and nothing else. These routes answer only the Code Mode dispatcher's
-//! synthetic caller (its session is `code_mode:<id>`); a person has the room routes.
+//! session may see (`access::visible_rooms`, plan D3). `brain.propose` lives in `ai_propose.rs`.
+//! These routes answer only the Code Mode dispatcher's synthetic caller (its session is
+//! `code_mode:<id>`); a person has the room routes. A source a session read through
+//! `brainAiEvidence` is audited (`brain.ai.evidence`); `ai_propose.rs` accepts only those as citations.
 //!
 //! SECURITY MODEL (Brain v2, B2-03; read before changing anything here)
 //!
@@ -29,7 +30,6 @@ use ainkrad_core::untrusted::wrap;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
 use ainkrad_core_server::store::begin_write;
-use ainkrad_proto::redact::Redactor;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
@@ -38,32 +38,26 @@ use sqlx::Row;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::access::{Visible, visible_room, visible_rooms};
-use crate::answer::KINDS;
-use crate::distil::log_op;
 use crate::inbox::open_room;
 use crate::index::{rec_fts, words};
 use crate::rooms::RoomAccess;
-use crate::{Brain, code, rand_id, record};
+use crate::{Brain, code, record};
 
 /// The marker in `records.distil` of a candidate an AI session proposed: `ai:<session id>`.
 pub(crate) const PROPOSED: &str = "ai:";
 pub(crate) const SESSION: &str = "code_mode:";
 const DEFAULT_LIMIT: u32 = 10;
 const MAX_LIMIT: u32 = 25;
-const MAX_BODY: usize = 2000;
+pub(crate) const MAX_BODY: usize = 2000;
 /// How much of a cited source `brainAiEvidence` returns.
 const EVIDENCE_CHARS: usize = 2000;
 /// A list shows this much of a record; `brain.record` has all of it.
 pub(crate) const LIST_BODY: usize = 400;
-/// Candidates one session may propose into one room.
-/// ponytail: per room file, not a session-wide counter; a control-plane table if that is needed.
-const PROPOSE_CAP: i64 = 20;
-const PROPOSE_INVALID: &str = "a known type, a body of 1 to 2000 characters, at most 8 tags of 1 to 40 and 20 sources that are in this room";
 /// Rooms one search reads.
 const MAX_ROOMS: usize = 20;
 
 /// The session behind a Code Mode call.
-fn session_of(me: &Caller) -> Result<String, ApiError> {
+pub(crate) fn session_of(me: &Caller) -> Result<String, ApiError> {
     me.session
         .strip_prefix(SESSION)
         .filter(|s| !s.is_empty())
@@ -78,7 +72,7 @@ fn session_of(me: &Caller) -> Result<String, ApiError> {
 }
 
 /// `room` when the session may see it; else the 404 of an unknown id (audited once per window).
-async fn room_of(app: &App, session: &str, room: &str) -> Result<Visible, ApiError> {
+pub(crate) async fn room_of(app: &App, session: &str, room: &str) -> Result<Visible, ApiError> {
     if let Some(v) = visible_room(app, session, room).await? {
         return Ok(v);
     }
@@ -528,170 +522,4 @@ pub(crate) async fn evidence(
         truncated,
         compacted,
     }))
-}
-
-#[derive(Deserialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Propose {
-    /// `decision`, `fact`, `preference`, `rule`, `project-state`, `task` or `summary`.
-    #[serde(rename = "type")]
-    #[schema(rename = "type")]
-    pub kind: String,
-    /// One self-contained statement, 1 to 2000 characters.
-    pub body: String,
-    /// At most 8 tags of 1 to 40 characters.
-    #[serde(default)]
-    pub tags: Vec<String>,
-    /// Item ids of sources in the same room (at most 20).
-    #[serde(default)]
-    pub sources: Vec<String>,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct Proposed {
-    pub room: String,
-    pub id: String,
-    /// Always `candidate`: a person decides in the Inbox.
-    pub status: String,
-    /// The same statement was already in the room: nothing was added.
-    pub duplicate: bool,
-}
-
-#[utoipa::path(post, path = "/ai/rooms/{room}/propose", operation_id = "brainAiPropose", tag = "brain",
-    params(("room" = String, Path, description = "Room id")),
-    request_body = Propose,
-    responses((status = 200, description = "The proposal waits in the room's Inbox as a candidate (never accepted automatically; a repeat of the same statement is `duplicate`; 20 per session per room)", body = Proposed)))]
-pub(crate) async fn propose(
-    State(app): State<App>,
-    Extension(b): Extension<Brain>,
-    Extension(me): Extension<Caller>,
-    Path(room): Path<String>,
-    Json(req): Json<Propose>,
-) -> ApiResult<Proposed> {
-    let session = session_of(&me)?;
-    let body = Redactor::new().text(req.body.trim());
-    let ok = KINDS.contains(&req.kind.as_str())
-        && (1..=MAX_BODY).contains(&body.chars().count())
-        && req.tags.len() <= 8
-        && req
-            .tags
-            .iter()
-            .all(|t| (1..=40).contains(&t.chars().count()))
-        && req.sources.len() <= 20;
-    if !ok {
-        return Err(ApiError::bad_request(PROPOSE_INVALID));
-    }
-    let v = room_of(&app, &session, &room).await?;
-    let a = open_room(&app, &b, &v.id).await?;
-    // The room's file closes on every path: a pool left open holds a rolled-back read.
-    let done = land(&app, &a, &session, &req, &body).await;
-    a.pool().close().await;
-    let (id, waiting) = done?;
-    let Some(waiting) = waiting else {
-        return Ok(Json(Proposed {
-            room: v.id,
-            id,
-            status: "candidate".to_owned(),
-            duplicate: true,
-        }));
-    };
-    // Ids and counts only (Q-15); the origin is the session's, set by the dispatcher.
-    let mut ctl = begin_write(&app.pool).await?;
-    record(
-        &mut ctl,
-        "brain.ai.proposed",
-        json!({"room": v.id, "record": id, "session": session, "type": req.kind,
-            "project": ainkrad_core_server::ops_catalog::session_project(&app.pool, &session).await}),
-        Some((
-            "brain.inbox",
-            json!({"room": v.id, "op": "proposed", "waiting": waiting}),
-        )),
-    )
-    .await?;
-    ctl.commit().await?;
-    Ok(Json(Proposed {
-        room: v.id,
-        id,
-        status: "candidate".to_owned(),
-        duplicate: false,
-    }))
-}
-
-/// Adds the candidate to the open room: its id and how many wait, or `None` waiting for a repeat.
-async fn land(
-    app: &App,
-    a: &RoomAccess,
-    session: &str,
-    req: &Propose,
-    body: &str,
-) -> Result<(String, Option<i64>), ApiError> {
-    let now = app.clock.now();
-    let mut tx = a.pool().begin().await?;
-    for s in &req.sources {
-        let known: i64 = sqlx::query_scalar("SELECT count(*) FROM sources WHERE item_id = ?")
-            .bind(s)
-            .fetch_one(&mut *tx)
-            .await?;
-        if known == 0 {
-            // The same 400 as any other invalid proposal: no oracle for which ids exist.
-            // ponytail: a session may cite any source id of a room it sees; restricting it to ids
-            // it read through record.sources / evidence needs per-session tracking. The Inbox
-            // shows the cited sources to the reviewer (plan note).
-            return Err(ApiError::bad_request(PROPOSE_INVALID));
-        }
-    }
-    let same: Option<String> =
-        sqlx::query_scalar("SELECT id FROM records WHERE type = ? AND body = ? LIMIT 1")
-            .bind(&req.kind)
-            .bind(body)
-            .fetch_optional(&mut *tx)
-            .await?;
-    if let Some(id) = same {
-        // The id only when the match is memory: a candidate, rejected or archived record is not
-        // something an AI session may learn exists.
-        let in_memory: i64 = sqlx::query_scalar("SELECT count(*) FROM memory WHERE id = ?")
-            .bind(&id)
-            .fetch_one(&mut *tx)
-            .await?;
-        return Ok((if in_memory > 0 { id } else { String::new() }, None));
-    }
-    let marker = format!("{PROPOSED}{session}");
-    let mine: i64 = sqlx::query_scalar("SELECT count(*) FROM records WHERE distil = ?")
-        .bind(&marker)
-        .fetch_one(&mut *tx)
-        .await?;
-    if mine >= PROPOSE_CAP {
-        return Err(code(
-            429,
-            "too_many_proposals",
-            "this session proposed enough to this room; a person must review them first",
-        ));
-    }
-    let id = rand_id("rec-");
-    // Always a candidate: the room's auto-accept list is for distillation, never for this.
-    sqlx::query(
-        "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, distil) \
-         VALUES (?, ?, 'candidate', ?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(&req.kind)
-    .bind(body)
-    .bind(json!(req.tags).to_string())
-    .bind(json!(req.sources).to_string())
-    .bind(&now)
-    .bind(&marker)
-    .execute(&mut *tx)
-    .await?;
-    log_op(&mut tx, "record.candidate", &id, &now).await?;
-    sqlx::query("INSERT INTO room_audit (action, detail, at) VALUES ('inbox.proposed', ?, ?)")
-        .bind(json!({"record": id, "session": session}).to_string())
-        .bind(&now)
-        .execute(&mut *tx)
-        .await?;
-    let waiting: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM records WHERE status = 'candidate'")
-            .fetch_one(&mut *tx)
-            .await?;
-    tx.commit().await?;
-    Ok((id, Some(waiting)))
 }
