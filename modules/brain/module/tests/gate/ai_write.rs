@@ -216,7 +216,12 @@ async fn a_repeat_reinforces_and_a_rule_or_preference_is_refused() {
             json!({"type": kind, "body": GOOD, "sources": [w.src]}),
         )
         .await;
-        assert_eq!((st, &v), (StatusCode::BAD_REQUEST, &bad), "{kind}");
+        let plain = |mut v: Value| {
+            v.as_object_mut().unwrap().remove("error_id");
+            v
+        };
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{kind}");
+        assert_eq!(plain(v), plain(bad.clone()), "{kind}");
     }
     let all: Vec<(i64,)> = rows(
         &fx,

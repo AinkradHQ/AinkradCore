@@ -166,7 +166,7 @@ async fn the_dry_run_reports_counts_and_writes_nothing() {
         ok(
             &fx,
             Method::GET,
-            &format!("/rooms/{room}/retention?days=36500"),
+            &format!("/rooms/{room}/retention?days=3650"),
             None
         )
         .await["would_compact"],

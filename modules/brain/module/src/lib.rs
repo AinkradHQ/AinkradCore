@@ -876,7 +876,7 @@ impl Module for Brain {
 
     fn query_names(&self) -> &'static [&'static str] {
         &[
-            "q", "room", "mode", "status", "limit", "after", "prompt", "budget",
+            "q", "room", "mode", "status", "limit", "after", "prompt", "budget", "days",
         ]
     }
 

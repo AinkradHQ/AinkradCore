@@ -379,9 +379,9 @@ async fn the_cursor_waits_for_a_session_the_sync_has_not_taken_yet() {
         "not moved past an event that never reached the queue"
     );
     fx.brain.auto_distil_step_at(now + 200).await.unwrap();
-    assert_eq!(
-        cursor(&fx).await,
-        last,
+    // (At least that far: the step's own events come after it.)
+    assert!(
+        cursor(&fx).await >= last,
         "moved once its session was collected"
     );
 }

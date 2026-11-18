@@ -7,7 +7,8 @@ use super::common::*;
 
 const DOCS: &[(&str, &str)] = &[
     ("Billing", "we decided to export invoices as CSV"),
-    ("Deploy", "the deploy runs on Fridays only"),
+    // A user turn: a preference is only admitted on a person's word.
+    ("Deploy", "User: we always deploy only on Fridays."),
 ];
 
 async fn distil(fx: &Fx, room: &str) -> (StatusCode, Value) {
@@ -98,7 +99,7 @@ async fn ended_distil_for(fx: &Fx, room: &str, answer: &str, id: &str) -> (Strin
 fn answer(ids: &[String]) -> String {
     json!({"candidates": [
         {"type": "decision", "body": "Invoices are exported as CSV.", "tags": ["billing"], "sources": [ids[0]]},
-        {"type": "preference", "body": "Deploy only on Fridays.", "sources": [ids[1]]},
+        {"type": "preference", "body": "We always deploy only on Fridays.", "sources": [ids[1]]},
     ]})
     .to_string()
 }
@@ -333,7 +334,7 @@ async fn the_inbox_accepts_edits_and_rejects_and_auto_accept_is_off_until_set() 
         "Beta",
         &[
             ("Notes", "we prefer small pull requests"),
-            ("Chat", "the retro is on Thursdays"),
+            ("Chat", "User: we always retro only on Thursdays."),
         ],
     )
     .await;
@@ -375,7 +376,12 @@ async fn the_inbox_accepts_edits_and_rejects_and_auto_accept_is_off_until_set() 
     )
     .await;
     let ids2 = item_ids(&fx, &room2).await;
-    ended_distil_for(&fx, &room2, &answer(&ids2), "dst-two").await;
+    let answer2 = json!({"candidates": [
+        {"type": "decision", "body": "We prefer small pull requests.", "sources": [ids2[0]]},
+        {"type": "preference", "body": "We always retro only on Thursdays.", "sources": [ids2[1]]},
+    ]})
+    .to_string();
+    ended_distil_for(&fx, &room2, &answer2, "dst-two").await;
     fx.brain.distil_step().await.unwrap();
     ok(&fx, Method::POST, &format!("/rooms/{room2}/open"), None).await;
     let inbox = ok(&fx, Method::GET, &format!("/rooms/{room2}/inbox"), None).await;
@@ -404,8 +410,8 @@ async fn auto_accept_needs_the_minimum_number_of_sources() {
     .await;
     let ids = item_ids(&fx, &room).await;
     let a = json!({"candidates": [
-        {"type": "decision", "body": "Export as CSV.", "sources": [ids[0], ids[1]]},
-        {"type": "preference", "body": "Fridays only.", "sources": [ids[1]]},
+        {"type": "decision", "body": "We decided to export invoices as CSV.", "sources": [ids[0], ids[1]]},
+        {"type": "preference", "body": "We always deploy only on Fridays.", "sources": [ids[1]]},
     ]})
     .to_string();
     ended_distil(&fx, &room, &a).await;

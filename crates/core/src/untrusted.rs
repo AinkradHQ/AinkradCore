@@ -19,11 +19,16 @@ pub const NOTICE: &str =
 
 const ZWSP: char = '\u{200B}';
 
-/// `s` with every run of three or more `<` or `>` broken up, so it holds no live marker.
+/// `s` with every run of three or more `<` or `>` broken up, so it holds no live marker, and every
+/// `@` that starts a line or follows whitespace followed by a zero-width space, so a CLI that expands
+/// `@path` imports (Gemini-style) in a context file cannot read a file the text names.
 fn defang(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let (mut last, mut run) = (None, 0);
+    let mut at_start = true;
     for c in s.chars() {
+        let import = c == '@' && at_start;
+        at_start = c.is_whitespace();
         if matches!(c, '<' | '>') {
             run = if last == Some(c) { run + 1 } else { 1 };
             if run >= 3 {
@@ -35,6 +40,9 @@ fn defang(s: &str) -> String {
         }
         last = Some(c);
         out.push(c);
+        if import {
+            out.push(ZWSP);
+        }
     }
     out
 }
@@ -66,6 +74,17 @@ mod tests {
     /// Live markers in `s`: (opens, closes).
     fn live(s: &str) -> (usize, usize) {
         (s.matches("<<<").count(), s.matches(">>>").count())
+    }
+
+    #[test]
+    fn an_at_import_is_broken_but_an_email_is_not() {
+        let w = wrap("l", "@config/mcp_config.json\nsee @a/b and x@y.com\n  @c");
+        assert!(
+            !w.contains("@config") && !w.contains(" @a") && !w.contains("  @c"),
+            "{w}"
+        );
+        assert!(w.contains("x@y.com"), "{w}");
+        assert!(w.starts_with(OPEN) && w.ends_with(CLOSE));
     }
 
     #[test]
