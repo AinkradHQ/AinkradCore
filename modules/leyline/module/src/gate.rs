@@ -50,13 +50,14 @@ use ainkrad_core_server::ops_catalog::{
     void_approval, wait_approval,
 };
 use ainkrad_core_server::store::connections::access;
-use ainkrad_core_server::store::{begin_write, settings};
+use ainkrad_core_server::store::{begin_write, gov, settings};
 use axum::http::StatusCode;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use ainkrad_proto::v2::MAX_SSH_HOPS;
 use sqlx::{Row, SqliteConnection};
 
-use crate::commands::{Cmd, load_cmd};
+use crate::commands::{Cmd, Scope, load_cmd};
 use crate::hosts::find;
 pub use crate::policy::{Action, Principal};
 use crate::policy::{Rule, Verdict, Who, verdict};
@@ -73,6 +74,7 @@ pub(crate) fn redact_text(s: &str) -> String {
 }
 
 /// Most hosts one fleet call may name.
+const NOT_FOR_HOST: &str = "the command is not for that host";
 const MAX_HOSTS: usize = 100;
 /// Longest detail kept on a run row.
 const KEPT: usize = 2000;
@@ -117,24 +119,57 @@ impl Authorized {
     }
 }
 
+/// One machine on the path: what a connection to it is made with.
+#[derive(Clone)]
+pub(crate) struct Stop {
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) user: String,
+    pub(crate) key_id: Option<String>,
+    pub(crate) secret: Option<String>,
+    pub(crate) pinned: Vec<String>,
+}
+
+/// The target, its jump hosts in order, and the runner that connects (the host's `via_runner`, else
+/// the Core machine's built-in one): read once, together with the host's rule.
+#[derive(Clone)]
+pub(crate) struct Link {
+    pub(crate) target: Stop,
+    pub(crate) hops: Vec<Stop>,
+    pub(crate) runner: String,
+}
+
 /// Dispatch calls this right before each thing it sends: the gate's decision still holds. The host
-/// must still exist with the same rule and connection (address, port, user, key, jump chain,
-/// runner) it had when the gate decided (`op_sha256` was made over exactly that), the run must
-/// still be running, and an AI session must still be live. Fixed answers, nothing echoed.
+/// must still exist with the same rule and connection (address, port, user, key, every jump hop's
+/// connection, runner) it had when the gate decided (`op_sha256` was made over exactly that), the
+/// run must still be running, a person must still be an active device and an AI session must still
+/// be live. Fixed answers, nothing echoed.
 ///
 /// # Errors
 ///
 /// 403 `gate_refused` when anything changed, or a store failure.
 pub async fn still_valid(app: &App, a: &Authorized) -> Result<(), ApiError> {
+    check(app, a).await.map(|_| ())
+}
+
+/// [`still_valid`], and the very connection data it compared: dispatch connects with THIS read,
+/// never a second one made after the check.
+pub(crate) async fn checked(app: &App, a: &Authorized) -> Result<Link, ApiError> {
+    check(app, a).await?.map_err(refuse)
+}
+
+/// What still holds, and the connection read with it (which may itself be unusable: no runner, a
+/// bad jump chain; that only matters to a caller that connects).
+async fn check(app: &App, a: &Authorized) -> Result<Result<Link, &'static str>, ApiError> {
     let host = {
         let mut conn = app.pool.acquire().await?;
         host_row(&mut conn, &a.host).await?
     };
-    match host {
+    let link = match host {
         None => return Err(refuse("the host is gone")),
         Some(h) if h.tuple != a.tuple => return Err(refuse("the host changed")),
-        Some(_) => {}
-    }
+        Some(h) => h.link,
+    };
     let state: Option<String> = sqlx::query_scalar("SELECT state FROM leyline_runs WHERE id = ?")
         .bind(&a.run)
         .fetch_optional(&app.pool)
@@ -142,13 +177,25 @@ pub async fn still_valid(app: &App, a: &Authorized) -> Result<(), ApiError> {
     if state.as_deref() != Some("running") {
         return Err(refuse("the run is no longer running"));
     }
-    if let Who::Session(s) = &a.principal.0 {
-        let live = access::load(&app.pool, s).await?.is_some_and(|x| x.live);
-        if !live || session_principal(&app.pool, s).await?.is_none() {
-            return Err(refuse("this session may no longer act"));
+    match &a.principal.0 {
+        Who::Session(s) => {
+            let live = access::load(&app.pool, s).await?.is_some_and(|x| x.live);
+            if !live || session_principal(&app.pool, s).await?.is_none() {
+                return Err(refuse("this session may no longer act"));
+            }
         }
+        Who::Person(d) => {
+            let usable = gov::get_device(&app.pool, d)
+                .await
+                .map_err(|e| ApiError::from(sqlx::Error::Protocol(e.to_string())))?
+                .is_some_and(|d| d.usable());
+            if !usable {
+                return Err(refuse("this device may no longer act"));
+            }
+        }
+        Who::Health => {}
     }
-    Ok(())
+    Ok(link)
 }
 
 /// What a fleet call came to.
@@ -178,6 +225,7 @@ pub async fn authorize(
     let mut g = authorize_many(app, who, &[host], action).await?;
     match (g.authorized.pop(), g.refused.pop()) {
         (Some(a), _) => Ok(a),
+        (None, Some((_, why))) if why == NOT_FOR_HOST => Err(ApiError::conflict(why)),
         (None, Some((_, why))) => Err(refuse(why)),
         (None, None) => Err(refuse("not allowed")),
     }
@@ -236,21 +284,31 @@ pub async fn authorize_many(
         _ => None,
     };
     let is_ai = matches!(who.0, Who::Session(_));
-    let verdicts: Vec<Verdict> = found
-        .iter()
-        .map(|h| {
-            if is_ai && session_runner.is_none() {
-                Verdict::Deny("this session may no longer act")
-            } else {
-                verdict(
-                    who,
-                    h.rule,
-                    action,
-                    cmd.as_ref().is_some_and(|c| c.read_only),
-                )
+    let mut verdicts: Vec<Verdict> = Vec::new();
+    for h in &found {
+        let v = if is_ai && session_runner.is_none() {
+            Verdict::Deny("this session may no longer act")
+        } else if !for_host(app, cmd.as_ref(), &h.id).await? {
+            Verdict::Deny(NOT_FOR_HOST)
+        } else {
+            match verdict(
+                who,
+                h.rule,
+                action,
+                cmd.as_ref().is_some_and(|c| c.read_only),
+            ) {
+                // A command that wants confirming is not run by an AI on its own, even where
+                // the host allows it.
+                Verdict::Allow
+                    if is_ai && h.rule == Rule::Allowed && cmd.as_ref().is_some_and(|c| c.confirm) =>
+                {
+                    Verdict::Ask
+                }
+                v => v,
             }
-        })
-        .collect();
+        };
+        verdicts.push(v);
+    }
     let run = new_id("lr_");
     let hash = op_hash(action, cmd.as_ref(), &found);
     write_run(app, who, &run, action, &found, &verdicts, &hash).await?;
@@ -299,8 +357,11 @@ struct H {
     id: String,
     name: String,
     rule: Rule,
-    /// Rule, address, port, user, key, jump chain, runner: any change is a different host.
+    /// Rule, address, port, user, key, runner and every jump hop's connection: any change is a
+    /// different host.
     tuple: String,
+    /// The connection as read in the same query round as `tuple`.
+    link: Result<Link, &'static str>,
 }
 
 fn gone() -> ApiError {
@@ -313,20 +374,31 @@ async fn host_row(conn: &mut SqliteConnection, id: &str) -> Result<Option<H>, sq
          FROM leyline_hosts WHERE id = ?",
     )
     .bind(id)
-    .fetch_optional(conn)
+    .fetch_optional(&mut *conn)
     .await?
     else {
         return Ok(None);
     };
     let rule: String = r.try_get("ai_rule")?;
+    let (jump_chain, via): (String, Option<String>) =
+        (r.try_get("jump_chain")?, r.try_get("via_runner")?);
+    let link = link(conn, id, &jump_chain, via.as_deref()).await;
+    let path = match &link {
+        Ok(l) => json!({
+            "runner": l.runner,
+            "stops": l.hops.iter().chain([&l.target]).map(|s| json!([s.host, s.port, s.user, s.key_id])).collect::<Vec<_>>(),
+        }),
+        Err(e) => json!(e),
+    };
     let tuple = json!([
         rule,
         r.try_get::<String, _>("address")?,
         r.try_get::<i64, _>("port")?,
         r.try_get::<String, _>("username")?,
         r.try_get::<Option<String>, _>("key_id")?,
-        r.try_get::<String, _>("jump_chain")?,
-        r.try_get::<Option<String>, _>("via_runner")?,
+        jump_chain,
+        via,
+        path,
     ])
     .to_string();
     Ok(Some(H {
@@ -334,7 +406,108 @@ async fn host_row(conn: &mut SqliteConnection, id: &str) -> Result<Option<H>, sq
         name: r.try_get("name")?,
         rule: Rule::of(&rule),
         tuple,
+        link,
     }))
+}
+
+const NO: &str = "the host cannot be read";
+
+/// The path to `host`: each hop's connection (and key secret and pinned keys), and the runner.
+async fn link(
+    conn: &mut SqliteConnection,
+    host: &str,
+    jump_chain: &str,
+    via: Option<&str>,
+) -> Result<Link, &'static str> {
+    let jumps: Vec<String> = serde_json::from_str(jump_chain).map_err(|_| NO)?;
+    if jumps.len() > MAX_SSH_HOPS {
+        return Err("too many jump hosts");
+    }
+    let runner = match via {
+        Some(r) => r.to_owned(),
+        None => sqlx::query_scalar(
+            "SELECT p.device_id FROM core_pairings p JOIN core_devices d ON d.id = p.device_id \
+             WHERE p.kind = 'runner' AND p.sas = ? AND d.status = 'active' AND d.revoked_at IS NULL LIMIT 1",
+        )
+        .bind(ainkrad_core_server::store::gov::LOCAL_ENROL_SAS)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|_| NO)?
+        .ok_or("the Core has no built-in runner")?,
+    };
+    let mut stops = Vec::new();
+    for id in jumps.iter().map(String::as_str).chain([host]) {
+        let h = sqlx::query(
+            "SELECT h.address, h.port, h.username, h.key_id, k.secret FROM leyline_hosts h \
+             LEFT JOIN leyline_keys k ON k.id = h.key_id WHERE h.id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|_| NO)?
+        .ok_or(NO)?;
+        let pinned: Vec<String> = sqlx::query_scalar(
+            "SELECT fingerprint FROM leyline_host_keys WHERE host_id = ? AND state = 'trusted'",
+        )
+        .bind(id)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|_| NO)?;
+        stops.push(Stop {
+            host: h.try_get("address").map_err(|_| NO)?,
+            port: u16::try_from(h.try_get::<i64, _>("port").map_err(|_| NO)?).map_err(|_| NO)?,
+            user: h.try_get("username").map_err(|_| NO)?,
+            key_id: h.try_get("key_id").map_err(|_| NO)?,
+            secret: h.try_get("secret").map_err(|_| NO)?,
+            pinned,
+        });
+    }
+    let target = stops.pop().ok_or(NO)?;
+    Ok(Link {
+        target,
+        hops: stops,
+        runner,
+    })
+}
+
+/// Whether the pre-set command (if any) is for the host `host` (an id): its scope, checked here so
+/// a single run and a fleet run (Y4-03) both pass through it.
+async fn for_host(app: &App, cmd: Option<&Cmd>, host: &str) -> Result<bool, sqlx::Error> {
+    let Some(c) = cmd else {
+        return Ok(true);
+    };
+    let mut conn = app.pool.acquire().await?;
+    in_scope(&mut conn, &c.scope, host).await
+}
+
+/// Whether `host` (an id) is one of the hosts `scope` names.
+async fn in_scope(
+    conn: &mut SqliteConnection,
+    scope: &Option<Scope>,
+    host: &str,
+) -> Result<bool, sqlx::Error> {
+    let Some(s) = scope else {
+        return Ok(true);
+    };
+    let sql = match s.kind.as_str() {
+        "host" => "SELECT ?2 = ?1",
+        "group" => {
+            "SELECT EXISTS (SELECT 1 FROM leyline_hosts WHERE id = ?1 AND group_name = ?2 COLLATE NOCASE)"
+        }
+        "tag" => {
+            "SELECT EXISTS (SELECT 1 FROM leyline_hosts, json_each(tags) WHERE leyline_hosts.id = ?1 AND value = ?2)"
+        }
+        _ => {
+            "SELECT EXISTS (SELECT 1 FROM leyline_project_hosts WHERE host_id = ?1 AND project = ?2 \
+             AND (?3 IS NULL OR role = ?3))"
+        }
+    };
+    sqlx::query_scalar(sql)
+        .bind(host)
+        .bind(&s.value)
+        .bind(&s.role)
+        .fetch_one(conn)
+        .await
 }
 
 /// Parks the approval of the `ask` hosts (if any), then settles the run.
@@ -437,7 +610,7 @@ fn op_hash(action: &Action, cmd: Option<&Cmd>, hosts: &[H]) -> String {
         .map(|h| (h.id.as_str(), h.tuple.as_str()))
         .collect();
     hs.sort_unstable();
-    let cmd = cmd.map(|c| json!([c.id, c.name, c.read_only, c.steps]));
+    let cmd = cmd.map(|c| json!([c.id, c.name, c.read_only, c.confirm, c.steps, c.scope]));
     let doc = json!({"op": action.op(), "action": format!("{action:?}"), "cmd": cmd, "hosts": hs});
     Sha256::digest(doc.to_string().as_bytes())
         .iter()

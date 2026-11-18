@@ -78,7 +78,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/projects/{project}/hosts", "read"),
     ("GET", "/commands", "read"),
     ("GET", "/commands/{command}", "read"),
-    ("GET", "/runs/{run}", "read"),
+    ("GET", "/runs/{run}", "write"),
 ];
 
 #[derive(Default, Clone, Copy)]

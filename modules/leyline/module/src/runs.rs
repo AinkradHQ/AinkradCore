@@ -6,6 +6,7 @@ use ainkrad_core::audit::NewAuditEvent;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, BY};
 use ainkrad_core_server::store::{audit, begin_write, redact};
+use ainkrad_proto::redact::names::secret_name;
 use serde_json::{Value, json};
 use sqlx::{SqliteConnection, SqlitePool};
 
@@ -135,11 +136,40 @@ pub(super) async fn write_run(
     Ok(())
 }
 
-/// `s` with secret shapes masked (`store::redact::text` reads JSON, not plain text).
+/// `s` with secrets masked: `NAME=value` and `NAME: value` lines whose NAME is secret-named (the
+/// JSON key-name pass cannot see these in plain text), then every known secret shape.
 pub(super) fn redacted(s: &str) -> String {
-    let mut v = Value::String(s.to_owned());
+    let masked = s.split('\n').map(mask_line).collect::<Vec<_>>().join("\n");
+    let mut v = Value::String(masked);
     redact::json(&mut v);
     v.as_str().unwrap_or_default().to_owned()
+}
+
+/// `export NAME=value`, `NAME=value`, `NAME: value`, `"name": "value",`: the value is replaced when
+/// NAME is secret-named. The first separator on the line decides.
+fn mask_line(line: &str) -> String {
+    let Some(at) = line.find(['=', ':']) else {
+        return line.to_owned();
+    };
+    let (head, rest) = line.split_at(at);
+    let sep = &rest[..1];
+    // `NAME: value` needs the space (or the end); `NAME=value` does not.
+    if sep == ":" && !(rest[1..].is_empty() || rest[1..].starts_with([' ', '\t', '"'])) {
+        return line.to_owned();
+    }
+    let name = head
+        .rsplit(|c: char| c.is_whitespace())
+        .next()
+        .unwrap_or("")
+        .trim_matches(['"', '\'']);
+    let named = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+    if named && secret_name(name) && rest.len() > 1 {
+        return format!("{head}{sep} [redacted:{name}]");
+    }
+    line.to_owned()
 }
 
 fn cut(s: &str) -> String {
@@ -264,4 +294,23 @@ pub async fn finish(app: &App, done: Authorized, ok: bool) -> Result<(), ApiErro
     .await?;
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redacted;
+
+    /// Plain-text output is masked by the NAME, not only by shape (Y4-02 review, MEDIUM).
+    #[test]
+    fn secret_named_lines_in_output_are_masked() {
+        let out = redacted(
+            "$ env\nDB_PASSWORD=hunter2\nexport API_TOKEN=abc123\nclient_secret: s3cr3t\n\
+             \"password\": \"pw\",\nHOME=/root\nnote: nothing here\nPASSWORD=\n",
+        );
+        for leaked in ["hunter2", "abc123", "s3cr3t", "\"pw\""] {
+            assert!(!out.contains(leaked), "{leaked} leaked: {out}");
+        }
+        assert!(out.contains("DB_PASSWORD= [redacted:DB_PASSWORD]"), "{out}");
+        assert!(out.contains("HOME=/root") && out.contains("note: nothing here"));
+    }
 }
