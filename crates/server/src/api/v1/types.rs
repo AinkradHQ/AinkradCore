@@ -284,7 +284,9 @@
 ///    leases dropped); the Leyline key runner sync (Y1-02) is its first user.
 /// 90: Lore (Core 0.9 epic). Seven `loreAi*` operations in the Code Mode allow-list (`api/ai-ops.allow.json`), each
 ///    scoped to the session's project; Lore's own routes, events and audit actions live in `modules/lore/api`.
-/// 92: Leyline (Core 0.9 epic; 91 is Design). The runner wire protocol gains the ssh ops (exec, sftp, agent) and
+/// 91: Design (Core 0.9 epic). The runner wire protocol gains the `design.*` commands (`api/runner.schema.json`); the
+///    Design module's own routes live in `modules/design/api`.
+/// 92: Leyline (Core 0.9 epic). The runner wire protocol gains the ssh ops (exec, sftp, agent) and
 ///    `PtyOpen.ssh` (`SshTerminal`: the runner starts its own `ssh-pty`, keys over an inherited pipe); eight
 ///    `leyline*` operations join the Code Mode allow-list; Leyline's routes live in `modules/leyline/api`.
 pub const API_MINOR: u32 = 92;

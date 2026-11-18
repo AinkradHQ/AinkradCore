@@ -5,6 +5,7 @@
 //! document treats it as hostile: validators refuse out-of-schema values, the forest builder breaks parent cycles
 //! deterministically, and the resolver is bounded in depth and size.
 
+pub mod export;
 pub mod ids;
 pub mod lint;
 pub mod resolve;
@@ -13,6 +14,7 @@ pub mod svgpath;
 pub mod tree;
 pub mod validate;
 
+pub use export::{ExportError, ExportOpts, Exported, export};
 pub use lint::{Finding, Severity, lint};
 pub use resolve::{Diagnostic, Resolved, ResolvedNode, Theme, resolve};
 pub use schema::{Doc, Meta, Node, NodeType, Token, TokenKind};

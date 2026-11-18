@@ -72,6 +72,10 @@ pub struct Node {
     /// Lamport clock of the last move of this node (parent + order); breaks move cycles (`tree`).
     #[serde(default)]
     pub clock: u64,
+    /// The parent this node had before its last move (`None`: it was new, or a page). Lets `forest` put a node back
+    /// where it was when its move loses a cycle, instead of detaching its subtree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev: Option<String>,
     #[serde(default)]
     pub name: String,
     #[serde(default)]

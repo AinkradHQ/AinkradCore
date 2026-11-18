@@ -1,9 +1,9 @@
 # The Design module (V1-02): its own workspace like `modules/brain` and `modules/leyline`,
-# `make build-design` / `make test-design`. V2-01 added `render`; later stories add `ffi`.
+# `make build-design` / `make test-design`. V2-01 added `render`, V2-02 `doc` + `ffi`.
 [workspace]
 resolver = "3"
-members = ["model", "module", "render"]
-exclude = ["model/fuzz"]
+members = ["doc", "ffi", "helper", "model", "module", "render"]
+exclude = ["model/fuzz", "ffi/fuzz", "doc/fuzz"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,13 @@ publish = false
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# cargo-fuzz builds with --cfg fuzzing (design-doc runs its big-stack work inline there)
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# KAN-253: age without its localisation proc-macros (reproducible builds, no basic-toml / proc-macro-error2), as the root
+# workspace and the other modules do. The Core crates this module links pull `age` in.
+[patch.crates-io]
+age = { git = "https://github.com/AinkradHQ/rage", rev = "794958a40fd3471e8ea75be0acdf9761191b2a46" }

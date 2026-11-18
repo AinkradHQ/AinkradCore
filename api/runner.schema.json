@@ -194,32 +194,6 @@
       ],
       "type": "object"
     },
-    "AgentKey": {
-      "description": "One key of the lease: the secret lease to redeem and the host keys of the machine it logs in to.",
-      "properties": {
-        "lease": {
-          "description": "A secret lease (`l_...`) for the private key, redeemed by the runner, once.",
-          "type": "string"
-        },
-        "pinned_keys": {
-          "description": "`SHA256:<base64>` fingerprints of the host keys this key may sign for: the pins of the one\nmachine it logs in to. Never empty (a key with nothing pinned could sign for anyone).",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "user": {
-          "description": "The login user on that machine: a sign request for any other user is refused.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "lease",
-        "pinned_keys",
-        "user"
-      ],
-      "type": "object"
-    },
     "AgentLimit": {
       "description": "Core to runner: set the ceiling of a live gateway session.",
       "properties": {
@@ -928,10 +902,10 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/SshAgentLoad",
+          "$ref": "#/$defs/DesignRender",
           "properties": {
             "op": {
-              "const": "ssh.agent.load",
+              "const": "design.render",
               "type": "string"
             }
           },
@@ -941,10 +915,75 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/SshAgentDrop",
+          "$ref": "#/$defs/DesignMeasure",
           "properties": {
             "op": {
-              "const": "ssh.agent.drop",
+              "const": "design.measure",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignReview",
+          "properties": {
+            "op": {
+              "const": "design.review",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignCheck",
+          "properties": {
+            "op": {
+              "const": "design.check",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignShot",
+          "properties": {
+            "op": {
+              "const": "design.shot",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignExport",
+          "properties": {
+            "op": {
+              "const": "design.export",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignFidelity",
+          "properties": {
+            "op": {
+              "const": "design.fidelity",
               "type": "string"
             }
           },
@@ -1223,6 +1262,550 @@
       ],
       "type": "object"
     },
+    "DesignBox": {
+      "description": "One node's absolute box, in points.",
+      "properties": {
+        "h": {
+          "format": "float",
+          "type": "number"
+        },
+        "id": {
+          "type": "string"
+        },
+        "w": {
+          "format": "float",
+          "type": "number"
+        },
+        "x": {
+          "format": "float",
+          "type": "number"
+        },
+        "y": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "type": "object"
+    },
+    "DesignBoxes": {
+      "properties": {
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/DesignBox"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "nodes"
+      ],
+      "type": "object"
+    },
+    "DesignCheck": {
+      "description": "`design.check`: is this upload a font, or an Icon Composer `.icon` zip, the helper can use?",
+      "properties": {
+        "data": {
+          "description": "Standard base64.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "`font` or `icon_composer`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "data"
+      ],
+      "type": "object"
+    },
+    "DesignChecked": {
+      "description": "The answer to `design.check`: `ok`, or a fixed sentence why not.",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "type": "object"
+    },
+    "DesignExport": {
+      "description": "`design.export` (V6-03): one screen as an inert HTML/CSS package. The answer carries the page and\nits stylesheet; the fonts and images it names are the job's own files, which the caller already\nholds, so they are not sent back.",
+      "properties": {
+        "doc": true,
+        "doc_id": {
+          "type": "string"
+        },
+        "fallback_font": {
+          "description": "The hash of one of `fonts` that `system` text falls back to (plan Q2: Linux has no SF Pro).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fonts": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "page": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "screen": {
+          "description": "A resolved id of a top-level node of the page; absent, the page's first screen. `doc.theme`\nis only the theme the page opens in: the package carries both.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "system": true,
+        "system_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "theme": {
+          "description": "`day` or `night`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "doc_id",
+        "doc",
+        "theme"
+      ],
+      "type": "object"
+    },
+    "DesignExported": {
+      "description": "The answer to `design.export`. Files of the package: `index.html`, `style.css`, and for each\nhash in `fonts` / `images` the file `fonts/<sha256>` / `assets/<sha256>` (the job's bytes).",
+      "properties": {
+        "css": {
+          "type": "string"
+        },
+        "fonts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "html": {
+          "type": "string"
+        },
+        "images": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "metrics_differ": {
+          "default": false,
+          "description": "Some text used a font other than the library file it names (plan Q2).",
+          "type": "boolean"
+        },
+        "screen": {
+          "description": "The resolved id of the screen exported (what `design.render`'s `node` takes).",
+          "type": "string"
+        },
+        "width": {
+          "description": "The screen's size in points, as the engine lays it out: the viewport a shot of it needs.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "screen",
+        "html",
+        "css",
+        "fonts",
+        "images",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "DesignFidelity": {
+      "description": "`design.fidelity`: how far two PNGs of one screen are apart (the engine's frame, Chromium's shot\nof the export). Both are decoded only in the helper's sandbox.",
+      "properties": {
+        "a": {
+          "type": "string"
+        },
+        "b": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "a",
+        "b"
+      ],
+      "type": "object"
+    },
+    "DesignFidelityScore": {
+      "description": "The answer to `design.fidelity`: the share of pixels that differ by more than the tolerance\n(CIE76 delta E), in percent. Sizes that differ are a score of 100.",
+      "properties": {
+        "changed": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "percent": {
+          "format": "double",
+          "type": "number"
+        },
+        "total": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "percent",
+        "changed",
+        "total",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "DesignFile": {
+      "description": "A file by its library hash: `sha256` (lowercase hex) and its bytes, standard base64.",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha256",
+        "data"
+      ],
+      "type": "object"
+    },
+    "DesignFinding": {
+      "description": "A geometry finding: `rule` (`geometry.outside`, `geometry.text_overflow`), the node, a sentence.",
+      "properties": {
+        "msg": {
+          "type": "string"
+        },
+        "node": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule",
+        "node",
+        "msg"
+      ],
+      "type": "object"
+    },
+    "DesignFindings": {
+      "properties": {
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/DesignFinding"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "findings"
+      ],
+      "type": "object"
+    },
+    "DesignImage": {
+      "description": "The answer to `design.render` and `design.shot`.",
+      "properties": {
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "metrics_differ": {
+          "default": false,
+          "description": "Some text used a font other than the library file it names (plan Q2: \"metrics differ\").",
+          "type": "boolean"
+        },
+        "png": {
+          "description": "Standard base64 PNG.",
+          "type": "string"
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "png",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "DesignMeasure": {
+      "description": "`design.measure`: every laid-out node's box.",
+      "properties": {
+        "doc": true,
+        "doc_id": {
+          "type": "string"
+        },
+        "fallback_font": {
+          "description": "The hash of one of `fonts` that `system` text falls back to (plan Q2: Linux has no SF Pro).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fonts": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "page": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "system": true,
+        "system_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "theme": {
+          "description": "`day` or `night`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "doc_id",
+        "doc",
+        "theme"
+      ],
+      "type": "object"
+    },
+    "DesignRender": {
+      "description": "`design.render`: one screen or node (or the whole page) as a PNG, CPU Skia.",
+      "properties": {
+        "doc": true,
+        "doc_id": {
+          "type": "string"
+        },
+        "fallback_font": {
+          "description": "The hash of one of `fonts` that `system` text falls back to (plan Q2: Linux has no SF Pro).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fonts": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "node": {
+          "description": "A resolved node id; absent, every screen of the page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scale": {
+          "default": 1.0,
+          "description": "Pixels per point, 0.25 to 4.",
+          "format": "float",
+          "type": "number"
+        },
+        "system": true,
+        "system_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "theme": {
+          "description": "`day` or `night`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "doc_id",
+        "doc",
+        "theme"
+      ],
+      "type": "object"
+    },
+    "DesignReview": {
+      "description": "`design.review`: geometry findings (what needs real text metrics and layout).",
+      "properties": {
+        "doc": true,
+        "doc_id": {
+          "type": "string"
+        },
+        "fallback_font": {
+          "description": "The hash of one of `fonts` that `system` text falls back to (plan Q2: Linux has no SF Pro).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fonts": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "page": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "system": true,
+        "system_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "theme": {
+          "description": "`day` or `night`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "doc_id",
+        "doc",
+        "theme"
+      ],
+      "type": "object"
+    },
+    "DesignShot": {
+      "description": "`design.shot`: headless Chromium opens `entry` of `files` (an HTML export or a mockup package)\nwith no network and screenshots the viewport.",
+      "properties": {
+        "entry": {
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/DesignShotFile"
+          },
+          "type": "array"
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scale": {
+          "default": 1.0,
+          "format": "float",
+          "type": "number"
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "files",
+        "entry",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "DesignShotFile": {
+      "description": "One file of a `design.shot` site: a relative path (no `..`, no leading `/`, no NUL or `\\`).",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "data"
+      ],
+      "type": "object"
+    },
     "DiskReport": {
       "description": "A runner's disk use (1.15, E15.9), as measured after its last clean-up pass.",
       "properties": {
@@ -1450,6 +2033,16 @@
         {
           "const": "too_large",
           "description": "A transfer over `SFTP_MAX_BYTES`.",
+          "type": "string"
+        },
+        {
+          "const": "design_failed",
+          "description": "`design.*`: the helper (or Chromium) failed, crashed, or was stopped at a limit; `message` says\nwhich. The input is what it could not handle; the runner itself is unaffected.",
+          "type": "string"
+        },
+        {
+          "const": "design_limit",
+          "description": "`design.*`: the helper (or Chromium) ran out of wall clock. Load on the runner can cause it as\nmuch as the input, so it is no verdict on the file: try again later.",
           "type": "string"
         },
         {
@@ -2734,17 +3327,6 @@
         "size": {
           "$ref": "#/$defs/Size"
         },
-        "ssh": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/SshTerminal"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "An interactive SSH terminal (Leyline): the runner starts its own `ssh-pty` as the terminal's\nprogram, handing it the redeemed keys over an inherited pipe. Then `program`, `args`,\n`cwd`, `session`, `env` and `env_pass` must be empty (`invalid_args`)."
-        },
         "watch": {
           "description": "This stream only watches for the exit (the Core's monitor): it is not a client, so it\ndoes not protect the terminal's scrollback from the disk budget.",
           "type": "boolean"
@@ -3178,10 +3760,10 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/SshAgentLoaded",
+          "$ref": "#/$defs/DesignImage",
           "properties": {
             "op": {
-              "const": "ssh.agent.load",
+              "const": "design.render",
               "type": "string"
             }
           },
@@ -3191,10 +3773,75 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/SshAgentDropped",
+          "$ref": "#/$defs/DesignBoxes",
           "properties": {
             "op": {
-              "const": "ssh.agent.drop",
+              "const": "design.measure",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignFindings",
+          "properties": {
+            "op": {
+              "const": "design.review",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignChecked",
+          "properties": {
+            "op": {
+              "const": "design.check",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignImage",
+          "properties": {
+            "op": {
+              "const": "design.shot",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignExported",
+          "properties": {
+            "op": {
+              "const": "design.export",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignFidelityScore",
+          "properties": {
+            "op": {
+              "const": "design.fidelity",
               "type": "string"
             }
           },
@@ -4019,15 +4666,6 @@
           },
           "type": "array"
         },
-        "mode": {
-          "description": "Permission bits (`0o7777`) set on the file before any byte is written, so a file meant for\nits owner alone (Leyline's runner invite, `0o600`) is never readable by anyone else.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "overwrite": {
           "default": false,
           "description": "Replace an existing file (`sftp_exists` when absent and the path is taken).",
@@ -4107,91 +4745,6 @@
       ],
       "type": "object"
     },
-    "SshAgentDrop": {
-      "description": "Ends the agent `id`: the listener and every connection close and the keys are wiped, before the\nanswer. Dropping an id that is not live (ended, never loaded) is not an error.",
-      "properties": {
-        "id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "id"
-      ],
-      "type": "object"
-    },
-    "SshAgentDropped": {
-      "description": "What the agent did before it ended.",
-      "properties": {
-        "refused": {
-          "description": "Sign requests refused (unbound session, unpinned host, expired, wrong data).",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "signatures": {
-          "description": "Signatures made.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "was_live": {
-          "description": "The agent was live when the drop arrived (not already over).",
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "was_live",
-        "signatures",
-        "refused"
-      ],
-      "type": "object"
-    },
-    "SshAgentLoad": {
-      "description": "Starts an agent on the runner under `id` (the Core's name for it): the keys are redeemed, a socket\nopens in a 0700 directory of the runner's own temporary directory, and the agent answers\n`SshAgentLoaded`. It ends at `ttl_secs`, on `ssh.agent.drop`, or when the runner has been cut off\nfrom the Core for 5 minutes.",
-      "properties": {
-        "id": {
-          "description": "`[A-Za-z0-9_]`, 1 to 64 characters.",
-          "type": "string"
-        },
-        "keys": {
-          "description": "1 to `SSH_AGENT_MAX_KEYS`.",
-          "items": {
-            "$ref": "#/$defs/AgentKey"
-          },
-          "type": "array"
-        },
-        "ttl_secs": {
-          "description": "1 to `SSH_AGENT_MAX_TTL_SECS`.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "id",
-        "ttl_secs",
-        "keys"
-      ],
-      "type": "object"
-    },
-    "SshAgentLoaded": {
-      "description": "Where the agent listens, for the person's `ssh`.",
-      "properties": {
-        "config": {
-          "description": "An `ssh_config` beside the socket: `IdentityAgent`, a private `UserKnownHostsFile`, public-key\nauthentication only, no agent forwarding. `ssh -F <config> ...` is the whole ready command.",
-          "type": "string"
-        },
-        "socket": {
-          "description": "The agent socket (`SSH_AUTH_SOCK`).",
-          "type": "string"
-        }
-      },
-      "required": [
-        "socket",
-        "config"
-      ],
-      "type": "object"
-    },
     "SshExec": {
       "description": "Runs `run` on `target`, through `hops` (jump hosts, first to last), and answers with the exit and\noutput of the remote command: an `ExecResult` with `exec.run`'s limits, redaction and capacity.",
       "properties": {
@@ -4257,25 +4810,6 @@
       ],
       "type": "object"
     },
-    "SshTerminal": {
-      "description": "The machine an interactive SSH terminal (`PtyOpen::ssh`) reaches, through `hops` (first to last):\nthe same hops, pins and key leases as `ssh.exec`, and the same rules (at most `MAX_SSH_HOPS`).\nThe runner redeems the leases and passes the keys to `ssh-pty`; a password or keyboard-interactive\nprompt is answered by the person typing in the terminal.",
-      "properties": {
-        "hops": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/SshHop"
-          },
-          "type": "array"
-        },
-        "target": {
-          "$ref": "#/$defs/SshHop"
-        }
-      },
-      "required": [
-        "target"
-      ],
-      "type": "object"
-    },
     "StreamError": {
       "description": "A command's failure, or (on stream 0) a connection's. `message` is human text, redacted.",
       "properties": {
@@ -4333,17 +4867,6 @@
             "integer",
             "null"
           ]
-        },
-        "host_key": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/HostKeyEvidence"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "An interactive SSH terminal that never reached a shell because a hop's host key was not\ntrusted (exit code `SSH_PTY_EXIT_HOST_KEY_UNKNOWN` or `_CHANGED`): which hop, and the key it\npresented. Reported by `ssh-pty` itself over a private descriptor, never read from the\nterminal's output, which a remote shell controls."
         },
         "signal": {
           "description": "The signal's description, when one ended it.",

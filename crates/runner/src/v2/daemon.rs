@@ -106,6 +106,9 @@ impl Daemon {
         if let Some(ssh) = &ssh {
             session = session.with_ssh(Arc::clone(ssh));
         }
+        if let Some(design) = super::DesignDriver::discover() {
+            session = session.with_design(Arc::new(design));
+        }
         let mut delay = self.backoff.min;
         let mut refused = 0;
         loop {
