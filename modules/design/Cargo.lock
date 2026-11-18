@@ -1092,6 +1092,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "getrandom 0.4.3",
+ "libc",
  "quick-xml",
  "serde",
  "serde_json",

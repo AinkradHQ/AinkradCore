@@ -13,7 +13,8 @@ use serde::Deserialize;
 use serde_json::{Map as JMap, Value};
 use yrs::{Any, In, Map, MapPrelim, Out, Text, TextPrelim, Transact, TransactionMut};
 
-use crate::{Error, LOCAL, Live, MAX_UPDATE_BYTES, json_any};
+use crate::read::move_any;
+use crate::{Error, LOCAL, Live, MAX_PEER_UPDATE_BYTES, json_any};
 use yrs::ReadTxn;
 use yrs::updates::decoder::Decode;
 
@@ -140,6 +141,7 @@ fn check(m: &mut Doc, i: usize, op: &Op) -> Result<Planned, Error> {
                 parent: parent.clone(),
                 order: order.clone(),
                 clock: m.next_clock(),
+                prev: None,
                 name: name.clone(),
                 props: props.clone(),
                 text: match ty {
@@ -187,18 +189,21 @@ fn check(m: &mut Doc, i: usize, op: &Op) -> Result<Planned, Error> {
             if n.ty != NodeType::Text {
                 return Err(refuse(i, "not a text node"));
             }
-            let (a, b, out) =
+            let (_, _, out) =
                 crate::text::spliced(n.text.as_deref().unwrap_or(""), *at, *del, text)
                     .ok_or_else(|| refuse(i, "range outside the text or inside a character"))?;
             text_str(&out).map_err(|e| refuse(i, e))?;
             n.text = Some(out.clone());
-            Planned::Splice(id.clone(), a as u32, (b - a) as u32, text.clone(), out)
+            // yrs counts UTF-16 units here (`new_ydoc`), so the op's own offsets go in, not the byte ones.
+            Planned::Splice(id.clone(), *at, *del, text.clone(), out)
         }
         Op::Move { id, parent, order } => {
             let clock = m.next_clock();
             m.move_node(id, parent.as_deref(), order, clock)
                 .map_err(|e| refuse(i, format!("{e:?}")))?;
-            Planned::Move(id.clone(), parent.clone(), order.clone(), clock)
+            // the model recorded the parent the node had before this move: written with it, in one register
+            let prev = m.nodes.get(id).and_then(|n| n.prev.clone());
+            Planned::Move(id.clone(), parent.clone(), order.clone(), clock, prev)
         }
         Op::Delete { id } => {
             node(m, i, id)?;
@@ -224,7 +229,7 @@ impl Live {
             return Err(Error::TooLarge);
         }
         let mut m = self.read();
-        self.commit(&mut m, ops, MAX_UPDATE_BYTES)
+        self.commit(&mut m, ops, MAX_PEER_UPDATE_BYTES)
     }
 
     /// The engine's own canvas gesture (V2-03): up to `MAX_GESTURE_OPS`, so a drag of a large selection is still one
@@ -235,7 +240,7 @@ impl Live {
         if ops.len() > MAX_GESTURE_OPS {
             return Err(Error::TooLarge);
         }
-        self.commit(m, ops, MAX_UPDATE_BYTES)
+        self.commit(m, ops, MAX_PEER_UPDATE_BYTES)
     }
 
     /// Validate, size-check and write one batch. A batch whose update would exceed `budget` is refused
@@ -296,7 +301,7 @@ impl Live {
         if est <= budget {
             return est;
         }
-        let copy = yrs::Doc::new();
+        let copy = crate::new_ydoc();
         let nodes = copy.get_or_insert_map("nodes");
         let state = self
             .doc()
@@ -345,7 +350,12 @@ fn planned_bytes(p: &Planned) -> usize {
         Planned::Add(id, n) => id.len() + serde_json::to_vec(n).map_or(0, |b| b.len()),
         Planned::Set(id, k, x) => id.len() + k.len() + v(x),
         Planned::Name(id, t) | Planned::Text(id, t) => id.len() + t.len(),
-        Planned::Move(id, p, o, _) => id.len() + p.as_ref().map_or(0, String::len) + o.len(),
+        Planned::Move(id, p, o, _, f) => {
+            id.len()
+                + p.as_ref().map_or(0, String::len)
+                + o.len()
+                + f.as_ref().map_or(0, String::len)
+        }
         Planned::Delete(ids) => ids.iter().map(String::len).sum(),
         Planned::Splice(id, _, _, t, _) => id.len() + t.len() + 16,
     }
@@ -357,9 +367,10 @@ enum Planned {
     Set(String, String, Value),
     Name(String, String),
     Text(String, String),
-    Move(String, Option<String>, String, u64),
+    /// id, parent, order, clock, previous parent.
+    Move(String, Option<String>, String, u64, Option<String>),
     Delete(Vec<String>),
-    /// id, byte offset, bytes removed, inserted text, the whole text after (for a node without a yrs text yet)
+    /// id, UTF-16 offset, UTF-16 units removed, inserted text, the whole text after (for a node without a yrs text yet)
     Splice(String, u32, u32, String, String),
 }
 
@@ -368,10 +379,6 @@ fn node_map(nodes: &yrs::MapRef, txn: &TransactionMut, id: &str) -> Option<yrs::
         Some(Out::YMap(m)) => Some(m),
         _ => None,
     }
-}
-
-fn parent_any(p: Option<&str>) -> Any {
-    p.map_or(Any::Null, Any::from)
 }
 
 fn write(nodes: &yrs::MapRef, txn: &mut TransactionMut, p: &Planned) {
@@ -387,9 +394,11 @@ fn write(nodes: &yrs::MapRef, txn: &mut TransactionMut, p: &Planned) {
                     "type",
                     In::Any(json_any(&serde_json::to_value(n.ty).unwrap_or(Value::Null))),
                 ),
-                ("parent", In::Any(parent_any(n.parent.as_deref()))),
                 ("order", In::Any(Any::from(n.order.as_str()))),
-                ("clock", In::Any(Any::from(n.clock as f64))),
+                (
+                    "move",
+                    In::Any(move_any(n.parent.as_deref(), n.clock, n.prev.as_deref())),
+                ),
                 ("name", In::Any(Any::from(n.name.as_str()))),
                 ("props", In::Map(props)),
             ];
@@ -451,11 +460,14 @@ fn write(nodes: &yrs::MapRef, txn: &mut TransactionMut, p: &Planned) {
                 }
             }
         }
-        Planned::Move(id, parent, order, clock) => {
+        Planned::Move(id, parent, order, clock, prev) => {
             if let Some(m) = node_map(nodes, txn, id) {
-                m.insert(txn, "parent", parent_any(parent.as_deref()));
+                m.insert(
+                    txn,
+                    "move",
+                    move_any(parent.as_deref(), *clock, prev.as_deref()),
+                );
                 m.insert(txn, "order", order.as_str());
-                m.insert(txn, "clock", *clock as f64);
             }
         }
         Planned::Delete(ids) => {

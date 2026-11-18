@@ -65,6 +65,9 @@ pub struct Host {
     pub(crate) rng: u64,
     /// The text node being edited (V2-04), if any.
     pub(crate) text: Option<crate::text::Session>,
+    /// Other people and AI sessions (V2-06), the pointer's last world position, follow mode.
+    pub(crate) peers: crate::presence::Peers,
+    pub(crate) local_cursor: Option<(f32, f32)>,
     held: usize,
     fonts: usize,
     #[cfg(all(feature = "metal", target_os = "macos"))]
@@ -95,6 +98,8 @@ impl Host {
             previewed: HashSet::new(),
             rng: crate::edits::seed(),
             text: None,
+            peers: Default::default(),
+            local_cursor: None,
             held: 0,
             fonts: 0,
             #[cfg(all(feature = "metal", target_os = "macos"))]
@@ -244,6 +249,7 @@ impl Host {
 
     /// Frame the selection (everything when nothing is selected).
     pub fn fit_selection(&mut self) {
+        self.stop_follow();
         self.refresh();
         let ids = self.top_selected();
         match crate::interact::union(ids.iter().filter_map(|id| self.rect(id))) {
@@ -256,6 +262,7 @@ impl Host {
     }
 
     pub fn fit(&mut self) {
+        self.stop_follow();
         self.settle = None;
         self.refresh();
         if let Some(r) = self.renderer.as_mut() {
@@ -270,6 +277,7 @@ impl Host {
         if !(factor.is_finite() && factor > 0.0 && factor <= 100.0) {
             return Err(DE_ERR_ARG);
         }
+        self.stop_follow();
         self.settle = None;
         let before = self.camera;
         self.camera.zoom_at(factor, x, y);

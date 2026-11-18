@@ -8,11 +8,14 @@
 //!
 //! Cost: the copy is built once from a full encode of the replica, then kept in step with deltas (the replica's
 //! changes since the copy's state vector, which include our own edits) plus the remote update itself. Per remote
-//! update: two thread spawns, the delta encode, one extra apply and a walk over the whole document.
+//! update: two thread spawns, the delta encode, one extra apply and a walk over the whole document. Since V1-05 the
+//! Core's replica runs it too (`gate`), so the Core trial-applies every device update before it touches its replica.
 
 use yrs::types::text::{Diff, YChange};
 use yrs::updates::decoder::Decode;
 use yrs::{Any, Doc, Map, MapRef, Out, ReadTxn, StateVector, Text, Transact, Update};
+
+use crate::gate::Refused;
 
 /// The stack for the trial and for applying remote updates to the replica.
 #[cfg(not(fuzzing))]
@@ -27,29 +30,31 @@ pub(crate) struct Trial {
 /// per-thread records, so two threads per update ran the fuzzer out of memory, and inline the fuzzer also proves the
 /// layout gate alone keeps yrs from recursing deeply (any miss would abort the run).
 #[cfg(fuzzing)]
-pub(crate) fn big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Option<T> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
+pub(crate) fn big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Result<T, Refused> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|_| Refused::Malformed)
 }
 
-/// Run `f` on a thread with `BIG_STACK`; `None` when the thread cannot start or `f` panicked.
+/// Run `f` on a thread with `BIG_STACK` and wait for it: `Busy` when no thread could start (`f` did not run),
+/// `Malformed` when `f` panicked.
 #[cfg(not(fuzzing))]
-pub(crate) fn big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Option<T> {
+pub(crate) fn big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Result<T, Refused> {
     std::thread::scope(|s| {
-        std::thread::Builder::new()
+        match std::thread::Builder::new()
             .stack_size(BIG_STACK)
             .spawn_scoped(s, f)
-            .ok()?
-            .join()
-            .ok()
+        {
+            Ok(h) => h.join().map_err(|_| Refused::Malformed),
+            Err(_) => Err(Refused::Busy),
+        }
     })
 }
 
 /// Bring the trial (or a new one built from `base` = the replica's full state) up to date with `base`, apply
-/// `update`, and walk it. `None` = the update is refused (the trial was dropped on the big stack).
-pub(crate) fn run(trial: Option<Trial>, base: Vec<u8>, update: &[u8]) -> Option<Trial> {
+/// `update`, and walk it. `Err` = the update is refused (the trial was dropped on the big stack), or `Busy`.
+pub(crate) fn run(trial: Option<Trial>, base: Vec<u8>, update: &[u8]) -> Result<Trial, Refused> {
     big_stack(move || {
         let doc = trial.map(|t| t.doc).unwrap_or_else(|| {
-            let d = Doc::new();
+            let d = crate::new_ydoc();
             for root in ["nodes", "meta", "tokens"] {
                 d.get_or_insert_map(root);
             }
@@ -66,8 +71,8 @@ pub(crate) fn run(trial: Option<Trial>, base: Vec<u8>, update: &[u8]) -> Option<
         let sv = doc.transact().state_vector();
         ok.then_some(Trial { doc, sv })
         // a refused copy is dropped here, on the big stack
-    })
-    .flatten()
+    })?
+    .ok_or(Refused::Malformed)
 }
 
 /// The layout, checked on the copy's live structure. Flat: the layout's depth is fixed at 2.

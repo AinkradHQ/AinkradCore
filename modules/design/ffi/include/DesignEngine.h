@@ -198,6 +198,36 @@ int32_t de_presence_apply(uint64_t h, const uint8_t *bytes_, size_t len);
 // See `put`.
 int32_t de_presence_peers(uint64_t h, uint8_t *out, size_t cap, size_t *out_len);
 
+// One presence message relayed by the Core's socket, with a `label` the App added: `{"peer","conn","label"?,
+// "cursor"?,"selection"?,"view"?}` or `{"conn","gone":true}`, at most 4 KiB. A message out of bounds is
+// `DE_ERR_INVALID` and changes nothing. A peer silent for 30 s disappears; a peer that sends a `view` moves a
+// camera that follows it.
+//
+// # Safety
+// `json..+len` readable.
+int32_t de_presence_remote(uint64_t h, const uint8_t *json, size_t len);
+
+// This device's presence to send to the Core's socket as a text frame: `{"cursor","selection","view"}` (world
+// coordinates). `*out_len == 0`: nothing changed since the last call that took it. Taken only when it fits.
+//
+// # Safety
+// See `put`.
+int32_t de_presence_local(uint64_t h, uint8_t *out, size_t cap, size_t *out_len);
+
+// The peers on the canvas: `[{"peer","label","kind":"person"|"ai","following"}]`, oldest first.
+//
+// # Safety
+// See `put`.
+int32_t de_presence_list(uint64_t h, uint8_t *out, size_t cap, size_t *out_len);
+
+// Follow a peer (its `peer` id from `de_presence_list`): the camera shows what it sees until the viewer pans,
+// zooms, fits or presses on the canvas, or the peer goes. An empty id stops following; an unknown peer is
+// `DE_ERR_ARG`.
+//
+// # Safety
+// `peer..+len` readable.
+int32_t de_follow(uint64_t h, const uint8_t *peer, size_t len);
+
 // A JSON array of edit ops (`add`, `set`, `name`, `text`, `move`, `delete`); all or nothing, one undo step.
 //
 // # Safety

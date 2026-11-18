@@ -253,6 +253,32 @@ pub fn run(data: &[u8]) {
                         }
                     }
                 }
+                // V2-06: peers, own presence, follow
+                29 => {
+                    let m = format!(
+                        r#"{{"peer":"person:d_{}","conn":{},"label":"p","cursor":[{},{}],"selection":["{}"],"view":[0,0,{},{}]}}"#,
+                        i.u8(),
+                        i.u8() % 4,
+                        i.u8(),
+                        i.u8(),
+                        IDS[i.u8() as usize % IDS.len()],
+                        i.u8(),
+                        i.u8()
+                    );
+                    let (mp, ml) = if i.u8() % 2 == 0 {
+                        (m.as_ptr(), m.len())
+                    } else {
+                        (ip, il)
+                    };
+                    let who = format!("person:d_{}", i.u8());
+                    match i.u8() % 5 {
+                        0 | 1 => de_presence_remote(h, mp, ml),
+                        2 => de_presence_local(h, op, cap, ol),
+                        3 => de_presence_list(h, op, cap, ol),
+                        _ if i.u8() % 2 == 0 => de_follow(h, who.as_ptr(), who.len()),
+                        _ => de_follow(h, ip, il),
+                    }
+                }
                 _ => match i.u8() % 2 {
                     0 => de_font_add(h, std::ptr::null(), 0, ip, il),
                     _ => {

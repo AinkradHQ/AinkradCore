@@ -56,7 +56,7 @@ fn name_ok(s: &str) -> bool {
     (1..=100).contains(&s.chars().count()) && s == s.trim() && !s.chars().any(char::is_control)
 }
 
-fn doc_id_ok(s: &str) -> bool {
+pub(crate) fn doc_id_ok(s: &str) -> bool {
     s.len() == 19 && s.starts_with("dd_") && s[3..].bytes().all(|c| c.is_ascii_hexdigit())
 }
 
@@ -115,7 +115,7 @@ fn store_err(e: sqlx::Error) -> ApiError {
     }
 }
 
-async fn record(
+pub(crate) async fn record(
     conn: &mut SqliteConnection,
     op: &str,
     id: &str,
@@ -154,7 +154,7 @@ pub(crate) async fn project_id(
 }
 
 /// An active doc, or the fixed refusal (not found / archived).
-async fn editable(conn: &mut SqliteConnection, id: &str) -> Result<(), ApiError> {
+pub(crate) async fn editable(conn: &mut SqliteConnection, id: &str) -> Result<(), ApiError> {
     let none = || ApiError::not_found("no such design");
     if !doc_id_ok(id) {
         return Err(none());
@@ -342,6 +342,46 @@ pub(crate) async fn patch(
     let out = view(&mut tx, &doc).await?;
     tx.commit().await?;
     Ok(Json(out))
+}
+
+/// Set `ai_paused` and record it once (a repeat changes nothing). Take over / resume are human actions on the
+/// design: never ops, so no AI session can resume itself (T12/T13); `designApply` (V1-04) reads the flag.
+async fn set_paused(app: App, doc: String, paused: bool) -> ApiResult<DocView> {
+    let mut tx = begin_write(&app.pool).await?;
+    editable(&mut tx, &doc).await?;
+    let changed = sqlx::query(
+        "UPDATE design_docs SET ai_paused = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+         WHERE id = ? AND ai_paused != ?",
+    )
+    .bind(paused as i64)
+    .bind(&doc)
+    .bind(paused as i64)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if changed > 0 {
+        record(&mut tx, if paused { "taken_over" } else { "resumed" }, &doc, None).await?;
+    }
+    let out = view(&mut tx, &doc).await?;
+    tx.commit().await?;
+    Ok(Json(out))
+}
+
+#[utoipa::path(post, path = "/docs/{doc}/take-over", operation_id = "designTakeOver", tag = "design",
+    params(("doc" = String, Path, description = "Design id")),
+    responses((status = 200, description = "AI sessions are paused on this design: `designApply` answers `paused` until resume (audited as `design.doc.taken_over`); repeating changes nothing; an archived design is refused", body = DocView)))]
+pub(crate) async fn take_over(
+    State(app): State<App>,
+    Path(doc): Path<String>,
+) -> ApiResult<DocView> {
+    set_paused(app, doc, true).await
+}
+
+#[utoipa::path(post, path = "/docs/{doc}/resume", operation_id = "designResume", tag = "design",
+    params(("doc" = String, Path, description = "Design id")),
+    responses((status = 200, description = "AI sessions may write again (audited as `design.doc.resumed`); repeating changes nothing; an archived design is refused", body = DocView)))]
+pub(crate) async fn resume(State(app): State<App>, Path(doc): Path<String>) -> ApiResult<DocView> {
+    set_paused(app, doc, false).await
 }
 
 #[utoipa::path(post, path = "/docs/{doc}/archive", operation_id = "designArchiveDoc", tag = "design",

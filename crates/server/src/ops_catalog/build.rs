@@ -100,7 +100,7 @@ pub fn build(spec: &Value, allow: &[Allowed]) -> Catalogue {
                 .push(format!("{}: not in the contract, left out", a.op));
             continue;
         };
-        if !super::exposed(path) {
+        if !super::exposed(path) || super::NOT_EXPOSED_OPS.contains(&a.op.as_str()) {
             cat.warnings
                 .push(format!("{}: a route no session reaches, left out", a.op));
             continue;
