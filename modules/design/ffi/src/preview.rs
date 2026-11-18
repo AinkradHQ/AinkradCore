@@ -184,6 +184,20 @@ pub fn patch(
                     set_geometry(n, key, value);
                 }
             }
+            // V2-04: a committed splice, or the marked-text preview (the whole composed text)
+            Op::Splice { id, at, del, text } => {
+                if let Some(n) = w.node_mut(id) {
+                    let t = n.text.take().unwrap_or_default();
+                    let b = |u: u32| design_doc::byte_of_utf16(&t, u as usize).unwrap_or(t.len());
+                    let (a, e) = (b(*at), b(at.saturating_add(*del)).max(b(*at)));
+                    n.text = Some([&t[..a], text.as_str(), &t[e..]].concat());
+                }
+            }
+            Op::Text { id, text } => {
+                if let Some(n) = w.node_mut(id) {
+                    n.text = Some(text.clone());
+                }
+            }
             Op::Move { id, parent, order } => {
                 let Some(p) = parent else { continue };
                 if let Some(n) = w.detach(id) {
@@ -232,12 +246,25 @@ impl Host {
     /// the boards they touch (the gesture preview's path) instead of re-reading and re-resolving the whole document,
     /// which costs 100+ ms at 5 000 nodes. Anything the patch cannot follow falls back to the full refresh.
     pub(crate) fn commit(&mut self, ops: &[Op], dups: &HashMap<String, String>) -> Result<(), i32> {
+        self.commit_as(ops, dups, None)
+    }
+
+    /// `commit`, or with `typing = Some(merge)` a typing batch (`Live::apply_typing`: a run is one undo step).
+    pub(crate) fn commit_as(
+        &mut self,
+        ops: &[Op],
+        dups: &HashMap<String, String>,
+        typing: Option<bool>,
+    ) -> Result<(), i32> {
         if ops.is_empty() {
             return Ok(());
         }
-        let simple = ops
-            .iter()
-            .all(|o| matches!(o, Op::Set { .. } | Op::Move { .. } | Op::Add { .. }));
+        let simple = ops.iter().all(|o| {
+            matches!(
+                o,
+                Op::Set { .. } | Op::Move { .. } | Op::Add { .. } | Op::Splice { .. }
+            )
+        });
         let patched = match (&self.model, &self.resolved) {
             (Some(m), Some(res)) if simple && self.is_loaded() => res
                 .pages
@@ -247,13 +274,13 @@ impl Host {
         };
         let (Some(mut p), Some(mut m)) = (patched, self.model.take()) else {
             let mut m = self.live.read();
-            let r = self.live.apply_gesture_ops(&mut m, ops);
+            let r = self.write_ops(&mut m, ops, typing);
             // also after a refusal: an `Error::Reset` emptied the document
             self.changed();
             return r.map_err(crate::host::code);
         };
         // inside `recover`: a yrs panic resets the replica and comes back as `Error::Reset` -> DE_ERR_RESET
-        if let Err(e) = self.live.apply_gesture_ops(&mut m, ops) {
+        if let Err(e) = self.write_ops(&mut m, ops, typing) {
             self.changed();
             return Err(crate::host::code(e));
         }
@@ -285,6 +312,20 @@ impl Host {
         self.selection.retain(|id| m.nodes.contains_key(id));
         self.model = Some(m);
         Ok(())
+    }
+}
+
+impl Host {
+    fn write_ops(
+        &mut self,
+        m: &mut Doc,
+        ops: &[Op],
+        typing: Option<bool>,
+    ) -> Result<(), design_doc::Error> {
+        match typing {
+            Some(merge) => self.live.apply_typing(m, ops, merge),
+            None => self.live.apply_gesture_ops(m, ops),
+        }
     }
 }
 

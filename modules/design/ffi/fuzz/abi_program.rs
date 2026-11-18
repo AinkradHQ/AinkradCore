@@ -47,7 +47,7 @@ fn edit_json(i: &mut In) -> String {
     let id = |i: &mut In| IDS[i.u8() as usize % IDS.len()];
     let n = (i.u8() % 4) as usize + 1;
     let ops: Vec<String> = (0..n)
-        .map(|_| match i.u8() % 9 {
+        .map(|_| match i.u8() % 10 {
             0 => format!(r#"{{"op":"add","id":"{}","type":"page","parent":null,"order":"a"}}"#, IDS[0]),
             1 => format!(
                 r#"{{"op":"add","id":"{}","type":"frame","parent":"{}","order":"a{}","props":{{"w":{},"h":200,"x":{}}}}}"#,
@@ -62,6 +62,10 @@ fn edit_json(i: &mut In) -> String {
             5 => format!(r#"{{"op":"delete","id":"{}"}}"#, id(i)),
             6 => format!(r#"{{"op":"name","id":"{}","name":"n{}"}}"#, id(i), i.u8()),
             7 => format!(r#"{{"op":"text","id":"{}","text":"t{}"}}"#, id(i), i.u8()),
+            8 => format!(
+                r#"{{"op":"splice","id":"{}","at":{},"del":{},"text":"日😀{}"}}"#,
+                id(i), i.u8() % 8, i.u8() % 4, i.u8()
+            ),
             _ => format!(r##"{{"op":"set","id":"{}","key":"fill","value":[{{"type":"solid","color":"#ff0000"}}]}}"##, id(i)),
         })
         .collect();
@@ -138,7 +142,7 @@ pub fn run(data: &[u8]) {
         let (x, y) = (i.f32(), i.f32());
         // SAFETY: every (ptr, len) above is NULL or inside a live buffer, which is the ABI's contract.
         let rc = unsafe {
-            match i.u8() % 30 {
+            match i.u8() % 32 {
                 0 => de_sync_apply(h, i.u8() as u32 % 3, ip, il),
                 1 => de_sync_state_vector(h, op, cap, ol),
                 2 => de_sync_diff(h, ip, il, op, cap, ol),
@@ -206,6 +210,76 @@ pub fn run(data: &[u8]) {
                     8 => de_tick(h, i.f32()),
                     _ => de_fit_selection(h),
                 },
+                // V2-04: text editing, with real text (CJK, emoji, RTL, combining) or the raw input
+                30 | 31 => {
+                    const T: [&str; 6] = [
+                        "日本",
+                        "👩\u{200d}💻",
+                        "مرحبا",
+                        "a\n",
+                        "e\u{301}",
+                        "\u{202e}",
+                    ];
+                    let t = T[i.u8() as usize % T.len()];
+                    let (tp, tl) = if i.u8() % 3 == 0 {
+                        (ip, il)
+                    } else {
+                        (t.as_ptr(), t.len())
+                    };
+                    let r = |i: &mut In| match i.u8() % 4 {
+                        0 => DE_TEXT_NO_RANGE,
+                        1 => i.u32() as i32 as i64,
+                        _ => (i.u8() % 12) as i64,
+                    };
+                    match i.u8() % 9 {
+                        0 => de_text_begin(h, x, y),
+                        1 => de_text_end(h),
+                        2 => de_text_insert(h, tp, tl, r(&mut i), r(&mut i)),
+                        3 => de_text_set_marked(
+                            h,
+                            tp,
+                            tl,
+                            r(&mut i),
+                            r(&mut i),
+                            r(&mut i),
+                            r(&mut i),
+                        ),
+                        4 => de_text_unmark(h),
+                        5 => de_text_command(h, i.u32() % 10, i.u32()),
+                        6 => de_text_state(h, op, cap, ol),
+                        7 => de_text_first_rect(h, r(&mut i), r(&mut i), op, cap, ol),
+                        _ => {
+                            let c = de_text_index_at(h, x, y);
+                            if c >= 0 { 0 } else { c }
+                        }
+                    }
+                }
+                // V2-06: peers, own presence, follow
+                29 => {
+                    let m = format!(
+                        r#"{{"peer":"person:d_{}","conn":{},"label":"p","cursor":[{},{}],"selection":["{}"],"view":[0,0,{},{}]}}"#,
+                        i.u8(),
+                        i.u8() % 4,
+                        i.u8(),
+                        i.u8(),
+                        IDS[i.u8() as usize % IDS.len()],
+                        i.u8(),
+                        i.u8()
+                    );
+                    let (mp, ml) = if i.u8() % 2 == 0 {
+                        (m.as_ptr(), m.len())
+                    } else {
+                        (ip, il)
+                    };
+                    let who = format!("person:d_{}", i.u8());
+                    match i.u8() % 5 {
+                        0 | 1 => de_presence_remote(h, mp, ml),
+                        2 => de_presence_local(h, op, cap, ol),
+                        3 => de_presence_list(h, op, cap, ol),
+                        _ if i.u8() % 2 == 0 => de_follow(h, who.as_ptr(), who.len()),
+                        _ => de_follow(h, ip, il),
+                    }
+                }
                 _ => match i.u8() % 2 {
                     0 => de_font_add(h, std::ptr::null(), 0, ip, il),
                     _ => {

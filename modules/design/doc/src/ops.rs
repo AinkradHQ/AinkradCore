@@ -54,6 +54,16 @@ pub enum Op {
         id: String,
         text: String,
     },
+    /// Replace `del` UTF-16 code units at UTF-16 offset `at` of a text node's text with `text` (V2-04: typing, IME
+    /// commits, paste). A granular CRDT edit, so two people typing in one label both keep their characters. Plain
+    /// text only: styles live in props, never as yrs formatting attributes (the layout gate refuses those).
+    Splice {
+        id: String,
+        at: u32,
+        del: u32,
+        #[serde(default)]
+        text: String,
+    },
     Move {
         id: String,
         parent: Option<String>,
@@ -171,6 +181,22 @@ fn check(m: &mut Doc, i: usize, op: &Op) -> Result<Planned, Error> {
             text_str(text).map_err(|e| refuse(i, e))?;
             Planned::Text(id.clone(), text.clone())
         }
+        Op::Splice { id, at, del, text } => {
+            let n = m
+                .nodes
+                .get_mut(id)
+                .ok_or_else(|| refuse(i, "unknown node"))?;
+            if n.ty != NodeType::Text {
+                return Err(refuse(i, "not a text node"));
+            }
+            let (_, _, out) =
+                crate::text::spliced(n.text.as_deref().unwrap_or(""), *at, *del, text)
+                    .ok_or_else(|| refuse(i, "range outside the text or inside a character"))?;
+            text_str(&out).map_err(|e| refuse(i, e))?;
+            n.text = Some(out.clone());
+            // yrs counts UTF-16 units here (`new_ydoc`), so the op's own offsets go in, not the byte ones.
+            Planned::Splice(id.clone(), *at, *del, text.clone(), out)
+        }
         Op::Move { id, parent, order } => {
             let clock = m.next_clock();
             m.move_node(id, parent.as_deref(), order, clock)
@@ -220,6 +246,28 @@ impl Live {
     /// Validate, size-check and write one batch. A batch whose update would exceed `budget` is refused
     /// (`TooLarge`): the relay refuses such an update, so it would never sync. A panic inside yrs resets the replica.
     pub(crate) fn commit(&mut self, m: &mut Doc, ops: &[Op], budget: usize) -> Result<(), Error> {
+        self.commit_as(m, ops, budget, None)
+    }
+
+    /// Typing (V2-04): an engine-made batch of `splice` ops, validated against `m` as `apply_gesture_ops` does. With
+    /// `merge` it joins the previous typing batch's undo step when it follows within yrs's capture window (500 ms),
+    /// so a typed word undoes at once, as in any Mac text field; every other batch is always its own step.
+    pub fn apply_typing(&mut self, m: &mut Doc, ops: &[Op], merge: bool) -> Result<(), Error> {
+        if ops.len() > MAX_OPS {
+            return Err(Error::TooLarge);
+        }
+        self.commit_as(m, ops, MAX_UPDATE_BYTES, Some(merge))
+    }
+
+    /// `typing`: `None` = a batch of its own; `Some(merge)` = typing, which leaves the undo step open for the next
+    /// typing batch and joins the open one when `merge`.
+    fn commit_as(
+        &mut self,
+        m: &mut Doc,
+        ops: &[Op],
+        budget: usize,
+        typing: Option<bool>,
+    ) -> Result<(), Error> {
         self.recover(|l| {
             let plan = ops
                 .iter()
@@ -230,12 +278,17 @@ impl Live {
                 return Err(Error::TooLarge);
             }
             // a commit that trips over a bad pending remote update panics in yrs: reset, do not poison the engine
+            if typing != Some(true) {
+                l.undo.reset();
+            }
             let mut txn = l.doc().transact_mut_with(LOCAL);
             for p in &plan {
                 write(&l.nodes, &mut txn, p);
             }
             drop(txn);
-            l.undo.reset();
+            if typing.is_none() {
+                l.undo.reset();
+            }
             Ok(())
         })
     }
@@ -248,7 +301,7 @@ impl Live {
         if est <= budget {
             return est;
         }
-        let copy = yrs::Doc::new();
+        let copy = crate::new_ydoc();
         let nodes = copy.get_or_insert_map("nodes");
         let state = self
             .doc()
@@ -304,6 +357,7 @@ fn planned_bytes(p: &Planned) -> usize {
                 + f.as_ref().map_or(0, String::len)
         }
         Planned::Delete(ids) => ids.iter().map(String::len).sum(),
+        Planned::Splice(id, _, _, t, _) => id.len() + t.len() + 16,
     }
 }
 
@@ -316,6 +370,8 @@ enum Planned {
     /// id, parent, order, clock, previous parent.
     Move(String, Option<String>, String, u64, Option<String>),
     Delete(Vec<String>),
+    /// id, UTF-16 offset, UTF-16 units removed, inserted text, the whole text after (for a node without a yrs text yet)
+    Splice(String, u32, u32, String, String),
 }
 
 fn node_map(nodes: &yrs::MapRef, txn: &TransactionMut, id: &str) -> Option<yrs::MapRef> {
@@ -382,6 +438,25 @@ fn write(nodes: &yrs::MapRef, txn: &mut TransactionMut, p: &Planned) {
                 }
                 _ => {
                     m.insert(txn, "text", TextPrelim::new(t.as_str()));
+                }
+            }
+        }
+        Planned::Splice(id, at, del, ins, full) => {
+            let Some(m) = node_map(nodes, txn, id) else {
+                return;
+            };
+            match m.get(txn, "text") {
+                // plain `insert` only: never `insert_with_attributes` / `format` (#298: text stays plain strings)
+                Some(Out::YText(x)) => {
+                    if *del > 0 {
+                        x.remove_range(txn, *at, *del);
+                    }
+                    if !ins.is_empty() {
+                        x.insert(txn, *at, ins);
+                    }
+                }
+                _ => {
+                    m.insert(txn, "text", TextPrelim::new(full.as_str()));
                 }
             }
         }

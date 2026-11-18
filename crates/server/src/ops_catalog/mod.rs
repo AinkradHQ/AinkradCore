@@ -45,6 +45,10 @@ pub const NOT_EXPOSED: &[&str] = &[
     "/handshake",
 ];
 
+/// Operations a session never reaches whatever the allow-list says, by id where their route shares a
+/// name with one a session may use: taking a design doc over from the AI and handing it back is human-only.
+pub const NOT_EXPOSED_OPS: &[&str] = &["designTakeOver", "designResume"];
+
 /// Whether `path` may be an operation of a session at all.
 pub fn exposed(path: &str) -> bool {
     !NOT_EXPOSED
@@ -179,7 +183,7 @@ pub fn check(spec: &Value, allow: &[Allowed]) -> Vec<String> {
         for (m, op) in item.as_object().into_iter().flatten() {
             if let Some(id) = op["operationId"].as_str() {
                 methods.insert(id, m);
-                if !exposed(path) {
+                if !exposed(path) || NOT_EXPOSED_OPS.contains(&id) {
                     hidden.insert(id);
                 }
             }

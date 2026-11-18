@@ -54,6 +54,24 @@ pub const DE_CURSOR_RESIZE_EW: i32 = 2;
 pub const DE_CURSOR_RESIZE_NWSE: i32 = 3;
 pub const DE_CURSOR_RESIZE_NESW: i32 = 4;
 
+/// `de_text_command` (V2-04): what `NSTextInputClient.doCommand(by:)` maps to. `DE_MOD_SHIFT` extends the selection;
+/// `DE_MOD_OPTION` moves or deletes by word; `DE_MOD_COMMAND` turns ←/→ into line start/end and ↑/↓ into text
+/// start/end.
+pub const DE_TEXT_LEFT: u32 = 1;
+pub const DE_TEXT_RIGHT: u32 = 2;
+pub const DE_TEXT_UP: u32 = 3;
+pub const DE_TEXT_DOWN: u32 = 4;
+pub const DE_TEXT_DELETE_BACK: u32 = 5;
+pub const DE_TEXT_DELETE_FORWARD: u32 = 6;
+pub const DE_TEXT_SELECT_ALL: u32 = 7;
+pub const DE_TEXT_NEWLINE: u32 = 8;
+/// "No range" for `de_text_insert` / `de_text_set_marked` (`NSNotFound` in Swift maps to this).
+pub const DE_TEXT_NO_RANGE: i64 = -1;
+/// UTF-16 offsets and lengths the text calls take (a text holds at most 100 000 characters).
+pub const DE_MAX_TEXT_OFFSET: i64 = 1 << 20;
+/// UTF-8 bytes one `de_text_insert` / `de_text_set_marked` takes (a paste of a whole text fits).
+pub const DE_MAX_TEXT_BYTES: usize = 1 << 20;
+
 /// Engines alive at once.
 pub const DE_MAX_ENGINES: usize = 64;
 /// Sync bytes in (a full document state fits).

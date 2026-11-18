@@ -80,7 +80,7 @@ pub(crate) struct Board {
     fonts_epoch: u64,
     pub(crate) origin: Point,
     pub(crate) laid: Laid,
-    index: HashMap<String, u32>,
+    pub(crate) index: HashMap<String, u32>,
     pics: [Option<Picture>; LODS],
     last_used: u64,
 }
@@ -149,6 +149,7 @@ impl Renderer {
     fn build_board(&mut self, n: &ResolvedNode) -> Board {
         self.stats.layouts += 1;
         let laid = build(n, &self.fonts, self.theme);
+        self.missing_fonts(n);
         let index = laid
             .nodes
             .iter()
@@ -167,6 +168,26 @@ impl Renderer {
             index,
             pics: Default::default(),
             last_used: 0,
+        }
+    }
+
+    /// Library fonts the board names and the host has not supplied: they join `missing` (the host fetches them by
+    /// hash like images and hands them over with `add_font`; the text draws with the fallback until then).
+    fn missing_fonts(&mut self, n: &ResolvedNode) {
+        let mut stack = vec![n];
+        while let Some(n) = stack.pop() {
+            if let Some(a) = n
+                .props
+                .get("type")
+                .and_then(|t| t.get("font"))
+                .and_then(|f| f.get("asset"))
+                .and_then(serde_json::Value::as_str)
+                && !self.fonts.has_asset(a)
+                && !self.missing.iter().any(|m| m == a)
+            {
+                self.missing.push(a.to_string());
+            }
+            stack.extend(n.children.iter());
         }
     }
 

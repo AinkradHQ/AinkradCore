@@ -88,6 +88,34 @@
 
 #define DE_CURSOR_RESIZE_NESW 4
 
+// `de_text_command` (V2-04): what `NSTextInputClient.doCommand(by:)` maps to. `DE_MOD_SHIFT` extends the selection;
+// `DE_MOD_OPTION` moves or deletes by word; `DE_MOD_COMMAND` turns ←/→ into line start/end and ↑/↓ into text
+// start/end.
+#define DE_TEXT_LEFT 1
+
+#define DE_TEXT_RIGHT 2
+
+#define DE_TEXT_UP 3
+
+#define DE_TEXT_DOWN 4
+
+#define DE_TEXT_DELETE_BACK 5
+
+#define DE_TEXT_DELETE_FORWARD 6
+
+#define DE_TEXT_SELECT_ALL 7
+
+#define DE_TEXT_NEWLINE 8
+
+// "No range" for `de_text_insert` / `de_text_set_marked` (`NSNotFound` in Swift maps to this).
+#define DE_TEXT_NO_RANGE -1
+
+// UTF-16 offsets and lengths the text calls take (a text holds at most 100 000 characters).
+#define DE_MAX_TEXT_OFFSET (1 << 20)
+
+// UTF-8 bytes one `de_text_insert` / `de_text_set_marked` takes (a paste of a whole text fits).
+#define DE_MAX_TEXT_BYTES (1 << 20)
+
 // Engines alive at once.
 #define DE_MAX_ENGINES 64
 
@@ -172,6 +200,36 @@ int32_t de_presence_apply(uint64_t h, const uint8_t *bytes_, size_t len);
 // # Safety
 // See `put`.
 int32_t de_presence_peers(uint64_t h, uint8_t *out, size_t cap, size_t *out_len);
+
+// One presence message relayed by the Core's socket, with a `label` the App added: `{"peer","conn","label"?,
+// "cursor"?,"selection"?,"view"?}` or `{"conn","gone":true}`, at most 4 KiB. A message out of bounds is
+// `DE_ERR_INVALID` and changes nothing. A peer silent for 30 s disappears; a peer that sends a `view` moves a
+// camera that follows it.
+//
+// # Safety
+// `json..+len` readable.
+int32_t de_presence_remote(uint64_t h, const uint8_t *json, size_t len);
+
+// This device's presence to send to the Core's socket as a text frame: `{"cursor","selection","view"}` (world
+// coordinates). `*out_len == 0`: nothing changed since the last call that took it. Taken only when it fits.
+//
+// # Safety
+// See `put`.
+int32_t de_presence_local(uint64_t h, uint8_t *out, size_t cap, size_t *out_len);
+
+// The peers on the canvas: `[{"peer","label","kind":"person"|"ai","following"}]`, oldest first.
+//
+// # Safety
+// See `put`.
+int32_t de_presence_list(uint64_t h, uint8_t *out, size_t cap, size_t *out_len);
+
+// Follow a peer (its `peer` id from `de_presence_list`): the camera shows what it sees until the viewer pans,
+// zooms, fits or presses on the canvas, or the peer goes. An empty id stops following; an unknown peer is
+// `DE_ERR_ARG`.
+//
+// # Safety
+// `peer..+len` readable.
+int32_t de_follow(uint64_t h, const uint8_t *peer, size_t len);
 
 // A JSON array of edit ops (`add`, `set`, `name`, `text`, `move`, `delete`); all or nothing, one undo step.
 //
@@ -261,6 +319,71 @@ int32_t de_hit(uint64_t h, float x, float y, uint8_t *out, size_t cap, size_t *o
 // # Safety
 // See `put`.
 int32_t de_missing_assets(uint64_t h, uint8_t *out, size_t cap, size_t *out_len);
+
+// Start editing the text node under view point (x, y) with the caret there (a double-click on text). Marked text
+// of an earlier session is committed first. `DE_ERR_INVALID` when there is no text node at the point.
+int32_t de_text_begin(uint64_t h,
+                      float x,
+                      float y);
+
+// Stop editing (commits marked text). Not editing: `DE_OK`.
+int32_t de_text_end(uint64_t h);
+
+// `insertText(_:replacementRange:)`: UTF-8 `text` replaces the marked text, else the replacement range, else the
+// selection. One batch; a run of typing is one undo step.
+//
+// # Safety
+// `text..+len` readable.
+int32_t de_text_insert(uint64_t h,
+                       const uint8_t *text_,
+                       size_t len,
+                       int64_t rep_start,
+                       int64_t rep_len);
+
+// `setMarkedText(_:selectedRange:replacementRange:)`: the IME's composition, drawn in place and never written to
+// the document until it is committed (`de_text_insert`, `de_text_unmark`). `sel` is inside `text`; an empty `text`
+// ends the composition.
+//
+// # Safety
+// `text..+len` readable.
+int32_t de_text_set_marked(uint64_t h,
+                           const uint8_t *text_,
+                           size_t len,
+                           int64_t sel_start,
+                           int64_t sel_len,
+                           int64_t rep_start,
+                           int64_t rep_len);
+
+// `unmarkText()`: the marked text goes in as it is.
+int32_t de_text_unmark(uint64_t h);
+
+// `doCommand(by:)`: a `DE_TEXT_*` command with `DE_MOD_*` bits.
+int32_t de_text_command(uint64_t h, uint32_t cmd, uint32_t mods);
+
+// The editing state as JSON: `{id, text, selection: [start, len], marked: [start, len] | null}`, or `null` when
+// not editing (`selectedRange()`, `markedRange()`, `hasMarkedText()`, `attributedSubstring(forProposedRange:)`).
+//
+// # Safety
+// See `put`.
+int32_t de_text_state(uint64_t h,
+                      uint8_t *out,
+                      size_t cap,
+                      size_t *out_len);
+
+// `firstRect(forCharacterRange:actualRange:)`: `{rect: [x, y, w, h], range: [start, len]}`, the rect in view
+// points (the App converts it to screen coordinates), the range as it was snapped.
+//
+// # Safety
+// See `put`.
+int32_t de_text_first_rect(uint64_t h,
+                           int64_t start,
+                           int64_t len,
+                           uint8_t *out,
+                           size_t cap,
+                           size_t *out_len);
+
+// `characterIndex(for:)`: the offset nearest view point (x, y) (>= 0), or an error code.
+int32_t de_text_index_at(uint64_t h, float x, float y);
 
 // A library font by its sha256 (`asset_len == 0`: the fallback `system` draws with).
 //

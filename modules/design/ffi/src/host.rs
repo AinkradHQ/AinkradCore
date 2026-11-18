@@ -64,6 +64,11 @@ pub struct Host {
     /// Boards the current preview changed (to put back).
     pub(crate) previewed: HashSet<String>,
     pub(crate) rng: u64,
+    /// The text node being edited (V2-04), if any.
+    pub(crate) text: Option<crate::text::Session>,
+    /// Other people and AI sessions (V2-06), the pointer's last world position, follow mode.
+    pub(crate) peers: crate::presence::Peers,
+    pub(crate) local_cursor: Option<(f32, f32)>,
     held: usize,
     fonts: usize,
     #[cfg(all(feature = "metal", target_os = "macos"))]
@@ -93,6 +98,9 @@ impl Host {
             settle: None,
             previewed: HashSet::new(),
             rng: crate::edits::seed(),
+            text: None,
+            peers: Default::default(),
+            local_cursor: None,
             held: 0,
             fonts: 0,
             #[cfg(all(feature = "metal", target_os = "macos"))]
@@ -123,6 +131,7 @@ impl Host {
             }
             self.tree = Some(forest(&d));
             self.model = Some(d);
+            self.rebase_text();
         }
         self.model.get_or_insert_with(Doc::default)
     }
@@ -241,6 +250,7 @@ impl Host {
 
     /// Frame the selection (everything when nothing is selected).
     pub fn fit_selection(&mut self) {
+        self.stop_follow();
         self.refresh();
         let ids = self.top_selected();
         match crate::interact::union(ids.iter().filter_map(|id| self.rect(id))) {
@@ -253,6 +263,7 @@ impl Host {
     }
 
     pub fn fit(&mut self) {
+        self.stop_follow();
         self.settle = None;
         self.refresh();
         if let Some(r) = self.renderer.as_mut() {
@@ -267,6 +278,7 @@ impl Host {
         if !(factor.is_finite() && factor > 0.0 && factor <= 100.0) {
             return Err(DE_ERR_ARG);
         }
+        self.stop_follow();
         self.settle = None;
         let before = self.camera;
         self.camera.zoom_at(factor, x, y);
@@ -278,6 +290,14 @@ impl Host {
     }
 
     pub fn key(&mut self, key: u32, mods: u32) -> Result<(), i32> {
+        // while editing text, keys are text commands (`de_text_command`); Escape ends editing, nothing else acts
+        if self.text.is_some() {
+            return if key == DE_KEY_ESCAPE {
+                self.text_end()
+            } else {
+                Ok(())
+            };
+        }
         let step = if mods & DE_MOD_SHIFT != 0 { 10.0 } else { 1.0 };
         // a press that has not moved yet is not a gesture to protect; a drag is (keys wait for its end)
         if matches!(self.gesture, Some(crate::interact::Gesture::Press { .. })) {

@@ -99,7 +99,7 @@ impl Host {
     }
 
     /// The deepest document node under screen point (x, y).
-    fn hit_doc(&self, x: f32, y: f32) -> Option<String> {
+    pub(crate) fn hit_doc(&self, x: f32, y: f32) -> Option<String> {
         let h = self.renderer.as_ref()?.hit(x, y)?;
         let m = self.model.as_ref()?;
         h.path.into_iter().rev().find(|id| m.nodes.contains_key(id))
@@ -159,6 +159,14 @@ impl Host {
             return Err(DE_ERR_ARG);
         }
         self.refresh();
+        self.local_cursor = Some(self.camera.to_world(x, y));
+        if phase == DE_POINTER_DOWN {
+            self.stop_follow();
+        }
+        if let Some(r) = self.text_pointer(phase, x, y, mods) {
+            self.refresh();
+            return r;
+        }
         match phase {
             DE_POINTER_DOWN => self.down(x, y, mods),
             DE_POINTER_MOVE => self.drag(x, y, mods),
@@ -370,7 +378,9 @@ impl Host {
     /// Show the current edit gesture's ops on the boards they touch, or put back the boards a previous preview
     /// changed when there is none.
     pub(crate) fn sync_preview(&mut self) {
-        let (none_ops, none_dups) = (vec![], HashMap::new());
+        // no gesture: the IME's marked text, if any, is the preview (V2-04)
+        let (none_ops, none_dups): (Vec<Op>, _) =
+            (self.marked_preview().into_iter().collect(), HashMap::new());
         let (ops, dups) = match &self.gesture {
             Some(Gesture::Edit(e)) => (&e.ops, &e.dups),
             _ => (&none_ops, &none_dups),
@@ -403,7 +413,10 @@ impl Host {
     }
 
     pub(crate) fn overlay(&self) -> Overlay {
-        let mut o = Overlay::default();
+        let mut o = Overlay {
+            peers: self.remote_marks(),
+            ..Overlay::default()
+        };
         let ids = match &self.gesture {
             Some(Gesture::Edit(e)) => {
                 o.guides = e.guides.clone();
@@ -426,6 +439,7 @@ impl Host {
             .as_ref()
             .filter(|h| self.gesture.is_none() && !self.selection.contains(h))
             .and_then(|h| self.rect(h));
+        self.text_overlay(&mut o);
         o
     }
 
@@ -449,6 +463,7 @@ impl Host {
     /// Pan by a scroll delta; past the content bounds the pan is rubber-banded.
     pub fn scroll(&mut self, dx: f32, dy: f32) -> Result<(), i32> {
         finite(&[dx, dy], MAX_COORD)?;
+        self.stop_follow();
         self.settle = None;
         let (pan, (w, h)) = (self.camera.pan, self.camera.view);
         let p = match self.ranges() {

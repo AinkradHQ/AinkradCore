@@ -21,12 +21,14 @@ pub mod metal;
 pub mod overlay;
 pub mod scene;
 pub mod synth;
+pub mod text;
 
 pub use assets::Assets;
 pub use camera::Camera;
 pub use draw::Lod;
 pub use fonts::Fonts;
 pub use hit::Hit;
-pub use overlay::Overlay;
+pub use overlay::{Overlay, PeerMark};
 pub use scene::{Config, Dirty, Renderer};
 pub use skia_safe::Rect;
+pub use text::TextGeo;

@@ -10,6 +10,7 @@ mod asset_links;
 mod assets;
 mod collections;
 mod docs;
+mod package;
 mod sniff;
 mod svg;
 mod sync;
@@ -25,6 +26,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use utoipa::OpenApi;
 
+pub use package::import_dir;
+
 pub const MODULE: &str = "design";
 
 pub static MIGRATIONS: &[Migration] = &[
@@ -39,6 +42,12 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0002_design_assets",
         up: include_str!("../migrations/0002_design_assets.up.sql"),
         down: include_str!("../migrations/0002_design_assets.down.sql"),
+    },
+    Migration {
+        version: 3,
+        name: "0003_design_mockups",
+        up: include_str!("../migrations/0003_design_mockups.up.sql"),
+        down: include_str!("../migrations/0003_design_mockups.down.sql"),
     },
 ];
 
@@ -71,6 +80,8 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/docs"),
     ("PATCH", "/docs/{doc}"),
+    ("POST", "/docs/{doc}/take-over"),
+    ("POST", "/docs/{doc}/resume"),
     ("PUT", "/docs/{doc}/projects/{project}"),
     ("DELETE", "/docs/{doc}/projects/{project}"),
     ("POST", "/assets"),
@@ -83,6 +94,8 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("DELETE", "/collections/{id}/items/{sha}"),
     ("PUT", "/collections/{id}/projects/{project}"),
     ("DELETE", "/collections/{id}/projects/{project}"),
+    ("PUT", "/docs/{doc}/package/files"),
+    ("POST", "/docs/{doc}/package/manifest"),
 ];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/docs", "read"),
@@ -92,9 +105,14 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/assets/{sha}/data", "read"),
     ("GET", "/collections", "read"),
     ("GET", "/collections/{id}", "read"),
+    ("GET", "/docs/{doc}/package", "read"),
+    ("GET", "/docs/{doc}/package/files", "read"),
 ];
 // A signed upload is read whole to check its signature: the file cap plus nothing else.
-const BODY_LIMITS: &[(&str, &str, usize)] = &[("POST", "/assets", assets::MAX_BODY)];
+const BODY_LIMITS: &[(&str, &str, usize)] = &[
+    ("POST", "/assets", assets::MAX_BODY),
+    ("PUT", "/docs/{doc}/package/files", assets::MAX_BODY),
+];
 
 /// The live documents (`sync`) live in the module value, so each Core has its own.
 #[derive(Default, Clone)]
@@ -126,6 +144,8 @@ pub use sync::Limits;
         docs::get,
         docs::patch,
         docs::archive,
+        docs::take_over,
+        docs::resume,
         docs::link,
         docs::unlink,
         assets::upload,
@@ -145,6 +165,10 @@ pub use sync::Limits;
         collections::remove_item,
         collections::link,
         collections::unlink,
+        package::put,
+        package::file,
+        package::get,
+        package::seal,
         ws::sync
     ),
     components(schemas(
@@ -157,7 +181,9 @@ pub use sync::Limits;
         collections::Item,
         collections::NewCollection,
         collections::CollectionPatch,
-        collections::ItemBody
+        collections::ItemBody,
+        package::FileView,
+        package::PackageView
     ))
 )]
 struct Doc;
@@ -172,11 +198,21 @@ impl Module for Design {
             .route("/docs", get(docs::list).post(docs::create))
             .route("/docs/{doc}", get(docs::get).patch(docs::patch))
             .route("/docs/{doc}/archive", post(docs::archive))
+            .route("/docs/{doc}/take-over", post(docs::take_over))
+            .route("/docs/{doc}/resume", post(docs::resume))
             .route("/docs/{doc}/sync", get(ws::sync))
             .route(
                 "/docs/{doc}/projects/{project}",
                 put(docs::link).delete(docs::unlink),
             )
+            .route("/docs/{doc}/package", get(package::get))
+            .route(
+                "/docs/{doc}/package/files",
+                get(package::file)
+                    .put(package::put)
+                    .layer(DefaultBodyLimit::max(assets::MAX_BODY)),
+            )
+            .route("/docs/{doc}/package/manifest", post(package::seal))
             .route(
                 "/assets",
                 get(assets::list)
@@ -231,6 +267,8 @@ impl Module for Design {
             "design.doc.created",
             "design.doc.changed",
             "design.doc.archived",
+            "design.doc.taken_over",
+            "design.doc.resumed",
             "design.doc.linked",
             "design.doc.unlinked",
             "design.asset.created",
@@ -247,7 +285,16 @@ impl Module for Design {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["state", "kind", "project", "name", "tag", "q", "collection"]
+        &[
+            "state",
+            "kind",
+            "project",
+            "name",
+            "tag",
+            "q",
+            "collection",
+            "path",
+        ]
     }
 
     fn scope(&self) -> &'static str {
