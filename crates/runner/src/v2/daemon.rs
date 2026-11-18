@@ -98,6 +98,11 @@ impl Daemon {
             self.redeem()?,
             self.run_checkouts.clone(),
         );
+        // The Core's repo copies are read through the agent driver's mirror path, where it is on.
+        let run = match &self.agents {
+            Some(agents) => run.with_clones(Arc::clone(agents)),
+            None => run,
+        };
         run.info().map(|_| Arc::new(run))
     }
 

@@ -131,6 +131,23 @@ impl Workspaces {
         std::fs::rename(&path, saved.join(generation.to_string())).map_err(|e| e.to_string())
     }
 
+    /// Deletes (never saves) every session workspace, live or saved, whose id starts with
+    /// `prefix` and is not in `keep`: a project run's clone is only its helper's input (P5-05),
+    /// so nothing of it is worth the `session-wip` a normal cleanup would leave.
+    pub fn discard_sessions(&self, prefix: &str, keep: &[String]) {
+        for base in ["worktrees/sessions", "session-wip"] {
+            let Ok(entries) = std::fs::read_dir(self.root.join(base)) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with(prefix) && !keep.contains(&name) {
+                    let _ = std::fs::remove_dir_all(e.path());
+                }
+            }
+        }
+    }
+
     /// Recovery retains sessions re-adopted by the driver; only unknown sessions are orphaned.
     pub fn recover_sessions(&self, adopted: &[String]) {
         let dir = self.root.join("worktrees/sessions");

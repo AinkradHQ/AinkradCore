@@ -480,6 +480,7 @@ mod layout;
 
 mod read;
 
+mod discard_run;
 mod security;
 
 mod tls;

@@ -240,6 +240,10 @@ impl Session {
             tokio::task::spawn_blocking(move || super::facts::gather(&versions, active, own))
                 .await
                 .unwrap_or_default();
+        let can_clone = self.agent.is_some();
+        if let Some(caps) = facts.run_caps.as_mut() {
+            caps.can_clone = can_clone;
+        }
         if let Some(s) = shell {
             facts.tools.insert("terminal shell".to_owned(), s);
         }
