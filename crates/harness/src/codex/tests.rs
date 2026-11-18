@@ -478,7 +478,7 @@ fn slot_spec() -> Spec {
 #[test]
 fn a_tools_session_passes_precompact_and_sessionend_hooks_as_flags() {
     let flags = hook_flags(&slot_spec());
-    let cmd = r#""'/opt/ainkrad-runner' ainkrad-hook checkpoint '/run/a/tools.sock'""#;
+    let cmd = r#""'/opt/ainkrad-runner' hook checkpoint '/run/a/tools.sock'""#;
     assert_eq!(
         flags,
         [
@@ -499,7 +499,7 @@ fn a_tools_session_passes_precompact_and_sessionend_hooks_as_flags() {
 
 #[test]
 fn only_our_untrusted_session_flag_hooks_are_trusted() {
-    let ours = "'/x' ainkrad-hook checkpoint '/s'";
+    let ours = "'/x' hook checkpoint '/s'";
     let hook = |key: &str, source: &str, command: &str, status: &str, hash: &str| {
         json!({"key": key, "source": source, "handlerType": "command", "command": command,
             "trustStatus": status, "currentHash": hash})

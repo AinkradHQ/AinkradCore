@@ -22,7 +22,6 @@ use ainkrad_proto::v2::{
 use serde_json::Value;
 use tokio::sync::{Notify, oneshot, watch};
 
-pub mod hook;
 pub mod mcp;
 pub mod selftest;
 pub mod sock;

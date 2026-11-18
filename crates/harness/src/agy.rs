@@ -117,7 +117,7 @@ fn link_files(spec: &Spec) -> io::Result<()> {
 }
 
 /// The Brain checkpoint hook (B8-04): agy's `Stop` event (the loop ended) in the private home's
-/// `.gemini/config/hooks.json`, run as the runner's `ainkrad-hook checkpoint <socket>` on the
+/// `.gemini/config/hooks.json`, run as the runner's `hook checkpoint <socket>` on the
 /// session's own tools socket. agy has no pre-compaction or session-end event. Only a session with
 /// the tools slot gets it; otherwise a stale file is removed. Only the private home is written:
 /// the real `~/.gemini` is never read or touched. `link_files` made `.gemini/config` real.

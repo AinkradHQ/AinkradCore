@@ -40,7 +40,7 @@ fn launch(spec: &Spec) -> Launch {
 }
 
 /// The Brain checkpoint hooks (B8-04): `PreCompact` and `SessionEnd`, as `-c hooks.<Event>=...`
-/// session flags of this app-server process, running the runner's `ainkrad-hook checkpoint
+/// session flags of this app-server process, running the runner's `hook checkpoint
 /// <socket>` on the session's own tools socket. Only a session with the tools slot gets them. A
 /// session with the slot is sandboxed and so never warm (`work`): its app-server is its own, and
 /// the socket in the flag is its own. Codex runs a hook only once it is trusted: see
@@ -400,7 +400,11 @@ impl Codex {
             .proc
             .write(&json!({"jsonrpc": "2.0", "method": "initialized"}))
             .await?;
-        codex.trust_hooks(spec).await?;
+        // Never fails the start: untrusted hooks are skipped by Codex, and the Core-side
+        // checkpoint covers the session.
+        if let Err(e) = codex.trust_hooks(spec).await {
+            tracing::warn!(harness = "codex", error = %e, "could not trust the checkpoint hooks");
+        }
         let method = if resume.is_some() {
             "thread/resume"
         } else {
@@ -418,11 +422,9 @@ impl Codex {
     /// `config/batchWrite` of `hooks.state.<key>.trusted_hash` for each hook that is a session
     /// flag, ours (the exact command) and not yet trusted. Nothing else is trusted: a hook from the
     /// workspace or any other layer stays as Codex finds it. A failure leaves the hooks untrusted,
-    /// which Codex skips silently: the Core-side checkpoint covers the session, so this never
-    /// fails the start. The key is the same for every session of this `CODEX_HOME` and the hash
-    /// is not (the socket differs), so two sessions starting at once can overwrite each other's
-    /// trust: the earlier one loses its hooks, nothing else.
-    // ponytail: shared CODEX_HOME, last trust wins. A home per run is the upgrade.
+    /// which Codex skips silently; the caller logs it and carries on. `CODEX_HOME` is per
+    /// session (`~/.ainkrad-runner/.../sessions/<ref>`), so the trust written here is this
+    /// session's own and cannot collide with another's.
     async fn trust_hooks(&mut self, spec: &Spec) -> io::Result<()> {
         let flags = hook_flags(spec);
         if flags.is_empty() {

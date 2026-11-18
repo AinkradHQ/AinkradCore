@@ -86,7 +86,7 @@ fn a_tools_session_gets_a_stop_hook_in_its_private_home_only() {
     assert_eq!(hook["type"], "command");
     assert_eq!(
         hook["command"],
-        "'/opt/ainkrad-runner' ainkrad-hook checkpoint '/run/a/tools.sock'"
+        "'/opt/ainkrad-runner' hook checkpoint '/run/a/tools.sock'"
     );
     assert_eq!(hook["timeout"], 2);
     // Only `Stop`, and no credential anywhere in the file.
