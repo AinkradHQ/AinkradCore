@@ -116,6 +116,16 @@ async fn call(
     (status, serde_json::from_slice(&raw).unwrap_or(Value::Null))
 }
 
+/// A pre-set command row, written straight into the store.
+async fn command(fx: &Fx, id: &str, read_only: bool) {
+    sqlx::query("INSERT INTO leyline_commands (id, name, steps, read_only) VALUES (?1, ?1, '[\"uptime\"]', ?2)")
+        .bind(id)
+        .bind(i64::from(read_only))
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+}
+
 async fn add(fx: &Fx, name: &str, rule: &str) -> String {
     let body = json!({"name": name, "address": format!("{name}.example.com"), "username": "deploy", "ai_rule": rule});
     let (s, v) = call(fx, &fx.admin, Method::POST, "/hosts", Some(body)).await;
@@ -260,10 +270,9 @@ async fn read_only_hosts_refuse_an_ai_without_asking_anyone() {
     let fx = fx().await;
     add(&fx, "ro", "read_only").await;
     let (ai, _) = session(&fx, "as_ro").await;
-    let write = Action::Preset {
-        id: "c".into(),
-        read_only: false,
-    };
+    command(&fx, "lc_write", false).await;
+    command(&fx, "lc_read", true).await;
+    let write = Action::Preset("lc_write".into());
     for a in [
         exec(),
         Action::Terminal,
@@ -277,10 +286,7 @@ async fn read_only_hosts_refuse_an_ai_without_asking_anyone() {
             "{a:?}"
         );
     }
-    let read = Action::Preset {
-        id: "c".into(),
-        read_only: true,
-    };
+    let read = Action::Preset("lc_read".into());
     authorize(
         &fx.app,
         &ai,

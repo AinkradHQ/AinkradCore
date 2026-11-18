@@ -59,11 +59,9 @@ pub enum Action {
     Terminal,
     /// An ad-hoc command.
     Exec(String),
-    /// A pre-set command or runbook step, by command id.
-    Preset {
-        id: String,
-        read_only: bool,
-    },
+    /// A pre-set command, by command id. Whether it is read-only, and its steps, are read by the
+    /// gate from `leyline_commands`; a caller cannot say.
+    Preset(String),
     FileList(String),
     FileRead(String),
     FileWrite(String),
@@ -82,7 +80,7 @@ impl Action {
         match self {
             Self::Terminal => "leylineTerminal",
             Self::Exec(_) => "leylineExec",
-            Self::Preset { .. } => "leylineRunCommand",
+            Self::Preset(_) => "leylineRunCommand",
             Self::FileList(_) => "leylineListFiles",
             Self::FileRead(_) => "leylineReadFile",
             Self::FileWrite(_) => "leylineWriteFile",
@@ -96,11 +94,11 @@ impl Action {
     pub(crate) fn detail(&self) -> &str {
         match self {
             Self::Exec(s)
+            | Self::Preset(s)
             | Self::FileList(s)
             | Self::FileRead(s)
             | Self::FileWrite(s)
             | Self::Tunnel(s) => s,
-            Self::Preset { id, .. } => id,
             _ => "",
         }
     }
@@ -131,9 +129,10 @@ pub(crate) enum Verdict {
     Deny(&'static str),
 }
 
-/// The whole policy, in one table.
-pub(crate) fn verdict(who: &Principal, rule: Rule, action: &Action) -> Verdict {
-    use Action::{Direct, FileList, FileRead, Preset, Probe, Trust};
+/// The whole policy, in one table. `preset_ro`: the pre-set command of a `Preset` action is flagged
+/// read-only in the store (the gate looks it up; it is never an input).
+pub(crate) fn verdict(who: &Principal, rule: Rule, action: &Action, preset_ro: bool) -> Verdict {
+    use Action::{Direct, FileList, FileRead, Probe, Trust};
     match &who.0 {
         Who::Person(_) => Verdict::Allow,
         Who::Health if *action == Probe => Verdict::Allow,
@@ -142,13 +141,8 @@ pub(crate) fn verdict(who: &Principal, rule: Rule, action: &Action) -> Verdict {
             (Direct | Trust, _) => Verdict::Deny("only a person may do that"),
             (_, Rule::Allowed) => Verdict::Allow,
             (_, Rule::Ask) => Verdict::Ask,
-            (Probe | FileList(_) | FileRead(_), Rule::ReadOnly)
-            | (
-                Preset {
-                    read_only: true, ..
-                },
-                Rule::ReadOnly,
-            ) => Verdict::Allow,
+            (Probe | FileList(_) | FileRead(_), Rule::ReadOnly) => Verdict::Allow,
+            (Action::Preset(_), Rule::ReadOnly) if preset_ro => Verdict::Allow,
             _ => Verdict::Deny("this host is read-only for AI"),
         },
     }
@@ -166,19 +160,11 @@ mod tests {
         let person = Principal(Who::Person("d_1".into()));
         let ai = Principal(Who::Session("as_1".into()));
         let health = Principal::health();
-        let ro_cmd = Action::Preset {
-            id: "c".into(),
-            read_only: true,
-        };
-        let rw_cmd = Action::Preset {
-            id: "c".into(),
-            read_only: false,
-        };
+        let cmd = Action::Preset("c".into());
         let all = [
             Action::Terminal,
             Action::Exec("ls".into()),
-            ro_cmd.clone(),
-            rw_cmd.clone(),
+            cmd.clone(),
             Action::FileList("/".into()),
             Action::FileRead("/a".into()),
             Action::FileWrite("/a".into()),
@@ -189,32 +175,35 @@ mod tests {
         ];
         for rule in [ReadOnly, AskR, Allowed] {
             for a in &all {
-                // A person is always allowed; the person-only actions still need their routes' step-up.
-                assert_eq!(verdict(&person, rule, a), Allow, "{rule:?} {a:?}");
-                // Health probes and nothing else, on every rule.
-                let h = verdict(&health, rule, a);
-                assert_eq!(h == Allow, *a == Action::Probe, "{rule:?} {a:?}");
-                // An AI never trusts a key or leases Mac-direct, on any rule.
-                let v = verdict(&ai, rule, a);
-                if matches!(a, Action::Direct | Action::Trust) {
-                    assert!(matches!(v, Deny(_)), "{rule:?} {a:?}");
-                    continue;
-                }
-                let want = match rule {
-                    Allowed => Allow,
-                    AskR => Ask,
-                    ReadOnly => {
-                        let reads =
-                            matches!(a, Action::Probe | Action::FileList(_) | Action::FileRead(_))
-                                || *a == ro_cmd;
-                        if reads {
-                            Allow
-                        } else {
-                            Deny("this host is read-only for AI")
-                        }
+                for ro in [false, true] {
+                    // A person is always allowed; the person-only actions still need their routes' step-up.
+                    assert_eq!(verdict(&person, rule, a, ro), Allow, "{rule:?} {a:?}");
+                    // Health probes and nothing else, on every rule.
+                    let h = verdict(&health, rule, a, ro);
+                    assert_eq!(h == Allow, *a == Action::Probe, "{rule:?} {a:?}");
+                    // An AI never trusts a key or leases Mac-direct, on any rule.
+                    let v = verdict(&ai, rule, a, ro);
+                    if matches!(a, Action::Direct | Action::Trust) {
+                        assert!(matches!(v, Deny(_)), "{rule:?} {a:?}");
+                        continue;
                     }
-                };
-                assert_eq!(v, want, "{rule:?} {a:?}");
+                    let want = match rule {
+                        Allowed => Allow,
+                        AskR => Ask,
+                        ReadOnly => {
+                            let reads = matches!(
+                                a,
+                                Action::Probe | Action::FileList(_) | Action::FileRead(_)
+                            ) || (*a == cmd && ro);
+                            if reads {
+                                Allow
+                            } else {
+                                Deny("this host is read-only for AI")
+                            }
+                        }
+                    };
+                    assert_eq!(v, want, "{rule:?} {a:?} ro={ro}");
+                }
             }
         }
     }
