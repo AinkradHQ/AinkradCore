@@ -19,9 +19,71 @@ fn ws(repo: &str) -> Value {
     json!({"repo": repo, "base": "main", "branch": "citadel/X-1"})
 }
 
-/// A session working in `repo`, walking one pool per provider.
+/// A session working in `repo`, walking one pool per provider, in a project linked (1:1, as the
+/// Projects epic does) to the active room named after the repo's folder, when there is one.
 pub async fn session(fx: &Fx, repo: &str, providers: &[&str]) -> String {
+    let s = session_unlinked(fx, repo, providers).await;
+    let base = repo
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap()
+        .trim_end_matches(".git");
+    let room: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM brain_rooms WHERE lower(name) = lower(?) AND state = 'active'",
+    )
+    .bind(base)
+    .fetch_optional(&fx.app.pool)
+    .await
+    .unwrap();
+    if let Some(room) = room {
+        link_session(fx, &s, &room).await;
+    }
+    s
+}
+
+/// A session working in `repo` with no project: the name of its repo is all it has.
+pub async fn session_unlinked(fx: &Fx, repo: &str, providers: &[&str]) -> String {
     chain_session_in(fx, providers, Some(&ws(repo))).await
+}
+
+/// Links session `s` to `room`'s project (making one when the room has none: the link is 1:1).
+pub async fn link_session(fx: &Fx, s: &str, room: &str) {
+    let linked: Option<String> =
+        sqlx::query_scalar("SELECT project FROM brain_project_rooms WHERE room = ?")
+            .bind(room)
+            .fetch_optional(&fx.app.pool)
+            .await
+            .unwrap();
+    let id: i64 = match linked {
+        Some(p) => p.parse().unwrap(),
+        None => {
+            let n: i64 = sqlx::query_scalar("SELECT count(*) + 1 FROM core_projects")
+                .fetch_one(&fx.app.pool)
+                .await
+                .unwrap();
+            let id: i64 = sqlx::query_scalar(
+                "INSERT INTO core_projects (slug, name, source, created_at, updated_at) \
+                 VALUES (?, 'P', 'manual', '2026-11-18T00:00:00Z', '2026-11-18T00:00:00Z') RETURNING id",
+            )
+            .bind(format!("p{n}"))
+            .fetch_one(&fx.app.pool)
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO brain_project_rooms (project, room) VALUES (?, ?)")
+                .bind(id.to_string())
+                .bind(room)
+                .execute(&fx.app.pool)
+                .await
+                .unwrap();
+            id
+        }
+    };
+    sqlx::query("UPDATE core_agent_sessions SET project_id = ? WHERE id = ?")
+        .bind(id)
+        .bind(s)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
 }
 
 /// A Code Mode dispatcher call (the E2 path: catalogue, scope gate, audit).
@@ -48,7 +110,7 @@ pub async fn read(fx: &Fx, s: &str, o: &str, args: Value) -> Value {
 
 /// The Brain route as the session's synthetic caller, writes included (the handler itself, without
 /// the dispatcher's idempotency and audit row).
-async fn as_session(
+pub(super) async fn as_session(
     fx: &Fx,
     s: &str,
     method: Method,
@@ -89,7 +151,7 @@ pub async fn open_room(fx: &Fx, room: &str) {
 }
 
 /// Records in the room's file, as accepted/candidate/rejected would be.
-pub(super) async fn put_record(fx: &Fx, room: &str, id: &str, kind: &str, status: &str, body: &str) {
+pub async fn put_record(fx: &Fx, room: &str, id: &str, kind: &str, status: &str, body: &str) {
     let p = canon_pool(fx, room).await;
     sqlx::query(
         "INSERT INTO records (id, type, status, body, tags, source_ids, created_at) \
@@ -115,6 +177,88 @@ async fn ids(fx: &Fx, s: &str) -> Vec<String> {
 }
 
 pub const ALPHA: &str = "https://github.com/acme/Alpha.git";
+
+/// B2-05 (Sec): the room comes from the project-room link, never from a name.
+#[tokio::test]
+async fn room_visibility_follows_the_project_room_link_not_the_name() {
+    let fx = fx().await;
+    let alpha = committed_room_named(&fx, "Alpha", &[("A", "alpha text")]).await;
+    let twin = committed_room_named(&fx, "AlphaTwin", &[("T", "twin text")]).await;
+    exec(&fx, "UPDATE brain_rooms SET name = 'Alpha' WHERE id = ?", &twin).await;
+    assert_ne!(twin, alpha);
+    let beta = committed_room_named(&fx, "Beta", &[("B", "beta text")]).await;
+    // The linked room is visible, and only it: not the same-name room, not another room.
+    let linked = session_unlinked(&fx, "https://github.com/acme/Other.git", &["anthropic"]).await;
+    link_session(&fx, &linked, &twin).await;
+    assert_eq!(ids(&fx, &linked).await, std::slice::from_ref(&twin));
+    // A session whose repo and room share a name, with no link, sees nothing.
+    let unlinked = session_unlinked(&fx, ALPHA, &["anthropic"]).await;
+    assert!(ids(&fx, &unlinked).await.is_empty());
+    // A linked project does not see another project's room either.
+    assert!(!ids(&fx, &linked).await.contains(&alpha));
+    assert!(!ids(&fx, &linked).await.contains(&beta));
+}
+
+async fn exec(fx: &Fx, sql: &str, bind: &str) {
+    sqlx::query(sql)
+        .bind(bind)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_linked_room_is_hidden_when_archived_denied_unlinked_or_its_project_archived() {
+    let fx = fx().await;
+    let room = committed_room_named(&fx, "Alpha", &[("A", "alpha text")]).await;
+    let twin = committed_room_named(&fx, "AlphaTwin", &[("T", "twin text")]).await;
+    exec(&fx, "UPDATE brain_rooms SET name = 'Alpha' WHERE id = ?", &twin).await;
+    assert_ne!(twin, room);
+    let s = session_unlinked(&fx, ALPHA, &["anthropic"]).await;
+    link_session(&fx, &s, &room).await;
+    // Two active rooms with the one name: only the linked one.
+    assert_eq!(ids(&fx, &s).await, std::slice::from_ref(&room));
+    assert!(!ids(&fx, &s).await.contains(&twin));
+
+    // Policy denies the chain.
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("/rooms/{room}/policy"),
+        Some(json!({"model": "local_only"})),
+    )
+    .await;
+    assert!(ids(&fx, &s).await.is_empty());
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("/rooms/{room}/policy"),
+        Some(json!({"model": "cloud"})),
+    )
+    .await;
+    assert_eq!(ids(&fx, &s).await, std::slice::from_ref(&room));
+
+    // Archived project revokes its room; active again restores it.
+    exec(&fx, "UPDATE core_projects SET state = 'archived' WHERE CAST(id AS TEXT) = (SELECT project FROM brain_project_rooms WHERE room = ?)", &room).await;
+    assert!(ids(&fx, &s).await.is_empty());
+    exec(&fx, "UPDATE core_projects SET state = 'active' WHERE CAST(id AS TEXT) = (SELECT project FROM brain_project_rooms WHERE room = ?)", &room).await;
+    assert_eq!(ids(&fx, &s).await, std::slice::from_ref(&room));
+
+    // Unlinking hides it from the live session.
+    exec(&fx, "DELETE FROM brain_project_rooms WHERE room = ?", &room).await;
+    assert!(ids(&fx, &s).await.is_empty());
+    link_session(&fx, &s, &room).await;
+    assert_eq!(ids(&fx, &s).await, std::slice::from_ref(&room));
+
+    // Archived room is hidden.
+    exec(
+        &fx,
+        "UPDATE brain_rooms SET state = 'archived' WHERE id = ?",
+        &room,
+    )
+    .await;
+    assert!(ids(&fx, &s).await.is_empty());
+}
 
 #[tokio::test]
 async fn a_session_sees_only_the_rooms_its_project_matches() {
@@ -543,12 +687,17 @@ async fn a_proposal_waits_in_the_inbox_and_is_never_accepted() {
         (Some("candidate"), Some(false))
     );
     let id = v["id"].as_str().unwrap().to_owned();
-    // The same statement again adds nothing.
+    // The same statement again adds nothing; the match is a candidate, not memory, so no id.
     let (_, again) = as_session(&fx, &s, Method::POST, &path, Some(body)).await;
     assert_eq!(
         (again["id"].as_str(), again["duplicate"].as_bool()),
-        (Some(id.as_str()), Some(true))
+        (Some(""), Some(true))
     );
+    assert!(!again.to_string().contains(&id));
+    // An unknown source id answers exactly like any other invalid proposal.
+    let (_, bad_type) = as_session(&fx, &s, Method::POST, &path, Some(json!({"type": "fact", "body": "x", "tags": vec!["a"; 9]}))).await;
+    let (st, bad_src) = as_session(&fx, &s, Method::POST, &path, Some(json!({"type": "fact", "body": "x", "sources": ["no-such-item"]}))).await;
+    assert_eq!((st, &bad_src), (StatusCode::BAD_REQUEST, &bad_type));
 
     let inbox = ok(&fx, Method::GET, &format!("/rooms/{room}/inbox"), None).await;
     let items = inbox["items"].as_array().unwrap();
@@ -717,14 +866,14 @@ async fn no_ai_op_returns_source_text_except_evidence_for_a_cited_pair() {
     let s = session(&fx, ALPHA, &["anthropic"]).await;
 
     // Every brainAi op, classified. A new op fails this until it is added and checked.
-    let live: Vec<String> = fx
-        .app
-        .catalogue()
-        .ops
-        .keys()
-        .filter(|k| k.starts_with("brainAi"))
-        .cloned()
+    // The list comes from the committed allow-list, so an op added there fails this until covered.
+    let live: Vec<String> = ainkrad_core_server::ops_catalog::allow_list()
+        .unwrap()
+        .into_iter()
+        .map(|a| a.op)
+        .filter(|o| o.starts_with("brainAi"))
         .collect();
+    assert!(!live.is_empty());
     let calls: Vec<(&str, Value)> = vec![
         ("brainAiRooms", json!({})),
         ("brainAiSearch", json!({"q": "pipeline"})),
@@ -782,6 +931,16 @@ async fn no_ai_op_returns_source_text_except_evidence_for_a_cited_pair() {
     let t = e["text"].as_str().unwrap();
     assert!(t.contains(MARK) && t.starts_with(OPEN) && t.ends_with(CLOSE), "{t}");
     assert_eq!((e["compacted"].as_bool(), e["record"].as_str()), (Some(false), Some("rec-live")));
+    // Each successful read leaves an audit row with ids only.
+    let rows: Vec<String> = sqlx::query_scalar("SELECT details FROM audit_events WHERE action = 'brain.ai.evidence'")
+        .fetch_all(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    for want in [room.as_str(), "rec-live", cited, s.as_str()] {
+        assert!(rows[0].contains(want), "{want} not in {}", rows[0]);
+    }
+    assert!(!rows[0].contains(MARK));
     for (rec, src) in [
         ("rec-live", other),     // a source the record does not cite
         ("rec-none", cited),     // a record that cites nothing

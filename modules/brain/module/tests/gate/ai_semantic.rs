@@ -18,6 +18,8 @@ use super::common::*;
 #[derive(Default)]
 pub struct Fake {
     pub seen: Mutex<Vec<String>>,
+    /// What came in through `embed_query` (the search question), apart from stored text.
+    pub queries: Mutex<Vec<String>>,
     pub hold: AtomicBool,
 }
 
@@ -25,11 +27,21 @@ impl Embedder for Fake {
     fn model_id(&self) -> &str {
         "fake-angles"
     }
+    fn embed_query(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        self.queries.lock().unwrap().extend(texts.iter().cloned());
+        self.vectors(texts)
+    }
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        self.seen.lock().unwrap().extend(texts.iter().cloned());
+        self.vectors(texts)
+    }
+}
+
+impl Fake {
+    fn vectors(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         while self.hold.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(5));
         }
-        self.seen.lock().unwrap().extend(texts.iter().cloned());
         Ok(texts
             .iter()
             .map(|t| {
@@ -49,18 +61,11 @@ impl Embedder for Fake {
 /// Alpha (visible to the session): a paraphrase of the query and an unrelated note.
 async fn setup(brain: Brain) -> (Fx, String, String) {
     let fx = fx_with(brain, 1).await;
-    let alpha = committed_room_named(
-        &fx,
-        "Alpha",
-        &[
-            ("Keys", "rotate the signing keys ang=10 "),
-            ("Lunch", "pasta menu ang=90 "),
-        ],
-    )
-    .await;
-    // The memory layer: the facts the search may rank. The sources above repeat their angles.
-    put_record(&fx, &alpha, "rec-keys", "fact", "accepted", "rotate the signing keys ang=10 ").await;
-    put_record(&fx, &alpha, "rec-lunch", "fact", "accepted", "pasta menu ang=90 ").await;
+    let alpha = committed_room_named(&fx, "Alpha", &[("Keys", "SRCMARK-7f3a ang=20 ")]).await;
+    put_record(&fx, &alpha, "r1", "fact", "accepted", "rotate the signing keys ang=10 ").await;
+    put_record(&fx, &alpha, "r2", "fact", "accepted", "pasta menu ang=90 ").await;
+    // Not memory: a candidate (and the source above is never searched by meaning).
+    put_record(&fx, &alpha, "r3", "fact", "candidate", "ang=20 credentials draft ").await;
     let s = session(&fx, ALPHA, &["anthropic"]).await;
     open_room(&fx, &alpha).await;
     (fx, alpha, s)
@@ -94,7 +99,7 @@ async fn meaning_ranks_a_paraphrase_that_keywords_miss_and_never_reads_hidden_ro
     let (fx, _alpha, s) = setup(Brain::with_embedder(fake.clone())).await;
     // A room the session cannot see, with text that would match best.
     let beta = committed_room_named(&fx, "Beta", &[("Secret", "hidden ang=20 ")]).await;
-    put_record(&fx, &beta, "rec-hidden", "fact", "accepted", "hidden ang=20 ").await;
+    put_record(&fx, &beta, "b1", "fact", "accepted", "hidden ang=20 ").await;
     // Committing Beta embedded it (centroids); what matters is what searching reads from now on.
     fake.seen.lock().unwrap().clear();
     // Keywords alone miss the paraphrase; the first meaning search queues the vectors.
@@ -108,9 +113,18 @@ async fn meaning_ranks_a_paraphrase_that_keywords_miss_and_never_reads_hidden_ro
     assert_eq!(v["ranked_by"], "both");
     let hits = v["hits"].as_array().unwrap();
     assert!(hits[0]["text"].as_str().unwrap().contains("signing keys"));
-    assert_eq!(hits[0]["kind"], "record");
+    assert!(hits.iter().all(|h| h["kind"] == "record"));
+    assert!(!v.to_string().contains("credentials draft"));
     assert!(hits[0]["text"].as_str().unwrap().starts_with(OPEN));
     assert_eq!(v["complete"], true);
+    // The source sits right on the query's angle, so only the memory-only rule keeps it out: in
+    // every hit of both meaning-using modes ("auto" ranks by both), not just the first.
+    for mode in ["auto", "meaning"] {
+        let r = search(&fx, &s, mode).await;
+        for h in r["hits"].as_array().unwrap() {
+            assert!(!h.to_string().contains("SRCMARK-7f3a"), "{mode}: {h}");
+        }
+    }
     assert!(!v.to_string().contains(&beta));
     let m = search(&fx, &s, "meaning").await;
     assert_eq!(m["ranked_by"], "meaning");
@@ -120,8 +134,31 @@ async fn meaning_ranks_a_paraphrase_that_keywords_miss_and_never_reads_hidden_ro
             .unwrap()
             .contains("signing keys")
     );
-    // The unrelated note is below the cut-off; the hidden room's text was never embedded.
+    // The unrelated note is outside the margin of the best hit; the hidden room's text was never embedded.
     assert_eq!(m["hits"].as_array().unwrap().len(), 1);
+    // The question was embedded as a query, never as a passage; stored text the other way round.
+    assert!(
+        fake.queries
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|t| t.contains("credential renewal"))
+    );
+    assert!(
+        !fake
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|t| t.contains("credential renewal"))
+    );
+    assert!(
+        fake.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|t| t.contains("signing keys"))
+    );
     assert!(
         !fake
             .seen

@@ -121,7 +121,7 @@ impl Brain {
         let (tx, rx) = oneshot::channel();
         self.inner.sem.enqueue(async move {
             b.apply_threads(&app).await;
-            let r = tokio::task::spawn_blocking(move || e.embed(&text)).await;
+            let r = tokio::task::spawn_blocking(move || e.embed_query(&text)).await;
             let _ = tx.send(r.ok().and_then(Result::ok).and_then(|mut v| v.pop()));
         });
         let v = tokio::time::timeout(wait, rx).await.ok()?.ok()??;

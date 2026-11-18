@@ -47,7 +47,7 @@ use crate::{Brain, code, rand_id, record};
 
 /// The marker in `records.distil` of a candidate an AI session proposed: `ai:<session id>`.
 pub(crate) const PROPOSED: &str = "ai:";
-const SESSION: &str = "code_mode:";
+pub(crate) const SESSION: &str = "code_mode:";
 const DEFAULT_LIMIT: u32 = 10;
 const MAX_LIMIT: u32 = 25;
 const MAX_BODY: usize = 2000;
@@ -58,6 +58,7 @@ pub(crate) const LIST_BODY: usize = 400;
 /// Candidates one session may propose into one room.
 /// ponytail: per room file, not a session-wide counter; a control-plane table if that is needed.
 const PROPOSE_CAP: i64 = 20;
+const PROPOSE_INVALID: &str = "a known type, a body of 1 to 2000 characters, at most 8 tags of 1 to 40 and 20 sources that are in this room";
 /// Rooms one search reads.
 const MAX_ROOMS: usize = 20;
 
@@ -474,7 +475,7 @@ pub(crate) async fn evidence(
     State(app): State<App>,
     Extension(b): Extension<Brain>,
     Extension(me): Extension<Caller>,
-    Path((room, record, source)): Path<(String, String, String)>,
+    Path((room, record_id, source)): Path<(String, String, String)>,
 ) -> ApiResult<AiEvidence> {
     let session = session_of(&me)?;
     let v = room_of(&app, &session, &room).await?;
@@ -490,7 +491,7 @@ pub(crate) async fn evidence(
              OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(m.source_ids) THEN m.source_ids ELSE '[]' END) j \
                         WHERE j.value = s.item_id))",
     )
-    .bind(&record)
+    .bind(&record_id)
     .bind(&source)
     .fetch_optional(a.pool())
     .await;
@@ -509,9 +510,19 @@ pub(crate) async fn evidence(
             cut_,
         )
     };
+    // Ids only: who read which source, through which record.
+    let mut ctl = begin_write(&app.pool).await?;
+    record(
+        &mut ctl,
+        "brain.ai.evidence",
+        json!({"room": v.id, "record": record_id, "source": source, "session": session}),
+        None,
+    )
+    .await?;
+    ctl.commit().await?;
     Ok(Json(AiEvidence {
         room: v.id,
-        record,
+        record: record_id,
         source,
         text,
         truncated,
@@ -568,9 +579,7 @@ pub(crate) async fn propose(
             .all(|t| (1..=40).contains(&t.chars().count()))
         && req.sources.len() <= 20;
     if !ok {
-        return Err(ApiError::bad_request(
-            "a known type, a body of 1 to 2000 characters, at most 8 tags of 1 to 40 and 20 sources",
-        ));
+        return Err(ApiError::bad_request(PROPOSE_INVALID));
     }
     let v = room_of(&app, &session, &room).await?;
     let a = open_room(&app, &b, &v.id).await?;
@@ -624,7 +633,11 @@ async fn land(
             .fetch_one(&mut *tx)
             .await?;
         if known == 0 {
-            return Err(ApiError::bad_request("a source is not in this room"));
+            // The same 400 as any other invalid proposal: no oracle for which ids exist.
+            // ponytail: a session may cite any source id of a room it sees; restricting it to ids
+            // it read through record.sources / evidence needs per-session tracking. The Inbox
+            // shows the cited sources to the reviewer (plan note).
+            return Err(ApiError::bad_request(PROPOSE_INVALID));
         }
     }
     let same: Option<String> =
@@ -634,7 +647,13 @@ async fn land(
             .fetch_optional(&mut *tx)
             .await?;
     if let Some(id) = same {
-        return Ok((id, None));
+        // The id only when the match is memory: a candidate, rejected or archived record is not
+        // something an AI session may learn exists.
+        let in_memory: i64 = sqlx::query_scalar("SELECT count(*) FROM memory WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&mut *tx)
+            .await?;
+        return Ok((if in_memory > 0 { id } else { String::new() }, None));
     }
     let marker = format!("{PROPOSED}{session}");
     let mine: i64 = sqlx::query_scalar("SELECT count(*) FROM records WHERE distil = ?")
