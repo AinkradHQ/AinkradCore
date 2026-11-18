@@ -162,6 +162,7 @@ use super::{
         projects::run_spec::save,
         projects::run_spec::versions,
         projects::run_spec::version,
+        projects::fetch_now,
         secrets::list,
         secrets::create,
         secrets::rotate,
