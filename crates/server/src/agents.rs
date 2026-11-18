@@ -1050,15 +1050,24 @@ impl Agents {
     }
 
     /// Holds `e` under lease `id` (a `l_…`), dropping what has expired; `false` when the table
-    /// is full.
-    pub(crate) fn stash(&self, id: &str, e: Ephemeral, now: i64) -> bool {
+    /// is full. Public for a module that mints a single-use lease for one runner outside a
+    /// secret's stored scope (Leyline's Mac-direct, from a value it opened with
+    /// `secrets::open_for_module`); redeemed once, by that runner, through the broker's redeem
+    /// route, which checks `secrets.mode` first.
+    pub fn stash(&self, id: &str, e: Ephemeral, now: i64) -> bool {
         let mut held = self.ephemeral.lock().unwrap();
         held.retain(|_, v| v.expires > now);
         if held.len() >= EPHEMERAL_MAX {
             return false;
         }
-        held.insert(crate::auth::crypto::sha256(id.as_bytes()), e);
-        true
+        match held.entry(crate::auth::crypto::sha256(id.as_bytes())) {
+            // An id collision must never replace another runner's live credential.
+            std::collections::hash_map::Entry::Occupied(_) => false,
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(e);
+                true
+            }
+        }
     }
 
     /// The credential under lease `id` if it is `runner`'s and live; it is removed either way a
@@ -1090,6 +1099,10 @@ mod tests {
     fn a_credential_is_redeemed_once_by_its_runner_before_it_expires() {
         let a = Agents::new(AgentsConfig::default());
         assert!(a.stash("l_one", held("d_a", 100), 0));
+        assert!(
+            !a.stash("l_one", held("d_b", 100), 0),
+            "a collision never replaces"
+        );
         // Another runner does not find it, and does not spend it.
         assert!(a.take_ephemeral("l_one", "d_b", 1).is_none());
         assert!(a.take_ephemeral("l_two", "d_a", 1).is_none());

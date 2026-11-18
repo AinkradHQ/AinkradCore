@@ -20,6 +20,14 @@
     {"op": "loreAiCreate", "risk": "write", "summary": "Create a Lore note in this session's project, or a personal note when it has none. It cannot go anywhere else."},
     {"op": "loreAiAppend", "risk": "write", "summary": "Add text at the end of a Lore note of this session's scope. The old text is kept as a version before the session's first edit."},
     {"op": "loreAiEdit", "risk": "write", "summary": "Replace text that occurs exactly once in a Lore note of this session's scope; no match changes nothing. The old text is kept as a version before the session's first edit."},
-    {"op": "loreAiTrash", "risk": "risky", "summary": "Move a Lore note of this session's scope to the trash (nothing is deleted; a person restores it). Waits for a person's approval."}
+    {"op": "loreAiTrash", "risk": "risky", "summary": "Move a Lore note of this session's scope to the trash (nothing is deleted; a person restores it). Waits for a person's approval."},
+    {"op": "leylineListHosts", "risk": "read", "summary": "List the SSH hosts in Leyline: address, user, group, tags, roles and each host's AI rule (read_only, ask or allowed). Never key material."},
+    {"op": "leylineGetHost", "risk": "read", "summary": "Read one Leyline host by id or unique label: its facts, AI rule and project roles. Never key material."},
+    {"op": "leylineListCommands", "risk": "read", "summary": "List the pre-set Leyline commands: steps, which hosts they are for, and whether they are read-only."},
+    {"op": "leylineAiRunCommand", "risk": "write", "summary": "Run a pre-set command on a host. The host's AI rule decides: read_only runs only read-only commands, ask waits for a person, allowed runs. Returns a run id."},
+    {"op": "leylineExec", "risk": "risky", "summary": "Run one command line on a host over SSH. Refused on a read_only host; on an ask host a person approves it first. Returns a run id."},
+    {"op": "leylineAiGetRun", "risk": "read", "summary": "Read one of this session's Leyline runs: its state and each host's result. Output comes back as outside data."},
+    {"op": "leylineListFiles", "risk": "read", "summary": "List a directory on a host over SFTP, as outside data. The host's AI rule decides (allowed on read_only hosts)."},
+    {"op": "leylineReadFile", "risk": "read", "summary": "Read a regular file of at most 1 MB on a host over SFTP, as outside data. The host's AI rule decides (allowed on read_only hosts)."}
   ]
 }

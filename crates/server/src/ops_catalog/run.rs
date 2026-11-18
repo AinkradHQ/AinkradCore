@@ -25,6 +25,16 @@ use super::{Op, Risk, args, session_principal};
 use crate::api::App;
 use crate::api::v1::{Caller, Client};
 
+tokio::task_local! {
+    static APPROVAL_LEFT: Duration;
+}
+
+/// How long the Code Mode call now running still waits for a person (the `wait_ms` and the
+/// approval limit), for a module route that asks one itself. `None` outside a Code Mode call.
+pub fn approval_left() -> Option<Duration> {
+    APPROVAL_LEFT.try_with(|d| *d).ok()
+}
+
 /// A flag: absent or null is false.
 fn flag(v: &Value) -> Result<bool, ()> {
     match v {
@@ -256,7 +266,11 @@ async fn guarded(
     lim: &Limits,
     (method, hash, args): (&Method, &str, &Value),
 ) -> Done {
-    if op.risk != Risk::Risky {
+    // A module route that asks a person itself (Leyline's gate) is not parked twice: its own
+    // policy decides, and its approval is the same Core-held `cm_` request (T11).
+    if op.risk != Risk::Risky
+        || crate::api::v1::scopes::self_approved(method, &op.path, &app.modules)
+    {
         return send(app, op, req, lim, method).await;
     }
     let reason = if crate::api::v1::scopes::destructive(method, &op.path, &app.modules) {
@@ -357,7 +371,7 @@ async fn send(app: &App, op: &Op, req: &Req<'_>, lim: &Limits, method: &Method) 
         .header(header::HOST, &app.host)
         .extension(Caller {
             device: principal.device,
-            session: format!("code_mode:{session}"),
+            session: format!("{}{session}", super::SESSION_PREFIX),
         })
         .extension(Client("code_mode".to_owned()));
     if req.body.is_some() {
@@ -367,11 +381,19 @@ async fn send(app: &App, op: &Op, req: &Req<'_>, lim: &Limits, method: &Method) 
     let Ok(request) = request else {
         return deny("bad_args", "not a valid target", Some(op));
     };
-    let sent = tokio::time::timeout(
-        lim.call_wall,
+    // A route that may wait for a person inside its handler gets that wait on top of its time.
+    let wall = if crate::api::v1::scopes::self_approved(method, &op.path, &app.modules) {
+        lim.call_wall + req.approval
+    } else {
+        lim.call_wall
+    };
+    // The handler learns how long this caller still waits, so an approval it asks for is never
+    // held past it (`approval_left`).
+    let call = APPROVAL_LEFT.scope(
+        req.approval,
         crate::api::v1::router(app.clone()).oneshot(request),
-    )
-    .await;
+    );
+    let sent = tokio::time::timeout(wall, call).await;
     drop(flight);
     let fail = |code: &str, msg: &str| Done {
         op: Some((op.id.clone(), op.risk)),

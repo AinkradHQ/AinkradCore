@@ -34,8 +34,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ainkrad_proto::v2::{
-    DriverInfo, ErrorCode, ExecResult, MAX_SSH_HOPS, OP_EXEC_RUN, OP_SSH_EXEC, SshExec, SshHop,
-    StreamError,
+    DriverInfo, ErrorCode, ExecResult, FEATURE_PTY_SSH, MAX_SSH_HOPS, OP_EXEC_RUN,
+    OP_SSH_AGENT_DROP, OP_SSH_AGENT_LOAD, OP_SSH_EXEC, SshExec, SshHop, StreamError,
 };
 use russh::client::{self, Handle, Handler};
 use russh::keys::{
@@ -75,7 +75,9 @@ const HOST_KEYS: &[Algorithm] = &[
     },
 ];
 
-fn config() -> Arc<client::Config> {
+/// `keepalive`: an interactive terminal pings a silent host (and gives up on a dead link); a command
+/// is left alone, since its own deadline covers it.
+fn config(keepalive: bool) -> Arc<client::Config> {
     Arc::new(client::Config {
         // kex, ciphers, MACs and compression stay russh's defaults (SHA-2, AEAD/CTR, none); a test
         // pins that no SHA-1/CBC/DSA name is in them.
@@ -86,6 +88,8 @@ fn config() -> Arc<client::Config> {
         // No russh inactivity timeout: it would drop a command that is silent for longer than it,
         // under the exec ceiling. Idle connections are closed by the pool's sweeper.
         inactivity_timeout: None,
+        keepalive_interval: keepalive.then_some(Duration::from_secs(30)),
+        keepalive_max: 3,
         ..client::Config::default()
     })
 }
@@ -122,8 +126,12 @@ pub struct SshDriver {
     // if that ever costs.
     pool: Pool,
     idle: Duration,
+    /// The runner binary `ssh-pty` terminals start; unset, this process's own executable.
+    bin: Option<std::path::PathBuf>,
     /// The most bytes one SFTP transfer moves (`SFTP_MAX_BYTES`; a test lowers it).
     cap: u64,
+    /// Mac-direct agents (Y6-01).
+    agents: Arc<agent::Agents>,
 }
 
 pub(super) fn fail(code: ErrorCode, m: impl Into<String>) -> StreamError {
@@ -138,12 +146,13 @@ fn plain(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && !s.chars().any(|c| c.is_control() || c.is_whitespace())
 }
 
-/// A hostname, IPv4 or IPv6 literal: nothing that could read as another field.
+/// A hostname, IPv4 or IPv6 literal (with a `%zone`): nothing that could read as another field. The
+/// same rule as Leyline's `valid::address` (255 bytes, `. : % _ -`); a test pins the two together.
 fn host_ok(h: &str) -> bool {
     !h.is_empty()
-        && h.len() <= 253
+        && h.len() <= 255
         && !h.starts_with('-')
-        && (h.bytes()).all(|b| b.is_ascii_alphanumeric() || b".-:_".contains(&b))
+        && (h.bytes()).all(|b| b.is_ascii_alphanumeric() || b".-:_%".contains(&b))
 }
 
 /// A portable POSIX user name.
@@ -190,8 +199,17 @@ impl SshDriver {
             redeem,
             pool: Pool::default(),
             idle: IDLE,
+            bin: None,
             cap: ainkrad_proto::v2::SFTP_MAX_BYTES,
+            agents: Arc::default(),
         }
+    }
+
+    /// Tests run inside the test binary: the real `ainkrad-runner` is what `ssh-pty` must start.
+    #[cfg(test)]
+    pub(in crate::v2) fn with_bin(mut self, bin: std::path::PathBuf) -> Self {
+        self.bin = Some(bin);
+        self
     }
 
     #[cfg(test)]
@@ -216,6 +234,8 @@ impl SshDriver {
                 name: DRIVER.to_owned(),
                 commands: std::iter::once(OP_SSH_EXEC)
                     .chain(sftp::OPS)
+                    .chain([OP_SSH_AGENT_LOAD, OP_SSH_AGENT_DROP])
+                    .chain([FEATURE_PTY_SSH])
                     .map(str::to_owned)
                     .collect(),
                 capacity: e.capacity,
@@ -279,6 +299,14 @@ impl SshDriver {
 
     /// A key from its lease, parsed. Never logged; errors are fixed text.
     async fn load_key(&self, lease: &str) -> Result<PrivateKey, StreamError> {
+        let text = self.key_text(lease).await?;
+        parse_key(&text).map_err(|m| fail(ErrorCode::SshAuthFailed, m))
+    }
+
+    /// The leased key's OpenSSH text. A lease is redeemed once: whoever calls this holds the key.
+    /// Delivery (`file` or `env`) is ignored on purpose: the key is only ever in this memory, and is
+    /// then handed on over a pipe or used here, never written to a file or an environment.
+    async fn key_text(&self, lease: &str) -> Result<Zeroizing<String>, StreamError> {
         let auth = |m: String| fail(ErrorCode::SshAuthFailed, self.exec.redact(&m));
         let leased = (self.redeem)(lease.to_owned())
             .await
@@ -296,89 +324,14 @@ impl SshDriver {
         };
         let text =
             std::str::from_utf8(&bytes).map_err(|_| auth("the leased key is not text".into()))?;
-        russh::keys::decode_secret_key(text, None)
-            .map_err(|_| auth("the leased key is not a usable unencrypted private key".into()))
+        Ok(Zeroizing::new(text.to_owned()))
     }
 
-    /// Connects hop by hop; each hop's host key is verified before its authentication.
+    /// Connects hop by hop with each hop's key; each hop's host key is verified before its
+    /// authentication.
     async fn dial(&self, chain: &[&SshHop], keys: Vec<PrivateKey>) -> Result<Conn, StreamError> {
-        let cfg = config();
-        let mut handles: Vec<Handle<Verify>> = Vec::new();
-        let mut host_keys = Vec::new();
-        for (i, (hop, key)) in chain.iter().zip(keys).enumerate() {
-            let at = |m: String| {
-                let m = self.exec.redact(&format!("hop {i}: {m}"));
-                fail(ErrorCode::SshFailed, m)
-            };
-            let seen = Arc::new(Mutex::new(None));
-            let verify = Verify {
-                pinned: hop.pinned_keys.clone(),
-                seen: Arc::clone(&seen),
-            };
-            let connected = match handles.last() {
-                None => {
-                    let tcp = TcpStream::connect((hop.host.as_str(), hop.port))
-                        .await
-                        .map_err(|e| at(format!("cannot connect: {e}")))?;
-                    client::connect_stream(Arc::clone(&cfg), tcp, verify).await
-                }
-                Some(prev) => {
-                    let ch = prev
-                        .channel_open_direct_tcpip(
-                            hop.host.clone(),
-                            u32::from(hop.port),
-                            "127.0.0.1",
-                            0,
-                        )
-                        .await
-                        .map_err(|e| at(format!("the previous hop cannot reach it: {e}")))?;
-                    client::connect_stream(Arc::clone(&cfg), ch.into_stream(), verify).await
-                }
-            };
-            let mut handle = match connected {
-                Ok(handle) => handle,
-                Err(e) => {
-                    let presented = seen.lock().unwrap().clone();
-                    return Err(match presented {
-                        Some(fp) if !hop.pinned_keys.contains(&fp) => {
-                            host_key_refusal(i, hop.pinned_keys.is_empty(), fp)
-                        }
-                        _ => at(format!("the connection failed: {e}")),
-                    });
-                }
-            };
-            // Only reachable after `check_server_key` accepted this hop.
-            host_keys.extend(seen.lock().unwrap().clone());
-            self.authenticate(&mut handle, &hop.user, key, i).await?;
-            handles.push(handle);
-        }
-        let handle = handles
-            .pop()
-            .ok_or_else(|| fail(ErrorCode::Internal, "an empty chain"))?;
-        Ok(Conn {
-            handle,
-            _jumps: handles,
-            host_keys,
-            used: Mutex::new(Instant::now()),
-            busy: AtomicUsize::new(0),
-        })
-    }
-
-    /// One `publickey` attempt; `key` is dropped here.
-    async fn authenticate(
-        &self,
-        handle: &mut Handle<Verify>,
-        user: &str,
-        key: PrivateKey,
-        hop: usize,
-    ) -> Result<(), StreamError> {
-        let denied = |m: &str| fail(ErrorCode::SshAuthFailed, format!("hop {hop}: {m}"));
-        let key = PrivateKeyWithHashAlg::new(Arc::new(key), None);
-        match handle.authenticate_publickey(user, key).await {
-            Ok(r) if r.success() => Ok(()),
-            Ok(_) => Err(denied("the host refused the key")),
-            Err(_) => Err(denied("the connection ended during authentication")),
-        }
+        let mut auth = KeyAuth(keys.into());
+        dial_chain(chain, config(false), &mut auth, &|m| self.exec.redact(&m)).await
     }
 
     /// The command on `conn`, to its end, `end`, or `cancel`.
@@ -454,6 +407,123 @@ impl SshDriver {
     }
 }
 
+/// How one hop is authenticated, after its host key was accepted.
+trait HopAuth {
+    fn authenticate(
+        &mut self,
+        handle: &mut Handle<Verify>,
+        hop: &SshHop,
+        index: usize,
+    ) -> impl std::future::Future<Output = Result<(), StreamError>> + Send;
+}
+
+/// `ssh.exec`: one `publickey` attempt per hop, with that hop's key.
+struct KeyAuth(std::collections::VecDeque<PrivateKey>);
+
+impl HopAuth for KeyAuth {
+    async fn authenticate(
+        &mut self,
+        handle: &mut Handle<Verify>,
+        hop: &SshHop,
+        index: usize,
+    ) -> Result<(), StreamError> {
+        let key = self
+            .0
+            .pop_front()
+            .ok_or_else(|| fail(ErrorCode::Internal, "a hop without a key"))?;
+        publickey(handle, &hop.user, key, index).await
+    }
+}
+
+/// One `publickey` attempt; `key` is dropped here.
+async fn publickey(
+    handle: &mut Handle<Verify>,
+    user: &str,
+    key: PrivateKey,
+    hop: usize,
+) -> Result<(), StreamError> {
+    let denied = |m: &str| fail(ErrorCode::SshAuthFailed, format!("hop {hop}: {m}"));
+    let key = PrivateKeyWithHashAlg::new(Arc::new(key), None);
+    match handle.authenticate_publickey(user, key).await {
+        Ok(r) if r.success() => Ok(()),
+        Ok(_) => Err(denied("the host refused the key")),
+        Err(_) => Err(denied("the connection ended during authentication")),
+    }
+}
+
+/// An OpenSSH private key, unencrypted. The error is fixed text.
+fn parse_key(text: &str) -> Result<PrivateKey, &'static str> {
+    russh::keys::decode_secret_key(text, None)
+        .map_err(|_| "the leased key is not a usable unencrypted private key")
+}
+
+/// Connects hop by hop (each next hop is a `direct-tcpip` channel through the previous one); each
+/// hop's host key is verified against its pins before `auth` is asked to authenticate it. `redact`
+/// cleans a failure's text.
+async fn dial_chain(
+    chain: &[&SshHop],
+    cfg: Arc<client::Config>,
+    auth: &mut impl HopAuth,
+    redact: &(dyn Fn(String) -> String + Sync),
+) -> Result<Conn, StreamError> {
+    let mut handles: Vec<Handle<Verify>> = Vec::new();
+    let mut host_keys = Vec::new();
+    for (i, hop) in chain.iter().enumerate() {
+        let at = |m: String| fail(ErrorCode::SshFailed, redact(format!("hop {i}: {m}")));
+        let seen = Arc::new(Mutex::new(None));
+        let verify = Verify {
+            pinned: hop.pinned_keys.clone(),
+            seen: Arc::clone(&seen),
+        };
+        let connected = match handles.last() {
+            None => {
+                let tcp = TcpStream::connect((hop.host.as_str(), hop.port))
+                    .await
+                    .map_err(|e| at(format!("cannot connect: {e}")))?;
+                client::connect_stream(Arc::clone(&cfg), tcp, verify).await
+            }
+            Some(prev) => {
+                let ch = prev
+                    .channel_open_direct_tcpip(
+                        hop.host.clone(),
+                        u32::from(hop.port),
+                        "127.0.0.1",
+                        0,
+                    )
+                    .await
+                    .map_err(|e| at(format!("the previous hop cannot reach it: {e}")))?;
+                client::connect_stream(Arc::clone(&cfg), ch.into_stream(), verify).await
+            }
+        };
+        let mut handle = match connected {
+            Ok(handle) => handle,
+            Err(e) => {
+                let presented = seen.lock().unwrap().clone();
+                return Err(match presented {
+                    Some(fp) if !hop.pinned_keys.contains(&fp) => {
+                        host_key_refusal(i, hop.pinned_keys.is_empty(), fp)
+                    }
+                    _ => at(format!("the connection failed: {e}")),
+                });
+            }
+        };
+        // Only reachable after `check_server_key` accepted this hop.
+        host_keys.extend(seen.lock().unwrap().clone());
+        auth.authenticate(&mut handle, hop, i).await?;
+        handles.push(handle);
+    }
+    let handle = handles
+        .pop()
+        .ok_or_else(|| fail(ErrorCode::Internal, "an empty chain"))?;
+    Ok(Conn {
+        handle,
+        _jumps: handles,
+        host_keys,
+        used: Mutex::new(Instant::now()),
+        busy: AtomicUsize::new(0),
+    })
+}
+
 pub(super) fn cancelled() -> StreamError {
     fail(ErrorCode::Cancelled, "cancelled")
 }
@@ -465,9 +535,13 @@ async fn stop(ch: &russh::Channel<client::Msg>) {
     let _ = ch.close().await;
 }
 
+mod agent;
 #[cfg(test)]
-mod fixture;
+pub(in crate::v2) mod fixture;
 mod pool;
+pub mod pty;
+#[cfg(test)]
+pub(in crate::v2) mod pty_tests;
 #[cfg(test)]
 mod safety_tests;
 mod sftp;

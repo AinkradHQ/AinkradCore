@@ -19,8 +19,10 @@ runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/AgentEvents/prop
 # (design.render/measure/review/check/shot/export/fidelity, Design V6-01/V6-03: seven new Command and seven new Reply
 # variants; the catch-all moved from #32 to #39 and from #30 to #37. The older ssh.exec lines for #25 and #23 are gone:
 # the baseline has those ops now. The `ExecResult` line below stays: the second `ExecResult` reply still reads as a changed tag.)
-runner.schema.json: variant #32 removed at /$defs/Command/oneOf
-runner.schema.json: variant #30 removed at /$defs/Reply/oneOf
+# Leyline (Y2-01..Y6-01, epic build): the ssh.exec/sftp/agent ops sit before the catch-all, which moves from #32 to #39
+# (Command) and from #30 to #37 (Reply) on top of the Design ops; again only positions shift.
+runner.schema.json: variant #39 removed at /$defs/Command/oneOf
+runner.schema.json: variant #37 removed at /$defs/Reply/oneOf
 runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/ExecResult/properties/op
 
 # SFTP (Leyline Y2-03): the positional comparison reads the new `sftp.*` replies' op tags as changed against an

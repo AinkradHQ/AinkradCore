@@ -22,11 +22,17 @@ use serde::Deserialize;
 use serde_json::Value;
 
 pub use approval::{
-    Decided, PREFIX as APPROVAL_PREFIX, Pending, decide as decide_approval, pending,
+    Decided, Outcome, PREFIX as APPROVAL_PREFIX, Pending, Waiting, abandon as abandon_approval,
+    consume as consume_approval, create as create_approval, decide as decide_approval,
+    new_id as new_approval_id, pending, void as void_approval, wait as wait_approval,
 };
+/// The session id of a Code Mode call's caller starts with this: only the Core sets it.
+pub const SESSION_PREFIX: &str = "code_mode:";
+
 pub use build::build;
 pub use call::{CALL, CallState, call_call, call_tool};
 pub use render::render;
+pub use run::approval_left;
 pub use search::search;
 pub use serve::{Principal, SEARCH, search_call, search_tool, session_principal, session_scopes};
 

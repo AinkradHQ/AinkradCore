@@ -95,6 +95,10 @@ pub enum Command {
     DesignExport(super::DesignExport),
     #[serde(rename = "design.fidelity")]
     DesignFidelity(super::DesignFidelity),
+    #[serde(rename = "ssh.agent.load")]
+    SshAgentLoad(super::SshAgentLoad),
+    #[serde(rename = "ssh.agent.drop")]
+    SshAgentDrop(super::SshAgentDrop),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -143,6 +147,8 @@ impl Command {
             Self::DesignShot(_) => super::OP_DESIGN_SHOT,
             Self::DesignExport(_) => super::OP_DESIGN_EXPORT,
             Self::DesignFidelity(_) => super::OP_DESIGN_FIDELITY,
+            Self::SshAgentLoad(_) => super::OP_SSH_AGENT_LOAD,
+            Self::SshAgentDrop(_) => super::OP_SSH_AGENT_DROP,
             Self::Unknown => "unknown",
         }
     }
@@ -270,6 +276,10 @@ pub enum Reply {
     DesignExport(super::DesignExported),
     #[serde(rename = "design.fidelity")]
     DesignFidelity(super::DesignFidelityScore),
+    #[serde(rename = "ssh.agent.load")]
+    SshAgentLoad(super::SshAgentLoaded),
+    #[serde(rename = "ssh.agent.drop")]
+    SshAgentDrop(super::SshAgentDropped),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,
