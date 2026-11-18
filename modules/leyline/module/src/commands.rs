@@ -199,8 +199,18 @@ impl Fields {
             });
         // A name that looks like an id could shadow one: refused.
         let id_like = self.name.trim().to_ascii_lowercase().starts_with("lc_");
-        if !(valid::label(&self.name) && !id_like && steps_ok && self.description.chars().count() <= 500) {
+        if !(valid::label(&self.name)
+            && !id_like
+            && steps_ok
+            && self.description.chars().count() <= 500)
+        {
             return Err(bad());
+        }
+        // A secret written out in a step would be stored, shown on cards and logged: use `$VAR`.
+        if self.steps.iter().any(|s| crate::gate::literal_secret(s)) {
+            return Err(ApiError::bad_request(
+                "a step contains a secret: read it from a variable such as $TOKEN instead",
+            ));
         }
         let Some(sc) = &mut self.scope else {
             return Ok(());
@@ -344,7 +354,7 @@ pub(crate) async fn create(
 
 #[utoipa::path(patch, path = "/commands/{command}", operation_id = "leylinePatchCommand", tag = "leyline",
     params(("command" = String, Path, description = "Command id, else its unique name")), request_body = CommandPatch,
-    responses((status = 200, description = "The changed command (audited as `leyline.command.changed`); changing the steps or the flag of a `read_only` one, or making one `read_only`, needs a step-up. A run already started keeps the steps it was decided with", body = CommandView)))]
+    responses((status = 200, description = "The changed command (audited as `leyline.command.changed`); changing the steps, the scope or `confirm` (on) of a `read_only` one, or making one `read_only`, needs a step-up. A run already started keeps the steps it was decided with", body = CommandView)))]
 pub(crate) async fn patch(
     State(app): State<App>,
     Path(c): Path<String>,
@@ -355,7 +365,12 @@ pub(crate) async fn patch(
     let mut tx = begin_write(&app.pool).await?;
     let id = find_cmd(&mut tx, &c).await?;
     let cur = load_view(&mut tx, &id).await?;
-    let (was_ro, was_steps, was_scope) = (cur.read_only, cur.steps.clone(), cur.scope.clone());
+    let (was_ro, was_steps, was_scope, was_confirm) = (
+        cur.read_only,
+        cur.steps.clone(),
+        cur.scope.clone(),
+        cur.confirm,
+    );
     let mut f = Fields {
         name: req.name.unwrap_or(cur.name),
         description: req.description.unwrap_or(cur.description),
@@ -365,7 +380,9 @@ pub(crate) async fn patch(
         confirm: req.confirm.unwrap_or(cur.confirm),
     };
     f.check(&mut tx).await?;
-    let widened = !was_ro || f.steps != was_steps || f.scope != was_scope;
+    // Dropping `confirm` on a read-only command lets an AI run it without a person: a grant too.
+    let widened =
+        !was_ro || f.steps != was_steps || f.scope != was_scope || (was_confirm && !f.confirm);
     if f.read_only && widened && !elevated(&app, &me) {
         return Err(step_up_required());
     }
@@ -420,22 +437,20 @@ pub(crate) async fn run(
     Path(c): Path<String>,
     In(req): In<RunRequest>,
 ) -> ApiResult<RunStarted> {
-    let (cmd, host) = {
+    let (id, host) = {
         let mut conn = app.pool.acquire().await?;
         let id = find_cmd(&mut conn, &c).await?;
-        let cmd = load_view(&mut conn, &id).await?;
-        let host = find(&mut conn, &req.host).await?;
-        if cmd.confirm && req.confirm != Some(true) {
-            return Err(ApiError::new(
-                StatusCode::CONFLICT,
-                "confirm_required",
-                "this command must be confirmed: send confirm true",
-            ));
-        }
-        (cmd, host)
+        (id, find(&mut conn, &req.host).await?)
     };
-    let auth =
-        crate::gate::authorize(&app, &Principal::of(&me), &host, &Action::Preset(cmd.id)).await?;
+    // The gate judges `confirm` on the command it reads itself, with what the request said.
+    let auth = crate::gate::authorize_confirmed(
+        &app,
+        &Principal::of(&me),
+        &host,
+        &Action::Preset(id),
+        req.confirm == Some(true),
+    )
+    .await?;
     let run = auth.run_id().to_owned();
     tokio::spawn(crate::exec::run(app.clone(), auth));
     Ok(Json(RunStarted {

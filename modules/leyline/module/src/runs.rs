@@ -5,8 +5,7 @@
 use ainkrad_core::audit::NewAuditEvent;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, BY};
-use ainkrad_core_server::store::{audit, begin_write, redact};
-use ainkrad_proto::redact::names::secret_name;
+use ainkrad_core_server::store::{audit, begin_write};
 use serde_json::{Value, json};
 use sqlx::{SqliteConnection, SqlitePool};
 
@@ -136,40 +135,96 @@ pub(super) async fn write_run(
     Ok(())
 }
 
-/// `s` with secrets masked: `NAME=value` and `NAME: value` lines whose NAME is secret-named (the
-/// JSON key-name pass cannot see these in plain text), then every known secret shape.
+/// `s` with secrets masked: the shared text pass (`ainkrad_proto::redact::one`), which masks a
+/// secret-named field anywhere in a line (`user=bob password=x`, one-line JSON, `NAME: value`), URL
+/// passwords, base64 runs and every known secret shape.
 pub(super) fn redacted(s: &str) -> String {
-    let masked = s.split('\n').map(mask_line).collect::<Vec<_>>().join("\n");
-    let mut v = Value::String(masked);
-    redact::json(&mut v);
-    v.as_str().unwrap_or_default().to_owned()
+    ainkrad_proto::redact::one(s)
 }
 
-/// `export NAME=value`, `NAME=value`, `NAME: value`, `"name": "value",`: the value is replaced when
-/// NAME is secret-named. The first separator on the line decides.
-fn mask_line(line: &str) -> String {
-    let Some(at) = line.find(['=', ':']) else {
-        return line.to_owned();
-    };
-    let (head, rest) = line.split_at(at);
-    let sep = &rest[..1];
-    // `NAME: value` needs the space (or the end); `NAME=value` does not.
-    if sep == ":" && !(rest[1..].is_empty() || rest[1..].starts_with([' ', '\t', '"'])) {
-        return line.to_owned();
+/// Whether `s` holds a secret written out. A masked value that is only a `$VAR`, `${NAME}` or
+/// `$(...)` reference is not one: the card can show it as written.
+pub(crate) fn literal_secret(s: &str) -> bool {
+    let masked = redacted(s);
+    if masked == s {
+        return false;
     }
-    let name = head
-        .rsplit(|c: char| c.is_whitespace())
-        .next()
-        .unwrap_or("")
-        .trim_matches(['"', '\'']);
-    let named = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
-    if named && secret_name(name) && rest.len() > 1 {
-        return format!("{head}{sep} [redacted:{name}]");
+    // `masked` is `s` with some spans swapped for `[redacted:...]`: walk both and judge each span.
+    // Anything that does not line up counts as a secret (the safe side).
+    let (mut i, mut r) = (0, masked.as_str());
+    while let Some(at) = r.find(MARK) {
+        let lit = &r[..at];
+        if !s[i..].starts_with(lit) {
+            return true;
+        }
+        i += lit.len();
+        let Some(close) = r[at..].find(']') else {
+            return true;
+        };
+        r = &r[at + close + 1..];
+        let end = match r.find(MARK).map(|n| &r[..n]) {
+            Some("") => return true,
+            Some(next) => s[i..].find(next).map(|n| i + n),
+            None if r.is_empty() => Some(s.len()),
+            None => s.ends_with(r).then(|| s.len() - r.len()),
+        };
+        match end {
+            Some(e) if e >= i && only_refs(&s[i..e]) => i = e,
+            _ => return true,
+        }
     }
-    line.to_owned()
+    false
+}
+
+const MARK: &str = "[redacted:";
+
+/// A value made only of `$NAME`, `${NAME}` and `$(...)`, with optional quotes and auth scheme word.
+fn only_refs(span: &str) -> bool {
+    let mut t = span.trim().trim_matches(['"', '\'']);
+    if let Some((w, rest)) = t.split_once(' ')
+        && matches!(
+            w.to_ascii_lowercase().as_str(),
+            "bearer" | "basic" | "token" | "digest"
+        )
+    {
+        t = rest.trim_start().trim_matches(['"', '\'']);
+    }
+    let b = t.as_bytes();
+    let name = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let (mut i, mut seen) = (0, false);
+    while i < b.len() {
+        if b[i] != b'$' {
+            return false;
+        }
+        i += 1;
+        match b.get(i) {
+            Some(b'{') => {
+                let n = b[i + 1..].iter().take_while(|c| name(**c)).count();
+                if n == 0 || b.get(i + 1 + n) != Some(&b'}') {
+                    return false;
+                }
+                i += n + 2;
+            }
+            Some(b'(') => {
+                let mut depth = 0;
+                let Some(n) = b[i..].iter().position(|c| {
+                    depth += i32::from(*c == b'(') - i32::from(*c == b')');
+                    depth == 0
+                }) else {
+                    return false;
+                };
+                i += n + 1;
+            }
+            Some(c) if c.is_ascii_alphabetic() || *c == b'_' => {
+                while b.get(i).is_some_and(|c| name(*c)) {
+                    i += 1;
+                }
+            }
+            _ => return false,
+        }
+        seen = true;
+    }
+    seen
 }
 
 fn cut(s: &str) -> String {
@@ -315,7 +370,7 @@ mod tests {
         for leaked in ["hunter2", "abc123", "s3cr3t", "\"pw\""] {
             assert!(!out.contains(leaked), "{leaked} leaked: {out}");
         }
-        assert!(out.contains("DB_PASSWORD= [redacted:DB_PASSWORD]"), "{out}");
+        assert!(out.contains("DB_PASSWORD=[redacted:DB_PASSWORD]"), "{out}");
         assert!(out.contains("HOME=/root") && out.contains("note: nothing here"));
     }
 }
