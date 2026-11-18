@@ -69,6 +69,16 @@ async fn generic_group_routes_refuse_project_groups() {
     .await;
     assert_eq!(status(&r), StatusCode::BAD_REQUEST);
 
+    // Nor can a single project secret be leased through the generic route.
+    let r = call(
+        &fx,
+        Method::POST,
+        "/api/v1/secrets/shop.db_password/leases",
+        json!({"runner": "d_aaaaaaaaaaaaaaaaaaaaaaaaaa"}),
+    )
+    .await;
+    assert_eq!(status(&r), StatusCode::BAD_REQUEST, "{}", r.1);
+
     // An ordinary group still works.
     let r = call(&fx, Method::POST, g, json!({"name": "aws"})).await;
     assert_eq!(status(&r), StatusCode::OK, "{}", r.1);

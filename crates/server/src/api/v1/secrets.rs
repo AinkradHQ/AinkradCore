@@ -395,6 +395,7 @@ pub async fn lease(
     body: Bytes,
 ) -> ApiResult<LeaseGrant> {
     let n = name(&n)?;
+    not_project(&app, Some(n), None).await?;
     let b: NewLease = parse(&body)?;
     let (lease, expires_at) = store::lease(
         &app.pool,
