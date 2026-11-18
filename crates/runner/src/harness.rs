@@ -444,6 +444,10 @@ impl Executor for HarnessExecutor {
         self.workspaces.held()
     }
 
+    fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream) {
+        self.workspaces.set_mirror_upstream(up);
+    }
+
     async fn prepare_agent_workspace(
         &self,
         session: &str,
@@ -456,12 +460,14 @@ impl Executor for HarnessExecutor {
             reference: workspace.base.clone(),
             branch: workspace.branch.clone(),
             name: workspace.name.clone(),
+            mirror: workspace.mirror,
         }];
         requests.extend(workspace.also.iter().map(|w| SessionWorkspace {
             repo: w.repo.clone(),
             reference: w.base.clone(),
             branch: w.branch.clone(),
             name: w.name.clone(),
+            mirror: w.mirror,
         }));
         let path = self
             .workspaces
@@ -486,6 +492,20 @@ impl Executor for HarnessExecutor {
 
     fn recover_agent_workspaces(&self, adopted: &[String]) {
         self.workspaces.recover_sessions(adopted);
+    }
+
+    fn discard_agent_workspaces(&self, name: &str, prefix: bool, keep: &[String]) {
+        self.agent_workspaces
+            .lock()
+            .expect("agent workspaces")
+            .retain(|(s, _), _| {
+                !(if prefix {
+                    s.starts_with(name)
+                } else {
+                    s == name
+                }) || keep.contains(s)
+            });
+        self.workspaces.discard_sessions(name, prefix, keep);
     }
 
     fn work_dir(&self, job: &Job) -> Option<PathBuf> {

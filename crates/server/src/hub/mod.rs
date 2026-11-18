@@ -52,6 +52,15 @@ pub mod connect;
 #[derive(Debug, Clone, Copy)]
 pub struct Elevated(());
 
+/// The only commands [`Hub::dispatch_run_housekeeping`] sends.
+#[derive(Debug)]
+pub enum RunHousekeeping {
+    Stop(ainkrad_proto::v2::RunStop),
+    Status(ainkrad_proto::v2::RunStatusReq),
+    /// Read-only: service metrics and log lines (P5-04).
+    Observe(ainkrad_proto::v2::RunObserveReq),
+}
+
 impl Elevated {
     /// For tests that drive the hub directly.
     #[cfg(any(test, feature = "test-support"))]
@@ -132,6 +141,8 @@ struct Pending {
     credit: u64,
     /// A `pty.open`/`pty.attach` stream: it may carry one `opened` and credited `snapshot`s.
     terminal: bool,
+    /// A `port.open` stream (P6-01): the runner's `credit` for the Core's bytes reaches the dispatcher.
+    port: bool,
     opened: bool,
     /// The driver, when it declares its own `streams` (counted apart).
     own: Option<String>,
@@ -345,6 +356,22 @@ impl Dispatched {
         Some(body)
     }
 
+    /// The next frame without granting credit for it: a port stream (the Host router) grants
+    /// with [`Dispatched::grant_read`] only once its public client has taken the bytes.
+    pub(crate) async fn next_ungranted(&mut self) -> Option<Body> {
+        self.rx.recv().await
+    }
+
+    /// The dispatcher passed `bytes` of output on: the runner may send as many more.
+    pub(crate) fn grant_read(&self, bytes: u64) {
+        self.hub.grant(&self.runner, self.stream, bytes);
+    }
+
+    /// A non-retained frame to the runner on this stream (port bytes, a `close`).
+    pub(crate) fn send(&self, body: Body) -> Result<(), StreamError> {
+        self.hub.send_terminal(&self.runner, self.stream, body)
+    }
+
     /// The command's last frame, skipping its output.
     pub async fn outcome(mut self) -> Result<Body, StreamError> {
         while let Some(body) = self.next().await {
@@ -442,6 +469,35 @@ impl Hub {
     /// cap. Callers check the session names their module; the module's operator enabled it.
     pub(crate) fn module_elevation(&self) -> Elevated {
         Elevated(())
+    }
+
+    /// The project run orchestrator's own housekeeping (`runs`): `run.stop` and `run.status` for
+    /// the idle stop, reconciliation and cleanup of a failed start. The type admits nothing else,
+    /// so no elevation leaves here: a `run.start` only goes out through
+    /// [`Hub::dispatch_elevated`] with the proof of the admin route that asked.
+    pub(crate) fn dispatch_run_housekeeping(
+        self: &Arc<Self>,
+        runner: &str,
+        op: RunHousekeeping,
+    ) -> Result<Dispatched, StreamError> {
+        let command = match op {
+            RunHousekeeping::Stop(s) => Command::RunStop(s),
+            RunHousekeeping::Status(s) => Command::RunStatus(s),
+            RunHousekeeping::Observe(s) => Command::RunObserve(s),
+        };
+        self.send_command(runner, command)
+    }
+
+    /// `port.open` (P6-01): the Host router's one command. The type admits nothing else; no elevation
+    /// leaves here, because the public router has no caller to step up. The runner serves only an
+    /// `expose: true` port of a live run (see `ainkrad_proto::v2::PortOpen`), and the router checks
+    /// the project's expose toggle before it asks.
+    pub(crate) fn dispatch_port(
+        self: &Arc<Self>,
+        runner: &str,
+        open: ainkrad_proto::v2::PortOpen,
+    ) -> Result<Dispatched, StreamError> {
+        self.send_command(runner, Command::PortOpen(open))
     }
 
     /// The capability of the wake queue's job (`agents::wake`): the route that queued the wake
@@ -653,6 +709,7 @@ impl Hub {
             received: 0,
             credit: STREAM_WINDOW,
             terminal,
+            port: command.op() == ainkrad_proto::v2::OP_PORT_OPEN,
             opened: false,
             own,
         };
@@ -992,6 +1049,10 @@ impl Hub {
                 ))
             }
             last @ (Body::Result(_) | Body::Error(_)) => last,
+            Body::Credit(c) if p.port => {
+                let _ = p.to.send(Body::Credit(c));
+                return;
+            }
             // Credit and heartbeats on a stream: nothing to do for a command.
             _ => return,
         };

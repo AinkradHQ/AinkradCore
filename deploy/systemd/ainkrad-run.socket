@@ -1,0 +1,18 @@
+# The one door to Podman for project runs (Core 0.9, P5-02; see crates/runner/src/run.rs). The runner stays its own
+# unprivileged, sandboxed user: it asks this socket to start, stop or report a run, and the helper
+# (ainkrad-run@.service, started per connection) drives rootless Podman as the separate ainkrad-run user. Only root and
+# the ainkrad-runner group can connect (the helper also checks the peer's uid). Installed by deploy/install-linux.sh --with-run.
+[Unit]
+Description=Ainkrad project runs (socket)
+Documentation=https://github.com/AinkradHQ/AinkradCore
+
+[Socket]
+ListenStream=/run/ainkrad-run.sock
+SocketUser=root
+SocketGroup=ainkrad-runner
+SocketMode=0660
+Accept=yes
+MaxConnections=8
+
+[Install]
+WantedBy=sockets.target

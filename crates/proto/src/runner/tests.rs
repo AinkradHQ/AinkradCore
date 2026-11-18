@@ -52,6 +52,7 @@ fn workspaces_never_carry_credentials_or_options() {
         name: String::new(),
         also: vec![],
         expected_head: None,
+        mirror: None,
     };
     for ok in [
         "https://github.com/AinkradHQ/AinkradCitadel.git",

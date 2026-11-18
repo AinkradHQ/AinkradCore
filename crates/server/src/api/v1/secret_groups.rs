@@ -99,6 +99,17 @@ fn name(name: &str) -> Result<&str, ApiError> {
     }
 }
 
+/// `project-*` groups belong to the projects (P4-04): made with the project, never made, changed,
+/// deleted or leased here, so the in-use check and the project/run path cannot be bypassed.
+fn not_project(group: &str) -> Result<(), ApiError> {
+    match group.starts_with(crate::store::project_secrets::GROUP_PREFIX) {
+        true => Err(ApiError::bad_request(
+            "project secret groups are managed through the project's secrets",
+        )),
+        false => Ok(()),
+    }
+}
+
 #[utoipa::path(get, path = "/api/v1/secret-groups", operation_id = "listSecretGroups",
     tag = "secrets",
     responses((status = 200, description = "Every group, by name, with its members", body = Vec<SecretGroupInfo>)))]
@@ -117,6 +128,7 @@ pub async fn create(
     body: Bytes,
 ) -> ApiResult<SecretGroupInfo> {
     let b: NewSecretGroup = parse(&body)?;
+    not_project(&b.name)?;
     let g = store::create(
         &app.pool,
         &b.name,
@@ -142,6 +154,7 @@ pub async fn update(
     body: Bytes,
 ) -> ApiResult<SecretGroupInfo> {
     let b: UpdateSecretGroup = parse(&body)?;
+    not_project(&n)?;
     let g = store::update(
         &app.pool,
         name(&n)?,
@@ -164,6 +177,7 @@ pub async fn delete(
     Extension(me): Extension<Caller>,
     Path(n): Path<String>,
 ) -> ApiResult<SecretGroupDeleted> {
+    not_project(&n)?;
     store::delete(&app.pool, name(&n)?, &me.device.id, BY).await?;
     Ok(Json(SecretGroupDeleted { deleted: true }))
 }
@@ -182,6 +196,7 @@ pub async fn lease(
     body: Bytes,
 ) -> ApiResult<GroupLeaseGrant> {
     let n = name(&n)?;
+    not_project(n)?;
     let b: NewGroupLease = parse(&body)?;
     let group = store::list(&app.pool)
         .await?

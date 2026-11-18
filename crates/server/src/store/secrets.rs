@@ -504,7 +504,7 @@ const META: &str = "SELECT s.id, s.name, s.owner, s.runners, s.delivery, s.versi
                     g.runners AS group_runners FROM core_secrets s \
                     LEFT JOIN core_secret_groups g ON g.id = s.group_id";
 
-async fn find(conn: &mut SqliteConnection, name: &str) -> Result<Meta, Error> {
+pub(super) async fn find(conn: &mut SqliteConnection, name: &str) -> Result<Meta, Error> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!("{META} WHERE s.name = ?")))
         .bind(name)
         .fetch_optional(&mut *conn)
@@ -816,6 +816,12 @@ pub async fn lease(
     .await
 }
 
+/// The runners secret `name` may be leased to (its own scope, else its group's).
+pub async fn effective_runners(pool: &SqlitePool, name: &str) -> Result<Vec<String>, Error> {
+    let mut conn = pool.acquire().await?;
+    Ok(find(&mut conn, name).await?.effective_runners)
+}
+
 /// [`lease`] for a reader named in the audit row (`"to": "gateway"`: the runner's auth gateway
 /// redeems it into its own memory, KAN-435).
 #[allow(clippy::too_many_arguments)]
@@ -1037,6 +1043,10 @@ pub async fn open_for_module(
         return refused("not_found", "no such secret");
     }
     let mut tx = super::begin_write(pool).await?;
+    // A project secret (`<slug>.<name>`) is never a module's, whatever the slug is.
+    if super::project_secrets::is_member(&mut tx, name).await? {
+        return refused("not_found", "no such secret");
+    }
     enabled(&mut tx).await?;
     let row = sqlx::query("SELECT id, version, key_id, sealed FROM core_secrets WHERE name = ?")
         .bind(name)

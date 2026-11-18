@@ -331,6 +331,12 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/projects`.
     /// - Remark: Generated from `#/paths//api/v1/projects/post(createProject)`.
     func createProject(_ input: Operations.CreateProject.Input) async throws -> Operations.CreateProject.Output
+    /// - Remark: HTTP `POST /api/v1/projects/from-github`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/from-github/post(createProjectFromGithub)`.
+    func createProjectFromGithub(_ input: Operations.CreateProjectFromGithub.Input) async throws -> Operations.CreateProjectFromGithub.Output
+    /// - Remark: HTTP `GET /api/v1/projects/github/repos`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/github/repos/get(listGithubRepos)`.
+    func listGithubRepos(_ input: Operations.ListGithubRepos.Input) async throws -> Operations.ListGithubRepos.Output
     /// - Remark: HTTP `GET /api/v1/projects/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)`.
     func getProject(_ input: Operations.GetProject.Input) async throws -> Operations.GetProject.Output
@@ -346,9 +352,60 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /api/v1/projects/{id}/repos/{repo}`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/delete(removeProjectRepo)`.
     func removeProjectRepo(_ input: Operations.RemoveProjectRepo.Input) async throws -> Operations.RemoveProjectRepo.Output
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/repos/{repo}/fetch`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/fetch/post(fetchProjectRepo)`.
+    func fetchProjectRepo(_ input: Operations.FetchProjectRepo.Input) async throws -> Operations.FetchProjectRepo.Output
     /// - Remark: HTTP `POST /api/v1/projects/{id}/repos/{repo}/primary`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/primary/post(setProjectRepoPrimary)`.
     func setProjectRepoPrimary(_ input: Operations.SetProjectRepoPrimary.Input) async throws -> Operations.SetProjectRepoPrimary.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/run`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/get(getProjectRun)`.
+    func getProjectRun(_ input: Operations.GetProjectRun.Input) async throws -> Operations.GetProjectRun.Output
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/run/activity`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/activity/post(touchProjectRun)`.
+    func touchProjectRun(_ input: Operations.TouchProjectRun.Input) async throws -> Operations.TouchProjectRun.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/run/logs`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/logs/get(getProjectRunLogs)`.
+    func getProjectRunLogs(_ input: Operations.GetProjectRunLogs.Input) async throws -> Operations.GetProjectRunLogs.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/run/logs/ws`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/logs/ws/get(streamProjectRunLogs)`.
+    func streamProjectRunLogs(_ input: Operations.StreamProjectRunLogs.Input) async throws -> Operations.StreamProjectRunLogs.Output
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/run/restart`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/restart/post(restartProjectRun)`.
+    func restartProjectRun(_ input: Operations.RestartProjectRun.Input) async throws -> Operations.RestartProjectRun.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/run/services`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/services/get(getProjectRunServices)`.
+    func getProjectRunServices(_ input: Operations.GetProjectRunServices.Input) async throws -> Operations.GetProjectRunServices.Output
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/run/spec/draft`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/spec/draft/post(draftProjectSpec)`.
+    func draftProjectSpec(_ input: Operations.DraftProjectSpec.Input) async throws -> Operations.DraftProjectSpec.Output
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/run/start`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/start/post(startProjectRun)`.
+    func startProjectRun(_ input: Operations.StartProjectRun.Input) async throws -> Operations.StartProjectRun.Output
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/run/stop`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/stop/post(stopProjectRun)`.
+    func stopProjectRun(_ input: Operations.StopProjectRun.Input) async throws -> Operations.StopProjectRun.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/secrets`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/secrets/get(listProjectSecrets)`.
+    func listProjectSecrets(_ input: Operations.ListProjectSecrets.Input) async throws -> Operations.ListProjectSecrets.Output
+    /// - Remark: HTTP `PUT /api/v1/projects/{id}/secrets/{name}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/secrets/{name}/put(setProjectSecret)`.
+    func setProjectSecret(_ input: Operations.SetProjectSecret.Input) async throws -> Operations.SetProjectSecret.Output
+    /// - Remark: HTTP `DELETE /api/v1/projects/{id}/secrets/{name}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/secrets/{name}/delete(deleteProjectSecret)`.
+    func deleteProjectSecret(_ input: Operations.DeleteProjectSecret.Input) async throws -> Operations.DeleteProjectSecret.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/spec`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/get(getProjectSpec)`.
+    func getProjectSpec(_ input: Operations.GetProjectSpec.Input) async throws -> Operations.GetProjectSpec.Output
+    /// - Remark: HTTP `PUT /api/v1/projects/{id}/spec`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/put(saveProjectSpec)`.
+    func saveProjectSpec(_ input: Operations.SaveProjectSpec.Input) async throws -> Operations.SaveProjectSpec.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/spec/versions`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/versions/get(listProjectSpecVersions)`.
+    func listProjectSpecVersions(_ input: Operations.ListProjectSpecVersions.Input) async throws -> Operations.ListProjectSpecVersions.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/spec/versions/{version}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/versions/{version}/get(getProjectSpecVersion)`.
+    func getProjectSpecVersion(_ input: Operations.GetProjectSpecVersion.Input) async throws -> Operations.GetProjectSpecVersion.Output
     /// - Remark: HTTP `PUT /api/v1/push-token`.
     /// - Remark: Generated from `#/paths//api/v1/push-token/put(setPushToken)`.
     func setPushToken(_ input: Operations.SetPushToken.Input) async throws -> Operations.SetPushToken.Output
@@ -1639,6 +1696,28 @@ extension APIProtocol {
             body: body
         ))
     }
+    /// - Remark: HTTP `POST /api/v1/projects/from-github`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/from-github/post(createProjectFromGithub)`.
+    public func createProjectFromGithub(
+        headers: Operations.CreateProjectFromGithub.Input.Headers = .init(),
+        body: Operations.CreateProjectFromGithub.Input.Body
+    ) async throws -> Operations.CreateProjectFromGithub.Output {
+        try await createProjectFromGithub(Operations.CreateProjectFromGithub.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/github/repos`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/github/repos/get(listGithubRepos)`.
+    public func listGithubRepos(
+        query: Operations.ListGithubRepos.Input.Query = .init(),
+        headers: Operations.ListGithubRepos.Input.Headers = .init()
+    ) async throws -> Operations.ListGithubRepos.Output {
+        try await listGithubRepos(Operations.ListGithubRepos.Input(
+            query: query,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `GET /api/v1/projects/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)`.
     public func getProject(
@@ -1698,6 +1777,17 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/repos/{repo}/fetch`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/fetch/post(fetchProjectRepo)`.
+    public func fetchProjectRepo(
+        path: Operations.FetchProjectRepo.Input.Path,
+        headers: Operations.FetchProjectRepo.Input.Headers = .init()
+    ) async throws -> Operations.FetchProjectRepo.Output {
+        try await fetchProjectRepo(Operations.FetchProjectRepo.Input(
+            path: path,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `POST /api/v1/projects/{id}/repos/{repo}/primary`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/primary/post(setProjectRepoPrimary)`.
     public func setProjectRepoPrimary(
@@ -1705,6 +1795,194 @@ extension APIProtocol {
         headers: Operations.SetProjectRepoPrimary.Input.Headers = .init()
     ) async throws -> Operations.SetProjectRepoPrimary.Output {
         try await setProjectRepoPrimary(Operations.SetProjectRepoPrimary.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/run`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/get(getProjectRun)`.
+    public func getProjectRun(
+        path: Operations.GetProjectRun.Input.Path,
+        headers: Operations.GetProjectRun.Input.Headers = .init()
+    ) async throws -> Operations.GetProjectRun.Output {
+        try await getProjectRun(Operations.GetProjectRun.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/run/activity`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/activity/post(touchProjectRun)`.
+    public func touchProjectRun(
+        path: Operations.TouchProjectRun.Input.Path,
+        headers: Operations.TouchProjectRun.Input.Headers = .init()
+    ) async throws -> Operations.TouchProjectRun.Output {
+        try await touchProjectRun(Operations.TouchProjectRun.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/run/logs`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/logs/get(getProjectRunLogs)`.
+    public func getProjectRunLogs(
+        path: Operations.GetProjectRunLogs.Input.Path,
+        query: Operations.GetProjectRunLogs.Input.Query = .init(),
+        headers: Operations.GetProjectRunLogs.Input.Headers = .init()
+    ) async throws -> Operations.GetProjectRunLogs.Output {
+        try await getProjectRunLogs(Operations.GetProjectRunLogs.Input(
+            path: path,
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/run/logs/ws`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/logs/ws/get(streamProjectRunLogs)`.
+    public func streamProjectRunLogs(
+        path: Operations.StreamProjectRunLogs.Input.Path,
+        query: Operations.StreamProjectRunLogs.Input.Query = .init(),
+        headers: Operations.StreamProjectRunLogs.Input.Headers = .init()
+    ) async throws -> Operations.StreamProjectRunLogs.Output {
+        try await streamProjectRunLogs(Operations.StreamProjectRunLogs.Input(
+            path: path,
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/run/restart`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/restart/post(restartProjectRun)`.
+    public func restartProjectRun(
+        path: Operations.RestartProjectRun.Input.Path,
+        headers: Operations.RestartProjectRun.Input.Headers = .init()
+    ) async throws -> Operations.RestartProjectRun.Output {
+        try await restartProjectRun(Operations.RestartProjectRun.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/run/services`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/services/get(getProjectRunServices)`.
+    public func getProjectRunServices(
+        path: Operations.GetProjectRunServices.Input.Path,
+        headers: Operations.GetProjectRunServices.Input.Headers = .init()
+    ) async throws -> Operations.GetProjectRunServices.Output {
+        try await getProjectRunServices(Operations.GetProjectRunServices.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/run/spec/draft`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/spec/draft/post(draftProjectSpec)`.
+    public func draftProjectSpec(
+        path: Operations.DraftProjectSpec.Input.Path,
+        headers: Operations.DraftProjectSpec.Input.Headers = .init(),
+        body: Operations.DraftProjectSpec.Input.Body
+    ) async throws -> Operations.DraftProjectSpec.Output {
+        try await draftProjectSpec(Operations.DraftProjectSpec.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/run/start`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/start/post(startProjectRun)`.
+    public func startProjectRun(
+        path: Operations.StartProjectRun.Input.Path,
+        headers: Operations.StartProjectRun.Input.Headers = .init()
+    ) async throws -> Operations.StartProjectRun.Output {
+        try await startProjectRun(Operations.StartProjectRun.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/run/stop`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run/stop/post(stopProjectRun)`.
+    public func stopProjectRun(
+        path: Operations.StopProjectRun.Input.Path,
+        headers: Operations.StopProjectRun.Input.Headers = .init()
+    ) async throws -> Operations.StopProjectRun.Output {
+        try await stopProjectRun(Operations.StopProjectRun.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/secrets`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/secrets/get(listProjectSecrets)`.
+    public func listProjectSecrets(
+        path: Operations.ListProjectSecrets.Input.Path,
+        headers: Operations.ListProjectSecrets.Input.Headers = .init()
+    ) async throws -> Operations.ListProjectSecrets.Output {
+        try await listProjectSecrets(Operations.ListProjectSecrets.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/projects/{id}/secrets/{name}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/secrets/{name}/put(setProjectSecret)`.
+    public func setProjectSecret(
+        path: Operations.SetProjectSecret.Input.Path,
+        headers: Operations.SetProjectSecret.Input.Headers = .init(),
+        body: Operations.SetProjectSecret.Input.Body
+    ) async throws -> Operations.SetProjectSecret.Output {
+        try await setProjectSecret(Operations.SetProjectSecret.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/projects/{id}/secrets/{name}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/secrets/{name}/delete(deleteProjectSecret)`.
+    public func deleteProjectSecret(
+        path: Operations.DeleteProjectSecret.Input.Path,
+        query: Operations.DeleteProjectSecret.Input.Query = .init(),
+        headers: Operations.DeleteProjectSecret.Input.Headers = .init()
+    ) async throws -> Operations.DeleteProjectSecret.Output {
+        try await deleteProjectSecret(Operations.DeleteProjectSecret.Input(
+            path: path,
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/spec`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/get(getProjectSpec)`.
+    public func getProjectSpec(
+        path: Operations.GetProjectSpec.Input.Path,
+        headers: Operations.GetProjectSpec.Input.Headers = .init()
+    ) async throws -> Operations.GetProjectSpec.Output {
+        try await getProjectSpec(Operations.GetProjectSpec.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/projects/{id}/spec`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/put(saveProjectSpec)`.
+    public func saveProjectSpec(
+        path: Operations.SaveProjectSpec.Input.Path,
+        headers: Operations.SaveProjectSpec.Input.Headers = .init(),
+        body: Operations.SaveProjectSpec.Input.Body
+    ) async throws -> Operations.SaveProjectSpec.Output {
+        try await saveProjectSpec(Operations.SaveProjectSpec.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/spec/versions`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/versions/get(listProjectSpecVersions)`.
+    public func listProjectSpecVersions(
+        path: Operations.ListProjectSpecVersions.Input.Path,
+        headers: Operations.ListProjectSpecVersions.Input.Headers = .init()
+    ) async throws -> Operations.ListProjectSpecVersions.Output {
+        try await listProjectSpecVersions(Operations.ListProjectSpecVersions.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/spec/versions/{version}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/versions/{version}/get(getProjectSpecVersion)`.
+    public func getProjectSpecVersion(
+        path: Operations.GetProjectSpecVersion.Input.Path,
+        headers: Operations.GetProjectSpecVersion.Input.Headers = .init()
+    ) async throws -> Operations.GetProjectSpecVersion.Output {
+        try await getProjectSpecVersion(Operations.GetProjectSpecVersion.Input(
             path: path,
             headers: headers
         ))

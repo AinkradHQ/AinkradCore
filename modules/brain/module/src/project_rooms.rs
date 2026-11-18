@@ -93,6 +93,198 @@ async fn link(conn: &mut SqliteConnection, project: &str, room: &str) -> Result<
     Ok(())
 }
 
+/// A new AI session of `project` claims the project's room, if it has one (P3-02): the same
+/// claim as `brainClaimRoom` (the room's model policy against the session's whole chain). A
+/// project with no room claims nothing. `Err` is why the claim was refused; the Core then ends the
+/// session unstarted.
+pub(crate) async fn claim_for_session(
+    app: &App,
+    session: &str,
+    project: i64,
+    by: &str,
+) -> Result<(), String> {
+    let room: Option<String> =
+        sqlx::query_scalar("SELECT room FROM brain_project_rooms WHERE project = ?")
+            .bind(project.to_string())
+            .fetch_optional(&app.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    match room {
+        None => Ok(()),
+        Some(room) => crate::claim::claim(app, &room, session, by)
+            .await
+            .map(drop)
+            .map_err(|e| e.message),
+    }
+}
+
+/// A launch of a project session needs its claim when the project has a room: a session that
+/// lost its claim (or never got one) would clone the project's repos without the room's policy.
+pub(crate) async fn require_claim(app: &App, session: &str, project: i64) -> Result<(), String> {
+    let missing: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM brain_project_rooms WHERE project = ?1) \
+         AND NOT EXISTS (SELECT 1 FROM brain_session_rooms WHERE session = ?2)",
+    )
+    .bind(project.to_string())
+    .bind(session)
+    .fetch_one(&app.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    if missing {
+        return Err("the project has a room and this session holds no claim on it".to_owned());
+    }
+    Ok(())
+}
+
+/// How long the start bundle may take before the session starts without it.
+const BUNDLE_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// What an AI session starts with (P3-03, B8-02): the approved instructions of the room it claimed,
+/// then `brainAiContext(start)` of that room plus the me card (a session with no claim gets the
+/// me card only).
+///
+/// SECURITY MODEL
+/// - The bundle goes in the instruction text the runner writes to a private file (claude), sends as
+///   `developerInstructions` (codex) or links as `GEMINI.md` (agy). It is never a user turn.
+/// - It is the op's own output, so it is already wrapped once in the outside-data envelope (the
+///   no-echo guard cuts that envelope before distil), its record ids are already in
+///   `brain_session_loaded`, and the me-card provider gate and room policy already ran.
+///   Nothing here reads memory or writes anything itself. No credential is involved.
+/// - The approved instructions stay plain text, as before; they are left out of the bundle.
+/// - Fail open: an op error or a slow op (3 s) gives the plain instructions, or `None`.
+/// - Budget: the op's start cap, 1,500 tokens.
+pub(crate) async fn instructions_for_session(
+    app: &App,
+    b: &Brain,
+    session: &str,
+) -> Option<String> {
+    let room: Option<String> =
+        sqlx::query_scalar("SELECT room FROM brain_session_rooms WHERE session = ?")
+            .bind(session)
+            .fetch_optional(&app.pool)
+            .await
+            .ok()
+            .flatten();
+    let plain = match &room {
+        Some(room) => match crate::distil::canon(app, b, room).await {
+            Ok(pool) => {
+                let text = approved_instructions(&pool).await;
+                pool.close().await;
+                text
+            }
+            Err(_) => None,
+        },
+        None => None,
+    };
+    let bundle = start_bundle(app, b, session, room.as_deref()).await;
+    join(plain, bundle)
+}
+
+/// The wrapped start bundle, or `None` when there is nothing to add or the op failed.
+async fn start_bundle(app: &App, b: &Brain, session: &str, room: Option<&str>) -> Option<String> {
+    let q = crate::context::AiContextQuery {
+        mode: "start".to_owned(),
+        room: room.map(str::to_owned),
+        prompt: None,
+        budget: None,
+    };
+    let opts = crate::context::Opts {
+        me_only: room.is_none(),
+        no_instructions: true,
+    };
+    let got = tokio::time::timeout(BUNDLE_WAIT, crate::context::build(app, b, session, q, opts))
+        .await
+        .ok()?
+        .ok()?;
+    Some(got.text).filter(|t| !t.is_empty())
+}
+
+/// Plain instructions first, the bundle after a blank line.
+fn join(plain: Option<String>, bundle: Option<String>) -> Option<String> {
+    match (plain, bundle) {
+        (Some(p), Some(b)) => Some(format!("{p}\n\n{b}")),
+        (p, b) => p.or(b),
+    }
+}
+
+/// The approved, non-blank instructions in a room's `room_overview` row.
+async fn approved_instructions(pool: &sqlx::SqlitePool) -> Option<String> {
+    let text: Option<String> = sqlx::query_scalar(
+        "SELECT instructions FROM room_overview \
+         WHERE id = 1 AND instructions_approved_at IS NOT NULL",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+    text.filter(|t| !t.trim().is_empty())
+}
+
+#[cfg(test)]
+mod instructions_tests {
+    use super::{approved_instructions, join};
+
+    #[test]
+    fn the_bundle_follows_the_plain_text_and_either_alone_passes() {
+        let (p, b) = (Some("Use tabs.".to_owned()), Some("<<<B>>>".to_owned()));
+        assert_eq!(
+            join(p.clone(), b.clone()).as_deref(),
+            Some("Use tabs.\n\n<<<B>>>")
+        );
+        assert_eq!(join(p.clone(), None), p);
+        assert_eq!(join(None, b.clone()), b);
+        assert_eq!(join(None, None), None);
+    }
+
+    /// The no-echo guard cuts the bundle out of a transcript that repeats the instructions, and
+    /// leaves the approved plain text (which is the person's own).
+    #[test]
+    fn the_echo_guard_strips_the_bundle() {
+        let bundle = ainkrad_core::untrusted::wrap(
+            "Brain memory | start",
+            "- [r1] Deploys go out on Friday.",
+        );
+        let text = join(Some("Use tabs.".to_owned()), Some(bundle)).unwrap();
+        let out = crate::echo::strip(&format!("Assistant: {text}"), &[]);
+        assert!(!out.contains("Friday") && !out.contains("[r1]"), "{out}");
+        assert!(out.contains("Use tabs."), "{out}");
+    }
+
+    async fn room(text: Option<&str>, approved: Option<&str>) -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE room_overview (id INTEGER PRIMARY KEY, instructions TEXT, \
+             instructions_approved_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO room_overview (id, instructions, instructions_approved_at) VALUES (1, ?, ?)")
+            .bind(text)
+            .bind(approved)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn only_approved_text_is_returned() {
+        let t = Some("Use tabs.");
+        let a = Some("2026-11-18T10:00:00.000Z");
+        assert_eq!(approved_instructions(&room(t, a).await).await.as_deref(), t);
+        assert_eq!(approved_instructions(&room(t, None).await).await, None);
+        assert_eq!(approved_instructions(&room(None, a).await).await, None);
+        assert_eq!(
+            approved_instructions(&room(Some(" \n"), a).await).await,
+            None
+        );
+    }
+}
+
 #[utoipa::path(put, path = "/projects/{project}/room", operation_id = "brainLinkProjectRoom", tag = "brain",
     params(("project" = String, Path, description = "The Core project's id")),
     request_body = LinkRoom,

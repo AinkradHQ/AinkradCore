@@ -88,6 +88,8 @@ pub struct App {
     pub conn_pace: Arc<crate::connections::pace::Pace>,
     /// The root host helper's socket (`crate::host`), for `/api/v1/system`.
     pub host_helper: Arc<crate::host::Client>,
+    /// The Core's copies of project repos (`crate::mirrors`); `None` where the Core keeps none.
+    pub mirrors: Option<Arc<crate::mirrors::Mirrors>>,
     /// Tool installs on runners, in flight and the last ones (`v1::runner_control`).
     pub tool_ops: Arc<v1::ToolOps>,
     /// The Code Mode operation catalogue, built on first use (the modules are set by then).
@@ -135,6 +137,7 @@ impl App {
             conn_flows: Arc::default(),
             conn_pace: Arc::default(),
             host_helper: Arc::default(),
+            mirrors: None,
             tool_ops: Arc::default(),
             ops: Arc::default(),
             code_mode: Arc::default(),

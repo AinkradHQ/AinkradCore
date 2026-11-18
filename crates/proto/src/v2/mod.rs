@@ -48,7 +48,10 @@ mod gateway;
 mod history;
 pub mod local;
 mod login;
+mod observe;
 mod plan_limit;
+mod port;
+mod run;
 mod sftp;
 mod ssh;
 mod ssh_agent;
@@ -64,7 +67,10 @@ pub use design::*;
 pub use gateway::*;
 pub use history::*;
 pub use login::*;
+pub use observe::*;
 pub use plan_limit::*;
+pub use port::*;
+pub use run::*;
 pub use sftp::*;
 pub use ssh::*;
 pub use ssh_agent::*;
@@ -205,6 +211,10 @@ pub struct RunCaps {
     pub mem_mb: u64,
     /// Project networks can be isolated from each other (`--opt isolate=true`).
     pub isolate: bool,
+    /// Can clone a project repo from the Core's copies (agent driver on): a spec that builds
+    /// from or mounts repos is placed on such a runner first (P5-05).
+    #[serde(default)]
+    pub can_clone: bool,
 }
 
 /// The state of `/dev/kvm` on a runner, for the microvm tier (E8a-09).

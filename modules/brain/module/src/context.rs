@@ -74,7 +74,8 @@ const MAX_QUEUE: usize = 100;
 const NOT_CONTESTED: &str = "contests IS NULL";
 /// Distinct cited sources of a record. Raw `support` is not used (it is being changed to count
 /// origins, B5-02), and this reads the same facts directly.
-const SUPPORT_SQL: &str = "(SELECT count(DISTINCT rs.source) FROM record_sources rs WHERE rs.record = memory.id)";
+const SUPPORT_SQL: &str =
+    "(SELECT count(DISTINCT rs.source) FROM record_sources rs WHERE rs.record = memory.id)";
 
 #[derive(Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -238,6 +239,29 @@ pub(crate) async fn context(
     Query(q): Query<AiContextQuery>,
 ) -> ApiResult<AiContext> {
     let session = session_of(&me)?;
+    build(&app, &b, &session, q, Opts::default())
+        .await
+        .map(Json)
+}
+
+/// How the Core itself asks for a bundle (B8-02, `project_rooms::instructions_for_session`).
+#[derive(Default)]
+pub(crate) struct Opts {
+    /// Read no room, only the me card: a session with no project.
+    pub me_only: bool,
+    /// Leave out the room's approved instructions: the caller already sends them as plain text.
+    pub no_instructions: bool,
+}
+
+/// The op itself, for a Code Mode call and for the Core's own session start. Everything in the
+/// security model above holds for both: same gate, same ledger, same envelope.
+pub(crate) async fn build(
+    app: &App,
+    b: &Brain,
+    session: &str,
+    q: AiContextQuery,
+    opts: Opts,
+) -> Result<AiContext, ApiError> {
     let start = match q.mode.as_str() {
         "start" => true,
         "prompt" => false,
@@ -251,10 +275,18 @@ pub(crate) async fn context(
     if !start && prompt.is_none() {
         return Err(ApiError::bad_request("prompt mode needs a prompt"));
     }
-    let max = if start { Q_START_TOKENS } else { Q_PROMPT_TOKENS };
+    let max = if start {
+        Q_START_TOKENS
+    } else {
+        Q_PROMPT_TOKENS
+    };
     let tokens = (q.budget.map_or(max, |n| n as usize)).clamp(50, max);
-    let named = q.room.is_some();
-    let (rooms, _) = scope(&app, &session, q.room.as_deref()).await?;
+    let named = q.room.is_some() && !opts.me_only;
+    let (rooms, _) = if opts.me_only {
+        (vec![], false)
+    } else {
+        scope(app, session, q.room.as_deref()).await?
+    };
     let solo = rooms.len() == 1;
     let (open, _closed) = open_all(&app, &b, rooms, named).await?;
 
@@ -282,7 +314,7 @@ pub(crate) async fn context(
             )
             .fetch_optional(a.pool())
             .await?;
-            if let Some(t) = ins.filter(|t| !t.trim().is_empty()) {
+            if let Some(t) = ins.filter(|t| !opts.no_instructions && !t.trim().is_empty()) {
                 let (t, was_cut) = cut(&t, INSTRUCTION_TOKENS * CHARS_PER_TOKEN);
                 body.complete &= !was_cut;
                 body.put(&format!("Instructions:\n{t}\n"), &[]);
@@ -348,7 +380,10 @@ pub(crate) async fn context(
     if start {
         let from = order.len();
         for r in &by_support {
-            if order.len() - from < Q_START_BY_SUPPORT && !used.contains(&r.id) && seen.insert(&r.id) {
+            if order.len() - from < Q_START_BY_SUPPORT
+                && !used.contains(&r.id)
+                && seen.insert(&r.id)
+            {
                 order.push(r);
             }
         }
@@ -363,7 +398,11 @@ pub(crate) async fn context(
     for r in order {
         let origin = if r.ai { ", origin=ai" } else { "" };
         let line = format!("- [{}{origin}] {}\n", r.id, one_line(&r.body, LINE_CHARS));
-        let part = if first { format!("Memory:\n{line}") } else { line };
+        let part = if first {
+            format!("Memory:\n{line}")
+        } else {
+            line
+        };
         if !body.put(&part, &[(r.room.clone(), r.id.clone())]) {
             break;
         }
@@ -371,13 +410,13 @@ pub(crate) async fn context(
     }
 
     if body.at.is_empty() && body.text.is_empty() {
-        return Ok(Json(AiContext {
+        return Ok(AiContext {
             mode: q.mode,
             text: String::new(),
             ids: vec![],
             tokens: 0,
             complete: body.complete,
-        }));
+        });
     }
 
     // The ledger and the audit first; no text leaves if they fail.
@@ -414,11 +453,11 @@ pub(crate) async fn context(
         .filter(|x| seen_ids.insert(x.1.clone()))
         .map(|x| x.1.clone())
         .collect();
-    Ok(Json(AiContext {
+    Ok(AiContext {
         text: wrap(&format!("Brain memory | {}", q.mode), &body.text),
         mode: q.mode,
         ids,
         tokens: n,
         complete: body.complete,
-    }))
+    })
 }

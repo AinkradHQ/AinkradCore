@@ -50,6 +50,8 @@ pub struct Workspaces {
     /// Build caches by the files that mark a repo's kind (E15.9): each one found in a worktree
     /// points its variable at the repo's shared cache on this runner.
     pub cache_rules: Vec<CacheRule>,
+    /// How a project repo's copy on the Core is reached (P3-02); none until the daemon sets it.
+    mirror_upstream: Mutex<Option<relay::Upstream>>,
 }
 
 /// A platform workspace request. The caller supplies the branch naming policy; the runner
@@ -60,6 +62,8 @@ pub struct SessionWorkspace {
     pub reference: String,
     pub branch: String,
     pub name: String,
+    /// Clone from the Core's copy of this project repo id (via the relay), not from `repo`.
+    pub mirror: Option<i64>,
 }
 
 /// A repo URL as a plain file name: its mirror's and its build cache's.
@@ -114,7 +118,12 @@ impl Workspaces {
             locks: Mutex::default(),
             in_use: Mutex::default(),
             cache_rules: CacheRule::defaults(),
+            mirror_upstream: Mutex::default(),
         }
+    }
+
+    pub fn set_mirror_upstream(&self, up: relay::Upstream) {
+        *self.mirror_upstream.lock().expect("mirror upstream") = Some(up);
     }
 
     /// The issue's worktree.
@@ -481,6 +490,7 @@ mod disk;
 mod layout;
 mod push;
 mod read;
+pub mod relay;
 mod session;
 pub use disk::CacheRule;
 

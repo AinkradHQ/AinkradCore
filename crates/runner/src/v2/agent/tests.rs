@@ -173,6 +173,7 @@ pub(super) fn dirs(name: &str) -> (TestDir, AgentConfig) {
 
 pub(super) fn start(session: &str, harness: &str) -> AgentStart {
     AgentStart {
+        instructions: None,
         session: session.to_owned(),
         harness: harness.to_owned(),
         model: None,
@@ -1591,4 +1592,12 @@ async fn a_mode_change_reaches_the_run_and_the_transcript() {
         d.mode(mode(edits)).unwrap_err().code,
         ErrorCode::InvalidArgs
     );
+}
+
+#[tokio::test]
+async fn an_agent_session_cannot_take_a_project_runs_id_range() {
+    let (_root, config) = dirs("as-run");
+    let d = Arc::new(AgentDriver::new(config, script("echo up")).unwrap());
+    assert!(d.start(start("as_run6162", "fake")).is_err());
+    assert!(d.start(start("as_runner", "fake")).is_err());
 }
