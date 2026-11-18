@@ -40,7 +40,7 @@ scan() { # FILE... -> offending lines on stdout, exit 1 if any
         next if "$o[0].$o[1].$o[2]" =~ /^(192\.0\.2|198\.51\.100|203\.0\.113)$/;
         next if $o[0] >= 224;                                          # multicast and reserved, never a host
         next if $ip eq "168.63.129.16";                                # Azure WireServer: a cloud constant, not our host
-        next if $ARGV eq "crates/server/src/api/limit.rs";             # Cloudflare edge ranges: published, not ours
+        next if $ARGV =~ m{^crates/server/src/(api/limit|gateway/projects/tests)\.rs$}; # Cloudflare edge ranges: published, not ours
         push @why, "public IPv4 $ip";
       }
     }
