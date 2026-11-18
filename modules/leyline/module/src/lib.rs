@@ -3,8 +3,8 @@
 //! text out (API and table), `leyline.*` events and audit; and keys (Y1-02): generated or imported,
 //! sealed in the Core's secret store, public data only in the API; and project attachments (Y1-03).
 //! SSH itself runs on a runner (Y2); the command gate (`gate`, Y4-01), host terminals and host-key
-//! trust (Y3-01), making a host a runner (Y8-01), and session history, recording and replay
-//! (Y3-02) are here.
+//! trust (Y3-01), Mac-direct agent leases (`direct`, Y6-01), making a host a runner (Y8-01), and session
+//! history, recording and replay (Y3-02) are here.
 //!
 //! Module off, the Core is unchanged: the tables are its own `leyline_` namespace, no Core
 //! migration, no Core crate names this module.
@@ -15,6 +15,7 @@ mod alerts;
 mod attach;
 mod cast;
 mod commands;
+mod direct;
 mod exec;
 mod fleet;
 pub mod gate;
@@ -25,6 +26,7 @@ mod hosts;
 mod keys;
 mod makerunner;
 mod policy;
+mod ready;
 /// Terminal recording; public so `benches/relay_tap.rs` can time the relay's tap.
 pub mod record;
 mod scrub;
@@ -93,6 +95,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0008_recordings.up.sql"),
         down: include_str!("../migrations/0008_recordings.down.sql"),
     },
+    Migration {
+        version: 9,
+        name: "0009_direct",
+        up: include_str!("../migrations/0009_direct.up.sql"),
+        down: include_str!("../migrations/0009_direct.down.sql"),
+    },
 ];
 
 // A key write is a secret write: importing needs the step-up like the Core's own secret writes.
@@ -105,6 +113,8 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     // decision that could point a session at an impostor.
     ("POST", "/hosts/{host}/terminals"),
     ("POST", "/hosts/{host}/host-keys/replace"),
+    // A Mac-direct lease hands a key to a runner on the person's machine: Touch ID, like a terminal.
+    ("POST", "/hosts/{host}/direct"),
     // Recording on or off both need it: turning it off hides what happens on a host. Resuming a
     // paused recording too; pausing does not (a person who sees one can stop it at once).
     ("PUT", "/hosts/{host}/recording"),
@@ -125,6 +135,8 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/fleet/runs"),
     ("POST", "/runs/{run}/cancel"),
     ("POST", "/hosts/{host}/host-keys/trust"),
+    // Ending a lease only takes access away.
+    ("POST", "/hosts/{host}/direct/revoke"),
     ("POST", "/sessions/{session}/recording/pause"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
@@ -160,6 +172,8 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts/{host}/host-keys", "read"),
     // The terminal scope, as the Core's own terminal routes.
     ("POST", "/hosts/{host}/terminals", "terminal"),
+    ("POST", "/hosts/{host}/direct", "terminal"),
+    ("POST", "/hosts/{host}/direct/revoke", "terminal"),
     ("GET", "/hosts/{host}/sessions", "read"),
     ("GET", "/projects/{project}/sessions", "read"),
     // A recording is terminal content: the terminal scope, and a step-up in the handler.
@@ -208,6 +222,8 @@ pub struct Leyline;
         hostkeys::trust_route,
         hostkeys::replace_route,
         terminal::open,
+        direct::lease,
+        direct::revoke_route,
         history::host_sessions,
         history::project_sessions,
         history::set_recording,
@@ -250,6 +266,9 @@ pub struct Leyline;
         hostkeys::Pick,
         terminal::NewSession,
         terminal::SessionView,
+        direct::NewDirect,
+        direct::DirectView,
+        direct::DirectEnded,
         history::SessionRow,
         history::NewRecording,
         history::HostRecording,
@@ -274,6 +293,10 @@ impl Module for Leyline {
                 if terminal::close_orphans(&app).await.is_err() {
                     tracing::warn!("leyline sessions left open could not be closed");
                 }
+                // Mac-direct leases outlive the Core: their timers start again.
+                if direct::resume(&app).await.is_err() {
+                    tracing::warn!("leyline direct leases left open could not be watched");
+                }
             });
         }
         health::attach(app);
@@ -293,6 +316,8 @@ impl Module for Leyline {
                 post(hostkeys::replace_route),
             )
             .route("/hosts/{host}/terminals", post(terminal::open))
+            .route("/hosts/{host}/direct", post(direct::lease))
+            .route("/hosts/{host}/direct/revoke", post(direct::revoke_route))
             .route("/hosts/{host}/sessions", get(history::host_sessions))
             .route("/hosts/{host}/recording", put(history::set_recording))
             .route(
@@ -347,6 +372,7 @@ impl Module for Leyline {
             "leyline.command",
             "leyline.alert",
             "leyline.run",
+            "leyline.direct",
         ]
     }
 
@@ -375,6 +401,11 @@ impl Module for Leyline {
             "leyline.hostkey.replaced",
             "leyline.session.opened",
             "leyline.session.ended",
+            "leyline.direct.leased",
+            "leyline.direct.revoked",
+            "leyline.direct.expired",
+            "leyline.direct.failed",
+            "leyline.direct.dropped",
             "leyline.recording.on",
             "leyline.recording.off",
             "leyline.recording.replayed",

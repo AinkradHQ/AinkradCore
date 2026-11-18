@@ -81,6 +81,10 @@ pub enum Command {
     SshSftpRename(super::SftpRename),
     #[serde(rename = "ssh.sftp.remove")]
     SshSftpRemove(super::SftpRemove),
+    #[serde(rename = "ssh.agent.load")]
+    SshAgentLoad(super::SshAgentLoad),
+    #[serde(rename = "ssh.agent.drop")]
+    SshAgentDrop(super::SshAgentDrop),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -122,6 +126,8 @@ impl Command {
             Self::SshSftpMkdir(_) => super::OP_SFTP_MKDIR,
             Self::SshSftpRename(_) => super::OP_SFTP_RENAME,
             Self::SshSftpRemove(_) => super::OP_SFTP_REMOVE,
+            Self::SshAgentLoad(_) => super::OP_SSH_AGENT_LOAD,
+            Self::SshAgentDrop(_) => super::OP_SSH_AGENT_DROP,
             Self::Unknown => "unknown",
         }
     }
@@ -235,6 +241,10 @@ pub enum Reply {
     SshSftpRename(super::SftpDone),
     #[serde(rename = "ssh.sftp.remove")]
     SshSftpRemove(super::SftpDone),
+    #[serde(rename = "ssh.agent.load")]
+    SshAgentLoad(super::SshAgentLoaded),
+    #[serde(rename = "ssh.agent.drop")]
+    SshAgentDrop(super::SshAgentDropped),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

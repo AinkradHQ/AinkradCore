@@ -34,8 +34,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ainkrad_proto::v2::{
-    DriverInfo, ErrorCode, ExecResult, FEATURE_PTY_SSH, MAX_SSH_HOPS, OP_EXEC_RUN, OP_SSH_EXEC,
-    SshExec, SshHop, StreamError,
+    DriverInfo, ErrorCode, ExecResult, FEATURE_PTY_SSH, MAX_SSH_HOPS, OP_EXEC_RUN,
+    OP_SSH_AGENT_DROP, OP_SSH_AGENT_LOAD, OP_SSH_EXEC, SshExec, SshHop, StreamError,
 };
 use russh::client::{self, Handle, Handler};
 use russh::keys::{
@@ -130,6 +130,8 @@ pub struct SshDriver {
     bin: Option<std::path::PathBuf>,
     /// The most bytes one SFTP transfer moves (`SFTP_MAX_BYTES`; a test lowers it).
     cap: u64,
+    /// Mac-direct agents (Y6-01).
+    agents: Arc<agent::Agents>,
 }
 
 pub(super) fn fail(code: ErrorCode, m: impl Into<String>) -> StreamError {
@@ -199,6 +201,7 @@ impl SshDriver {
             idle: IDLE,
             bin: None,
             cap: ainkrad_proto::v2::SFTP_MAX_BYTES,
+            agents: Arc::default(),
         }
     }
 
@@ -231,6 +234,7 @@ impl SshDriver {
                 name: DRIVER.to_owned(),
                 commands: std::iter::once(OP_SSH_EXEC)
                     .chain(sftp::OPS)
+                    .chain([OP_SSH_AGENT_LOAD, OP_SSH_AGENT_DROP])
                     .chain([FEATURE_PTY_SSH])
                     .map(str::to_owned)
                     .collect(),
@@ -531,6 +535,7 @@ async fn stop(ch: &russh::Channel<client::Msg>) {
     let _ = ch.close().await;
 }
 
+mod agent;
 #[cfg(test)]
 pub(in crate::v2) mod fixture;
 mod pool;

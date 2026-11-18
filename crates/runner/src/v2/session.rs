@@ -506,6 +506,9 @@ impl Session {
             | Command::SshSftpMkdir(_)
             | Command::SshSftpRename(_)
             | Command::SshSftpRemove(_) => self.start_sftp(stream, command, h),
+            Command::SshAgentLoad(_) | Command::SshAgentDrop(_) => {
+                self.start_ssh_agent(stream, command)
+            }
             Command::PtyOpen(_) | Command::PtyAttach(_) | Command::PtyClose(_) => {
                 self.start_pty(stream, command, h)
             }
@@ -654,6 +657,36 @@ impl Session {
             let _ = done.send((stream, body));
         });
         None
+    }
+}
+
+impl Session {
+    /// `ssh.agent.load` (its leases are redeemed first, so it answers later) and `ssh.agent.drop`
+    /// (at once).
+    fn start_ssh_agent(&self, stream: u64, command: Command) -> Option<Body> {
+        let Some(ssh) = self.ssh.as_ref().filter(|s| s.info().is_some()) else {
+            return Some(Body::Error(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                "ssh is off on this runner (it follows exec.run: --enable-exec)",
+            )));
+        };
+        match command {
+            Command::SshAgentDrop(req) => {
+                Some(Body::Result(Reply::SshAgentDrop(ssh.agent_drop(&req))))
+            }
+            Command::SshAgentLoad(req) => {
+                let (ssh, done) = (Arc::clone(ssh), self.done_tx.clone());
+                tokio::spawn(async move {
+                    let body = match ssh.agent_load(&req).await {
+                        Ok(loaded) => Body::Result(Reply::SshAgentLoad(loaded)),
+                        Err(e) => Body::Error(e),
+                    };
+                    let _ = done.send((stream, body));
+                });
+                None
+            }
+            _ => None,
+        }
     }
 }
 

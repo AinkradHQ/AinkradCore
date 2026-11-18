@@ -1050,8 +1050,11 @@ impl Agents {
     }
 
     /// Holds `e` under lease `id` (a `l_…`), dropping what has expired; `false` when the table
-    /// is full.
-    pub(crate) fn stash(&self, id: &str, e: Ephemeral, now: i64) -> bool {
+    /// is full. Public for a module that mints a single-use lease for one runner outside a
+    /// secret's stored scope (Leyline's Mac-direct, from a value it opened with
+    /// `secrets::open_for_module`); redeemed once, by that runner, through the broker's redeem
+    /// route, which checks `secrets.mode` first.
+    pub fn stash(&self, id: &str, e: Ephemeral, now: i64) -> bool {
         let mut held = self.ephemeral.lock().unwrap();
         held.retain(|_, v| v.expires > now);
         if held.len() >= EPHEMERAL_MAX {

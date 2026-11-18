@@ -713,3 +713,27 @@ mod mac_slots {
         let _ = std::fs::remove_dir_all(root);
     }
 }
+
+#[test]
+fn the_runners_mac_direct_agent_sockets_are_denied_by_name_last() {
+    let (root, mut spec) = fixture("ssh-agent-hide");
+    spec.env.push((
+        "AINKRAD_SANDBOX_HIDE_TMP".into(),
+        "/private/var/folders/ab/c+d/T/".into(),
+    ));
+    let text = profile(&spec, OsStr::new("/bin/true"));
+    let deny = "(deny file-read* file-write* (regex #\"^/private/var/folders/ab/c\\+d/T/ainkrad-ssh\\.\"))";
+    let other =
+        "(deny file-read* file-write* (regex #\"^/var/folders/ab/c\\+d/T/ainkrad-ssh\\.\"))";
+    assert!(text.contains(deny), "{text}");
+    assert!(text.contains(other), "the /var spelling");
+    // After every grant: nothing later can allow it again.
+    assert!(text.rfind("(allow").unwrap() < text.find(deny).unwrap());
+    // A path a regex literal cannot hold: the whole directory is denied instead.
+    spec.env
+        .push(("AINKRAD_SANDBOX_HIDE_TMP".into(), "/tmp/a\"b".into()));
+    let text = profile(&spec, OsStr::new("/bin/true"));
+    assert!(text.contains("(deny file-read* file-write* (subpath \"/tmp/a\\\"b\"))"));
+    assert!(!text.contains("ainkrad-ssh"));
+    let _ = std::fs::remove_dir_all(root);
+}
