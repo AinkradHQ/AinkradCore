@@ -11,6 +11,7 @@ mod assets;
 mod checks;
 mod collections;
 mod docs;
+mod fidelity;
 mod package;
 mod sniff;
 mod svg;
@@ -27,8 +28,9 @@ use serde_json::Value;
 use std::sync::Arc;
 use utoipa::OpenApi;
 
-pub use package::import_dir;
 pub use checks::check_pending;
+pub use fidelity::{FLAG_PERCENT, Measured, measure};
+pub use package::import_dir;
 
 pub const MODULE: &str = "design";
 

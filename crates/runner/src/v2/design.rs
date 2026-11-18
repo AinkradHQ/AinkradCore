@@ -1,5 +1,5 @@
 //! The `design` driver (Design V6-01, plan T7): `design.render`, `design.measure`, `design.review` and
-//! `design.check` run the `ainkrad-design` helper (CPU Skia); `design.shot` runs headless Chromium.
+//! `design.check`, `design.export` and `design.fidelity` run the `ainkrad-design` helper (CPU Skia); `design.shot` runs headless Chromium.
 //!
 //! Security model. Library fonts, images, SVG and HTML are untrusted, and so is a design document:
 //! a parser bug in Skia, FreeType or Blink must cost one job, never the runner or the host. So:
@@ -34,8 +34,8 @@ use std::time::Duration;
 
 use ainkrad_proto::v2::{
     Command, DESIGN_MAX_INPUT, DESIGN_MAX_PNG, DESIGN_MAX_SIDE, DriverInfo, ErrorCode,
-    OP_DESIGN_CHECK, OP_DESIGN_MEASURE, OP_DESIGN_RENDER, OP_DESIGN_REVIEW, OP_DESIGN_SHOT, Reply,
-    StreamError,
+    OP_DESIGN_CHECK, OP_DESIGN_EXPORT, OP_DESIGN_FIDELITY, OP_DESIGN_MEASURE, OP_DESIGN_RENDER,
+    OP_DESIGN_REVIEW, OP_DESIGN_SHOT, Reply, StreamError,
 };
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -140,6 +140,8 @@ impl DesignDriver {
             OP_DESIGN_MEASURE,
             OP_DESIGN_REVIEW,
             OP_DESIGN_CHECK,
+            OP_DESIGN_EXPORT,
+            OP_DESIGN_FIDELITY,
         ]
         .map(str::to_owned)
         .to_vec();
@@ -207,7 +209,9 @@ impl DesignDriver {
             Command::DesignRender(_)
             | Command::DesignMeasure(_)
             | Command::DesignReview(_)
-            | Command::DesignCheck(_) => {
+            | Command::DesignCheck(_)
+            | Command::DesignExport(_)
+            | Command::DesignFidelity(_) => {
                 let json = serde_json::to_vec(command).map_err(|e| internal(&e))?;
                 std::fs::write(job.dir.join("in/job.json"), json).map_err(|e| internal(&e))?;
                 (
@@ -310,6 +314,8 @@ fn reply(command: &Command, out: &[u8]) -> Result<Reply, StreamError> {
         Command::DesignMeasure(_) => Reply::DesignMeasure(parse(out)?),
         Command::DesignReview(_) => Reply::DesignReview(parse(out)?),
         Command::DesignCheck(_) => Reply::DesignCheck(parse(out)?),
+        Command::DesignExport(_) => Reply::DesignExport(parse(out)?),
+        Command::DesignFidelity(_) => Reply::DesignFidelity(parse(out)?),
         Command::DesignShot(_) => {
             let png = out;
             let (width, height) =

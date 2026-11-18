@@ -16,6 +16,8 @@ pub const OP_DESIGN_MEASURE: &str = "design.measure";
 pub const OP_DESIGN_REVIEW: &str = "design.review";
 pub const OP_DESIGN_CHECK: &str = "design.check";
 pub const OP_DESIGN_SHOT: &str = "design.shot";
+pub const OP_DESIGN_EXPORT: &str = "design.export";
+pub const OP_DESIGN_FIDELITY: &str = "design.fidelity";
 
 /// The largest job, as its command JSON (base64 included): under the Core's 8 MiB message cap, so
 /// about 5 MiB of files. ponytail: inline bytes; a bigger font is refused by the check. Stream the
@@ -164,4 +166,54 @@ pub struct DesignChecked {
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+/// `design.export` (V6-03): one screen as an inert HTML/CSS package. The answer carries the page and
+/// its stylesheet; the fonts and images it names are the job's own files, which the caller already
+/// holds, so they are not sent back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DesignExport {
+    #[serde(flatten)]
+    pub doc: DesignDoc,
+    /// A resolved id of a top-level node of the page; absent, the page's first screen. `doc.theme`
+    /// is only the theme the page opens in: the package carries both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<String>,
+}
+
+/// The answer to `design.export`. Files of the package: `index.html`, `style.css`, and for each
+/// hash in `fonts` / `images` the file `fonts/<sha256>` / `assets/<sha256>` (the job's bytes).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DesignExported {
+    /// The resolved id of the screen exported (what `design.render`'s `node` takes).
+    pub screen: String,
+    pub html: String,
+    pub css: String,
+    pub fonts: Vec<String>,
+    pub images: Vec<String>,
+    /// The screen's size in points, as the engine lays it out: the viewport a shot of it needs.
+    pub width: u32,
+    pub height: u32,
+    /// Some text used a font other than the library file it names (plan Q2).
+    #[serde(default)]
+    pub metrics_differ: bool,
+}
+
+/// `design.fidelity`: how far two PNGs of one screen are apart (the engine's frame, Chromium's shot
+/// of the export). Both are decoded only in the helper's sandbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DesignFidelity {
+    pub a: String,
+    pub b: String,
+}
+
+/// The answer to `design.fidelity`: the share of pixels that differ by more than the tolerance
+/// (CIE76 delta E), in percent. Sizes that differ are a score of 100.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DesignFidelityScore {
+    pub percent: f64,
+    pub changed: u64,
+    pub total: u64,
+    pub width: u32,
+    pub height: u32,
 }

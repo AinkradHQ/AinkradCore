@@ -33,7 +33,7 @@ pub fn image_ok(b: &[u8]) -> bool {
     })
 }
 
-fn theme(t: &str) -> Result<Theme, String> {
+pub(crate) fn theme(t: &str) -> Result<Theme, String> {
     match t {
         "day" => Ok(Theme::Day),
         "night" => Ok(Theme::Night),
@@ -41,8 +41,8 @@ fn theme(t: &str) -> Result<Theme, String> {
     }
 }
 
-/// The document resolved and laid out, with the job's fonts and the images that pass `image_ok`.
-fn load(d: &DesignDoc) -> Result<(Renderer, Resolved), String> {
+/// The document resolved for `t`, from the job's JSON.
+pub(crate) fn resolved(d: &DesignDoc, t: Theme) -> Result<Resolved, String> {
     let doc: Doc =
         serde_json::from_value(d.doc.clone()).map_err(|_| "the design is not a valid document")?;
     let system: Option<Doc> = match &d.system {
@@ -52,8 +52,12 @@ fn load(d: &DesignDoc) -> Result<(Renderer, Resolved), String> {
         None => None,
     };
     let sys = d.system_id.as_deref().zip(system.as_ref());
-    let resolved = resolve(&d.doc_id, &doc, sys, theme(&d.theme)?)
-        .map_err(|e| format!("the design does not resolve: {e:?}"))?;
+    resolve(&d.doc_id, &doc, sys, t).map_err(|e| format!("the design does not resolve: {e:?}"))
+}
+
+/// The document resolved and laid out, with the job's fonts and the images that pass `image_ok`.
+pub(crate) fn load(d: &DesignDoc) -> Result<(Renderer, Resolved), String> {
+    let resolved = resolved(d, theme(&d.theme)?)?;
     let mut fonts = Fonts::new();
     for f in &d.fonts {
         let Some(bytes) = b64(&f.data) else { continue };
@@ -82,7 +86,7 @@ fn load(d: &DesignDoc) -> Result<(Renderer, Resolved), String> {
 }
 
 /// Text whose font is not a library file the job supplied: laid out with a fallback (plan Q2).
-fn metrics_differ(n: &ResolvedNode, fonts: &Fonts) -> bool {
+pub(crate) fn metrics_differ(n: &ResolvedNode, fonts: &Fonts) -> bool {
     let asset = n
         .props
         .get("type")
