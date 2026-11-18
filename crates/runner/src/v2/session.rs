@@ -115,6 +115,8 @@ pub struct Session {
     pty: Option<Arc<PtyDriver>>,
     /// `ssh.exec` (Leyline), offered where `exec.run` is.
     ssh: Option<Arc<SshDriver>>,
+    /// Project runs (P5-02), where the run helper is installed.
+    run: Option<Arc<super::RunDriver>>,
     /// Agent sessions (`--enable-agents`), if offered.
     agent: Option<Arc<AgentDriver>>,
     pub(super) login: Option<Arc<super::login::LoginDriver>>, // KAN-441 L2, set with `agent`
@@ -136,6 +138,7 @@ impl Session {
             exec,
             pty: None,
             ssh: None,
+            run: None,
             agent: None,
             login: None,
             control: None,
@@ -164,6 +167,12 @@ impl Session {
     /// Offers the `ssh` driver too.
     pub fn with_ssh(mut self, ssh: Arc<SshDriver>) -> Self {
         self.ssh = Some(ssh);
+        self
+    }
+
+    /// Offers the `run` driver too.
+    pub fn with_run(mut self, run: Arc<super::RunDriver>) -> Self {
+        self.run = Some(run);
         self
     }
 
@@ -238,6 +247,7 @@ impl Session {
             drivers: std::iter::once(self.exec.info())
                 .chain(pty_info)
                 .chain(self.ssh.as_ref().and_then(|s| s.info()))
+                .chain(self.run.as_ref().and_then(|r| r.info()))
                 .chain(agent_info)
                 .chain(
                     self.control
@@ -524,6 +534,23 @@ impl Session {
             | Command::AgentAttach(_)
             | Command::AgentSubagentStop(_)
             | Command::GatewayTest(_) => self.start_agent(stream, command),
+            Command::RunStart(_) | Command::RunStop(_) | Command::RunStatus(_) => {
+                let Some(run) = self.run.as_ref().filter(|r| r.info().is_some()) else {
+                    return Some(Body::Error(StreamError::new(
+                        ErrorCode::UnsupportedCommand,
+                        "project runs are not set up on this runner (install it with --with-run)",
+                    )));
+                };
+                let (run, done) = (Arc::clone(run), self.done_tx.clone());
+                tokio::spawn(async move {
+                    let body = match run.handle(command).await {
+                        Ok(reply) => Body::Result(reply),
+                        Err(e) => Body::Error(e),
+                    };
+                    let _ = done.send((stream, body));
+                });
+                None
+            }
             Command::RunnerPolicy(_) | Command::ToolsInstall(_) | Command::ToolsStatus(_) => {
                 self.start_control(stream, command)
             }

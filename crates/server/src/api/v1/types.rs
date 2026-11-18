@@ -290,7 +290,10 @@
 ///    the repos of the project's or default GitHub connection, grouped by owner, `q`, `page`, `per_page`) and
 ///    `POST /projects/from-github` (`createProjectFromGithub`: creates the project, its repos and, unless the connection is the workspace default, a `project`-scope
 ///    connection binding). Both `admin`; the POST is destructive. No new audit or event kinds.
-pub const API_MINOR: u32 = 93;
+/// 94: project runs (P5-02). Runner wire protocol only (`runner.schema.json`): driver `run` with ops `run.start`
+///    (`RunStart` -> `RunInfo`), `run.stop` (`RunStop` -> `RunInfo`) and `run.status` (`RunStatusReq` -> `RunList`);
+///    no route yet. (90-93 are taken by open PRs.)
+pub const API_MINOR: u32 = 94;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

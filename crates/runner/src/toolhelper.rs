@@ -391,7 +391,7 @@ impl Host for Real {
 }
 
 /// The uid of `name` in a passwd file's text.
-fn uid_in(passwd: &str, name: &str) -> Option<u32> {
+pub(crate) fn uid_in(passwd: &str, name: &str) -> Option<u32> {
     passwd.lines().find_map(|l| {
         let mut f = l.split(':');
         (f.next()? == name).then(|| f.nth(1)?.parse().ok())?

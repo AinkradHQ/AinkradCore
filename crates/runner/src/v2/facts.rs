@@ -65,7 +65,9 @@ pub fn gather(
         own_logins,
         policy,
         podman: podman.clone(),
-        run_caps: run_caps(podman.as_ref(), Path::new("/"), host_resources()),
+        // Fail closed without the egress block (`deploy/run-egress.nft`).
+        run_caps: run_caps(podman.as_ref(), Path::new("/"), host_resources())
+            .filter(|_| super::run::egress_active()),
     }
 }
 
