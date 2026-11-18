@@ -198,15 +198,24 @@ async fn the_relay_answers_only_the_granted_repos_upload_pack_with_its_token() {
     );
     assert!(ask(&url, &big).await.contains("413"));
     drop(relay);
+    // Dropping aborts the listener task; the socket closes once the runtime
+    // processes the abort, so poll briefly instead of racing it.
+    let addr = url
+        .strip_prefix("http://")
+        .unwrap()
+        .split('/')
+        .next()
+        .unwrap();
+    let mut closed = false;
+    for _ in 0..40 {
+        if tokio::net::TcpStream::connect(addr).await.is_err() {
+            closed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     assert!(
-        tokio::net::TcpStream::connect(
-            url.strip_prefix("http://")
-                .unwrap()
-                .split('/')
-                .next()
-                .unwrap()
-        )
-        .await
-        .is_err()
+        closed,
+        "the relay still accepts connections 2 s after it was dropped"
     );
 }

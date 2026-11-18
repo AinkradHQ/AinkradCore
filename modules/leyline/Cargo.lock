@@ -85,11 +85,11 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core"
-version = "0.8.11"
+version = "0.9.0"
 
 [[package]]
 name = "ainkrad-core-server"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "age",
  "ainkrad-core",
@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-proto"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "schemars",
  "serde",
@@ -137,7 +137,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-providers"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "reqwest 0.12.28",
  "serde_json",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-sys"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "libc",
 ]
