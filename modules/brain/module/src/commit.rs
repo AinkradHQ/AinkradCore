@@ -365,7 +365,8 @@ pub(crate) async fn commit_room(
                  title, text, links, started_at, ended_at, run, assigned_by, needed, pointer) \
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                  ON CONFLICT(item_id) DO UPDATE SET content_hash = excluded.content_hash, path = excluded.path, \
-                 project_hint = excluded.project_hint, title = excluded.title, text = excluded.text, links = excluded.links, \
+                 project_hint = excluded.project_hint, author_kind = excluded.author_kind, author_name = excluded.author_name, \
+                 title = excluded.title, text = excluded.text, links = excluded.links, \
                  started_at = excluded.started_at, ended_at = excluded.ended_at, run = excluded.run, \
                  pointer = excluded.pointer, distilled = NULL, compacted_at = NULL \
                  WHERE content_hash != excluded.content_hash AND excluded.started_at >= started_at \

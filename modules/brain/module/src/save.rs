@@ -6,7 +6,7 @@
 //! is kept only under the `bodies` key of its `admit.dropped` audit row (the 30-day purge of
 //! `changes::purge_room` clears exactly that key), next to counts and reason codes that stay.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ainkrad_proto::redact::Redactor;
 use brain_model::merge::{Decision, Grounding, Tier, body_norm, may_supersede};
@@ -17,7 +17,7 @@ use crate::answer::Candidate;
 use crate::changes::ChangeSet;
 use crate::distil::{DistilledBy, auto_ok, log_op};
 use crate::judge::Dropped;
-use crate::merge::{Memory, Prepared, Replace, reinforce, supersede};
+use crate::merge::{Memory, Prepared, Replace, recount, reinforce, supersede};
 use crate::{policy, rand_id};
 
 /// What one save did.
@@ -47,7 +47,10 @@ pub(crate) struct Saved {
 /// the same transaction, so a rerun can never save twice. A candidate saved into memory that names a
 /// record it `replaces` supersedes it when `grounded[i]` is strong enough (`may_supersede`), else
 /// only contests it (B4-02). One change set: "Saved N · reinforced M · dropped K", plus
-/// "· replaced R" when any was.
+/// "· replaced R" when any was. `loaded` maps a record id to the sessions the Brain gave it to
+/// (`loaded::of_room`): their citations of it never raise its support. `ai` marks a proposal from an AI
+/// session (`ai_propose.rs`): its rows get `origin = 'ai'` and its change set is of kind `ai`; it passes no
+/// grounding, so it can never supersede.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn store_candidates(
     pool: &SqlitePool,
@@ -59,9 +62,11 @@ pub(crate) async fn store_candidates(
     now: &str,
     prep: &Prepared,
     grounded: &[Grounding],
+    loaded: &HashMap<String, HashSet<String>>,
+    ai: bool,
 ) -> Result<Saved, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let mut cs = ChangeSet::new("distil", now);
+    let mut cs = ChangeSet::new(if ai { "ai" } else { "distil" }, now);
     let mut memory = Memory::load(&mut tx, prep).await?;
     let batch = Batch {
         distil,
@@ -70,6 +75,8 @@ pub(crate) async fn store_candidates(
         by,
         prep,
         grounded,
+        loaded,
+        ai,
     };
     let mut saved = save_into(&mut tx, &mut cs, &mut memory, policy, now, &batch).await?;
     drop_pending(&mut tx, distil).await?;
@@ -93,6 +100,10 @@ pub(crate) struct Batch<'a> {
     pub by: &'a DistilledBy,
     pub prep: &'a Prepared,
     pub grounded: &'a [Grounding],
+    /// Record id -> sessions the Brain gave it to (`loaded::of_room`).
+    pub loaded: &'a HashMap<String, HashSet<String>>,
+    /// A proposal from an AI session (`ai_propose.rs`).
+    pub ai: bool,
 }
 
 /// Removes the distil's parked judge state, so a rerun can never save twice.
@@ -127,7 +138,10 @@ pub(crate) async fn save_into(
         by,
         prep,
         grounded,
+        loaded,
+        ai,
     } = *batch;
+    let none = HashSet::new();
     let redactor = Redactor::new();
     let (mut n, mut accepted, mut reinforced, mut replaced, mut contested) = (0, 0, 0, 0, 0);
     for (i, c) in out.iter().enumerate() {
@@ -144,7 +158,8 @@ pub(crate) async fn save_into(
                 && c.replaces.as_deref() == Some(id.as_str())
                 && may_supersede(&c.kind, &c.kind, g))
         {
-            reinforce(&mut *conn, cs, &id, &c.sources, distil, now).await?;
+            let loaded_by = loaded.get(&id).unwrap_or(&none);
+            reinforce(&mut *conn, cs, &id, &c.sources, distil, loaded_by, now).await?;
             reinforced += 1;
             continue;
         }
@@ -152,8 +167,8 @@ pub(crate) async fn save_into(
         cs.touch(&mut *conn, &id).await?;
         let auto_ok = auto_ok(c, policy);
         sqlx::query(
-            "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, reviewed_at, decided_by, distil, provider, account, tool, body_norm, last_seen_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, reviewed_at, decided_by, distil, provider, account, tool, body_norm, last_seen_at, origin) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&c.kind)
@@ -170,6 +185,7 @@ pub(crate) async fn save_into(
         .bind(&by.tool)
         .bind(&norm)
         .bind(now)
+        .bind(if ai { "ai" } else { "distil" })
         .execute(&mut *conn)
         .await?;
         for (pos, s) in c.sources.iter().enumerate() {
@@ -183,6 +199,8 @@ pub(crate) async fn save_into(
             .execute(&mut *conn)
             .await?;
         }
+        // Two sessions stating it in one batch are two origins.
+        recount(&mut *conn, &id).await?;
         let mut skip_add = false;
         if auto_ok {
             // Only a fact that really entered memory may retire another.

@@ -20,6 +20,7 @@
 //!   `admin`, never as a read-only device.
 //! - Brain-owned sessions (distil, judge, tidy, overview) are never a trigger, and never a source.
 //! - The first run starts at the newest event: history is not distilled by surprise.
+//! - Mid-session checkpoints (`checkpoint.rs`) queue through the same `queue`, so they share every cap.
 //!
 //! The clock is a parameter (`step_at`), so tests set the time.
 //! ponytail: every tick reads up to 10 pages of events; a session end scans each active room's
@@ -43,7 +44,7 @@ use crate::{Brain, MODULE, distil, policy, rand_id, record};
 const EVERY_SECS: u64 = 30;
 /// Idle debounce: a session's end is acted on this long after it happened, so a burst of ends in
 /// one room (and the sync that collects them) settles into one distil.
-const IDLE_SECS: i64 = 45;
+pub(crate) const IDLE_SECS: i64 = 45;
 /// Import threshold (a Q value): this many undistilled sources in a room ...
 const THRESHOLD_SOURCES: i64 = 40;
 /// ... or the oldest undistilled source this old.
@@ -60,7 +61,7 @@ const PAGE: u32 = 200;
 const MAX_PAGES: u32 = 10;
 
 #[derive(Debug, PartialEq, Eq)]
-enum Queued {
+pub(crate) enum Queued {
     Yes,
     /// A distil of the room is open (it takes the new sources), or this session had its distil.
     Coalesced,
@@ -92,7 +93,7 @@ async fn active_rooms(app: &App) -> Result<Vec<String>, sqlx::Error> {
 /// The device the distil runs as (its user's fallback chain): the owner's (user 1) active device
 /// with a write scope that asked for a distil most recently, else the oldest such device. No device,
 /// no distil.
-async fn requester(app: &App) -> Result<Option<String>, sqlx::Error> {
+pub(crate) async fn requester(app: &App) -> Result<Option<String>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT id FROM core_devices WHERE kind = 'device' AND status = 'active' AND revoked_at IS NULL \
          AND user_id = 1 AND EXISTS (SELECT 1 FROM json_each(core_devices.scopes) WHERE value IN ('write','admin')) \
@@ -103,9 +104,12 @@ async fn requester(app: &App) -> Result<Option<String>, sqlx::Error> {
     .await
 }
 
+/// Triggers of a running session (B5-02 checkpoints): they share half of a room's `daily_distils`.
+const MID_SESSION: &[&str] = &["checkpoint", "hook"];
+
 /// Queues one distil of `room` (`fresh` undistilled sources) unless a gate says no. One write
 /// transaction: the checks and the insert cannot be split by another tick.
-async fn queue(
+pub(crate) async fn queue(
     app: &App,
     room: &str,
     trigger: &str,
@@ -162,16 +166,21 @@ async fn queue(
         .bind(room)
         .fetch_one(&mut *tx)
         .await?;
-    let (in_room, in_all): (i64, i64) = sqlx::query_as(
-        "SELECT coalesce(sum(room = ?), 0), count(*) FROM brain_distils \
-         WHERE created_at >= ? AND \"trigger\" NOT IN ('redistil','tidy','judge')",
+    let (in_room, in_all, mid_room): (i64, i64, i64) = sqlx::query_as(
+        "SELECT coalesce(sum(room = ?1), 0), count(*), \
+                coalesce(sum(room = ?1 AND \"trigger\" IN ('checkpoint','hook')), 0) FROM brain_distils \
+         WHERE created_at >= ?2 AND \"trigger\" NOT IN ('redistil','tidy','judge')",
     )
     .bind(room)
     .bind(&since)
     .fetch_one(&mut *tx)
     .await?;
+    // Mid-session distils (B5-02) may use at most half the room's day: the rest is kept for session ends.
+    let mid_cap = cap / 2;
     let over = if in_room >= cap {
         Some(("room_cap", cap))
+    } else if MID_SESSION.contains(&trigger) && mid_room >= mid_cap {
+        Some(("room_cap", mid_cap))
     } else if in_all >= GLOBAL_DAILY {
         Some(("global_cap", GLOBAL_DAILY))
     } else {
@@ -420,7 +429,8 @@ pub(crate) async fn step(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError
     // The threshold scan has its own path: a failure of the event reader never sits in front of it.
     let from_events = ended(app, b, now).await;
     let from_scan = threshold(app, b, now).await;
-    Ok(from_events? + from_scan?)
+    let from_checkpoints = crate::checkpoint::step(app, b, now).await;
+    Ok(from_events? + from_scan? + from_checkpoints?)
 }
 
 struct AutoJob(Brain);

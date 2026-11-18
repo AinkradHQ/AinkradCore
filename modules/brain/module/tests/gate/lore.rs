@@ -14,12 +14,13 @@ const OLD: &str = "2026-11-01T08:00:00.000Z";
 async fn lore_tables(fx: &Fx) {
     sqlx::query(
         "CREATE TABLE lore_notes (id TEXT PRIMARY KEY, project TEXT, kind TEXT NOT NULL DEFAULT 'note', \
-         title TEXT NOT NULL, text TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, trashed_at TEXT)",
+         title TEXT NOT NULL, text TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, trashed_at TEXT, \
+         updated_by TEXT NOT NULL DEFAULT 'person:d_test')",
     )
     .execute(&fx.app.pool)
     .await
     .unwrap();
-    sqlx::query("CREATE VIEW lore_feed_v1 AS SELECT id, project, kind, title, text, rev, updated_at, trashed_at FROM lore_notes")
+    sqlx::query("CREATE VIEW lore_feed_v1 AS SELECT id, project, kind, title, text, rev, updated_at, trashed_at, updated_by FROM lore_notes")
         .execute(&fx.app.pool)
         .await
         .unwrap();
@@ -165,6 +166,58 @@ async fn a_project_note_lands_in_its_room_and_a_personal_note_in_the_personal_ro
     );
     // Nothing changed: nothing is taken again.
     assert_eq!(lore_sync(&fx).await["idle"], "nothing_new");
+}
+
+async fn author_kind(fx: &Fx, room: &str) -> String {
+    let c = canon_pool(fx, room).await;
+    let k: String = sqlx::query_scalar("SELECT author_kind FROM sources")
+        .fetch_one(&c)
+        .await
+        .unwrap();
+    c.close().await;
+    k
+}
+
+/// B3-04 review: a note an AI session edited last is an `agent` source (it never grounds an AI
+/// proposal); a person's later edit makes it a `person` one again.
+#[tokio::test]
+async fn a_note_last_edited_by_an_ai_session_is_an_agent_source() {
+    let fx = fx_lore().await;
+    let (p, room) = project(&fx, "shop", "Shop").await;
+    note(
+        &fx,
+        "ln_aiedit00001",
+        Some(p),
+        "Ship the cart on Friday.",
+        1,
+        OLD,
+    )
+    .await;
+    sqlx::query("UPDATE lore_notes SET updated_by = 'session:as_1' WHERE id = 'ln_aiedit00001'")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(lore_sync(&fx).await["found"], 1);
+    assert_eq!(author_kind(&fx, &room).await, "agent");
+    note(
+        &fx,
+        "ln_aiedit00001",
+        Some(p),
+        "Ship the cart on Monday.",
+        2,
+        OLD,
+    )
+    .await;
+    sqlx::query("UPDATE lore_notes SET updated_by = 'person:d_test' WHERE id = 'ln_aiedit00001'")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(lore_sync(&fx).await["found"], 1);
+    assert_eq!(
+        author_kind(&fx, &room).await,
+        "person",
+        "the update carries the new editor"
+    );
 }
 
 #[tokio::test]

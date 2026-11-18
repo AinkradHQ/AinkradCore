@@ -1,6 +1,6 @@
 //! E4: the Brain through Code Mode. A session sees only the rooms its project matches or a room's
 //! access list names, inside each room's model policy; what it reads is outside data; what it
-//! proposes waits in the Inbox.
+//! proposes goes through the save pipeline (`ai_write.rs`).
 
 use ainkrad_core::untrusted::{CLOSE, OPEN};
 use ainkrad_core_server::api::v1::{Caller, Client, router};
@@ -656,132 +656,6 @@ async fn a_closed_room_is_counted_not_searched_and_the_ops_are_session_only() {
 }
 
 #[tokio::test]
-async fn a_proposal_waits_in_the_inbox_and_is_never_accepted() {
-    let fx = fx().await;
-    let room = committed_room_named(&fx, "Alpha", &[("A", "alpha text")]).await;
-    open_room(&fx, &room).await;
-    // Even a room that auto-accepts decisions does not accept this one.
-    ok(
-        &fx,
-        Method::PATCH,
-        &format!("/rooms/{room}/policy"),
-        Some(json!({"auto_accept": ["decision"]})),
-    )
-    .await;
-    let s = session(&fx, ALPHA, &["anthropic"]).await;
-    let path = format!("/ai/rooms/{room}/propose");
-    let item_id = {
-        let p = canon_pool(&fx, &room).await;
-        let id: String = sqlx::query_scalar("SELECT item_id FROM sources LIMIT 1")
-            .fetch_one(&p)
-            .await
-            .unwrap();
-        p.close().await;
-        id
-    };
-    let body = json!({"type": "decision", "body": "Use SQLite for the cache.", "tags": ["db"], "sources": [item_id]});
-    let (st, v) = as_session(&fx, &s, Method::POST, &path, Some(body.clone())).await;
-    assert_eq!(st, StatusCode::OK, "{v}");
-    assert_eq!(
-        (v["status"].as_str(), v["duplicate"].as_bool()),
-        (Some("candidate"), Some(false))
-    );
-    let id = v["id"].as_str().unwrap().to_owned();
-    // The same statement again adds nothing; the match is a candidate, not memory, so no id.
-    let (_, again) = as_session(&fx, &s, Method::POST, &path, Some(body)).await;
-    assert_eq!(
-        (again["id"].as_str(), again["duplicate"].as_bool()),
-        (Some(""), Some(true))
-    );
-    assert!(!again.to_string().contains(&id));
-    // An unknown source id answers exactly like any other invalid proposal.
-    let (_, bad_type) = as_session(&fx, &s, Method::POST, &path, Some(json!({"type": "fact", "body": "x", "tags": vec!["a"; 9]}))).await;
-    let (st, bad_src) = as_session(&fx, &s, Method::POST, &path, Some(json!({"type": "fact", "body": "x", "sources": ["no-such-item"]}))).await;
-    assert_eq!((st, &bad_src), (StatusCode::BAD_REQUEST, &bad_type));
-
-    let inbox = ok(&fx, Method::GET, &format!("/rooms/{room}/inbox"), None).await;
-    let items = inbox["items"].as_array().unwrap();
-    assert_eq!(items.len(), 1, "{inbox}");
-    assert_eq!(
-        (
-            items[0]["status"].as_str(),
-            items[0]["proposed_by"].as_str()
-        ),
-        (Some("candidate"), Some(s.as_str()))
-    );
-    assert!(items[0]["decided_by"].is_null() && items[0]["distilled_by"].is_null());
-    // No accepted record exists, so no read op shows it.
-    let d = read(&fx, &s, "brainAiDecisions", json!({})).await;
-    assert!(d["records"].as_array().unwrap().is_empty());
-
-    // Bad proposals never land.
-    for bad in [
-        json!({"type": "opinion", "body": "x"}),
-        json!({"type": "fact", "body": ""}),
-        json!({"type": "fact", "body": "x".repeat(2001)}),
-        json!({"type": "fact", "body": "x", "tags": vec!["a"; 9]}),
-        json!({"type": "fact", "body": "x", "sources": ["no-such-item"]}),
-        json!({"type": "fact", "body": "x", "extra": 1}),
-    ] {
-        let (st, _) = as_session(&fx, &s, Method::POST, &path, Some(bad)).await;
-        assert!(
-            st == StatusCode::BAD_REQUEST || st == StatusCode::UNPROCESSABLE_ENTITY,
-            "{st}"
-        );
-    }
-    // A person's decision still works on it, and the session cap holds.
-    for n in 0..19 {
-        let (st, _) = as_session(
-            &fx,
-            &s,
-            Method::POST,
-            &path,
-            Some(json!({"type": "fact", "body": format!("fact {n}")})),
-        )
-        .await;
-        assert_eq!(st, StatusCode::OK);
-    }
-    let (st, v) = as_session(
-        &fx,
-        &s,
-        Method::POST,
-        &path,
-        Some(json!({"type": "fact", "body": "one more"})),
-    )
-    .await;
-    assert_eq!(
-        (st, v["code"].as_str()),
-        (StatusCode::TOO_MANY_REQUESTS, Some("too_many_proposals"))
-    );
-    let (st, _) = call(
-        &fx,
-        &fx.admin,
-        Method::POST,
-        &format!("/rooms/{room}/inbox/{id}"),
-        Some(json!({"action": "reject"})),
-    )
-    .await;
-    assert_eq!(st, StatusCode::OK);
-
-    // The audit row carries the session's origin and holds no text.
-    let rows: Vec<(String, Option<String>, String)> = sqlx::query_as("SELECT origin, origin_ref, details FROM audit_events WHERE action = 'brain.ai.proposed' ORDER BY seq")
-        .fetch_all(&fx.app.pool)
-        .await
-        .unwrap();
-    assert_eq!(rows.len(), 20);
-    for (origin, oref, details) in &rows {
-        assert_eq!(
-            (origin.as_str(), oref.as_deref()),
-            ("ai_session", Some(s.as_str()))
-        );
-        assert!(
-            !details.contains("SQLite") && !details.contains("fact "),
-            "{details}"
-        );
-    }
-}
-
-#[tokio::test]
 async fn the_brain_operations_are_in_the_live_catalogue_with_their_risks() {
     let fx = fx().await;
     let c = fx.app.catalogue();
@@ -794,6 +668,7 @@ async fn the_brain_operations_are_in_the_live_catalogue_with_their_risks() {
         ("brainAiDecisions", "read"),
         ("brainAiProjectState", "read"),
         ("brainAiPropose", "write"),
+        ("brainAiCheckpoint", "write"),
     ] {
         let o = c
             .ops
@@ -886,7 +761,7 @@ async fn no_ai_op_returns_source_text_except_evidence_for_a_cited_pair() {
         ("brainAiDecisions", json!({})),
         ("brainAiProjectState", json!({})),
     ];
-    let skipped = ["brainAiEvidence", "brainAiPropose"];
+    let skipped = ["brainAiEvidence", "brainAiPropose", "brainAiCheckpoint"];
     for k in &live {
         assert!(
             skipped.contains(&k.as_str()) || calls.iter().any(|(o, _)| o == k),

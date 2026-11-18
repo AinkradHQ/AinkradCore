@@ -32,6 +32,10 @@ use crate::{Brain, rand_id, record};
 pub const KINDS: &[&str] = &["distil", "checkpoint", "ai", "tidy", "purge", "archive"];
 /// Archived records are purged this many days after `archived_at` (and Undo lasts as long).
 pub const PURGE_DAYS: i64 = 30;
+/// A record a room tidy archived (not yet undone) is kept this many days longer, so a person has time
+/// to see the change in Activity and Undo it. (There is no per-change "seen" mark; a longer window
+/// instead of a `seen_at` column.)
+pub const TIDY_EXTRA_DAYS: i64 = 60;
 /// Daily, 03:17 UTC.
 const PURGE_CRON: &str = "17 3 * * *";
 
@@ -52,13 +56,24 @@ pub async fn image(conn: &mut SqliteConnection, id: &str) -> Result<Option<Strin
     .await?;
     let Some(row) = row else { return Ok(None) };
     let mut v: Value = serde_json::from_str(&row).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    let sources: Vec<(String, i64, Option<String>)> = sqlx::query_as(
-        "SELECT source, position, run FROM record_sources WHERE record = ? ORDER BY position, source",
+    let sources: Vec<(String, i64, Option<String>, i64)> = sqlx::query_as(
+        "SELECT source, position, run, echo FROM record_sources WHERE record = ? ORDER BY position, source",
     )
     .bind(id)
     .fetch_all(&mut *conn)
     .await?;
-    v["_sources"] = json!(sources);
+    // `[source, position, run]` (canon_0009), plus a fourth `1` for an echo citation (canon_0010):
+    // images written before echo existed compare equal to today's.
+    v["_sources"] = sources
+        .into_iter()
+        .map(|(s, p, run, echo)| {
+            if echo == 0 {
+                json!([s, p, run])
+            } else {
+                json!([s, p, run, 1])
+            }
+        })
+        .collect();
     Ok(Some(v.to_string()))
 }
 
@@ -117,15 +132,14 @@ async fn restore(
     q.execute(&mut *conn).await?;
     for s in obj["_sources"].as_array().into_iter().flatten() {
         if let (Some(src), Some(pos)) = (s[0].as_str(), s[1].as_i64()) {
-            sqlx::query(
-                "INSERT OR REPLACE INTO record_sources (record, source, position, run) VALUES (?, ?, ?, ?)",
-            )
-            .bind(id)
-            .bind(src)
-            .bind(pos)
-            .bind(s.get(2).and_then(Value::as_str))
-            .execute(&mut *conn)
-            .await?;
+            sqlx::query("INSERT OR REPLACE INTO record_sources (record, source, position, run, echo) VALUES (?, ?, ?, ?, ?)")
+                .bind(id)
+                .bind(src)
+                .bind(pos)
+                .bind(s.get(2).and_then(Value::as_str))
+                .bind(s.get(3).and_then(Value::as_i64).unwrap_or(0))
+                .execute(&mut *conn)
+                .await?;
         }
     }
     Ok(())
@@ -361,9 +375,13 @@ pub async fn purge_room(
 ) -> Result<(usize, usize), sqlx::Error> {
     let mut tx = pool.begin().await?;
     let ids: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM records WHERE archived_at IS NOT NULL AND archived_at < ?",
+        "SELECT id FROM records WHERE archived_at IS NOT NULL AND archived_at < ?1 \
+             AND (archived_at < strftime('%Y-%m-%dT%H:%M:%SZ', ?1, ?2) OR NOT EXISTS ( \
+               SELECT 1 FROM change_rows cr JOIN changes c ON c.id = cr.change \
+               WHERE cr.record = records.id AND c.kind = 'tidy' AND c.undone_at IS NULL))",
     )
     .bind(cutoff)
+    .bind(format!("-{TIDY_EXTRA_DAYS} days"))
     .fetch_all(&mut *tx)
     .await?;
     for id in &ids {
