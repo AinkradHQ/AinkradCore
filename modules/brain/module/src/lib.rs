@@ -34,6 +34,7 @@ pub mod clean;
 pub mod collectors;
 mod commit;
 mod distil;
+pub mod eval;
 pub mod files;
 mod imports;
 mod inbox;
