@@ -70,8 +70,11 @@ pub fn decide(
     Decision::Insert
 }
 
-/// What backs a candidate: ONE user turn of a source it cites, or ONE cited Jira or GitHub item
-/// (`answer::user_grounded` / `answer::structured_grounded`).
+/// What backs a candidate, by the strict test (`admit::Grounds::supports`, B4-02 round 3): every
+/// content word in one clause of ONE user turn of a source it cites, with that clause's negation
+/// words, or in the tool-set fields (title, status, resolution, assignee) of ONE cited Jira or
+/// GitHub item, never its description or comments (`answer::user_supported` /
+/// `answer::fields_supported`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Grounding {
     pub user_turn: bool,
@@ -79,9 +82,11 @@ pub struct Grounding {
 }
 
 /// B4-02 security rule, one for every kind: a true record is never retired on weak evidence. A
-/// `replaces` supersedes its target only when both are of one kind and the candidate is grounded in
-/// a user turn, or, for a `task` or `project-state`, in one cited Jira or GitHub item. Otherwise the
-/// candidate is saved alone (if admitted), the target stays in force, and the two are marked contested.
+/// `replaces` supersedes its target only when both are of one kind and the candidate passes the
+/// strict test (`Grounding`) on a user turn, or, for a `task` or `project-state`, on one cited Jira
+/// or GitHub item's tool-set fields. Lexical overlap cannot read meaning, so the test is strict
+/// rather than tuned: anything less saves the candidate alone (if admitted), keeps the target in
+/// force, and marks the two contested. A contested record never steers (ranks last, labelled).
 pub fn may_supersede(candidate_kind: &str, target_kind: &str, g: Grounding) -> bool {
     candidate_kind == target_kind
         && (g.user_turn
@@ -94,10 +99,19 @@ pub fn is_stale(kind: &str, last_seen: &str, cutoff: &str) -> bool {
     matches!(kind, "project-state" | "task") && last_seen < cutoff
 }
 
+macro_rules! stale_sql {
+    () => {
+        "(type IN ('project-state','task') AND coalesce(last_seen_at, created_at) < ?)"
+    };
+}
+
 /// The same test as `is_stale`, as an SQL expression of one `?` (the cut-off, ISO text) over the
 /// `records` / `memory` columns. A gate test keeps the two equal.
-pub const STALE_SQL: &str =
-    "(type IN ('project-state','task') AND coalesce(last_seen_at, created_at) < ?)";
+pub const STALE_SQL: &str = stale_sql!();
+
+/// The retrieval sort key (B4-02 round 3), one `?` like `STALE_SQL`: 0 fresh, 1 stale, 2 or 3
+/// contested (`contests IS NOT NULL`), so a contested record comes after everything else.
+pub const DEMOTE_SQL: &str = concat!("((contests IS NOT NULL) * 2 + ", stale_sql!(), ")");
 
 #[cfg(test)]
 mod tests {
@@ -207,7 +221,14 @@ mod tests {
             structured_item: true,
             ..none
         };
-        for kind in ["rule", "preference", "fact", "decision", "task", "project-state"] {
+        for kind in [
+            "rule",
+            "preference",
+            "fact",
+            "decision",
+            "task",
+            "project-state",
+        ] {
             assert!(!may_supersede(kind, kind, none), "{kind}");
             assert!(may_supersede(kind, kind, user), "{kind}");
         }

@@ -172,6 +172,9 @@ pub struct Known {
     sources: HashMap<String, Vec<Grounds>>,
     /// Each cited Jira or GitHub item as one block (a structured connection import).
     structured: HashMap<String, Grounds>,
+    /// Only the tool-set fields of each such item (`collectors::tool_fields`): what may ground a
+    /// supersede (B4-02 round 3), never its description or comments.
+    fields: HashMap<String, Grounds>,
     shown: HashSet<String>,
     protected: HashSet<String>,
 }
@@ -186,6 +189,10 @@ impl Known {
         for (id, kind, text) in sources {
             if matches!(kind, SourceKind::Jira | SourceKind::Github) {
                 k.structured.insert(id.to_owned(), Grounds::of(text));
+                k.fields.insert(
+                    id.to_owned(),
+                    Grounds::of(&crate::collectors::tool_fields(text)),
+                );
             }
             k.sources.insert(id.to_owned(), user_turns(text, kind));
         }
@@ -235,6 +242,26 @@ pub(crate) fn structured_grounded(c: &Candidate, known: &Known) -> bool {
 
 fn grounded_in<'a>(body: &str, mut blocks: impl Iterator<Item = &'a Grounds>) -> bool {
     blocks.any(|b| b.ground(body))
+}
+
+/// The strict test a `replaces` needs (B4-02 round 3, `Grounds::supports`): every content word of
+/// the body in one clause of ONE user turn of a source it cites, with that clause's negations.
+pub(crate) fn user_supported(c: &Candidate, known: &Known) -> bool {
+    let mut turns = c
+        .sources
+        .iter()
+        .filter_map(|s| known.sources.get(s))
+        .flatten();
+    turns.any(|t| t.supports(&c.body))
+}
+
+/// The same strict test against the tool-set fields (title, status, resolution, assignee) of ONE
+/// Jira or GitHub item it cites; a description, body, review or comment never counts.
+pub(crate) fn fields_supported(c: &Candidate, known: &Known) -> bool {
+    c.sources
+        .iter()
+        .filter_map(|s| known.fields.get(s))
+        .any(|f| f.supports(&c.body))
 }
 
 /// The answer as candidates, or why it is rejected. A fenced block is unwrapped; anything else

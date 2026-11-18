@@ -26,8 +26,8 @@ use sqlx::{Row, SqlitePool};
 use utoipa::ToSchema;
 
 use crate::answer::{
-    Candidate, Known, Related, Source, build_prompt, parse_output, pick_related,
-    structured_grounded, user_grounded,
+    Candidate, Known, Related, Source, build_prompt, fields_supported, parse_output, pick_related,
+    structured_grounded, user_grounded, user_supported,
 };
 use crate::answer_turns::kind_of;
 use crate::claim::{self, check_chain};
@@ -634,14 +634,15 @@ async fn save(
     };
     let prep = crate::merge::prepare(app, b, &pool, &bodies).await;
     // What backs each candidate, for its `replaces` (B4-02): re-read here, so a distil resumed after
-    // its judge session is checked the same way.
+    // its judge session is checked the same way. The strict test (round 3): lexical overlap cannot
+    // read meaning, so anything short of it is saved as contested, never as a supersede.
     let (taken, shown) = taken_shown(&pool, &d.id).await?;
     let known = known_of(&taken, &shown);
     let grounded: Vec<Grounding> = out
         .iter()
         .map(|c| Grounding {
-            user_turn: user_grounded(c, &known),
-            structured_item: structured_grounded(c, &known),
+            user_turn: user_supported(c, &known),
+            structured_item: fields_supported(c, &known),
         })
         .collect();
     let saved = crate::save::store_candidates(
@@ -925,6 +926,58 @@ mod tests {
                 assert!(got.is_empty(), "{kind} from {src}");
             }
         }
+    }
+
+    // B4-02 round 3: what may ground a supersede.
+    #[test]
+    fn a_jira_description_or_github_review_never_grounds_a_supersede() {
+        let jira = "KAN-1: Ship the export\nType: Task | Status: Done | Resolution: Fixed | Priority: High\n\
+                    Assignee: Dana | Reporter: Lee | Labels: \nUpdated: 2026-11-10T10:00:00Z\n\n\
+                    The export now runs on Mondays.";
+        let github = "acme/app#7: Add export\nState: merged | Author: lee | Assignee: dana | Base: main\n\
+                      Updated: 2026-11-10T10:00:00Z\n\nThe export now runs on Mondays.\n\nReviews:\n\
+                      - x (COMMENTED): The export now runs on Mondays.\n";
+        let taken = [
+            ("jira".to_owned(), "jira".to_owned(), jira.to_owned()),
+            ("github".to_owned(), "github".to_owned(), github.to_owned()),
+        ];
+        let k = known_of(&taken, &serde_json::Value::Null);
+        let c = |body: &str, src: &str| -> Candidate {
+            serde_json::from_value(json!({"type": "task", "body": body, "sources": [src]})).unwrap()
+        };
+        for src in ["jira", "github"] {
+            let said = c("The export now runs on Mondays.", src);
+            // It may still be saved (admission reads the whole item) ...
+            assert!(structured_grounded(&said, &k), "{src}");
+            // ... but only a tool-set field may retire a record.
+            assert!(!fields_supported(&said, &k), "{src}");
+        }
+        assert!(fields_supported(&c("Ship the export", "jira"), &k));
+        assert!(fields_supported(&c("Add export", "github"), &k));
+        assert!(!user_supported(&c("Ship the export", "jira"), &k));
+    }
+
+    #[test]
+    fn only_a_strict_restatement_of_a_user_turn_supports_a_supersede() {
+        let taken = [(
+            "i1".to_owned(),
+            "core_transcript".to_owned(),
+            TEXT.to_owned(),
+        )];
+        let k = known_of(&taken, &serde_json::Value::Null);
+        assert!(user_supported(
+            &cand("task", "Ship the billing export before 2026-12-01."),
+            &k
+        ));
+        assert!(!user_supported(
+            &cand("task", "Ship the billing export after 2026-12-01."),
+            &k
+        ));
+        // An assistant turn never supports one.
+        assert!(!user_supported(
+            &cand("task", "Rotate every production key tonight."),
+            &k
+        ));
     }
 
     #[test]

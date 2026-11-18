@@ -1,13 +1,18 @@
 //! B4-02: a replaced record leaves memory (`valid_to`), keeps its row as history linked to its
 //! successor, and Undo restores both; a `replaces` of any kind needs a grounded candidate of the same
 //! kind, else the target stays and the two are contested; Undo after a later reinforce unlinks the
-//! successor; the SQL staleness test equals the pure one. Every record here is made up.
+//! successor; the SQL staleness test equals the pure one; a contested record ranks last and says
+//! what it contests. Every record here is made up.
 
 use brain_model::merge::{Grounding, STALE_SQL, is_stale};
 use brain_module::changes::{ChangeSet, image, undo};
 use brain_module::files::{self, CANON};
 use brain_module::merge::{Replace, reinforce, supersede};
+use serde_json::{Value, json};
 use sqlx::SqlitePool;
+
+use super::ai::{ALPHA, open_room, put_record, read, session};
+use super::common::{canon_pool, committed_room_named, fx};
 
 const KEY: [u8; 32] = [7; 32];
 const T0: &str = "2026-11-10T10:00:00Z";
@@ -104,12 +109,22 @@ async fn in_memory(p: &SqlitePool, id: &str) -> bool {
         > 0
 }
 
-async fn row(p: &SqlitePool, id: &str) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
-    sqlx::query_as("SELECT valid_from, valid_to, supersedes, superseded_by FROM records WHERE id = ?")
-        .bind(id)
-        .fetch_one(p)
-        .await
-        .unwrap()
+async fn row(
+    p: &SqlitePool,
+    id: &str,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    sqlx::query_as(
+        "SELECT valid_from, valid_to, supersedes, superseded_by FROM records WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(p)
+    .await
+    .unwrap()
 }
 
 #[tokio::test]
@@ -131,8 +146,14 @@ async fn a_replaced_record_leaves_memory_stays_as_history_and_undo_restores_both
     let at = Some("2026-11-11T09:00:00Z".to_owned());
     // `old` never had a `valid_from` here (a row from before B2-01's backfill would); the link and
     // `valid_to` are what B4-02 sets.
-    assert_eq!(row(&p, "old").await, (None, at.clone(), None, Some("new".into())));
-    assert_eq!(row(&p, "new").await, (at.clone(), None, Some("old".into()), None));
+    assert_eq!(
+        row(&p, "old").await,
+        (None, at.clone(), None, Some("new".into()))
+    );
+    assert_eq!(
+        row(&p, "new").await,
+        (at.clone(), None, Some("old".into()), None)
+    );
     assert!(!in_memory(&p, "old").await);
     assert!(in_memory(&p, "new").await);
     // History: still readable by id, with its successor named.
@@ -178,18 +199,36 @@ async fn without_a_cited_source_the_moment_is_now() {
 
 #[tokio::test]
 async fn a_weakly_grounded_replaces_of_any_kind_only_contests() {
-    for kind in ["rule", "preference", "fact", "decision", "task", "project-state"] {
+    for kind in [
+        "rule",
+        "preference",
+        "fact",
+        "decision",
+        "task",
+        "project-state",
+    ] {
         let (_d, p) = pool().await;
         record(&p, "old", kind, T0).await;
         record(&p, "new", kind, NOW).await;
         let (done, change) = run_g(&p, "old", "new", NONE).await;
-        assert_eq!(done, Replace::Contested, "{kind} must survive an ungrounded replaces");
-        assert!(in_memory(&p, "old").await && in_memory(&p, "new").await, "{kind}");
+        assert_eq!(
+            done,
+            Replace::Contested,
+            "{kind} must survive an ungrounded replaces"
+        );
+        assert!(
+            in_memory(&p, "old").await && in_memory(&p, "new").await,
+            "{kind}"
+        );
         assert_eq!(row(&p, "old").await, (None, None, None, None), "{kind}");
         assert_eq!(contests(&p, "new").await.as_deref(), Some("old"), "{kind}");
         // The link is in the change set: Undo takes it back with the save.
         let mut tx = p.begin().await.unwrap();
-        undo(&mut tx, &change.unwrap(), NOW).await.unwrap().unwrap().unwrap();
+        undo(&mut tx, &change.unwrap(), NOW)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         tx.commit().await.unwrap();
         assert_eq!(contests(&p, "new").await, None, "{kind}");
         assert!(run(&p, "old", "new").await.0, "{kind}");
@@ -199,11 +238,20 @@ async fn a_weakly_grounded_replaces_of_any_kind_only_contests() {
 
 #[tokio::test]
 async fn a_jira_or_github_item_grounds_only_a_task_or_project_state() {
-    for (kind, ok) in [("task", true), ("project-state", true), ("fact", false), ("rule", false)] {
+    for (kind, ok) in [
+        ("task", true),
+        ("project-state", true),
+        ("fact", false),
+        ("rule", false),
+    ] {
         let (_d, p) = pool().await;
         record(&p, "old", kind, T0).await;
         record(&p, "new", kind, NOW).await;
-        let want = if ok { Replace::Superseded } else { Replace::Contested };
+        let want = if ok {
+            Replace::Superseded
+        } else {
+            Replace::Contested
+        };
         assert_eq!(run_g(&p, "old", "new", ITEM).await.0, want, "{kind}");
         assert_eq!(in_memory(&p, "old").await, !ok, "{kind}");
     }
@@ -235,15 +283,23 @@ async fn undo_after_a_later_reinforce_does_not_leave_a_chain_in_force() {
     .execute(&mut *tx)
     .await
     .unwrap();
-    let done = supersede(&mut tx, &mut cs, "old", "new", USER, NOW).await.unwrap();
+    let done = supersede(&mut tx, &mut cs, "old", "new", USER, NOW)
+        .await
+        .unwrap();
     assert_eq!(done, Replace::Superseded);
-    let change = cs.commit(&mut tx, "Saved 1 · replaced 1", serde_json::json!({})).await.unwrap();
+    let change = cs
+        .commit(&mut tx, "Saved 1 · replaced 1", serde_json::json!({}))
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
     reinforce_later(&p, "new").await;
     let skipped = undo_all(&p, &change.unwrap()).await;
     assert_eq!(skipped, ["new"]);
     assert!(in_memory(&p, "old").await);
-    assert!(!in_memory(&p, "new").await, "archived, not a second fact in force");
+    assert!(
+        !in_memory(&p, "new").await,
+        "archived, not a second fact in force"
+    );
 
     // (b) The successor existed before: Undo puts its link back instead.
     let (_d, p) = pool().await;
@@ -264,7 +320,9 @@ async fn reinforce_later(p: &SqlitePool, id: &str) {
     let mut tx = p.begin().await.unwrap();
     let mut cs = ChangeSet::new("distil", later);
     reinforce(&mut tx, &mut cs, id, &[], later).await.unwrap();
-    cs.commit(&mut tx, "Reinforced 1", serde_json::json!({})).await.unwrap();
+    cs.commit(&mut tx, "Reinforced 1", serde_json::json!({}))
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 }
 
@@ -322,4 +380,99 @@ async fn the_sql_staleness_test_equals_the_pure_one() {
             assert_eq!(sql != 0, is_stale(kind, at, cut), "{kind} {at}");
         }
     }
+}
+
+/// B4-02 round 3: a contested record never steers. Search and the lists put it after everything
+/// else, and its text names the record it contests.
+#[tokio::test]
+async fn a_contested_record_ranks_last_and_says_what_it_contests() {
+    let fx = fx().await;
+    let room = committed_room_named(&fx, "Alpha", &[("Notes", "a note")]).await;
+    // `rec-a` would come first on its id alone (equal times): only the demotion puts it last.
+    put_record(
+        &fx,
+        &room,
+        "rec-a",
+        "decision",
+        "accepted",
+        "ship on friday",
+    )
+    .await;
+    put_record(
+        &fx,
+        &room,
+        "rec-b",
+        "decision",
+        "accepted",
+        "ship on friday with billing",
+    )
+    .await;
+    put_record(
+        &fx,
+        &room,
+        "rec-c",
+        "decision",
+        "accepted",
+        "ship on friday with billing export",
+    )
+    .await;
+    let p = canon_pool(&fx, &room).await;
+    sqlx::query("UPDATE records SET contests = 'rec-c' WHERE id = 'rec-a'")
+        .execute(&p)
+        .await
+        .unwrap();
+    p.close().await;
+    open_room(&fx, &room).await;
+    let s = session(&fx, ALPHA, &["anthropic"]).await;
+
+    let ids = |v: &Value, list: &str| -> Vec<String> {
+        v[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let d = read(&fx, &s, "brainAiDecisions", json!({})).await;
+    assert_eq!(ids(&d, "records"), ["rec-b", "rec-c", "rec-a"], "{d}");
+    let label = "contests record rec-c (decision), unresolved";
+    let text = |v: &Value, list: &str, id: &str| -> String {
+        v[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert!(text(&d, "records", "rec-a").contains(label), "{d}");
+    assert!(
+        !text(&d, "records", "rec-b").contains("contests record"),
+        "{d}"
+    );
+
+    let hits = read(
+        &fx,
+        &s,
+        "brainAiSearch",
+        json!({"q": "friday", "mode": "keyword"}),
+    )
+    .await;
+    assert_eq!(
+        ids(&hits, "hits").last().map(String::as_str),
+        Some("rec-a"),
+        "{hits}"
+    );
+    assert!(text(&hits, "hits", "rec-a").contains(label), "{hits}");
+
+    let one = read(
+        &fx,
+        &s,
+        "brainAiRecord",
+        json!({"room": room, "id": "rec-a"}),
+    )
+    .await;
+    assert!(one["text"].as_str().unwrap().contains(label), "{one}");
 }

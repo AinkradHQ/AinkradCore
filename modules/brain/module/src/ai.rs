@@ -30,10 +30,10 @@ use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
 use ainkrad_core_server::scheduler::iso_of_unix;
 use ainkrad_core_server::store::begin_write;
-use brain_model::merge::STALE_SQL;
 use ainkrad_proto::redact::Redactor;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
+use brain_model::merge::DEMOTE_SQL;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::Row;
@@ -200,7 +200,14 @@ pub struct AiHit {
     pub started_at: String,
     /// The match, inside the outside-text envelope.
     pub text: String,
+    /// The sort key (`DEMOTE_SQL`): fresh, stale, then contested last. Not in the contract.
+    #[serde(skip)]
+    pub(crate) demote: i64,
 }
+
+/// The kind of the record a `memory` row contests (B4-02 round 3), for its label (`record_of`).
+pub(crate) const CONTESTS_KIND: &str =
+    "(SELECT t.type FROM records t WHERE t.id = memory.contests) AS contests_kind";
 
 #[derive(Serialize, ToSchema)]
 pub struct AiHits {
@@ -217,7 +224,8 @@ pub struct AiHits {
 }
 
 /// The time before which a `project-state` or `task` last in use is stale in `room` (B4-02): the
-/// room's `review_days` ago. Stale ones rank after fresh ones in every retrieval op.
+/// room's `review_days` ago. Stale ones rank after fresh ones in every retrieval op, and contested
+/// ones after both (`DEMOTE_SQL`).
 pub(crate) async fn stale_cutoff(app: &App, room: &str) -> String {
     let days = policy::load(app, room).await.map_or(90, |p| p.review_days);
     iso_of_unix(app.clock.unix() - days * 86_400)
@@ -268,17 +276,18 @@ pub(crate) async fn search(
         for (rank, id) in rec_fts(&app, &key, a, limit, &expr).await? {
             // The index only nominates: the text is read from `memory` now.
             let sql = format!(
-                "SELECT id, type, body, tags, source_ids, created_at, {STALE_SQL} AS stale FROM memory WHERE id = ?"
+                "SELECT id, type, body, tags, source_ids, created_at, contests, {CONTESTS_KIND}, {DEMOTE_SQL} AS demote FROM memory WHERE id = ?"
             );
             let row = sqlx::query(sqlx::AssertSqlSafe(sql))
                 .bind(&cutoff)
                 .bind(&id)
-            .fetch_optional(a.pool())
-            .await?;
+                .fetch_optional(a.pool())
+                .await?;
             if let Some(r) = row {
                 let rec = record_of(&v.id, &r, LIST_BODY)?;
+                let demote = r.try_get::<i64, _>("demote")?;
                 recs.push((
-                    r.try_get::<i64, _>("stale")? != 0,
+                    demote,
                     rank,
                     AiHit {
                         room: v.id.clone(),
@@ -286,6 +295,7 @@ pub(crate) async fn search(
                         started_at: rec.created_at,
                         text: rec.text,
                         id: rec.id,
+                        demote,
                     },
                 ));
             }
@@ -310,7 +320,7 @@ pub(crate) async fn search(
             complete: Some(!capped),
         }));
     }
-    // Fresh before stale (B4-02), then by rank.
+    // Fresh, then stale, then contested (B4-02), then by rank.
     recs.sort_by(|x, y| {
         x.0.cmp(&y.0)
             .then(x.1.total_cmp(&y.1))
@@ -365,16 +375,19 @@ async fn history_of(
     id: &str,
 ) -> Result<Vec<AiPast>, sqlx::Error> {
     let mut out = vec![];
-    let mut next: Option<String> = sqlx::query_scalar("SELECT supersedes FROM records WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&mut *conn)
-        .await?
-        .flatten();
-    while let Some(old) = next.take().filter(|_| out.len() < MAX_HISTORY) {
-        let Some(r) = sqlx::query("SELECT * FROM records WHERE id = ? AND status = 'accepted' AND archived_at IS NULL")
-            .bind(&old)
+    let mut next: Option<String> =
+        sqlx::query_scalar("SELECT supersedes FROM records WHERE id = ?")
+            .bind(id)
             .fetch_optional(&mut *conn)
             .await?
+            .flatten();
+    while let Some(old) = next.take().filter(|_| out.len() < MAX_HISTORY) {
+        let Some(r) = sqlx::query(
+            "SELECT * FROM records WHERE id = ? AND status = 'accepted' AND archived_at IS NULL",
+        )
+        .bind(&old)
+        .fetch_optional(&mut *conn)
+        .await?
         else {
             break;
         };
@@ -399,11 +412,20 @@ pub(crate) fn record_of(
     let tags: Vec<String> =
         serde_json::from_str(&r.try_get::<String, _>("tags")?).unwrap_or_default();
     let (body, truncated) = cut(&r.try_get::<String, _>("body")?, max_body);
-    let text = if tags.is_empty() {
+    let mut text = if tags.is_empty() {
         body
     } else {
         format!("tags: {}\n{body}", tags.join(", "))
     };
+    // A contested record says so, so the session sees the conflict (B4-02 round 3).
+    let contests = r.try_get::<Option<String>, _>("contests").ok().flatten();
+    let contests_kind = r
+        .try_get::<Option<String>, _>("contests_kind")
+        .ok()
+        .flatten();
+    if let (Some(c), Some(k)) = (contests, contests_kind) {
+        text = format!("contests record {c} ({k}), unresolved\n{text}");
+    }
     Ok(AiRecord {
         text: wrap(&format!("record {id} ({kind})"), &text),
         sources: r
@@ -433,10 +455,12 @@ pub(crate) async fn one(
     let session = session_of(&me)?;
     let v = room_of(&app, &session, &room).await?;
     let a = open_room(&app, &b, &v.id).await?;
-    let row = sqlx::query("SELECT * FROM memory WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(a.pool())
-        .await?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT *, {CONTESTS_KIND} FROM memory WHERE id = ?"
+    )))
+    .bind(&id)
+    .fetch_optional(a.pool())
+    .await?;
     let past = match &row {
         Some(_) => Some(history_of(&mut *a.pool().acquire().await?, &id).await?),
         None => None,
@@ -479,8 +503,8 @@ async fn list(
     let (open, closed) = open_all(app, b, rooms, named).await?;
     let marks = vec!["?"; kinds.len()].join(",");
     let sql = format!(
-        "SELECT *, {STALE_SQL} AS stale FROM memory WHERE type IN ({marks}) \
-         ORDER BY stale, created_at DESC, id LIMIT {limit}"
+        "SELECT *, {CONTESTS_KIND}, {DEMOTE_SQL} AS demote FROM memory WHERE type IN ({marks}) \
+         ORDER BY demote, created_at DESC, id LIMIT {limit}"
     );
     let mut all = vec![];
     for (v, a) in &open {
@@ -490,11 +514,14 @@ async fn list(
             query = query.bind(*k);
         }
         for r in query.fetch_all(a.pool()).await? {
-            all.push((r.try_get::<i64, _>("stale")? != 0, record_of(&v.id, &r, LIST_BODY)?));
+            all.push((
+                r.try_get::<i64, _>("demote")?,
+                record_of(&v.id, &r, LIST_BODY)?,
+            ));
         }
         a.pool().close().await;
     }
-    // Fresh before stale (B4-02), then newest first.
+    // Fresh, then stale, then contested (B4-02), then newest first.
     all.sort_by(|x, y| {
         (x.0.cmp(&y.0))
             .then(y.1.created_at.cmp(&x.1.created_at))
