@@ -162,6 +162,7 @@ use super::{
         projects_github::create,
         projects::run_spec::latest,
         projects::run_spec::save,
+        projects::run_spec::draft,
         projects::run_spec::versions,
         projects::run_spec::version,
         projects::runs::status,

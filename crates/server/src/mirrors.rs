@@ -95,10 +95,12 @@ pub struct Mirrors {
 }
 
 mod lease;
+mod read;
 mod serve;
 #[cfg(test)]
 pub(crate) use lease::grant_now;
 pub use lease::{LEASE_SECS, for_session, release_run, release_session, servable};
+pub use read::path_ok;
 
 /// Why a mirror cannot be served.
 #[derive(Debug, PartialEq, Eq)]
