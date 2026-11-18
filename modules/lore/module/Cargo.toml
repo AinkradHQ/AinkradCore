@@ -28,6 +28,7 @@ tracing = "0.1"
 
 [dev-dependencies]
 ainkrad-core-server = { path = "../../../crates/server", features = ["test-support"] }
+ainkrad-proto = { path = "../../../crates/proto" }
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5.3", features = ["util"] }
 
