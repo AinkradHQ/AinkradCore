@@ -141,7 +141,7 @@ fn the_trial_layer_alone_refuses_it() {
     // the gate is bypassed here: the trial copy gets the attack directly
     let (base, props) = base();
     let t = trial::run(None, base, &attack(0, props));
-    assert!(t.is_none(), "a map nested in props fails the walk");
+    assert!(t.is_err(), "a map nested in props fails the walk");
 }
 
 #[test]
@@ -151,10 +151,32 @@ fn the_gate_alone_refuses_it() {
     l.apply_remote(&base).unwrap();
     let have = l.state_vector_struct();
     let r = l
+        .gate
         .shadow
         .lock()
         .unwrap()
         .check(&attack(0, props), &have)
         .map(|_| ());
     assert!(r.is_err(), "{r:?}");
+}
+
+/// Ported from `design-crdt` (`a_held_block_is_never_a_parent_or_origin_taken_from_the_update`), against the layout
+/// shadow that replaced its depth index: the update's own claim about a held block is ignored and what the replica
+/// committed is the truth. The same relabelled resend that is refused under a props map is legal under a node map.
+#[test]
+fn a_held_block_is_judged_by_what_the_replica_holds() {
+    let (base, props) = base();
+    let mut l = Live::new();
+    l.apply_remote(&base).unwrap();
+    let have = l.state_vector_struct();
+    let check = |u: &[u8]| l.gate.shadow.lock().unwrap().check(u, &have).map(|_| ());
+    assert!(
+        check(&attack(0, props)).is_err(),
+        "a map under props: depth 3"
+    );
+    // the base's node map is client 7's first block: a props map under it is the layout
+    assert!(
+        check(&attack(0, (7, 0))).is_ok(),
+        "a props map under a node map"
+    );
 }

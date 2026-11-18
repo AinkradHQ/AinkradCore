@@ -239,7 +239,7 @@ impl Doc {
     /// The clock cap makes acceptance depend on the receiver's state, so it is NOT commutative for records that
     /// exceed it: replicas that disagree on the highest clock can disagree on whether to apply one. That is
     /// deliberate (an honest peer never exceeds it), so the sync layer must treat `false` as a protocol violation and
-    /// drop the peer, never as a skipped update (`design-crdt` does, and its tests close the connection on one).
+    /// drop the peer, never as a skipped update (`design_doc::Replica` does; the sync tests close the socket on one).
     pub fn apply_remote_move(&mut self, id: &str, rec: MoveRecord) -> bool {
         let limit = self.next_clock().saturating_add(MAX_CLOCK_JUMP);
         self.apply_bounded(id, rec, limit)

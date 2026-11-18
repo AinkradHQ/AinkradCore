@@ -1,11 +1,12 @@
-//! The document actor: one live `design_crdt::Replica` per open design, shared by every socket and, later, AI ops.
+//! The document actor: one live `design_doc::Replica` per open design, shared by every socket and, later, AI ops.
 //!
-//! SECURITY MODEL (read with `design_crdt`'s)
+//! SECURITY MODEL (read with `design_doc`'s: its `gate` and `replica` modules)
 //! - Reaching a doc takes a signed device request with the module scope (`admin`): the route is not in `ROUTE_SCOPES`,
 //!   so it keeps the deny-by-default module scope. Revocation and a scope change cut the socket within the backstop
 //!   (`ws.rs`). Every peer may write: there is no read-only socket in this story.
-//! - Nothing a peer sends is trusted. An update goes through `Replica::apply_remote` (size, decode, schema, clock and
-//!   node budgets, via the model crate) BEFORE it is stored or shown to anyone. A refusal is a protocol violation: the
+//! - Nothing a peer sends is trusted. An update goes through `Replica::apply_remote`, the same gate the App engine runs
+//!   (raw-byte scan, dependencies, the T1 layout, guarded decode, a trial copy; then schema, clock and node budgets via
+//!   the model crate), BEFORE it is stored or shown to anyone. A refusal is a protocol violation: the
 //!   socket is closed with a code and the replica is rebuilt from storage, so no half-applied update survives.
 //! - Persist, then broadcast: the diff that was integrated is written to `design_updates` in a write transaction, and
 //!   only after the commit is it sent to the other peers and acknowledged to the sender. A crash loses nothing that
@@ -24,7 +25,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use design_crdt::{Refused, Replica};
+use design_doc::{Refused, Replica};
 use design_model::limits::MAX_DOC_BYTES;
 use sqlx::{Row, SqlitePool};
 use tokio::sync::{Mutex, broadcast};
