@@ -15,6 +15,7 @@ use std::path::Path as FsPath;
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
+use ainkrad_core_server::module::Module;
 use ainkrad_core_server::store::begin_write;
 use ainkrad_core_server::store::modsettings::ModuleSettings;
 use axum::Json;
@@ -148,7 +149,7 @@ pub(crate) async fn put_file(
     if body.is_empty() {
         return Err(bad());
     }
-    let settings = ModuleSettings::of(&Design);
+    let settings = ModuleSettings::of(&Design::default() as &dyn Module);
     let max = settings
         .get_in(conn, "asset.max_bytes")
         .await

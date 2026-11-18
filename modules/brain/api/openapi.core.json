@@ -8278,7 +8278,7 @@
             ]
           },
           "source": {
-            "description": "Sync one source of the Core's: `core_transcript` (the default), `jira` or `github`.",
+            "description": "Sync one source of the Core's: `core_transcript` (the default), `jira`, `github` or `lore`.",
             "type": [
               "string",
               "null"
@@ -8995,7 +8995,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.89.0"
+    "version": "1.91.0"
   },
   "openapi": "3.1.0",
   "paths": {

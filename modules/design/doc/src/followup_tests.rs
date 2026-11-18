@@ -27,7 +27,10 @@ fn one_update_over_the_cap_stays_queued_and_is_not_sent() {
     let ops = json!([{"op": "add", "id": "n_aaaaaaaaaaaa", "type": "page", "parent": null, "order": "a"}]);
     l.apply_ops(&parse_ops(ops.to_string().as_bytes()).unwrap())
         .unwrap();
-    assert!(l.outbox_under(true, 4).is_empty(), "over the cap: nothing goes out");
+    assert!(
+        l.outbox_under(true, 4).is_empty(),
+        "over the cap: nothing goes out"
+    );
     assert!(!l.outbox(false).is_empty(), "and it is still queued");
 }
 

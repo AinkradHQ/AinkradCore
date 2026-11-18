@@ -8,6 +8,7 @@
 use ainkrad_core::audit::NewAuditEvent;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY, Caller};
+use ainkrad_core_server::module::Module;
 use ainkrad_core_server::store::modsettings::ModuleSettings;
 use ainkrad_core_server::store::{audit, begin_write, events};
 use axum::Json;
@@ -167,7 +168,7 @@ pub(crate) async fn upload(
     if !name_ok(&q.name) || body.is_empty() {
         return Err(bad());
     }
-    let settings = ModuleSettings::of(&Design);
+    let settings = ModuleSettings::of(&Design::default() as &dyn Module);
     let max = settings
         .get(&app.pool, "asset.max_bytes")
         .await

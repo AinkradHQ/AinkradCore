@@ -164,6 +164,8 @@ fn every_schema_prop_changes_the_export() {
         }
         if ty == "vector" {
             base["path"] = json!("M0 0 L1 1");
+            // a vector draws one `<path>` per fill or stroke: with neither, its path changes nothing
+            base["fill"] = solid("#336699");
         }
         let with = {
             let mut p = base.clone();

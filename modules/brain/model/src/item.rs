@@ -28,6 +28,8 @@ pub enum SourceKind {
     Linear,
     Github,
     Chat,
+    /// A Lore note (R3-01).
+    Note,
 }
 
 impl SourceKind {
@@ -47,6 +49,7 @@ impl SourceKind {
             Self::Linear => "linear",
             Self::Github => "github",
             Self::Chat => "chat",
+            Self::Note => "note",
         }
     }
 }

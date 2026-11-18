@@ -35,7 +35,7 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for In<T> {
 }
 
 /// `"field": null` clears; an absent field keeps.
-fn some<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+pub(crate) fn some<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     d: D,
 ) -> Result<Option<Option<T>>, D::Error> {
     Option::<T>::deserialize(d).map(Some)
@@ -170,7 +170,7 @@ pub struct NoteView {
     pub text: String,
 }
 
-fn summary(r: &sqlx::sqlite::SqliteRow) -> Result<NoteSummary, sqlx::Error> {
+pub(crate) fn summary(r: &sqlx::sqlite::SqliteRow) -> Result<NoteSummary, sqlx::Error> {
     let text = |c: &str| r.try_get::<String, _>(c);
     Ok(NoteSummary {
         id: text("id")?,
@@ -239,7 +239,10 @@ pub(crate) async fn record(
 
 /// The project `ident` names, as the text id a note stores. The Projects store is the authority:
 /// a text that is no existing project's id is refused (no foreign key into a Core table).
-async fn project_id(conn: &mut SqliteConnection, ident: &str) -> Result<String, ApiError> {
+pub(crate) async fn project_id(
+    conn: &mut SqliteConnection,
+    ident: &str,
+) -> Result<String, ApiError> {
     let unknown = || ApiError::bad_request("no such project");
     if ident.is_empty() || ident.len() > 18 || !ident.bytes().all(|c| c.is_ascii_digit()) {
         return Err(unknown());
@@ -315,38 +318,41 @@ pub(crate) async fn create(
         Some(p) => Some(project_id(&mut tx, p).await?),
         None => None,
     };
-    let id = new_id();
-    let parse = parsed(&text)?;
-    let title = parse.title.clone();
     let who = format!("person:{}", me.device.id);
+    let id = insert(&mut tx, project.as_deref(), &text, &who, "person").await?;
+    let out = view(&mut tx, &id).await?;
+    tx.commit().await?;
+    Ok(Json(out))
+}
+
+/// Inserts a note at rev 1 with its first save, index, audit row and event. The caller has checked the
+/// project and the size; `who` is the `created_by` (`person:…` or `session:…`), `origin` the event's.
+pub(crate) async fn insert(
+    conn: &mut SqliteConnection,
+    project: Option<&str>,
+    text: &str,
+    who: &str,
+    origin: &str,
+) -> Result<String, ApiError> {
+    let id = new_id();
+    let parse = parsed(text)?;
     sqlx::query(
         "INSERT INTO lore_notes (id, project, title, title_norm, text, created_by, updated_by) \
          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(&project)
-    .bind(&title)
-    .bind(lore_model::normalize_title(&title))
-    .bind(&text)
-    .bind(&who)
-    .bind(&who)
-    .execute(&mut *tx)
+    .bind(project)
+    .bind(&parse.title)
+    .bind(lore_model::normalize_title(&parse.title))
+    .bind(text)
+    .bind(who)
+    .bind(who)
+    .execute(&mut *conn)
     .await
     .map_err(store_err)?;
-    crate::save::seed(&mut tx, &id, &text, &parse).await?;
-    record(
-        &mut tx,
-        "created",
-        "changed",
-        &id,
-        1,
-        "person",
-        project.as_deref(),
-    )
-    .await?;
-    let out = view(&mut tx, &id).await?;
-    tx.commit().await?;
-    Ok(Json(out))
+    crate::save::seed(&mut *conn, &id, text, &parse).await?;
+    record(&mut *conn, "created", "changed", &id, 1, origin, project).await?;
+    Ok(id)
 }
 
 #[derive(Deserialize)]
@@ -376,6 +382,7 @@ pub(crate) async fn today(
             if trashed.is_some() {
                 let rev = restore_row(&mut tx, &id).await?;
                 record(&mut tx, "restored", "changed", &id, rev, "person", None).await?;
+                crate::save::relink(&mut tx, &id, None).await?;
             }
             id
         }
@@ -497,6 +504,8 @@ pub(crate) async fn patch(
         let rev = restore_row(&mut tx, &note).await?;
         record(&mut tx, "restored", "changed", &note, rev, "person", None).await?;
     }
+    // A move changes which note a link prefers; a trash or restore changes whether it can be a target.
+    crate::save::relink(&mut tx, &note, None).await?;
     let out = view(&mut tx, &note).await?;
     tx.commit().await?;
     Ok(Json(out))

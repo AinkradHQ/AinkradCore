@@ -286,7 +286,19 @@ pub(crate) async fn approve(
 ) -> ApiResult<ApprovalView> {
     let lease = open_actor(&app, &reg, &me, &doc).await?;
     let (model, state) = lease.actor.view().await.map_err(edit_err)?;
-    if !is_node_id(&screen) || !model.nodes.contains_key(&screen) {
+    // a screen is a top-level frame (or a page): a frame or page with no parent, or whose parent is a page
+    let top_level = model.nodes.get(&screen).is_some_and(|n| {
+        matches!(
+            n.ty,
+            design_model::NodeType::Frame | design_model::NodeType::Page
+        ) && n.parent.as_ref().is_none_or(|p| {
+            model
+                .nodes
+                .get(p)
+                .is_some_and(|p| p.ty == design_model::NodeType::Page)
+        })
+    });
+    if !is_node_id(&screen) || !top_level {
         return Err(ApiError::new(
             axum::http::StatusCode::UNPROCESSABLE_ENTITY,
             "no_such_screen",

@@ -1,5 +1,7 @@
 //! Undo and redo are held to the same 1 MiB update budget as an edit: deleting a large selection is a small update,
-//! but undoing it writes every node back. That undo is refused (`TooLarge`) and reverted, and the outbox still drains.
+//! but undoing it writes every node back. That undo is refused (`TooLarge`) and reverted. Its update cannot be replaced by
+//! a small one here (the restored nodes' content is in it), so it stays queued: the outbox reports stuck at once (#331),
+//! refuses new edits, and the updates queued before it still go out.
 
 use design_doc::{Error, Live, MAX_PEER_UPDATE_BYTES, parse_ops};
 use serde_json::{Value, json};
@@ -43,7 +45,10 @@ fn drain(l: &Live) -> Vec<Vec<u8>> {
     for _ in 0..200 {
         let c = l.outbox(true);
         if c.is_empty() {
-            assert!(!l.outbox_stuck(), "the outbox is stuck behind an oversized update");
+            assert!(
+                !l.outbox_stuck(),
+                "the outbox is stuck behind an oversized update"
+            );
             return chunks;
         }
         assert!(c.len() <= MAX_PEER_UPDATE_BYTES, "{}", c.len());
@@ -56,19 +61,37 @@ fn drain(l: &Live) -> Vec<Vec<u8>> {
 fn undoing_a_big_delete_is_refused_reverted_and_does_not_loop() {
     let mut l = Live::new();
     big(&mut l);
-    drain(&l);
-    run(&mut l, json!([{"op": "delete", "id": PAGE}]));
-    assert!(l.read().nodes.is_empty());
-    assert_eq!(l.undo_checked(), Err(Error::TooLarge));
-    assert!(l.read().nodes.is_empty(), "the undo was reverted");
-    assert!(!l.undo(), "the plain call just says false");
-    // everything that was queued still reaches a peer in chunks under the cap, and the peer agrees
     let mut peer = Live::new();
     for c in drain(&l) {
         peer.apply_remote(&c).unwrap();
     }
+    run(&mut l, json!([{"op": "delete", "id": PAGE}]));
+    assert!(l.read().nodes.is_empty());
+    assert_eq!(l.undo_checked(), Err(Error::TooLarge));
+    assert!(l.read().nodes.is_empty(), "the undo was reverted");
+    assert!(
+        l.outbox_stuck(),
+        "stuck is reported as soon as the oversized update is queued"
+    );
+    assert!(!l.undo(), "the plain call just says false");
+    assert_eq!(
+        l.apply_ops(
+            &parse_ops(
+                br#"[{"op":"add","id":"n_bbbbbbbbbbbb","type":"page","parent":null,"order":"a"}]"#
+            )
+            .unwrap()
+        ),
+        Err(Error::TooLarge),
+        "no new edits while stuck"
+    );
+    // what was queued before the oversized update still reaches a peer in chunks under the cap
+    while !l.outbox(false).is_empty() {
+        let c = l.outbox(true);
+        assert!(c.len() <= MAX_PEER_UPDATE_BYTES);
+        peer.apply_remote(&c).unwrap();
+    }
     assert_eq!(peer.read(), l.read());
-    assert!(l.outbox(false).is_empty());
+    assert!(l.outbox_stuck() && l.outbox(false).is_empty());
 }
 
 #[test]

@@ -95,6 +95,10 @@ fn entries(b: &[u8]) -> Result<(Vec<Entry>, usize), &'static str> {
         });
         i += 46 + nl + xl + cl;
     }
+    // the directory ends exactly where the end record starts: no bytes hide between them
+    if i != eocd {
+        return Err(BAD);
+    }
     Ok((out, cd))
 }
 
@@ -120,6 +124,19 @@ fn layout(b: &[u8], list: &[Entry], cd: usize) -> Result<(), &'static str> {
         );
         if b.get(at + 30..at + 30 + nl) != Some(e.name.as_bytes()) {
             return Err("a local header names a different file than the directory");
+        }
+        // the local header says what the directory says (a decoder may trust either one); with a data descriptor the
+        // sizes and CRC sit after the data, so only the method is compared
+        let local_descriptor = u16_at(b, at + 6).ok_or(BAD)? & 8 != 0;
+        if u16_at(b, at + 8) != Some(e.method) || local_descriptor != e.descriptor {
+            return Err("a local header disagrees with the directory");
+        }
+        if !e.descriptor
+            && (u32_at(b, at + 14) != Some(e.crc)
+                || u32_at(b, at + 18) != Some(e.comp as u32)
+                || u32_at(b, at + 22) != Some(e.size as u32))
+        {
+            return Err("a local header disagrees with the directory");
         }
         at += 30 + nl + xl + e.comp as usize;
         if e.descriptor {

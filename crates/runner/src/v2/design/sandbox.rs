@@ -84,8 +84,25 @@ pub(super) struct Keep {
 
 impl Keep {
     /// Drops it off the async thread: ending the job cgroup waits for its processes to go.
-    pub(super) async fn release(self) {
-        let _ = tokio::task::spawn_blocking(move || drop(self)).await;
+    pub(super) async fn release(mut self) {
+        if let Some(cg) = self._cgroup.take() {
+            let _ = tokio::task::spawn_blocking(move || drop(cg)).await;
+        }
+    }
+}
+
+impl Drop for Keep {
+    /// A future dropped before `release` (a cancelled job) must not stall the async thread for the up to 500 ms the
+    /// cgroup takes to empty: hand it to the blocking pool when there is one.
+    fn drop(&mut self) {
+        if let Some(cg) = self._cgroup.take() {
+            match tokio::runtime::Handle::try_current() {
+                Ok(h) => {
+                    drop(h.spawn_blocking(move || drop(cg)));
+                }
+                Err(_) => drop(cg),
+            }
+        }
     }
 }
 

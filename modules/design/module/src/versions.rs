@@ -346,8 +346,19 @@ pub(crate) async fn restore(
             .fetch_optional(&app.pool)
             .await?
             .ok_or_else(|| ApiError::not_found("no such version"))?;
-    // the safety version first: a restore that cannot be undone is not made
-    let (_, now) = lease.actor.view().await.map_err(edit_err)?;
+    // The state before is read inside the edit, under the document lock, so an edit by a peer between a read and the
+    // restore can never be missing from the safety copy; the copy is stored once the restore went through.
+    let edited = lease
+        .actor
+        .edit(&person(&me), |live| {
+            let before = live
+                .diff(&[])
+                .map_err(|_| EditError::Refused("the design could not be read".into()))?;
+            restore_into(live, &blob)?;
+            Ok(before)
+        })
+        .await;
+    let (now, seq) = edited.map_err(edit_err)?;
     let mut tx = begin_write(&app.pool).await?;
     let before = store_version(
         &mut tx,
@@ -359,21 +370,6 @@ pub(crate) async fn restore(
     )
     .await?;
     tx.commit().await?;
-    let edited = lease
-        .actor
-        .edit(&person(&me), |live| restore_into(live, &blob))
-        .await;
-    let seq = match edited {
-        Ok((_, seq)) => seq,
-        Err(e) => {
-            // nothing was restored (too large for one update, refused, paused...): the safety version is not needed
-            sqlx::query("DELETE FROM design_versions WHERE id = ?")
-                .bind(&before)
-                .execute(&app.pool)
-                .await?;
-            return Err(edit_err(e));
-        }
-    };
     let mut tx = begin_write(&app.pool).await?;
     note(
         &mut tx,
@@ -402,6 +398,7 @@ mod tests {
             parent: parent.map(Into::into),
             order: order.into(),
             clock: 0,
+            prev: None,
             name: String::new(),
             props: Map::new(),
             text: None,

@@ -99,15 +99,18 @@ fn materials_are_layers_behind_the_children_and_themed() {
         .trim_start_matches("background-color:var(")
         .trim_end_matches(')');
     assert!(
-        e.css.contains(&format!(":root,[data-theme=\"day\"]{{"))
-            && e.css.contains(&format!("{v}:#ffffff4c"))
+        e.css.contains(":root,[data-theme=\"day\"]{") && e.css.contains(&format!("{v}:#ffffff4c"))
     );
     assert!(e.css.contains(&format!("{v}:#ffffff1a")));
     let well = screen(json!({"w": 9, "h": 9, "material": "well"}), vec![]);
     assert!(well.css.contains(":#0000000e") && well.css.contains(":#00000046"));
     assert!(!well.css.contains("backdrop-filter"));
     let clear = screen(json!({"w": 9, "h": 9, "material": "clear"}), vec![]);
-    assert!(clear.css.contains(":#ffffff50") && clear.css.contains(":#ffffff24"));
+    // the rim sits in a `box-shadow`, so the themed variable holds the whole value
+    assert!(
+        clear.css.contains(":inset 0 0 0 1px #ffffff50")
+            && clear.css.contains(":inset 0 0 0 1px #ffffff24")
+    );
     assert!(
         !rule(&clear.css, ".n0::before")
             .iter()

@@ -44,7 +44,11 @@ async fn fx_with(on: bool) -> Fx {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let pool = connect(&dir.join("core.db")).await.unwrap();
-    let modules: Vec<Arc<dyn Module>> = if on { vec![Arc::new(Design)] } else { vec![] };
+    let modules: Vec<Arc<dyn Module>> = if on {
+        vec![Arc::new(Design::default())]
+    } else {
+        vec![]
+    };
     migrate::migrate_modules(&pool, &modules).await.unwrap();
     let identity = Arc::new(
         Identity::load_or_create(
@@ -248,7 +252,8 @@ async fn a_package_is_drafted_sealed_and_served_only_as_an_inert_attachment() {
         .collect();
     assert_eq!(
         names,
-        ["index.html", "sub/b.html"],
+        // putting `INDEX.html` replaced `index.html` (one file, the later spelling kept), and it still sorts first
+        ["INDEX.html", "sub/b.html"],
         "root index first, only html"
     );
     assert_eq!(v["sealed"], json!(true));
@@ -288,14 +293,15 @@ async fn a_package_is_drafted_sealed_and_served_only_as_an_inert_attachment() {
     )
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
-    // The package pins its bytes: the asset cannot be deleted while it is used.
+    // A package's bytes are not library assets (the asset routes do not see them), so they cannot be deleted there.
     let sha: String =
         sqlx::query_scalar("SELECT sha256 FROM design_mockup_files WHERE path = 'app.css'")
             .fetch_one(&fx.app.pool)
             .await
             .unwrap();
     let (s, _) = call(&fx, Method::DELETE, &format!("/assets/{sha}"), None).await;
-    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(files(&fx).await, 4, "the package still holds its files");
     // Not a mockup, and audit carries ids only.
     let (_, d) = call(
         &fx,
@@ -334,14 +340,11 @@ async fn bytes_must_match_the_type_and_only_the_fixed_types_are_taken() {
         ("f.woff2", b"wOF2....".to_vec()),
         ("g.zip", b"PK\x03\x04".to_vec()),
         ("h.exe", b"x".to_vec()),
-        (
-            "i.svg",
-            b"<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>x".to_vec(),
-        ),
     ] {
         let (s, v) = put(&fx, &doc, p, b).await;
         assert_eq!(s, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{p} {v}");
     }
+    // (an SVG with a script is not refused: it is stored sanitised, below)
     let (s, v) = put(
         &fx,
         &doc,

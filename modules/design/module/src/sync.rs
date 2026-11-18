@@ -86,6 +86,12 @@ pub enum Out {
     },
 }
 
+/// What `persist` did.
+enum Stored {
+    Yes,
+    Gone(bool),
+}
+
 #[derive(Debug)]
 pub enum Refusal {
     /// A protocol violation by the peer.
@@ -94,6 +100,8 @@ pub enum Refusal {
     /// The update builds on state the document lacks: the client resyncs (a fresh connection, snapshot first).
     Resync,
     Archived,
+    /// A person took the design over between the check in `edit` and the write (#327): an AI origin is refused.
+    Paused,
     /// Storage failed; the peer did nothing wrong.
     Store,
 }
@@ -284,10 +292,14 @@ impl Actor {
         }
         let seq = st.last_seq + 1;
         match self.persist(seq, origin, &diff).await {
-            Ok(true) => {}
-            Ok(false) => {
+            Ok(Stored::Yes) => {}
+            Ok(Stored::Gone(paused)) => {
                 self.rebuild(st).await;
-                return Err(Refusal::Archived);
+                return Err(if paused {
+                    Refusal::Paused
+                } else {
+                    Refusal::Archived
+                });
             }
             Err(e) => {
                 tracing::error!(error = %e, doc = %self.id, "design update not stored");
@@ -313,26 +325,34 @@ impl Actor {
         });
         if (st.log_updates >= self.limits.compact_updates
             || st.log_bytes >= self.limits.compact_bytes)
-            && let Err(e) = self.compact(&mut st).await
+            && let Err(e) = self.compact(st).await
         {
             tracing::error!(error = %e, doc = %self.id, "design compaction failed");
         }
         Ok(seq)
     }
 
-    /// `false`: the doc is not active any more (nothing was written).
-    async fn persist(&self, seq: i64, origin: &str, diff: &[u8]) -> Result<bool, sqlx::Error> {
+    /// `Gone(paused)`: nothing was written; the doc is archived, or (`paused`) a person took it over and `origin` is
+    /// the AI's. The flag is checked in the same statement that touches the row, so a take-over is never raced (#327).
+    async fn persist(&self, seq: i64, origin: &str, diff: &[u8]) -> Result<Stored, sqlx::Error> {
         let mut tx = ainkrad_core_server::store::begin_write(&self.pool).await?;
         let touched = sqlx::query(
             "UPDATE design_docs SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
-             WHERE id = ? AND state = 'active'",
+             WHERE id = ? AND state = 'active' AND (ai_paused = 0 OR ? NOT LIKE 'session:%')",
         )
         .bind(&self.id)
+        .bind(origin)
         .execute(&mut *tx)
         .await?
         .rows_affected();
         if touched == 0 {
-            return Ok(false);
+            let paused: Option<i64> = sqlx::query_scalar(
+                "SELECT ai_paused FROM design_docs WHERE id = ? AND state = 'active'",
+            )
+            .bind(&self.id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            return Ok(Stored::Gone(paused == Some(1)));
         }
         sqlx::query("INSERT INTO design_updates (doc, seq, data, origin) VALUES (?, ?, ?, ?)")
             .bind(&self.id)
@@ -342,7 +362,7 @@ impl Actor {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        Ok(true)
+        Ok(Stored::Yes)
     }
 
     /// Fold the log into the snapshot; add an `auto` version when none is recent (T14), pruning the oldest autos
@@ -488,6 +508,7 @@ impl Actor {
                     Refusal::Violation(Refused::TooLarge) => EditError::TooLarge,
                     Refusal::DocFull => EditError::DocFull,
                     Refusal::Archived => EditError::Archived,
+                    Refusal::Paused => EditError::Paused,
                     other => {
                         tracing::error!(?other, doc = %self.id, "design edit refused by the gate");
                         EditError::Store

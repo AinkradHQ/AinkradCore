@@ -159,7 +159,7 @@ fn hostile_messages_change_nothing() {
         let rc = unsafe { de_presence_remote(h, junk.as_ptr(), junk.len()) };
         assert!(rc == DE_ERR_ARG || rc == DE_ERR_INVALID, "{rc}");
     }
-    let big = vec![b' '; 5000];
+    let big = vec![b' '; 9000]; // over the 8 KiB message cap
     assert_eq!(
         unsafe { de_presence_remote(h, big.as_ptr(), big.len()) },
         DE_ERR_TOO_LARGE

@@ -256,7 +256,7 @@ impl Live {
         if ops.len() > MAX_OPS {
             return Err(Error::TooLarge);
         }
-        self.commit_as(m, ops, MAX_UPDATE_BYTES, Some(merge))
+        self.commit_as(m, ops, MAX_PEER_UPDATE_BYTES, Some(merge))
     }
 
     /// `typing`: `None` = a batch of its own; `Some(merge)` = typing, which leaves the undo step open for the next
@@ -269,6 +269,10 @@ impl Live {
         typing: Option<bool>,
     ) -> Result<(), Error> {
         self.recover(|l| {
+            // an update that can never be sent is queued (#331): more edits would only pile up behind it
+            if l.outbox_stuck() {
+                return Err(Error::TooLarge);
+            }
             let plan = ops
                 .iter()
                 .enumerate()

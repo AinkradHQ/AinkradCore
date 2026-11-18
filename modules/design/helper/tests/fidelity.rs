@@ -78,13 +78,16 @@ fn library_text() -> Doc {
         json!({"type": "text", "text": s, "props": {"type": {"font": {"asset": asset}, "size": size, "weight": weight, "line": size * 1.4},
             "fill": common::solid("#16181f")}})
     };
+    let mut caption = t("Tracked uppercase caption", 11.0, 400, REGULAR);
+    caption["props"]["type"]["tracking"] = json!(0.08);
+    caption["props"]["type"]["transform"] = json!("uppercase");
     common::tree(common::page(vec![
         json!({"type": "frame", "props": {"w": 320, "h": 150, "fill": common::solid("#ffffff"),
         "layout": {"dir": "column", "gap": 8, "pad": [14, 14, 14, 14]}},
         "children": [
             t("Library fonts, bold", 22.0, 700, BOLD),
             t("Regular weight in the second face, set at fourteen points.", 14.0, 400, REGULAR),
-            {let mut x = t("Tracked uppercase caption", 11.0, 400, REGULAR); x["props"]["type"]["tracking"] = json!(0.08); x["props"]["type"]["transform"] = json!("uppercase"); x}]}),
+            caption]}),
     ]))
 }
 
@@ -158,6 +161,11 @@ fn measure(chrome: &Path, doc: &Doc, theme: &str, at: usize, tag: &str) -> f64 {
     })
     .unwrap();
     assert_eq!((frame.width, frame.height), (ex.width, ex.height));
+    // AINKRAD_FIDELITY_KEEP=1 keeps the shot and the engine's frame (`frame.png`) for a look at what differs
+    let keep = std::env::var_os("AINKRAD_FIDELITY_KEEP").is_some();
+    if keep {
+        std::fs::write(dir.join("frame.png"), STANDARD.decode(&frame.png).unwrap()).unwrap();
+    }
     let s = fidelity(&DesignFidelity {
         a: frame.png,
         b: b64(&std::fs::read(&shot).unwrap()),
@@ -167,7 +175,9 @@ fn measure(chrome: &Path, doc: &Doc, theme: &str, at: usize, tag: &str) -> f64 {
         "fidelity {tag}: {:.3} % ({} of {} px)",
         s.percent, s.changed, s.total
     );
-    let _ = std::fs::remove_dir_all(&dir);
+    if !keep {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     s.percent
 }
 
@@ -183,6 +193,7 @@ fn golden_screens_export_within_one_percent() {
         return;
     };
     let mut worst: f64 = 0.0;
+    let mut over = vec![];
     let cases: Vec<(&str, Doc, usize)> = vec![
         ("layout-a", layout(), 0),
         ("layout-b", layout(), 1),
@@ -192,14 +203,15 @@ fn golden_screens_export_within_one_percent() {
     for (name, doc, at) in &cases {
         for theme in ["day", "night"] {
             let p = measure(&chrome, doc, theme, *at, &format!("{name}-{theme}"));
-            assert!(
-                p <= 1.0,
-                "{name} {theme}: {p:.3} % of pixels differ (gate 1 %)"
-            );
+            if p > 1.0 {
+                over.push(format!("{name} {theme}: {p:.3} %"));
+            }
             worst = worst.max(p);
         }
     }
     println!("worst fidelity: {worst:.3} %");
+    // every fixture is measured before the verdict, so one failure does not hide the others' numbers
+    assert!(over.is_empty(), "pixels differ over the 1 % gate: {over:?}");
 }
 
 #[test]
@@ -223,12 +235,12 @@ fn export_reports_the_screen_and_its_size_and_runs_as_a_job() {
     .unwrap();
     assert_eq!((b.width, b.height), (220, 160));
     // the same through the one entry point the sandbox calls
-    let job = serde_json::to_vec(&Command::DesignExport(DesignExport {
+    let bytes = serde_json::to_vec(&Command::DesignExport(DesignExport {
         doc: d,
         screen: None,
     }))
     .unwrap();
-    let out: serde_json::Value = serde_json::from_str(&run(&job).unwrap()).unwrap();
+    let out: serde_json::Value = serde_json::from_str(&run(&bytes).unwrap()).unwrap();
     assert_eq!(out["width"], 360);
     // a screen that is not on the page, a theme that is not one
     let mut bad = job(&doc, "day");

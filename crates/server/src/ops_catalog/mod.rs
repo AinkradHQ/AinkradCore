@@ -54,6 +54,10 @@ pub const NOT_EXPOSED_OPS: &[&str] = &[
     "designSetAiPaused",
     "designApproveScreen",
     "designWithdrawApproval",
+    // until V7-01 wraps comment bodies as outside data and routes AI writes through `apply_to` with a `session:` origin
+    "designListComments",
+    "designRestoreVersion",
+    "designApply",
 ];
 
 /// Whether `path` may be an operation of a session at all.
