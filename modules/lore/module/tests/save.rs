@@ -713,3 +713,250 @@ async fn a_10000_word_save_is_under_20_ms() {
         assert!(fresh[7].as_millis() < 20 && merged[7].as_millis() < 20);
     }
 }
+
+// ---- R1-04: index, link resolution and backlinks ----
+
+async fn target_of(fx: &Fx, src: &str, norm: &str) -> Option<String> {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT target FROM lore_links WHERE src = '{src}' AND target_title_norm = '{norm}'"
+    )))
+    .fetch_one(&fx.app.pool)
+    .await
+    .unwrap()
+}
+
+async fn backlinks(fx: &Fx, id: &str) -> Vec<Value> {
+    let (s, v) = call(
+        fx,
+        &fx.admin,
+        Method::GET,
+        &format!("/notes/{id}/backlinks"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    v.as_array().unwrap().clone()
+}
+
+#[tokio::test]
+async fn links_resolve_same_project_then_personal_then_any_newest_first() {
+    let fx = fx().await;
+    let personal = add(&fx, "# Topic\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let other = add(&fx, "# Topic\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mine_old = add(&fx, "# Topic\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mine_new = add(&fx, "# Topic\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    sql(
+        &fx,
+        &format!("UPDATE lore_notes SET project = 'pb' WHERE id = '{other}'"),
+    )
+    .await;
+    sql(&fx, &format!("UPDATE lore_notes SET project = 'pa', updated_at = '2020-01-01T00:00:00.000Z' WHERE id = '{mine_old}'")).await;
+    sql(
+        &fx,
+        &format!("UPDATE lore_notes SET project = 'pa' WHERE id = '{mine_new}'"),
+    )
+    .await;
+    // a linker in project pa prefers its own project, newest first
+    let l = add(&fx, "# L\n[[Topic]]\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    sql(
+        &fx,
+        &format!("UPDATE lore_notes SET project = 'pa' WHERE id = '{l}'"),
+    )
+    .await;
+    save(&fx, &l, 1, "# L\nsee [[topic]]\n").await;
+    assert_eq!(target_of(&fx, &l, "topic").await, Some(mine_new.clone()));
+    // a personal linker takes the personal note, not a project's
+    let p = add(&fx, "# P\n[[Topic]]\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(target_of(&fx, &p, "topic").await, Some(personal.clone()));
+    // a linker in a third project: no own note, personal wins over another project's
+    let q = add(&fx, "# Q\n[[Topic]]\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    sql(
+        &fx,
+        &format!("UPDATE lore_notes SET project = 'pc' WHERE id = '{q}'"),
+    )
+    .await;
+    save(&fx, &q, 1, "# Q\n[[Topic]] again\n").await;
+    assert_eq!(target_of(&fx, &q, "topic").await, Some(personal.clone()));
+    // trash the personal one: the third project's link falls to "any", newest
+    call(
+        &fx,
+        &fx.admin,
+        Method::PATCH,
+        &format!("/notes/{personal}"),
+        Some(json!({"trashed": true})),
+    )
+    .await;
+    assert_eq!(target_of(&fx, &q, "topic").await, Some(mine_new));
+    assert!(target_of(&fx, &p, "topic").await.is_some());
+    let _ = other;
+}
+
+#[tokio::test]
+async fn a_later_note_resolves_earlier_dangling_links_and_rename_keeps_them_resolved() {
+    let fx = fx().await;
+    let b = add(&fx, "# B\nsee [[Alpha]] and `[[Alpha]]`\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(target_of(&fx, &b, "alpha").await, None);
+    // create
+    let a = add(&fx, "# Alpha\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(target_of(&fx, &b, "alpha").await, Some(a.clone()));
+    // rename a note INTO the name another note links to
+    let z = add(&fx, "# B2\n[[Zed]]\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(target_of(&fx, &z, "zed").await, None);
+    let n = add(&fx, "# Nope\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    save(&fx, &n, 1, "# Zed\n").await;
+    assert_eq!(target_of(&fx, &z, "zed").await, Some(n.clone()));
+    // rename Alpha: B is rewritten (code span untouched) and resolves to the renamed note
+    save(&fx, &a, 1, "# Beta\n").await;
+    assert_eq!(
+        get(&fx, &b).await["text"],
+        json!("# B\nsee [[Beta]] and `[[Alpha]]`\n")
+    );
+    assert_eq!(target_of(&fx, &b, "beta").await, Some(a.clone()));
+    assert_eq!(backlinks(&fx, &a).await.len(), 1);
+}
+
+#[tokio::test]
+async fn backlinks_carry_context_skip_trashed_sources_and_follow_the_target() {
+    let fx = fx().await;
+    let t = add(&fx, "# Target\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let s1 = add(&fx, "# One\nfirst line\nthe [[Target#Part|link]] is here\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let s2 = add(&fx, "# Two\n[[Target]]\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let bl = backlinks(&fx, &t).await;
+    assert_eq!(bl.len(), 2);
+    let one = bl.iter().find(|b| b["note"] == json!(s1)).unwrap();
+    assert_eq!(
+        (
+            one["title"].clone(),
+            one["heading"].clone(),
+            one["context"].clone()
+        ),
+        (
+            json!("One"),
+            json!("Part"),
+            json!("the [[Target#Part|link]] is here")
+        )
+    );
+    // a trashed source is not listed
+    call(
+        &fx,
+        &fx.admin,
+        Method::PATCH,
+        &format!("/notes/{s2}"),
+        Some(json!({"trashed": true})),
+    )
+    .await;
+    assert_eq!(backlinks(&fx, &t).await.len(), 1);
+    // trash the target: links dangle, text kept; restore: they resolve again
+    call(
+        &fx,
+        &fx.admin,
+        Method::PATCH,
+        &format!("/notes/{t}"),
+        Some(json!({"trashed": true})),
+    )
+    .await;
+    assert_eq!(target_of(&fx, &s1, "target").await, None);
+    assert_eq!(
+        get(&fx, &s1).await["text"],
+        json!("# One\nfirst line\nthe [[Target#Part|link]] is here\n")
+    );
+    call(
+        &fx,
+        &fx.admin,
+        Method::PATCH,
+        &format!("/notes/{t}"),
+        Some(json!({"trashed": false})),
+    )
+    .await;
+    assert_eq!(backlinks(&fx, &t).await.len(), 1);
+    // purge the target for good: the link row stays, target NULL
+    sql(&fx, &format!("UPDATE lore_notes SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','-31 days') WHERE id = '{t}'")).await;
+    assert_eq!(lore_module::sweep(&fx.app.pool).await.unwrap(), 1);
+    assert_eq!(target_of(&fx, &s1, "target").await, None);
+    assert_eq!(get(&fx, &s1).await["rev"], json!(1));
+    let (s, _) = call(
+        &fx,
+        &fx.admin,
+        Method::GET,
+        &format!("/notes/{t}/backlinks"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_fts_rows_follow_saves_and_a_rebuild_changes_nothing() {
+    let fx = fx().await;
+    let a = add(&fx, "# Apple pie\nbake slowly\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let b = add(&fx, "# Café\nnaïve crème\n").await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    add(&fx, "").await;
+    save(&fx, &a, 1, "# Apple tart\nbake quickly\n").await;
+    call(&fx, &fx.admin, Method::GET, "/today?day=2026-11-17", None).await;
+    let hits = |q: &str| format!("SELECT count(*) FROM lore_fts WHERE lore_fts MATCH '{q}'");
+    assert_eq!(sql_i64(&fx, &hits("quickly")).await, 1);
+    assert_eq!(sql_i64(&fx, &hits("slowly")).await, 0);
+    assert_eq!(sql_i64(&fx, &hits("creme")).await, 1, "diacritics folded");
+    assert_eq!(sql_i64(&fx, &hits("title:tart")).await, 1);
+    assert_eq!(sql_i64(&fx, "SELECT count(*) FROM lore_fts").await, 4);
+    let dump = || async {
+        let rows: Vec<(i64, String, String)> =
+            sqlx::query_as("SELECT rowid, title, body FROM lore_fts ORDER BY rowid")
+                .fetch_all(&fx.app.pool)
+                .await
+                .unwrap();
+        rows
+    };
+    let before = dump().await;
+    lore_module::rebuild_fts(&fx.app.pool).await.unwrap();
+    assert_eq!(dump().await, before);
+    let _ = b;
+}

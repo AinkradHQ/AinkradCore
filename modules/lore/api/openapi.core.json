@@ -1230,6 +1230,10 @@
           "job.ran",
           "lore.attachment.created",
           "lore.attachment.purged",
+          "lore.import.abandoned",
+          "lore.import.committed",
+          "lore.import.created",
+          "lore.import.undone",
           "lore.note.conflict",
           "lore.note.created",
           "lore.note.moved",
@@ -1310,6 +1314,43 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "Backlink": {
+        "properties": {
+          "context": {
+            "description": "The trimmed line the link is on (at most 160 characters). Note text: outside data.",
+            "type": "string"
+          },
+          "heading": {
+            "description": "The `#Heading` the link names, empty when it names none.",
+            "type": "string"
+          },
+          "note": {
+            "description": "The linking note.",
+            "type": "string"
+          },
+          "project": {
+            "description": "The linking note's project id; `null` = personal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "note",
+          "title",
+          "heading",
+          "context",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -2428,6 +2469,7 @@
           "alarm.raised",
           "audit",
           "connection.health",
+          "lore.import",
           "lore.note.changed",
           "lore.note.purged",
           "lore.note.trashed",
@@ -2468,6 +2510,7 @@
           "alarm.raised": "admin",
           "audit": "admin",
           "connection.health": "admin",
+          "lore.import": "read",
           "lore.note.changed": "read",
           "lore.note.purged": "read",
           "lore.note.trashed": "read",
@@ -2706,6 +2749,42 @@
         ],
         "type": "object"
       },
+      "Hit": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/NoteSummary"
+          },
+          {
+            "properties": {
+              "heading": {
+                "description": "The heading of the best matching section, for a hit by meaning.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "score": {
+                "description": "Higher is better; only comparable within one answer.",
+                "format": "double",
+                "type": "number"
+              },
+              "snippet": {
+                "$ref": "#/components/schemas/Snippet"
+              },
+              "via": {
+                "description": "`text`, `meaning` or `both`: which ranking found it.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "score",
+              "via",
+              "snippet"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "HostBinary": {
         "description": "A program installed on the host, as the helper's manifest and checks say.",
         "properties": {
@@ -2895,6 +2974,96 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "ItemSummary": {
+        "properties": {
+          "flag": {
+            "description": "`duplicate`, `changed`, `conflict`, `too_large` or `skipped`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mark": {
+            "description": "`include` or `skip`.",
+            "type": "string"
+          },
+          "match_note": {
+            "description": "The note this item would update (or, for `conflict`, keep).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "project": {
+            "description": "The project a new note goes to; `null` = personal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {
+            "description": "What commit did with it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seq": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "path",
+          "title",
+          "tags",
+          "mark"
+        ],
+        "type": "object"
+      },
+      "ItemsPatch": {
+        "properties": {
+          "mark": {
+            "description": "`include` or `skip`. Items that are too large or skipped stay skipped.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "The project new notes go to; `null` = personal. Items are re-flagged against it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seqs": {
+            "description": "Up to 500 item numbers; empty = every item of the run.",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "seqs"
+        ],
         "type": "object"
       },
       "KindAuthMethod": {
@@ -3287,6 +3456,201 @@
         },
         "required": [
           "code"
+        ],
+        "type": "object"
+      },
+      "LoreAiEdit": {
+        "additionalProperties": false,
+        "properties": {
+          "find": {
+            "description": "Text that occurs exactly once in the note.",
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "replace": {
+            "description": "What takes its place; may be empty. At most 60 000 characters.",
+            "maxLength": 60000,
+            "type": "string"
+          }
+        },
+        "required": [
+          "find",
+          "replace"
+        ],
+        "type": "object"
+      },
+      "LoreAiHit": {
+        "properties": {
+          "id": {
+            "description": "`ln_` and 12 base32 characters.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`note` or `daily`.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The note's title and the stretch that matched, inside the outside-text envelope.",
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "updated_at",
+          "text"
+        ],
+        "type": "object"
+      },
+      "LoreAiHits": {
+        "properties": {
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/LoreAiHit"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "hits"
+        ],
+        "type": "object"
+      },
+      "LoreAiLink": {
+        "properties": {
+          "note": {
+            "description": "The note on the other end, when it is a live note of this scope; `null` for a link that names no such\nnote (a note of another project reads the same as no note).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "The link's target title (or `#Heading`) and the line it is on, inside the outside-text envelope.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "LoreAiLinks": {
+        "properties": {
+          "backlinks": {
+            "description": "The live notes of this scope that link to this one.",
+            "items": {
+              "$ref": "#/components/schemas/LoreAiLink"
+            },
+            "type": "array"
+          },
+          "links": {
+            "description": "The `[[links]]` this note's text makes.",
+            "items": {
+              "$ref": "#/components/schemas/LoreAiLink"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "links",
+          "backlinks"
+        ],
+        "type": "object"
+      },
+      "LoreAiNote": {
+        "properties": {
+          "day": {
+            "description": "A daily note's local date.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "`note` or `daily`.",
+            "type": "string"
+          },
+          "rev": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "text": {
+            "description": "The Markdown, inside the outside-text envelope; cut at 60 000 characters.",
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "rev",
+          "updated_at",
+          "text",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "LoreAiText": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "description": "Markdown; 1 to 60 000 characters.",
+            "maxLength": 60000,
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "LoreAiTrashed": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "rev": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "LoreAiWrote": {
+        "description": "What a write answers: ids and the revision only (the AI wrote the text; it is not echoed).",
+        "properties": {
+          "changed": {
+            "description": "`false` when the text came out the same, so nothing was written.",
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "rev": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "rev",
+          "changed"
         ],
         "type": "object"
       },
@@ -3910,6 +4274,32 @@
           "provider",
           "label",
           "value"
+        ],
+        "type": "object"
+      },
+      "NewRun": {
+        "properties": {
+          "project": {
+            "description": "The project the notes go to; absent = personal (an upload only).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "description": "A mirror run: the project's repo id; absent = its primary repo.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "description": "`mirror` (the project's repo copy in the Core), `upload` (items or a zip sent to this run) or `apple_notes`\n(an upload run whose Markdown the Mac made from Apple Notes; own origins).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
         ],
         "type": "object"
       },
@@ -5063,6 +5453,123 @@
         ],
         "type": "object"
       },
+      "RunView": {
+        "properties": {
+          "committed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "error": {
+            "description": "Why the run could not be read, a fixed sentence.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "flags": {
+            "additionalProperties": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "description": "Items by flag (`duplicate`, `changed`, `conflict`, `too_large`, `skipped`).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "id": {
+            "description": "`li_` and 12 base32 characters.",
+            "type": "string"
+          },
+          "ignored": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "include": {
+            "description": "Items that a commit would act on (marked include, not too large or skipped).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "items": {
+            "description": "Staged items.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "kept": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refused": {
+            "description": "Entries refused as unsafe and entries ignored as unwanted; counted, never kept.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "results": {
+            "additionalProperties": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "description": "Items by what commit did (`created`, `updated`, `conflict`, `unchanged`, `skipped`).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "source": {
+            "description": "`mirror`, `upload` or `apple_notes`.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`staging`, `review`, `committing`, `committed`, `undoing`, `undone` or `abandoned`.",
+            "type": "string"
+          },
+          "undone": {
+            "description": "Items undo put back (`undone`) and ones it left because the note changed after the import (`kept`).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "state",
+          "items",
+          "include",
+          "refused",
+          "ignored",
+          "flags",
+          "results",
+          "undone",
+          "kept",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "Runner": {
         "description": "A paired runner and its live state.",
         "properties": {
@@ -5497,6 +6004,25 @@
         "required": [
           "base_rev",
           "text"
+        ],
+        "type": "object"
+      },
+      "SearchOut": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/Hit"
+            },
+            "type": "array"
+          },
+          "semantic": {
+            "description": "`false` = the model is absent or not loaded yet, so these are text matches only.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "results",
+          "semantic"
         ],
         "type": "object"
       },
@@ -6132,6 +6658,44 @@
           }
         ]
       },
+      "Snippet": {
+        "properties": {
+          "matches": {
+            "description": "The matched words in `text`, in order, not overlapping; empty for a hit by meaning alone.",
+            "items": {
+              "$ref": "#/components/schemas/Span"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "A stretch of the note on one line (newlines become spaces), `…` where it was cut. Note text: outside data.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "matches"
+        ],
+        "type": "object"
+      },
+      "Span": {
+        "description": "A matched word inside a snippet: byte offsets into `Snippet.text`.",
+        "properties": {
+          "end": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
+      },
       "StartConnectionFlow": {
         "description": "A sign-in to start.",
         "properties": {
@@ -6566,6 +7130,37 @@
         },
         "type": "object"
       },
+      "UploadBatch": {
+        "properties": {
+          "items": {
+            "description": "At most 200 per call, and the whole call under the 1 MiB signed-body cap.",
+            "items": {
+              "$ref": "#/components/schemas/UploadItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "UploadItem": {
+        "properties": {
+          "path": {
+            "description": "The path relative to the folder or zip root, `/`-separated.",
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "text"
+        ],
+        "type": "object"
+      },
       "UsageByCompany": {
         "properties": {
           "company": {
@@ -6817,7 +7412,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.89.0"
+    "version": "1.91.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -15895,6 +16490,416 @@
         ]
       }
     },
+    "/modules/lore/v1/ai/notes": {
+      "post": {
+        "operationId": "loreAiCreate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoreAiText"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiWrote"
+                }
+              }
+            },
+            "description": "A new note at rev 1, in this AI session's project, or personal when it has none. It cannot be put anywhere else"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/modules/lore/v1/ai/notes/{note}": {
+      "get": {
+        "operationId": "loreAiRead",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiNote"
+                }
+              }
+            },
+            "description": "One live note of this AI session's scope, as outside data. A note of another project, a trashed one and an unknown id are the same 404"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/ai/notes/{note}/append": {
+      "post": {
+        "operationId": "loreAiAppend",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoreAiText"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiWrote"
+                }
+              }
+            },
+            "description": "The text added after the note's last line, on a new line. A version of the old text is kept before this session's first edit of the note"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/modules/lore/v1/ai/notes/{note}/edit": {
+      "post": {
+        "operationId": "loreAiEdit",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoreAiEdit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiWrote"
+                }
+              }
+            },
+            "description": "`find` replaced by `replace`. A `find` that is not in the note exactly once is a 409 and changes nothing. A version of the old text is kept before this session's first edit of the note"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/modules/lore/v1/ai/notes/{note}/links": {
+      "get": {
+        "operationId": "loreAiLinks",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiLinks"
+                }
+              }
+            },
+            "description": "The links of a note of this AI session's scope and the notes of the scope that link to it (at most 100 each), as outside data"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/ai/notes/{note}/trash": {
+      "post": {
+        "operationId": "loreAiTrash",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiTrashed"
+                }
+              }
+            },
+            "description": "The note is in the trash: nothing is deleted, a person restores it within 30 days. Needs a person's approval"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/modules/lore/v1/ai/search": {
+      "get": {
+        "operationId": "loreAiSearch",
+        "parameters": [
+          {
+            "description": "Words (prefix match) and \"quoted phrases\"; at most 300 characters",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only notes with this tag",
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many hits (default 10, most 25)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiHits"
+                }
+              }
+            },
+            "description": "Live notes of this AI session's scope (its project's, or personal and daily ones), best first; every text is wrapped as outside data"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
     "/modules/lore/v1/attachments": {
       "post": {
         "operationId": "loreUploadAttachment",
@@ -16009,6 +17014,709 @@
           "lore"
         ],
         "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/export": {
+      "get": {
+        "operationId": "loreExport",
+        "parameters": [
+          {
+            "description": "Only the notes of this project id",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only this note (and its attachments)",
+            "in": "query",
+            "name": "note",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "items": {
+                    "format": "int32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "A zip of `.md` files with front matter (`id`, `project`, `tags`, `created`, `updated`) and an `attachments/` folder; the live notes only, wikilinks as written. `project` and `note` together are refused; an unknown or trashed `note` is 404; more than 50 000 notes or 1 GiB is 413"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/imports": {
+      "get": {
+        "operationId": "loreListImports",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RunView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The runs, newest first (at most 50), with their state and counts: what is staged, committing, done or undone"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "post": {
+        "operationId": "loreCreateImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "A new run. `upload` and `apple_notes`: state `staging`, send items or a zip, then `finish`. `mirror`: the repo copy's `Docs/` (or `docs/`) is read now, `.md` regular files only, and the run comes back in `review` (or `abandoned` with `error` when it could not be read). Needs an active project with a copy"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/imports/{run}": {
+      "get": {
+        "operationId": "loreGetImport",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "The run and its counts"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/imports/{run}/abandon": {
+      "post": {
+        "operationId": "loreAbandonImport",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "The run is dropped before anything was committed; its staged text goes with the 30-day cleanup"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/imports/{run}/commit": {
+      "post": {
+        "operationId": "loreCommitImport",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "The included items become notes: new ones are created, an unedited note of the same origin is updated (its old text kept as a version), an edited one is kept and the incoming text saved as a `conflict` version. Done in transactions of 200 items; calling it again on a `committing` run resumes it. Links between the new notes are resolved as each one lands. Reversible with `undo`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/imports/{run}/finish": {
+      "post": {
+        "operationId": "loreFinishImport",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "Staging is over: the items are flagged (duplicate, changed, conflict) and the run is in `review`. Calling it again on a run in review is harmless"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/imports/{run}/items": {
+      "get": {
+        "operationId": "loreListImportItems",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items with this flag",
+            "in": "query",
+            "name": "flag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items after this seq",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "At most this many (default 200, at most 500)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ItemSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Staged items by seq, without their text"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "patch": {
+        "operationId": "lorePatchImportItems",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "The run after the review edit. Only while `review`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "post": {
+        "operationId": "loreAddImportItems",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "The run after the batch is staged. Unsafe paths and unreadable text are refused and counted, unwanted files ignored; a path sent twice replaces the earlier one. Only while `staging`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/imports/{run}/undo": {
+      "post": {
+        "operationId": "loreUndoImport",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "What the run created is trashed, what it updated gets its old text back (and old import hash), the conflict versions it kept are removed. A note edited after the import is left alone and counted in `kept`. Not possible once the run's staged text was cleaned up (30 days). Calling it again on an `undoing` run resumes it"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/imports/{run}/zip": {
+      "post": {
+        "operationId": "loreAddImportZip",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/zip": {
+              "schema": {
+                "items": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              }
+            }
+          },
+          "description": "A zip of `.md` files, at most 16 MiB",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "The run after the zip's Markdown files are staged. Symlinks, `..` or absolute names, NUL and binary files are refused and counted; over 5 000 entries, 2 000 files or 64 MiB of text is 413. Only while `staging`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/modules/lore/v1/notes": {
@@ -16247,6 +17955,62 @@
           "lore"
         ],
         "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/notes/{note}/backlinks": {
+      "get": {
+        "operationId": "loreBacklinks",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Backlink"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The live notes linking to this one, newest first, at most 500, one row per distinct link with its context line. Links to a note in the trash or deleted are not listed"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/modules/lore/v1/notes/{note}/restore": {
@@ -16525,6 +18289,105 @@
               }
             },
             "description": "One version with its text"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/search": {
+      "get": {
+        "operationId": "loreSearch",
+        "parameters": [
+          {
+            "description": "What to find: words (prefix match) and \"quoted phrases\"; at most 300 characters",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`active` (default), `trashed` or `all`",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`note` or `daily`",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only notes of this project id",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only notes with this tag",
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many hits (default 20, at most 50)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchOut"
+                }
+              }
+            },
+            "description": "Hits, best first, with snippets; `semantic` says whether meaning was used"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
