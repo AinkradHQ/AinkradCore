@@ -6,7 +6,6 @@
 //! room's `canon.db`; the Core's transcript keeps a placeholder (Q-16, C-08).
 //! ponytail: one session per run, sources capped per run; the rest wait for the next run.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -25,7 +24,7 @@ use serde_json::json;
 use sqlx::{Row, SqlitePool};
 use utoipa::ToSchema;
 
-use crate::answer::{Candidate, Source, build_prompt, parse_output};
+use crate::answer::{Candidate, Known, Related, Source, build_prompt, parse_output, pick_related};
 use crate::claim::{self, check_chain};
 use crate::files::{self, CANON};
 use crate::policy::{self, AUTO_KINDS};
@@ -253,9 +252,28 @@ pub(crate) fn pick_runner(app: &App) -> Option<String> {
     all.into_iter().next()
 }
 
+/// The room's current memory, newest first, from which the prompt's related block is picked.
+async fn related_in(pool: &SqlitePool) -> Result<Vec<Related>, sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT id, type, body FROM records WHERE status = 'accepted' AND valid_to IS NULL \
+         AND archived_at IS NULL ORDER BY created_at DESC LIMIT 500",
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.iter()
+        .map(|r| {
+            Ok(Related {
+                id: r.try_get("id")?,
+                kind: r.try_get("type")?,
+                body: r.try_get("body")?,
+            })
+        })
+        .collect()
+}
+
 async fn sources_for(pool: &SqlitePool) -> Result<Vec<Source>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT item_id, title, text FROM sources WHERE distilled IS NULL AND pointer = 0 \
+        "SELECT item_id, title, text, started_at FROM sources WHERE distilled IS NULL AND pointer = 0 \
          ORDER BY started_at, item_id LIMIT ?",
     )
     .bind(MAX_SOURCES)
@@ -278,6 +296,7 @@ async fn sources_for(pool: &SqlitePool) -> Result<Vec<Source>, sqlx::Error> {
             item_id: r.try_get("item_id")?,
             title: r.try_get("title")?,
             text,
+            at: r.try_get("started_at")?,
         });
     }
     Ok(out)
@@ -328,7 +347,8 @@ async fn launch(app: &App, b: &Brain, d: &DistilView, by: &str) -> Result<(), Ap
         )
         .await?);
     }
-    let prompt = build_prompt(&p.name, &sources);
+    let related = pick_related(related_in(&pool).await?, &sources);
+    let prompt = build_prompt(&p.name, &sources, &related);
     let policy = session_policy();
     let new = NewSession {
         runner: &runner,
@@ -370,6 +390,13 @@ async fn launch(app: &App, b: &Brain, d: &DistilView, by: &str) -> Result<(), Ap
             .execute(&mut *tx)
             .await?;
     }
+    // The memory ids the prompt showed: the answer's `same_as`/`replaces` are checked against them.
+    let shown: Vec<&str> = related.iter().map(|r| r.id.as_str()).collect();
+    sqlx::query("INSERT INTO room_audit (action, detail, at) VALUES ('distil.shown', ?, ?)")
+        .bind(json!({"distil": d.id, "ids": shown}).to_string())
+        .bind(app.clock.now())
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     pool.close().await;
     sqlx::query("UPDATE brain_distils SET session = ?, sources = ? WHERE id = ?")
@@ -443,13 +470,22 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     };
     let output = answer_of(app, &s.id).await?;
     let pool = canon(app, b, &d.room).await?;
-    let known: HashSet<String> =
-        sqlx::query_scalar("SELECT item_id FROM sources WHERE distilled = ?")
+    let taken: Vec<(String, String)> =
+        sqlx::query_as("SELECT item_id, text FROM sources WHERE distilled = ?")
             .bind(&d.id)
             .fetch_all(&pool)
-            .await?
-            .into_iter()
-            .collect();
+            .await?;
+    let shown: Vec<String> = sqlx::query_scalar(
+        "SELECT detail FROM room_audit WHERE action = 'distil.shown' \
+         AND json_extract(detail, '$.distil') = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(&d.id)
+    .fetch_optional(&pool)
+    .await?
+    .and_then(|j: String| serde_json::from_str::<serde_json::Value>(&j).ok())
+    .and_then(|v| serde_json::from_value(v["ids"].clone()).ok())
+    .unwrap_or_default();
+    let known = Known::new(taken.iter().map(|(i, t)| (i.as_str(), t.as_str())), shown);
     let parsed = match output.as_deref() {
         None => Err("the AI session gave no answer".to_owned()),
         Some(o) => parse_output(o, &known),
