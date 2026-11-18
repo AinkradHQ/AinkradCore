@@ -152,11 +152,18 @@ pub static VECTORS: &[FileMigration] = &[
     },
 ];
 
-pub static INDEX: &[FileMigration] = &[FileMigration {
-    version: 1,
-    name: "index_0001",
-    up: include_str!("../migrations/index_0001.sql"),
-}];
+pub static INDEX: &[FileMigration] = &[
+    FileMigration {
+        version: 1,
+        name: "index_0001",
+        up: include_str!("../migrations/index_0001.sql"),
+    },
+    FileMigration {
+        version: 2,
+        name: "index_0002",
+        up: include_str!("../migrations/index_0002.sql"),
+    },
+];
 
 pub static STAGING: &[FileMigration] = &[
     FileMigration {
@@ -221,5 +228,10 @@ pub static CANON: &[FileMigration] = &[
         version: 5,
         name: "canon_0005",
         up: include_str!("../migrations/canon_0005.sql"),
+    },
+    FileMigration {
+        version: 6,
+        name: "canon_0006",
+        up: include_str!("../migrations/canon_0006.sql"),
     },
 ];

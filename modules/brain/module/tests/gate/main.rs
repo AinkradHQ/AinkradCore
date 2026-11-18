@@ -17,6 +17,7 @@ mod overview;
 mod project_rooms;
 mod query;
 mod review;
+mod schema_v2;
 mod rooms;
 mod runner_history;
 mod semantic;

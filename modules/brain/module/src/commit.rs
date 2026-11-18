@@ -297,10 +297,11 @@ pub(crate) async fn commit_room(
     } else {
         24
     };
-    sqlx::query("INSERT OR IGNORE INTO brain_room_policy (room, allowed_providers, lease_hours) VALUES (?, ?, ?)")
+    sqlx::query("INSERT OR IGNORE INTO brain_room_policy (room, allowed_providers, lease_hours, auto_accept) VALUES (?, ?, ?, ?)")
         .bind(&room)
         .bind(providers)
         .bind(lease)
+        .bind(crate::policy::AUTO_ACCEPT_ALL)
         .execute(&mut *tx)
         .await?;
     if created {

@@ -27,6 +27,12 @@ pub const LOCAL: &str = "local";
 /// A landmine is a `rule` and an open thread a `task`, told apart by tag (plan section 4.4).
 pub const AUTO_KINDS: &[&str] = crate::answer::KINDS;
 
+/// A new room's `auto_accept` (Brain v2: auto-save every kind, with Undo). SQLite cannot change a
+/// column default, so the two places that insert a policy row bind this; keep it equal to the sorted
+/// `AUTO_KINDS` and to the backfill in `0009_brain_v2.up.sql`.
+pub(crate) const AUTO_ACCEPT_ALL: &str =
+    r#"["decision","fact","preference","project-state","rule","summary","task"]"#;
+
 pub(crate) struct Policy {
     pub name: String,
     pub allowed: Vec<String>,
