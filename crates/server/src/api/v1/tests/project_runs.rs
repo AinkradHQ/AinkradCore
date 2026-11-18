@@ -290,7 +290,7 @@ async fn the_idle_stop_fires_after_idle_minutes_on_a_faked_clock() {
         (r.state.as_str(), r.stop_reason.as_deref()),
         ("stopped", Some("idle"))
     );
-    assert_eq!(link.stops(), [id.clone()]);
+    assert_eq!(link.stops(), std::slice::from_ref(&id));
     runs::sweep(&fx.app, &link).await;
     assert_eq!(link.stops().len(), 1, "stopped once");
     let rows = audit_rows(&fx).await;

@@ -80,10 +80,12 @@ async fn in_flight_caps_per_client_and_per_project_answer_503_with_retry_after()
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert!(headers.contains_key(header::RETRY_AFTER));
     assert_eq!(dial.opened.load(AtomicOrdering::Relaxed), host::PER_PROJECT);
-    assert!(
-        host::PER_PROJECT < 32,
-        "well under the runner's run.port streams"
-    );
+    const {
+        assert!(
+            host::PER_PROJECT < 32,
+            "well under the runner's run.port streams"
+        )
+    };
     for h in hung {
         h.abort();
     }
