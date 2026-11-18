@@ -271,11 +271,12 @@ async fn commands_are_validated_listed_changed_and_deleted() {
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     // ids only in the audit rows, never a step
-    let rows: Vec<String> =
-        sqlx::query_scalar("SELECT details FROM core_audit WHERE action LIKE 'leyline.command.%'")
-            .fetch_all(&fx.app.pool)
-            .await
-            .unwrap();
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT details FROM audit_events WHERE action LIKE 'leyline.command.%'",
+    )
+    .fetch_all(&fx.app.pool)
+    .await
+    .unwrap();
     assert!(
         rows.len() >= 4
             && rows

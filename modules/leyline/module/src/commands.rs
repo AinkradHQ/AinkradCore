@@ -374,7 +374,7 @@ async fn in_scope(
             "SELECT EXISTS (SELECT 1 FROM leyline_hosts WHERE id = ?1 AND group_name = ?2 COLLATE NOCASE)"
         }
         "tag" => {
-            "SELECT EXISTS (SELECT 1 FROM leyline_hosts, json_each(tags) WHERE id = ?1 AND value = ?2)"
+            "SELECT EXISTS (SELECT 1 FROM leyline_hosts, json_each(tags) WHERE leyline_hosts.id = ?1 AND value = ?2)"
         }
         _ => {
             "SELECT EXISTS (SELECT 1 FROM leyline_project_hosts WHERE host_id = ?1 AND project = ?2 \
