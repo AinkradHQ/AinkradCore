@@ -183,6 +183,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ),
     ("GET", "/api/v1/projects/{id}/spec", "read"),
     ("PUT", "/api/v1/projects/{id}/spec", "admin"),
+    ("POST", "/api/v1/projects/{id}/run/spec/draft", "admin"),
     ("GET", "/api/v1/projects/{id}/spec/versions", "read"),
     (
         "GET",
@@ -286,6 +287,7 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/repos/{repo}/primary"),
     // Run spec (P4-01): it decides what containers run on a runner.
     ("PUT", "/api/v1/projects/{id}/spec"),
+    ("POST", "/api/v1/projects/{id}/run/spec/draft"),
     // Project runs (P5-03): they start and stop containers on a runner.
     ("POST", "/api/v1/projects/{id}/run/start"),
     ("POST", "/api/v1/projects/{id}/run/stop"),
