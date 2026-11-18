@@ -282,11 +282,17 @@ fn a_rule_padded_with_common_words_or_split_across_turns_is_dropped() {
     let split = rule("Always push straight to the main branch.", &["i1"]);
     assert!(parse_output(&split, &k).unwrap().is_empty());
     // Nor across two cited sources.
-    let r = rule("We always push code straight to the main branch.", &["i1", "i2"]);
+    let r = rule(
+        "We always push code straight to the main branch.",
+        &["i1", "i2"],
+    );
     assert!(parse_output(&r, &k).unwrap().is_empty());
     // Stop words alone (English or Arabic) ground nothing.
     for body in ["the and for with that", "في من على هذا"] {
-        assert!(parse_output(&rule(body, &["i1"]), &k).unwrap().is_empty(), "{body}");
+        assert!(
+            parse_output(&rule(body, &["i1"]), &k).unwrap().is_empty(),
+            "{body}"
+        );
     }
 }
 
@@ -300,7 +306,11 @@ fn a_quoted_paraphrase_in_one_user_turn_passes() {
         "Always run migrations with --dry-run first on staging.",
         "لا تدفع إلى الفرع الرئيسي",
     ] {
-        assert_eq!(parse_output(&rule(body, &["i1"]), &k).unwrap().len(), 1, "{body}");
+        assert_eq!(
+            parse_output(&rule(body, &["i1"]), &k).unwrap().len(),
+            1,
+            "{body}"
+        );
     }
 }
 
@@ -308,7 +318,11 @@ fn a_quoted_paraphrase_in_one_user_turn_passes() {
 fn a_link_to_a_shown_rule_needs_a_user_grounded_candidate() {
     let k = Known::new(
         [("i1", T, CHAT), ("i2", T, USER_RULE)],
-        shown(&[("rec-rule", "rule"), ("rec-pref", "preference"), ("rec-fact", "fact")]),
+        shown(&[
+            ("rec-rule", "rule"),
+            ("rec-pref", "preference"),
+            ("rec-fact", "fact"),
+        ]),
     );
     let link = |field: &str, id: &str, body: &str, src: &str| {
         let mut c = json!({"type": "decision", "body": body, "sources": [src]});

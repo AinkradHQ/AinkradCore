@@ -74,7 +74,8 @@ const MAX_QUEUE: usize = 100;
 const NOT_CONTESTED: &str = "contests IS NULL";
 /// Distinct cited sources of a record. Raw `support` is not used (it is being changed to count
 /// origins, B5-02), and this reads the same facts directly.
-const SUPPORT_SQL: &str = "(SELECT count(DISTINCT rs.source) FROM record_sources rs WHERE rs.record = memory.id)";
+const SUPPORT_SQL: &str =
+    "(SELECT count(DISTINCT rs.source) FROM record_sources rs WHERE rs.record = memory.id)";
 
 #[derive(Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -251,7 +252,11 @@ pub(crate) async fn context(
     if !start && prompt.is_none() {
         return Err(ApiError::bad_request("prompt mode needs a prompt"));
     }
-    let max = if start { Q_START_TOKENS } else { Q_PROMPT_TOKENS };
+    let max = if start {
+        Q_START_TOKENS
+    } else {
+        Q_PROMPT_TOKENS
+    };
     let tokens = (q.budget.map_or(max, |n| n as usize)).clamp(50, max);
     let named = q.room.is_some();
     let (rooms, _) = scope(&app, &session, q.room.as_deref()).await?;
@@ -348,7 +353,10 @@ pub(crate) async fn context(
     if start {
         let from = order.len();
         for r in &by_support {
-            if order.len() - from < Q_START_BY_SUPPORT && !used.contains(&r.id) && seen.insert(&r.id) {
+            if order.len() - from < Q_START_BY_SUPPORT
+                && !used.contains(&r.id)
+                && seen.insert(&r.id)
+            {
                 order.push(r);
             }
         }
@@ -363,7 +371,11 @@ pub(crate) async fn context(
     for r in order {
         let origin = if r.ai { ", origin=ai" } else { "" };
         let line = format!("- [{}{origin}] {}\n", r.id, one_line(&r.body, LINE_CHARS));
-        let part = if first { format!("Memory:\n{line}") } else { line };
+        let part = if first {
+            format!("Memory:\n{line}")
+        } else {
+            line
+        };
         if !body.put(&part, &[(r.room.clone(), r.id.clone())]) {
             break;
         }

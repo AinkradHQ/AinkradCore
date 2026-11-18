@@ -20,7 +20,10 @@ fn path(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
 /// Sources `s1` (older) and `s2` (newer), and records covering every backfill branch, written
 /// the way canon level 5 wrote them.
 async fn seed_level_5(pool: &SqlitePool) {
-    for (id, at) in [("s1", "2026-01-01T00:00:00Z"), ("s2", "2026-03-01T00:00:00Z")] {
+    for (id, at) in [
+        ("s1", "2026-01-01T00:00:00Z"),
+        ("s2", "2026-03-01T00:00:00Z"),
+    ] {
         sqlx::query(
             "INSERT INTO sources (item_id, content_hash, source_kind, device, path, author_kind, author_name, \
              title, text, started_at, run, assigned_by) VALUES (?, ?, 'note', 'd', '/p', 'user', 'a', 't', 'x', ?, 'r', 'rule')",
@@ -34,12 +37,54 @@ async fn seed_level_5(pool: &SqlitePool) {
     }
     // (id, status, body, source_ids, decided_by, distil)
     let rows: [(&str, &str, &str, &str, Option<&str>, Option<&str>); 6] = [
-        ("r-auto", "accepted", "  Deploy\ton   FRIDAYS \n", r#"["s1","s2"]"#, Some("auto"), Some("dst-1")),
-        ("r-person", "accepted", "We use Rust", r#"["s2"]"#, Some("dev-9"), Some("dst-1")),
-        ("r-ai", "candidate", "AI proposed", "[]", None, Some("ai:as_1")),
-        ("r-bad", "accepted", "bad json", "not json", Some("auto"), None),
-        ("r-dangling", "rejected", "cites nothing real", r#"["gone"]"#, None, None),
-        ("r-dup", "accepted", "dup cite", r#"["s1","s1"]"#, Some("auto"), None),
+        (
+            "r-auto",
+            "accepted",
+            "  Deploy\ton   FRIDAYS \n",
+            r#"["s1","s2"]"#,
+            Some("auto"),
+            Some("dst-1"),
+        ),
+        (
+            "r-person",
+            "accepted",
+            "We use Rust",
+            r#"["s2"]"#,
+            Some("dev-9"),
+            Some("dst-1"),
+        ),
+        (
+            "r-ai",
+            "candidate",
+            "AI proposed",
+            "[]",
+            None,
+            Some("ai:as_1"),
+        ),
+        (
+            "r-bad",
+            "accepted",
+            "bad json",
+            "not json",
+            Some("auto"),
+            None,
+        ),
+        (
+            "r-dangling",
+            "rejected",
+            "cites nothing real",
+            r#"["gone"]"#,
+            None,
+            None,
+        ),
+        (
+            "r-dup",
+            "accepted",
+            "dup cite",
+            r#"["s1","s1"]"#,
+            Some("auto"),
+            None,
+        ),
     ];
     for (id, status, body, ids, by, distil) in rows {
         sqlx::query(
@@ -74,7 +119,9 @@ async fn snapshot(pool: &SqlitePool) -> Vec<String> {
 async fn a_room_file_from_every_canon_level_opens_at_the_newest() {
     for level in 1..=CANON.len() {
         let (_d, p) = path("canon.db");
-        let old = files::open_migrated(&p, &KEY, true, &CANON[..level]).await.unwrap();
+        let old = files::open_migrated(&p, &KEY, true, &CANON[..level])
+            .await
+            .unwrap();
         old.close().await;
         let pool = files::open_migrated(&p, &KEY, false, CANON).await.unwrap();
         let n: i64 = sqlx::query_scalar("SELECT count(*) FROM _file_migrations")
@@ -94,7 +141,9 @@ async fn a_room_file_from_every_canon_level_opens_at_the_newest() {
 #[tokio::test]
 async fn the_backfill_fills_the_new_columns_from_what_level_5_recorded() {
     let (_d, p) = path("canon.db");
-    let old = files::open_migrated(&p, &KEY, true, &CANON[..5]).await.unwrap();
+    let old = files::open_migrated(&p, &KEY, true, &CANON[..5])
+        .await
+        .unwrap();
     seed_level_5(&old).await;
     old.close().await;
     let pool = files::open_migrated(&p, &KEY, false, CANON).await.unwrap();
@@ -136,14 +185,19 @@ async fn the_backfill_fills_the_new_columns_from_what_level_5_recorded() {
 #[tokio::test]
 async fn the_backfill_is_idempotent_and_reopening_changes_nothing() {
     let (_d, p) = path("canon.db");
-    let old = files::open_migrated(&p, &KEY, true, &CANON[..5]).await.unwrap();
+    let old = files::open_migrated(&p, &KEY, true, &CANON[..5])
+        .await
+        .unwrap();
     seed_level_5(&old).await;
     old.close().await;
     let pool = files::open_migrated(&p, &KEY, false, CANON).await.unwrap();
     let first = snapshot(&pool).await;
     // Run the backfill statements again (everything after the marker; the DDL above it is not repeatable).
     let backfill = CANON[5].up.split("-- Backfill.").nth(1).unwrap();
-    sqlx::raw_sql(&format!("--{backfill}")).execute(&pool).await.unwrap();
+    sqlx::raw_sql(&format!("--{backfill}"))
+        .execute(&pool)
+        .await
+        .unwrap();
     assert_eq!(snapshot(&pool).await, first);
     pool.close().await;
     let pool = files::open_migrated(&p, &KEY, false, CANON).await.unwrap();
@@ -155,20 +209,27 @@ async fn the_backfill_is_idempotent_and_reopening_changes_nothing() {
 async fn new_records_get_the_v2_defaults_and_the_change_tables_work() {
     let (_d, p) = path("canon.db");
     let pool = files::open_migrated(&p, &KEY, true, CANON).await.unwrap();
-    sqlx::query("INSERT INTO records (id, type, body, created_at) VALUES ('r', 'fact', 'b', 'now')")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "INSERT INTO records (id, type, body, created_at) VALUES ('r', 'fact', 'b', 'now')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let (support, origin, edited, status): (i64, String, i64, String) =
         sqlx::query_as("SELECT support, origin, edited_by_person, status FROM records")
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!((support, origin.as_str(), edited, status.as_str()), (1, "distil", 0, "candidate"));
-    sqlx::query("INSERT INTO changes (id, kind, summary, at) VALUES ('c1', 'distil', 'Saved 1', 'now')")
-        .execute(&pool)
-        .await
-        .unwrap();
+    assert_eq!(
+        (support, origin.as_str(), edited, status.as_str()),
+        (1, "distil", 0, "candidate")
+    );
+    sqlx::query(
+        "INSERT INTO changes (id, kind, summary, at) VALUES ('c1', 'distil', 'Saved 1', 'now')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query("INSERT INTO change_rows (change, seq, record, after) VALUES ('c1', 0, 'r', '{}')")
         .execute(&pool)
         .await
@@ -180,16 +241,29 @@ async fn new_records_get_the_v2_defaults_and_the_change_tables_work() {
             .await
             .is_err()
     );
-    sqlx::query("INSERT INTO record_sources (record, source, position) VALUES ('r', 's', 0)").execute(&pool).await.unwrap();
-    assert!(sqlx::query("INSERT INTO record_sources (record, source, position) VALUES ('r', 's', 1)").execute(&pool).await.is_err());
-    sqlx::query("UPDATE sources SET compacted_at = NULL, redistil = NULL").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO record_sources (record, source, position) VALUES ('r', 's', 0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query("INSERT INTO record_sources (record, source, position) VALUES ('r', 's', 1)")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    sqlx::query("UPDATE sources SET compacted_at = NULL, redistil = NULL")
+        .execute(&pool)
+        .await
+        .unwrap();
     pool.close().await;
 }
 
 #[tokio::test]
 async fn a_room_index_from_level_1_opens_and_holds_the_memory_search() {
     let (_d, p) = path("index.db");
-    let old = files::open_migrated(&p, &KEY, true, &INDEX[..1]).await.unwrap();
+    let old = files::open_migrated(&p, &KEY, true, &INDEX[..1])
+        .await
+        .unwrap();
     old.close().await;
     let pool = files::open_migrated(&p, &KEY, false, INDEX).await.unwrap();
     sqlx::query("INSERT INTO rec_fts (record, type, body, tags) VALUES ('r', 'fact', 'Deploy on Fridays', 'ops')")
@@ -223,12 +297,20 @@ async fn control_0009_goes_down_and_up_and_switches_old_rooms_to_auto_save() {
     use ainkrad_core_server::module::Module;
     use ainkrad_core_server::store::migrate;
     let fx = fx().await;
-    let (d, pol) = (columns(&fx, "brain_distils").await, columns(&fx, "brain_room_policy").await);
+    let (d, pol) = (
+        columns(&fx, "brain_distils").await,
+        columns(&fx, "brain_room_policy").await,
+    );
     assert!(has(&d, "trigger") && has(&d, "of_session"));
     assert!(has(&pol, "retention_days") && has(&pol, "daily_distils"));
 
-    migrate::undo(&fx.app.pool, "brain", brain_module::MIGRATIONS, 8).await.unwrap();
-    let (d, pol) = (columns(&fx, "brain_distils").await, columns(&fx, "brain_room_policy").await);
+    migrate::undo(&fx.app.pool, "brain", brain_module::MIGRATIONS, 8)
+        .await
+        .unwrap();
+    let (d, pol) = (
+        columns(&fx, "brain_distils").await,
+        columns(&fx, "brain_room_policy").await,
+    );
     assert!(!has(&d, "trigger") && !has(&d, "of_session"));
     assert!(!has(&pol, "retention_days") && !has(&pol, "daily_distils"));
 
@@ -252,7 +334,9 @@ async fn control_0009_goes_down_and_up_and_switches_old_rooms_to_auto_save() {
         .await
         .unwrap();
     let modules: Vec<Arc<dyn Module>> = vec![Arc::new(fx.brain.clone())];
-    migrate::migrate_modules(&fx.app.pool, &modules).await.unwrap();
+    migrate::migrate_modules(&fx.app.pool, &modules)
+        .await
+        .unwrap();
 
     let rows: Vec<(String, String, Option<i64>, i64)> = sqlx::query_as(
         "SELECT room, auto_accept, retention_days, daily_distils FROM brain_room_policy \
@@ -286,7 +370,10 @@ async fn control_0009_goes_down_and_up_and_switches_old_rooms_to_auto_save() {
             .is_err()
     );
     assert!(
-        sqlx::query("INSERT INTO brain_session_cursor VALUES (2, 0)").execute(&fx.app.pool).await.is_err()
+        sqlx::query("INSERT INTO brain_session_cursor VALUES (2, 0)")
+            .execute(&fx.app.pool)
+            .await
+            .is_err()
     );
 }
 
@@ -294,19 +381,48 @@ async fn control_0009_goes_down_and_up_and_switches_old_rooms_to_auto_save() {
 async fn a_room_made_by_a_commit_auto_saves_every_kind_until_set_back_to_review() {
     let fx = fx().await;
     let run = start(&fx).await;
-    send(&fx, &run, vec![item(1, "/h/Projects/Alpha/a", "a", "alpha text")]).await;
+    send(
+        &fx,
+        &run,
+        vec![item(1, "/h/Projects/Alpha/a", "a", "alpha text")],
+    )
+    .await;
     finish(&fx, &run).await;
-    let id = proposals(&fx, &run).await[0]["id"].as_str().unwrap().to_owned();
-    ok(&fx, Method::PATCH, &format!("/imports/{run}/proposals/{id}"), Some(json!({"state": "accepted"}))).await;
-    let room = ok(&fx, Method::POST, &format!("/imports/{run}/commit"), None).await["rooms"][0]["room"]
+    let id = proposals(&fx, &run).await[0]["id"]
         .as_str()
         .unwrap()
         .to_owned();
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("/imports/{run}/proposals/{id}"),
+        Some(json!({"state": "accepted"})),
+    )
+    .await;
+    let room =
+        ok(&fx, Method::POST, &format!("/imports/{run}/commit"), None).await["rooms"][0]["room"]
+            .as_str()
+            .unwrap()
+            .to_owned();
     let pol = ok(&fx, Method::GET, &format!("/rooms/{room}/policy"), None).await;
     assert_eq!(
         pol["auto_accept"],
-        json!(["decision", "fact", "preference", "project-state", "rule", "summary", "task"])
+        json!([
+            "decision",
+            "fact",
+            "preference",
+            "project-state",
+            "rule",
+            "summary",
+            "task"
+        ])
     );
-    let back = ok(&fx, Method::PATCH, &format!("/rooms/{room}/policy"), Some(json!({"auto_accept": []}))).await;
+    let back = ok(
+        &fx,
+        Method::PATCH,
+        &format!("/rooms/{room}/policy"),
+        Some(json!({"auto_accept": []})),
+    )
+    .await;
     assert_eq!(back["auto_accept"], json!([]));
 }

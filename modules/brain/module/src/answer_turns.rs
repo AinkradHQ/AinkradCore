@@ -197,7 +197,11 @@ mod tests {
         assert_eq!(kind_of("core_transcript"), SourceKind::CoreTranscript);
         assert_eq!(kind_of("claude_code"), SourceKind::ClaudeCode);
         assert_eq!(kind_of("whatever"), SourceKind::Doc);
-        for kind in [SourceKind::CoreTranscript, SourceKind::ClaudeCode, SourceKind::Codex] {
+        for kind in [
+            SourceKind::CoreTranscript,
+            SourceKind::ClaudeCode,
+            SourceKind::Codex,
+        ] {
             assert_eq!(user_turns(text, kind).len(), 1, "{kind:?}");
         }
     }

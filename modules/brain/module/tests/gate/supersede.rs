@@ -245,7 +245,11 @@ async fn a_replaces_of_a_rule_preference_decision_or_fact_always_contests() {
             let (_d, p) = pool().await;
             record(&p, "old", kind, T0).await;
             record(&p, "new", kind, NOW).await;
-            assert_eq!(run_g(&p, "old", "new", g).await.0, Replace::Contested, "{kind}");
+            assert_eq!(
+                run_g(&p, "old", "new", g).await.0,
+                Replace::Contested,
+                "{kind}"
+            );
             assert!(in_memory(&p, "old").await, "{kind}");
             assert_eq!(contests(&p, "new").await.as_deref(), Some("old"), "{kind}");
         }
@@ -522,7 +526,13 @@ async fn a_contested_label_stays_when_its_target_is_gone() {
     p.close().await;
     open_room(&fx, &room).await;
     let s = session(&fx, ALPHA, &["anthropic"]).await;
-    let one = read(&fx, &s, "brainAiRecord", json!({"room": room, "id": "rec-a"})).await;
+    let one = read(
+        &fx,
+        &s,
+        "brainAiRecord",
+        json!({"room": room, "id": "rec-a"}),
+    )
+    .await;
     let label = "contests record rec-c (gone), unresolved";
     assert!(one["text"].as_str().unwrap().contains(label), "{one}");
 }

@@ -24,9 +24,9 @@ pub const Q_MEMORY_MARGIN: f32 = 0.05;
 
 /// How many of `scores` (best first) are within `margin` of the best one.
 pub fn within_margin(scores: &[f32], margin: f32) -> usize {
-    scores
-        .first()
-        .map_or(0, |top| scores.iter().take_while(|s| **s >= top - margin).count())
+    scores.first().map_or(0, |top| {
+        scores.iter().take_while(|s| **s >= top - margin).count()
+    })
 }
 
 /// Refused (restricted path) items are never embedded. The caller also drops private ones it knows of.

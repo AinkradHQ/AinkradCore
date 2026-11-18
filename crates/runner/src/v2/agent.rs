@@ -52,9 +52,9 @@ mod plan;
 mod signals;
 mod sub;
 // Code Mode (`ainkrad_run`, the `ainkrad` CLI): the QuickJS engine, behind the `quickjs` feature.
+pub mod hook;
 #[cfg(feature = "quickjs")]
 pub mod script;
-pub mod hook;
 pub mod tools;
 
 /// The variable the Core delivers a run's token under (`Module::credentials` of Citadel).

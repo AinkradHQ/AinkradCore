@@ -78,7 +78,9 @@ pub(crate) async fn candidates(pool: &SqlitePool) -> Result<Vec<Cand>, sqlx::Err
            AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE value IN {CONTESTED}) \
          ORDER BY support DESC, seen DESC, id"
     );
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql)).fetch_all(pool).await?;
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await?;
     let mut out = vec![];
     for r in &rows {
         let id: String = r.try_get("id")?;
@@ -110,9 +112,7 @@ pub(crate) async fn candidates(pool: &SqlitePool) -> Result<Vec<Cand>, sqlx::Err
 /// The card from candidates of every passing room: best supported first, then newest, one line
 /// each, cut at the budget. `None` when nothing qualifies.
 pub(crate) fn assemble(mut all: Vec<Cand>) -> Option<Card> {
-    all.sort_by(|a, b| {
-        (b.support, &b.seen, &a.id).cmp(&(a.support, &a.seen, &b.id))
-    });
+    all.sort_by(|a, b| (b.support, &b.seen, &a.id).cmp(&(a.support, &a.seen, &b.id)));
     let cap = BUDGET_TOKENS * CHARS_PER_TOKEN;
     let (mut text, mut ids, mut complete) = (HEADING.to_owned(), vec![], true);
     let mut seen_text = std::collections::HashSet::new();
@@ -285,19 +285,29 @@ mod tests {
             .fetch_one(p)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO record_sources (record, source, position, run) VALUES (?, ?, ?, ?)")
-            .bind(rec)
-            .bind(item)
-            .bind(pos)
-            .bind(run)
-            .execute(p)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO record_sources (record, source, position, run) VALUES (?, ?, ?, ?)",
+        )
+        .bind(rec)
+        .bind(item)
+        .bind(pos)
+        .bind(run)
+        .execute(p)
+        .await
+        .unwrap();
     }
 
     /// A record (support is set high on purpose: it must not count) cited by `n` transcript
     /// sessions, each in its own distil run.
-    async fn put(p: &SqlitePool, id: &str, kind: &str, body: &str, tags: &str, n: i64, origin: &str) {
+    async fn put(
+        p: &SqlitePool,
+        id: &str,
+        kind: &str,
+        body: &str,
+        tags: &str,
+        n: i64,
+        origin: &str,
+    ) {
         sqlx::query(
             "INSERT INTO records (id, type, status, body, tags, created_at, support, last_seen_at, origin) \
              VALUES (?, ?, 'accepted', ?, ?, '2026-11-01T00:00:00Z', 99, '2026-11-01T00:00:00Z', ?)",
@@ -312,7 +322,15 @@ mod tests {
         .unwrap();
         for i in 0..n {
             let item = format!("{id}-s{i}");
-            cite(p, id, &item, "claude_code", &format!("runner://x/{id}-{i}"), &format!("run-{i}")).await;
+            cite(
+                p,
+                id,
+                &item,
+                "claude_code",
+                &format!("runner://x/{id}-{i}"),
+                &format!("run-{i}"),
+            )
+            .await;
         }
     }
 
@@ -325,8 +343,24 @@ mod tests {
         let (_d, p) = room().await;
         put(&p, "r", "rule", "Be brief.", "[]", 0, "distil").await;
         // Two parts of one Core session, cited by two different runs.
-        cite(&p, "r", "a", "core_transcript", "core://ai-session/s1", "run-1").await;
-        cite(&p, "r", "b", "core_transcript", "core://ai-session/s1", "run-2").await;
+        cite(
+            &p,
+            "r",
+            "a",
+            "core_transcript",
+            "core://ai-session/s1",
+            "run-1",
+        )
+        .await;
+        cite(
+            &p,
+            "r",
+            "b",
+            "core_transcript",
+            "core://ai-session/s1",
+            "run-2",
+        )
+        .await;
         assert!(!qualifies(&p, "r").await);
     }
 
@@ -334,8 +368,24 @@ mod tests {
     async fn two_sessions_in_one_run_do_not_qualify() {
         let (_d, p) = room().await;
         put(&p, "r", "rule", "Be brief.", "[]", 0, "distil").await;
-        cite(&p, "r", "a", "core_transcript", "core://ai-session/s1", "run-1").await;
-        cite(&p, "r", "b", "core_transcript", "core://ai-session/s2", "run-1").await;
+        cite(
+            &p,
+            "r",
+            "a",
+            "core_transcript",
+            "core://ai-session/s1",
+            "run-1",
+        )
+        .await;
+        cite(
+            &p,
+            "r",
+            "b",
+            "core_transcript",
+            "core://ai-session/s2",
+            "run-1",
+        )
+        .await;
         assert!(!qualifies(&p, "r").await);
     }
 
@@ -343,7 +393,15 @@ mod tests {
     async fn two_sessions_across_two_runs_qualify() {
         let (_d, p) = room().await;
         put(&p, "r", "rule", "Be brief.", "[]", 0, "distil").await;
-        cite(&p, "r", "a", "core_transcript", "core://ai-session/s1", "run-1").await;
+        cite(
+            &p,
+            "r",
+            "a",
+            "core_transcript",
+            "core://ai-session/s1",
+            "run-1",
+        )
+        .await;
         cite(&p, "r", "b", "claude_code", "runner://x/s2", "run-2").await;
         assert!(qualifies(&p, "r").await);
     }
@@ -353,9 +411,20 @@ mod tests {
     async fn an_echo_citation_does_not_qualify() {
         let (_d, p) = room().await;
         put(&p, "r", "rule", "Be brief.", "[]", 0, "distil").await;
-        cite(&p, "r", "a", "core_transcript", "core://ai-session/s1", "run-1").await;
+        cite(
+            &p,
+            "r",
+            "a",
+            "core_transcript",
+            "core://ai-session/s1",
+            "run-1",
+        )
+        .await;
         cite(&p, "r", "b", "claude_code", "runner://x/s2", "run-2").await;
-        sqlx::query("UPDATE record_sources SET echo = 1 WHERE source = 'b'").execute(&p).await.unwrap();
+        sqlx::query("UPDATE record_sources SET echo = 1 WHERE source = 'b'")
+            .execute(&p)
+            .await
+            .unwrap();
         assert!(!qualifies(&p, "r").await);
     }
 
@@ -363,7 +432,15 @@ mod tests {
     async fn a_lore_note_plus_a_session_does_not_qualify() {
         let (_d, p) = room().await;
         put(&p, "r", "rule", "Be brief.", "[]", 0, "distil").await;
-        cite(&p, "r", "a", "core_transcript", "core://ai-session/s1", "run-1").await;
+        cite(
+            &p,
+            "r",
+            "a",
+            "core_transcript",
+            "core://ai-session/s1",
+            "run-1",
+        )
+        .await;
         cite(&p, "r", "b", "note", "lore://note/n1", "run-2").await;
         assert!(!qualifies(&p, "r").await);
     }
@@ -371,13 +448,67 @@ mod tests {
     #[tokio::test]
     async fn only_stable_uncontested_preferences_and_rules_qualify() {
         let (_d, p) = room().await;
-        put(&p, "ok1", "preference", "Answer briefly.", "[]", 2, "distil").await;
-        put(&p, "ok2", "rule", "Never commit secrets.", "[]", 0, "person").await;
-        put(&p, "weak", "rule", "One-off, unconfirmed.", "[]", 1, "distil").await;
-        put(&p, "fight", "rule", "Squash merges.", r#"["contested"]"#, 3, "person").await;
-        put(&p, "fight2", "rule", "Rebase merges.", r#"["conflict"]"#, 3, "person").await;
+        put(
+            &p,
+            "ok1",
+            "preference",
+            "Answer briefly.",
+            "[]",
+            2,
+            "distil",
+        )
+        .await;
+        put(
+            &p,
+            "ok2",
+            "rule",
+            "Never commit secrets.",
+            "[]",
+            0,
+            "person",
+        )
+        .await;
+        put(
+            &p,
+            "weak",
+            "rule",
+            "One-off, unconfirmed.",
+            "[]",
+            1,
+            "distil",
+        )
+        .await;
+        put(
+            &p,
+            "fight",
+            "rule",
+            "Squash merges.",
+            r#"["contested"]"#,
+            3,
+            "person",
+        )
+        .await;
+        put(
+            &p,
+            "fight2",
+            "rule",
+            "Rebase merges.",
+            r#"["conflict"]"#,
+            3,
+            "person",
+        )
+        .await;
         put(&p, "task", "task", "Ship the export.", "[]", 3, "person").await;
-        put(&p, "state", "project-state", "Beta is live.", "[]", 3, "person").await;
+        put(
+            &p,
+            "state",
+            "project-state",
+            "Beta is live.",
+            "[]",
+            3,
+            "person",
+        )
+        .await;
         put(&p, "sum", "summary", "A summary.", "[]", 3, "person").await;
         put(&p, "fact", "fact", "A fact.", "[]", 3, "person").await;
         put(&p, "gone", "rule", "Replaced rule.", "[]", 3, "person").await;
@@ -391,12 +522,26 @@ mod tests {
             .await
             .unwrap();
         // B4-02: a record whose `replaces` lacked the evidence to retire its target is contested.
-        put(&p, "contests", "rule", "Contesting rule.", "[]", 3, "person").await;
+        put(
+            &p,
+            "contests",
+            "rule",
+            "Contesting rule.",
+            "[]",
+            3,
+            "person",
+        )
+        .await;
         sqlx::query("UPDATE records SET contests = 'ok2' WHERE id = 'contests'")
             .execute(&p)
             .await
             .unwrap();
-        let ids: Vec<String> = candidates(&p).await.unwrap().into_iter().map(|c| c.id).collect();
+        let ids: Vec<String> = candidates(&p)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
         assert_eq!(ids, ["ok1", "ok2"]);
         let card = assemble(candidates(&p).await.unwrap()).unwrap();
         assert_eq!(card.ids, ["ok1", "ok2"], "{}", card.text);
@@ -423,12 +568,35 @@ mod tests {
         let (_d, p) = room().await;
         put(&p, "a", "rule", "Made by the person.", "[]", 0, "person").await;
         put(&p, "b", "rule", "Edited by the person.", "[]", 0, "distil").await;
-        sqlx::query("UPDATE records SET edited_by_person = 1 WHERE id = 'b'").execute(&p).await.unwrap();
+        sqlx::query("UPDATE records SET edited_by_person = 1 WHERE id = 'b'")
+            .execute(&p)
+            .await
+            .unwrap();
         put(&p, "c", "rule", "Accepted by a device.", "[]", 0, "distil").await;
-        sqlx::query("UPDATE records SET decided_by = 'dev-1' WHERE id = 'c'").execute(&p).await.unwrap();
-        put(&p, "d", "rule", "Accepted by the room policy.", "[]", 0, "distil").await;
-        sqlx::query("UPDATE records SET decided_by = 'auto' WHERE id = 'd'").execute(&p).await.unwrap();
-        let mut ids: Vec<String> = candidates(&p).await.unwrap().into_iter().map(|c| c.id).collect();
+        sqlx::query("UPDATE records SET decided_by = 'dev-1' WHERE id = 'c'")
+            .execute(&p)
+            .await
+            .unwrap();
+        put(
+            &p,
+            "d",
+            "rule",
+            "Accepted by the room policy.",
+            "[]",
+            0,
+            "distil",
+        )
+        .await;
+        sqlx::query("UPDATE records SET decided_by = 'auto' WHERE id = 'd'")
+            .execute(&p)
+            .await
+            .unwrap();
+        let mut ids: Vec<String> = candidates(&p)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
         ids.sort();
         assert_eq!(ids, ["a", "b", "c"]);
     }
@@ -445,7 +613,11 @@ mod tests {
             .collect();
         let c = assemble(all).unwrap();
         assert!(!c.complete);
-        assert!(c.text.chars().count() <= BUDGET_TOKENS * CHARS_PER_TOKEN, "{}", c.text.len());
+        assert!(
+            c.text.chars().count() <= BUDGET_TOKENS * CHARS_PER_TOKEN,
+            "{}",
+            c.text.len()
+        );
         assert_eq!(c.ids[0], "r00", "best supported first");
         assert!(assemble(vec![]).is_none(), "nothing qualifies: no card");
     }
