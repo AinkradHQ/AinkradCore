@@ -343,6 +343,9 @@ pub struct SaveOut {
     /// A version made by this call that holds text the head no longer has: the kept head (`conflict`,
     /// `base_lost`) or the undo point of a restore.
     pub version: Option<String>,
+    /// Attachments the returned `text` names (`lore-attachment:<sha>`) that the Core does not hold (never
+    /// uploaded, or swept): re-upload them from the local copy. Ascending, no repeats.
+    pub missing_attachments: Vec<String>,
 }
 
 #[utoipa::path(put, path = "/notes/{note}/text", operation_id = "loreSaveText", tag = "lore",
@@ -397,7 +400,9 @@ pub(crate) async fn put_text(
     if r.text != h.text {
         commit_text(&mut tx, &h, &r.text, &who, "person", Snap::IfIdle).await?;
     }
+    let missing_attachments = crate::attachments::missing(&mut tx, &r.text).await?;
     let out = SaveOut {
+        missing_attachments,
         note: view(&mut tx, &note).await?,
         outcome: r.outcome.name().to_owned(),
         version: kept,
