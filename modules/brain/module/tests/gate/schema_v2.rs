@@ -180,8 +180,8 @@ async fn new_records_get_the_v2_defaults_and_the_change_tables_work() {
             .await
             .is_err()
     );
-    sqlx::query("INSERT INTO record_sources VALUES ('r', 's', 0)").execute(&pool).await.unwrap();
-    assert!(sqlx::query("INSERT INTO record_sources VALUES ('r', 's', 1)").execute(&pool).await.is_err());
+    sqlx::query("INSERT INTO record_sources (record, source, position) VALUES ('r', 's', 0)").execute(&pool).await.unwrap();
+    assert!(sqlx::query("INSERT INTO record_sources (record, source, position) VALUES ('r', 's', 1)").execute(&pool).await.is_err());
     sqlx::query("UPDATE sources SET compacted_at = NULL, redistil = NULL").execute(&pool).await.unwrap();
     pool.close().await;
 }

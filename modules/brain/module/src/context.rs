@@ -379,12 +379,7 @@ pub(crate) async fn context(
     // The ledger and the audit first; no text leaves if they fail.
     let mut tx = begin_write(&app.pool).await?;
     for (room, id) in &body.at {
-        sqlx::query("INSERT OR IGNORE INTO brain_session_loaded (session, room, record) VALUES (?, ?, ?)")
-            .bind(&session)
-            .bind(room)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+        crate::loaded::record_in(&mut tx, &session, room, std::slice::from_ref(id)).await?;
     }
     let mut rooms_used: Vec<&str> = body.at.iter().map(|x| x.0.as_str()).collect();
     rooms_used.sort_unstable();

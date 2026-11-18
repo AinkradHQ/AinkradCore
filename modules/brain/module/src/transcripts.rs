@@ -85,11 +85,23 @@ pub(crate) struct Meta<'a> {
 /// Items for the entries `(seq, body)`, oldest first: one per part of at most `PART_BYTES`.
 /// Each item's origin range is the entries it covers, so a session that is resumed and ends again
 /// gives only its new entries.
-pub(crate) fn items(s: &Meta, entries: &[(u64, Value)], now_ms: u64) -> Vec<Item> {
+///
+/// `loaded` is the text this session was given from the Brain; it is cut out first (`echo::strip`),
+/// so memory the model was shown is never distilled back as a new fact.
+pub(crate) fn items(
+    s: &Meta,
+    entries: &[(u64, Value)],
+    now_ms: u64,
+    loaded: &[String],
+) -> Vec<Item> {
     // (first seq, last seq, text) per part.
     let mut parts: Vec<(u64, u64, String)> = vec![];
     for (seq, body) in entries {
         let Some(block) = render(body) else { continue };
+        let block = crate::echo::strip(&block, loaded);
+        if crate::echo::is_empty_turn(&block) {
+            continue;
+        }
         let block = cut(&block, PART_BYTES).to_owned();
         match parts.last_mut() {
             Some((_, last, text)) if text.len() + block.len() < PART_BYTES => {
@@ -168,6 +180,7 @@ mod tests {
             &session(),
             &[(1, user), (2, tool), (3, reply), (4, odd)],
             1_000,
+            &[],
         );
         assert_eq!(out.len(), 1);
         assert!(out[0].text.ends_with("User: hello\n\nAssistant: done"));
@@ -181,7 +194,7 @@ mod tests {
         let big =
             json!({"type": "user", "message": {"role": "user", "content": "x".repeat(150_000)}});
         let entries: Vec<_> = (1..=3).map(|n| (n, big.clone())).collect();
-        let out = items(&session(), &entries, 1_000);
+        let out = items(&session(), &entries, 1_000, &[]);
         assert_eq!(out.len(), 3);
         assert!(out[1].title.ends_with("(part 2 of 3)"));
         assert!(out.iter().all(|i| i.validate().is_ok()));
@@ -190,7 +203,7 @@ mod tests {
 
     #[test]
     fn nothing_said_gives_no_item() {
-        let out = items(&session(), &[(1, json!({"type": "ended"}))], 1_000);
+        let out = items(&session(), &[(1, json!({"type": "ended"}))], 1_000, &[]);
         assert!(out.is_empty());
     }
 }

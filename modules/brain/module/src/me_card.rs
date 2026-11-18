@@ -85,7 +85,7 @@ pub(crate) async fn candidates(pool: &SqlitePool) -> Result<Vec<Cand>, sqlx::Err
         if r.try_get::<i64, _>("person")? == 0 {
             let cites: Vec<(String, String, Option<String>)> = sqlx::query_as(
                 "SELECT s.source_kind, s.path, rs.run FROM record_sources rs \
-                 JOIN sources s ON s.item_id = rs.source WHERE rs.record = ?",
+                 JOIN sources s ON s.item_id = rs.source WHERE rs.record = ? AND rs.echo = 0",
             )
             .bind(&id)
             .fetch_all(pool)
@@ -345,6 +345,17 @@ mod tests {
         cite(&p, "r", "a", "core_transcript", "core://ai-session/s1", "run-1").await;
         cite(&p, "r", "b", "claude_code", "runner://x/s2", "run-2").await;
         assert!(qualifies(&p, "r").await);
+    }
+
+    /// B5-02: a session the Brain gave the record to and that said it back (`echo`) is no origin.
+    #[tokio::test]
+    async fn an_echo_citation_does_not_qualify() {
+        let (_d, p) = room().await;
+        put(&p, "r", "rule", "Be brief.", "[]", 0, "distil").await;
+        cite(&p, "r", "a", "core_transcript", "core://ai-session/s1", "run-1").await;
+        cite(&p, "r", "b", "claude_code", "runner://x/s2", "run-2").await;
+        sqlx::query("UPDATE record_sources SET echo = 1 WHERE source = 'b'").execute(&p).await.unwrap();
+        assert!(!qualifies(&p, "r").await);
     }
 
     #[tokio::test]
