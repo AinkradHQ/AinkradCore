@@ -144,6 +144,7 @@ pub(crate) async fn compose(pool: &SqlitePool, h: &Head, now: &str) -> Result<Ca
         "SELECT id, body FROM memory \
          WHERE type IN (SELECT value FROM json_each(?1)) \
            AND (?2 = 0 OR datetime(coalesce(last_seen_at, created_at)) >= datetime(?3, '-' || ?2 || ' days')) \
+           AND contests IS NULL
            AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE value IN {CONTESTED}) \
          ORDER BY CASE WHEN ?4 THEN support ELSE 0 END DESC, coalesce(last_seen_at, created_at) DESC, id \
          LIMIT ?5"

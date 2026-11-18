@@ -66,7 +66,7 @@ const PROPOSE_INVALID: &str = "a known type, a body of 1 to 2000 characters, at 
 const MAX_ROOMS: usize = 20;
 
 /// The session behind a Code Mode call.
-fn session_of(me: &Caller) -> Result<String, ApiError> {
+pub(crate) fn session_of(me: &Caller) -> Result<String, ApiError> {
     me.session
         .strip_prefix(SESSION)
         .filter(|s| !s.is_empty())
@@ -106,7 +106,7 @@ async fn room_of(app: &App, session: &str, room: &str) -> Result<Visible, ApiErr
 
 /// The rooms a call reads: the named one (visible or 404), else every visible room; true when
 /// `MAX_ROOMS` cut the list.
-async fn scope(
+pub(crate) async fn scope(
     app: &App,
     session: &str,
     room: Option<&str>,
@@ -122,7 +122,7 @@ async fn scope(
 }
 
 /// The open file of each room that is open; how many were not (a closed lease, or unreadable).
-async fn open_all(
+pub(crate) async fn open_all(
     app: &App,
     b: &Brain,
     rooms: Vec<Visible>,

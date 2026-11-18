@@ -56,6 +56,7 @@ pub(crate) async fn candidates(pool: &SqlitePool) -> Result<Vec<Cand>, sqlx::Err
         "SELECT id, body, support, coalesce(last_seen_at, created_at) AS seen FROM memory \
          WHERE type IN ('preference','rule') \
            AND (support >= 2 OR origin = 'person' OR edited_by_person = 1) \
+           AND contests IS NULL
            AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE value IN {CONTESTED}) \
          ORDER BY support DESC, seen DESC, id LIMIT ?"
     );
@@ -106,6 +107,15 @@ pub(crate) fn assemble(mut all: Vec<Cand>) -> Option<Card> {
 
 /// The me card for `session`, or `None`. Never an error that says why.
 pub async fn build(app: &App, b: &Brain, session: &str) -> Option<Card> {
+    build_located(app, b, session).await.map(|c| c.0)
+}
+
+/// The card and the `(room, record)` of every record on it, for `brain_session_loaded` (B7-03).
+pub(crate) async fn build_located(
+    app: &App,
+    b: &Brain,
+    session: &str,
+) -> Option<(Card, Vec<(String, String)>)> {
     let s = agents::get(&app.pool, session).await.ok()??;
     if !s.live() {
         return None;
@@ -113,6 +123,7 @@ pub async fn build(app: &App, b: &Brain, session: &str) -> Option<Card> {
     let chain = alloc::view(&app.pool, session).await.ok()??.chain?;
     let key = b.key(app).await.ok()?;
     let mut all = vec![];
+    let mut at = vec![];
     for room in me_rooms(&app.pool).await.ok()? {
         let Ok(p) = policy::load(app, &room).await else {
             continue;
@@ -124,10 +135,13 @@ pub async fn build(app: &App, b: &Brain, session: &str) -> Option<Card> {
             continue;
         };
         if let Ok(c) = candidates(a.pool()).await {
+            at.extend(c.iter().map(|c| (room.clone(), c.id.clone())));
             all.extend(c);
         }
     }
-    assemble(all)
+    let card = assemble(all)?;
+    at.retain(|(_, id)| card.ids.contains(id));
+    Some((card, at))
 }
 
 #[cfg(test)]
