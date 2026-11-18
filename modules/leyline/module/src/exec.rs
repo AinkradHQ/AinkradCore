@@ -166,9 +166,8 @@ pub(crate) async fn sftp(
 }
 
 /// The runner that connects and the `ssh.exec` for `step`, with a one-use lease per hop. `link` is
-/// the very read `checked` compared: nothing is read again after the check. Shared with the health
-/// prober (Y5-01), which dispatches it itself to tell "host down" from "runner away".
-pub(crate) async fn build(
+/// the very read `checked` compared: nothing is read again after the check.
+async fn build(
     app: &App,
     auth: &Authorized,
     step: &str,
@@ -186,6 +185,21 @@ pub(crate) async fn build(
         },
     };
     Ok((runner, exec))
+}
+
+/// The health probe's (Y5-01) `ssh.exec` of `step`, sent from `link` (the very read `checked`
+/// compared). The prober waits on the answer itself to tell "host down" from "runner away".
+pub(crate) async fn probe(
+    app: &App,
+    auth: &Authorized,
+    step: &str,
+    timeout: Duration,
+    link: Link,
+) -> Result<Dispatched, String> {
+    let (runner, exec) = build(app, auth, step, timeout, link).await?;
+    app.hub
+        .dispatch_ssh_exec(&runner, exec)
+        .map_err(|e| why(e.code))
 }
 
 /// One `ssh.exec` of `step` on the authorised host: leases, hops, dispatch, the answer.
