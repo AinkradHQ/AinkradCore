@@ -20,6 +20,10 @@ pub struct Overlay {
     pub marquee: Option<Rect>,
     /// Guide segments `[x1, y1, x2, y2]`.
     pub guides: Vec<[f32; 4]>,
+    /// Text editing (V2-04), world rects: the caret (zero width), the selected text, the IME's marked text.
+    pub caret: Option<Rect>,
+    pub text_selection: Vec<Rect>,
+    pub marked: Vec<Rect>,
 }
 
 impl Overlay {
@@ -84,6 +88,24 @@ pub fn draw(canvas: &Canvas, cam: &Camera, o: &Overlay) {
             canvas.draw_rrect(h, &fill);
             canvas.draw_rrect(h, &line);
         }
+    }
+    let mut fill = Paint::default();
+    fill.set_anti_alias(true);
+    fill.set_color(ACCENT.with_a(0x48));
+    for r in &o.text_selection {
+        canvas.draw_rect(screen(cam, *r), &fill);
+    }
+    fill.set_color(ACCENT);
+    for r in &o.marked {
+        let r = screen(cam, *r);
+        canvas.draw_rect(Rect::new(r.left, r.bottom - 1.0, r.right, r.bottom), &fill);
+    }
+    if let Some(c) = o.caret {
+        let r = screen(cam, c);
+        canvas.draw_rect(
+            Rect::new(r.left - 0.75, r.top, r.left + 0.75, r.bottom),
+            &fill,
+        );
     }
     line.set_color(GUIDE);
     for g in &o.guides {

@@ -10,5 +10,7 @@ mod interact;
 mod preview;
 mod snap;
 pub mod testing;
+mod text;
+mod typing;
 
 pub use host::Host;

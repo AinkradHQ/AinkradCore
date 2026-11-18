@@ -43,6 +43,7 @@ mod read;
 mod replica;
 #[cfg(test)]
 mod reset_tests;
+mod text;
 mod trial;
 
 pub use design_model::{Doc as Model, NodeType};
@@ -51,6 +52,7 @@ pub use gate::Refused;
 pub use ops::{MAX_GESTURE_OPS, MAX_OPS, MAX_OPS_BYTES, Op, parse_ops};
 pub use presence::{ClockFn, MAX_PEERS, MAX_PRESENCE_BYTES, PEER_TTL_MS, Presence};
 pub use replica::{MAX_PEER_UPDATE_BYTES, Replica};
+pub use text::byte_of_utf16;
 
 /// What the engine accepts from the Core: one relayed update or a full state (the document cap plus framing room).
 /// What a device may SEND is smaller, `MAX_PEER_UPDATE_BYTES`: the Core refuses more, so the engine's outbox and its

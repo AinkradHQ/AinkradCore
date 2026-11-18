@@ -510,6 +510,127 @@ pub unsafe extern "C" fn de_missing_assets(
     with(h, |e| unsafe { put(&e.missing_json(), out, cap, out_len) })
 }
 
+// ---- text editing (V2-04) ---------------------------------------------------------------------------------------
+//
+// What the App's `NSTextInputClient` bridge calls. Offsets and lengths are UTF-16 code units of the composed text
+// (the node's text with the IME's marked text in place), as `NSRange` counts them; a range argument is a start and
+// a length, each in `0..=DE_MAX_TEXT_OFFSET`, or start `DE_TEXT_NO_RANGE` (Swift's `NSNotFound`). Offsets past the
+// text are clamped and offsets inside a character or emoji sequence snap to its edge. Calls other than
+// `de_text_begin` / `de_text_end` return `DE_ERR_INVALID` when no text is being edited.
+
+/// Start editing the text node under view point (x, y) with the caret there (a double-click on text). Marked text
+/// of an earlier session is committed first. `DE_ERR_INVALID` when there is no text node at the point.
+#[unsafe(no_mangle)]
+pub extern "C" fn de_text_begin(h: u64, x: f32, y: f32) -> i32 {
+    with(h, |e| ok(e.text_begin(x, y)))
+}
+
+/// Stop editing (commits marked text). Not editing: `DE_OK`.
+#[unsafe(no_mangle)]
+pub extern "C" fn de_text_end(h: u64) -> i32 {
+    with(h, |e| ok(e.text_end()))
+}
+
+/// `insertText(_:replacementRange:)`: UTF-8 `text` replaces the marked text, else the replacement range, else the
+/// selection. One batch; a run of typing is one undo step.
+///
+/// # Safety
+/// `text..+len` readable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_text_insert(
+    h: u64,
+    text_: *const u8,
+    len: usize,
+    rep_start: i64,
+    rep_len: i64,
+) -> i32 {
+    with(h, |e| {
+        let t = unsafe { text(text_, len, DE_MAX_TEXT_BYTES) }?;
+        let rep = crate::typing::range_arg(rep_start, rep_len)?;
+        ok(e.text_insert(t, rep))
+    })
+}
+
+/// `setMarkedText(_:selectedRange:replacementRange:)`: the IME's composition, drawn in place and never written to
+/// the document until it is committed (`de_text_insert`, `de_text_unmark`). `sel` is inside `text`; an empty `text`
+/// ends the composition.
+///
+/// # Safety
+/// `text..+len` readable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_text_set_marked(
+    h: u64,
+    text_: *const u8,
+    len: usize,
+    sel_start: i64,
+    sel_len: i64,
+    rep_start: i64,
+    rep_len: i64,
+) -> i32 {
+    with(h, |e| {
+        let t = unsafe { text(text_, len, DE_MAX_TEXT_BYTES) }?;
+        let end = t.encode_utf16().count();
+        let sel = crate::typing::range_arg(sel_start, sel_len)?.unwrap_or((end, end));
+        let rep = crate::typing::range_arg(rep_start, rep_len)?;
+        ok(e.text_set_marked(t, sel, rep))
+    })
+}
+
+/// `unmarkText()`: the marked text goes in as it is.
+#[unsafe(no_mangle)]
+pub extern "C" fn de_text_unmark(h: u64) -> i32 {
+    with(h, |e| ok(e.text_unmark()))
+}
+
+/// `doCommand(by:)`: a `DE_TEXT_*` command with `DE_MOD_*` bits.
+#[unsafe(no_mangle)]
+pub extern "C" fn de_text_command(h: u64, cmd: u32, mods: u32) -> i32 {
+    with(h, |e| ok(e.text_command(cmd, mods)))
+}
+
+/// The editing state as JSON: `{id, text, selection: [start, len], marked: [start, len] | null}`, or `null` when
+/// not editing (`selectedRange()`, `markedRange()`, `hasMarkedText()`, `attributedSubstring(forProposedRange:)`).
+///
+/// # Safety
+/// See `put`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_text_state(
+    h: u64,
+    out: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    with(h, |e| unsafe {
+        put(&e.text_state_json(), out, cap, out_len)
+    })
+}
+
+/// `firstRect(forCharacterRange:actualRange:)`: `{rect: [x, y, w, h], range: [start, len]}`, the rect in view
+/// points (the App converts it to screen coordinates), the range as it was snapped.
+///
+/// # Safety
+/// See `put`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_text_first_rect(
+    h: u64,
+    start: i64,
+    len: i64,
+    out: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    with(h, |e| {
+        let j = e.text_first_rect_json(start, len)?;
+        unsafe { put(&j, out, cap, out_len) }
+    })
+}
+
+/// `characterIndex(for:)`: the offset nearest view point (x, y) (>= 0), or an error code.
+#[unsafe(no_mangle)]
+pub extern "C" fn de_text_index_at(h: u64, x: f32, y: f32) -> i32 {
+    with(h, |e| e.text_index_at(x, y))
+}
+
 // ---- fonts + assets -----------------------------------------------------------------------------------------------
 
 /// A library font by its sha256 (`asset_len == 0`: the fallback `system` draws with).
