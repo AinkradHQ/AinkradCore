@@ -789,6 +789,7 @@ async fn the_brain_operations_are_in_the_live_catalogue_with_their_risks() {
         ("brainAiRooms", "read"),
         ("brainAiSearch", "read"),
         ("brainAiRecord", "read"),
+        ("brainAiContext", "read"),
         ("brainAiEvidence", "read"),
         ("brainAiDecisions", "read"),
         ("brainAiProjectState", "read"),
@@ -880,6 +881,8 @@ async fn no_ai_op_returns_source_text_except_evidence_for_a_cited_pair() {
         ("brainAiSearch", json!({"q": "pipeline", "mode": "meaning"})),
         ("brainAiSearch", json!({"q": MARK})),
         ("brainAiRecord", json!({"room": room, "id": "rec-live"})),
+        ("brainAiContext", json!({"mode": "start"})),
+        ("brainAiContext", json!({"mode": "prompt", "prompt": "pipeline"})),
         ("brainAiDecisions", json!({})),
         ("brainAiProjectState", json!({})),
     ];
