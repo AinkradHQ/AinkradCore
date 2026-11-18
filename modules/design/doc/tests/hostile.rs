@@ -24,7 +24,7 @@ fn small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
         .unwrap()
 }
 
-/// A hostile replica in the T1 layout that records every update it makes.
+/// A hostile replica in the T1 layout (the `move` register) that records every update it makes.
 fn hostile() -> (Doc, Arc<Mutex<Vec<Vec<u8>>>>) {
     let d = Doc::new();
     let log: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
@@ -33,10 +33,14 @@ fn hostile() -> (Doc, Arc<Mutex<Vec<Vec<u8>>>>) {
         .unwrap();
     let nodes = d.get_or_insert_map("nodes");
     let mut t = d.transact_mut();
-    for (id, ty, parent) in [(PAGE, "page", Any::Null), (FRAME, "frame", Any::from(PAGE))] {
+    for (id, ty, parent) in [
+        (PAGE, "page", "null"),
+        (FRAME, "frame", "\"n_aaaaaaaaaaaa\""),
+    ] {
+        let mv = Any::from_json(&format!(r#"{{"p":{parent},"c":1,"f":null}}"#)).unwrap();
         let n: MapPrelim = [
             ("type", yrs::In::Any(Any::from(ty))),
-            ("parent", yrs::In::Any(parent)),
+            ("move", yrs::In::Any(mv)),
             ("order", yrs::In::Any(Any::from("a"))),
             ("props", yrs::In::Map(MapPrelim::default())),
         ]
@@ -253,13 +257,32 @@ fn an_update_listing_a_client_twice_is_refused() {
 /// yrs would keep this update as pending and then panic re-encoding it (`merge_pending_v1` unwrap; found by mutating
 /// real updates). It starts past what the replica has, so it is refused before yrs sees it.
 const PENDING_BAD: &[u8] = include_bytes!("../fuzz/regressions/pending-merge-panic");
+/// The base the regressions were cut from, kept byte for byte: it predates the `move` register (V1-05), so its nodes
+/// no longer read, but every regression still meets the exact blocks it was found against. Tests that need content
+/// use `base()`.
 const BASE: &[u8] = include_bytes!("../fuzz/seeds/apply/base");
+
+/// A page, a frame and a text in the current layout, made by another replica (what the Core relays).
+fn base() -> Vec<u8> {
+    let mut l = Live::new();
+    op(
+        &mut l,
+        json!([
+            {"op": "add", "id": PAGE, "type": "page", "parent": null, "order": "a"},
+            {"op": "add", "id": FRAME, "type": "frame", "parent": PAGE, "order": "a", "props": {"w": 360, "h": 640}},
+            {"op": "add", "id": "n_cccccccccccc", "type": "text", "parent": FRAME, "order": "a", "text": "Hello"},
+        ]),
+    );
+    l.outbox(true)
+}
 
 #[test]
 fn bad_pending_updates_are_refused_and_local_edits_survive() {
+    // the regression meets BASE's blocks; the local edits are on a page of our own (BASE's nodes predate `move`)
+    const MINE: &str = "n_mmmmmmmmmmmm";
     let mut l = Live::new();
-    let set_w = |l: &mut Live, w: u32| {
-        let op = json!([{"op": "set", "id": FRAME, "key": "w", "value": w}]);
+    let name = |l: &mut Live, n: &str| {
+        let op = json!([{"op": "name", "id": MINE, "name": n}]);
         l.apply_ops(&parse_ops(op.to_string().as_bytes()).unwrap())
     };
     l.apply_remote(BASE).unwrap();
@@ -267,17 +290,20 @@ fn bad_pending_updates_are_refused_and_local_edits_survive() {
         l.apply_remote(PENDING_BAD),
         Err(Error::Malformed(_))
     ));
-    set_w(&mut l, 777).unwrap();
+    op(
+        &mut l,
+        json!([{"op": "add", "id": MINE, "type": "page", "parent": null, "order": "m"}]),
+    );
     assert!(matches!(
         l.apply_remote(PENDING_BAD),
         Err(Error::Malformed(_))
     ));
-    set_w(&mut l, 778).unwrap();
-    assert_eq!(l.read().nodes[FRAME].props["w"], json!(778));
+    name(&mut l, "Kept").unwrap();
+    assert_eq!(l.read().nodes[MINE].name, "Kept");
     let mut peer = Live::new();
     peer.apply_remote(BASE).unwrap();
     peer.apply_remote(&l.outbox(true)).unwrap();
-    assert_eq!(peer.read().nodes[FRAME].props["w"], json!(778));
+    assert_eq!(peer.read().nodes[MINE].name, "Kept");
 }
 
 /// The `apply` fuzz target's input format (`[0xf0 | k, a, b, rest]`, cut into 3 updates): the second update starts
@@ -292,6 +318,7 @@ fn overlapping_pending_updates_are_refused() {
     let (x, y) = (at(a).min(at(b)), at(a).max(at(b)));
     let mut l = Live::new();
     l.apply_remote(BASE).unwrap();
+    let held = l.state_vector();
     assert!(l.apply_remote(&rest[..x]).is_err());
     assert!(matches!(
         l.apply_remote(&rest[x..y]),
@@ -301,7 +328,7 @@ fn overlapping_pending_updates_are_refused() {
         l.apply_remote(&rest[y..]),
         Err(Error::Malformed(_))
     ));
-    assert_eq!(l.read().nodes.len(), 3);
+    assert_eq!(l.state_vector(), held, "none of it got in");
 }
 
 fn op(l: &mut Live, v: serde_json::Value) {
@@ -312,8 +339,9 @@ fn op(l: &mut Live, v: serde_json::Value) {
 #[test]
 fn incremental_edits_relay_one_at_a_time() {
     let (mut a, mut b) = (Live::new(), Live::new());
-    a.apply_remote(BASE).unwrap();
-    b.apply_remote(BASE).unwrap();
+    let base = base();
+    a.apply_remote(&base).unwrap();
+    b.apply_remote(&base).unwrap();
     for (i, id) in [
         "n_ffffffffffff",
         "n_gggggggggggg",
@@ -345,8 +373,9 @@ fn incremental_edits_relay_one_at_a_time() {
 #[test]
 fn a_state_vector_resync_after_an_out_of_order_update() {
     let (mut a, mut b) = (Live::new(), Live::new());
-    a.apply_remote(BASE).unwrap();
-    b.apply_remote(BASE).unwrap();
+    let base = base();
+    a.apply_remote(&base).unwrap();
+    b.apply_remote(&base).unwrap();
     op(
         &mut a,
         json!([{"op": "set", "id": FRAME, "key": "w", "value": 1}]),
@@ -370,8 +399,9 @@ fn a_state_vector_resync_after_an_out_of_order_update() {
 
 #[test]
 fn skip_blocks_are_refused() {
+    let base = base();
     let mut a = Live::new();
-    a.apply_remote(BASE).unwrap();
+    a.apply_remote(&base).unwrap();
     let mut parts = vec![];
     for w in [1, 2, 3] {
         op(
@@ -383,7 +413,7 @@ fn skip_blocks_are_refused() {
     // merging the first and third leaves a skip where the second was
     let merged = yrs::merge_updates_v1([parts[0].as_slice(), parts[2].as_slice()]).unwrap();
     let mut b = Live::new();
-    b.apply_remote(BASE).unwrap();
+    b.apply_remote(&base).unwrap();
     match b.apply_remote(&merged) {
         Err(Error::Malformed(m)) => assert!(!m.contains("resync"), "refused at decode: {m}"),
         r => panic!("{r:?}"),
@@ -396,8 +426,9 @@ fn skip_blocks_are_refused() {
 
 #[test]
 fn an_update_with_a_gap_is_refused_until_the_resync() {
+    let base = base();
     let mut a = Live::new();
-    a.apply_remote(BASE).unwrap();
+    a.apply_remote(&base).unwrap();
     let op = json!([{"op": "name", "id": FRAME, "name": "Home"}]);
     a.apply_ops(&parse_ops(op.to_string().as_bytes()).unwrap())
         .unwrap();
@@ -405,9 +436,9 @@ fn an_update_with_a_gap_is_refused_until_the_resync() {
     let mut b = Live::new();
     assert!(
         matches!(b.apply_remote(&later), Err(Error::Malformed(_))),
-        "it builds on BASE, which b lacks"
+        "it builds on the base, which b lacks"
     );
-    b.apply_remote(BASE).unwrap();
+    b.apply_remote(&base).unwrap();
     b.apply_remote(&later).unwrap();
     assert_eq!(b.read().nodes[FRAME].name, "Home");
 }
@@ -508,7 +539,7 @@ fn fuzz_seeds() {
 #[ignore]
 fn trial_cost() {
     let mut a = Live::new();
-    a.apply_remote(BASE).unwrap();
+    a.apply_remote(&base()).unwrap();
     for batch in 0..25 {
         let ops: Vec<_> = (0..200)
             .map(|i| {
@@ -553,11 +584,12 @@ fn trial_cost() {
 #[test]
 #[ignore]
 fn no_growth() {
+    let base = base();
     let mut a = Live::new();
-    a.apply_remote(BASE).unwrap();
+    a.apply_remote(&base).unwrap();
     for i in 0..20_000u32 {
         let mut b = Live::new();
-        b.apply_remote(BASE).unwrap();
+        b.apply_remote(&base).unwrap();
         op(
             &mut a,
             json!([{"op": "set", "id": FRAME, "key": "w", "value": i}]),

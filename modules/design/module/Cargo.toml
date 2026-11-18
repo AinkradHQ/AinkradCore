@@ -11,7 +11,7 @@ workspace = true
 ainkrad-core = { path = "../../../crates/core" }
 ainkrad-core-server = { path = "../../../crates/server" }
 axum = "0.8.9"
-design-crdt = { path = "../crdt" }
+design-doc = { path = "../doc" }
 design-model = { path = "../model" }
 getrandom = "0.4.3"
 libc = "0.2.191"

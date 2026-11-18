@@ -25,7 +25,7 @@ use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Extension, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use design_crdt::MAX_UPDATE_BYTES;
+use design_doc::MAX_PEER_UPDATE_BYTES;
 use design_model::ids::is_node_id;
 use design_model::limits::MAX_COORD;
 use serde::Deserialize;
@@ -127,7 +127,7 @@ fn cursor(h: &HeaderMap) -> Result<Option<i64>, ApiError> {
 /// Which close a refusal is.
 fn refusal_close(r: &Refusal) -> Message {
     match r {
-        Refusal::Violation(design_crdt::Refused::TooLarge) => close(1009, "update too large"),
+        Refusal::Violation(design_doc::Refused::TooLarge) => close(1009, "update too large"),
         Refusal::Violation(e) => close(1008, &e.to_string().chars().take(100).collect::<String>()),
         Refusal::DocFull => close(1009, "document full"),
         Refusal::Resync => close(4412, "resync needed"),
@@ -228,8 +228,8 @@ pub(crate) async fn sync(
             () = rescoped => 4003,
         }
     };
-    ws.max_message_size(MAX_UPDATE_BYTES + 16)
-        .max_frame_size(MAX_UPDATE_BYTES + 16)
+    ws.max_message_size(MAX_PEER_UPDATE_BYTES + 16)
+        .max_frame_size(MAX_PEER_UPDATE_BYTES + 16)
         .on_upgrade(move |socket| session(app, socket, lease, origin, after, ended))
 }
 
