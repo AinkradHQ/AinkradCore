@@ -7,6 +7,7 @@
 //! Module off, the Core is unchanged: the tables are its own `lore_` namespace, no Core
 //! migration, no Core crate names this module.
 
+mod ai;
 mod attachments;
 mod backlinks;
 mod embed;
@@ -98,10 +99,15 @@ pub static MIGRATIONS: &[Migration] = &[
     },
 ];
 
-// The trash is reversible (every row is kept for 30 days), so no write needs a step-up.
-const DESTRUCTIVE: &[(&str, &str)] = &[];
+// The trash is reversible (every row is kept for 30 days), so no person's write needs a step-up. The one
+// AI route that removes a note from view is destructive: Code Mode reaches it only as `risky`, waiting
+// for a person's approval (R5-01).
+const DESTRUCTIVE: &[(&str, &str)] = &[("POST", "/ai/notes/{note}/trash")];
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/notes"),
+    ("POST", "/ai/notes"),
+    ("POST", "/ai/notes/{note}/append"),
+    ("POST", "/ai/notes/{note}/edit"),
     ("PATCH", "/notes/{note}"),
     ("PUT", "/notes/{note}/text"),
     ("POST", "/notes/{note}/versions"),
@@ -129,6 +135,14 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/imports/{run}", "read"),
     ("GET", "/imports/{run}/items", "read"),
     ("GET", "/export", "read"),
+    // What AI sessions reach through Code Mode (R5-01); the handlers answer only the dispatcher's caller.
+    ("GET", "/ai/search", "read"),
+    ("GET", "/ai/notes/{note}", "read"),
+    ("GET", "/ai/notes/{note}/links", "read"),
+    ("POST", "/ai/notes", "agent"),
+    ("POST", "/ai/notes/{note}/append", "agent"),
+    ("POST", "/ai/notes/{note}/edit", "agent"),
+    ("POST", "/ai/notes/{note}/trash", "agent"),
 ];
 
 const BODY_LIMITS: &[(&str, &str, usize)] = &[
@@ -174,7 +188,14 @@ pub struct Lore {
         import::abandon,
         import_commit::commit,
         import_commit::undo,
-        export::export
+        export::export,
+        ai::search,
+        ai::read,
+        ai::links,
+        ai::create,
+        ai::append,
+        ai::edit,
+        ai::trash
     ),
     components(schemas(
         notes::NoteSummary,
@@ -198,7 +219,16 @@ pub struct Lore {
         import::UploadItem,
         import::UploadBatch,
         import::ItemSummary,
-        import::ItemsPatch
+        import::ItemsPatch,
+        ai::LoreAiHit,
+        ai::LoreAiHits,
+        ai::LoreAiNote,
+        ai::LoreAiLink,
+        ai::LoreAiLinks,
+        ai::LoreAiWrote,
+        ai::LoreAiText,
+        ai::LoreAiEdit,
+        ai::LoreAiTrashed
     ))
 )]
 struct Doc;
@@ -262,6 +292,13 @@ impl Module for Lore {
             .route("/imports/{run}/abandon", post(import::abandon))
             .route("/export", get(export::export))
             .route("/today", get(notes::today))
+            .route("/ai/search", get(ai::search))
+            .route("/ai/notes", post(ai::create))
+            .route("/ai/notes/{note}", get(ai::read))
+            .route("/ai/notes/{note}/links", get(ai::links))
+            .route("/ai/notes/{note}/append", post(ai::append))
+            .route("/ai/notes/{note}/edit", post(ai::edit))
+            .route("/ai/notes/{note}/trash", post(ai::trash))
             .layer(axum::Extension(self.clone()))
     }
 
