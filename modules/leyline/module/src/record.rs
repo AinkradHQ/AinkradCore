@@ -369,7 +369,7 @@ async fn run(app: App, session: String, mut rx: mpsc::Receiver<Msg>, mut cast: C
             }
             _ = tick.tick() => {
                 if !fresh {
-                    cast.idle(last);
+                    cast.idle(last); // holds the half-typed line; nothing is released
                 }
                 fresh = false;
                 sink = flush(&app, &session, &mut cast, s).await;
@@ -377,7 +377,7 @@ async fn run(app: App, session: String, mut rx: mpsc::Receiver<Msg>, mut cast: C
         }
     }
     if let Some(s) = sink {
-        cast.idle(last);
+        cast.finish(last);
         let _ = flush(&app, &session, &mut cast, s).await;
     }
     live().lock().unwrap().remove(&session);

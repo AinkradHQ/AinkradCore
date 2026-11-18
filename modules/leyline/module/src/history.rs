@@ -33,7 +33,9 @@ use sqlx::SqlitePool;
 use utoipa::ToSchema;
 
 use crate::cast::Blocks;
+use crate::gate::Principal;
 use crate::hosts::{In, elevated, find};
+use crate::policy::Who;
 
 /// How long a recording is kept, and how much all of them may take together.
 pub const KEEP_SECS: i64 = 30 * 24 * 3600;
@@ -323,7 +325,13 @@ pub struct Paused {
 /// Pauses or resumes the recording of a running session. A person only (an AI session never
 /// switches a recording); resuming needs the step-up (its route is destructive), pausing does not.
 async fn pause_to(app: &App, me: &Caller, session: &str, on: bool) -> ApiResult<Paused> {
-    crate::commands::people_only(me)?;
+    if matches!(Principal::of(me).0, Who::Session(_)) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "gate_refused",
+            "only a person may pause or resume a recording",
+        ));
+    }
     if !session_id(session) {
         return Err(ApiError::not_found("no such recording"));
     }

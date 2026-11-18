@@ -118,8 +118,13 @@ impl Cast {
         self.event(at, &text);
     }
 
-    /// The output went quiet: the held word is whole as far as we will ever know.
-    pub fn idle(&mut self, at: f64) {
+    /// The output went quiet. Nothing is released: a half-typed secret (`export TOKEN=abc`, a
+    /// pause, `def`) must not leak its tail. The line is held (capped by the scrubber) until its
+    /// newline, a gap, or `finish`.
+    pub fn idle(&mut self, _at: f64) {}
+
+    /// The recording ends: the held line is scrubbed and let go.
+    pub fn finish(&mut self, at: f64) {
         let text = self.scrub.release();
         self.event(at, &text);
     }
@@ -234,11 +239,28 @@ mod tests {
             off += 1;
         }
         c.push(off, b"\r\nSorry, try again.\r\n", 0.3);
-        c.idle(0.4);
+        c.finish(0.4);
         let all = texts(&c.take()).join("");
         assert!(all.contains("[sudo] password for bob: "));
         assert!(!all.contains("hunter2") && !all.contains("horse"), "{all}");
         assert!(all.contains("Sorry, try again."));
+    }
+
+    #[test]
+    fn a_pause_in_typing_does_not_release_the_half_typed_secret() {
+        for (head, tail) in [
+            ("export API_TOKEN=abc", "def123"),
+            ("export DB_PASSWORD=hunt", "er2"),
+            ("mysql -phunt", "er2"),
+        ] {
+            let mut c = Cast::new(SIZE, 0);
+            c.push(0, head.as_bytes(), 0.1);
+            c.idle(2.5);
+            c.push(head.len() as u64, format!("{tail}\n").as_bytes(), 3.0);
+            c.finish(3.1);
+            let all = texts(&c.take()).join("");
+            assert!(!all.contains(tail), "{head}: {all}");
+        }
     }
 
     #[test]
@@ -248,7 +270,7 @@ mod tests {
         let mut c = Cast::new(SIZE, 0);
         c.push(0, format!("token is {a}").as_bytes(), 0.1);
         c.push(a.len() as u64 + 9, format!("{b}\r\n").as_bytes(), 0.2);
-        c.idle(0.3);
+        c.finish(0.3);
         let all = texts(&c.take()).join("");
         assert!(!all.contains(a) && !all.contains(b), "{all}");
         assert!(all.contains("[redacted:"), "{all}");
@@ -271,7 +293,7 @@ mod tests {
         c.push(0, &text[..4], 0.1); // ends inside the two-byte e-acute
         c.push(4, &text[4..], 0.2);
         c.push(0, text, 0.3); // a fresh attach is replayed everything
-        c.idle(0.4);
+        c.finish(0.4);
         let all = texts(&c.take()).join("");
         assert_eq!(all, "caf\u{e9} ok\r\n");
     }
