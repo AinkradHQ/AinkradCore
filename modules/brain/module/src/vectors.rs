@@ -232,7 +232,7 @@ pub(crate) async fn forget_refused(app: &App, b: &Brain, st: &SqlitePool) {
 }
 
 /// One transaction; `content_hash` is indexed (vectors_0003), so this is one lookup per hash.
-async fn delete(app: &App, b: &Brain, hashes: &[String]) -> Result<(), ApiError> {
+pub(crate) async fn delete(app: &App, b: &Brain, hashes: &[String]) -> Result<(), ApiError> {
     let p = pool(app, b).await?;
     let mut tx = p.begin().await?;
     for h in hashes {
