@@ -4,17 +4,22 @@
 //! Security model: sources and the related memory are outside data, each inside one envelope
 //! (`ainkrad_core::untrusted`), and a source's turns carry their author in a tag the text cannot forge
 //! (`answer_turns`). The prompt tells the model that rules and preferences come only from user turns,
-//! but the answer is checked in code too: a `rule`/`preference` is dropped unless it is grounded in the
-//! user turns of a source it cites, so an instruction an assistant turn (or a tool result) smuggled in
-//! cannot become a rule even when the model obeys it. `same_as` / `replaces` must name ids the prompt
-//! showed, else the whole answer is rejected.
+//! but the answer is checked in code too: a `rule`/`preference` is dropped unless it is grounded in
+//! ONE user turn of ONE source it cites (`user_grounded`: stop words dropped, `Q_USER_GROUNDING` of
+//! its content words), so an instruction an assistant turn, a tool result or a document smuggled in
+//! cannot become a rule even when the model obeys it. Only transcript kinds have user turns
+//! (`answer_turns::split`). `same_as` / `replaces` must name ids the prompt showed, else the whole
+//! answer is rejected; one that targets a shown rule or preference is ignored unless the candidate
+//! itself passes the same user-turn check (B3-03 / B4-01 wire them; the guard is here already).
 
 use std::collections::{HashMap, HashSet};
 
 use ainkrad_core::untrusted::wrap;
+use brain_model::admit::{Q_USER_GROUNDING, content_stems};
+use brain_model::item::SourceKind;
 use serde::Deserialize;
 
-use crate::answer_turns::{tagged, user_words, words};
+use crate::answer_turns::{escape_tags, tagged, user_turns, words};
 
 pub const KINDS: &[&str] = &[
     "decision",
@@ -30,8 +35,6 @@ const MAX_BODY: usize = 2000;
 /// Existing records shown to the model, and how much of each.
 pub(crate) const MAX_RELATED: usize = 30;
 const RELATED_CHARS: usize = 400;
-/// Share of a rule's content words that must occur in the cited user turns.
-const USER_GROUNDING: f32 = 0.4;
 
 /// One proposed record, as the model wrote it and the validator accepted it.
 #[derive(Debug, Deserialize, PartialEq)]
@@ -69,6 +72,8 @@ pub const OUTPUT_SCHEMA: &str = r#"{"candidates":[{"type":"decision|fact|prefere
 
 pub struct Source {
     pub item_id: String,
+    /// Decides whether the text is split into authors (`answer_turns::is_transcript`).
+    pub kind: SourceKind,
     pub title: String,
     pub text: String,
     /// When the source started (RFC 3339): the base for absolute dates.
@@ -137,7 +142,7 @@ pub fn build_prompt(room: &str, sources: &[Source], related: &[Related]) -> Stri
                     "[{}] ({}) {}",
                     one_line(&r.id, 64),
                     one_line(&r.kind, 20),
-                    one_line(&r.body, RELATED_CHARS)
+                    one_line(&escape_tags(&r.body), RELATED_CHARS)
                 )
             })
             .collect();
@@ -152,33 +157,43 @@ pub fn build_prompt(room: &str, sources: &[Source], related: &[Related]) -> Stri
         // source cannot close its own block. The id is the Core's, the title is outside text.
         p.push_str(&wrap(
             &format!("source item {} | {}", s.item_id, s.title),
-            &tagged(&s.text, &s.at),
+            &tagged(&s.text, &s.at, s.kind),
         ));
         p.push_str("\n\n");
     }
     p
 }
 
-/// What an answer is checked against: the sources of the batch (their user-turn words) and the
-/// memory ids the prompt showed.
+/// What an answer is checked against: the sources of the batch (the content stems of each user
+/// turn, from the same cut text the prompt showed), the memory ids the prompt showed and, of those,
+/// the rules and preferences.
 #[derive(Default)]
 pub struct Known {
-    sources: HashMap<String, HashSet<String>>,
+    sources: HashMap<String, Vec<HashSet<String>>>,
     shown: HashSet<String>,
+    protected: HashSet<String>,
 }
 
 impl Known {
+    /// `sources` as (item id, kind, text), `shown` as (record id, record type).
     pub fn new<'a>(
-        sources: impl IntoIterator<Item = (&'a str, &'a str)>,
-        shown: impl IntoIterator<Item = String>,
+        sources: impl IntoIterator<Item = (&'a str, SourceKind, &'a str)>,
+        shown: impl IntoIterator<Item = (String, String)>,
     ) -> Self {
-        Self {
+        let mut k = Self {
             sources: sources
                 .into_iter()
-                .map(|(id, text)| (id.to_owned(), user_words(text)))
+                .map(|(id, kind, text)| (id.to_owned(), user_turns(text, kind)))
                 .collect(),
-            shown: shown.into_iter().collect(),
+            ..Self::default()
+        };
+        for (id, kind) in shown {
+            if matches!(kind.as_str(), "rule" | "preference") {
+                k.protected.insert(id.clone());
+            }
+            k.shown.insert(id);
         }
+        k
     }
 }
 
@@ -199,27 +214,29 @@ pub(crate) fn json_body(out: &str) -> &str {
     }
 }
 
-/// Is a rule or preference's body backed by what the user said in the sources it cites?
-fn user_said(c: &Candidate, known: &Known) -> bool {
-    let body = words(&c.body);
+/// Is the body backed by what the user said: at least [`Q_USER_GROUNDING`] of its content words
+/// (stop words dropped) in ONE user turn of ONE source it cites, never the union of several.
+pub(crate) fn user_grounded(c: &Candidate, known: &Known) -> bool {
+    let body = content_stems(&c.body);
     if body.is_empty() {
         return false;
     }
-    let said: HashSet<&String> = c
-        .sources
+    c.sources
         .iter()
         .filter_map(|s| known.sources.get(s))
         .flatten()
-        .collect();
-    let hit = body.iter().filter(|w| said.contains(w)).count();
-    hit as f32 / body.len() as f32 >= USER_GROUNDING
+        .any(|turn| {
+            let hit = body.iter().filter(|w| turn.contains(*w)).count();
+            hit as f32 / body.len() as f32 >= Q_USER_GROUNDING
+        })
 }
 
 /// The answer as candidates, or why it is rejected. A fenced block is unwrapped; anything else
 /// around the JSON, an unknown field, a bad kind, an empty or oversize body, a source id that is
 /// not in the batch, a `same_as`/`replaces` that was not shown (or both at once) or a bad
-/// `confidence` rejects the whole answer. A `rule` or `preference` not grounded in the user turns
-/// of its cited sources is dropped alone (the rest is kept), never saved.
+/// `confidence` rejects the whole answer. A `rule` or `preference` not grounded in one user turn of
+/// a cited source is dropped alone (the rest is kept), never saved or queued; a `same_as` /
+/// `replaces` aimed at a shown rule or preference by a candidate that is not so grounded is ignored.
 pub fn parse_output(out: &str, known: &Known) -> Result<Vec<Candidate>, String> {
     let t = json_body(out);
     let parsed: Output =
@@ -273,7 +290,20 @@ pub fn parse_output(out: &str, known: &Known) -> Result<Vec<Candidate>, String> 
     Ok(parsed
         .candidates
         .into_iter()
-        .filter(|c| !matches!(c.kind.as_str(), "rule" | "preference") || user_said(c, known))
+        .filter_map(|mut c| {
+            let grounded = user_grounded(&c, known);
+            if matches!(c.kind.as_str(), "rule" | "preference") && !grounded {
+                return None;
+            }
+            if !grounded {
+                for link in [&mut c.same_as, &mut c.replaces] {
+                    if link.as_deref().is_some_and(|id| known.protected.contains(id)) {
+                        *link = None;
+                    }
+                }
+            }
+            Some(c)
+        })
         .collect())
 }
 
