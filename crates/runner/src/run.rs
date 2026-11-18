@@ -43,6 +43,8 @@ pub mod helper;
 mod prepare;
 mod ps;
 #[cfg(test)]
+mod review_tests;
+#[cfg(test)]
 mod tests;
 
 pub use prepare::inside;
@@ -177,12 +179,11 @@ pub fn create_args(
         .filter(|p| p.expose)
         .map(|p| p.port.to_string())
         .collect();
-    if !exposed.is_empty() {
-        a.extend([
-            "--label".to_owned(),
-            format!("{LABEL_EXPOSE}={}", exposed.join(",")),
-        ]);
-    }
+    // Always set, even empty: an image's own `LABEL ainkrad.expose` must never take effect.
+    a.extend([
+        "--label".to_owned(),
+        format!("{LABEL_EXPOSE}={}", exposed.join(",")),
+    ]);
     if let Some(h) = &s.health {
         a.extend([
             "--health-cmd".to_owned(),

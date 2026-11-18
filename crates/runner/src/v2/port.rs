@@ -12,6 +12,7 @@
 //!   reader costs the runner at most one window.
 
 use std::future::Future;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
@@ -36,7 +37,7 @@ pub(super) fn resolve(list: &RunList, req: &PortOpen) -> Result<u16, String> {
     let run = list
         .runs
         .iter()
-        .find(|r| r.run == req.run && r.phase == RunPhase::Running)
+        .find(|r| r.run == req.run && r.project == req.project && r.phase == RunPhase::Running)
         .ok_or_else(refuse)?;
     run.services
         .iter()
@@ -62,7 +63,7 @@ where
     Fut: Future<Output = bool>,
 {
     let err = |c, m: &str| Body::Error(StreamError::new(c, m));
-    let dial = TcpStream::connect(("127.0.0.1", host_port));
+    let dial = TcpStream::connect(SocketAddr::from((Ipv4Addr::LOCALHOST, host_port)));
     let sock = match tokio::time::timeout(DIAL, dial).await {
         Ok(Ok(s)) => s,
         _ => {
@@ -78,6 +79,10 @@ where
             reason: reason.to_owned(),
         }))
     };
+    // A run that ended while we dialled: close now, not a second later.
+    if !alive().await {
+        return done("run_ended");
+    }
     // `credit`: what the runner may still send the Core. `window`: what the Core may still send the
     // runner. `owed`: bytes written to the service and not yet granted back.
     let mut credit = STREAM_WINDOW;
@@ -129,6 +134,9 @@ where
 }
 
 #[cfg(test)]
+mod review_tests;
+
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -162,6 +170,7 @@ mod tests {
 
     fn open(run: &str, service: &str, port: u16) -> PortOpen {
         PortOpen {
+            project: 7,
             run: run.into(),
             service: service.into(),
             port,

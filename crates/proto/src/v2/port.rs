@@ -11,6 +11,8 @@ pub const OP_PORT_OPEN: &str = "port.open";
 /// Opens a stream to `port` (the container port, as written in the spec) of `service` in run `run`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PortOpen {
+    /// The project the run belongs to; the runner refuses a run of another project.
+    pub project: u64,
     pub run: String,
     pub service: String,
     pub port: u16,
@@ -33,5 +35,18 @@ impl PortOpen {
             return Some("service: 1-40 of a-z, 0-9, _ and -".to_owned());
         }
         (self.port == 0).then(|| "port: 1-65535".to_owned())
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    #[test]
+    fn the_project_is_required() {
+        let ok = serde_json::json!({"project": 7, "run": "r1", "service": "web", "port": 3000});
+        assert_eq!(serde_json::from_value::<PortOpen>(ok).unwrap().project, 7);
+        let none = serde_json::json!({"run": "r1", "service": "web", "port": 3000});
+        assert!(serde_json::from_value::<PortOpen>(none).is_err());
     }
 }
