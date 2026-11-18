@@ -494,3 +494,54 @@ async fn a_read_only_device_reads_but_cannot_change_a_package() {
     .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn a_mockup_file_is_never_a_library_asset() {
+    let fx = fx().await;
+    let doc = new_mockup(&fx).await;
+    let (s, v) = put(&fx, &doc, "a.png", png()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let sha = v["sha256"].as_str().unwrap().to_owned();
+    // The asset routes do not see it.
+    for path in [format!("/assets/{sha}"), format!("/assets/{sha}/data")] {
+        let (s, _, _, _) = send(&fx, &fx.admin, Method::GET, &path, vec![]).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{path}");
+    }
+    // The same bytes as an ordinary upload are refused and the row never joins the library.
+    let (s, _, _, _) = send(&fx, &fx.admin, Method::POST, "/assets?name=x.png", png()).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    let lib: i64 = sqlx::query_scalar("SELECT library FROM design_assets WHERE sha256 = ?")
+        .bind(&sha)
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(lib, 0);
+    let (s, v, _, _) = send(&fx, &fx.admin, Method::GET, "/assets", vec![]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(!v.to_string().contains(&sha));
+}
+
+#[tokio::test]
+async fn the_import_skips_hidden_dirs_and_refuses_hard_links_and_a_symlinked_root() {
+    let fx = fx().await;
+    let dir = fx.dir.join("pkg-hard");
+    std::fs::create_dir_all(dir.join(".git")).unwrap();
+    std::os::unix::fs::symlink("/etc/hosts", dir.join(".git/link")).unwrap();
+    std::fs::write(dir.join("index.html"), "<p>hi</p>").unwrap();
+    let (_, n) = design_module::import_dir(&fx.app.pool, &dir, "Hidden", &[])
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    std::fs::hard_link(dir.join("index.html"), dir.join("again.html")).unwrap();
+    let e = design_module::import_dir(&fx.app.pool, &dir, "Hard", &[])
+        .await
+        .unwrap_err();
+    assert!(e.contains("hard link"), "{e}");
+    let root = fx.dir.join("root-link");
+    std::os::unix::fs::symlink(&dir, &root).unwrap();
+    assert!(
+        design_module::import_dir(&fx.app.pool, &root, "Root", &[])
+            .await
+            .is_err()
+    );
+}

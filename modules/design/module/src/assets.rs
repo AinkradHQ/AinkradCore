@@ -109,7 +109,7 @@ pub struct AssetView {
 pub(crate) async fn view(conn: &mut SqliteConnection, sha: &str) -> Result<AssetView, ApiError> {
     let r = sqlx::query(
         "SELECT sha256, kind, name, content_type, size, check_state, library, created_by, created_at \
-         FROM design_assets WHERE sha256 = ?",
+         FROM design_assets WHERE sha256 = ? AND kind <> 'mockup_file'",
     )
     .bind(sha)
     .fetch_optional(&mut *conn)
@@ -207,11 +207,16 @@ pub(crate) async fn upload(
         Some(p) => Some(project_id(&mut tx, p).await?),
         None => None,
     };
-    let existing: Option<i64> =
-        sqlx::query_scalar("SELECT library FROM design_assets WHERE sha256 = ?")
+    // A mockup package file is never a library asset: same bytes as one is refused, not adopted.
+    let existing: Option<(i64, String)> =
+        sqlx::query_as("SELECT library, kind FROM design_assets WHERE sha256 = ?")
             .bind(&sha)
             .fetch_optional(&mut *tx)
             .await?;
+    if existing.as_ref().is_some_and(|e| e.1 == "mockup_file") {
+        return Err(ApiError::conflict("these bytes belong to a mockup package"));
+    }
+    let existing = existing.map(|e| e.0);
     let dup = existing.is_some();
     if let Some(lib) = existing {
         if lib == 0 {
@@ -297,7 +302,7 @@ pub(crate) async fn list(
     });
     let mut conn = app.pool.acquire().await?;
     let ids: Vec<String> = sqlx::query_scalar(
-        "SELECT sha256 FROM design_assets a WHERE library = 1 \
+        "SELECT sha256 FROM design_assets a WHERE library = 1 AND kind <> 'mockup_file' \
            AND (?1 IS NULL OR kind = ?1) \
            AND (?2 IS NULL OR EXISTS (SELECT 1 FROM design_asset_tags t WHERE t.sha256 = a.sha256 AND t.tag = ?2)) \
            AND (?3 IS NULL OR name LIKE ?3 ESCAPE '\\') \
@@ -346,7 +351,7 @@ pub(crate) async fn data(
         return Err(none());
     }
     let row: Option<(String, Vec<u8>)> = sqlx::query_as(
-        "SELECT content_type, data FROM design_assets WHERE sha256 = ? AND check_state = 'ok'",
+        "SELECT content_type, data FROM design_assets WHERE sha256 = ? AND check_state = 'ok' AND kind <> 'mockup_file'",
     )
     .bind(&sha)
     .fetch_optional(&app.pool)

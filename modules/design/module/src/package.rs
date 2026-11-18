@@ -10,6 +10,7 @@
 //! network, no script bridge, served from the package only. The file types are a fixed list, fonts and
 //! zips are not accepted. Every refusal is a fixed sentence; audit and events carry ids only.
 
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path as FsPath;
 
 use ainkrad_core_server::api::App;
@@ -465,15 +466,19 @@ pub(crate) async fn file(
         .into_response())
 }
 
-/// Files under `dir` that a package takes, `(relative path, absolute path)`. A symlink anywhere in the
-/// walked tree refuses the whole folder; directories whose name starts with a `skip` word are not
-/// entered; hidden files and extensions outside the fixed list are left out.
-fn walk(dir: &FsPath, skip: &[String]) -> Result<Vec<(String, std::path::PathBuf)>, String> {
+/// One file the walk saw: relative path, absolute path, and the device/inode it had then.
+type Found = (String, std::path::PathBuf, u64, u64);
+
+/// Files under `dir` that a package takes. A symlink or a hard-linked file (`nlink > 1`) anywhere in
+/// the walked tree, or as the root, refuses the whole folder; hidden entries (`.git`, dotfiles) and
+/// directories whose name starts with a `skip` word are left out, as are extensions outside the
+/// fixed list. `read_found` re-checks device/inode at open time, so a swap after the walk is refused.
+fn walk(dir: &FsPath, skip: &[String]) -> Result<Vec<Found>, String> {
     fn rec(
         root: &FsPath,
         dir: &FsPath,
         skip: &[String],
-        out: &mut Vec<(String, std::path::PathBuf)>,
+        out: &mut Vec<Found>,
     ) -> Result<(), String> {
         let mut entries: Vec<_> = std::fs::read_dir(dir)
             .map_err(|e| format!("{}: {e}", dir.display()))?
@@ -482,18 +487,20 @@ fn walk(dir: &FsPath, skip: &[String]) -> Result<Vec<(String, std::path::PathBuf
         entries.sort_by_key(|e| e.file_name());
         for e in entries {
             let p = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
             let meta =
                 std::fs::symlink_metadata(&p).map_err(|e| format!("{}: {e}", p.display()))?;
             if meta.file_type().is_symlink() {
                 return Err(format!("{}: a symlink is not allowed", p.display()));
             }
-            let name = e.file_name().to_string_lossy().into_owned();
             if meta.is_dir() {
                 if !skip.iter().any(|s| name.starts_with(s.as_str())) {
                     rec(root, &p, skip, out)?;
                 }
             } else if meta.is_file()
-                && !name.starts_with('.')
                 && ext_of(&name).is_some_and(|x| kind_of(&x).is_some())
             {
                 let rel = p.strip_prefix(root).map_err(|e| e.to_string())?;
@@ -503,14 +510,40 @@ fn walk(dir: &FsPath, skip: &[String]) -> Result<Vec<(String, std::path::PathBuf
                     .collect::<Option<Vec<_>>>()
                     .ok_or_else(|| format!("{}: the path is not UTF-8", p.display()))?
                     .join("/");
-                out.push((rel, p));
+                if meta.nlink() > 1 {
+                    return Err(format!("{}: a hard link is not allowed", p.display()));
+                }
+                out.push((rel, p, meta.dev(), meta.ino()));
             }
         }
         Ok(())
     }
+    let root = std::fs::symlink_metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if root.file_type().is_symlink() || !root.is_dir() {
+        return Err(format!("{}: not a plain folder", dir.display()));
+    }
     let mut out = Vec::new();
     rec(dir, dir, skip, &mut out)?;
     Ok(out)
+}
+
+/// Read a file the walk saw: opened with `O_NOFOLLOW`, and refused unless it is still the same
+/// regular, singly-linked file (device and inode) the walk recorded.
+fn read_found(abs: &FsPath, dev: u64, ino: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let bad = |m: &str| format!("{}: {m}", abs.display());
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(abs)
+        .map_err(|e| bad(&e.to_string()))?;
+    let m = f.metadata().map_err(|e| bad(&e.to_string()))?;
+    if !m.is_file() || m.nlink() > 1 || m.dev() != dev || m.ino() != ino {
+        return Err(bad("changed while importing"));
+    }
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).map_err(|e| bad(&e.to_string()))?;
+    Ok(buf)
 }
 
 /// The one-off import (V4-02): one folder becomes one sealed `mockup` doc named `name`, in one
@@ -542,8 +575,8 @@ pub async fn import_dir(
     record(&mut tx, "created", &doc, None)
         .await
         .map_err(|e| e.to_string())?;
-    for (rel, abs) in &files {
-        let bytes = std::fs::read(abs).map_err(|e| format!("{}: {e}", abs.display()))?;
+    for (rel, abs, dev, ino) in &files {
+        let bytes = read_found(abs, *dev, *ino)?;
         put_file(&mut tx, &doc, rel, &bytes, by)
             .await
             .map_err(|e| format!("{rel}: {}", err(e)))?;
