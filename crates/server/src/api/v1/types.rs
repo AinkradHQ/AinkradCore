@@ -286,7 +286,11 @@
 ///    version, step-up), `GET /projects/{id}/spec/versions` (`listProjectSpecVersions`) and
 ///    `GET /projects/{id}/spec/versions/{version}` (`getProjectSpecVersion`). 400 `invalid_spec` names the bad field.
 ///    Registers the event kind and audit action `project.spec_saved`.
-pub const API_MINOR: u32 = 92;
+/// 93: Projects from GitHub (P2-01). `GET /projects/github/repos` (`listGithubRepos`:
+///    the repos of the project's or default GitHub connection, grouped by owner, `q`, `page`, `per_page`) and
+///    `POST /projects/from-github` (`createProjectFromGithub`: creates the project, its repos and, unless the connection is the workspace default, a `project`-scope
+///    connection binding). Both `admin`; the POST is destructive. No new audit or event kinds.
+pub const API_MINOR: u32 = 93;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -331,6 +331,12 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/projects`.
     /// - Remark: Generated from `#/paths//api/v1/projects/post(createProject)`.
     func createProject(_ input: Operations.CreateProject.Input) async throws -> Operations.CreateProject.Output
+    /// - Remark: HTTP `POST /api/v1/projects/from-github`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/from-github/post(createProjectFromGithub)`.
+    func createProjectFromGithub(_ input: Operations.CreateProjectFromGithub.Input) async throws -> Operations.CreateProjectFromGithub.Output
+    /// - Remark: HTTP `GET /api/v1/projects/github/repos`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/github/repos/get(listGithubRepos)`.
+    func listGithubRepos(_ input: Operations.ListGithubRepos.Input) async throws -> Operations.ListGithubRepos.Output
     /// - Remark: HTTP `GET /api/v1/projects/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)`.
     func getProject(_ input: Operations.GetProject.Input) async throws -> Operations.GetProject.Output
@@ -1652,6 +1658,28 @@ extension APIProtocol {
         try await createProject(Operations.CreateProject.Input(
             headers: headers,
             body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/projects/from-github`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/from-github/post(createProjectFromGithub)`.
+    public func createProjectFromGithub(
+        headers: Operations.CreateProjectFromGithub.Input.Headers = .init(),
+        body: Operations.CreateProjectFromGithub.Input.Body
+    ) async throws -> Operations.CreateProjectFromGithub.Output {
+        try await createProjectFromGithub(Operations.CreateProjectFromGithub.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/github/repos`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/github/repos/get(listGithubRepos)`.
+    public func listGithubRepos(
+        query: Operations.ListGithubRepos.Input.Query = .init(),
+        headers: Operations.ListGithubRepos.Input.Headers = .init()
+    ) async throws -> Operations.ListGithubRepos.Output {
+        try await listGithubRepos(Operations.ListGithubRepos.Input(
+            query: query,
+            headers: headers
         ))
     }
     /// - Remark: HTTP `GET /api/v1/projects/{id}`.
