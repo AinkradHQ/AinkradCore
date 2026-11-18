@@ -120,6 +120,7 @@ mod providers;
 mod push;
 mod revocation;
 mod run_spec_api;
+mod run_spec_draft_api;
 mod runners;
 mod scheduler_events;
 mod scheduler_failover;

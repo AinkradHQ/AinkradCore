@@ -209,7 +209,7 @@ fn a_child_past_its_timeout_dies_with_its_whole_group() {
 #[test]
 fn ps_output_reads_as_runs_and_a_dead_service_fails_its_run() {
     let ps = r#"[
-      {"State":"running","ExitCode":0,"Labels":{"ainkrad.project":"7","ainkrad.run":"r1","ainkrad.service":"db"},
+      {"State":"running","ExitCode":0,"Labels":{"ainkrad.project":"7","ainkrad.run":"r1","ainkrad.service":"db","ainkrad.expose":"5432"},
        "Ports":[{"host_ip":"127.0.0.1","container_port":5432,"host_port":40001,"range":1,"protocol":"tcp"},
                 {"host_ip":"0.0.0.0","container_port":9,"host_port":40002,"range":1,"protocol":"tcp"}]},
       {"State":"exited","ExitCode":3,"Labels":{"ainkrad.project":"7","ainkrad.run":"r1","ainkrad.service":"web"}},
@@ -226,7 +226,8 @@ fn ps_output_reads_as_runs_and_a_dead_service_fails_its_run() {
         runs[0].services[0].ports,
         [PublishedPort {
             port: 5432,
-            host_port: 40001
+            host_port: 40001,
+            expose: true
         }]
     );
     assert_eq!(runs[1].phase, RunPhase::Starting);

@@ -14,6 +14,7 @@ use super::projects::{self, Who};
 use super::secrets::Error;
 
 pub mod compose;
+pub mod scripts;
 pub mod spec;
 
 pub use spec::RunSpec;

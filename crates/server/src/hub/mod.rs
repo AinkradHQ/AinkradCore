@@ -141,6 +141,8 @@ struct Pending {
     credit: u64,
     /// A `pty.open`/`pty.attach` stream: it may carry one `opened` and credited `snapshot`s.
     terminal: bool,
+    /// A `port.open` stream (P6-01): the runner's `credit` for the Core's bytes reaches the dispatcher.
+    port: bool,
     opened: bool,
     /// The driver, when it declares its own `streams` (counted apart).
     own: Option<String>,
@@ -431,6 +433,19 @@ impl Hub {
         self.send_command(runner, command)
     }
 
+    /// `port.open` (P6-01): the Host router's one command. The type admits nothing else; no elevation
+    /// leaves here, because the public router has no caller to step up. The runner serves only an
+    /// `expose: true` port of a live run (see `ainkrad_proto::v2::PortOpen`), and the router checks
+    /// the project's expose toggle before it asks.
+    #[allow(dead_code)] // the Host router (P6-02) is its caller
+    pub(crate) fn dispatch_port(
+        self: &Arc<Self>,
+        runner: &str,
+        open: ainkrad_proto::v2::PortOpen,
+    ) -> Result<Dispatched, StreamError> {
+        self.send_command(runner, Command::PortOpen(open))
+    }
+
     /// The capability of the wake queue's job (`agents::wake`): the route that queued the wake
     /// passed the gate and a live step-up, and the job re-checks that the requesting device is
     /// still usable and holds `agent` before it uses this. Not a route entry point.
@@ -531,6 +546,7 @@ impl Hub {
             received: 0,
             credit: STREAM_WINDOW,
             terminal,
+            port: command.op() == ainkrad_proto::v2::OP_PORT_OPEN,
             opened: false,
             own,
         };
@@ -854,6 +870,10 @@ impl Hub {
                 ))
             }
             last @ (Body::Result(_) | Body::Error(_)) => last,
+            Body::Credit(c) if p.port => {
+                let _ = p.to.send(Body::Credit(c));
+                return;
+            }
             // Credit and heartbeats on a stream: nothing to do for a command.
             _ => return,
         };

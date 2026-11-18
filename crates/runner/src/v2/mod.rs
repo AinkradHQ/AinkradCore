@@ -37,6 +37,7 @@ pub mod login;
 pub mod mirror;
 mod observe;
 pub mod pair;
+mod port;
 pub mod pty;
 mod run;
 mod sandbox;

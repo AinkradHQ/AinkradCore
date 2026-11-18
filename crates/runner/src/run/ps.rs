@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use ainkrad_proto::v2::{PublishedPort, RunInfo, RunPhase, ServiceStatus};
 
-use super::{LABEL_PROJECT, LABEL_RUN, LABEL_SERVICE};
+use super::{LABEL_EXPOSE, LABEL_PROJECT, LABEL_RUN, LABEL_SERVICE};
 
 /// What `podman ps --format json` says of one container (the fields used).
 #[derive(serde::Deserialize)]
@@ -50,6 +50,10 @@ pub fn runs_from_ps(json: &str) -> Result<Vec<RunInfo>, String> {
             services: Vec::new(),
         });
         let running = c.state == "running";
+        let exposed: Vec<u16> = labels
+            .get(LABEL_EXPOSE)
+            .map(|l| l.split(',').filter_map(|p| p.parse().ok()).collect())
+            .unwrap_or_default();
         info.services.push(ServiceStatus {
             name: service.clone(),
             exit_code: (!running && c.state == "exited").then_some(c.exit_code),
@@ -63,6 +67,7 @@ pub fn runs_from_ps(json: &str) -> Result<Vec<RunInfo>, String> {
                 .map(|p| PublishedPort {
                     port: p.container_port,
                     host_port: p.host_port,
+                    expose: exposed.contains(&p.container_port),
                 })
                 .collect(),
         });

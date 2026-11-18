@@ -9,8 +9,8 @@ use std::time::{Duration, SystemTime};
 
 use ainkrad_proto::runner::Workspace;
 use ainkrad_proto::v2::{
-    Command, DRIVER_RUN, DriverInfo, ErrorCode, OP_RUN_OBSERVE, OP_RUN_START, OP_RUN_STATUS,
-    OP_RUN_STOP, Reply, RunStart, StreamError,
+    Command, DRIVER_RUN, DriverInfo, ErrorCode, OP_PORT_OPEN, OP_RUN_OBSERVE, OP_RUN_START,
+    OP_RUN_STATUS, OP_RUN_STOP, PortOpen, Reply, RunList, RunStart, StreamError,
 };
 use zeroize::Zeroizing;
 
@@ -29,6 +29,22 @@ pub struct RunDriver {
     clones: Option<Arc<super::agent::AgentDriver>>,
     /// Logs and metrics of the runs watched (P5-04), and the values to redact from them.
     observers: Arc<super::observe::Observers>,
+    /// One `run.status` per run per [`STATUS_TTL`], shared by all of the run's port streams.
+    status: tokio::sync::Mutex<BTreeMap<String, (std::time::Instant, Result<RunList, String>)>>,
+}
+
+/// How long a run's `run.status` answers its port streams' liveness checks.
+const STATUS_TTL: std::time::Duration = std::time::Duration::from_secs(1);
+/// The most simultaneous `port.open` streams, counted by the Core apart from run control so port
+/// traffic cannot starve `run.stop` and `run.status`. Below the session's `MAX_HELD`.
+pub const PORT_STREAMS: u32 = 32;
+/// The driver name `port.open` is offered under.
+pub const DRIVER_PORT: &str = "run.port";
+
+/// A fixed refusal for a failure inside the helper link; the detail goes to the log only.
+fn helper_failed(what: &str, detail: impl std::fmt::Display) -> StreamError {
+    tracing::warn!(%detail, "{what}");
+    StreamError::new(ErrorCode::Internal, "the run helper failed")
 }
 
 /// The unit that loads `deploy/run-egress.nft` (and re-loads it with nftables.service).
@@ -114,6 +130,7 @@ impl RunDriver {
             redeem,
             checkouts: checkouts.into(),
             clones: None,
+            status: Default::default(),
         }
     }
 
@@ -207,11 +224,22 @@ impl RunDriver {
         })
     }
 
+    /// `port.open`, a driver of its own so the Core counts its streams apart from run control.
+    pub fn port_info(&self) -> Option<DriverInfo> {
+        self.info().map(|_| DriverInfo {
+            name: DRIVER_PORT.to_owned(),
+            commands: vec![OP_PORT_OPEN.to_owned()],
+            capacity: PORT_STREAMS,
+            streams: Some(PORT_STREAMS),
+            ..DriverInfo::default()
+        })
+    }
+
     pub async fn handle(&self, command: Command) -> Result<Reply, StreamError> {
-        let internal = |e: String| StreamError::new(ErrorCode::Internal, e);
+        let internal = |e: String| helper_failed("run helper call failed", e);
         fn de<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> Result<T, StreamError> {
             serde_json::from_value(v)
-                .map_err(|e| StreamError::new(ErrorCode::Internal, e.to_string()))
+                .map_err(|e| helper_failed("run helper reply did not parse", e))
         }
         match command {
             Command::RunStart(req) => {
@@ -245,12 +273,67 @@ impl RunDriver {
         }
     }
 
+    /// `port.open` (P6-01): resolves the request against the run's live containers (`port::resolve`),
+    /// then bridges the stream until it or the run ends. The last frame is returned.
+    pub async fn port(
+        self: Arc<Self>,
+        req: PortOpen,
+        stream: u64,
+        inbox: tokio::sync::mpsc::UnboundedReceiver<ainkrad_proto::v2::Body>,
+        cancel: tokio::sync::oneshot::Receiver<()>,
+        out: tokio::sync::mpsc::UnboundedSender<(u64, ainkrad_proto::v2::Body)>,
+    ) -> ainkrad_proto::v2::Body {
+        use ainkrad_proto::v2::Body;
+        let refuse = |c, m: String| Body::Error(StreamError::new(c, m));
+        if let Some(p) = req.problem() {
+            return refuse(ErrorCode::InvalidArgs, p);
+        }
+        let host_port = match self.runs(&req.run).await {
+            Ok(l) => super::port::resolve(&l, &req),
+            Err(e) => return Body::Error(helper_failed("port.open status failed", e)),
+        };
+        let host_port = match host_port {
+            Ok(p) => p,
+            Err(e) => return refuse(ErrorCode::InvalidArgs, e),
+        };
+        let (me, asked) = (&*self, &req);
+        let alive = move || async move {
+            me.runs_cached(&asked.run)
+                .await
+                .and_then(|l| super::port::resolve(&l, asked))
+                == Ok(host_port)
+        };
+        super::port::bridge(host_port, alive, stream, inbox, cancel, out).await
+    }
+
+    /// The helper's view of run `run`. `Err` holds the detail, for the log only.
+    async fn runs(&self, run: &str) -> Result<RunList, String> {
+        let req = Request::Status {
+            run: Some(run.to_owned()),
+        };
+        let v = helper::call(&self.socket, &req, &[]).await?;
+        serde_json::from_value(v).map_err(|e| e.to_string())
+    }
+
+    /// [`Self::runs`], at most once per [`STATUS_TTL`] per run: the lock is held across the fetch, so
+    /// the streams of a run that ask together share one `podman ps`.
+    async fn runs_cached(&self, run: &str) -> Result<RunList, String> {
+        let mut cache = self.status.lock().await;
+        if let Some((_, got)) = cache.get(run).filter(|(at, _)| at.elapsed() < STATUS_TTL) {
+            return got.clone();
+        }
+        let got = self.runs(run).await;
+        cache.retain(|_, (at, _)| at.elapsed() < STATUS_TTL * 10);
+        cache.insert(run.to_owned(), (std::time::Instant::now(), got.clone()));
+        got
+    }
+
     /// Bundles each checkout and hands the start to the run helper.
     async fn start_bundled(&self, req: RunStart) -> Result<Reply, StreamError> {
-        let internal = |e: String| StreamError::new(ErrorCode::Internal, e);
+        let internal = |e: String| helper_failed("run helper call failed", e);
         fn de<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> Result<T, StreamError> {
             serde_json::from_value(v)
-                .map_err(|e| StreamError::new(ErrorCode::Internal, e.to_string()))
+                .map_err(|e| helper_failed("run helper reply did not parse", e))
         }
         let tmp = tempdir()?;
         let mut bundles = Vec::new();
@@ -357,6 +440,8 @@ async fn bundle(git_dir: &Path, to: &Path) -> Result<(PathBuf, u64), StreamError
     Ok((to.to_path_buf(), len))
 }
 
+#[cfg(test)]
+mod port_review_tests;
 #[cfg(test)]
 mod review_tests;
 
