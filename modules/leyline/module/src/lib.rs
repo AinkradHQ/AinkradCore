@@ -3,7 +3,7 @@
 //! text out (API and table), `leyline.*` events and audit; and keys (Y1-02): generated or imported,
 //! sealed in the Core's secret store, public data only in the API; and project attachments (Y1-03).
 //! SSH itself runs on a runner (Y2); the command gate (`gate`, Y4-01), host terminals and host-key
-//! trust (Y3-01) are here.
+//! trust (Y3-01) and making a host a runner (Y8-01) are here.
 //!
 //! Module off, the Core is unchanged: the tables are its own `leyline_` namespace, no Core
 //! migration, no Core crate names this module.
@@ -19,6 +19,7 @@ mod health;
 pub mod hostkeys;
 mod hosts;
 mod keys;
+mod makerunner;
 mod policy;
 mod terminal;
 mod valid;
@@ -91,6 +92,8 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     // decision that could point a session at an impostor.
     ("POST", "/hosts/{host}/terminals"),
     ("POST", "/hosts/{host}/host-keys/replace"),
+    // Installs software as root on a host and pairs it: a person at a live step-up.
+    ("POST", "/hosts/{host}/runner"),
 ];
 // POST and PATCH need a step-up only for what widens an AI's reach or repoints a host (`allowed`,
 // address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
@@ -122,6 +125,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts/{host}/host-keys", "read"),
     // The terminal scope, as the Core's own terminal routes.
     ("POST", "/hosts/{host}/terminals", "terminal"),
+    ("POST", "/hosts/{host}/runner", "terminal"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -157,7 +161,8 @@ pub struct Leyline;
         hostkeys::list,
         hostkeys::trust_route,
         hostkeys::replace_route,
-        terminal::open
+        terminal::open,
+        makerunner::make
     ),
     components(schemas(
         hosts::HostView,
@@ -188,7 +193,8 @@ pub struct Leyline;
         hostkeys::HostKeyView,
         hostkeys::Pick,
         terminal::NewSession,
-        terminal::SessionView
+        terminal::SessionView,
+        makerunner::Install
     ))
 )]
 struct Doc;
@@ -224,6 +230,7 @@ impl Module for Leyline {
                 post(hostkeys::replace_route),
             )
             .route("/hosts/{host}/terminals", post(terminal::open))
+            .route("/hosts/{host}/runner", post(makerunner::make))
             .route("/groups", get(hosts::groups))
             .route("/tags", get(hosts::tags))
             .route("/keys", get(keys::list).post(keys::generate))

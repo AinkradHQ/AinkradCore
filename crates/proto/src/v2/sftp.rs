@@ -82,6 +82,10 @@ pub struct SftpWrite {
     /// `eof` fails the transfer (nothing is left behind).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
+    /// Permission bits (`0o7777`) set on the file before any byte is written, so a file meant for
+    /// its owner alone (Leyline's runner invite, `0o600`) is never readable by anyone else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<u32>,
 }
 
 /// `ssh.sftp.mkdir`: one directory (its parent must exist).
