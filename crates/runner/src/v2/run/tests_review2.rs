@@ -64,7 +64,7 @@ fn a_checkout_is_a_plain_repo_inside_its_own_projects_root() {
     let theirs = root.join("projects/8");
     repo(&mine.join("r1/web"));
     repo(&theirs.join("r2/web"));
-    let ok = checkout_dir(&root, 7, mine.join("r1/web").to_str().unwrap()).unwrap();
+    let ok = checkout_dir(&root, 7, None, mine.join("r1/web").to_str().unwrap()).unwrap();
     assert_eq!(ok, mine.canonicalize().unwrap().join("r1/web/.git"));
 
     // Outside the project's own root.
@@ -79,13 +79,21 @@ fn a_checkout_is_a_plain_repo_inside_its_own_projects_root() {
         mine.join("missing"),
     ] {
         assert!(
-            checkout_dir(&root, 7, bad.to_str().unwrap()).is_err(),
+            checkout_dir(&root, 7, None, bad.to_str().unwrap()).is_err(),
             "{}",
             bad.display()
         );
     }
+    // The run's own clone (`clone_all`) is accepted wherever it lies, and only it.
+    let clone = base.join("sessions/as_runr1/0");
+    repo(&clone);
+    let got = checkout_dir(&root, 7, Some(&clone), clone.to_str().unwrap()).unwrap();
+    assert_eq!(got, clone.canonicalize().unwrap().join(".git"));
+    assert!(checkout_dir(&root, 7, None, clone.to_str().unwrap()).is_err());
+    let theirs_web = theirs.join("r2/web");
+    assert!(checkout_dir(&root, 7, Some(&clone), theirs_web.to_str().unwrap()).is_err());
     // A project with no checkout root here at all.
-    assert!(checkout_dir(&root, 9, mine.join("r1/web").to_str().unwrap()).is_err());
+    assert!(checkout_dir(&root, 9, None, mine.join("r1/web").to_str().unwrap()).is_err());
 
     // Inside the root, but git would read another repo.
     let other_git = theirs.join("r2/web/.git");
@@ -125,7 +133,7 @@ fn a_checkout_is_a_plain_repo_inside_its_own_projects_root() {
         (&alt, "alternates"),
         (&common, "commondir"),
     ] {
-        let e = checkout_dir(&root, 7, d.to_str().unwrap()).unwrap_err();
+        let e = checkout_dir(&root, 7, None, d.to_str().unwrap()).unwrap_err();
         assert!(e.contains(why), "{}: {e}", d.display());
     }
     let _ = std::fs::remove_dir_all(&base);
@@ -137,7 +145,7 @@ async fn a_checkout_is_bundled_from_its_named_git_dir() {
     let root = base.join("work");
     let web = root.join("projects/7/r1/web");
     repo(&web);
-    let git = checkout_dir(&root, 7, web.to_str().unwrap()).unwrap();
+    let git = checkout_dir(&root, 7, None, web.to_str().unwrap()).unwrap();
     let (path, len) = bundle(&git, &base.join("b")).await.unwrap();
     assert!(len > 0 && path.exists());
     let _ = std::fs::remove_dir_all(&base);

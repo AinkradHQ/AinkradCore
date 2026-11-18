@@ -108,11 +108,20 @@ fn a_start_and_its_cleanup_fit_inside_the_helper_units_runtime_cap() {
         .trim()
         .parse()
         .unwrap();
-    // The 10 s request read and a margin for the answer on top.
-    assert!(
-        (START_BUDGET + CLEANUP_BUDGET + Duration::from_secs(30)).as_secs() <= max,
-        "START_BUDGET + CLEANUP_BUDGET exceed RuntimeMaxSec={max}"
-    );
+    // Every phase of one helper: the slice reap at launch (one QUICK), the 10 s request read,
+    // the start (bundle upload, the no-containers check, checkouts, builds, creates, health),
+    // what a build already begun adds past it, the stop of a failed start, and a margin for the
+    // answer and the sleeps between podman calls.
+    let phases = [
+        QUICK,
+        Duration::from_secs(10),
+        START_BUDGET,
+        OVERRUN,
+        CLEANUP_BUDGET,
+        Duration::from_secs(30),
+    ];
+    let sum: Duration = phases.iter().sum();
+    assert!(sum.as_secs() < max, "{sum:?} exceeds RuntimeMaxSec={max}");
 }
 
 #[test]

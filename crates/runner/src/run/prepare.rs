@@ -105,6 +105,61 @@ fn git() -> Command {
     c
 }
 
+/// Image transports that read a file or store of the host instead of a registry.
+const HOST_TRANSPORTS: &[&str] = &[
+    "oci-archive:",
+    "docker-archive:",
+    "dir:",
+    "oci:",
+    "containers-storage:",
+    "docker-daemon:",
+    "ostree:",
+];
+
+/// Why a Dockerfile may not be built: a `FROM` image or a `--from=` (also `--mount=...,from=`)
+/// that names a host transport, or holds a `$` (an `ARG` would choose the transport only at build
+/// time, past this check). Instructions are joined across `\` continuations.
+pub(super) fn image_source_problem(dockerfile: &str) -> Option<String> {
+    let joined = dockerfile.replace("\\\r\n", " ").replace("\\\n", " ");
+    let bad = |what: &str, v: &str| {
+        if v.contains('$') {
+            return Some(format!("{what} {v} uses a variable; name the image itself"));
+        }
+        let l = v.trim_matches(['"', '\'']).to_ascii_lowercase();
+        HOST_TRANSPORTS
+            .iter()
+            .any(|t| l.starts_with(t))
+            .then(|| format!("{what} {v} reads an image from the host, not a registry"))
+    };
+    for line in joined.lines() {
+        let mut words = line.split_whitespace();
+        let from = words.next().is_some_and(|w| w.eq_ignore_ascii_case("FROM"));
+        let mut image_seen = false;
+        let copies = ["COPY", "ADD", "RUN"]
+            .iter()
+            .any(|k| line.trim_start().to_ascii_uppercase().starts_with(k));
+        for w in words.clone().filter(|_| copies || from) {
+            for part in w.split(',').filter(|_| copies) {
+                let part = part.strip_prefix("--mount=").unwrap_or(part);
+                for key in ["--from=", "from="] {
+                    if let Some(v) = part.strip_prefix(key) {
+                        if let Some(why) = bad("--from", v) {
+                            return Some(why);
+                        }
+                    }
+                }
+            }
+            if from && !image_seen && !w.starts_with("--") {
+                image_seen = true;
+                if let Some(why) = bad("FROM", w) {
+                    return Some(why);
+                }
+            }
+        }
+    }
+    None
+}
+
 impl Engine {
     /// Clones `bundle` to `dest` without a work tree, adds its `.git` and the size of the tree it
     /// would write to `used`, refuses past `checkout_cap`, and only then writes the tree.
@@ -157,9 +212,16 @@ impl Engine {
         repos: &Path,
         deadline: Instant,
     ) -> Result<String, String> {
+        if Instant::now() >= deadline {
+            return Err("the start ran out of time".to_owned());
+        }
         let repo = repos.join(&b.repo);
         let ctx = inside(&repo, b.context.as_deref().unwrap_or("."))?;
         let file = inside(&repo, b.dockerfile.as_deref().unwrap_or("Dockerfile"))?;
+        let text = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        if let Some(why) = image_source_problem(&String::from_utf8_lossy(&text)) {
+            return Err(why);
+        }
         let (ctx, file) = (ctx.display().to_string(), file.display().to_string());
         let tag = format!("localhost/{}-{name}:{}", network(req.project), req.run);
         let slice = build_slice(&req.run, name);

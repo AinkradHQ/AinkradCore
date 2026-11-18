@@ -71,20 +71,30 @@ pub(super) fn egress_fresh(marker: &Path, now: SystemTime) -> bool {
 }
 
 /// A run's checkout `dir` of `project`, resolved, when it lies under `<root>/projects/<project>/`
-/// (also resolved) and is a plain repo: `.git` and `.git/objects` real directories (not a `gitdir:`
+/// (also resolved) or in `clone`, the run's own clone of the Core's copies (`clone_all`, under the
+/// agent driver's `worktrees/sessions/`), and is a plain repo: `.git` and `.git/objects` real directories (not a `gitdir:`
 /// file or a symlink), and no `objects/info/alternates` or `commondir`, either of which would let
 /// git read another repo's objects into the bundle. Answers the `.git` dir (`--git-dir`).
-pub(super) fn checkout_dir(root: &Path, project: u64, dir: &str) -> Result<PathBuf, String> {
+pub(super) fn checkout_dir(
+    root: &Path,
+    project: u64,
+    clone: Option<&Path>,
+    dir: &str,
+) -> Result<PathBuf, String> {
     let bad = |why: &str| format!("the checkout {dir} is not one of this project's: {why}");
-    let root = root
-        .join("projects")
-        .join(project.to_string())
-        .canonicalize()
-        .map_err(|_| bad("the project has no checkouts here"))?;
     let d = Path::new(dir)
         .canonicalize()
         .map_err(|_| bad("it does not exist"))?;
-    if !d.starts_with(&root) || d == root {
+    let projects = root
+        .join("projects")
+        .join(project.to_string())
+        .canonicalize();
+    let in_project = projects.is_ok_and(|r| d.starts_with(&r) && d != r);
+    // The clone root itself is the checkout when the run clones one repo.
+    let in_clone = clone
+        .and_then(|c| c.canonicalize().ok())
+        .is_some_and(|c| d.starts_with(c));
+    if !in_project && !in_clone {
         return Err(bad("it is outside the project's checkout root"));
     }
     let real_dir = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
@@ -198,8 +208,9 @@ impl RunDriver {
             .collect();
         let session = format!("{RUN_SESSION_PREFIX}{alnum}");
         // Armed before the clone: a failed or cancelled clone leaves nothing either.
-        let guard = CloneGuard(Arc::clone(agents), session.clone());
+        let mut guard = CloneGuard(Arc::clone(agents), session.clone(), PathBuf::new());
         let root = agents.run_workspace(&session, &head).await.map_err(bad)?;
+        guard.2 = root.clone();
         for c in req.checkouts.iter_mut().filter(|c| c.from_core.is_some()) {
             let dir = match trees.len() {
                 1 => root.clone(),
@@ -253,8 +264,9 @@ impl RunDriver {
                 self.can_clone(&req)?;
                 let mut req = self.prepare(req).await?;
                 // Held to the end: dropped (and the clone deleted) on success, error or cancel.
-                let _held = self.clone_all(&mut req).await?;
-                self.start_bundled(req).await
+                let held = self.clone_all(&mut req).await?;
+                self.start_bundled(req, held.as_ref().map(|g| g.2.as_path()))
+                    .await
             }
             Command::RunStop(req) => {
                 self.observers.forget(&req.run);
@@ -335,7 +347,12 @@ impl RunDriver {
     }
 
     /// Bundles each checkout and hands the start to the run helper.
-    async fn start_bundled(&self, req: RunStart) -> Result<Reply, StreamError> {
+    /// `clone` is the run's own clone root (`clone_all`), if it made one.
+    async fn start_bundled(
+        &self,
+        req: RunStart,
+        clone: Option<&Path>,
+    ) -> Result<Reply, StreamError> {
         let internal = |e: String| helper_failed("run helper call failed", e);
         fn de<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> Result<T, StreamError> {
             serde_json::from_value(v)
@@ -344,7 +361,7 @@ impl RunDriver {
         let tmp = tempdir()?;
         let mut bundles = Vec::new();
         for c in &req.checkouts {
-            let dir = checkout_dir(&self.checkouts, &c.dir)
+            let dir = checkout_dir(&self.checkouts, req.project, clone, &c.dir)
                 .map_err(|e| StreamError::new(ErrorCode::InvalidArgs, e))?;
             bundles.push(bundle(&dir, &tmp.0.join(&c.repo)).await?);
         }
@@ -390,7 +407,8 @@ impl RunDriver {
 
 /// Deletes a run's clone (the session it was made under) when dropped. Not `cleanup_session`: that
 /// saves the work under `session-wip`, which nothing ever cleans.
-struct CloneGuard(Arc<super::agent::AgentDriver>, String);
+/// The third field is the clone's root, the one place besides `projects/<p>/` a checkout may be.
+struct CloneGuard(Arc<super::agent::AgentDriver>, String, PathBuf);
 
 impl Drop for CloneGuard {
     fn drop(&mut self) {
@@ -420,28 +438,102 @@ fn tempdir() -> Result<Tmp, StreamError> {
     Ok(Tmp(p))
 }
 
-/// `git --git-dir <git_dir> bundle create <to> HEAD` of a checkout (no repo discovery, no work
-/// tree): the file and its length.
+/// Refuses a `.git` dir (`git`, the one [`checkout_dir`] answers) that holds any symlink (a session
+/// could point one at a file outside the checkout), `objects/info/alternates` (the same, for
+/// objects) or `commondir` (git would read another repo's refs and objects); `Err` names the first.
+pub(super) fn git_dir_clean(git: &Path) -> Result<(), String> {
+    let is_dir = std::fs::symlink_metadata(git).is_ok_and(|m| m.file_type().is_dir());
+    if !is_dir {
+        return Err(format!("{} is not a plain .git directory", git.display()));
+    }
+    let mut todo = vec![git.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for e in std::fs::read_dir(&d).map_err(|e| format!("{}: {e}", d.display()))? {
+            let e = e.map_err(|e| e.to_string())?;
+            let t = e.file_type().map_err(|e| e.to_string())?;
+            if t.is_symlink() {
+                return Err(format!("{} is a symlink", e.path().display()));
+            }
+            if t.is_dir() {
+                todo.push(e.path());
+            }
+        }
+    }
+    if std::fs::symlink_metadata(git.join("objects/info/alternates")).is_ok() {
+        return Err("the checkout borrows objects from elsewhere".to_owned());
+    }
+    if std::fs::symlink_metadata(git.join("commondir")).is_ok() {
+        return Err("the checkout shares another repo's git dir (commondir)".to_owned());
+    }
+    Ok(())
+}
+
+/// `git` for the runner's own use on a checkout a session may have written: no system or global
+/// config, no replace refs, no fsmonitor, no hooks.
+fn safe_git() -> tokio::process::Command {
+    let mut c = tokio::process::Command::new("git");
+    c.args([
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+    ])
+    .env_clear()
+    .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+    .env("GIT_CONFIG_NOSYSTEM", "1")
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_NO_REPLACE_OBJECTS", "1")
+    .env("GIT_TERMINAL_PROMPT", "0");
+    c
+}
+
+/// `git bundle create <to> HEAD` of a checkout's `.git` dir (`git_dir`, from [`checkout_dir`]):
+/// the file and its length. The dir is checked ([`git_dir_clean`]), copied (`--mirror --no-local`,
+/// no hardlinks, no templates) into a private dir beside `to`, and the bundle is made from that
+/// copy with `--git-dir` (no repo discovery, no work tree): nothing a session wrote is read by the
+/// bundling itself.
+///
+/// Checked, then copied: a gap a writer could race. It is accepted only because no live session
+/// can write the checkout while it is bundled. P5-05 holds this by a guard, not a lease: a
+/// `from_core` checkout is the run's own clone (`clone_all`), made moments before under the run's
+/// own `as_run…` session dir (`prepare_session` refuses a dir that exists, so no agent session
+/// shares it), never handed to a harness, and deleted when the start ends ([`CloneGuard`]). A
+/// Core-named `dir` under `projects/<p>/` has no guard in code: nothing on this runner creates that
+/// dir today, and whatever does must keep sessions out of it while a run starts.
 async fn bundle(git_dir: &Path, to: &Path) -> Result<(PathBuf, u64), StreamError> {
     let bad = |e: String| StreamError::new(ErrorCode::InvalidArgs, e);
-    let out = tokio::process::Command::new("git")
-        .arg("--git-dir")
+    let d = git_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || git_dir_clean(&d))
+        .await
+        .map_err(|e| bad(e.to_string()))?
+        .map_err(|e| bad(format!("the checkout {}: {e}", git_dir.display())))?;
+    let mut mirror = to.as_os_str().to_owned();
+    mirror.push(".mirror");
+    let mirror = PathBuf::from(mirror);
+    let run = |mut c: tokio::process::Command, what: &'static str| async move {
+        let out = c.output().await.map_err(|e| bad(format!("git: {e}")))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(bad(format!(
+                "{what} the checkout: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )))
+        }
+    };
+    let mut clone = safe_git();
+    clone
+        .args(["clone", "--mirror", "--no-local", "--template=", "-q"])
         .arg(git_dir)
+        .arg(&mirror);
+    run(clone, "copying").await?;
+    let mut b = safe_git();
+    b.arg("--git-dir")
+        .arg(&mirror)
         .args(["bundle", "create", "-q"])
         .arg(to)
-        .arg("HEAD")
-        .env_clear()
-        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-        .output()
-        .await
-        .map_err(|e| bad(format!("git: {e}")))?;
-    if !out.status.success() {
-        return Err(bad(format!(
-            "bundling the checkout {}: {}",
-            git_dir.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
-    }
+        .arg("HEAD");
+    run(b, "bundling").await?;
     let len = std::fs::metadata(to).map_err(|e| bad(e.to_string()))?.len();
     Ok((to.to_path_buf(), len))
 }
@@ -482,6 +574,78 @@ mod tests {
                 .info()
                 .is_none()
         );
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("run-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(p.join(".git/objects/info")).unwrap();
+        p
+    }
+
+    #[test]
+    fn a_git_dir_with_a_symlink_or_alternates_is_refused() {
+        let ok = scratch("git-ok");
+        assert!(git_dir_clean(&ok.join(".git")).is_ok());
+        let deep = scratch("git-deep");
+        std::os::unix::fs::symlink("/etc/passwd", deep.join(".git/objects/info/x")).unwrap();
+        assert!(
+            git_dir_clean(&deep.join(".git"))
+                .unwrap_err()
+                .contains("symlink")
+        );
+        let alt = scratch("git-alt");
+        std::fs::write(alt.join(".git/objects/info/alternates"), "/elsewhere\n").unwrap();
+        assert!(
+            git_dir_clean(&alt.join(".git"))
+                .unwrap_err()
+                .contains("borrows")
+        );
+        // A worktree-style `commondir` points git at another repo's refs and objects.
+        let common = scratch("git-common");
+        std::fs::write(common.join(".git/commondir"), "/elsewhere/.git\n").unwrap();
+        assert!(
+            git_dir_clean(&common.join(".git"))
+                .unwrap_err()
+                .contains("commondir")
+        );
+        // `.git` itself a symlink, or a gitfile, is not a plain directory.
+        let link = scratch("git-link");
+        std::fs::remove_dir_all(link.join(".git")).unwrap();
+        std::os::unix::fs::symlink(ok.join(".git"), link.join(".git")).unwrap();
+        assert!(git_dir_clean(&link.join(".git")).is_err());
+        let file = scratch("git-file");
+        std::fs::remove_dir_all(file.join(".git")).unwrap();
+        std::fs::write(file.join(".git"), "gitdir: /elsewhere\n").unwrap();
+        assert!(git_dir_clean(&file.join(".git")).is_err());
+        for p in [ok, deep, alt, common, link, file] {
+            let _ = std::fs::remove_dir_all(p);
+        }
+    }
+
+    #[test]
+    fn the_bundling_git_ignores_every_config_but_the_repos_own_safe_ones() {
+        let c = safe_git();
+        let c = c.as_std();
+        let args: Vec<_> = c
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args.join(" "),
+            "-c core.fsmonitor=false -c core.hooksPath=/dev/null"
+        );
+        let env: BTreeMap<_, _> = c
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert_eq!(env["GIT_CONFIG_NOSYSTEM"].as_deref(), Some("1"));
+        assert_eq!(env["GIT_NO_REPLACE_OBJECTS"].as_deref(), Some("1"));
     }
 }
 

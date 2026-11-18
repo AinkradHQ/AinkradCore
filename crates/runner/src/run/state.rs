@@ -80,7 +80,11 @@ impl Engine {
     /// `Stopped` (project 0) when none does.
     // ponytail: one `podman ps` per project store; index run -> project if a host ever has hundreds.
     pub fn find(&self, run: &str) -> Result<RunInfo, String> {
-        let deadline = Instant::now() + CLEANUP_BUDGET;
+        self.find_by(run, Instant::now() + CLEANUP_BUDGET)
+    }
+
+    /// [`Engine::find`] within `deadline` (a start's own).
+    pub(super) fn find_by(&self, run: &str, deadline: Instant) -> Result<RunInfo, String> {
         for p in self.stores() {
             let r = self.status_by(run, p, deadline)?;
             if !r.services.is_empty() {
