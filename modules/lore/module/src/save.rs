@@ -4,8 +4,12 @@
 //! Renaming a note (its derived title changes) rewrites `[[Old]]` in the notes that link to it (T6), as
 //! `system` saves in the same transaction, each with an auto version of what it replaced.
 //!
-//! ponytail: a rewritten linker whose own title changes does not cascade a second rename; links are indexed
-//! here with `target` unset, R1-04 adds resolution and FTS.
+//! Index (R1-04): links, tags and the FTS row are written in the same transaction, and links are resolved
+//! (T6: same project, then personal, then any; newest wins) by `relink`. A note that appears, is renamed,
+//! moved, trashed or restored re-resolves every link that names or pointed at it.
+//!
+//! ponytail: a rewritten linker whose own title changes does not cascade a second rename.
+//! ponytail: `lore_fts` is keyed by the note's rowid, which VACUUM may renumber; `rebuild_fts` repairs it.
 
 use ainkrad_core::audit::NewAuditEvent;
 use ainkrad_core_server::api::App;
@@ -70,7 +74,65 @@ pub(crate) async fn seed(
         .bind(text)
         .execute(&mut *conn)
         .await?;
-    index(conn, id, p).await
+    index(conn, id, p).await?;
+    fts(conn, id).await?;
+    Ok(relink(conn, id, None).await?)
+}
+
+/// The note's FTS row (title, body = the whole Markdown) in step with the note.
+pub(crate) async fn fts(conn: &mut SqliteConnection, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM lore_fts WHERE rowid = (SELECT rowid FROM lore_notes WHERE id = ?)")
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query(
+        "INSERT INTO lore_fts (rowid, title, body) SELECT rowid, title, text FROM lore_notes WHERE id = ?",
+    )
+    .bind(id)
+    .execute(conn)
+    .await
+    .map(|_| ())
+}
+
+/// Rebuilds every FTS row from the notes (repair, and the proof that the incremental rows are right).
+pub async fn rebuild_fts(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
+    let mut tx = begin_write(pool)
+        .await
+        .map_err(|_| sqlx::Error::PoolClosed)?;
+    sqlx::query("DELETE FROM lore_fts")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO lore_fts (rowid, title, body) SELECT rowid, title, text FROM lore_notes",
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await
+}
+
+/// T6 resolution. Re-resolves every link that is `id`'s own, points at `id`, or names `id`'s current title
+/// (or `old_norm`, the title it just left). A link's target is the live note with the title it names,
+/// preferring the linking note's project, then personal, then any; ties go to the newest. No match = NULL.
+pub(crate) async fn relink(
+    conn: &mut SqliteConnection,
+    id: &str,
+    old_norm: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE lore_links SET target = ( \
+             SELECT n.id FROM lore_notes n, lore_notes s \
+             WHERE s.id = lore_links.src AND n.title_norm = lore_links.target_title_norm \
+               AND n.trashed_at IS NULL AND n.id != s.id \
+             ORDER BY CASE WHEN n.project IS s.project THEN 0 WHEN n.project IS NULL THEN 1 ELSE 2 END, \
+                      n.updated_at DESC, n.id LIMIT 1) \
+         WHERE src = ?1 OR target = ?1 OR target_title_norm = ?2 \
+            OR target_title_norm = (SELECT title_norm FROM lore_notes WHERE id = ?1)",
+    )
+    .bind(id)
+    .bind(old_norm)
+    .execute(conn)
+    .await
+    .map(|_| ())
 }
 
 /// Links and tags of the note's current text, replacing the old rows.
@@ -197,13 +259,15 @@ pub(crate) async fn write_text(
     .execute(&mut *conn)
     .await?;
     index(conn, &h.id, &p).await?;
+    fts(conn, &h.id).await?;
+    let renamed_from = (!daily && p.title_norm != h.title_norm).then(|| h.title_norm.clone());
+    relink(conn, &h.id, renamed_from.as_deref()).await?;
     events::append(
         conn,
         "lore.note.changed",
         &json!({"id": h.id, "rev": rev, "origin": origin}),
     )
     .await?;
-    let renamed_from = (!daily && p.title_norm != h.title_norm).then(|| h.title_norm.clone());
     Ok(Wrote { rev, renamed_from })
 }
 

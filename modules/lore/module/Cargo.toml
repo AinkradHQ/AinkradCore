@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 ainkrad-core = { path = "../../../crates/core" }
 ainkrad-core-server = { path = "../../../crates/server" }
+ainkrad-embed = { path = "../../../crates/embed" }
 axum = "0.8.9"
 getrandom = "0.4.3"
 lore-model = { path = "../model" }
@@ -19,8 +20,14 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
 utoipa = "6.0.0"
+tokio = { version = "1.54.0", features = ["rt", "time"] }
+tracing = "0.1"
 
 [dev-dependencies]
 ainkrad-core-server = { path = "../../../crates/server", features = ["test-support"] }
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5.3", features = ["util"] }
+
+[features]
+# Search by meaning: loads the shared local e5 model. Off = search is FTS only and nothing is embedded.
+semantic = ["ainkrad-embed/semantic"]
