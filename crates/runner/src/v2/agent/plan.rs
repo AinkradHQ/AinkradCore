@@ -38,6 +38,7 @@ impl AgentDriver {
             format!("as_pc{}", *n)
         };
         let start = AgentStart {
+            instructions: None,
             session: session.clone(),
             harness: SUBSCRIPTION_HARNESS.to_owned(),
             model: Some(MODEL.to_owned()),

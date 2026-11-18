@@ -173,6 +173,7 @@ pub(super) fn dirs(name: &str) -> (TestDir, AgentConfig) {
 
 pub(super) fn start(session: &str, harness: &str) -> AgentStart {
     AgentStart {
+        instructions: None,
         session: session.to_owned(),
         harness: harness.to_owned(),
         model: None,

@@ -89,6 +89,7 @@ fn start_command(
     s: &Session,
     secrets: Vec<SecretGrant>,
     gateway: Option<Box<ainkrad_proto::v2::GatewayGrant>>,
+    instructions: Option<String>,
     resume: bool,
 ) -> Result<Command, Refusal> {
     let bad = || {
@@ -124,6 +125,7 @@ fn start_command(
             0
         },
         live: s.conversation,
+        instructions,
     }))
 }
 
@@ -185,7 +187,7 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
         let why = "the runner is not connected";
         return Err(Refusal::Runner(StreamError::new(ErrorCode::Offline, why)));
     }
-    if let Err(e) = start_command(s, Vec::new(), None, resume) {
+    if let Err(e) = start_command(s, Vec::new(), None, None, resume) {
         fail(app, s, &describe(&e)).await;
         return Err(e);
     }
@@ -297,12 +299,26 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
             why,
         )));
     }
+    // What a module says the session starts with, read at every start (P3-03).
+    let mut instructions = None;
+    for module in app.modules.iter() {
+        if let Some(text) = module.session_instructions(app, &s.id).await {
+            instructions = Some(text);
+            break;
+        }
+    }
     let wait = app.agents.config.answer;
     let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();
     match ask(
         app,
         &s.runner,
-        start_command(s, secrets.clone(), leased.gateway.clone(), resume)?,
+        start_command(
+            s,
+            secrets.clone(),
+            leased.gateway.clone(),
+            instructions,
+            resume,
+        )?,
         wait,
         proof,
     )
