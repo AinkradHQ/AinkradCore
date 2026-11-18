@@ -8,7 +8,8 @@
 //!   or changing the steps or the flag of one, needs a live step-up (an AI session never has one).
 //!   Any other command can be edited freely: the gate treats it as a write anyway.
 //! - `confirm` is a guard on the request (`confirm: true` must be sent), not a permission.
-//! - The scope says which hosts a command is for; a run on any other host is refused here.
+//! - Only a person writes commands: create, change and delete refuse an AI session outright.
+//! - The scope says which hosts a command is for; the gate checks it (and hashes it) per host.
 //! - Audit and event rows carry ids only, never a step's text.
 
 use ainkrad_core::audit::NewAuditEvent;
@@ -25,6 +26,7 @@ use utoipa::ToSchema;
 
 use crate::gate::{Action, Principal};
 use crate::hosts::{In, elevated, find};
+use crate::policy::Who;
 use crate::valid;
 
 const MAX_STEPS: usize = 20;
@@ -37,18 +39,39 @@ pub(crate) struct Cmd {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) read_only: bool,
+    pub(crate) confirm: bool,
     pub(crate) steps: Vec<String>,
+    pub(crate) scope: Option<Scope>,
+}
+
+/// Unreadable stored steps are an error, never an empty list (an empty command would "succeed").
+fn steps_of(raw: &str) -> Result<Vec<String>, sqlx::Error> {
+    serde_json::from_str(raw).map_err(|e| sqlx::Error::Decode(Box::new(e)))
+}
+
+fn scope_of(r: &sqlx::sqlite::SqliteRow) -> Result<Option<Scope>, sqlx::Error> {
+    let kind: String = r.try_get("scope_kind")?;
+    if kind == "any" {
+        return Ok(None);
+    }
+    Ok(Some(Scope {
+        kind,
+        value: r.try_get("scope_value")?,
+        role: r.try_get("scope_role")?,
+    }))
 }
 
 pub(crate) async fn load_cmd(
     conn: &mut SqliteConnection,
     id: &str,
 ) -> Result<Option<Cmd>, sqlx::Error> {
-    let Some(r) =
-        sqlx::query("SELECT id, name, read_only, steps FROM leyline_commands WHERE id = ?")
-            .bind(id)
-            .fetch_optional(conn)
-            .await?
+    let Some(r) = sqlx::query(
+        "SELECT id, name, read_only, confirm, steps, scope_kind, scope_value, scope_role \
+         FROM leyline_commands WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(conn)
+    .await?
     else {
         return Ok(None);
     };
@@ -56,7 +79,9 @@ pub(crate) async fn load_cmd(
         id: r.try_get("id")?,
         name: r.try_get("name")?,
         read_only: r.try_get::<i64, _>("read_only")? == 1,
-        steps: serde_json::from_str(&r.try_get::<String, _>("steps")?).unwrap_or_default(),
+        confirm: r.try_get::<i64, _>("confirm")? == 1,
+        steps: steps_of(&r.try_get::<String, _>("steps")?)?,
+        scope: scope_of(&r)?,
     }))
 }
 
@@ -91,21 +116,12 @@ pub struct CommandView {
 
 fn view(r: &sqlx::sqlite::SqliteRow) -> Result<CommandView, sqlx::Error> {
     let text = |c: &str| r.try_get::<String, _>(c);
-    let kind = text("scope_kind")?;
-    let scope = if kind == "any" {
-        None
-    } else {
-        Some(Scope {
-            kind,
-            value: text("scope_value")?,
-            role: r.try_get("scope_role")?,
-        })
-    };
+    let scope = scope_of(r)?;
     Ok(CommandView {
         id: text("id")?,
         name: text("name")?,
         description: text("description")?,
-        steps: serde_json::from_str(&text("steps")?).unwrap_or_default(),
+        steps: steps_of(&text("steps")?)?,
         scope,
         read_only: r.try_get::<i64, _>("read_only")? == 1,
         confirm: r.try_get::<i64, _>("confirm")? == 1,
@@ -148,6 +164,19 @@ pub struct CommandDeleted {
     pub deleted: String,
 }
 
+/// Only a person writes commands: an AI session never creates, changes or removes one (a command
+/// is a grant on read-only hosts, and its scope and steps decide where it runs).
+fn people_only(me: &Caller) -> Result<(), ApiError> {
+    if matches!(Principal::of(me).0, Who::Session(_)) {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "gate_refused",
+            "only a person may change pre-set commands",
+        ));
+    }
+    Ok(())
+}
+
 fn bad() -> ApiError {
     ApiError::bad_request("the command is not valid")
 }
@@ -168,7 +197,9 @@ impl Fields {
             && self.steps.iter().all(|s| {
                 !s.trim().is_empty() && s.chars().count() <= MAX_STEP && !s.contains('\0')
             });
-        if !(valid::label(&self.name) && steps_ok && self.description.chars().count() <= 500) {
+        // A name that looks like an id could shadow one: refused.
+        let id_like = self.name.trim().to_ascii_lowercase().starts_with("lc_");
+        if !(valid::label(&self.name) && !id_like && steps_ok && self.description.chars().count() <= 500) {
             return Err(bad());
         }
         let Some(sc) = &mut self.scope else {
@@ -215,7 +246,8 @@ async fn record(conn: &mut SqliteConnection, op: &str, id: &str) -> Result<(), s
 /// The command `ident` names (id, else its unique name).
 async fn find_cmd(conn: &mut SqliteConnection, ident: &str) -> Result<String, ApiError> {
     sqlx::query_scalar(
-        "SELECT id FROM leyline_commands WHERE lower(id) = lower(?1) OR name = ?1 COLLATE NOCASE LIMIT 1",
+        "SELECT id FROM leyline_commands WHERE lower(id) = lower(?1) OR name = ?1 COLLATE NOCASE \
+         ORDER BY lower(id) = lower(?1) DESC LIMIT 1",
     )
     .bind(ident.chars().take(256).collect::<String>())
     .fetch_optional(conn)
@@ -288,6 +320,7 @@ pub(crate) async fn create(
     Extension(me): Extension<Caller>,
     In(req): In<NewCommand>,
 ) -> ApiResult<CommandView> {
+    people_only(&me)?;
     let mut f = Fields {
         name: req.name,
         description: req.description.unwrap_or_default(),
@@ -318,10 +351,11 @@ pub(crate) async fn patch(
     Extension(me): Extension<Caller>,
     In(req): In<CommandPatch>,
 ) -> ApiResult<CommandView> {
+    people_only(&me)?;
     let mut tx = begin_write(&app.pool).await?;
     let id = find_cmd(&mut tx, &c).await?;
     let cur = load_view(&mut tx, &id).await?;
-    let (was_ro, was_steps) = (cur.read_only, cur.steps.clone());
+    let (was_ro, was_steps, was_scope) = (cur.read_only, cur.steps.clone(), cur.scope.clone());
     let mut f = Fields {
         name: req.name.unwrap_or(cur.name),
         description: req.description.unwrap_or(cur.description),
@@ -331,7 +365,8 @@ pub(crate) async fn patch(
         confirm: req.confirm.unwrap_or(cur.confirm),
     };
     f.check(&mut tx).await?;
-    if f.read_only && (!was_ro || f.steps != was_steps) && !elevated(&app, &me) {
+    let widened = !was_ro || f.steps != was_steps || f.scope != was_scope;
+    if f.read_only && widened && !elevated(&app, &me) {
         return Err(step_up_required());
     }
     write(&mut tx, &id, &f, false).await?;
@@ -347,7 +382,9 @@ pub(crate) async fn patch(
 pub(crate) async fn remove(
     State(app): State<App>,
     Path(c): Path<String>,
+    Extension(me): Extension<Caller>,
 ) -> ApiResult<CommandDeleted> {
+    people_only(&me)?;
     let mut tx = begin_write(&app.pool).await?;
     let id = find_cmd(&mut tx, &c).await?;
     sqlx::query("DELETE FROM leyline_commands WHERE id = ?")
@@ -357,36 +394,6 @@ pub(crate) async fn remove(
     record(&mut tx, "deleted", &id).await?;
     tx.commit().await?;
     Ok(Json(CommandDeleted { deleted: id }))
-}
-
-/// Whether `host` (an id) is one of the hosts `scope` names.
-async fn in_scope(
-    conn: &mut SqliteConnection,
-    scope: &Option<Scope>,
-    host: &str,
-) -> Result<bool, sqlx::Error> {
-    let Some(s) = scope else {
-        return Ok(true);
-    };
-    let sql = match s.kind.as_str() {
-        "host" => "SELECT ?2 = ?1",
-        "group" => {
-            "SELECT EXISTS (SELECT 1 FROM leyline_hosts WHERE id = ?1 AND group_name = ?2 COLLATE NOCASE)"
-        }
-        "tag" => {
-            "SELECT EXISTS (SELECT 1 FROM leyline_hosts, json_each(tags) WHERE leyline_hosts.id = ?1 AND value = ?2)"
-        }
-        _ => {
-            "SELECT EXISTS (SELECT 1 FROM leyline_project_hosts WHERE host_id = ?1 AND project = ?2 \
-             AND (?3 IS NULL OR role = ?3))"
-        }
-    };
-    sqlx::query_scalar(sql)
-        .bind(host)
-        .bind(&s.value)
-        .bind(&s.role)
-        .fetch_one(conn)
-        .await
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -424,9 +431,6 @@ pub(crate) async fn run(
                 "confirm_required",
                 "this command must be confirmed: send confirm true",
             ));
-        }
-        if !in_scope(&mut conn, &cmd.scope, &host).await? {
-            return Err(ApiError::conflict("the command is not for that host"));
         }
         (cmd, host)
     };
@@ -470,11 +474,7 @@ pub struct RunView {
 #[utoipa::path(get, path = "/runs/{run}", operation_id = "leylineGetRun", tag = "leyline",
     params(("run" = String, Path, description = "The run's id")),
     responses((status = 200, description = "The run and each host's result", body = RunView)))]
-pub(crate) async fn get_run(
-    State(app): State<App>,
-    Extension(me): Extension<Caller>,
-    Path(id): Path<String>,
-) -> ApiResult<RunView> {
+pub(crate) async fn get_run(State(app): State<App>, Path(id): Path<String>) -> ApiResult<RunView> {
     let id: String = id.chars().take(64).collect();
     let r = sqlx::query(
         "SELECT id, command_id, action, principal, state, created_at, ended_at FROM leyline_runs WHERE id = ?",
@@ -502,7 +502,7 @@ pub(crate) async fn get_run(
             })
         })
         .collect::<Result<_, sqlx::Error>>()?;
-    let mut view = RunView {
+    Ok(Json(RunView {
         id: r.try_get("id")?,
         command_id: r.try_get("command_id")?,
         action: r.try_get("action")?,
@@ -511,8 +511,5 @@ pub(crate) async fn get_run(
         created_at: r.try_get("created_at")?,
         ended_at: r.try_get("ended_at")?,
         hosts,
-    };
-    // An AI session reads only its own runs, their output as outside data (Y7-01).
-    crate::ai::for_ai(&me, &mut view)?;
-    Ok(Json(view))
+    }))
 }

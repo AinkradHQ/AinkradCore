@@ -89,11 +89,12 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/projects/{project}/hosts", "read"),
     ("GET", "/commands", "read"),
     ("GET", "/commands/{command}", "read"),
-    ("GET", "/runs/{run}", "read"),
+    ("GET", "/runs/{run}", "write"),
     // Code Mode (Y7-01): a session acts as its creator without `admin`, so these name scopes a
     // creator holds. They answer only a session's own calls (`ai::session_only`).
-    ("GET", "/ai/hosts/{host}/files", "read"),
-    ("GET", "/ai/hosts/{host}/file", "read"),
+    ("GET", "/ai/runs/{run}", "agent"),
+    ("GET", "/ai/hosts/{host}/files", "agent"),
+    ("GET", "/ai/hosts/{host}/file", "agent"),
     ("POST", "/ai/hosts/{host}/exec", "agent"),
     ("POST", "/ai/commands/{command}/run", "agent"),
 ];
@@ -127,6 +128,7 @@ pub struct Leyline;
         commands::run,
         commands::get_run,
         ai::exec,
+        ai::get_run,
         ai::run_command,
         ai::list_files,
         ai::read_file
@@ -189,6 +191,7 @@ impl Module for Leyline {
             .route("/commands/{command}/run", post(commands::run))
             .route("/runs/{run}", get(commands::get_run))
             .route("/ai/hosts/{host}/exec", post(ai::exec))
+            .route("/ai/runs/{run}", get(ai::get_run))
             .route("/ai/hosts/{host}/files", get(ai::list_files))
             .route("/ai/hosts/{host}/file", get(ai::read_file))
             .route("/ai/commands/{command}/run", post(ai::run_command))

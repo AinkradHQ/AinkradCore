@@ -11,7 +11,7 @@
 //!   list/read and read-only pre-set commands only, `ask` hosts park ONE Core-held `cm_` approval,
 //!   `allowed` hosts run, audited. The routes are `Module::self_approved`, so the dispatcher does
 //!   not park a second approval for a `risky` op: T10 decides.
-//! - Dispatch takes the gate's `Authorized` and calls `gate::still_valid` before each runner op;
+//! - Dispatch takes the gate's `Authorized` and calls `gate::checked` before each runner op;
 //!   every runner op carries one-use key leases only, never key material.
 //! - What a host wrote (file text, directory entries, command output) leaves inside the
 //!   `ainkrad_core::untrusted` envelope, redacted first. Labels name Core ids, never input.
@@ -24,7 +24,7 @@ use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
 use ainkrad_core_server::ops_catalog::SESSION_PREFIX;
 use ainkrad_proto::v2::{
     Body, Close, Command, Reply, SFTP_MAX_PATH, SftpEntries, SftpKind, SftpList, SftpRead,
-    SftpStat, SshRoute,
+    SftpStat,
 };
 use axum::Json;
 use axum::extract::rejection::QueryRejection;
@@ -35,8 +35,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::commands::{RunRequest, RunStarted, RunView};
-use crate::exec::{route, why};
-use crate::gate::{Action, Authorized, Principal, authorize, finish, redact_text, still_valid};
+use crate::exec::{sftp, why};
+use crate::gate::{Action, Authorized, Principal, authorize, finish, redact_text};
 use crate::hosts::{In, find};
 
 /// The most a file read returns (T11).
@@ -65,10 +65,24 @@ fn host_err(why: String) -> ApiError {
     ApiError::new(StatusCode::BAD_GATEWAY, "host_unavailable", why)
 }
 
+#[utoipa::path(get, path = "/ai/runs/{run}", operation_id = "leylineAiGetRun", tag = "leyline",
+    params(("run" = String, Path, description = "The run's id")),
+    responses((status = 200, description = "One of this session's runs and each host's result, every output as outside data; another principal's run is a 404", body = RunView)))]
+pub(crate) async fn get_run(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<RunView> {
+    session_only(&me)?;
+    let Json(mut run) = crate::commands::get_run(State(app), Path(id)).await?;
+    own_run(&me, &mut run)?;
+    Ok(Json(run))
+}
+
 /// A session reads only its own runs, and every output there is outside data.
-pub(crate) fn for_ai(me: &Caller, run: &mut RunView) -> Result<(), ApiError> {
+fn own_run(me: &Caller, run: &mut RunView) -> Result<(), ApiError> {
     let Some(s) = session_of(me) else {
-        return Ok(());
+        return Err(ApiError::not_found("no such run"));
     };
     if run.principal != format!("session:{s}") {
         return Err(ApiError::not_found("no such run"));
@@ -99,7 +113,7 @@ pub struct ExecRequest {
 
 #[utoipa::path(post, path = "/ai/hosts/{host}/exec", operation_id = "leylineExec", tag = "leyline",
     params(("host" = String, Path, description = "Host id, else its unique label")), request_body = ExecRequest,
-    responses((status = 200, description = "Past the gate: the command runs in the background; read the run (`leylineGetRun`) for its output, as outside data. 403 `gate_refused` when the host's AI rule says no, or the person did", body = RunStarted)))]
+    responses((status = 200, description = "Past the gate: the command runs in the background; read the run (`leylineAiGetRun`) for its output, as outside data. 403 `gate_refused` when the host's AI rule says no, or the person did", body = RunStarted)))]
 pub(crate) async fn exec(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -135,10 +149,11 @@ pub(crate) async fn run_command(
     In(req): In<AiRunRequest>,
 ) -> ApiResult<RunStarted> {
     session_only(&me)?;
-    // The person's run path, as the session: a session never sends `confirm` for itself.
+    // The person's run path, as the session. `confirm` is the person's guard, not the session's:
+    // the gate turns a `confirm` command run by a session into `ask` (a person approves it).
     let req = RunRequest {
         host: req.host,
-        confirm: None,
+        confirm: Some(true),
     };
     crate::commands::run(State(app), Extension(me), Path(command), In(req)).await
 }
@@ -156,21 +171,6 @@ fn path_of(q: Result<Query<PathQuery>, QueryRejection>) -> Result<String, ApiErr
         return Err(bad());
     }
     Ok(q.path)
-}
-
-/// One reading SFTP op on the gated host, the gate re-checked right before it is sent.
-async fn sftp(
-    app: &App,
-    auth: &Authorized,
-    make: impl FnOnce(SshRoute) -> Command,
-) -> Result<(ainkrad_core_server::hub::Dispatched, String), String> {
-    still_valid(app, auth).await.map_err(|e| e.message)?;
-    let (target, hops, runner) = route(app, auth).await?;
-    let d = app
-        .hub
-        .dispatch_ssh_sftp_read(&runner, make(SshRoute { target, hops }))
-        .map_err(|e| why(e.code))?;
-    Ok((d, runner))
 }
 
 fn other() -> String {

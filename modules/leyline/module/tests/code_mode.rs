@@ -44,7 +44,7 @@ const OPS: &[(&str, &str)] = &[
     ("leylineListCommands", "read"),
     ("leylineAiRunCommand", "write"),
     ("leylineExec", "risky"),
-    ("leylineGetRun", "read"),
+    ("leylineAiGetRun", "read"),
     ("leylineListFiles", "read"),
     ("leylineReadFile", "read"),
 ];
@@ -198,7 +198,7 @@ fn templates() -> Vec<(&'static str, Value)> {
         ("leylineListHosts", json!({"group": "g", "tag": "t"})),
         ("leylineGetHost", json!({"host": "ok"})),
         ("leylineListCommands", json!({})),
-        ("leylineGetRun", json!({"run": "lr_0000000000000000"})),
+        ("leylineAiGetRun", json!({"run": "lr_0000000000000000"})),
         (
             "leylineAiRunCommand",
             json!({"command": "lc_any", "body": {"host": "ok"}}),
@@ -288,7 +288,7 @@ async fn the_seeded_key_secret_never_comes_back_from_any_op_in_any_argument() {
     }
     for run in &runs {
         let (ok, text, code, _) =
-            op(&fx.app, &runner, &s, "leylineGetRun", json!({"run": run})).await;
+            op(&fx.app, &runner, &s, "leylineAiGetRun", json!({"run": run})).await;
         assert!(ok, "{run}: {code}");
         assert!(
             !text.contains("PRIVATE KEY") && !text.contains(&fixtures::ED[40..100]),
@@ -487,7 +487,7 @@ async fn the_ai_routes_answer_only_sessions_and_a_session_reads_only_its_own_run
         &fx.app,
         &runner,
         &s,
-        "leylineGetRun",
+        "leylineAiGetRun",
         json!({"run": started["run"]}),
     )
     .await;
@@ -507,7 +507,7 @@ async fn the_ai_routes_answer_only_sessions_and_a_session_reads_only_its_own_run
     let mut seen = Value::Null;
     for _ in 0..100 {
         let (ok, text, code, _) =
-            op(&fx.app, &runner, &s, "leylineGetRun", json!({"run": run})).await;
+            op(&fx.app, &runner, &s, "leylineAiGetRun", json!({"run": run})).await;
         assert!(ok, "{code}");
         seen = serde_json::from_str::<Value>(&text).unwrap()["result"].clone();
         if seen["hosts"][0]["output"].is_string() {
@@ -517,4 +517,48 @@ async fn the_ai_routes_answer_only_sessions_and_a_session_reads_only_its_own_run
     }
     let out = seen["hosts"][0]["output"].as_str().unwrap_or_default();
     assert!(out.starts_with(OPEN), "{seen}");
+}
+
+/// `Hub::dispatch_ssh_sftp_read` takes no proof either, so only Leyline's `exec.rs` (which holds
+/// the gate's `Authorized` and calls `gate::checked` first) may call it.
+#[test]
+fn only_the_gated_dispatcher_sends_sftp() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if !["target", ".git", "node_modules"].contains(&&*e.file_name().to_string_lossy()) {
+                    walk(&p, out);
+                }
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+    let needle = format!("dispatch_ssh_sftp_{}(", "read");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let mut files = Vec::new();
+    for d in ["crates", "modules"] {
+        walk(&root.join(d), &mut files);
+    }
+    let mut callers: Vec<String> = files
+        .iter()
+        .filter(|f| std::fs::read_to_string(f).is_ok_and(|s| s.contains(&needle)))
+        .map(|f| {
+            f.canonicalize()
+                .unwrap()
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    callers.sort();
+    assert_eq!(
+        callers,
+        ["crates/server/src/hub/mod.rs", "modules/leyline/module/src/exec.rs"]
+    );
 }
