@@ -227,24 +227,33 @@ impl Embedder for Local {
 
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         let n = self.threads.load(std::sync::atomic::Ordering::SeqCst);
-        let pool = {
-            let mut g = self.pool.lock().unwrap_or_else(|e| e.into_inner());
-            if g.as_ref().is_none_or(|(have, _)| *have != n) {
-                let p = rayon::ThreadPoolBuilder::new()
-                    .num_threads(n)
-                    .build()
-                    .map_err(|e| e.to_string())?;
-                *g = Some((n, std::sync::Arc::new(p)));
-            }
-            g.as_ref().map(|(_, p)| p.clone()).expect("pool")
-        };
+        let pool = self.pool_of(n)?;
         // Candle's matrix work uses the current rayon pool, so `install` bounds it to `n` threads.
-        pool.install(|| self.embed_inner(texts))
+        pool.install(|| self.embed_inner(texts, false))
+    }
+
+    fn embed_query(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        let n = self.threads.load(std::sync::atomic::Ordering::SeqCst);
+        let pool = self.pool_of(n)?;
+        pool.install(|| self.embed_inner(texts, true))
     }
 }
 
 impl Local {
-    fn embed_inner(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    /// The rayon pool of `n` threads, rebuilt when the setting changed.
+    fn pool_of(&self, n: usize) -> Result<std::sync::Arc<rayon::ThreadPool>, String> {
+        let mut g = self.pool.lock().unwrap_or_else(|e| e.into_inner());
+        if g.as_ref().is_none_or(|(have, _)| *have != n) {
+            let p = rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .map_err(|e| e.to_string())?;
+            *g = Some((n, std::sync::Arc::new(p)));
+        }
+        Ok(g.as_ref().map(|(_, p)| p.clone()).expect("pool"))
+    }
+
+    fn embed_inner(&self, texts: &[String], query: bool) -> Result<Vec<Vec<f32>>, String> {
         // Sorted by length so a batch pads little; the order is restored at the end.
         let mut order: Vec<usize> = (0..texts.len()).collect();
         order.sort_by_key(|&i| texts[i].len());
@@ -252,7 +261,7 @@ impl Local {
         for chunk in order.chunks(BATCH) {
             let prefixed: Vec<String> = chunk
                 .iter()
-                .map(|&i| format!("passage: {}", texts[i]))
+                .map(|&i| crate::prefixed(query, &texts[i]))
                 .collect();
             let refs: Vec<&str> = prefixed.iter().map(String::as_str).collect();
             for (&i, v) in chunk

@@ -89,7 +89,7 @@ pub async fn open_room(fx: &Fx, room: &str) {
 }
 
 /// Records in the room's file, as accepted/candidate/rejected would be.
-async fn put_record(fx: &Fx, room: &str, id: &str, kind: &str, status: &str, body: &str) {
+pub async fn put_record(fx: &Fx, room: &str, id: &str, kind: &str, status: &str, body: &str) {
     let p = canon_pool(fx, room).await;
     sqlx::query(
         "INSERT INTO records (id, type, status, body, tags, source_ids, created_at) \
