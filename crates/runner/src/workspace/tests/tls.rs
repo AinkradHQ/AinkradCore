@@ -94,6 +94,7 @@ fn request(repo: String) -> SessionWorkspace {
         reference: "main".into(),
         branch: "agent/topic".into(),
         name: String::new(),
+        mirror: None,
     }
 }
 

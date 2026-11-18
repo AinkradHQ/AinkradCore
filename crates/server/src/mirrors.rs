@@ -5,14 +5,12 @@
 //!
 //! Security model:
 //! - Serving is `git upload-pack` only, behind the signed gate with the `runner` scope
-//!   (`api::v1::mirrors`): a runner is trusted compute of this Core and may read any mirror,
+//!   (`api::v1::mirrors`): a runner is trusted compute of this Core, served only what it was leased,
 //!   which holds only what the remote holds. `git receive-pack` is never run, so a runner cannot
 //!   write the Core's copy; the route that names it answers 403. Nothing a runner sends reaches
 //!   a shell: the repo is a number, the rest is the pack protocol on stdin.
-//!   TODO(P3-02): today any runner device reads any project's mirror. P3-02 narrows it to a
-//!   lease per (device, repo ids), checked in `info_refs` and `upload_pack`, granted when the
-//!   Core builds a session's workspace list. The lease check must also require an active
-//!   project: an archived project's copy is still served today.
+//!   Only a runner holding a lease for the repo is served, and only while its project is
+//!   active (P3-02; the model is at the top of `lease`).
 //! - A mirror is only served while its repo row exists and its project and remote are the ones
 //!   the mirror was made from (a marker file in it): removing a repo deletes its copy (in a task
 //!   a dropped request cannot cancel), and a recycled repo id of another project or remote starts
@@ -91,9 +89,16 @@ pub struct Mirrors {
     locks: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
     /// Pack streams in flight; the Core machine runs other things too.
     serving: Arc<Semaphore>,
+    /// Who may read which copy, until when (unix seconds) and for which project and remote (`key`);
+    /// see `lease`.
+    leases: Mutex<HashMap<(String, i64), (i64, String)>>,
 }
 
+mod lease;
 mod serve;
+#[cfg(test)]
+pub(crate) use lease::grant_now;
+pub use lease::{LEASE_SECS, for_session, servable};
 
 /// Why a mirror cannot be served.
 #[derive(Debug, PartialEq, Eq)]
@@ -120,6 +125,10 @@ impl Target {
     }
 }
 
+fn key_of_target(t: &Target) -> String {
+    t.key()
+}
+
 impl Mirrors {
     pub fn new(root: PathBuf) -> Self {
         // git runs with the mirrors dir as its working directory: every path must be absolute.
@@ -130,6 +139,7 @@ impl Mirrors {
             timeout: Duration::from_secs(300),
             locks: Mutex::default(),
             serving: Arc::new(Semaphore::new(4)),
+            leases: Mutex::default(),
         }
     }
 
@@ -580,12 +590,6 @@ async fn target(pool: &SqlitePool, repo: i64) -> Result<Option<Target>, sqlx::Er
         })
     })
     .transpose()
-}
-
-/// What repo `repo`'s mirror must have been made for (`key`), or `None` if there is no such repo
-/// (any more).
-pub async fn key_of(pool: &SqlitePool, repo: i64) -> Result<Option<String>, sqlx::Error> {
-    Ok(target(pool, repo).await?.map(|t| t.key()))
 }
 
 /// Why a fetch was not tried.

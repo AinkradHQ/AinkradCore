@@ -127,6 +127,30 @@ fn start_command(
     }))
 }
 
+/// Leases the Core's copies of the repos `s`'s workspace names to its runner (P3-02, see
+/// `crate::mirrors`). A workspace naming copies without a project to lease them for is refused:
+/// only a project's session may read them, whatever the workspace says.
+pub(crate) async fn project_mirrors(app: &App, s: &Session) -> Result<(), String> {
+    let Some(w) = s
+        .workspace
+        .as_ref()
+        .and_then(|w| serde_json::from_value::<ainkrad_proto::runner::Workspace>(w.clone()).ok())
+    else {
+        return Ok(());
+    };
+    let repos: Vec<i64> = std::iter::once(&w)
+        .chain(&w.also)
+        .filter_map(|w| w.mirror)
+        .collect();
+    if repos.is_empty() {
+        return Ok(());
+    }
+    let project = s
+        .project_id
+        .ok_or("the workspace names repo copies but the session has no project")?;
+    crate::mirrors::for_session(app, &s.runner, project, &repos).await
+}
+
 /// Whether `s` may go to its runner now.
 pub enum Placement {
     Ok,
@@ -264,6 +288,11 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
     if !resume && !crate::store::alloc::mark_or_release(&app.pool, &s.id).await? {
         app.agents.leases.lock().unwrap().remove(&s.id);
         return Ok(());
+    }
+    // The repo copies a project session clones are leased to this runner now, at every start.
+    if let Err(why) = project_mirrors(app, s).await {
+        fail(app, s, &why).await;
+        return Err(Refusal::Runner(StreamError::new(ErrorCode::InvalidArgs, why)));
     }
     let wait = app.agents.config.answer;
     let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();

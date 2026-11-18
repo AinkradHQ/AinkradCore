@@ -39,6 +39,8 @@ mod topup;
 pub mod wake;
 pub use failover::drive as drive_failover;
 use launch::launch;
+#[cfg(test)]
+pub(crate) use launch::project_mirrors;
 pub use launch::{Placement, placement};
 
 use std::collections::{HashMap, HashSet};

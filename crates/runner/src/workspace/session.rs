@@ -37,6 +37,24 @@ impl Workspaces {
                 return Err("invalid or duplicate repository name".into());
             }
         }
+        // The Core's copies are reached through a loopback relay that lives for these clones.
+        let ids: Vec<i64> = requests.iter().filter_map(|r| r.mirror).collect();
+        let relay = match ids.is_empty() {
+            true => None,
+            false => {
+                let up = self
+                    .mirror_upstream
+                    .lock()
+                    .expect("mirror upstream")
+                    .clone()
+                    .ok_or("this runner cannot clone from the Core")?;
+                Some(
+                    super::relay::Relay::start(up, ids)
+                        .await
+                        .map_err(|e| format!("relay: {e}"))?,
+                )
+            }
+        };
         let _slot = self
             .prepares
             .acquire()
@@ -55,25 +73,36 @@ impl Workspaces {
                     root.join(&r.name)
                 };
                 let path_str = path.to_str().ok_or("invalid workspace path")?;
-                self.git_with_credentials(
-                    &self.root,
-                    &[
-                        "clone",
-                        "--no-checkout",
-                        "--no-recurse-submodules",
-                        "--template=",
-                        "--depth=1",
-                        "--single-branch",
-                        "--branch",
-                        &r.reference,
-                        "--",
-                        &r.repo,
-                        path_str,
-                    ],
-                    helper,
-                )
-                .await
+                let source = match (r.mirror, &relay) {
+                    (Some(id), Some(relay)) => Some(relay.url(id)),
+                    _ => None,
+                };
+                let clone = [
+                    "clone",
+                    "--no-checkout",
+                    "--no-recurse-submodules",
+                    "--template=",
+                    "--depth=1",
+                    "--single-branch",
+                    "--branch",
+                    &r.reference,
+                    "--",
+                    source.as_deref().unwrap_or(&r.repo),
+                    path_str,
+                ];
+                match source {
+                    Some(_) => self.git_relay(&self.root, &clone).await,
+                    None => {
+                        self.git_with_credentials(&self.root, &clone, helper)
+                            .await
+                    }
+                }
                 .map_err(|_| "git clone failed (credentials or transport)".to_owned())?;
+                if source.is_some() {
+                    // The checkout pushes to the real remote; no trace of the relay stays in it.
+                    self.git(&path, &["remote", "set-url", "origin", &r.repo])
+                        .await?;
+                }
                 // Only fresh, runner-created config is read. Never run git here after handoff.
                 self.git(
                     &path,

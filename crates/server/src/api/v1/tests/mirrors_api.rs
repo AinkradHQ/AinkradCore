@@ -144,6 +144,8 @@ async fn a_runner_clones_two_at_once_and_cannot_push_or_read_without_its_scope()
     let (fx, id, repo, head, dir) = shop().await;
     let vm = super::secrets::runner(&fx, "vm").await;
     let vm2 = super::secrets::runner(&fx, "vm2").await;
+    crate::mirrors::grant_now(&fx.app, &vm.id, repo).await;
+    crate::mirrors::grant_now(&fx.app, &vm2.id, repo).await;
     let refs = format!("/api/v1/mirrors/{repo}/info/refs?service=git-upload-pack");
     let pack = format!("/api/v1/mirrors/{repo}/git-upload-pack");
     // Nothing fetched yet.
@@ -293,6 +295,7 @@ fn run(cmd: &mut std::process::Command) {
 async fn a_removed_repo_is_gone_and_a_recycled_id_never_serves_the_old_objects() {
     let (fx, id, repo, old, dir) = shop().await;
     let vm = super::secrets::runner(&fx, "vm").await;
+    crate::mirrors::grant_now(&fx.app, &vm.id, repo).await;
     let refs = format!("/api/v1/mirrors/{repo}/info/refs?service=git-upload-pack");
     let pack = format!("/api/v1/mirrors/{repo}/git-upload-pack");
     let copy = dir.join("mirrors").join(format!("{repo}.git"));
@@ -336,6 +339,12 @@ async fn a_removed_repo_is_gone_and_a_recycled_id_never_serves_the_old_objects()
     .execute(&fx.app.pool)
     .await
     .unwrap();
+    // The old lease named the old remote: it opens nothing of the recycled id.
+    assert_eq!(
+        raw(&fx, Some(&vm), Method::GET, &refs, b"").await.0,
+        StatusCode::NOT_FOUND
+    );
+    crate::mirrors::grant_now(&fx.app, &vm.id, repo).await;
     for r in [
         raw(&fx, Some(&vm), Method::GET, &refs, b"").await,
         raw(&fx, Some(&vm), Method::POST, &pack, &want(&old)).await,
@@ -370,6 +379,7 @@ async fn a_removed_repo_is_gone_and_a_recycled_id_never_serves_the_old_objects()
         .execute(&fx.app.pool)
         .await
         .unwrap();
+    crate::mirrors::grant_now(&fx.app, &vm.id, repo).await;
     let r = fetch(&fx, &fx.dev, id, repo).await;
     let new = r.1["repos"][0]["mirror"]["head"]
         .as_str()
@@ -381,4 +391,63 @@ async fn a_removed_repo_is_gone_and_a_recycled_id_never_serves_the_old_objects()
     assert!(text.contains(&new) && !text.contains(&old));
     let _ = std::fs::remove_dir_all(dir);
     let _ = std::fs::remove_dir_all(dir2);
+}
+
+/// What `info/refs` and `git-upload-pack` answer `dev` for `repo`.
+async fn read_both(fx: &Fx, dev: &TestDevice, repo: i64, body: &[u8]) -> (StatusCode, StatusCode) {
+    let refs = format!("/api/v1/mirrors/{repo}/info/refs?service=git-upload-pack");
+    let pack = format!("/api/v1/mirrors/{repo}/git-upload-pack");
+    (
+        raw(fx, Some(dev), Method::GET, &refs, b"").await.0,
+        raw(fx, Some(dev), Method::POST, &pack, body).await.0,
+    )
+}
+
+#[tokio::test]
+async fn a_copy_is_served_only_to_a_device_with_a_live_lease_while_its_project_is_active() {
+    let (fx, id, repo, head, dir) = shop().await;
+    let (vm, other) = (
+        super::secrets::runner(&fx, "vm").await,
+        super::secrets::runner(&fx, "other").await,
+    );
+    assert_eq!(fetch(&fx, &fx.dev, id, repo).await.0, StatusCode::OK);
+    let body = want(&head);
+    let read = |dev| read_both(&fx, dev, repo, &body);
+    // No lease: a runner reads nothing, and cannot tell it from a repo that does not exist.
+    let none = raw(&fx, Some(&vm), Method::GET, "/api/v1/mirrors/999/info/refs?service=git-upload-pack", b"").await;
+    assert_eq!(read(&vm).await, (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND));
+    assert_eq!(none.0, StatusCode::NOT_FOUND);
+
+    // A lease is one device's and one repo's.
+    crate::mirrors::grant_now(&fx.app, &vm.id, repo).await;
+    assert_eq!(read(&vm).await, (StatusCode::OK, StatusCode::OK));
+    assert_eq!(read(&other).await, (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND));
+    let second: i64 = sqlx::query_scalar(
+        "INSERT INTO core_project_repos (project_id, name, remote_url, default_branch, is_primary) \
+         VALUES (?, 'api', ?, 'main', 0) RETURNING id",
+    )
+    .bind(id)
+    .bind(dir.join("remote").to_str().unwrap())
+    .fetch_one(&fx.app.pool)
+    .await
+    .unwrap();
+    let r = raw(&fx, Some(&vm), Method::GET, &format!("/api/v1/mirrors/{second}/info/refs?service=git-upload-pack"), b"").await;
+    assert_eq!(r.0, StatusCode::NOT_FOUND, "a lease for one repo opens no other");
+
+    // It runs out.
+    let mirrors = fx.app.mirrors.as_ref().unwrap();
+    mirrors.grant(&vm.id, repo, &crate::mirrors::key(id, &dir.join("remote").to_string_lossy()), fx.app.clock.unix() - crate::mirrors::LEASE_SECS - 1);
+    assert_eq!(read(&vm).await, (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND));
+
+    // An archived project's copy is closed, lease or not.
+    crate::mirrors::grant_now(&fx.app, &vm.id, repo).await;
+    assert_eq!(read(&vm).await, (StatusCode::OK, StatusCode::OK));
+    let r = send(
+        &fx.app,
+        req(Method::POST, &format!("/api/v1/projects/{id}/archive"), Some(&fx.dev), None),
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    assert_eq!(read(&vm).await, (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND));
+    let _ = std::fs::remove_dir_all(dir);
 }

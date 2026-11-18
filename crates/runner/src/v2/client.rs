@@ -96,8 +96,24 @@ pub fn canonical(
     nonce: &str,
     body: &[u8],
 ) -> Vec<u8> {
+    canonical_query(core_fp, device, session, method, path, "", timestamp, nonce, body)
+}
+
+/// [`canonical`] for a request with a query (the raw text after `?`).
+#[allow(clippy::too_many_arguments)]
+pub fn canonical_query(
+    core_fp: &str,
+    device: &str,
+    session: Option<&str>,
+    method: &str,
+    path: &str,
+    query: &str,
+    timestamp: i64,
+    nonce: &str,
+    body: &[u8],
+) -> Vec<u8> {
     format!(
-        "AINKRAD-REQ-V1\n{core_fp}\nES256\n{device}\n{}\n{method}\n{path}\n\n{timestamp}\n{nonce}\n{}",
+        "AINKRAD-REQ-V1\n{core_fp}\nES256\n{device}\n{}\n{method}\n{path}\n{query}\n{timestamp}\n{nonce}\n{}",
         session.unwrap_or("-"),
         b64(&sha256(body))
     )
@@ -121,16 +137,29 @@ impl Signer<'_> {
         path: &str,
         body: &[u8],
     ) -> Vec<(&'static str, String)> {
+        self.headers_query(session, method, path, "", body)
+    }
+
+    /// [`headers`](Self::headers) for a request with a query (the raw text after `?`).
+    pub fn headers_query(
+        &self,
+        session: Option<&str>,
+        method: &str,
+        path: &str,
+        query: &str,
+        body: &[u8],
+    ) -> Vec<(&'static str, String)> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs() as i64);
         let nonce = b64(&random::<16>());
-        let message = canonical(
+        let message = canonical_query(
             self.core_fp,
             self.device,
             session,
             method,
             path,
+            query,
             now,
             &nonce,
             body,
@@ -229,6 +258,37 @@ impl Client {
             .as_str()
             .map(str::to_owned)
             .ok_or_else(|| LinkError::Transport("no session id".to_owned()))
+    }
+
+    /// A signed request with a raw body, the answer left unread (a git pack streams through it).
+    /// `path` and `query` are exactly what the Core signs for; `extra` are unsigned headers.
+    pub async fn raw(
+        &self,
+        signer: Signer<'_>,
+        session: &str,
+        method: &str,
+        (path, query): (&str, &str),
+        extra: &[(String, String)],
+        body: Vec<u8>,
+    ) -> Result<reqwest::Response, LinkError> {
+        let m = reqwest::Method::from_bytes(method.as_bytes()).expect("a method");
+        let url = match query.is_empty() {
+            true => format!("{}{path}", self.base),
+            false => format!("{}{path}?{query}", self.base),
+        };
+        let mut req = self.http.request(m, url);
+        for (n, v) in signer.headers_query(Some(session), method, path, query, &body) {
+            req = req.header(n, v);
+        }
+        for (n, v) in extra {
+            req = req.header(n.as_str(), v.as_str());
+        }
+        // A pack outlives the 30 s the JSON calls get: the relay's own limits bound it.
+        req.timeout(std::time::Duration::from_secs(30 * 60))
+            .body(body)
+            .send()
+            .await
+            .map_err(transport)
     }
 
     /// One call: a JSON body, signed when `signed` names the signer and its session. A status
