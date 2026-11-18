@@ -3,7 +3,10 @@
 
 use design_doc::{Error, Live, parse_ops};
 use design_model::ids::{is_doc_id, is_sha256};
-use design_model::{Doc, Theme, resolve};
+use std::collections::HashSet;
+
+use design_model::tree::forest;
+use design_model::{Doc, Forest, Resolved, Theme, resolve};
 use design_render::{Assets, Camera, Fonts, Renderer};
 use serde_json::{Value, json};
 
@@ -18,6 +21,8 @@ pub(crate) const MAX_ASSET_BYTES: usize = 25 << 20;
 /// Raw asset and font bytes the host keeps in total (decoded images have their own cap in `Assets`).
 pub(crate) const MAX_HELD_BYTES: usize = 512 << 20;
 pub(crate) const MAX_FONTS: usize = 256;
+/// Ancestor walks stop here (the model caps depth at 64; the effective tree has no cycles).
+pub(crate) const MAX_DEPTH_WALK: usize = 256;
 
 pub fn code(e: Error) -> i32 {
     match e {
@@ -28,7 +33,7 @@ pub fn code(e: Error) -> i32 {
     }
 }
 
-fn finite(v: &[f32], lim: f32) -> Result<(), i32> {
+pub(crate) fn finite(v: &[f32], lim: f32) -> Result<(), i32> {
     if v.iter().all(|x| x.is_finite() && x.abs() <= lim) {
         Ok(())
     } else {
@@ -38,16 +43,26 @@ fn finite(v: &[f32], lim: f32) -> Result<(), i32> {
 
 pub struct Host {
     doc_id: String,
-    live: Live,
+    pub(crate) live: Live,
     system: Live,
-    /// The document as last read out of `live` (None = changed since).
-    model: Option<Doc>,
-    camera: Camera,
+    /// The document as last read out of `live` (None = changed since), and its tree.
+    pub(crate) model: Option<Doc>,
+    pub(crate) tree: Option<Forest>,
+    /// The resolved document the renderer last loaded (gesture previews patch its boards).
+    pub(crate) resolved: Option<Resolved>,
+    pub(crate) camera: Camera,
     theme: Theme,
-    page: usize,
-    selection: Vec<String>,
-    renderer: Option<Renderer>,
+    pub(crate) page: usize,
+    pub(crate) selection: Vec<String>,
+    pub(crate) renderer: Option<Renderer>,
     loaded: bool,
+    pub(crate) gesture: Option<crate::interact::Gesture>,
+    pub(crate) hover: Option<String>,
+    /// Rubber-band settle target (pan).
+    pub(crate) settle: Option<(f32, f32)>,
+    /// Boards the current preview changed (to put back).
+    pub(crate) previewed: HashSet<String>,
+    pub(crate) rng: u64,
     held: usize,
     fonts: usize,
     #[cfg(all(feature = "metal", target_os = "macos"))]
@@ -64,12 +79,19 @@ impl Host {
             live: Live::new(),
             system: Live::new(),
             model: None,
+            tree: None,
+            resolved: None,
             camera: Camera::default(),
             theme: Theme::Day,
             page: 0,
             selection: vec![],
             renderer: None,
             loaded: false,
+            gesture: None,
+            hover: None,
+            settle: None,
+            previewed: HashSet::new(),
+            rng: crate::edits::seed(),
             held: 0,
             fonts: 0,
             #[cfg(all(feature = "metal", target_os = "macos"))]
@@ -77,8 +99,13 @@ impl Host {
         })
     }
 
-    fn changed(&mut self) {
+    pub(crate) fn is_loaded(&self) -> bool {
+        self.loaded
+    }
+
+    pub(crate) fn changed(&mut self) {
         self.model = None;
+        self.tree = None;
         self.loaded = false;
     }
 
@@ -86,6 +113,14 @@ impl Host {
         if self.model.is_none() {
             let d = self.live.read();
             self.selection.retain(|id| d.nodes.contains_key(id));
+            if self
+                .hover
+                .as_ref()
+                .is_some_and(|h| !d.nodes.contains_key(h))
+            {
+                self.hover = None;
+            }
+            self.tree = Some(forest(&d));
             self.model = Some(d);
         }
         self.model.get_or_insert_with(Doc::default)
@@ -132,6 +167,7 @@ impl Host {
 
     /// `true` when something was undone / redone.
     pub fn undo(&mut self, redo: bool) -> bool {
+        self.cancel();
         let did = if redo {
             self.live.redo()
         } else {
@@ -142,23 +178,11 @@ impl Host {
     }
 
     fn delete_selection(&mut self) -> Result<(), i32> {
-        let sel = self.selection.clone();
-        let d = self.model();
+        self.refresh();
         // a node under another selected node goes with it; deleting it again would refuse the batch
-        let under = |id: &str| {
-            let mut cur = d.nodes.get(id).and_then(|n| n.parent.as_deref());
-            for _ in 0..d.nodes.len() {
-                match cur {
-                    Some(p) if sel.iter().any(|s| s == p) => return true,
-                    Some(p) => cur = d.nodes.get(p).and_then(|n| n.parent.as_deref()),
-                    None => break,
-                }
-            }
-            false
-        };
-        let ops: Vec<Value> = sel
+        let ops: Vec<Value> = self
+            .top_selected()
             .iter()
-            .filter(|id| !under(id))
             .map(|id| json!({"op": "delete", "id": id}))
             .collect();
         if ops.is_empty() {
@@ -214,7 +238,21 @@ impl Host {
         self.loaded = false;
     }
 
+    /// Frame the selection (everything when nothing is selected).
+    pub fn fit_selection(&mut self) {
+        self.refresh();
+        let ids = self.top_selected();
+        match crate::interact::union(ids.iter().filter_map(|id| self.rect(id))) {
+            Some(r) => {
+                self.settle = None;
+                self.camera.fit(r, 0.1);
+            }
+            None => self.fit(),
+        }
+    }
+
     pub fn fit(&mut self) {
+        self.settle = None;
         self.refresh();
         if let Some(r) = self.renderer.as_mut() {
             r.set_camera(self.camera);
@@ -223,19 +261,12 @@ impl Host {
         }
     }
 
-    pub fn scroll(&mut self, dx: f32, dy: f32) -> Result<(), i32> {
-        finite(&[dx, dy], MAX_COORD)?;
-        let p = (self.camera.pan.0 + dx, self.camera.pan.1 + dy);
-        finite(&[p.0, p.1], MAX_COORD)?;
-        self.camera.pan = p;
-        Ok(())
-    }
-
     pub fn magnify(&mut self, factor: f32, x: f32, y: f32) -> Result<(), i32> {
         finite(&[x, y], MAX_COORD)?;
         if !(factor.is_finite() && factor > 0.0 && factor <= 100.0) {
             return Err(DE_ERR_ARG);
         }
+        self.settle = None;
         let before = self.camera;
         self.camera.zoom_at(factor, x, y);
         if finite(&[self.camera.pan.0, self.camera.pan.1], MAX_COORD).is_err() {
@@ -245,38 +276,28 @@ impl Host {
         Ok(())
     }
 
-    /// Pointer down selects the hit node (shift toggles it in the selection); empty canvas clears. Drags are V2-03.
-    pub fn pointer(&mut self, phase: u32, x: f32, y: f32, mods: u32) -> Result<(), i32> {
-        finite(&[x, y], MAX_COORD)?;
-        if phase > DE_POINTER_UP {
-            return Err(DE_ERR_ARG);
+    pub fn key(&mut self, key: u32, mods: u32) -> Result<(), i32> {
+        let step = if mods & DE_MOD_SHIFT != 0 { 10.0 } else { 1.0 };
+        // a press that has not moved yet is not a gesture to protect; a drag is (keys wait for its end)
+        if matches!(self.gesture, Some(crate::interact::Gesture::Press { .. })) {
+            self.gesture = None;
         }
-        if phase != DE_POINTER_DOWN {
+        if key != DE_KEY_ESCAPE && self.gesture.is_some() {
             return Ok(());
         }
-        let hit = self.hit(x, y).map(|h| h.0);
-        match (hit, mods & DE_MOD_SHIFT != 0) {
-            (None, false) => self.selection.clear(),
-            (None, true) => {}
-            (Some(id), false) => self.selection = vec![id],
-            (Some(id), true) => match self.selection.iter().position(|s| *s == id) {
-                Some(i) => {
-                    self.selection.remove(i);
-                }
-                None => self.selection.push(id),
-            },
-        }
-        Ok(())
-    }
-
-    pub fn key(&mut self, key: u32, mods: u32) -> Result<(), i32> {
-        let _ = mods;
         match key {
             DE_KEY_DELETE => self.delete_selection(),
             DE_KEY_ESCAPE => {
-                self.selection.clear();
+                if !self.cancel() {
+                    self.selection.clear();
+                }
                 Ok(())
             }
+            DE_KEY_DUPLICATE => self.duplicate(),
+            DE_KEY_LEFT => self.nudge(-step, 0.0),
+            DE_KEY_RIGHT => self.nudge(step, 0.0),
+            DE_KEY_UP => self.nudge(0.0, -step),
+            DE_KEY_DOWN => self.nudge(0.0, step),
             _ => Ok(()),
         }
     }
@@ -389,16 +410,22 @@ impl Host {
             let resolved =
                 resolve(&doc_id, &doc, sys.as_deref().map(|s| (s, &sys_doc)), theme).ok();
             let r = self.renderer();
-            match resolved {
+            match &resolved {
                 Some(res) => {
-                    r.load(&res, page);
+                    r.load(res, page);
                 }
                 None => r.invalidate_all(),
             }
+            self.resolved = resolved;
             self.loaded = true;
+            // the renderer holds the document as it is now; a gesture in progress is shown over it again
+            self.previewed.clear();
+            self.sync_preview();
         }
         let cam = self.camera;
         self.renderer().set_camera(cam);
+        let o = self.overlay();
+        self.renderer().set_overlay(o);
     }
 
     /// Up-to-date renderer and the attached Metal context, or `None` when nothing is attached.
@@ -415,6 +442,34 @@ impl Host {
     pub fn needs_frame(&mut self) -> bool {
         self.refresh();
         self.renderer().needs_frame()
+    }
+
+    pub(crate) fn import(&mut self, doc: &Doc, system: &Doc) {
+        self.live.import(doc);
+        self.system.import(system);
+        self.changed();
+    }
+
+    /// One full frame at the view size (benches): Metal offscreen or CPU raster, in µs.
+    pub(crate) fn bench_frame(&mut self, metal: bool) -> Option<i32> {
+        self.refresh();
+        let t = std::time::Instant::now();
+        #[cfg(all(feature = "metal", target_os = "macos"))]
+        if metal {
+            let m = match self.metal.as_mut() {
+                Some(m) => m,
+                None => self
+                    .metal
+                    .insert(design_render::metal::Metal::system_default()?),
+            };
+            m.render_offscreen(self.renderer.as_mut()?)?;
+            return Some(t.elapsed().as_micros() as i32);
+        }
+        if metal {
+            return None;
+        }
+        design_render::cpu::render(self.renderer())?;
+        Some(t.elapsed().as_micros() as i32)
     }
 
     /// Draw one CPU frame at most 256 x 256 px (tests and the fuzz target exercise the draw path with it).

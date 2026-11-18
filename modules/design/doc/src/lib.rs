@@ -41,7 +41,7 @@ mod presence;
 mod reset_tests;
 mod trial;
 
-pub use ops::{MAX_OPS, MAX_OPS_BYTES, Op, parse_ops};
+pub use ops::{MAX_GESTURE_OPS, MAX_OPS, MAX_OPS_BYTES, Op, parse_ops};
 pub use presence::{ClockFn, MAX_PEERS, MAX_PRESENCE_BYTES, PEER_TTL_MS, Presence};
 
 /// A remote update or a full state: the document cap plus framing room.
@@ -320,22 +320,33 @@ impl Live {
         }
     }
 
-    /// Local updates not yet sent, merged into one (empty when there are none). `take` = drain them.
+    /// Local updates not yet sent, merged into one update of at most `MAX_UPDATE_BYTES` (empty when there are none).
+    /// More pending than that: the oldest that fit, the rest wait for the next call. `take` = drain what is returned.
     pub fn outbox(&self, take: bool) -> Vec<u8> {
+        self.outbox_under(take, MAX_UPDATE_BYTES)
+    }
+
+    pub(crate) fn outbox_under(&self, take: bool, cap: usize) -> Vec<u8> {
         let mut o = self.outbox.lock().unwrap_or_else(|e| e.into_inner());
         if o.is_empty() {
             return vec![];
         }
-        match yrs::merge_updates_v1(o.iter().map(Vec::as_slice)) {
-            Ok(merged) => {
+        // the oldest updates whose sizes add up to `cap` (always one: local batches are refused over the cap)
+        let (mut n, mut sum) = (0, 0);
+        while n < o.len() && (n == 0 || sum + o[n].len() <= cap) {
+            sum += o[n].len();
+            n += 1;
+        }
+        match yrs::merge_updates_v1(o[..n].iter().map(Vec::as_slice)) {
+            Ok(merged) if n == 1 || merged.len() <= cap => {
                 if take {
-                    o.clear();
+                    o.drain(..n);
                 }
                 merged
             }
             // never send bytes that are not one update: fall back to the oldest one, the rest stay queued
-            Err(_) if take => o.remove(0),
-            Err(_) => o[0].clone(),
+            _ if take => o.remove(0),
+            _ => o[0].clone(),
         }
     }
 

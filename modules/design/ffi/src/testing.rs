@@ -8,6 +8,44 @@ pub fn draw_cpu(h: u64, w: i32, height: i32) -> i32 {
     with(h, |e| Ok(e.draw_cpu(w, height) as i32))
 }
 
+/// Seed an engine with a whole model document and its design system (benches and tests: a generated scene).
+#[doc(hidden)]
+pub fn import(h: u64, doc: &design_model::Doc, system: &design_model::Doc) -> i32 {
+    with(h, |e| {
+        e.import(doc, system);
+        Ok(0)
+    })
+}
+
+/// Draw one frame at the view size: on Metal when `metal` is true (the default device, offscreen, waiting for the
+/// GPU), else CPU raster. Returns the frame time in µs, or an error code.
+#[doc(hidden)]
+pub fn frame_us(h: u64, metal: bool) -> i32 {
+    with(h, |e| e.bench_frame(metal).ok_or(crate::ffi::DE_ERR_GPU))
+}
+
+/// Set the camera directly (benches: a known zoom and pan).
+#[doc(hidden)]
+pub fn set_camera(h: u64, zoom: f32, pan: (f32, f32)) -> i32 {
+    with(h, |e| {
+        e.camera.zoom = zoom;
+        e.camera.pan = pan;
+        Ok(0)
+    })
+}
+
+/// World rect `[l, t, r, b]` of a node as drawn now (preview included).
+#[doc(hidden)]
+pub fn rect(h: u64, id: &str) -> Option<[f32; 4]> {
+    let mut out = None;
+    with(h, |e| {
+        e.refresh();
+        out = e.rect(id).map(|r| [r.left, r.top, r.right, r.bottom]);
+        Ok(0)
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ffi::*;
