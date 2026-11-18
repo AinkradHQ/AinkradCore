@@ -515,7 +515,8 @@ async fn an_invite_nobody_claims_is_withdrawn_and_its_file_removed() {
     .await;
     // Told to the app, linked to nothing, and the person may start again with a new invite.
     for _ in 0..100 {
-        if scalar(&fx, "SELECT details FROM audit_events WHERE action = 'leyline.host.changed' AND details LIKE ?", "%expired%").await != "" {
+        let q = "SELECT details FROM audit_events WHERE action = 'leyline.host.changed' AND details LIKE ?";
+        if !scalar(&fx, q, "%expired%").await.is_empty() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;

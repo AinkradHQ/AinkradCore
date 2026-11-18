@@ -151,7 +151,8 @@ async fn fd3_hands_the_child_a_pipe_and_nothing_else_leaks() {
             .unwrap_or_else(|| panic!("{text:?}"));
         assert!(
             fds.split_whitespace()
-                .all(|n| ["0", "1", "2", "3", "4", "10"].contains(&n)),
+                // 4 is the host-key report pipe; 5 is the shell's own substitution pipe, now that 4 is taken.
+                .all(|n| ["0", "1", "2", "3", "4", "5", "10"].contains(&n)),
             "leaked descriptors: {fds}"
         );
     }

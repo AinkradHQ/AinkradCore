@@ -95,7 +95,7 @@ async fn the_gate_checks_the_commands_scope_per_host() {
 #[tokio::test]
 async fn a_confirm_command_from_a_session_asks_even_on_an_allowed_host() {
     let fx = fx().await;
-    let h = add(&fx, "web", "allowed").await;
+    add(&fx, "web", "allowed").await;
     let c = mk(&fx, json!({"name": "c", "steps": ["one"], "confirm": true})).await;
     let (ai, dev) = session(&fx, "as_cf").await;
     let action = Action::Preset(c["id"].as_str().unwrap().into());

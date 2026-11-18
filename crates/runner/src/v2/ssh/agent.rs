@@ -233,8 +233,7 @@ fn userauth_ok(data: &[u8], key: &Held, bind: &Bind) -> Option<()> {
     };
     let (has_sig, algo, blob) = (d.u8()?, d.string()?, d.string()?);
     let host_ok = !hostbound || d.string()? == bind.host.as_slice();
-    let algo_ok =
-        ALGOS.contains(&algo) && algo == key.key.algorithm().as_str().as_bytes();
+    let algo_ok = ALGOS.contains(&algo) && algo == key.key.algorithm().as_str().as_bytes();
     (sid == bind.sid.as_slice()
         && kind == USERAUTH_REQUEST
         && user == key.user.as_bytes()

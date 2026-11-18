@@ -296,13 +296,11 @@ async fn open_terminal(
             pid: None,
             exit: None,
         };
-        let mut seq = 0;
         let frames = std::iter::once(Body::Control(Control::Opened(info))).chain(then(&terminal));
-        for b in frames {
+        for (seq, b) in frames.enumerate() {
             fx.app
                 .hub
-                .fake_reply(&fx.runner.id, Frame::new(f.stream_id, seq, b));
-            seq += 1;
+                .fake_reply(&fx.runner.id, Frame::new(f.stream_id, seq as u64, b));
         }
         Some(open)
     };

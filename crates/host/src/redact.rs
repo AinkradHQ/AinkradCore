@@ -10,7 +10,7 @@
 pub use ainkrad_proto::redact::one;
 // Only the tests reach the other passes through this module.
 #[cfg(test)]
-use ainkrad_proto::redact::{mask_runs, names_text, url_creds};
+use ainkrad_proto::redact::{names_text, url_creds};
 
 const PEM_BEGIN: &str = "-----BEGIN ";
 const PEM_END: &str = "-----END ";

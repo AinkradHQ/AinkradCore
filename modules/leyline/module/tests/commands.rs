@@ -153,6 +153,7 @@ async fn person(fx: &Fx) -> Principal {
     Principal::of(&caller(fx, &fx.admin.id, "a-real-session").await)
 }
 
+#[allow(dead_code)] // the shared helper's twin: kept so the files read alike
 async fn states(fx: &Fx, sql: &'static str, bind: &str) -> Vec<String> {
     sqlx::query_scalar(sqlx::AssertSqlSafe(sql)) // test-only literals
         .bind(bind.to_owned())

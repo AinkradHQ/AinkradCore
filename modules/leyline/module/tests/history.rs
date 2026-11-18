@@ -260,13 +260,11 @@ async fn open_terminal(
             pid: None,
             exit: None,
         };
-        let mut seq = 0;
         let frames = std::iter::once(Body::Control(Control::Opened(info))).chain(then(&terminal));
-        for b in frames {
+        for (seq, b) in frames.enumerate() {
             fx.app
                 .hub
-                .fake_reply(&fx.runner.id, Frame::new(f.stream_id, seq, b));
-            seq += 1;
+                .fake_reply(&fx.runner.id, Frame::new(f.stream_id, seq as u64, b));
         }
         Some(open)
     };
@@ -293,6 +291,7 @@ async fn raw(fx: &Fx, dev: &TestDevice, path: &str) -> (StatusCode, String) {
     (status, String::from_utf8_lossy(&text).into_owned())
 }
 
+#[allow(dead_code)] // kept for the next history test that feeds output
 fn printed(text: &str) -> Body {
     Body::Output(Output {
         data: B64.encode(text),
@@ -608,7 +607,7 @@ async fn a_client_cannot_move_the_recording_offset_with_after() {
     assert_eq!(tap.known(), 0);
     tap.output(0, &B64.encode("12345"));
     assert_eq!(tap.known(), 5);
-    assert_eq!(u64::MAX.min(tap.known()), 5);
+    assert_eq!(tap.known(), 5);
 }
 
 #[tokio::test]
