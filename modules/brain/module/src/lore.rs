@@ -1,5 +1,5 @@
 //! The Lore collector (R3-01): notes feed the Brain. The only contract with Lore is its view
-//! `lore_feed_v1` (id, project, kind, title, text, rev, updated_at, trashed_at); Lore absent means
+//! `lore_feed_v1` (id, project, kind, title, text, rev, updated_at, trashed_at, updated_by); Lore absent means
 //! the source reports `lore_not_installed` and skips, and Brain off leaves Lore untouched.
 //!
 //! - A note is taken when it has settled (no save for 10 minutes), has text, and its rev passed the
@@ -12,6 +12,9 @@
 //!   project, so the two-employer rule is untouched.
 //! - A trashed or deleted note's source leaves its room, as does a source whose note moved to
 //!   another room (it is then added where it now belongs).
+//! - A note whose last editor is not a person (`updated_by` is `session:…` after `loreAiEdit`,
+//!   `loreAiAppend` or `loreAiCreate`) is an `agent`-authored source, so it never grounds an AI
+//!   proposal (`ai_propose.rs`, B3-04 review).
 //! - Items pass the same intake (rules, dedupe, clean-up) as every other collector.
 //!
 //! ponytail: a note restored from the trash without an edit is not sent again until its next edit
@@ -159,7 +162,7 @@ async fn unstage(app: &App, b: &Brain, items: &[String]) -> Result<(), ApiError>
     Ok(())
 }
 
-fn note_item(id: &str, title: &str, text: &str, updated: &str) -> Item {
+fn note_item(id: &str, title: &str, text: &str, updated: &str, by: &str) -> Item {
     let mut end = text.len().min(MAX_TEXT);
     while !text.is_char_boundary(end) {
         end -= 1;
@@ -176,7 +179,11 @@ fn note_item(id: &str, title: &str, text: &str, updated: &str) -> Item {
         },
         project_hint: None,
         author: Author {
-            kind: AuthorKind::Person,
+            kind: if by.starts_with("person:") {
+                AuthorKind::Person
+            } else {
+                AuthorKind::Agent
+            },
             name: "lore".to_owned(),
         },
         title: title.chars().take(200).collect(),
@@ -288,13 +295,13 @@ pub(crate) async fn sync_lore(
         {
             continue;
         }
-        let (title, text): (String, String) =
-            sqlx::query_as("SELECT title, text FROM lore_feed_v1 WHERE id = ?")
+        let (title, text, by): (String, String, String) =
+            sqlx::query_as("SELECT title, text, updated_by FROM lore_feed_v1 WHERE id = ?")
                 .bind(id)
                 .fetch_one(&app.pool)
                 .await?;
         taken["notes"][id.as_str()] = json!(rev);
-        let i = note_item(id, &title, &text, updated);
+        let i = note_item(id, &title, &text, updated, &by);
         place.insert(i.item_id.clone(), room);
         items.push(i);
     }

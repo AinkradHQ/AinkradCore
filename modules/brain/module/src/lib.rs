@@ -24,6 +24,7 @@ use utoipa::{OpenApi, ToSchema};
 
 mod access;
 mod ai;
+mod ai_propose;
 mod ai_semantic;
 mod context;
 mod aliases;
@@ -562,7 +563,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         ai::evidence,
         ai::decisions,
         ai::project_state,
-        ai::propose,
+        ai_propose::propose,
         checkpoint::request
     ),
     components(schemas(
@@ -649,8 +650,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         ai::AiRecords,
         ai::AiPast,
         ai::AiEvidence,
-        ai::Propose,
-        ai::Proposed,
+        ai_propose::Propose,
+        ai_propose::Proposed,
         checkpoint::CheckpointAsked
     ))
 )]
@@ -741,7 +742,7 @@ impl Module for Brain {
             )
             .route("/ai/decisions", get(ai::decisions))
             .route("/ai/project-state", get(ai::project_state))
-            .route("/ai/rooms/{room}/propose", post(ai::propose))
+            .route("/ai/rooms/{room}/propose", post(ai_propose::propose))
             .route("/ai/checkpoint", post(checkpoint::request))
             .route("/sources", get(sync::sources))
             .route("/sources/{id}", put(sync::put_source))
@@ -800,6 +801,7 @@ impl Module for Brain {
             "brain.me_card.served",
             "brain.ai.proposed",
             "brain.ai.checkpoint_requested",
+            "brain.ai.outcome",
             "brain.ai.refused",
             "brain.alias.set",
             "brain.alias.removed",

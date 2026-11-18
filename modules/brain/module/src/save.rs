@@ -48,7 +48,9 @@ pub(crate) struct Saved {
 /// record it `replaces` supersedes it when `grounded[i]` is strong enough (`may_supersede`), else
 /// only contests it (B4-02). One change set: "Saved N · reinforced M · dropped K", plus
 /// "· replaced R" when any was. `loaded` maps a record id to the sessions the Brain gave it to
-/// (`loaded::of_room`): their citations of it never raise its support.
+/// (`loaded::of_room`): their citations of it never raise its support. `ai` marks a proposal from an AI
+/// session (`ai_propose.rs`): its rows get `origin = 'ai'` and its change set is of kind `ai`; it passes no
+/// grounding, so it can never supersede.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn store_candidates(
     pool: &SqlitePool,
@@ -61,12 +63,13 @@ pub(crate) async fn store_candidates(
     prep: &Prepared,
     grounded: &[Grounding],
     loaded: &HashMap<String, HashSet<String>>,
+    ai: bool,
 ) -> Result<Saved, sqlx::Error> {
     let none = HashSet::new();
     let redactor = Redactor::new();
     let (mut n, mut accepted, mut reinforced, mut replaced, mut contested) = (0, 0, 0, 0, 0);
     let mut tx = pool.begin().await?;
-    let mut cs = ChangeSet::new("distil", now);
+    let mut cs = ChangeSet::new(if ai { "ai" } else { "distil" }, now);
     let mut memory = Memory::load(&mut tx, prep).await?;
     for (i, c) in out.iter().enumerate() {
         let body = redactor.text(c.body.trim());
@@ -91,8 +94,8 @@ pub(crate) async fn store_candidates(
         cs.touch(&mut tx, &id).await?;
         let auto_ok = auto_ok(c, policy);
         sqlx::query(
-            "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, reviewed_at, decided_by, distil, provider, account, tool, body_norm, last_seen_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, reviewed_at, decided_by, distil, provider, account, tool, body_norm, last_seen_at, origin) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&c.kind)
@@ -109,6 +112,7 @@ pub(crate) async fn store_candidates(
         .bind(&by.tool)
         .bind(&norm)
         .bind(now)
+        .bind(if ai { "ai" } else { "distil" })
         .execute(&mut *tx)
         .await?;
         for (pos, s) in c.sources.iter().enumerate() {

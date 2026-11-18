@@ -94,6 +94,25 @@ async fn context_is_memory_only_and_never_carries_a_contested_record() {
     }
 }
 
+/// B3-04: a record an AI session saved says `origin=ai` on its line of the bundle; others do not.
+#[tokio::test]
+async fn an_ai_record_says_origin_ai_in_the_bundle() {
+    let (fx, alpha, s) = setup().await;
+    put_record(&fx, &alpha, "mine", "fact", "accepted", "rotate the signing keys ang=10 ").await;
+    put_record(&fx, &alpha, "bot", "fact", "accepted", "rotate the backup keys ang=10 ").await;
+    let p = canon_pool(&fx, &alpha).await;
+    sqlx::query("UPDATE records SET origin = 'ai' WHERE id = 'bot'")
+        .execute(&p)
+        .await
+        .unwrap();
+    p.close().await;
+    open_room(&fx, &alpha).await;
+    let v = ctx(&fx, &s, json!({"mode": "start"})).await;
+    let text = v["text"].as_str().unwrap();
+    assert!(text.contains("[bot, origin=ai]"), "{text}");
+    assert!(text.contains("[mine]") && !text.contains("[mine, origin=ai]"), "{text}");
+}
+
 /// A second session in the same room (a prompt never repeats within one session, not across).
 async fn s_fresh(fx: &Fx) -> String {
     session(fx, ALPHA, &["anthropic"]).await

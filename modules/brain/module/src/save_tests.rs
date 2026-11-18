@@ -60,6 +60,7 @@ async fn save(pool: &SqlitePool, out: &[Candidate], dropped: &[Dropped]) -> Save
         &Prepared::default(),
         &[],
         &HashMap::new(),
+        false,
     )
     .await
     .unwrap()
@@ -262,4 +263,55 @@ async fn a_contested_record_is_not_related_and_never_reinforced() {
         .await
         .unwrap();
     assert_eq!(support, 1);
+}
+
+/// B3-04 merge: an AI proposal passes no grounding (`&[]`), so even a `task` that names a record it
+/// `replaces` can never supersede it. The same save with a user-turn grounding does, which shows
+/// the empty grounding is what holds.
+#[tokio::test]
+async fn an_ai_save_never_supersedes() {
+    let task = "Rotate the deploy keys in scripts/deploy.sh before Friday.";
+    let next = "Rotate the deploy keys in scripts/deploy.sh before Monday.";
+    for (ai, grounded, superseded) in [
+        (true, vec![], false),
+        (
+            false,
+            vec![Grounding {
+                user_turn: true,
+                structured_item: false,
+            }],
+            true,
+        ),
+    ] {
+        let (_d, pool) = room().await;
+        save(&pool, &[cand("task", task)], &[]).await;
+        let old: String = sqlx::query_scalar("SELECT id FROM records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let mut c = cand("task", next);
+        c.replaces = Some(old.clone());
+        let s = store_candidates(
+            &pool,
+            "dst-2",
+            &[c],
+            &[],
+            &policy(),
+            &DistilledBy::default(),
+            NOW,
+            &Prepared::default(),
+            &grounded,
+            &HashMap::new(),
+            ai,
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.replaced == 1, superseded, "ai = {ai}");
+        let in_force: i64 = sqlx::query_scalar("SELECT count(*) FROM memory WHERE id = ?")
+            .bind(&old)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(in_force == 1, !superseded, "ai = {ai}");
+    }
 }

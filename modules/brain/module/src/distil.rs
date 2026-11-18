@@ -665,6 +665,7 @@ async fn save(
         &prep,
         &grounded,
         &crate::loaded::of_room(app, &d.room).await?,
+        false,
     )
     .await?;
     // Facts that went straight into memory get their vectors now, off the request path.

@@ -151,7 +151,7 @@ pub(crate) async fn rank(
         let c = &cands[i.parse::<usize>().ok()?];
         let (v, a) = &open[c.room];
         let r = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id, type, body, tags, source_ids, created_at, contests, {CONTESTS_KIND} FROM memory WHERE id = ?"
+            "SELECT id, type, body, tags, source_ids, created_at, origin, contests, {CONTESTS_KIND} FROM memory WHERE id = ?"
         )))
         .bind(&c.id)
         .fetch_optional(a.pool())
