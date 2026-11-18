@@ -194,6 +194,32 @@
       ],
       "type": "object"
     },
+    "AgentKey": {
+      "description": "One key of the lease: the secret lease to redeem and the host keys of the machine it logs in to.",
+      "properties": {
+        "lease": {
+          "description": "A secret lease (`l_...`) for the private key, redeemed by the runner, once.",
+          "type": "string"
+        },
+        "pinned_keys": {
+          "description": "`SHA256:<base64>` fingerprints of the host keys this key may sign for: the pins of the one\nmachine it logs in to. Never empty (a key with nothing pinned could sign for anyone).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "user": {
+          "description": "The login user on that machine: a sign request for any other user is refused.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "lease",
+        "pinned_keys",
+        "user"
+      ],
+      "type": "object"
+    },
     "AgentLimit": {
       "description": "Core to runner: set the ceiling of a live gateway session.",
       "properties": {
@@ -893,6 +919,32 @@
           "properties": {
             "op": {
               "const": "ssh.sftp.remove",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SshAgentLoad",
+          "properties": {
+            "op": {
+              "const": "ssh.agent.load",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SshAgentDrop",
+          "properties": {
+            "op": {
+              "const": "ssh.agent.drop",
               "type": "string"
             }
           },
@@ -3126,6 +3178,32 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/SshAgentLoaded",
+          "properties": {
+            "op": {
+              "const": "ssh.agent.load",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SshAgentDropped",
+          "properties": {
+            "op": {
+              "const": "ssh.agent.drop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer runner. Never sent.",
           "properties": {
             "op": {
@@ -3941,6 +4019,15 @@
           },
           "type": "array"
         },
+        "mode": {
+          "description": "Permission bits (`0o7777`) set on the file before any byte is written, so a file meant for\nits owner alone (Leyline's runner invite, `0o600`) is never readable by anyone else.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "overwrite": {
           "default": false,
           "description": "Replace an existing file (`sftp_exists` when absent and the path is taken).",
@@ -4017,6 +4104,91 @@
       "required": [
         "seq",
         "data"
+      ],
+      "type": "object"
+    },
+    "SshAgentDrop": {
+      "description": "Ends the agent `id`: the listener and every connection close and the keys are wiped, before the\nanswer. Dropping an id that is not live (ended, never loaded) is not an error.",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "SshAgentDropped": {
+      "description": "What the agent did before it ended.",
+      "properties": {
+        "refused": {
+          "description": "Sign requests refused (unbound session, unpinned host, expired, wrong data).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "signatures": {
+          "description": "Signatures made.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "was_live": {
+          "description": "The agent was live when the drop arrived (not already over).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "was_live",
+        "signatures",
+        "refused"
+      ],
+      "type": "object"
+    },
+    "SshAgentLoad": {
+      "description": "Starts an agent on the runner under `id` (the Core's name for it): the keys are redeemed, a socket\nopens in a 0700 directory of the runner's own temporary directory, and the agent answers\n`SshAgentLoaded`. It ends at `ttl_secs`, on `ssh.agent.drop`, or when the runner has been cut off\nfrom the Core for 5 minutes.",
+      "properties": {
+        "id": {
+          "description": "`[A-Za-z0-9_]`, 1 to 64 characters.",
+          "type": "string"
+        },
+        "keys": {
+          "description": "1 to `SSH_AGENT_MAX_KEYS`.",
+          "items": {
+            "$ref": "#/$defs/AgentKey"
+          },
+          "type": "array"
+        },
+        "ttl_secs": {
+          "description": "1 to `SSH_AGENT_MAX_TTL_SECS`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "ttl_secs",
+        "keys"
+      ],
+      "type": "object"
+    },
+    "SshAgentLoaded": {
+      "description": "Where the agent listens, for the person's `ssh`.",
+      "properties": {
+        "config": {
+          "description": "An `ssh_config` beside the socket: `IdentityAgent`, a private `UserKnownHostsFile`, public-key\nauthentication only, no agent forwarding. `ssh -F <config> ...` is the whole ready command.",
+          "type": "string"
+        },
+        "socket": {
+          "description": "The agent socket (`SSH_AUTH_SOCK`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "socket",
+        "config"
       ],
       "type": "object"
     },
@@ -4161,6 +4333,17 @@
             "integer",
             "null"
           ]
+        },
+        "host_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostKeyEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "An interactive SSH terminal that never reached a shell because a hop's host key was not\ntrusted (exit code `SSH_PTY_EXIT_HOST_KEY_UNKNOWN` or `_CHANGED`): which hop, and the key it\npresented. Reported by `ssh-pty` itself over a private descriptor, never read from the\nterminal's output, which a remote shell controls."
         },
         "signal": {
           "description": "The signal's description, when one ended it.",

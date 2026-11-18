@@ -285,7 +285,7 @@
 /// 90: Leyline interactive SSH (Y2-02; 88 is the runner SFTP ops, 89 the Leyline hosts' projects). Runner wire protocol only
 ///    (`runner.schema.json`): `PtyOpen.ssh` (`SshTerminal`: the runner starts its own `ssh-pty` as the terminal's
 ///    program, keys over an inherited pipe). No route yet.
-pub const API_MINOR: u32 = 90;
+pub const API_MINOR: u32 = 92;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
