@@ -95,6 +95,10 @@ pub enum Command {
     DesignExport(super::DesignExport),
     #[serde(rename = "design.fidelity")]
     DesignFidelity(super::DesignFidelity),
+    #[serde(rename = "ssh.agent.load")]
+    SshAgentLoad(super::SshAgentLoad),
+    #[serde(rename = "ssh.agent.drop")]
+    SshAgentDrop(super::SshAgentDrop),
     #[serde(rename = "run.start")]
     RunStart(super::RunStart),
     #[serde(rename = "run.stop")]
@@ -154,6 +158,8 @@ impl Command {
             Self::DesignShot(_) => super::OP_DESIGN_SHOT,
             Self::DesignExport(_) => super::OP_DESIGN_EXPORT,
             Self::DesignFidelity(_) => super::OP_DESIGN_FIDELITY,
+            Self::SshAgentLoad(_) => super::OP_SSH_AGENT_LOAD,
+            Self::SshAgentDrop(_) => super::OP_SSH_AGENT_DROP,
             Self::RunStart(_) => super::OP_RUN_START,
             Self::RunStop(_) => super::OP_RUN_STOP,
             Self::RunStatus(_) => super::OP_RUN_STATUS,
@@ -286,6 +292,10 @@ pub enum Reply {
     DesignExport(super::DesignExported),
     #[serde(rename = "design.fidelity")]
     DesignFidelity(super::DesignFidelityScore),
+    #[serde(rename = "ssh.agent.load")]
+    SshAgentLoad(super::SshAgentLoaded),
+    #[serde(rename = "ssh.agent.drop")]
+    SshAgentDrop(super::SshAgentDropped),
     /// `run.start` and `run.stop` answer with the run's state; `run.status` with every run asked for.
     #[serde(rename = "run.start")]
     RunStart(super::RunInfo),

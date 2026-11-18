@@ -28,6 +28,8 @@ use utoipa::ToSchema;
 
 mod local;
 pub use local::*;
+mod ssh_ops;
+pub use ssh_ops::{MAX_SMALL_FILE, MAX_UPLOAD, SftpJob, sftp_job, type_into};
 
 const MAX_INPUT: usize = 64 * 1024;
 /// One WebSocket message: base64 of the largest input, with its frame around it.
@@ -51,9 +53,30 @@ const ACK_EXITED_AFTER: i64 = KEEP_EXITED - 300;
 /// How often the idle reaper looks (`sweep_loop`).
 const SWEEP_EVERY: Duration = Duration::from_secs(30);
 
+/// A listener on the output a terminal relays to its clients (Leyline recording, Y3-02). It sees
+/// the runner-to-client direction only: what a client types never reaches it. It is called on the
+/// relay's hot path, so an implementation must only queue the bytes and return.
+pub trait OutputTap: Send + Sync {
+    /// `b64` (standard base64, as on the wire) is the terminal's output starting at byte `offset`.
+    /// The same bytes may arrive again (a client attaching afresh is replayed the history); the
+    /// offset says where they belong.
+    fn output(&self, offset: u64, b64: &str);
+    /// The end of the output this tap has seen: the highest offset a client may honestly resume
+    /// from. A client's `?after=` is clamped to it, so a lie cannot move the recording's offsets.
+    fn known(&self) -> u64;
+}
+
+/// Bytes a standard base64 string decodes to (padding counted, validity not checked).
+fn b64_len(s: &str) -> u64 {
+    let pad = s.bytes().rev().take(2).filter(|b| *b == b'=').count();
+    (s.len() / 4 * 3).saturating_sub(pad) as u64
+}
+
 /// What the terminal service keeps in memory (never terminal content).
 #[derive(Default)]
 pub struct Rooms {
+    /// Listeners on a terminal's output, set by a module when it opens the terminal.
+    taps: Mutex<HashMap<String, std::sync::Arc<dyn OutputTap>>>,
     /// One create at a time, so the caps are checked and used up under one lock.
     // ponytail: a global create lock; per-runner locks if create latency ever matters.
     create: tokio::sync::Mutex<()>,
@@ -120,6 +143,22 @@ impl Drop for AttachSlot {
 }
 
 impl Rooms {
+    /// Listens to `terminal`'s relayed output until [`untap`](Self::untap). Set before the
+    /// terminal's id is handed to any client, so no attach misses it.
+    pub fn tap(&self, terminal: &str, tap: std::sync::Arc<dyn OutputTap>) {
+        self.taps.lock().unwrap().insert(terminal.to_owned(), tap);
+    }
+
+    /// Stops listening; a tap with no other holder is dropped.
+    pub fn untap(&self, terminal: &str) {
+        self.taps.lock().unwrap().remove(terminal);
+    }
+
+    /// The tap on `terminal`, if any: looked up once per attach, not per frame.
+    pub fn tap_of(&self, terminal: &str) -> Option<std::sync::Arc<dyn OutputTap>> {
+        self.taps.lock().unwrap().get(terminal).cloned()
+    }
+
     /// A slot for one more attach of `terminal` by `device`, or `None` at either cap.
     fn reserve(self: &std::sync::Arc<Self>, terminal: &str, device: &str) -> Option<AttachSlot> {
         let mut s = self.slots.lock().unwrap();
@@ -384,20 +423,37 @@ fn abandon(app: &App, runner: &str, terminal: &str) {
     });
 }
 
-/// Watches `terminal` on `d` until it exits, then records the exit.
-fn monitor(app: &App, terminal: String, mut d: Dispatched) {
+/// Watches `terminal` on `d` until it exits, then records the exit. `tap`, when given, is told
+/// how it ended (after the row is settled).
+fn monitor(
+    app: &App,
+    terminal: String,
+    mut d: Dispatched,
+    tap: Option<tokio::sync::oneshot::Sender<Ended>>,
+) {
     let a = app.clone();
     let id = terminal.clone();
     let task = tokio::spawn(async move {
+        let mut end = Ended {
+            lost: true,
+            ..Ended::default()
+        };
         while let Some(body) = d.next().await {
             match body {
                 Body::Result(Reply::PtyOpen(exit) | Reply::PtyAttach(exit)) => {
+                    end.lost = false;
+                    end.exit_code = exit.exit_code;
+                    end.signal = exit.signal.clone();
+                    end.host_key = exit.host_key.clone();
                     ended(&a, &id, exit.exit_code, exit.signal).await;
                     break;
                 }
                 Body::Error(_) => break,
                 _ => {}
             }
+        }
+        if let Some(tap) = tap {
+            let _ = tap.send(end);
         }
     });
     app.terminals
@@ -774,7 +830,7 @@ fn ensure_monitor(app: &App, t: &Terminal) {
         app.hub
             .dispatch_elevated(&t.runner, attach, app.hub.continue_terminal_elevation())
     {
-        monitor(app, t.id.clone(), d);
+        monitor(app, t.id.clone(), d, None);
     }
 }
 
@@ -831,92 +887,135 @@ pub async fn create(
         }
         (None, cwd) => cwd,
     };
-    // The caps are counted and used up under one lock, so concurrent creates cannot overshoot.
-    let _turn = app.terminals.create.lock().await;
-    if let Err(e) = reap(&app).await {
-        return e.into_response();
+    let spec = Spec {
+        program: req.program,
+        args: req.args.unwrap_or_default(),
+        cwd,
+        // Only this path names a session: the runner then lets the shell into that session's
+        // folder, inside its hidden state, once it has checked it is the folder it recorded.
+        session,
+        env: req.env.unwrap_or_default(),
+        ssh: None,
+    };
+    match open(&app, &me, &req.runner, req.size, spec, None).await {
+        Ok(t) => (axum::http::StatusCode::CREATED, Json(t)).into_response(),
+        Err(e) => e.into_response(),
     }
-    let mine = match sqlx::query_scalar::<_, i64>(
+}
+
+/// What a terminal starts as.
+struct Spec {
+    program: Option<String>,
+    args: Vec<String>,
+    cwd: Option<String>,
+    session: Option<String>,
+    env: BTreeMap<String, String>,
+    ssh: Option<ainkrad_proto::v2::SshTerminal>,
+}
+
+/// How a terminal ended, as its monitor saw it, handed to whoever asked to be told
+/// ([`open_ssh`]): the exit, or `lost` when the stream failed (the runner went) with no exit seen.
+#[derive(Debug, Clone, Default)]
+pub struct Ended {
+    pub exit_code: Option<i32>,
+    pub signal: Option<String>,
+    pub lost: bool,
+    /// A host-key refusal the runner reported in the exit (set only when the connection failed
+    /// before any shell started). Never read from the terminal's output.
+    pub host_key: Option<ainkrad_proto::v2::HostKeyEvidence>,
+}
+
+/// Every refusal the Core makes before it starts a terminal: size, the per-device and per-runner
+/// caps (counted by the caller under the create lock) and a usable runner. Returns that runner.
+async fn admit(
+    app: &App,
+    me: &Caller,
+    runner: &str,
+    size: TerminalSize,
+) -> Result<gov::Device, ApiError> {
+    if !(1..=1000).contains(&size.rows) || !(1..=1000).contains(&size.cols) {
+        return Err(ApiError::bad_request("terminal size is out of range"));
+    }
+    reap(app).await?;
+    let mine = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM core_terminals WHERE opened_by=? AND status IN ('created','running')",
     )
     .bind(&me.device.id)
     .fetch_one(&app.pool)
-    .await
-    {
-        Ok(n) => n,
-        Err(e) => return ApiError::from(e).into_response(),
-    };
-    let (per_device, per_runner) = match (
-        store::settings::value(&app.pool, Key::TerminalMaxPerDevice, Scope::Server).await,
-        store::settings::value(&app.pool, Key::TerminalMaxPerRunner, Scope::Server).await,
-    ) {
-        (Ok(a), Ok(b)) => (a, b),
-        (Err(e), _) | (_, Err(e)) => return ApiError::from(e).into_response(),
-    };
+    .await?;
+    let per_device =
+        store::settings::value(&app.pool, Key::TerminalMaxPerDevice, Scope::Server).await?;
+    let per_runner =
+        store::settings::value(&app.pool, Key::TerminalMaxPerRunner, Scope::Server).await?;
     if mine >= per_device {
-        return ApiError::new(
+        return Err(ApiError::new(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "terminal_limit",
             "device terminal limit reached",
-        )
-        .into_response();
+        ));
     }
-    let runner = match gov::get_device(&app.pool, &req.runner).await {
-        Ok(Some(d)) if d.kind == "runner" && d.usable() => d,
-        Ok(_) => return ApiError::not_found("no such runner").into_response(),
-        Err(e) => return ApiError::from(e).into_response(),
+    let runner = match gov::get_device(&app.pool, runner).await? {
+        Some(d) if d.kind == "runner" && d.usable() => d,
+        _ => return Err(ApiError::not_found("no such runner")),
     };
-    let count = match sqlx::query_scalar::<_, i64>(
+    let count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM core_terminals WHERE runner=? AND status IN ('created','running')",
     )
     .bind(&runner.id)
     .fetch_one(&app.pool)
-    .await
-    {
-        Ok(n) => n,
-        Err(e) => return ApiError::from(e).into_response(),
-    };
+    .await?;
     if count >= per_runner {
-        return ApiError::new(
+        return Err(ApiError::new(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "terminal_limit",
             "runner terminal limit reached",
-        )
-        .into_response();
+        ));
     }
-    let scrollback = match (
-        store::settings::value(&app.pool, Key::TerminalScrollbackBytes, Scope::Server).await,
-        store::settings::value(&app.pool, Key::TerminalScrollbackBudget, Scope::Server).await,
-    ) {
-        (Ok(a), Ok(b)) => (a, b),
-        (Err(e), _) | (_, Err(e)) => return ApiError::from(e).into_response(),
-    };
+    Ok(runner)
+}
+
+/// Opens a terminal on `runner` for `me`: the caps, the runner's `pty.open`, the row, the audit
+/// row and the monitor. The route that calls it passed the terminal scope and the step-up.
+async fn open(
+    app: &App,
+    me: &Caller,
+    runner: &str,
+    size: TerminalSize,
+    spec: Spec,
+    tap: Option<tokio::sync::oneshot::Sender<Ended>>,
+) -> Result<Terminal, ApiError> {
+    // The caps are counted and used up under one lock, so concurrent creates cannot overshoot.
+    let _turn = app.terminals.create.lock().await;
+    let runner = admit(app, me, runner, size).await?;
+    let scrollback = (
+        store::settings::value(&app.pool, Key::TerminalScrollbackBytes, Scope::Server).await?,
+        store::settings::value(&app.pool, Key::TerminalScrollbackBudget, Scope::Server).await?,
+    );
     // The gate passed scope and step-up for this route; only now is the token minted.
-    let mut d = match app.hub.dispatch_elevated(
-        &runner.id,
-        Command::PtyOpen(PtyOpen {
-            program: req.program,
-            args: req.args.unwrap_or_default(),
-            cwd,
-            // Only this path names a session: the runner then lets the shell into that session's
-            // folder, inside its hidden state, once it has checked it is the folder it recorded.
-            session,
-            env: req.env.unwrap_or_default(),
-            env_pass: Vec::new(),
-            size: ainkrad_proto::v2::Size {
-                rows: req.size.rows,
-                cols: req.size.cols,
-            },
-            // The Core's own stream only watches for the exit; clients attach separately.
-            watch: true,
-            scrollback_bytes: u64::try_from(scrollback.0).ok(),
-            scrollback_budget: u64::try_from(scrollback.1).ok(),
-        }),
-        app.hub.terminal_elevation(&me),
-    ) {
-        Ok(d) => d,
-        Err(e) => return failed(&e).into_response(),
-    };
+    let mut d = app
+        .hub
+        .dispatch_elevated(
+            &runner.id,
+            Command::PtyOpen(PtyOpen {
+                program: spec.program,
+                args: spec.args,
+                cwd: spec.cwd,
+                session: spec.session,
+                env: spec.env,
+                env_pass: Vec::new(),
+                size: ainkrad_proto::v2::Size {
+                    rows: size.rows,
+                    cols: size.cols,
+                },
+                // The Core's own stream only watches for the exit; clients attach separately.
+                watch: true,
+                scrollback_bytes: u64::try_from(scrollback.0).ok(),
+                scrollback_budget: u64::try_from(scrollback.1).ok(),
+                ssh: spec.ssh,
+            }),
+            app.hub.terminal_elevation(me),
+        )
+        .map_err(|e| failed(&e))?;
     let info = match opened(&mut d).await {
         Ok(i) => i,
         Err(e) => {
@@ -937,18 +1036,82 @@ pub async fn create(
                     abandon(&app, &runner, &i.terminal);
                 }
             });
-            return e.into_response();
+            return Err(e);
         }
     };
-    if let Err(e) = register(&app, &me, &runner.id, &info).await {
-        abandon(&app, &runner.id, &info.terminal);
-        return e.into_response();
+    if let Err(e) = register(app, me, &runner.id, &info).await {
+        abandon(app, &runner.id, &info.terminal);
+        return Err(e);
     }
-    monitor(&app, info.terminal.clone(), d);
-    match row(&app, &info.terminal).await {
-        Ok(t) => (axum::http::StatusCode::CREATED, Json(t)).into_response(),
-        Err(e) => e.into_response(),
+    monitor(app, info.terminal.clone(), d, tap);
+    row(app, &info.terminal).await
+}
+
+fn need_terminal_scope(me: &Caller) -> Result<(), ApiError> {
+    if me.device.scopes.iter().any(|s| s == "terminal") {
+        return Ok(());
     }
+    Err(ApiError::new(
+        axum::http::StatusCode::FORBIDDEN,
+        "forbidden_scope",
+        "this device may not open terminals",
+    ))
+}
+
+/// Every refusal [`open_ssh`] would make on its own (the terminal scope, the size range, the
+/// per-device and per-runner caps, a usable runner), without opening anything. A module calls it
+/// BEFORE it leases any secret for the terminal, so a refusal costs no lease. It is a check, not a
+/// reservation: `open_ssh` checks again, and a module revokes what it leased when that fails.
+///
+/// # Errors
+///
+/// The same as [`open_ssh`]'s checks.
+pub async fn check_ssh_open(
+    app: &App,
+    me: &Caller,
+    runner: &str,
+    size: TerminalSize,
+) -> Result<(), ApiError> {
+    need_terminal_scope(me)?;
+    let _turn = app.terminals.create.lock().await;
+    admit(app, me, runner, size).await.map(|_| ())
+}
+
+/// An interactive SSH terminal for a module (Leyline): the same open as `POST /terminals` (caps,
+/// row, audit, monitor), with `ssh` as the `PtyOpen`. This needs the caller to hold the `terminal`
+/// scope, like the terminal routes. The answer is the terminal and a channel that says how it
+/// ended. The hub refuses `ssh` to a runner that does not list `pty.ssh` (it would open a local
+/// shell), whoever asks.
+///
+/// REQUIREMENT ON THE CALLER (not enforced here: the gate lives in another crate, so no type this
+/// crate defines could only be made by it): the module must have passed its own gate for this
+/// exact host and action (Leyline: `gate::authorize(Terminal)` returns an `Authorized`, which
+/// `terminal::start` holds for the whole call), and must call [`check_ssh_open`] before it leases
+/// any key. Nothing else may call this function. A new caller needs the same review as the gate.
+///
+/// # Errors
+///
+/// 403 without the `terminal` scope; the open's own errors (caps, runner, `terminal_failed`).
+pub async fn open_ssh(
+    app: &App,
+    me: &Caller,
+    runner: &str,
+    ssh: ainkrad_proto::v2::SshTerminal,
+    size: TerminalSize,
+) -> Result<(Terminal, tokio::sync::oneshot::Receiver<Ended>), ApiError> {
+    need_terminal_scope(me)?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let spec = Spec {
+        program: None,
+        args: Vec::new(),
+        cwd: None,
+        session: None,
+        env: BTreeMap::new(),
+        ssh: Some(ssh),
+    };
+    open(app, me, runner, size, spec, Some(tx))
+        .await
+        .map(|t| (t, rx))
 }
 
 /// Records an opened terminal: its row, the audit row and the event, in one transaction.
@@ -1198,6 +1361,7 @@ pub async fn attach(
         .unwrap_or(app.clock.unix());
     let terminal_id = id.clone();
     let by_device = me.device.id.clone();
+    let from = q.after.unwrap_or(0);
     ws.protocols([super::ticket::PROTOCOL])
         .max_message_size(MAX_WS_MESSAGE)
         .max_frame_size(MAX_WS_MESSAGE)
@@ -1213,6 +1377,7 @@ pub async fn attach(
                 revoked,
                 rescoped,
                 slot,
+                from,
             )
         })
 }
@@ -1228,8 +1393,15 @@ async fn stream(
     revoked: impl std::future::Future<Output = ()>,
     rescoped: impl std::future::Future<Output = ()>,
     _slot: AttachSlot,
+    from: u64,
 ) {
     let client = app.terminals.join(&terminal);
+    // Looked up once; each frame then costs one `Option` check (no lock) when nobody listens.
+    let tap = app.terminals.tap_of(&terminal);
+    // Where the next output byte of this stream belongs: the attach point, moved by a snapshot.
+    // The client's `after` is only believed up to what the tap has seen; a snapshot (the runner's
+    // own word) moves it afterwards.
+    let mut at = tap.as_ref().map_or(from, |t| from.min(t.known()));
     touch(&app, &terminal).await;
     tokio::pin!(revoked);
     tokio::pin!(rescoped);
@@ -1253,7 +1425,12 @@ async fn stream(
         ()=&mut revoked=>{close_socket(&mut socket,4001,"revoked",cap).await;break},
         ()=&mut rescoped=>{close_socket(&mut socket,4003,"scope changed",cap).await;break},
         ()=&mut expiry=>{close_socket(&mut socket,4003,"step-up expired",cap).await;break},
-        next=d.next()=>match next{Some(body)=>{let f=Frame::new(0,seq,body);seq=seq.saturating_add(1);if send(&mut socket,f,cap).await.is_err(){break}},None=>break},
+        next=d.next()=>match next{Some(body)=>{
+                if let Some(t)=&tap{match &body{
+                    Body::Output(o)=>{t.output(at,&o.data);at=at.saturating_add(b64_len(&o.data))}
+                    Body::Control(Control::Snapshot(s))=>at=s.seq,
+                    _=>{}}}
+                let f=Frame::new(0,seq,body);seq=seq.saturating_add(1);if send(&mut socket,f,cap).await.is_err(){break}},None=>break},
         msg=socket.recv()=>match msg{
             Some(Ok(Message::Text(t)))=>{
                 let Ok(f)=serde_json::from_str::<Frame>(&t) else {continue};

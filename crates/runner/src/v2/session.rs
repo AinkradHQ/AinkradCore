@@ -552,6 +552,9 @@ impl Session {
             | Command::SshSftpMkdir(_)
             | Command::SshSftpRename(_)
             | Command::SshSftpRemove(_) => self.start_sftp(stream, command, h),
+            Command::SshAgentLoad(_) | Command::SshAgentDrop(_) => {
+                self.start_ssh_agent(stream, command)
+            }
             Command::PtyOpen(_) | Command::PtyAttach(_) | Command::PtyClose(_) => {
                 self.start_pty(stream, command, h)
             }
@@ -639,6 +642,7 @@ impl Session {
             )));
         };
         let (pty, done) = (Arc::clone(pty), self.done_tx.clone());
+        let ssh = self.ssh.clone();
         let (cancel_tx, cancel_rx) = oneshot::channel();
         h.cancel = Some(cancel_tx);
         if let Command::PtyClose(req) = command {
@@ -656,7 +660,7 @@ impl Session {
         h.inbox = Some(inbox_tx);
         tokio::spawn(async move {
             let (op, terminal, seq, watch) = match command {
-                Command::PtyOpen(req) => match pty.open(&req).await {
+                Command::PtyOpen(req) => match open(&pty, ssh.as_deref(), &req).await {
                     Ok(id) => (Op::Open, id, 0, req.watch),
                     Err(e) => {
                         tracing::warn!(code = ?e.code, "a terminal did not open: {}", e.message);
@@ -683,6 +687,27 @@ impl Session {
         });
         None
     }
+}
+
+/// `pty.open`; for an ssh terminal (`PtyOpen::ssh`) the keys are redeemed first, so a lease that
+/// cannot be redeemed ends the open before any terminal exists.
+async fn open(
+    pty: &super::pty::PtyDriver,
+    ssh: Option<&SshDriver>,
+    req: &ainkrad_proto::v2::PtyOpen,
+) -> Result<String, StreamError> {
+    let Some(target) = &req.ssh else {
+        return pty.open(req).await;
+    };
+    let ssh = ssh.filter(|s| s.info().is_some()).ok_or_else(|| {
+        StreamError::new(
+            ErrorCode::UnsupportedCommand,
+            "ssh is off on this runner (it follows exec.run: --enable-exec)",
+        )
+    })?;
+    let slot = pty.check_ssh(req).await?;
+    let launch = ssh.terminal_launch(target).await?;
+    pty.open_with(req, Some(launch), Some(slot)).await
 }
 
 impl Session {
@@ -749,6 +774,36 @@ impl Session {
             let _ = done.send((stream, body));
         });
         None
+    }
+}
+
+impl Session {
+    /// `ssh.agent.load` (its leases are redeemed first, so it answers later) and `ssh.agent.drop`
+    /// (at once).
+    fn start_ssh_agent(&self, stream: u64, command: Command) -> Option<Body> {
+        let Some(ssh) = self.ssh.as_ref().filter(|s| s.info().is_some()) else {
+            return Some(Body::Error(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                "ssh is off on this runner (it follows exec.run: --enable-exec)",
+            )));
+        };
+        match command {
+            Command::SshAgentDrop(req) => {
+                Some(Body::Result(Reply::SshAgentDrop(ssh.agent_drop(&req))))
+            }
+            Command::SshAgentLoad(req) => {
+                let (ssh, done) = (Arc::clone(ssh), self.done_tx.clone());
+                tokio::spawn(async move {
+                    let body = match ssh.agent_load(&req).await {
+                        Ok(loaded) => Body::Result(Reply::SshAgentLoad(loaded)),
+                        Err(e) => Body::Error(e),
+                    };
+                    let _ = done.send((stream, body));
+                });
+                None
+            }
+            _ => None,
+        }
     }
 }
 

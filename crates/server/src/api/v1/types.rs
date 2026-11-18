@@ -286,6 +286,9 @@
 ///    scoped to the session's project; Lore's own routes, events and audit actions live in `modules/lore/api`.
 /// 91: Design (Core 0.9 epic). The runner wire protocol gains the `design.*` commands (`api/runner.schema.json`); the
 ///    Design module's own routes live in `modules/design/api`.
+/// 92: Leyline (Core 0.9 epic). The runner wire protocol gains the ssh ops (exec, sftp, agent) and
+///    `PtyOpen.ssh` (`SshTerminal`: the runner starts its own `ssh-pty`, keys over an inherited pipe); eight
+///    `leyline*` operations join the Code Mode allow-list; Leyline's routes live in `modules/leyline/api`.
 /// 92: Project run spec (P4-01). `GET/PUT /projects/{id}/spec` (`getProjectSpec`, `saveProjectSpec`: a save is a new
 ///    version, step-up), `GET /projects/{id}/spec/versions` (`listProjectSpecVersions`) and
 ///    `GET /projects/{id}/spec/versions/{version}` (`getProjectSpecVersion`). 400 `invalid_spec` names the bad field.

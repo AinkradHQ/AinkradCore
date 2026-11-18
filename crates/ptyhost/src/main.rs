@@ -36,18 +36,29 @@ fn main() -> ExitCode {
         say(&format!("error setsid: {e}"));
         return ExitCode::FAILURE;
     }
-    let mut input = Vec::new();
-    let spec: Spec = match std::io::stdin()
+    // The spec may hold a key handoff (`fd3`): not dumpable, and read into one fixed buffer that is
+    // wiped on drop (a growing `Vec` would leave unwiped copies behind).
+    ainkrad_sys::no_dump();
+    let mut input = zeroize::Zeroizing::new(Vec::with_capacity(ainkrad_ptyhost::pty::SPEC_MAX + 1));
+    let mut spec: Spec = match Read::by_ref(&mut std::io::stdin())
+        .take(ainkrad_ptyhost::pty::SPEC_MAX as u64 + 1)
         .read_to_end(&mut input)
         .map_err(|e| e.to_string())
-        .and_then(|_| serde_json::from_slice(&input).map_err(|e| e.to_string()))
-    {
+        .and_then(|_| {
+            if input.len() > ainkrad_ptyhost::pty::SPEC_MAX {
+                Err("spec too large".to_owned())
+            } else {
+                serde_json::from_slice(&input).map_err(|e| e.to_string())
+            }
+        }) {
         Ok(s) => s,
         Err(e) => {
             say(&format!("error spec: {e}"));
             return ExitCode::FAILURE;
         }
     };
+    // The input is wiped here, `spec.fd3` once the child has it.
+    drop(input);
     // The child is forked while this process has one thread: no runtime yet (review L1).
     let mut cfg = HostConfig::new(PathBuf::from(dir), id);
     if let (Some(d), Some(cap)) = (cfg.disk.as_mut(), spec.scrollback_bytes) {
@@ -60,6 +71,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    spec.fd3 = None;
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()

@@ -1,0 +1,20 @@
+@uname
+Linux
+@load
+0.52 0.40 0.31 1/312 48211
+@cpus
+4
+@mem
+MemTotal:        8040116 kB
+MemAvailable:    2010029 kB
+@disk
+Filesystem     1024-blocks     Used Available Capacity Mounted on
+udev               3989404        0   3989404       0% /dev
+tmpfs               804012     1204    802808       1% /run
+/dev/sda1         61255492 18376648  39737260      32% /
+/dev/loop0           56960    56960         0     100% /snap/core20/1974
+/dev/sda15          106858     6186    100673       6% /boot/efi
+/dev/sdb1         102400000 92160000   8000000      92% /srv/data disk
+@units
+  nginx.service loaded failed failed A high performance web server
+  cron.service  loaded failed failed Regular background program processing daemon

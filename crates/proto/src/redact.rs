@@ -450,7 +450,11 @@ fn shapes(text: &str) -> String {
 }
 
 pub mod names;
+mod text;
+pub use text::{mask_runs, names_text, one, url_creds};
 mod planted;
+#[cfg(test)]
+mod text_tests;
 pub use planted::PLANTED;
 
 #[cfg(test)]

@@ -537,6 +537,24 @@ pub fn module_destructive(m: &dyn Module, method: &str, sub: &str) -> bool {
         .any(|(mm, t)| mm.eq_ignore_ascii_case(method) && fits(t, sub))
 }
 
+/// Whether a module route decides its own approvals (`Module::self_approved`) and is not
+/// destructive: Code Mode then leaves the asking to it. Platform routes never are.
+pub fn self_approved(method: &Method, path: &str, modules: &[Arc<dyn Module>]) -> bool {
+    let Some((id, sub)) = module_path(path) else {
+        return false;
+    };
+    let Some(m) = modules.iter().find(|m| m.id() == id) else {
+        return false;
+    };
+    let Some(method) = module_method(method.as_str()) else {
+        return false;
+    };
+    !module_destructive(m.as_ref(), method, sub)
+        && m.self_approved()
+            .iter()
+            .any(|(mm, t)| mm.eq_ignore_ascii_case(method) && fits(t, sub))
+}
+
 /// Whether a request needs a live elevation: its route is in [`DESTRUCTIVE`], or in its
 /// module's `Module::destructive` (relative to `/modules/<id>/v1`).
 pub fn destructive(method: &Method, path: &str, modules: &[Arc<dyn Module>]) -> bool {

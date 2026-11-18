@@ -16,6 +16,11 @@ use tokio_tungstenite::tungstenite::protocol::Role;
 use super::exec::tests::{PLANTED, RUNNER_KEY, driver, sh};
 use super::*;
 
+thread_local! {
+    /// The `ssh` driver the next `Core::hello_with` gives its runner (set by `start_pty_ssh`).
+    static SSH: std::cell::RefCell<Option<Arc<super::SshDriver>>> = const { std::cell::RefCell::new(None) };
+}
+
 struct Core {
     ws: WebSocketStream<DuplexStream>,
     runner: JoinHandle<Result<Option<u16>, StreamError>>,
@@ -75,6 +80,12 @@ impl Core {
     /// Up to the runner's hello, which is returned; `save` is where a rotated pin goes.
     async fn hello(capacity: u32, save: Option<std::path::PathBuf>) -> (Self, RunnerHello) {
         Self::hello_pty(capacity, save, None).await
+    }
+
+    /// [`Core::start_pty`] for a runner that also has the `ssh` driver.
+    async fn start_pty_ssh(pty: Arc<PtyDriver>, ssh: Arc<super::SshDriver>) -> (Self, RunnerHello) {
+        SSH.with(|s| *s.borrow_mut() = Some(ssh));
+        Self::start_pty(pty).await
     }
 
     /// A runner that also offers `pty`, past its hello and our welcome.
@@ -144,8 +155,13 @@ impl Core {
         let (a, b) = tokio::io::duplex(1 << 16);
         let runner_ws = WebSocketStream::from_raw_socket(a, Role::Client, None).await;
         let exec = Arc::new(driver(capacity));
+        // Read here, on the test's own thread: `start_pty_ssh` set it just before.
+        let ssh = SSH.with(|s| s.borrow_mut().take());
         let runner = tokio::spawn(async move {
             let mut session = Session::new(exec);
+            if let Some(s) = ssh {
+                session = session.with_ssh(s);
+            }
             if let Some(c) = clock {
                 session = session.with_clock(c);
             }
@@ -631,6 +647,7 @@ mod pty {
     use tokio::sync::{mpsc, oneshot};
 
     mod session;
+    mod ssh;
 
     fn driver(dir: &std::path::Path, enabled: bool) -> Arc<PtyDriver> {
         let host = ainkrad_ptyhost::client::find_host_binary()
@@ -1235,6 +1252,7 @@ mod pty {
             watch: false,
             scrollback_bytes: None,
             scrollback_budget: None,
+            ssh: None,
         }))
     }
 

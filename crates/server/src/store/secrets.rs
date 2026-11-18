@@ -907,6 +907,21 @@ pub async fn lease_to(
     Ok((id, expires_at))
 }
 
+/// Drops lease `id` before it was redeemed (a caller that granted it and then could not use it).
+/// A lease that is not there is not an error.
+///
+/// # Errors
+///
+/// A database failure.
+pub async fn revoke_lease(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    let hash = digest(&SHA256, id.as_bytes());
+    sqlx::query("DELETE FROM core_secret_leases WHERE hash = ? AND used_at IS NULL")
+        .bind(hash.as_ref())
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Redeems lease `id` for `runner` (the calling device): once, before it expires, while the
 /// runner is still in the secret's scope. Audited as `secret.redeemed`. A lease that is not
 /// this runner's is `not_found`, as one that never existed; a spent or expired one is

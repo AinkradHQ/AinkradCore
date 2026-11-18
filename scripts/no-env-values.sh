@@ -54,6 +54,8 @@ scan() { # FILE... -> offending lines on stdout, exit 1 if any
       my ($dom, $tld) = (lc $1, lc $2);
       next if $dom =~ /(^|\.)example\.(com|org|net)$/ || $tld =~ /^(example|test|invalid|localhost|local|lan)$/;
       next if $dom eq "github.com";
+      # OpenSSH names its protocol extensions like `session-bind@openssh.com`: public names, not addresses.
+      next if $dom eq "openssh.com";
       push @why, "email at $dom";
     }
     for my $d (@deny) { push @why, "denylisted value" if index(lc $l, $d) >= 0; }
@@ -89,6 +91,7 @@ bind 127.0.0.1:7700 and 0.0.0.0, peers 10.0.0.1 172.16.0.1 192.168.1.1 192.0.2.4
 assert_eq!(v("1.2.3.4"), v("1.2.3")); VisualStudioVersion = 12.0.0.0; netmask 255.255.255.0
 endpoint https://ns.compat.objectstorage.example; --namespace-name "$NS"; namespace = <namespace>
 ops@example.com me@mail.example.org bot@citadel.lan test@citadel.invalid git@github.com:o/r.git https://tok@github.com/o/r.git
+session-bind@openssh.com publickey-hostbound-v00@openssh.com
 OK
   scan "$t/good" || { echo "selftest FAIL: allowed values were refused" >&2; exit 1; }
   echo "no-env-values selftest: $((n + 1)) planted kinds caught, allowed values pass"

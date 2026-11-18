@@ -30,15 +30,15 @@
 //!   drivers, capacity and load, for the API (`api::v1::runners`) and the `runner.*` events.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, CAP_GATEWAY, CAP_LOGIN, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame,
-    Heartbeat, HostLoad, IsolationCaps, OP_AGENT_LIMIT, OP_AGENT_READ, OP_GATEWAY_TEST,
-    OP_LOGIN_CANCEL, OP_LOGIN_CODE, OP_LOGIN_START, OP_PTY_ATTACH, OP_PTY_OPEN, RunnerHello,
-    STREAM_WINDOW, StreamError, StreamState,
+    Body, CAP_GATEWAY, CAP_LOGIN, Close, Command, Control, Credit, DriverInfo, ErrorCode,
+    FEATURE_PTY_SSH, Frame, Heartbeat, HostLoad, IsolationCaps, OP_AGENT_LIMIT, OP_AGENT_READ,
+    OP_GATEWAY_TEST, OP_LOGIN_CANCEL, OP_LOGIN_CODE, OP_LOGIN_START, OP_PTY_ATTACH, OP_PTY_OPEN,
+    RunnerHello, STREAM_WINDOW, StreamError, StreamState,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -291,6 +291,44 @@ pub struct Hub {
     streams: AtomicU64,
     /// Runner connection tasks alive (handshake included); `drained` waits for zero.
     live: tokio::sync::watch::Sender<usize>,
+    /// The one [`SshAgentLine`] was handed out.
+    ssh_agent_taken: AtomicBool,
+}
+
+/// The only way to send `ssh.agent.load` / `ssh.agent.drop` (Leyline Mac-direct). It has no public
+/// constructor: [`Hub::take_ssh_agent_line`] hands out ONE per hub, to the first caller, and every
+/// later call gets `None`. Leyline's `direct.rs` takes it on first use and keeps it in a private
+/// static, behind entry points that take the gate's `Authorized`; any other code that takes it
+/// first makes Mac-direct fail closed. A test (`modules/leyline/module/tests/ssh_agent_callers.rs`)
+/// also fails if any file of the workspace but `direct.rs` calls `take_ssh_agent_line`.
+pub struct SshAgentLine {
+    hub: std::sync::Weak<Hub>,
+}
+
+impl SshAgentLine {
+    /// This line was taken from `hub`.
+    pub fn serves(&self, hub: &Arc<Hub>) -> bool {
+        std::ptr::eq(self.hub.as_ptr(), Arc::as_ptr(hub))
+    }
+
+    /// The hub is gone (only a test drops one).
+    pub fn is_dead(&self) -> bool {
+        self.hub.strong_count() == 0
+    }
+
+    /// Sends one agent op. Neither carries a key (the runner redeems leases), and only these two
+    /// commands can be sent here.
+    pub fn dispatch(
+        &self,
+        runner: &str,
+        command: ainkrad_proto::v2::SshAgentCommand,
+    ) -> Result<Dispatched, StreamError> {
+        let hub = self
+            .hub
+            .upgrade()
+            .ok_or_else(|| err(ErrorCode::Offline, "the runner is not connected"))?;
+        hub.send_command(runner, command.into())
+    }
 }
 
 /// A dispatched command's frames: `output` (and a terminal's `control`), then one `result` or
@@ -381,6 +419,7 @@ impl Hub {
             generations: AtomicU64::new(1),
             streams: AtomicU64::new(1),
             live: tokio::sync::watch::Sender::new(0),
+            ssh_agent_taken: AtomicBool::new(false),
         }
     }
 
@@ -502,7 +541,25 @@ impl Hub {
         command: Command,
         _proof: Elevated,
     ) -> Result<Dispatched, StreamError> {
+        // `ssh.exec` has its own entry for a module that holds the gate's proof; a step-up alone
+        // never reaches a host through here. The agent ops have theirs too.
+        if matches!(
+            command,
+            Command::SshExec(_) | Command::SshAgentLoad(_) | Command::SshAgentDrop(_)
+        ) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "ssh.exec and ssh.agent.* are not sent through dispatch_elevated",
+            ));
+        }
         self.send_command(runner, command)
+    }
+
+    /// The one [`SshAgentLine`] of this hub: `Some` to the first caller only.
+    pub fn take_ssh_agent_line(self: &Arc<Self>) -> Option<SshAgentLine> {
+        (!self.ssh_agent_taken.swap(true, Ordering::SeqCst)).then(|| SshAgentLine {
+            hub: Arc::downgrade(self),
+        })
     }
 
     /// The sole non-code agent operation. Transcript reads do not need elevation, but are
@@ -519,6 +576,40 @@ impl Hub {
             return Err(err(
                 ErrorCode::InvalidArgs,
                 "only agent.read and agent.tools use the read path",
+            ));
+        }
+        self.send_command(runner, command)
+    }
+
+    /// `ssh.exec` for a module that runs its own gate first. This takes NO proof: the Hub cannot see
+    /// a module's gate, so nothing here checks one. The only caller allowed is Leyline's
+    /// `modules/leyline/module/src/exec.rs`, whose `run` takes the gate's `Authorized`; a test
+    /// (`modules/leyline/module/tests/ssh_exec_callers.rs`) fails if any other file calls it. It
+    /// carries no key (the runner redeems leases), and a host key the Core has not pinned ends it
+    /// before any login. Anything else a module could send still needs [`Hub::dispatch_elevated`].
+    pub fn dispatch_ssh_exec(
+        self: &Arc<Self>,
+        runner: &str,
+        exec: ainkrad_proto::v2::SshExec,
+    ) -> Result<Dispatched, StreamError> {
+        self.send_command(runner, Command::SshExec(exec))
+    }
+
+    /// The reading SFTP ops (`ssh.sftp.list`, `stat`, `read`) for a module holding its gate's proof,
+    /// as [`Hub::dispatch_ssh_exec`]: they carry no key, only one-use leases. Anything else is
+    /// refused (`invalid_args`) and never sent; writes are not a module's to send yet.
+    pub fn dispatch_ssh_sftp_read(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+    ) -> Result<Dispatched, StreamError> {
+        if !matches!(
+            command,
+            Command::SshSftpList(_) | Command::SshSftpStat(_) | Command::SshSftpRead(_)
+        ) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "only the reading sftp ops use this path",
             ));
         }
         self.send_command(runner, command)
@@ -580,6 +671,21 @@ impl Hub {
             return Err(err(
                 ErrorCode::UnsupportedCommand,
                 "the runner did not advertise that command",
+            ));
+        }
+        // An older runner ignores `PtyOpen.ssh` and would open a LOCAL shell: an ssh terminal goes
+        // only to a runner that lists the feature, whoever asks (Leyline Y3-01).
+        if let Command::PtyOpen(p) = &command
+            && p.ssh.is_some()
+            && !r
+                .hello
+                .drivers
+                .iter()
+                .any(|d| d.commands.iter().any(|c| c == FEATURE_PTY_SSH))
+        {
+            return Err(err(
+                ErrorCode::UnsupportedCommand,
+                "the runner cannot open ssh terminals",
             ));
         }
         if r.load
@@ -658,6 +764,22 @@ impl Hub {
             .out
             .try_send(frame)
             .map_err(|_| err(ErrorCode::Busy, "the runner's connection is backed up"))
+    }
+
+    /// A runner that is "connected" without a socket, for tests that drive the hub from the
+    /// outside: what the Core sends it arrives on the returned channel, and `fake_reply` answers.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fake_runner(&self, device: &str, hello: RunnerHello) -> mpsc::Receiver<Frame> {
+        let (out, rx) = mpsc::channel(OUT_QUEUE);
+        let now = 0;
+        self.register(device, device, hello, out, Arc::new(Notify::new()), now);
+        rx
+    }
+
+    /// A frame from a runner made by `fake_runner`, as if it came over its socket.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fake_reply(&self, device: &str, frame: Frame) {
+        self.received(device, frame);
     }
 
     /// Every runner that connected since the Core started, by device id.

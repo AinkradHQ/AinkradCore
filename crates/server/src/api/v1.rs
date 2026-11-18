@@ -57,14 +57,17 @@ pub mod session;
 mod settings;
 pub mod spec;
 mod stepup;
+/// The 403 a route that needs a step-up answers a session without one (a module's own check).
+pub use stepup::required as step_up_required;
 mod system;
 mod terminals;
 pub mod ticket;
 mod trace;
 pub use runner_control::ToolOps;
 pub use terminals::{
-    Rooms, reconcile as reconcile_terminals, sweep as sweep_terminals,
-    sweep_loop as terminal_sweep_loop,
+    Ended, MAX_SMALL_FILE, MAX_UPLOAD, OutputTap, Rooms, SftpJob, Terminal, TerminalSize,
+    check_ssh_open, open_ssh, reconcile as reconcile_terminals, sftp_job, sweep as sweep_terminals,
+    sweep_loop as terminal_sweep_loop, type_into,
 };
 pub use trace::{ApiError, ApiResult, error_id};
 pub mod types;

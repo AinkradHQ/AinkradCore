@@ -338,6 +338,15 @@ impl Sandbox for ProcessSandbox {
             secret_dir.display().to_string(),
         );
         Self::add(env, "AINKRAD_SANDBOX_TMP", tmp.display().to_string());
+        // The runner's own temporary directory holds its Mac-direct agent sockets
+        // (`ssh/agent.rs`, `ainkrad-ssh.*`): the Seatbelt profile denies them by name.
+        let own_tmp = std::env::temp_dir();
+        let own_tmp = own_tmp.canonicalize().unwrap_or(own_tmp);
+        Self::add(
+            env,
+            "AINKRAD_SANDBOX_HIDE_TMP",
+            own_tmp.display().to_string(),
+        );
         Self::add(env, "TMPDIR", tmp.display().to_string());
         // Harness adapters otherwise inherit the runner's HOME through their allow-list.
         // The process sandbox still owns the filesystem boundary; this makes HOME harmless
