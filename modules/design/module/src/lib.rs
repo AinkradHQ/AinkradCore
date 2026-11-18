@@ -6,14 +6,17 @@
 //! Module off, the Core is unchanged: the tables are its own `design_` namespace, no Core
 //! migration, no Core crate names this module.
 
+mod apply;
 mod asset_links;
 mod assets;
 mod collections;
 mod docs;
 mod package;
+mod review;
 mod sniff;
 mod svg;
 mod sync;
+mod versions;
 mod ws;
 
 use ainkrad_core_server::api::App;
@@ -48,6 +51,12 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0003_design_mockups",
         up: include_str!("../migrations/0003_design_mockups.up.sql"),
         down: include_str!("../migrations/0003_design_mockups.down.sql"),
+    },
+    Migration {
+        version: 4,
+        name: "0004_design_review",
+        up: include_str!("../migrations/0004_design_review.up.sql"),
+        down: include_str!("../migrations/0004_design_review.down.sql"),
     },
 ];
 
@@ -94,6 +103,14 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("DELETE", "/collections/{id}/projects/{project}"),
     ("PUT", "/docs/{doc}/package/files"),
     ("POST", "/docs/{doc}/package/manifest"),
+    ("POST", "/docs/{doc}/apply"),
+    ("POST", "/docs/{doc}/versions"),
+    ("POST", "/docs/{doc}/versions/{version}/restore"),
+    ("POST", "/docs/{doc}/comments"),
+    ("PUT", "/docs/{doc}/comments/{comment}/resolved"),
+    ("PUT", "/docs/{doc}/screens/{screen}/approval"),
+    ("DELETE", "/docs/{doc}/screens/{screen}/approval"),
+    ("PUT", "/docs/{doc}/ai-paused"),
 ];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/docs", "read"),
@@ -105,6 +122,9 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/collections/{id}", "read"),
     ("GET", "/docs/{doc}/package", "read"),
     ("GET", "/docs/{doc}/package/files", "read"),
+    ("GET", "/docs/{doc}/versions", "read"),
+    ("GET", "/docs/{doc}/comments", "read"),
+    ("GET", "/docs/{doc}/approvals", "read"),
 ];
 // A signed upload is read whole to check its signature: the file cap plus nothing else.
 const BODY_LIMITS: &[(&str, &str, usize)] = &[
@@ -165,7 +185,18 @@ pub use sync::Limits;
         package::file,
         package::get,
         package::seal,
-        ws::sync
+        ws::sync,
+        apply::apply,
+        versions::list,
+        versions::create,
+        versions::restore,
+        review::comments,
+        review::add_comment,
+        review::resolve,
+        review::approvals,
+        review::approve,
+        review::withdraw,
+        review::ai_paused
     ),
     components(schemas(
         docs::DocView,
@@ -179,7 +210,19 @@ pub use sync::Limits;
         collections::CollectionPatch,
         collections::ItemBody,
         package::FileView,
-        package::PackageView
+        package::PackageView,
+        apply::ApplyReq,
+        apply::ApplyOut,
+        apply::LintDelta,
+        apply::FindingView,
+        versions::VersionView,
+        versions::NewVersion,
+        versions::Restored,
+        review::CommentView,
+        review::NewComment,
+        review::Resolve,
+        review::ApprovalView,
+        review::Paused
     ))
 )]
 struct Doc;
@@ -199,6 +242,29 @@ impl Module for Design {
                 "/docs/{doc}/projects/{project}",
                 put(docs::link).delete(docs::unlink),
             )
+            .route("/docs/{doc}/apply", post(apply::apply))
+            .route(
+                "/docs/{doc}/versions",
+                get(versions::list).post(versions::create),
+            )
+            .route(
+                "/docs/{doc}/versions/{version}/restore",
+                post(versions::restore),
+            )
+            .route(
+                "/docs/{doc}/comments",
+                get(review::comments).post(review::add_comment),
+            )
+            .route(
+                "/docs/{doc}/comments/{comment}/resolved",
+                put(review::resolve),
+            )
+            .route("/docs/{doc}/approvals", get(review::approvals))
+            .route(
+                "/docs/{doc}/screens/{screen}/approval",
+                put(review::approve).delete(review::withdraw),
+            )
+            .route("/docs/{doc}/ai-paused", put(review::ai_paused))
             .route("/docs/{doc}/package", get(package::get))
             .route(
                 "/docs/{doc}/package/files",
@@ -248,7 +314,14 @@ impl Module for Design {
     }
 
     fn event_kinds(&self) -> &'static [&'static str] {
-        &["design.doc", "design.asset", "design.collection"]
+        &[
+            "design.doc",
+            "design.asset",
+            "design.collection",
+            "design.version",
+            "design.comment",
+            "design.approval",
+        ]
     }
 
     /// Ids only, so a read-only device may see them.
@@ -273,6 +346,13 @@ impl Module for Design {
             "design.collection.deleted",
             "design.collection.linked",
             "design.collection.unlinked",
+            "design.version.created",
+            "design.version.restored",
+            "design.comment.created",
+            "design.comment.resolved",
+            "design.comment.reopened",
+            "design.approval.approved",
+            "design.approval.withdrawn",
         ]
     }
 
@@ -286,6 +366,7 @@ impl Module for Design {
             "q",
             "collection",
             "path",
+            "screen",
         ]
     }
 

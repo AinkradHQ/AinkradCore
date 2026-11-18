@@ -161,4 +161,15 @@ mod tests {
         assert!(l.undo());
         assert_eq!(text(&l), "", "the whole word at once");
     }
+
+    #[test]
+    fn a_splice_is_placed_by_the_live_text_not_a_stale_cached_model() {
+        let mut l = live("hello");
+        let mut stale = l.read(); // "hello"
+        l.apply_ops(&[splice(0, 0, "日")]).unwrap(); // the live text is now "日hello"
+        // validated against the stale "hello" (offset 5 is its end); written at UTF-16 offset 5 of the live text
+        l.apply_gesture_ops(&mut stale, &[splice(5, 0, "!")])
+            .unwrap();
+        assert_eq!(text(&l), "日hell!o");
+    }
 }

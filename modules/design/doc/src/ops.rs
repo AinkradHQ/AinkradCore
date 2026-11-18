@@ -11,7 +11,7 @@ use design_model::validate::{self, Cx, name_str, text_str};
 use design_model::{Doc, Node, NodeType};
 use serde::Deserialize;
 use serde_json::{Map as JMap, Value};
-use yrs::{Any, In, Map, MapPrelim, Out, Text, TextPrelim, Transact, TransactionMut};
+use yrs::{Any, GetString, In, Map, MapPrelim, Out, Text, TextPrelim, Transact, TransactionMut};
 
 use crate::{Error, LOCAL, Live, MAX_UPDATE_BYTES, json_any};
 use yrs::ReadTxn;
@@ -187,12 +187,12 @@ fn check(m: &mut Doc, i: usize, op: &Op) -> Result<Planned, Error> {
             if n.ty != NodeType::Text {
                 return Err(refuse(i, "not a text node"));
             }
-            let (a, b, out) =
+            let (_, _, out) =
                 crate::text::spliced(n.text.as_deref().unwrap_or(""), *at, *del, text)
                     .ok_or_else(|| refuse(i, "range outside the text or inside a character"))?;
             text_str(&out).map_err(|e| refuse(i, e))?;
             n.text = Some(out.clone());
-            Planned::Splice(id.clone(), a as u32, (b - a) as u32, text.clone(), out)
+            Planned::Splice(id.clone(), *at, *del, text.clone(), out)
         }
         Op::Move { id, parent, order } => {
             let clock = m.next_clock();
@@ -359,7 +359,8 @@ enum Planned {
     Text(String, String),
     Move(String, Option<String>, String, u64),
     Delete(Vec<String>),
-    /// id, byte offset, bytes removed, inserted text, the whole text after (for a node without a yrs text yet)
+    /// id, UTF-16 offset, UTF-16 units removed, inserted text, the whole text after (for a node without a yrs text
+    /// yet). Byte offsets are worked out in `write` from the live yrs text, never from the model copy (#304).
     Splice(String, u32, u32, String, String),
 }
 
@@ -439,11 +440,21 @@ fn write(nodes: &yrs::MapRef, txn: &mut TransactionMut, p: &Planned) {
             match m.get(txn, "text") {
                 // plain `insert` only: never `insert_with_attributes` / `format` (#298: text stays plain strings)
                 Some(Out::YText(x)) => {
-                    if *del > 0 {
-                        x.remove_range(txn, *at, *del);
-                    }
-                    if !ins.is_empty() {
-                        x.insert(txn, *at, ins);
+                    // byte offsets from the text as it is in yrs right now (an earlier op of this batch, or a
+                    // stale cached model in a gesture batch, must not shift them); a range that no longer fits
+                    // is skipped, never written at a wrong place
+                    let cur = x.get_string(txn);
+                    let from = crate::text::byte_of_utf16(&cur, *at as usize);
+                    let to = at
+                        .checked_add(*del)
+                        .and_then(|e| crate::text::byte_of_utf16(&cur, e as usize));
+                    if let (Some(a), Some(b)) = (from, to) {
+                        if b > a {
+                            x.remove_range(txn, a as u32, (b - a) as u32);
+                        }
+                        if !ins.is_empty() {
+                            x.insert(txn, a as u32, ins);
+                        }
                     }
                 }
                 _ => {
