@@ -483,6 +483,17 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     let p = policy::load(app, &d.room).await?;
     let by = distilled_by(app, &s).await;
     let (n, accepted) = store_candidates(&pool, &d.id, &out, &p, &by, &app.clock.now()).await?;
+    // Facts that went straight into memory get their vectors now, off the request path.
+    if accepted > 0
+        && let Ok(rows) = sqlx::query_as::<_, (Option<String>, String)>(
+            "SELECT body_norm, body FROM memory WHERE distil = ?",
+        )
+        .bind(&d.id)
+        .fetch_all(&pool)
+        .await
+    {
+        b.queue_record_vectors(&rows);
+    }
     // The transcript's answer goes into the room (C-08); the Core keeps a placeholder.
     sqlx::query("INSERT INTO room_audit (action, detail, at) VALUES ('distil.answer', ?, ?)")
         .bind(json!({"distil": d.id, "session": s.id, "answer": output}).to_string())
