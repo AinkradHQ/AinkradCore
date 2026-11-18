@@ -19,7 +19,7 @@ serde_json = "1.0.154"
 sha2 = "0.10.9"
 # No `rsa`/`dsa` feature (RUSTSEC-2023-0071) and no `p256`/`p384` (they pull crypto-bigint 0.5, RUSTSEC-2026-0387).
 ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "ecdsa", "encryption"] }
-tokio = { version = "1.54.0", features = ["rt", "sync"] }
+tokio = { version = "1.54.0", features = ["macros", "rt", "sync", "time"] }
 tracing = "0.1.44"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
 utoipa = "6.0.0"
