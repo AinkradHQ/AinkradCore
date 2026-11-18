@@ -87,6 +87,8 @@ pub enum Command {
     RunStop(super::RunStop),
     #[serde(rename = "run.status")]
     RunStatus(super::RunStatusReq),
+    #[serde(rename = "run.observe")]
+    RunObserve(super::RunObserveReq),
     /// A TCP stream to an exposed port of a live run (P6-01); bytes are `output` frames.
     #[serde(rename = "port.open")]
     PortOpen(super::PortOpen),
@@ -134,6 +136,7 @@ impl Command {
             Self::RunStart(_) => super::OP_RUN_START,
             Self::RunStop(_) => super::OP_RUN_STOP,
             Self::RunStatus(_) => super::OP_RUN_STATUS,
+            Self::RunObserve(_) => super::OP_RUN_OBSERVE,
             Self::PortOpen(_) => super::OP_PORT_OPEN,
             Self::Unknown => "unknown",
         }
@@ -255,6 +258,9 @@ pub enum Reply {
     RunStop(super::RunInfo),
     #[serde(rename = "run.status")]
     RunStatus(super::RunList),
+    /// `run.observe`: service metrics and the new log lines of one run.
+    #[serde(rename = "run.observe")]
+    RunObserve(super::RunObserve),
     /// The last frame of `port.open`.
     #[serde(rename = "port.open")]
     PortOpen(super::PortClosed),
