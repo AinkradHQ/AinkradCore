@@ -116,28 +116,17 @@ async fn apply(
             }
             if imported.as_deref() != Some(now.as_str()) {
                 // Edited since the import: keep the note, keep what the file says now as a version.
-                let same: Option<String> = sqlx::query_scalar(
-                    "SELECT id FROM lore_versions WHERE note = ? AND kind = 'conflict' AND text = ? LIMIT 1",
+                // Always its own version: undo deletes it, so it must belong to this item alone.
+                let v = versions::keep(
+                    conn,
+                    nid,
+                    h.rev,
+                    &it.text,
+                    "conflict",
+                    Some("import"),
+                    "system",
                 )
-                .bind(nid)
-                .bind(&it.text)
-                .fetch_optional(&mut *conn)
                 .await?;
-                let v = match same {
-                    Some(v) => v,
-                    None => {
-                        versions::keep(
-                            conn,
-                            nid,
-                            h.rev,
-                            &it.text,
-                            "conflict",
-                            Some("import"),
-                            "system",
-                        )
-                        .await?
-                    }
-                };
                 save::audit_only(
                     conn,
                     "lore.note.conflict",
@@ -294,17 +283,19 @@ async fn undo_item(
     let Some(note) = note else { return Ok(2) };
     match result.as_str() {
         "created" => {
+            // Only a note still at the revision the import made it at: anything later (an edit, or another run
+            // updating it) is somebody's work and is kept.
             let rev: Option<i64> = sqlx::query_scalar(
                 "UPDATE lore_notes SET trashed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), rev = rev + 1 \
-                 WHERE id = ? AND trashed_at IS NULL RETURNING rev",
+                 WHERE id = ? AND trashed_at IS NULL AND rev = ? RETURNING rev",
             )
             .bind(&note)
+            .bind(r.try_get::<Option<i64>, _>("rev_after")?)
             .fetch_optional(&mut *conn)
             .await?;
-            if let Some(rev) = rev {
-                notes::record(conn, "trashed", "trashed", &note, rev, "import", None).await?;
-                save::relink(conn, &note, None).await?;
-            }
+            let Some(rev) = rev else { return Ok(2) };
+            notes::record(conn, "trashed", "trashed", &note, rev, "import", None).await?;
+            save::relink(conn, &note, None).await?;
             Ok(1)
         }
         "updated" => {

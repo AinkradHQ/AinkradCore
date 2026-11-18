@@ -2,7 +2,7 @@
 //! Security model: see `import_read.rs` (all input is hostile: path rules, zip and git reading, caps). Here:
 //! - A run stages *items*, never notes; nothing becomes a note before `commit`, and nothing is written outside
 //!   the Lore tables. Items hold the text only (no path outside what `classify_path` accepted).
-//! - Identity is the origin (`mirror:<repo>:<path>` / `upload:<project>:<path>`): importing it again updates the
+//! - Identity is the origin (`mirror:<project>:<repo>:<path>` / `upload:<project>:<path>`): importing it again updates the
 //!   note it made, and only while the note is unedited (its text still hashes to `import_hash`). An edited note is
 //!   never overwritten: it is flagged `conflict`, kept as it is, and the incoming text is kept as a `conflict`
 //!   version. An update first keeps the old text as an `auto` version (T4); undo puts it back exactly.
@@ -26,6 +26,7 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqliteConnection};
+use tokio::sync::Semaphore;
 use utoipa::ToSchema;
 
 use crate::Lore;
@@ -135,7 +136,11 @@ pub(crate) async fn create(
         let mut tx = begin_write(&app.pool).await?;
         match read {
             Ok(scan) => {
-                let origin = format!("mirror:{}:", repo_id.as_deref().unwrap_or_default());
+                let origin = format!(
+                    "mirror:{}:{}:",
+                    project.as_deref().unwrap_or_default(),
+                    repo_id.as_deref().unwrap_or_default()
+                );
                 match stage(&mut tx, &id, &origin, 1, project.as_deref(), scan).await {
                     Ok(()) => {
                         classify(&mut tx, &id, None).await?;
@@ -265,6 +270,9 @@ pub(crate) async fn add_zip(
         let mut conn = app.pool.acquire().await?;
         state_of(&mut conn, &run, &["staging"]).await?;
     }
+    // At most 2 zips inflate at once: each can hold 64 MiB of text in memory.
+    static ZIPS: Semaphore = Semaphore::const_new(2);
+    let _slot = ZIPS.acquire().await.map_err(|_| ApiError::bad_request("the zip is not valid"))?;
     let scan = tokio::task::spawn_blocking(move || read_zip(&body))
         .await
         .map_err(|_| ApiError::bad_request("the zip is not valid"))?

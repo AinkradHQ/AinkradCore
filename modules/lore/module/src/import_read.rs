@@ -57,12 +57,22 @@ pub(crate) enum PathClass {
     Refused,
 }
 
+/// Unicode category Cf (bidi overrides, zero-width and joiner characters, BOM, tags): they make a name read as
+/// something it is not. `char` has no category test, so the ranges are listed.
+fn is_format(c: char) -> bool {
+    matches!(c as u32,
+        0xAD | 0x600..=0x605 | 0x61C | 0x6DD | 0x70F | 0x890..=0x891 | 0x8E2 | 0x180E
+        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF
+        | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3
+        | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+}
+
 /// Sorts one source path: safe and wanted, safe but not wanted, or unsafe.
 pub(crate) fn classify_path(raw: &str) -> PathClass {
     if raw.is_empty()
         || raw.len() > PATH_MAX
         || raw.starts_with('/')
-        || raw.chars().any(|c| c.is_control() || c == '\\')
+        || raw.chars().any(|c| c.is_control() || is_format(c) || c == '\\')
     {
         return PathClass::Refused;
     }

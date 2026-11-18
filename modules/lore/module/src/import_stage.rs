@@ -150,10 +150,11 @@ pub(crate) async fn classify(
         let origin: String = r.try_get("origin")?;
         let title: String = r.try_get("title")?;
         let matched = sqlx::query(
-            "SELECT id, text, import_hash FROM lore_notes WHERE import_origin = ? AND trashed_at IS NULL \
+            "SELECT id, text, import_hash FROM lore_notes WHERE import_origin = ? AND project IS ? AND trashed_at IS NULL \
              ORDER BY updated_at DESC LIMIT 1",
         )
         .bind(&origin)
+        .bind(&project)
         .fetch_optional(&mut *conn)
         .await?;
         let (flag, mark, note): (Option<&str>, &str, Option<String>) = if first != seq {
