@@ -305,7 +305,7 @@ pub(crate) async fn build(
         scope(app, session, q.room.as_deref()).await?
     };
     let solo = rooms.len() == 1;
-    let (open, closed) = open_all(&app, &b, rooms, named).await?;
+    let (open, closed) = open_all(app, b, rooms, named).await?;
 
     let mut body = Body {
         text: String::new(),
@@ -336,26 +336,24 @@ pub(crate) async fn build(
                 body.complete &= !was_cut;
                 body.put(&format!("Instructions:\n{t}\n"), &[]);
             }
-            let c = card::build(&app, a.pool(), &v.id, &now).await?;
+            let c = card::build(app, a.pool(), &v.id, &now).await?;
             body.complete &= c.complete;
             let at: Vec<(String, String)> = c.ids.iter().map(|i| (v.id.clone(), i.clone())).collect();
             body.put(&c.text, &at);
         }
-        if start {
-            if let Some((c, at)) = me_card::build_located(&app, &b, &session).await {
-                body.complete &= c.complete;
-                if body.put(&c.text, &at) {
-                    me_ids = c.ids.clone();
-                }
+        if start && let Some((c, at)) = me_card::build_located(app, b, session).await {
+            body.complete &= c.complete;
+            if body.put(&c.text, &at) {
+                me_ids = c.ids.clone();
             }
         }
         used.extend(body.at.iter().map(|x| x.1.clone()));
         if !start {
-            used.extend(loaded_ids(&app, &session).await?);
+            used.extend(loaded_ids(app, session).await?);
         }
         let k = if start { Q_START_K } else { Q_PROMPT_K };
         for (v, a) in &open {
-            let cutoff = stale_cutoff(&app, &v.id).await;
+            let cutoff = stale_cutoff(app, &v.id).await;
             let mut all = fetch(a.pool(), &v.id, &cutoff, BY_NEWEST, MAX_SCORED + 1).await?;
             if all.len() > MAX_SCORED {
                 all.truncate(MAX_SCORED);
@@ -382,7 +380,7 @@ pub(crate) async fn build(
     // Choose the records: by meaning, by support, then the newest for the rest of the quota.
     let k = if start { Q_START_K } else { Q_PROMPT_K };
     let meaning = match &prompt {
-        Some(p) => by_meaning(&app, &b, p, &newest).await,
+        Some(p) => by_meaning(app, b, p, &newest).await,
         None => None,
     };
     let mut seen: HashSet<&str> = HashSet::new();
@@ -439,7 +437,7 @@ pub(crate) async fn build(
     // The ledger and the audit first; no text leaves if they fail.
     let mut tx = begin_write(&app.pool).await?;
     for (room, id) in &body.at {
-        crate::loaded::record_in(&mut tx, &session, room, std::slice::from_ref(id)).await?;
+        crate::loaded::record_in(&mut tx, session, room, std::slice::from_ref(id)).await?;
     }
     let mut rooms_used: Vec<&str> = body.at.iter().map(|x| x.0.as_str()).collect();
     rooms_used.sort_unstable();

@@ -36,7 +36,15 @@ async fn seed_level_5(pool: &SqlitePool) {
         .unwrap();
     }
     // (id, status, body, source_ids, decided_by, distil)
-    let rows: [(&str, &str, &str, &str, Option<&str>, Option<&str>); 6] = [
+    type Row<'a> = (
+        &'a str,
+        &'a str,
+        &'a str,
+        &'a str,
+        Option<&'a str>,
+        Option<&'a str>,
+    );
+    let rows: [Row; 6] = [
         (
             "r-auto",
             "accepted",

@@ -119,21 +119,19 @@ async fn finish(
         })
         .unwrap_or_default();
     let s = store::get(&app.pool, &session).await?;
-    if let Some(s) = &s {
-        if s.live() {
-            let began: Option<String> = sqlx::query_scalar(
-                "SELECT at FROM room_audit WHERE action = 'tidy.pending' \
-                 AND json_extract(detail, '$.session') = ?",
-            )
-            .bind(&session)
-            .fetch_optional(pool)
-            .await?;
-            let old = began
-                .and_then(|b| ainkrad_core_server::scheduler::unix_secs(&b))
-                .is_some_and(|t| now - t > PENDING_SECS);
-            if !old {
-                return Ok(());
-            }
+    if s.as_ref().is_some_and(|s| s.live()) {
+        let began: Option<String> = sqlx::query_scalar(
+            "SELECT at FROM room_audit WHERE action = 'tidy.pending' \
+             AND json_extract(detail, '$.session') = ?",
+        )
+        .bind(&session)
+        .fetch_optional(pool)
+        .await?;
+        let old = began
+            .and_then(|b| ainkrad_core_server::scheduler::unix_secs(&b))
+            .is_some_and(|t| now - t > PENDING_SECS);
+        if !old {
+            return Ok(());
         }
     }
     let verdict = match &s {

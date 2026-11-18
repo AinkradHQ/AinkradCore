@@ -1121,7 +1121,9 @@ mod tests {
             assert!(read_in_full(&taken, &shown, &out, &dropped).is_empty());
         }
         let not_grounded = judge::dropped_of(&f1.c, vec![], 0.0, "not_grounded");
-        assert!(read_in_full(&taken, &shown, &[f2.clone()], &[not_grounded]).is_empty());
+        assert!(
+            read_in_full(&taken, &shown, std::slice::from_ref(&f2), &[not_grounded]).is_empty()
+        );
         let by_score = judge::dropped_of(&f1.c, vec![], 0.1, "admit");
         assert_eq!(
             read_in_full(&taken, &shown, &[f2], &[by_score]),
