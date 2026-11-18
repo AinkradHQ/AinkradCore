@@ -22,6 +22,7 @@ use serde_json::json;
 use sqlx::SqliteConnection;
 use utoipa::ToSchema;
 
+use crate::alerts;
 use crate::gate::{self, Action, Principal};
 use crate::hosts::{In, find};
 
@@ -119,6 +120,9 @@ pub(crate) async fn saw(
     if new || revived || changed {
         let op = if changed { "changed" } else { "seen" };
         note(&mut tx, op, host, "leyline.hostkey").await?;
+    }
+    if changed {
+        alerts::open_alert(&mut tx, host, "host_key_changed").await?;
     }
     tx.commit().await?;
     Ok(new)
@@ -234,6 +238,8 @@ async fn write(
         _ => {}
     }
     if replacing {
+        // The new key is the pin: the changed-key alert is answered.
+        alerts::resolve(&mut tx, id, "host_key_changed").await?;
         sqlx::query("UPDATE leyline_host_keys SET state = 'replaced' WHERE host_id = ? AND state = 'trusted'")
             .bind(id)
             .execute(&mut *tx)

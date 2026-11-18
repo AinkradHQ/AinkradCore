@@ -18,8 +18,8 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Every source file under `crates` and `modules` that mentions `needle` (no `(`: an alias or a
-/// value use is a caller too).
+/// Every source file under `crates` and `modules` that mentions `needle` outside a comment line
+/// (no `(`: an alias or a value use is a caller too).
 fn callers(needle: &str) -> Vec<String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let mut files = Vec::new();
@@ -29,7 +29,12 @@ fn callers(needle: &str) -> Vec<String> {
     assert!(files.len() > 50, "the walk found the source tree");
     let mut found: Vec<String> = files
         .iter()
-        .filter(|f| std::fs::read_to_string(f).is_ok_and(|s| s.contains(needle)))
+        .filter(|f| {
+            std::fs::read_to_string(f).is_ok_and(|s| {
+                s.lines()
+                    .any(|l| !l.trim_start().starts_with("//") && l.contains(needle))
+            })
+        })
         .map(|f| {
             f.canonicalize()
                 .unwrap()

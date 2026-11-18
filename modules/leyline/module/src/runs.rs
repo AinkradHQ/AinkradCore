@@ -53,8 +53,9 @@ impl Drop for Abandon {
     }
 }
 
-/// Marks a run still waiting for approval cancelled (a run that has settled is left alone).
-pub(super) async fn cancel(pool: &SqlitePool, run: &str) {
+/// Marks a run still waiting for approval cancelled (a run that has settled is left alone), and
+/// voids its approval so the call parked on it ends at once. True when this call cancelled it.
+pub(crate) async fn cancel(pool: &SqlitePool, run: &str) -> bool {
     let done = async {
         let mut tx = begin_write(pool).await?;
         let n = sqlx::query(
@@ -67,17 +68,25 @@ pub(super) async fn cancel(pool: &SqlitePool, run: &str) {
         .rows_affected();
         if n == 1 {
             sqlx::query(
-                "UPDATE leyline_run_hosts SET state = 'skipped' WHERE run_id = ? AND state = 'needs_approval'",
+                "UPDATE leyline_run_hosts SET state = 'skipped' WHERE run_id = ? AND state IN ('needs_approval', 'queued')",
+            )
+            .bind(run)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "UPDATE core_code_mode_approvals SET state = 'void' \
+                 WHERE id = (SELECT approval FROM leyline_runs WHERE id = ?) AND state IN ('pending', 'approved')",
             )
             .bind(run)
             .execute(&mut *tx)
             .await?;
         }
-        tx.commit().await
+        tx.commit().await.map(|()| n == 1)
     };
-    if let Err(e) = done.await {
+    done.await.unwrap_or_else(|e| {
         tracing::error!(error = %e, "cancelling a parked leyline run failed");
-    }
+        false
+    })
 }
 
 pub(super) async fn note(
@@ -164,8 +173,9 @@ pub(super) fn redacted(s: &str) -> String {
     ainkrad_proto::redact::one(s)
 }
 
-/// Whether `s` holds a secret written out. A masked value that is only a `$VAR`, `${NAME}` or
-/// `$(...)` reference is not one: the card can show it as written.
+/// Whether `s` holds a secret written out. A masked value that is only a `$NAME` or `${NAME}`
+/// reference is not one: the card can show it as written. `$(...)` is not accepted: its inner
+/// text can hold the secret itself.
 pub(crate) fn literal_secret(s: &str) -> bool {
     let masked = redacted(s);
     if masked == s {
@@ -200,7 +210,7 @@ pub(crate) fn literal_secret(s: &str) -> bool {
 
 const MARK: &str = "[redacted:";
 
-/// A value made only of `$NAME`, `${NAME}` and `$(...)`, with optional quotes and auth scheme word.
+/// A value made only of `$NAME` and `${NAME}`, with optional quotes and auth scheme word.
 fn only_refs(span: &str) -> bool {
     let mut t = span.trim().trim_matches(['"', '\'']);
     if let Some((w, rest)) = t.split_once(' ')
@@ -226,16 +236,6 @@ fn only_refs(span: &str) -> bool {
                     return false;
                 }
                 i += n + 2;
-            }
-            Some(b'(') => {
-                let mut depth = 0;
-                let Some(n) = b[i..].iter().position(|c| {
-                    depth += i32::from(*c == b'(') - i32::from(*c == b')');
-                    depth == 0
-                }) else {
-                    return false;
-                };
-                i += n + 1;
             }
             Some(c) if c.is_ascii_alphabetic() || *c == b'_' => {
                 while b.get(i).is_some_and(|c| name(*c)) {
@@ -286,10 +286,11 @@ pub(super) async fn settle(
             Verdict::Ask => unreachable!("every ask is decided before settling"),
         }
     }
-    for (id, _) in &refused {
+    for (id, why) in &refused {
         sqlx::query(
-            "UPDATE leyline_run_hosts SET state = 'refused' WHERE run_id = ? AND host_id = ?",
+            "UPDATE leyline_run_hosts SET state = 'refused', reason = ? WHERE run_id = ? AND host_id = ? AND state <> 'skipped'",
         )
+        .bind(*why)
         .bind(run)
         .bind(id)
         .execute(&mut *tx)
@@ -311,7 +312,8 @@ pub(super) async fn settle(
     };
     sqlx::query(
         "UPDATE leyline_runs SET state = ?, approval = ?, \
-         ended_at = CASE WHEN ? = 'denied' THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') END WHERE id = ?",
+         ended_at = CASE WHEN ? = 'denied' THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') END \
+         WHERE id = ? AND state IN ('waiting_approval', 'running')",
     )
     .bind(state)
     .bind(approval_id)
@@ -358,7 +360,7 @@ pub(super) async fn settle(
 pub async fn finish(app: &App, done: Authorized, ok: bool) -> Result<(), ApiError> {
     let mut tx = begin_write(&app.pool).await?;
     sqlx::query(
-        "UPDATE leyline_run_hosts SET state = ? WHERE run_id = ? AND host_id = ? AND state = 'queued'",
+        "UPDATE leyline_run_hosts SET state = ? WHERE run_id = ? AND host_id = ? AND state IN ('queued', 'running')",
     )
     .bind(if ok { "ok" } else { "failed" })
     .bind(&done.run)

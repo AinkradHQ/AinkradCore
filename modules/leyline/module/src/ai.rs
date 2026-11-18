@@ -73,7 +73,7 @@ pub(crate) async fn get_run(
     Path(id): Path<String>,
 ) -> ApiResult<RunView> {
     session_only(&me)?;
-    let Json(mut run) = crate::commands::get_run(State(app), Path(id)).await?;
+    let Json(mut run) = crate::commands::get_run(State(app), Extension(me.clone()), Path(id)).await?;
     own_run(&me, &mut run)?;
     Ok(Json(run))
 }
@@ -157,7 +157,7 @@ pub(crate) async fn exec(
     }
     let auth = gated(&app, &me, &host, Action::Exec(line.to_owned())).await?;
     let run = auth.run_id().to_owned();
-    tokio::spawn(crate::exec::run(app.clone(), auth));
+    tokio::spawn(crate::exec::run(app.clone(), auth, None));
     Ok(Json(RunStarted {
         run,
         state: "running".to_owned(),
