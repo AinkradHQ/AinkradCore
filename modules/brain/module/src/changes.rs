@@ -8,7 +8,8 @@
 //!
 //! Undo restores the before image of each row whose current image still equals the change's after
 //! image. A row changed since (by a person, or by a later change set) is left alone and listed as
-//! skipped. Undo is idempotent: a change set is undone once, then it is a no-op.
+//! skipped (a skipped successor of a record Undo put back is archived or unlinked, `unlink_successor`).
+//! Undo is idempotent: a change set is undone once, then it is a no-op.
 //!
 //! Security model: person-only. Every route here refuses an AI session (`person_only`), because a
 //! change set holds record bodies and Undo rewrites memory. Routes need the room open (lease), like
@@ -256,6 +257,7 @@ pub async fn undo(
         skipped: vec![],
         already_undone: false,
     };
+    let mut changed = vec![];
     for r in rows {
         let record: String = r.try_get("record")?;
         let before: Option<String> = r.try_get("before")?;
@@ -265,10 +267,57 @@ pub async fn undo(
             log_op(&mut *tx, "record.restored", &record, now).await?;
             out.restored.push(record);
         } else {
-            out.skipped.push(record);
+            changed.push((record, before, after));
         }
     }
+    for (record, before, after) in changed {
+        unlink_successor(&mut *tx, &record, before.as_deref(), after.as_deref(), &out.restored, now)
+            .await?;
+        out.skipped.push(record);
+    }
     Ok(Some(Ok(out)))
+}
+
+/// B4-02 review: Undo put a superseded record back, but its successor was changed since (say, a later
+/// save reinforced it) and so is skipped. Two records in force as a chain would be wrong, so the
+/// successor is archived when this change set created it, else its `supersedes` / `valid_from` go
+/// back to the before image. It stays listed as skipped.
+async fn unlink_successor(
+    tx: &mut SqliteConnection,
+    record: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+    restored: &[String],
+    now: &str,
+) -> Result<(), sqlx::Error> {
+    let parse = |img: Option<&str>| img.and_then(|i| serde_json::from_str::<Value>(i).ok());
+    let (before, after) = (parse(before), parse(after));
+    let Some(old) = after.as_ref().and_then(|a| a["supersedes"].as_str()) else {
+        return Ok(());
+    };
+    let was = before.as_ref().and_then(|b| b["supersedes"].as_str());
+    if was == Some(old) || !restored.iter().any(|r| r == old) {
+        return Ok(());
+    }
+    match &before {
+        None => {
+            sqlx::query("UPDATE records SET archived_at = ? WHERE id = ? AND archived_at IS NULL")
+                .bind(now)
+                .bind(record)
+                .execute(&mut *tx)
+                .await?;
+            log_op(&mut *tx, "record.archived", record, now).await
+        }
+        Some(b) => {
+            sqlx::query("UPDATE records SET supersedes = ?, valid_from = ? WHERE id = ?")
+                .bind(b["supersedes"].as_str())
+                .bind(b["valid_from"].as_str())
+                .bind(record)
+                .execute(&mut *tx)
+                .await?;
+            log_op(&mut *tx, "record.edited", record, now).await
+        }
+    }
 }
 
 /// Deletes the records archived before `cutoff`, with their citations and their row images in every

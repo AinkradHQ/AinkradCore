@@ -9,13 +9,14 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use ainkrad_core_server::api::App;
+use brain_model::merge::DEMOTE_SQL;
 use brain_model::semantic::{EMBED_CHARS, Q_MEMORY_MARGIN, within_margin};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
 
 use crate::Brain;
 use crate::access::Visible;
-use crate::ai::{AiHit, LIST_BODY, record_of};
+use crate::ai::{AiHit, CONTESTS_KIND, LIST_BODY, record_of};
 use crate::rooms::RoomAccess;
 use crate::semantic::service::similar;
 
@@ -58,12 +59,7 @@ impl Brain {
     pub(crate) fn queue_record_vectors(&self, records: &[(Option<String>, String)]) {
         let pairs: Vec<(String, String)> = records
             .iter()
-            .map(|(n, body)| {
-                (
-                    record_hash(n.as_deref().unwrap_or(body)),
-                    embed_text(body),
-                )
-            })
+            .map(|(n, body)| (record_hash(n.as_deref().unwrap_or(body)), embed_text(body)))
             .collect();
         if !pairs.is_empty() {
             self.queue_embed(pairs);
@@ -75,6 +71,9 @@ struct Cand {
     room: usize,
     id: String,
     hash: String,
+    /// `DEMOTE_SQL`: a stale `project-state`/`task` ranks after the fresh ones, a contested record
+    /// after everything (B4-02).
+    demote: i64,
 }
 
 /// The best `limit` hits by meaning, best first, and whether `MAX_RECORDS` cut a room; `None` when
@@ -100,8 +99,9 @@ pub(crate) async fn rank(
             .ok()?;
         capped |= total > MAX_RECORDS;
         let recs = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id, body, body_norm FROM memory ORDER BY created_at DESC, id LIMIT {MAX_RECORDS}"
+            "SELECT id, body, body_norm, {DEMOTE_SQL} AS demote FROM memory ORDER BY created_at DESC, id LIMIT {MAX_RECORDS}"
         )))
+        .bind(crate::ai::stale_cutoff(app, &open[i].0.id).await)
         .fetch_all(a.pool())
         .await
         .ok()?;
@@ -113,6 +113,7 @@ pub(crate) async fn rank(
             cands.push(Cand {
                 room: i,
                 id: r.try_get("id").ok()?,
+                demote: r.try_get::<i64, _>("demote").ok()?,
                 hash,
             });
         }
@@ -136,18 +137,22 @@ pub(crate) async fn rank(
         .enumerate()
         .filter_map(|(i, c)| have.get(&c.hash).map(|v| (i.to_string(), v.clone())))
         .collect();
-    let top = similar(&qv, &scored, limit);
+    let mut top = similar(&qv, &scored, limit);
     let keep = within_margin(
         &top.iter().map(|t| t.1).collect::<Vec<_>>(),
         Q_MEMORY_MARGIN,
     );
+    top.truncate(keep);
+    // Stale project state and tasks after the fresh ones, contested records last, each group still
+    // best first (stable).
+    top.sort_by_key(|t| cands[t.0.parse::<usize>().unwrap_or(0)].demote);
     let mut hits = vec![];
-    for (i, _) in top.into_iter().take(keep) {
+    for (i, _) in top {
         let c = &cands[i.parse::<usize>().ok()?];
         let (v, a) = &open[c.room];
-        let r = sqlx::query(
-            "SELECT id, type, body, tags, source_ids, created_at FROM memory WHERE id = ?",
-        )
+        let r = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT id, type, body, tags, source_ids, created_at, contests, {CONTESTS_KIND} FROM memory WHERE id = ?"
+        )))
         .bind(&c.id)
         .fetch_optional(a.pool())
         .await
@@ -160,6 +165,7 @@ pub(crate) async fn rank(
             id: rec.id,
             started_at: rec.created_at,
             text: rec.text,
+            demote: c.demote,
         });
     }
     Some((hits, capped))
@@ -181,7 +187,12 @@ pub(crate) fn fuse(keyword: Vec<AiHit>, meaning: Vec<AiHit>, limit: usize) -> Ve
         .chain(meaning)
         .filter(|h| seen.insert(key(h)))
         .collect();
-    all.sort_by(|a, b| score[&key(b)].total_cmp(&score[&key(a)]));
+    // Fused best first, but never above the demotion: contested stays last (B4-02).
+    all.sort_by(|a, b| {
+        a.demote
+            .cmp(&b.demote)
+            .then(score[&key(b)].total_cmp(&score[&key(a)]))
+    });
     all.truncate(limit);
     all
 }
@@ -197,6 +208,7 @@ mod tests {
             id: id.into(),
             started_at: String::new(),
             text: id.into(),
+            demote: 0,
         }
     }
 
@@ -206,5 +218,16 @@ mod tests {
         let ids: Vec<&str> = out.iter().map(|x| x.id.as_str()).collect();
         assert_eq!(ids, ["b", "a", "c"]);
         assert_eq!(fuse(vec![h("a"), h("b")], vec![], 1).len(), 1);
+    }
+
+    #[test]
+    fn a_contested_hit_stays_last_after_fusion() {
+        let contested = AiHit {
+            demote: 2,
+            ..h("x")
+        };
+        let out = fuse(vec![contested.clone(), h("a")], vec![contested, h("c")], 10);
+        let ids: Vec<&str> = out.iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(ids, ["a", "c", "x"]);
     }
 }
