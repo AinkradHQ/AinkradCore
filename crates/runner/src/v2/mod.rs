@@ -36,6 +36,7 @@ pub mod key;
 pub mod login;
 pub mod mirror;
 pub mod pair;
+mod port;
 pub mod pty;
 mod run;
 mod sandbox;

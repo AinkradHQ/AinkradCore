@@ -551,6 +551,24 @@ impl Session {
                 });
                 None
             }
+            Command::PortOpen(req) => {
+                let Some(run) = self.run.as_ref().filter(|r| r.info().is_some()) else {
+                    return Some(Body::Error(StreamError::new(
+                        ErrorCode::UnsupportedCommand,
+                        "project runs are not set up on this runner (install it with --with-run)",
+                    )));
+                };
+                let (run, done) = (Arc::clone(run), self.done_tx.clone());
+                let (cancel_tx, cancel) = oneshot::channel();
+                let (inbox_tx, inbox) = mpsc::unbounded_channel();
+                h.cancel = Some(cancel_tx);
+                h.inbox = Some(inbox_tx);
+                tokio::spawn(async move {
+                    let last = run.port(req, stream, inbox, cancel, done.clone()).await;
+                    let _ = done.send((stream, last));
+                });
+                None
+            }
             Command::RunnerPolicy(_) | Command::ToolsInstall(_) | Command::ToolsStatus(_) => {
                 self.start_control(stream, command)
             }

@@ -6,8 +6,8 @@
 //! `repo_url_problem` here and again in the store, so no credential or odd scheme gets in.
 
 pub mod run_spec;
-pub mod secrets;
 pub mod runs;
+pub mod secrets;
 
 use axum::Json;
 use axum::extract::{Extension, Path, Query, State};

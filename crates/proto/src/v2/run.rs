@@ -150,6 +150,9 @@ pub struct PublishedPort {
     pub port: u16,
     /// Where it listens on the runner's 127.0.0.1.
     pub host_port: u16,
+    /// The spec marked it `expose: true`: the only ports `port.open` serves (P6-01).
+    #[serde(default)]
+    pub expose: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

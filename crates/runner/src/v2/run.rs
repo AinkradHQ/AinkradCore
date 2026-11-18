@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use ainkrad_proto::v2::{
-    Command, DRIVER_RUN, DriverInfo, ErrorCode, OP_RUN_START, OP_RUN_STATUS, OP_RUN_STOP, Reply,
-    RunStart, StreamError,
+    Command, DRIVER_RUN, DriverInfo, ErrorCode, OP_PORT_OPEN, OP_RUN_START, OP_RUN_STATUS,
+    OP_RUN_STOP, PortOpen, Reply, RunList, RunStart, StreamError,
 };
 use zeroize::Zeroizing;
 
@@ -82,7 +82,7 @@ impl RunDriver {
     pub fn info(&self) -> Option<DriverInfo> {
         self.socket.exists().then(|| DriverInfo {
             name: DRIVER_RUN.to_owned(),
-            commands: [OP_RUN_START, OP_RUN_STOP, OP_RUN_STATUS]
+            commands: [OP_RUN_START, OP_RUN_STOP, OP_RUN_STATUS, OP_PORT_OPEN]
                 .map(str::to_owned)
                 .into(),
             capacity: 4,
@@ -137,6 +137,48 @@ impl RunDriver {
                 "not a run op",
             )),
         }
+    }
+
+    /// `port.open` (P6-01): resolves the request against the run's live containers (`port::resolve`),
+    /// then bridges the stream until it or the run ends. The last frame is returned.
+    pub async fn port(
+        self: Arc<Self>,
+        req: PortOpen,
+        stream: u64,
+        inbox: tokio::sync::mpsc::UnboundedReceiver<ainkrad_proto::v2::Body>,
+        cancel: tokio::sync::oneshot::Receiver<()>,
+        out: tokio::sync::mpsc::UnboundedSender<(u64, ainkrad_proto::v2::Body)>,
+    ) -> ainkrad_proto::v2::Body {
+        use ainkrad_proto::v2::Body;
+        let refuse = |c, m: String| Body::Error(StreamError::new(c, m));
+        if let Some(p) = req.problem() {
+            return refuse(ErrorCode::InvalidArgs, p);
+        }
+        let host_port = match self
+            .runs(&req.run)
+            .await
+            .and_then(|l| super::port::resolve(&l, &req))
+        {
+            Ok(p) => p,
+            Err(e) => return refuse(ErrorCode::InvalidArgs, e),
+        };
+        let (me, asked) = (&*self, &req);
+        let alive = move || async move {
+            me.runs(&asked.run)
+                .await
+                .and_then(|l| super::port::resolve(&l, asked))
+                == Ok(host_port)
+        };
+        super::port::bridge(host_port, alive, stream, inbox, cancel, out).await
+    }
+
+    /// The helper's view of run `run`.
+    async fn runs(&self, run: &str) -> Result<RunList, String> {
+        let req = Request::Status {
+            run: Some(run.to_owned()),
+        };
+        let v = helper::call(&self.socket, &req, &[]).await?;
+        serde_json::from_value(v).map_err(|e| e.to_string())
     }
 
     /// Checks the request, redeems its leases and fills the env; the secrets list leaves it empty.
