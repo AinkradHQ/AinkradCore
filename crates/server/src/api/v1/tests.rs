@@ -103,6 +103,7 @@ mod placement;
 mod pools;
 mod preauth;
 mod project_secrets_api;
+mod project_secrets_review;
 mod projects_api;
 mod providers;
 mod push;

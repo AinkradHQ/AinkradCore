@@ -223,7 +223,7 @@ async fn deleting_a_used_secret_warns_naming_the_spec_version() {
 }
 
 #[tokio::test]
-async fn an_archived_project_takes_no_secret_changes() {
+async fn an_archived_project_takes_no_new_secret_values() {
     let fx = fx().await;
     seed(&fx.pool, fx.project, &["k"]).await;
     projects::archive(&fx.pool, fx.project, who())
@@ -232,10 +232,10 @@ async fn an_archived_project_takes_no_secret_changes() {
     let sealer = broker(&fx.pool).await;
     let r = set(&fx.pool, &sealer, fx.project, "k", &input(VALUE), who()).await;
     assert_eq!(code(r).0, "conflict");
-    assert_eq!(
-        code(delete(&fx.pool, fx.project, "k", true, who()).await).0,
-        "conflict"
-    );
+    // Deleting stays possible, so a leaked credential can be revoked (see review_tests).
+    delete(&fx.pool, fx.project, "k", true, who())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

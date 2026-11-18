@@ -256,6 +256,26 @@ async fn not_project(app: &App, secret: Option<&str>, group: Option<&str>) -> Re
     }
 }
 
+/// A new global secret may not be named `<project-slug>.*`: that is the project's namespace, and
+/// a look-alike outside its group must not exist.
+async fn not_project_slug(app: &App, name: &str) -> Result<(), ApiError> {
+    let Some((slug, _)) = name.split_once('.') else {
+        return Ok(());
+    };
+    let taken: i64 = sqlx::query_scalar("SELECT count(*) FROM core_projects WHERE slug = ?")
+        .bind(slug)
+        .fetch_one(&app.pool)
+        .await?;
+    match taken {
+        0 => Ok(()),
+        _ => Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "that name belongs to a project; add it under the project's secrets",
+        )),
+    }
+}
+
 #[utoipa::path(get, path = "/api/v1/secrets", operation_id = "listSecrets", tag = "secrets",
     responses((status = 200, description = "Every secret, by name, without its value", body = Vec<SecretInfo>)))]
 pub async fn list(State(app): State<App>) -> ApiResult<Vec<SecretInfo>> {
@@ -277,6 +297,7 @@ pub async fn create(
     let b: NewSecret = parse(&body)?;
     not_account(&b.name)?;
     not_project(&app, None, b.group.as_deref()).await?;
+    not_project_slug(&app, &b.name).await?;
     let new = NewValue {
         value: &b.value,
         runners: b.runners.as_deref(),

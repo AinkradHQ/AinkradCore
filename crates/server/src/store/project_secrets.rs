@@ -8,6 +8,14 @@
 //! sees only `<name>`. The prefix can never make an `acct.` provider-account name. The generic
 //! `/secrets` routes refuse members of a `project-*` group, so the in-use check below cannot be
 //! bypassed.
+//!
+//! CONTRACT for run-time `${secret:...}` resolution (the runner/lease path): resolve a name by
+//! `core_secrets.group_id = project.secret_group` and `name = <slug>.<name>`, NEVER by the name
+//! alone. Names are global, so a name lookup could reach another project's, a global or an
+//! `acct.` secret. The generic `POST /secrets` also refuses `<existing-project-slug>.*`, so a
+//! look-alike cannot be planted outside the group, but the group-id filter is the real guard.
+//! An archived project refuses `set` only; `delete` still works so a leaked credential can be
+//! revoked.
 
 use sqlx::sqlite::SqlitePool;
 use sqlx::{Row, SqliteConnection};
@@ -122,13 +130,15 @@ pub async fn list(pool: &SqlitePool, project_id: i64) -> Result<Vec<ProjectSecre
         return Ok(Vec::new());
     }
     let prefix = format!("{}.", project.slug);
-    let group = format!("{GROUP_PREFIX}{}", project.slug);
+    // Members by group id, the same filter as `names`, `check_refs` and `delete`.
+    let members = names(&mut *pool.acquire().await?, &project).await?;
     let mut out = Vec::new();
     for m in secrets::list(pool).await? {
-        if m.group.as_deref() != Some(&group) {
-            continue;
-        }
-        if let Some(name) = m.name.strip_prefix(&prefix) {
+        if let Some(name) = m
+            .name
+            .strip_prefix(&prefix)
+            .filter(|n| members.iter().any(|x| x == n))
+        {
             out.push(ProjectSecret {
                 name: name.to_owned(),
                 kind: m.kind,
@@ -253,7 +263,7 @@ async fn used_by(
     Ok(out)
 }
 
-/// Deletes the project's secret `name` (and its leases). A secret that a spec version refers to
+/// Deletes the project's secret `name` (and its leases), also for an archived project. A secret that a spec version refers to
 /// is a 409 `conflict` naming the newest such version, unless `force`; the specs are never
 /// changed, so a forced delete leaves them referring to a secret that is gone until they are
 /// saved again.
@@ -265,10 +275,8 @@ pub async fn delete(
     who: Who<'_>,
 ) -> Result<(), Error> {
     let mut tx = super::begin_write(pool).await?;
+    // Allowed while archived: a leaked credential must stay revocable.
     let project = projects::get(&mut tx, project_id).await?;
-    if project.state == "archived" {
-        return refused("conflict", "the project is archived");
-    }
     if !names(&mut tx, &project).await?.iter().any(|n| n == name) {
         return refused("not_found", "no such project secret");
     }
@@ -389,5 +397,7 @@ pub(crate) mod fixtures {
     }
 }
 
+#[cfg(test)]
+mod review_tests;
 #[cfg(test)]
 mod tests;

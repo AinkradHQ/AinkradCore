@@ -137,7 +137,7 @@ pub struct ProjectSecretDeleted {
            DeleteQuery),
     responses((status = 200, description = "Deleted with its leases (audited as \
         `secret.deleted`). 409 `conflict` while a spec version refers to it, the message naming \
-        the newest such version, unless `force=true`; or for an archived project. 404 for no \
+        the newest such version, unless `force=true`; 404 for no \
         such project or secret", body = ProjectSecretDeleted)))]
 pub async fn delete(
     State(app): State<App>,
