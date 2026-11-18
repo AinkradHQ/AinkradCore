@@ -240,18 +240,27 @@ async fn the_database_allows_one_open_distil_per_room_and_a_manual_start_gets_th
 }
 
 #[tokio::test]
-async fn a_failing_sync_is_logged_and_set_aside_and_the_threshold_scan_still_runs() {
+async fn a_failing_sync_stops_the_tick_sets_nothing_aside_and_never_holds_a_stale_end() {
     let fx = fx().await;
     let (room, now) = quiet_room(&fx).await;
-    session(&fx, "as_bad", Some(ALPHA), "ended", None, &[("user", "x"), ("assistant", "y")]).await;
-    ended(&fx, "as_bad").await;
+    let before = cursor(&fx).await;
+    for i in 0..5 {
+        let id = format!("as_bad{i}");
+        session(&fx, &id, Some(ALPHA), "ended", None, &[("user", "x"), ("assistant", "y")]).await;
+        ended(&fx, &id).await;
+    }
     unread(&fx, &room, 40, &iso_of_unix(now - 60)).await;
     sqlx::query("ALTER TABLE brain_sources RENAME TO brain_sources_away").execute(&fx.app.pool).await.unwrap();
+    // The first end fails the sync and the tick stops there: none of the five is set aside.
     let n = fx.brain.auto_distil_step_at(now + 400).await;
-    sqlx::query("ALTER TABLE brain_sources_away RENAME TO brain_sources").execute(&fx.app.pool).await.unwrap();
+    assert_eq!(cursor(&fx).await, before);
+    // The threshold scan still ran.
     assert_eq!(n.unwrap(), 1, "the threshold queued its distil");
     assert_eq!(rows(&fx, "\"trigger\" = 'threshold'").await, 1);
-    assert_eq!(cursor(&fx).await, newest_event(&fx).await, "the bad event was set aside");
+    // Days later the ends are stale: they skip the sync and the cursor moves past them.
+    fx.brain.auto_distil_step_at(now + 3 * 86_400).await.unwrap();
+    sqlx::query("ALTER TABLE brain_sources_away RENAME TO brain_sources").execute(&fx.app.pool).await.unwrap();
+    assert_eq!(cursor(&fx).await, newest_event(&fx).await);
 }
 
 #[tokio::test]

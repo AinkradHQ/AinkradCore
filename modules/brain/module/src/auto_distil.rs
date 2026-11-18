@@ -14,7 +14,7 @@
 //! - Queueing happens in one write transaction (check, cap, insert), so two ticks or a crash in
 //!   between never leave a duplicate or a half-made row; a unique index (one open distil per room)
 //!   also settles a race with a manual start. The event cursor moves only past an event that reached
-//!   `queue` (or was set aside as bad), so a temporary failure or an unsynced session replays it, and
+//!   `queue` , so a temporary failure or an unsynced session replays it, and
 //!   replays are harmless.
 //! - The distil runs as the room owner's (user 1) most recent manual requester that holds `write` or
 //!   `admin`, never as a read-only device.
@@ -340,26 +340,27 @@ async fn ended(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError> {
                     break 'pages;
                 }
                 if let Some(id) = e.payload["session"].as_str() {
-                    if !synced {
+                    // An end this old is not waited on: it skips the sync (a failing sync must not
+                    // hold it) and is queued from whatever is already collected.
+                    let stale = e.at < old;
+                    if !stale && !synced {
                         // Collects every finished session, this one among them, into its room.
                         match sync_core(app, b, None, None).await {
                             Ok(r) if r.idle.as_deref() == Some("running") => break 'pages,
                             Ok(_) => synced = true,
-                            // The brain key is missing or locked: wait, nothing is lost.
+                            // The key is missing or locked: wait, nothing is lost.
                             Err(x) if x.status == StatusCode::CONFLICT => break 'pages,
-                            // Any other failure: log it, set this event aside, go on (the next event
-                            // tries the sync again, and the threshold scan does not depend on it).
+                            // Any other failure may be temporary: log it and stop here. The cursor
+                            // stays, the sync ran once this tick, no event is set aside.
                             Err(x) => {
-                                tracing::error!(code = %x.code, session = id, "sync_core failed; the end event is set aside");
-                                from = e.seq;
-                                save_cursor(app, from).await?;
-                                continue;
+                                tracing::error!(code = %x.code, session = id, "sync_core failed; the end events wait");
+                                break 'pages;
                             }
                         }
                     }
                     // Past the cursor only once the event reached `queue`: a session the sync has
                     // not taken yet (200 a time) is read again next tick.
-                    match session_ended(app, b, id, now, e.at < old).await? {
+                    match session_ended(app, b, id, now, stale).await? {
                         Some(n) => queued += n,
                         None => break 'pages,
                     }
