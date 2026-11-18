@@ -655,3 +655,34 @@ async fn a_hostile_repo_copy_yields_only_docs_markdown() {
     .await;
     assert_eq!(none["state"], "abandoned");
 }
+
+#[tokio::test]
+async fn apple_notes_run_has_its_own_origins() {
+    let fx = fx().await;
+    let p = project(&fx, "alpha").await;
+    let _ = upload(&fx, &p, &[("a.md", "# Same\n")]).await;
+    let run = ok(
+        &fx,
+        Method::POST,
+        "/imports",
+        Some(json!({"source": "apple_notes", "project": p})),
+    )
+    .await;
+    assert_eq!((run["source"].as_str(), run["state"].as_str()), (Some("apple_notes"), Some("staging")));
+    let id = run["id"].as_str().unwrap().to_owned();
+    ok(
+        &fx,
+        Method::POST,
+        &format!("/imports/{id}/items"),
+        Some(json!({"items": [{"path": "Work/a.md", "text": "# Same\n"}]})),
+    )
+    .await;
+    let run = ok(&fx, Method::POST, &format!("/imports/{id}/finish"), None).await;
+    assert_eq!(run["state"], "review");
+    let origin = scalar(
+        &fx,
+        &format!("SELECT origin FROM lore_import_items WHERE run = '{id}'"),
+    )
+    .await;
+    assert_eq!(origin, format!("apple_notes:{p}:Work/a.md"));
+}

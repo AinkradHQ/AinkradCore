@@ -2,7 +2,7 @@
 //! Security model: see `import_read.rs` (all input is hostile: path rules, zip and git reading, caps). Here:
 //! - A run stages *items*, never notes; nothing becomes a note before `commit`, and nothing is written outside
 //!   the Lore tables. Items hold the text only (no path outside what `classify_path` accepted).
-//! - Identity is the origin (`mirror:<project>:<repo>:<path>` / `upload:<project>:<path>`): importing it again updates the
+//! - Identity is the origin (`mirror:<project>:<repo>:<path>` / `upload:<project>:<path>` / `apple_notes:<project>:<path>`): importing it again updates the
 //!   note it made, and only while the note is unedited (its text still hashes to `import_hash`). An edited note is
 //!   never overwritten: it is flagged `conflict`, kept as it is, and the incoming text is kept as a `conflict`
 //!   version. An update first keeps the old text as an `auto` version (T4); undo puts it back exactly.
@@ -49,7 +49,8 @@ fn too_large(what: &'static str) -> ApiError {
 
 #[derive(Deserialize, ToSchema)]
 pub struct NewRun {
-    /// `mirror` (the project's repo copy in the Core) or `upload` (items or a zip sent to this run).
+    /// `mirror` (the project's repo copy in the Core), `upload` (items or a zip sent to this run) or `apple_notes`
+    /// (an upload run whose Markdown the Mac made from Apple Notes; own origins).
     pub source: String,
     /// The project the notes go to; absent = personal (an upload only).
     pub project: Option<String>,
@@ -58,7 +59,7 @@ pub struct NewRun {
 }
 
 #[utoipa::path(post, path = "/imports", operation_id = "loreCreateImport", tag = "lore", request_body = NewRun,
-    responses((status = 200, description = "A new run. `upload`: state `staging`, send items or a zip, then `finish`. `mirror`: the repo copy's `Docs/` (or `docs/`) is read now, `.md` regular files only, and the run comes back in `review` (or `abandoned` with `error` when it could not be read). Needs an active project with a copy", body = RunView)))]
+    responses((status = 200, description = "A new run. `upload` and `apple_notes`: state `staging`, send items or a zip, then `finish`. `mirror`: the repo copy's `Docs/` (or `docs/`) is read now, `.md` regular files only, and the run comes back in `review` (or `abandoned` with `error` when it could not be read). Needs an active project with a copy", body = RunView)))]
 pub(crate) async fn create(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -67,7 +68,7 @@ pub(crate) async fn create(
 ) -> ApiResult<RunView> {
     let mirror = match req.source.as_str() {
         "mirror" => true,
-        "upload" => false,
+        "upload" | "apple_notes" => false,
         _ => return Err(ApiError::bad_request("the import source is not valid")),
     };
     let mut tx = begin_write(&app.pool).await?;
@@ -206,18 +207,23 @@ pub struct UploadBatch {
     pub items: Vec<UploadItem>,
 }
 
-/// Where an upload run's origins live: its project, or `-` for personal.
+/// Where an upload run's origins live: its project, or `-` for personal. An `apple_notes` run takes the same items as
+/// an `upload` one (Markdown the Mac made from Notes), under its own origin prefix, so a note imported again from Apple
+/// Notes updates the note it made and never one a file import made.
 async fn upload_scope(
     conn: &mut SqliteConnection,
     run: &str,
 ) -> Result<(String, Option<String>), ApiError> {
-    let r = sqlx::query("SELECT project FROM lore_imports WHERE id = ? AND source = 'upload'")
+    let r = sqlx::query(
+        "SELECT project, source FROM lore_imports WHERE id = ? AND source IN ('upload', 'apple_notes')",
+    )
         .bind(run)
         .fetch_optional(&mut *conn)
         .await?
         .ok_or_else(|| ApiError::conflict("the import does not take uploads"))?;
     let p: Option<String> = r.try_get("project")?;
-    Ok((format!("upload:{}:", p.as_deref().unwrap_or("-")), p))
+    let source: String = r.try_get("source")?;
+    Ok((format!("{source}:{}:", p.as_deref().unwrap_or("-")), p))
 }
 
 #[utoipa::path(post, path = "/imports/{run}/items", operation_id = "loreAddImportItems", tag = "lore",
