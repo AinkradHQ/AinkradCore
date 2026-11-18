@@ -106,6 +106,7 @@ pub async fn redeem(app: &App, ticket: &str, addr: &str) -> Result<Verified, Ref
             device: d,
             session: Some(session),
             body: Default::default(),
+            permit: None,
         }),
         Ok(_) => refused("ticket of a device no longer usable").await,
         Err(e) => Err(ApiError::from(e).into_response().into()),

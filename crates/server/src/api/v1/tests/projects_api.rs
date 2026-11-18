@@ -194,6 +194,11 @@ async fn repos_are_added_made_primary_removed_and_show_their_mirror() {
     assert_eq!(a.0, StatusCode::OK, "{}", a.1);
     assert_eq!(a.1["repos"][0]["is_primary"], true, "the first is primary");
     assert_eq!(a.1["repos"][0]["mirror"], Value::Null, "not fetched yet");
+    assert_eq!(
+        a.1["room"],
+        Value::Null,
+        "Brain off: no room, the project works"
+    );
     let b = admin(&fx, Method::POST, &format!("{p}/repos"), repo("api")).await;
     let web = b.1["repos"]
         .as_array()

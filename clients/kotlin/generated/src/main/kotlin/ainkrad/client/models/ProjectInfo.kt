@@ -16,6 +16,7 @@
 package ainkrad.client.models
 
 import ainkrad.client.models.ProjectRepo
+import ainkrad.client.models.ProjectRoom
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -37,6 +38,7 @@ import kotlinx.serialization.Contextual
  * @param source `manual` or `github`.
  * @param state `active` or `archived`.
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param room The linked Brain room; null when the Brain is off or the project has none.
  */
 @Serializable
 
@@ -86,7 +88,11 @@ data class ProjectInfo (
 
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "updated_at")
-    val updatedAt: java.time.OffsetDateTime
+    val updatedAt: java.time.OffsetDateTime,
+
+    /* The linked Brain room; null when the Brain is off or the project has none. */
+    @SerialName(value = "room")
+    val room: ProjectRoom? = null
 
 ) {
 

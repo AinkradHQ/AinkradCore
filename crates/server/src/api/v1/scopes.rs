@@ -391,6 +391,20 @@ fn module_path(path: &str) -> Option<(&str, &str)> {
     (sub.starts_with('/')).then_some((id, sub))
 }
 
+/// The body cap a module route declared (`Module::body_limits`), clamped to the platform maximum.
+pub fn module_body_limit(
+    modules: &[Arc<dyn Module>],
+    method: &Method,
+    path: &str,
+) -> Option<usize> {
+    let (id, sub) = module_path(path)?;
+    let m = modules.iter().find(|m| m.id() == id)?;
+    m.body_limits()
+        .iter()
+        .find(|(mm, t, _)| mm.eq_ignore_ascii_case(method.as_str()) && fits(t, sub))
+        .map(|(_, _, n)| (*n).min(crate::module::MAX_MODULE_BODY))
+}
+
 /// Whether every name of `query` is allowed on a module route: a platform name
 /// (`super::QUERY`) or one the path's module declares in `Module::query_names`. Never true for
 /// a path outside `/modules/<id>/v1`, nor for another module's names.
