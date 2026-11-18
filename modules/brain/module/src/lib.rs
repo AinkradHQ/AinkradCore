@@ -25,12 +25,14 @@ use utoipa::{OpenApi, ToSchema};
 mod access;
 mod ai;
 mod ai_semantic;
+mod context;
 mod aliases;
 mod answer;
 mod answer_turns;
 mod auto_distil;
 mod backfill;
 pub mod card;
+pub mod me_card;
 mod change_routes;
 mod checkpoint;
 pub mod changes;
@@ -223,6 +225,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     // creator holds. They answer only a session's own calls (`ai::session_of`).
     ("GET", "/ai/rooms", "read"),
     ("GET", "/ai/search", "read"),
+    ("GET", "/ai/context", "read"),
     ("GET", "/ai/rooms/{room}/records/{id}", "read"),
     (
         "GET",
@@ -550,6 +553,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         access::put,
         ai::rooms,
         ai::search,
+        context::context,
         ai::one,
         ai::evidence,
         ai::decisions,
@@ -636,6 +640,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         ai::AiRoom,
         ai::AiHit,
         ai::AiHits,
+        context::AiContext,
         ai::AiRecord,
         ai::AiRecords,
         ai::AiPast,
@@ -724,6 +729,7 @@ impl Module for Brain {
             )
             .route("/ai/rooms", get(ai::rooms))
             .route("/ai/search", get(ai::search))
+            .route("/ai/context", get(context::context))
             .route("/ai/rooms/{room}/records/{id}", get(ai::one))
             .route(
                 "/ai/rooms/{room}/records/{id}/sources/{source}",
@@ -783,6 +789,8 @@ impl Module for Brain {
             "brain.room.linked",
             "brain.room.unlinked",
             "brain.ai.evidence",
+            "brain.ai.context",
+            "brain.me_card.served",
             "brain.ai.proposed",
             "brain.ai.checkpoint_requested",
             "brain.ai.refused",
@@ -795,7 +803,7 @@ impl Module for Brain {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["q", "room", "mode", "status", "limit", "after"]
+        &["q", "room", "mode", "status", "limit", "after", "prompt", "budget"]
     }
 
     fn jobs(&self) -> Vec<Job> {

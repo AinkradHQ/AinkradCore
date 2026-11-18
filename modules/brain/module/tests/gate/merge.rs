@@ -85,6 +85,7 @@ async fn one_fact_from_three_sessions_is_one_record_and_undo_restores_it() {
         &mut cs,
         "rec-1",
         &["s2".to_owned()],
+        "run-1",
         &Default::default(),
         "2026-11-11T10:00:00Z",
     )
@@ -95,6 +96,7 @@ async fn one_fact_from_three_sessions_is_one_record_and_undo_restores_it() {
         &mut cs,
         "rec-1",
         &["s3".to_owned(), "s1".to_owned()],
+        "run-2",
         &Default::default(),
         "2026-11-12T10:00:00Z",
     )
@@ -196,12 +198,28 @@ async fn support_counts_distinct_origins_and_never_a_session_that_loaded_the_rec
     // One session says it again, then again in a later part: still one origin.
     let mut tx = pool.begin().await.unwrap();
     let mut cs = ChangeSet::new("distil", at);
-    reinforce(&mut tx, &mut cs, "rec-1", &["a1".to_owned()], &none, at)
-        .await
-        .unwrap();
-    reinforce(&mut tx, &mut cs, "rec-1", &["a2".to_owned()], &none, at)
-        .await
-        .unwrap();
+    reinforce(
+        &mut tx,
+        &mut cs,
+        "rec-1",
+        &["a1".to_owned()],
+        "run-x",
+        &none,
+        at,
+    )
+    .await
+    .unwrap();
+    reinforce(
+        &mut tx,
+        &mut cs,
+        "rec-1",
+        &["a2".to_owned()],
+        "run-x",
+        &none,
+        at,
+    )
+    .await
+    .unwrap();
     cs.commit(&mut tx, "Saved 0 · reinforced 2", serde_json::json!({}))
         .await
         .unwrap();
@@ -214,12 +232,28 @@ async fn support_counts_distinct_origins_and_never_a_session_that_loaded_the_rec
     let loaded_c = std::collections::HashSet::from(["C".to_owned()]);
     let mut tx = pool.begin().await.unwrap();
     let mut cs = ChangeSet::new("distil", later);
-    reinforce(&mut tx, &mut cs, "rec-1", &["b1".to_owned()], &none, later)
-        .await
-        .unwrap();
-    reinforce(&mut tx, &mut cs, "rec-1", &["c1".to_owned()], &loaded_c, later)
-        .await
-        .unwrap();
+    reinforce(
+        &mut tx,
+        &mut cs,
+        "rec-1",
+        &["b1".to_owned()],
+        "run-x",
+        &none,
+        later,
+    )
+    .await
+    .unwrap();
+    reinforce(
+        &mut tx,
+        &mut cs,
+        "rec-1",
+        &["c1".to_owned()],
+        "run-x",
+        &loaded_c,
+        later,
+    )
+    .await
+    .unwrap();
     let id = cs
         .commit(&mut tx, "Saved 0 · reinforced 2", serde_json::json!({}))
         .await

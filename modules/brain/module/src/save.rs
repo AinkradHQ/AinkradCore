@@ -83,7 +83,7 @@ pub(crate) async fn store_candidates(
                 && may_supersede(&c.kind, &c.kind, g))
         {
             let loaded_by = loaded.get(&id).unwrap_or(&none);
-            reinforce(&mut tx, &mut cs, &id, &c.sources, loaded_by, now).await?;
+            reinforce(&mut tx, &mut cs, &id, &c.sources, distil, loaded_by, now).await?;
             reinforced += 1;
             continue;
         }
@@ -113,11 +113,12 @@ pub(crate) async fn store_candidates(
         .await?;
         for (pos, s) in c.sources.iter().enumerate() {
             sqlx::query(
-                "INSERT OR IGNORE INTO record_sources (record, source, position) VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO record_sources (record, source, position, run) VALUES (?, ?, ?, ?)",
             )
             .bind(&id)
             .bind(s)
             .bind(pos as i64)
+            .bind(distil)
             .execute(&mut *tx)
             .await?;
         }

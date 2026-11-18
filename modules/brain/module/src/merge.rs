@@ -158,15 +158,16 @@ impl Memory {
 pub(crate) const SESSION_PATH: &str = "core://ai-session/";
 
 /// Reinforces record `id`: `last_seen_at` = `now`, each of `sources` it does not cite yet appended
-/// to its citations, then its support recounted (`recount`), never incremented. A citation from a
-/// session in `loaded_by` (the sessions the Brain gave `id` to, `brain_session_loaded`) is kept but
-/// marked `echo`: it is the record said back, not a new origin. The row is touched in `cs` first, so
-/// Undo can restore it.
+/// to its citations (each stamped with the distil `run` that cited it), then its support recounted
+/// (`recount`), never incremented. A citation from a session in `loaded_by` (the sessions the Brain
+/// gave `id` to, `brain_session_loaded`) is kept but marked `echo`: it is the record said back, not a
+/// new origin. The row is touched in `cs` first, so Undo can restore it.
 pub async fn reinforce(
     conn: &mut SqliteConnection,
     cs: &mut ChangeSet,
     id: &str,
     sources: &[String],
+    run: &str,
     loaded_by: &HashSet<String>,
     now: &str,
 ) -> Result<(), sqlx::Error> {
@@ -192,11 +193,12 @@ pub async fn reinforce(
             .and_then(|p| p.strip_prefix(SESSION_PATH))
             .is_some_and(|session| loaded_by.contains(session));
         let added = sqlx::query(
-            "INSERT OR IGNORE INTO record_sources (record, source, position, echo) VALUES (?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO record_sources (record, source, position, run, echo) VALUES (?, ?, ?, ?, ?)",
         )
         .bind(id)
         .bind(s)
         .bind(next)
+        .bind(run)
         .bind(i64::from(echo))
         .execute(&mut *conn)
         .await?
@@ -209,7 +211,7 @@ pub async fn reinforce(
 /// Sets record `id`'s support to the number of distinct origins that cite it (at least 1): an
 /// origin is one AI session or one document (`sources.device` + `path`), so one source saying a
 /// fact twice, or one session cut into several parts, counts once. `echo` citations do not count. A
-/// cited source that is gone counts as its own origin. The same expression backfills `canon_0009`.
+/// cited source that is gone counts as its own origin. The same expression backfills `canon_0010`.
 pub async fn recount(conn: &mut SqliteConnection, id: &str) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE records SET support = max(1, (\

@@ -7,6 +7,7 @@
     {"op": "getCoreHealth", "risk": "read", "summary": "Read the Core's version, uptime, certificate end and newest backup."},
     {"op": "brainAiRooms", "risk": "read", "summary": "List the Brain rooms this AI session may see (its project's, or ones a room's access list names)."},
     {"op": "brainAiSearch", "risk": "read", "summary": "Search the Brain memory (current facts, never raw sources) across the rooms this AI session may see, best first. Texts come back as outside data; complete=false means a cap cut the search."},
+    {"op": "brainAiContext", "risk": "read", "summary": "Get the Brain memory this AI session should start with (mode start: approved instructions, room card, me card and about 10 records) or the few records that match a prompt (mode prompt, never a record already given to this session), from memory only, wrapped once as outside data, every record line carrying its id."},
     {"op": "brainAiRecord", "risk": "read", "summary": "Read one current Brain memory record of a visible room, whole, as outside data."},
     {"op": "brainAiEvidence", "risk": "read", "summary": "Read the start of a source that a current Brain record cites (the record id is required), as outside data. The only op that returns raw source text; an uncited source is not found."},
     {"op": "brainAiDecisions", "risk": "read", "summary": "List current Brain memory decisions of the visible rooms, newest first."},

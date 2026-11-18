@@ -11,8 +11,10 @@ use std::collections::{HashMap, HashSet};
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::ApiError;
 use ainkrad_core_server::store::begin_write;
+use sqlx::SqliteConnection;
 
-/// Notes that `session` was given records `ids` of `room`. A repeat is a no-op.
+/// Notes that `session` was given records `ids` of `room`, in its own write transaction. A repeat
+/// is a no-op.
 pub(crate) async fn record(
     app: &App,
     session: &str,
@@ -23,6 +25,19 @@ pub(crate) async fn record(
         return Ok(());
     }
     let mut tx = begin_write(&app.pool).await?;
+    record_in(&mut tx, session, room, ids).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// `record` inside the caller's transaction, for an op that must write the ledger and its audit
+/// together before any text leaves (`context.rs`, fail closed).
+pub(crate) async fn record_in(
+    conn: &mut SqliteConnection,
+    session: &str,
+    room: &str,
+    ids: &[String],
+) -> Result<(), sqlx::Error> {
     for id in ids {
         sqlx::query(
             "INSERT OR IGNORE INTO brain_session_loaded (session, room, record) VALUES (?, ?, ?)",
@@ -30,10 +45,9 @@ pub(crate) async fn record(
         .bind(session)
         .bind(room)
         .bind(id)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
     }
-    tx.commit().await?;
     Ok(())
 }
 

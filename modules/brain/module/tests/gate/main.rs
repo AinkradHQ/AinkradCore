@@ -10,6 +10,7 @@ mod checkpoint;
 mod backfill;
 mod claim;
 mod collectors;
+mod context;
 mod common;
 mod decide;
 mod distil;
