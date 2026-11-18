@@ -1542,6 +1542,41 @@ extension Components {
                 case deleted
             }
         }
+        /// - Remark: Generated from `#/components/schemas/Build`.
+        public struct Build: Codable, Hashable, Sendable {
+            /// Build context inside that repo; default `.`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Build/context`.
+            public var context: Swift.String?
+            /// Path of the Dockerfile inside that repo; default `Dockerfile`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Build/dockerfile`.
+            public var dockerfile: Swift.String?
+            /// A repo of the project.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Build/repo`.
+            public var repo: Swift.String
+            /// Creates a new `Build`.
+            ///
+            /// - Parameters:
+            ///   - context: Build context inside that repo; default `.`.
+            ///   - dockerfile: Path of the Dockerfile inside that repo; default `Dockerfile`.
+            ///   - repo: A repo of the project.
+            public init(
+                context: Swift.String? = nil,
+                dockerfile: Swift.String? = nil,
+                repo: Swift.String
+            ) {
+                self.context = context
+                self.dockerfile = dockerfile
+                self.repo = repo
+            }
+            public enum CodingKeys: String, CodingKey {
+                case context
+                case dockerfile
+                case repo
+            }
+        }
         /// An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first
         /// entry that has one to give.
         ///
@@ -3508,6 +3543,23 @@ extension Components {
                 case supportedMinors = "supported_minors"
             }
         }
+        /// - Remark: Generated from `#/components/schemas/Health`.
+        public struct Health: Codable, Hashable, Sendable {
+            /// Run inside the container, one line of 1-512 characters; exit 0 is healthy.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Health/cmd`.
+            public var cmd: Swift.String
+            /// Creates a new `Health`.
+            ///
+            /// - Parameters:
+            ///   - cmd: Run inside the container, one line of 1-512 characters; exit 0 is healthy.
+            public init(cmd: Swift.String) {
+                self.cmd = cmd
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cmd
+            }
+        }
         /// A program installed on the host, as the helper's manifest and checks say.
         ///
         /// - Remark: Generated from `#/components/schemas/HostBinary`.
@@ -5271,6 +5323,33 @@ extension Components {
                 case value
             }
         }
+        /// - Remark: Generated from `#/components/schemas/NewRunSpec`.
+        public struct NewRunSpec: Codable, Hashable, Sendable {
+            /// Where it came from; default `manual`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewRunSpec/origin`.
+            public var origin: Swift.String?
+            /// The spec; see `RunSpec`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewRunSpec/spec`.
+            public var spec: Components.Schemas.RunSpec
+            /// Creates a new `NewRunSpec`.
+            ///
+            /// - Parameters:
+            ///   - origin: Where it came from; default `manual`.
+            ///   - spec: The spec; see `RunSpec`.
+            public init(
+                origin: Swift.String? = nil,
+                spec: Components.Schemas.RunSpec
+            ) {
+                self.origin = origin
+                self.spec = spec
+            }
+            public enum CodingKeys: String, CodingKey {
+                case origin
+                case spec
+            }
+        }
         /// A new secret. Deliberately no `Debug`.
         ///
         /// - Remark: Generated from `#/components/schemas/NewSecret`.
@@ -5931,6 +6010,33 @@ extension Components {
                 case name
                 case provider
                 case updatedAt = "updated_at"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/Port`.
+        public struct Port: Codable, Hashable, Sendable {
+            /// Give it a public URL (when the project is exposed); at most one per service.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Port/expose`.
+            public var expose: Swift.Bool?
+            /// The container port, 1-65535. It is only ever published on the runner's loopback.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Port/port`.
+            public var port: Swift.Int32
+            /// Creates a new `Port`.
+            ///
+            /// - Parameters:
+            ///   - expose: Give it a public URL (when the project is exposed); at most one per service.
+            ///   - port: The container port, 1-65535. It is only ever published on the runner's loopback.
+            public init(
+                expose: Swift.Bool? = nil,
+                port: Swift.Int32
+            ) {
+                self.expose = expose
+                self.port = port
+            }
+            public enum CodingKeys: String, CodingKey {
+                case expose
+                case port
             }
         }
         /// A price: millionths of a dollar per million tokens, and when the provider's list price was read.
@@ -6723,6 +6829,131 @@ extension Components {
                 case value
             }
         }
+        /// The whole spec: its services by name.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunSpec`.
+        public struct RunSpec: Codable, Hashable, Sendable {
+            /// 1-16 services. A name is 1-20 of `a-z0-9-`, starting with a letter: it is the service's
+            /// network alias and part of its public host name.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunSpec/services`.
+            public struct ServicesPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: [String: Components.Schemas.Service]
+                /// Creates a new `ServicesPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: [String: Components.Schemas.Service] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// 1-16 services. A name is 1-20 of `a-z0-9-`, starting with a letter: it is the service's
+            /// network alias and part of its public host name.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunSpec/services`.
+            public var services: Components.Schemas.RunSpec.ServicesPayload
+            /// Creates a new `RunSpec`.
+            ///
+            /// - Parameters:
+            ///   - services: 1-16 services. A name is 1-20 of `a-z0-9-`, starting with a letter: it is the service's
+            public init(services: Components.Schemas.RunSpec.ServicesPayload) {
+                self.services = services
+            }
+            public enum CodingKeys: String, CodingKey {
+                case services
+            }
+        }
+        /// A version without its spec.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunSpecSummary`.
+        public struct RunSpecSummary: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunSpecSummary/created_at`.
+            public var createdAt: Components.Schemas.Timestamp
+            /// - Remark: Generated from `#/components/schemas/RunSpecSummary/created_by`.
+            public var createdBy: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunSpecSummary/origin`.
+            public var origin: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunSpecSummary/version`.
+            public var version: Swift.Int64
+            /// Creates a new `RunSpecSummary`.
+            ///
+            /// - Parameters:
+            ///   - createdAt:
+            ///   - createdBy:
+            ///   - origin:
+            ///   - version:
+            public init(
+                createdAt: Components.Schemas.Timestamp,
+                createdBy: Swift.String,
+                origin: Swift.String,
+                version: Swift.Int64
+            ) {
+                self.createdAt = createdAt
+                self.createdBy = createdBy
+                self.origin = origin
+                self.version = version
+            }
+            public enum CodingKeys: String, CodingKey {
+                case createdAt = "created_at"
+                case createdBy = "created_by"
+                case origin
+                case version
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/RunSpecVersion`.
+        public struct RunSpecVersion: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunSpecVersion/created_at`.
+            public var createdAt: Components.Schemas.Timestamp
+            /// The device that saved it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunSpecVersion/created_by`.
+            public var createdBy: Swift.String
+            /// `manual`, `compose`, `package_json`, `makefile` or `run_sh`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunSpecVersion/origin`.
+            public var origin: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunSpecVersion/spec`.
+            public var spec: Components.Schemas.RunSpec
+            /// 1 for the first save, then one more each time.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunSpecVersion/version`.
+            public var version: Swift.Int64
+            /// Creates a new `RunSpecVersion`.
+            ///
+            /// - Parameters:
+            ///   - createdAt:
+            ///   - createdBy: The device that saved it.
+            ///   - origin: `manual`, `compose`, `package_json`, `makefile` or `run_sh`.
+            ///   - spec:
+            ///   - version: 1 for the first save, then one more each time.
+            public init(
+                createdAt: Components.Schemas.Timestamp,
+                createdBy: Swift.String,
+                origin: Swift.String,
+                spec: Components.Schemas.RunSpec,
+                version: Swift.Int64
+            ) {
+                self.createdAt = createdAt
+                self.createdBy = createdBy
+                self.origin = origin
+                self.spec = spec
+                self.version = version
+            }
+            public enum CodingKeys: String, CodingKey {
+                case createdAt = "created_at"
+                case createdBy = "created_by"
+                case origin
+                case spec
+                case version
+            }
+        }
         /// A paired runner and its live state.
         ///
         /// - Remark: Generated from `#/components/schemas/Runner`.
@@ -7478,6 +7709,137 @@ extension Components {
                 case updatedAt = "updated_at"
                 case useCount = "use_count"
                 case version
+            }
+        }
+        /// One container. Exactly one of `image` and `build`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/Service`.
+        public struct Service: Codable, Hashable, Sendable {
+            /// Build the image from a Dockerfile in one of the project's repos.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Service/build`.
+            public var build: Components.Schemas.Build?
+            /// Replaces the image's command; at most 64 arguments.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Service/command`.
+            public var command: [Swift.String]?
+            /// Services that must be started (and healthy, when they have a `health`) first.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Service/depends_on`.
+            public var dependsOn: [Swift.String]?
+            /// Environment. A value is plain text or contains `${secret:NAME}` references.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Service/env`.
+            public struct EnvPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: [String: Swift.String]
+                /// Creates a new `EnvPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: [String: Swift.String] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// Environment. A value is plain text or contains `${secret:NAME}` references.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Service/env`.
+            public var env: Components.Schemas.Service.EnvPayload?
+            /// - Remark: Generated from `#/components/schemas/Service/health`.
+            public var health: Components.Schemas.Health?
+            /// An image reference such as `postgres:17` or `ghcr.io/acme/app@sha256:...`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Service/image`.
+            public var image: Swift.String?
+            /// At most 8 ports the service listens on.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Service/ports`.
+            public var ports: [Components.Schemas.Port]?
+            /// Mount this project repo's checkout at `/repo/<name>`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Service/repo`.
+            public var repo: Swift.String?
+            /// Named volumes: volume name to the absolute container path it is mounted at.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Service/volumes`.
+            public struct VolumesPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: [String: Swift.String]
+                /// Creates a new `VolumesPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: [String: Swift.String] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// Named volumes: volume name to the absolute container path it is mounted at.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Service/volumes`.
+            public var volumes: Components.Schemas.Service.VolumesPayload?
+            /// Absolute path inside the container; default is the image's.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Service/workdir`.
+            public var workdir: Swift.String?
+            /// Creates a new `Service`.
+            ///
+            /// - Parameters:
+            ///   - build: Build the image from a Dockerfile in one of the project's repos.
+            ///   - command: Replaces the image's command; at most 64 arguments.
+            ///   - dependsOn: Services that must be started (and healthy, when they have a `health`) first.
+            ///   - env: Environment. A value is plain text or contains `${secret:NAME}` references.
+            ///   - health:
+            ///   - image: An image reference such as `postgres:17` or `ghcr.io/acme/app@sha256:...`.
+            ///   - ports: At most 8 ports the service listens on.
+            ///   - repo: Mount this project repo's checkout at `/repo/<name>`.
+            ///   - volumes: Named volumes: volume name to the absolute container path it is mounted at.
+            ///   - workdir: Absolute path inside the container; default is the image's.
+            public init(
+                build: Components.Schemas.Build? = nil,
+                command: [Swift.String]? = nil,
+                dependsOn: [Swift.String]? = nil,
+                env: Components.Schemas.Service.EnvPayload? = nil,
+                health: Components.Schemas.Health? = nil,
+                image: Swift.String? = nil,
+                ports: [Components.Schemas.Port]? = nil,
+                repo: Swift.String? = nil,
+                volumes: Components.Schemas.Service.VolumesPayload? = nil,
+                workdir: Swift.String? = nil
+            ) {
+                self.build = build
+                self.command = command
+                self.dependsOn = dependsOn
+                self.env = env
+                self.health = health
+                self.image = image
+                self.ports = ports
+                self.repo = repo
+                self.volumes = volumes
+                self.workdir = workdir
+            }
+            public enum CodingKeys: String, CodingKey {
+                case build
+                case command
+                case dependsOn = "depends_on"
+                case env
+                case health
+                case image
+                case ports
+                case repo
+                case volumes
+                case workdir
             }
         }
         /// - Remark: Generated from `#/components/schemas/SessionGrant`.

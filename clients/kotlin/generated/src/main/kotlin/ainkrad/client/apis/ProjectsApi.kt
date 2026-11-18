@@ -16,11 +16,12 @@
 package ainkrad.client.apis
 
 import ainkrad.client.models.ErrorBody
-import ainkrad.client.models.GithubRepoList
-import ainkrad.client.models.NewGithubProject
 import ainkrad.client.models.NewProject
 import ainkrad.client.models.NewProjectRepo
+import ainkrad.client.models.NewRunSpec
 import ainkrad.client.models.ProjectInfo
+import ainkrad.client.models.RunSpecSummary
+import ainkrad.client.models.RunSpecVersion
 import ainkrad.client.models.UpdateProject
 
 import ainkrad.client.infrastructure.*
@@ -141,18 +142,20 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
-        * POST /api/v1/projects/from-github
+        * POST /api/v1/projects/{id}/repos/{repo}/fetch
         * 
         * 
-         * @param newGithubProject  
+         * @param id The project&#39;s id 
+         * @param repo The repo&#39;s id 
          * @return ProjectInfo
         */
             @Suppress("UNCHECKED_CAST")
-        open suspend fun createProjectFromGithub(newGithubProject: NewGithubProject): HttpResponse<ProjectInfo> {
+        open suspend fun fetchProjectRepo(id: kotlin.String, repo: kotlin.String): HttpResponse<ProjectInfo> {
 
             val localVariableAuthNames = listOf<String>("device_signature")
 
-            val localVariableBody = newGithubProject
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
 
             val localVariableQuery = mutableMapOf<String, List<String>>()
 
@@ -160,13 +163,13 @@ import io.ktor.http.ParametersBuilder
 
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.POST,
-            "/api/v1/projects/from-github",
+            "/api/v1/projects/{id}/repos/{repo}/fetch".replace("{" + "id" + "}", "$id").replace("{" + "repo" + "}", "$repo"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
             )
 
-            return jsonRequest(
+            return request(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames
@@ -208,18 +211,14 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
-        * GET /api/v1/projects/github/repos
+        * GET /api/v1/projects/{id}/spec
         * 
         * 
-         * @param connection A connection id; default the project&#39;s, else the workspace default. (optional)
-         * @param project The project&#39;s id, to prefer the connection bound to it. (optional)
-         * @param q Case-insensitive text in &#x60;owner/name&#x60;. (optional)
-         * @param page From 1; default 1. (optional)
-         * @param perPage 1-100; default 30. (optional)
-         * @return GithubRepoList
+         * @param id The project&#39;s id 
+         * @return RunSpecVersion
         */
             @Suppress("UNCHECKED_CAST")
-        open suspend fun listGithubRepos(connection: kotlin.Long?, project: kotlin.String?, q: kotlin.String?, page: kotlin.Long?, perPage: kotlin.Long?): HttpResponse<GithubRepoList> {
+        open suspend fun getProjectSpec(id: kotlin.String): HttpResponse<RunSpecVersion> {
 
             val localVariableAuthNames = listOf<String>("device_signature")
 
@@ -227,17 +226,81 @@ import io.ktor.http.ParametersBuilder
                     io.ktor.client.utils.EmptyContent
 
             val localVariableQuery = mutableMapOf<String, List<String>>()
-            connection?.apply { localVariableQuery["connection"] = listOf("$connection") }
-            project?.apply { localVariableQuery["project"] = listOf("$project") }
-            q?.apply { localVariableQuery["q"] = listOf("$q") }
-            page?.apply { localVariableQuery["page"] = listOf("$page") }
-            perPage?.apply { localVariableQuery["per_page"] = listOf("$perPage") }
 
             val localVariableHeaders = mutableMapOf<String, String>()
 
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.GET,
-            "/api/v1/projects/github/repos",
+            "/api/v1/projects/{id}/spec".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/projects/{id}/spec/versions/{version}
+        * 
+        * 
+         * @param id The project&#39;s id 
+         * @param version The version number 
+         * @return RunSpecVersion
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getProjectSpecVersion(id: kotlin.String, version: kotlin.String): HttpResponse<RunSpecVersion> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/projects/{id}/spec/versions/{version}".replace("{" + "id" + "}", "$id").replace("{" + "version" + "}", "$version"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/projects/{id}/spec/versions
+        * 
+        * 
+         * @param id The project&#39;s id 
+         * @return kotlin.collections.List<RunSpecSummary>
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun listProjectSpecVersions(id: kotlin.String): HttpResponse<kotlin.collections.List<RunSpecSummary>> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/projects/{id}/spec/versions".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
@@ -314,6 +377,40 @@ import io.ktor.http.ParametersBuilder
             )
 
             return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * PUT /api/v1/projects/{id}/spec
+        * 
+        * 
+         * @param id The project&#39;s id 
+         * @param newRunSpec  
+         * @return RunSpecVersion
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun saveProjectSpec(id: kotlin.String, newRunSpec: NewRunSpec): HttpResponse<RunSpecVersion> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = newRunSpec
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/projects/{id}/spec".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames
