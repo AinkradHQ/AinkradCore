@@ -17,7 +17,7 @@ use ainkrad_core_server::auth::Identity;
 use ainkrad_core_server::auth::testing::TestDevice;
 use ainkrad_core_server::module::Module;
 use ainkrad_core_server::ops_catalog::{
-    Catalogue, Decided, allow_list, call_call, decide_approval, pending, session_principal,
+    Catalogue, Decided, allow_list, call_call, check, decide_approval, pending, session_principal,
 };
 use ainkrad_core_server::scheduler::{Clock, SystemClock};
 use ainkrad_core_server::store::agents::{self, NewSession, session_origin};
@@ -700,6 +700,14 @@ async fn an_ai_edit_never_writes_into_notes_outside_its_scope() {
 async fn the_ops_are_the_t14_list_and_the_never_ops_do_not_exist() {
     let fx = fx().await;
     let cat = Catalogue::live(&fx.app.modules);
+    let spec: Value =
+        serde_json::from_str(&ainkrad_core_server::api::v1::spec::json_for(&fx.app.modules)).unwrap();
+    let lore_allow: Vec<_> = allow_list()
+        .unwrap()
+        .into_iter()
+        .filter(|a| a.op.starts_with("lore"))
+        .collect();
+    assert_eq!(check(&spec, &lore_allow), Vec::<String>::new());
     let lore: BTreeSet<&str> = cat
         .ops
         .values()

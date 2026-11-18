@@ -240,6 +240,12 @@ pub(crate) async fn search(
         .tag
         .as_deref()
         .map(|t| t.trim().trim_start_matches('#').to_owned());
+    if tag
+        .as_ref()
+        .is_some_and(|t| t.chars().count() > lore_model::limits::MAX_TAG_CHARS)
+    {
+        return Err(bad());
+    }
 
     // 1. Text ranking: best first.
     let mut ranks: HashMap<String, Rank> = HashMap::new();
