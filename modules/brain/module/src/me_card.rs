@@ -74,7 +74,7 @@ pub(crate) async fn candidates(pool: &SqlitePool) -> Result<Vec<Cand>, sqlx::Err
     let sql = format!(
         "SELECT id, body, support, coalesce(last_seen_at, created_at) AS seen, coalesce({PERSON}, 0) AS person \
          FROM memory \
-         WHERE type IN ('preference','rule') AND origin <> 'ai' \
+         WHERE type IN ('preference','rule') AND origin <> 'ai' AND contests IS NULL \
            AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE value IN {CONTESTED}) \
          ORDER BY support DESC, seen DESC, id"
     );
@@ -375,6 +375,12 @@ mod tests {
             .unwrap();
         put(&p, "arch", "rule", "Archived rule.", "[]", 3, "person").await;
         sqlx::query("UPDATE records SET archived_at = '2026-11-10T00:00:00Z' WHERE id = 'arch'")
+            .execute(&p)
+            .await
+            .unwrap();
+        // B4-02: a record whose `replaces` lacked the evidence to retire its target is contested.
+        put(&p, "contests", "rule", "Contesting rule.", "[]", 3, "person").await;
+        sqlx::query("UPDATE records SET contests = 'ok2' WHERE id = 'contests'")
             .execute(&p)
             .await
             .unwrap();
