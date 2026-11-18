@@ -6,7 +6,7 @@
 //! - The prober is the principal `system:health` (`Principal::health`, built only here). Its whole
 //!   power is `Action::Probe`, decided by the gate's one table; every probe holds an `Authorized`
 //!   from `gate::authorize_many` and is sent only through `exec::build`, the same path a pre-set
-//!   command takes (lease per hop, pinned keys, `still_valid` right before dispatch). Health can
+//!   command takes (lease per hop, pinned keys, `gate::checked` right before dispatch). Health can
 //!   never trust or replace a host key, and runs no text but the constant `PROBE`.
 //! - A host whose key (or any jump hop's) has no TRUSTED host key is not probed at all, and a runner
 //!   that answers `host_key_unknown` / `host_key_changed` records nothing: "we could not verify the
@@ -29,7 +29,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
 use crate::exec;
-use crate::gate::{Action, Authorized, Principal, authorize_many, finish, still_valid};
+use crate::gate::{Action, Authorized, Principal, authorize_many, checked, finish};
 
 /// Probes in flight on one runner.
 const PER_RUNNER: usize = 4;
@@ -206,16 +206,18 @@ enum Seen {
 }
 
 async fn measure(app: &App, limits: &Limits, auth: &Authorized) -> Seen {
-    let Ok((_, _, runner)) = exec::chain(app, auth.host_id()).await else {
+    // The runner is read from the gate's check, to queue behind it; the probe itself is built from a
+    // second `checked` taken after the wait, and dispatched from that very read (nothing re-read).
+    let Ok(first) = checked(app, auth).await else {
         return Seen::Unknown;
     };
-    let Ok(_permit) = limits.of(&runner).acquire_owned().await else {
+    let Ok(_permit) = limits.of(&first.runner).acquire_owned().await else {
         return Seen::Unknown;
     };
-    if still_valid(app, auth).await.is_err() {
+    let Ok(link) = checked(app, auth).await else {
         return Seen::Unknown;
-    }
-    let Ok((runner, exec)) = exec::build(app, auth, PROBE, PROBE_TIMEOUT).await else {
+    };
+    let Ok((runner, exec)) = exec::build(app, auth, PROBE, PROBE_TIMEOUT, link).await else {
         return Seen::Unknown;
     };
     let t = Instant::now();

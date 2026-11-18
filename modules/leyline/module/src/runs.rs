@@ -5,7 +5,7 @@
 use ainkrad_core::audit::NewAuditEvent;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, BY};
-use ainkrad_core_server::store::{audit, begin_write, redact};
+use ainkrad_core_server::store::{audit, begin_write};
 use serde_json::{Value, json};
 use sqlx::{SqliteConnection, SqlitePool};
 
@@ -135,11 +135,87 @@ pub(super) async fn write_run(
     Ok(())
 }
 
-/// `s` with secret shapes masked (`store::redact::text` reads JSON, not plain text).
+/// `s` with secrets masked: the shared text pass (`ainkrad_proto::redact::one`), which masks a
+/// secret-named field anywhere in a line (`user=bob password=x`, one-line JSON, `NAME: value`), URL
+/// passwords, base64 runs and every known secret shape.
 pub(super) fn redacted(s: &str) -> String {
-    let mut v = Value::String(s.to_owned());
-    redact::json(&mut v);
-    v.as_str().unwrap_or_default().to_owned()
+    ainkrad_proto::redact::one(s)
+}
+
+/// Whether `s` holds a secret written out. A masked value that is only a `$NAME` or `${NAME}`
+/// reference is not one: the card can show it as written. `$(...)` is not accepted: its inner
+/// text can hold the secret itself.
+pub(crate) fn literal_secret(s: &str) -> bool {
+    let masked = redacted(s);
+    if masked == s {
+        return false;
+    }
+    // `masked` is `s` with some spans swapped for `[redacted:...]`: walk both and judge each span.
+    // Anything that does not line up counts as a secret (the safe side).
+    let (mut i, mut r) = (0, masked.as_str());
+    while let Some(at) = r.find(MARK) {
+        let lit = &r[..at];
+        if !s[i..].starts_with(lit) {
+            return true;
+        }
+        i += lit.len();
+        let Some(close) = r[at..].find(']') else {
+            return true;
+        };
+        r = &r[at + close + 1..];
+        let end = match r.find(MARK).map(|n| &r[..n]) {
+            Some("") => return true,
+            Some(next) => s[i..].find(next).map(|n| i + n),
+            None if r.is_empty() => Some(s.len()),
+            None => s.ends_with(r).then(|| s.len() - r.len()),
+        };
+        match end {
+            Some(e) if e >= i && only_refs(&s[i..e]) => i = e,
+            _ => return true,
+        }
+    }
+    false
+}
+
+const MARK: &str = "[redacted:";
+
+/// A value made only of `$NAME` and `${NAME}`, with optional quotes and auth scheme word.
+fn only_refs(span: &str) -> bool {
+    let mut t = span.trim().trim_matches(['"', '\'']);
+    if let Some((w, rest)) = t.split_once(' ')
+        && matches!(
+            w.to_ascii_lowercase().as_str(),
+            "bearer" | "basic" | "token" | "digest"
+        )
+    {
+        t = rest.trim_start().trim_matches(['"', '\'']);
+    }
+    let b = t.as_bytes();
+    let name = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let (mut i, mut seen) = (0, false);
+    while i < b.len() {
+        if b[i] != b'$' {
+            return false;
+        }
+        i += 1;
+        match b.get(i) {
+            Some(b'{') => {
+                let n = b[i + 1..].iter().take_while(|c| name(**c)).count();
+                if n == 0 || b.get(i + 1 + n) != Some(&b'}') {
+                    return false;
+                }
+                i += n + 2;
+            }
+            Some(c) if c.is_ascii_alphabetic() || *c == b'_' => {
+                while b.get(i).is_some_and(|c| name(*c)) {
+                    i += 1;
+                }
+            }
+            _ => return false,
+        }
+        seen = true;
+    }
+    seen
 }
 
 fn cut(s: &str) -> String {
@@ -264,4 +340,23 @@ pub async fn finish(app: &App, done: Authorized, ok: bool) -> Result<(), ApiErro
     .await?;
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redacted;
+
+    /// Plain-text output is masked by the NAME, not only by shape (Y4-02 review, MEDIUM).
+    #[test]
+    fn secret_named_lines_in_output_are_masked() {
+        let out = redacted(
+            "$ env\nDB_PASSWORD=hunter2\nexport API_TOKEN=abc123\nclient_secret: s3cr3t\n\
+             \"password\": \"pw\",\nHOME=/root\nnote: nothing here\nPASSWORD=\n",
+        );
+        for leaked in ["hunter2", "abc123", "s3cr3t", "\"pw\""] {
+            assert!(!out.contains(leaked), "{leaked} leaked: {out}");
+        }
+        assert!(out.contains("DB_PASSWORD=[redacted:DB_PASSWORD]"), "{out}");
+        assert!(out.contains("HOME=/root") && out.contains("note: nothing here"));
+    }
 }

@@ -35,10 +35,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, CAP_GATEWAY, CAP_LOGIN, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame,
-    Heartbeat, HostLoad, IsolationCaps, OP_AGENT_LIMIT, OP_AGENT_READ, OP_GATEWAY_TEST,
-    OP_LOGIN_CANCEL, OP_LOGIN_CODE, OP_LOGIN_START, OP_PTY_ATTACH, OP_PTY_OPEN, RunnerHello,
-    STREAM_WINDOW, StreamError, StreamState,
+    Body, CAP_GATEWAY, CAP_LOGIN, Close, Command, Control, Credit, DriverInfo, ErrorCode,
+    FEATURE_PTY_SSH, Frame, Heartbeat, HostLoad, IsolationCaps, OP_AGENT_LIMIT, OP_AGENT_READ,
+    OP_GATEWAY_TEST, OP_LOGIN_CANCEL, OP_LOGIN_CODE, OP_LOGIN_START, OP_PTY_ATTACH, OP_PTY_OPEN,
+    RunnerHello, STREAM_WINDOW, StreamError, StreamState,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -446,6 +446,14 @@ impl Hub {
         command: Command,
         _proof: Elevated,
     ) -> Result<Dispatched, StreamError> {
+        // `ssh.exec` has its own entry for a module that holds the gate's proof; a step-up alone
+        // never reaches a host through here.
+        if matches!(command, Command::SshExec(_)) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "ssh.exec is not sent through dispatch_elevated",
+            ));
+        }
         self.send_command(runner, command)
     }
 
@@ -468,10 +476,12 @@ impl Hub {
         self.send_command(runner, command)
     }
 
-    /// `ssh.exec` for a module that holds its own gate's proof (Leyline: dispatch takes the gate's
-    /// `Authorized`, which only the gate can make). Only this one op: it carries no key (the
-    /// runner redeems leases), and a host key the Core has not pinned ends it before any login.
-    /// Anything else a module could send still needs [`Hub::dispatch_elevated`].
+    /// `ssh.exec` for a module that runs its own gate first. This takes NO proof: the Hub cannot see
+    /// a module's gate, so nothing here checks one. The only caller allowed is Leyline's
+    /// `modules/leyline/module/src/exec.rs`, whose `run` takes the gate's `Authorized`; a test
+    /// (`modules/leyline/module/tests/ssh_exec_callers.rs`) fails if any other file calls it. It
+    /// carries no key (the runner redeems leases), and a host key the Core has not pinned ends it
+    /// before any login. Anything else a module could send still needs [`Hub::dispatch_elevated`].
     pub fn dispatch_ssh_exec(
         self: &Arc<Self>,
         runner: &str,
@@ -494,6 +504,21 @@ impl Hub {
             return Err(err(
                 ErrorCode::UnsupportedCommand,
                 "the runner did not advertise that command",
+            ));
+        }
+        // An older runner ignores `PtyOpen.ssh` and would open a LOCAL shell: an ssh terminal goes
+        // only to a runner that lists the feature, whoever asks (Leyline Y3-01).
+        if let Command::PtyOpen(p) = &command
+            && p.ssh.is_some()
+            && !r
+                .hello
+                .drivers
+                .iter()
+                .any(|d| d.commands.iter().any(|c| c == FEATURE_PTY_SSH))
+        {
+            return Err(err(
+                ErrorCode::UnsupportedCommand,
+                "the runner cannot open ssh terminals",
             ));
         }
         if r.load
@@ -571,6 +596,22 @@ impl Hub {
             .out
             .try_send(frame)
             .map_err(|_| err(ErrorCode::Busy, "the runner's connection is backed up"))
+    }
+
+    /// A runner that is "connected" without a socket, for tests that drive the hub from the
+    /// outside: what the Core sends it arrives on the returned channel, and `fake_reply` answers.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fake_runner(&self, device: &str, hello: RunnerHello) -> mpsc::Receiver<Frame> {
+        let (out, rx) = mpsc::channel(OUT_QUEUE);
+        let now = 0;
+        self.register(device, device, hello, out, Arc::new(Notify::new()), now);
+        rx
+    }
+
+    /// A frame from a runner made by `fake_runner`, as if it came over its socket.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fake_reply(&self, device: &str, frame: Frame) {
+        self.received(device, frame);
     }
 
     /// Every runner that connected since the Core started, by device id.

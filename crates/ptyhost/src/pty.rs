@@ -18,7 +18,7 @@ use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
-use ainkrad_proto::v2::Size;
+use ainkrad_proto::v2::{HostKeyEvidence, Size};
 use portable_pty::{CommandBuilder, MasterPty, PtySize, SlavePty, native_pty_system};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -103,6 +103,22 @@ pub struct Exit {
     pub code: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signal: Option<String>,
+    /// What the child reported on descriptor 4 (`Spec::fd3` children only): a host-key refusal
+    /// before any shell started. Only the child itself can write it; its output cannot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_key: Option<HostKeyEvidence>,
+}
+
+/// The most a child's report on descriptor 4 may be.
+const REPORT_MAX: usize = 1024;
+
+/// The report the child left on its descriptor 4, if it is a well-formed host-key refusal.
+fn read_report(mut r: std::io::PipeReader) -> Option<HostKeyEvidence> {
+    use std::os::fd::AsFd;
+    ainkrad_sys::pipe_setup(r.as_fd(), 0).ok()?;
+    let mut buf = [0u8; REPORT_MAX];
+    let n = r.read(&mut buf).ok()?;
+    serde_json::from_slice(&buf[..n]).ok()
 }
 
 /// Runner variables every terminal gets when the runner has them: who and where the user is.
@@ -178,7 +194,7 @@ fn spawn_with_fd3(
     spec: &Spec,
     secret: &Hidden,
     tty: Option<std::path::PathBuf>,
-) -> io::Result<std::process::Child> {
+) -> io::Result<(std::process::Child, std::io::PipeReader)> {
     use base64::Engine;
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::OpenOptionsExt;
@@ -211,8 +227,12 @@ fn spawn_with_fd3(
         cmd.current_dir(dir);
     }
     cmd.stdin(open()?).stdout(open()?).stderr(open()?);
-    ainkrad_sys::pty_child_on_exec(&mut cmd, reader.as_raw_fd());
-    cmd.spawn()
+    let (report_r, report_w) = std::io::pipe()?;
+    ainkrad_sys::pty_child_on_exec(&mut cmd, reader.as_raw_fd(), Some(report_w.as_raw_fd()));
+    let child = cmd.spawn()?;
+    // Ours closed, so the report reads to its end once the child is gone.
+    drop(report_w);
+    Ok((child, report_r))
 }
 
 fn pty_size(s: Size) -> PtySize {
@@ -284,9 +304,14 @@ impl Pty {
                 }
             }
         }
+        let mut report = None;
         let child: Box<dyn portable_pty::Child + Send + Sync> = match &spec.fd3 {
             None => pair.slave.spawn_command(cmd).map_err(io_err)?,
-            Some(secret) => Box::new(spawn_with_fd3(spec, secret, pair.master.tty_name())?),
+            Some(secret) => {
+                let (c, r) = spawn_with_fd3(spec, secret, pair.master.tty_name())?;
+                report = Some(r);
+                Box::new(c)
+            }
         };
         // Our slave fd stays open until the exit is announced (see `Pty::slave`).
         let pid = child
@@ -300,6 +325,7 @@ impl Pty {
                 Ok(ainkrad_sys::Ended::Code(c)) => Exit {
                     code: Some(c),
                     signal: None,
+                    host_key: report.and_then(read_report),
                 },
                 Ok(ainkrad_sys::Ended::Signal(n)) => Exit {
                     code: None,
@@ -307,10 +333,12 @@ impl Pty {
                         ainkrad_sys::signal_name(n)
                             .map_or_else(|| format!("signal {n}"), |s| format!("SIG{s}")),
                     ),
+                    host_key: None,
                 },
                 Err(e) => Exit {
                     code: None,
                     signal: Some(format!("wait failed: {e}")),
+                    host_key: None,
                 },
             };
             let _ = tx.send(Some(e));
