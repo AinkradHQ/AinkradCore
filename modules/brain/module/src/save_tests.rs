@@ -59,6 +59,7 @@ async fn save(pool: &SqlitePool, out: &[Candidate], dropped: &[Dropped]) -> Save
         NOW,
         &Prepared::default(),
         &[],
+        &HashMap::new(),
     )
     .await
     .unwrap()
@@ -184,10 +185,13 @@ async fn an_admitted_fact_is_saved_or_merged_and_one_undo_restores_everything() 
         0.0,
         "admit",
     );
+    // Another origin states it again (one source saying it twice would leave support at 1).
+    let mut again = cand("fact", GOOD);
+    again.sources = vec!["i2".to_owned()];
     let s = save(
         &pool,
         &[
-            cand("fact", GOOD),
+            again,
             cand(
                 "decision",
                 "Invoices are exported as CSV by the billing job.",

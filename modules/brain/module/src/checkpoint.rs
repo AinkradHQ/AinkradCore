@@ -13,6 +13,8 @@
 //! - Rate: one request per session per 10 minutes, one run per session per 10 minutes, at most
 //!   `MAX_PER_SESSION` checkpoint distils per session (counted from `brain_distils`, so a restart
 //!   cannot reset it), `MAX_PER_TICK` sessions per tick, `MAX_TRACKED` sessions remembered.
+//!   Checkpoint and hook distils share at most half of a room's `daily_distils`
+//!   (`auto_distil::queue`): the other half is kept for session ends.
 //! - Only whole turns are taken: nothing after the last answer, and the session is debounced
 //!   (`IDLE_SECS` waiting) unless a hook asked. The cursor is per session, so session end takes
 //!   only the rest and the two never share source text.
@@ -133,6 +135,21 @@ pub(crate) async fn request(
     }))
 }
 
+/// A request of `session` was acted on (or can never be): it is no longer pending. A request is
+/// cleared only here, so one the tick did not reach (over `MAX_PER_TICK`, too soon after a run, the
+/// key locked, an error) stays for the next tick.
+fn done_with(b: &Brain, session: &str) {
+    if let Some(c) = b
+        .inner
+        .ckpt
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_mut(session)
+    {
+        c.pending = false;
+    }
+}
+
 /// Takes new turns of live sessions and queues their distils; returns how many it queued.
 pub(crate) async fn step(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError> {
     let asked: Vec<String> = b
@@ -140,15 +157,17 @@ pub(crate) async fn step(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError
         .ckpt
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .iter_mut()
+        .iter()
         .filter(|(_, c)| c.pending)
-        .map(|(id, c)| {
-            c.pending = false;
-            id.clone()
-        })
+        .map(|(id, _)| id.clone())
         .collect();
+    let live = agents::live(&app.pool).await?;
+    // A request of a session that is no longer live will never be looked at: drop it.
+    for id in asked.iter().filter(|id| !live.iter().any(|s| &s.id == *id)) {
+        done_with(b, id);
+    }
     let mut todo: Vec<(agents::Session, bool)> = vec![];
-    for s in agents::live(&app.pool).await? {
+    for s in live {
         let was_asked = asked.contains(&s.id);
         let idle =
             s.api_state() == "waiting" && s.waiting_since.is_some_and(|w| w <= now - IDLE_SECS);
@@ -181,6 +200,7 @@ pub(crate) async fn step(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError
         .fetch_one(&app.pool)
         .await?;
         if done >= MAX_PER_SESSION {
+            done_with(b, &s.id);
             continue;
         }
         let min = if was_asked {
@@ -194,6 +214,8 @@ pub(crate) async fn step(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError
             Err(e) if e.status == axum::http::StatusCode::CONFLICT => break,
             Err(e) => return Err(e),
         };
+        // Looked at: a request is answered even when there was nothing new to take.
+        done_with(b, &s.id);
         if r.run.is_none() {
             continue;
         }

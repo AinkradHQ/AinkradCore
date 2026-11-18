@@ -463,7 +463,9 @@ async fn collect_live(
     id: &str,
     min_chars: usize,
 ) -> Result<(Vec<Item>, BTreeMap<String, i64>), ApiError> {
-    let mut next = done.clone();
+    // Only this session's cursor: the run must not hold (and on commit move) the sessions of
+    // other open runs, which `done` includes.
+    let mut next = BTreeMap::new();
     let Some(s) = agents::get(&app.pool, id).await? else {
         return Ok((vec![], next));
     };

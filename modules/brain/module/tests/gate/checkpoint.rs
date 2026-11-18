@@ -6,7 +6,7 @@ use ainkrad_core_server::store::events;
 use axum::http::{Method, StatusCode};
 use serde_json::json;
 
-use super::ai::{as_session, op, put_record};
+use super::ai::{as_session, link_session, op, open_room, put_record};
 use super::common::*;
 use super::sync::{room_alpha, say, session};
 
@@ -345,4 +345,202 @@ async fn memory_loaded_into_a_session_is_never_a_source() {
         "{}",
         t[0]
     );
+}
+
+/// B5-02 review (HIGH): an AI op that hands a record to a session notes it in
+/// `brain_session_loaded`, and the no-echo cut then keeps it out of that session's checkpoint.
+#[tokio::test]
+async fn a_record_an_ai_op_gave_the_session_is_noted_and_cut_from_its_transcript() {
+    let fx = fx().await;
+    let (room, now) = quiet_room(&fx).await;
+    let body = "Releases are tagged from the development branch every Tuesday.";
+    put_record(&fx, &room, "rec-1", "fact", "accepted", body).await;
+    put_record(
+        &fx,
+        &room,
+        "rec-2",
+        "decision",
+        "accepted",
+        "The billing export stays a nightly CSV job.",
+    )
+    .await;
+    let ws = json!({"repo": ALPHA, "base": "main", "branch": "b"});
+    let s = chain_session_in(&fx, &["anthropic"], Some(&ws)).await;
+    link_session(&fx, &s, &room).await;
+    open_room(&fx, &room).await;
+
+    // Through the real routes: one record, then the decisions list.
+    let (st, v) = as_session(
+        &fx,
+        &s,
+        Method::GET,
+        &format!("/ai/rooms/{room}/records/rec-1"),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let (st, v) = as_session(&fx, &s, Method::GET, "/ai/decisions", None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let loaded: Vec<(String, String)> = sqlx::query_as(
+        "SELECT room, record FROM brain_session_loaded WHERE session = ? ORDER BY record",
+    )
+    .bind(&s)
+    .fetch_all(&fx.app.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        loaded,
+        vec![
+            (room.clone(), "rec-1".to_owned()),
+            (room.clone(), "rec-2".to_owned())
+        ]
+    );
+
+    say(
+        &fx,
+        &s,
+        &[
+            ("user", "When do we release?"),
+            (
+                "assistant",
+                &format!(
+                    "{body} We also moved the cache to SQLite. {}",
+                    pad("more", 2_500)
+                ),
+            ),
+        ],
+    )
+    .await;
+    let (_, v) = as_session(&fx, &s, Method::POST, "/ai/checkpoint", None).await;
+    assert_eq!(v["requested"], json!(true), "{v}");
+    assert_eq!(fx.brain.auto_distil_step_at(now + 10).await.unwrap(), 1);
+    let t = texts(&fx, &room, &s).await;
+    assert_eq!(t.len(), 1);
+    assert!(!t[0].contains("tagged from the development"), "{}", t[0]);
+    assert!(t[0].contains("moved the cache to SQLite"), "{}", t[0]);
+}
+
+/// B5-02 review (MEDIUM): checkpoint and hook distils use at most half of `daily_distils`; the
+/// rest stays for session ends.
+#[tokio::test]
+async fn mid_session_distils_keep_half_the_room_cap_for_session_ends() {
+    let fx = fx().await;
+    let (room, now) = quiet_room(&fx).await;
+    sqlx::query("UPDATE brain_room_policy SET daily_distils = 2 WHERE room = ?")
+        .bind(&room)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    session(&fx, "as_a", Some(ALPHA), "running", None, &[]).await;
+    waiting(&fx, "as_a", now - 100).await;
+    turns(&fx, "as_a", "AAA", 3, 6_000).await;
+    assert_eq!(fx.brain.auto_distil_step_at(now + 10).await.unwrap(), 1);
+    settle(&fx, &room).await;
+
+    // The mid-session half (1 of 2) is used: a second session's checkpoint waits.
+    session(&fx, "as_b", Some(ALPHA), "running", None, &[]).await;
+    waiting(&fx, "as_b", now - 100).await;
+    turns(&fx, "as_b", "BBB", 3, 6_000).await;
+    assert_eq!(fx.brain.auto_distil_step_at(now + 20).await.unwrap(), 0);
+    assert_eq!(rows(&fx, "\"trigger\" = 'checkpoint'").await, 1);
+
+    // Its end still gets the reserved half.
+    sqlx::query(
+        "UPDATE core_agent_sessions SET state = 'ended', waiting_since = NULL WHERE id = 'as_b'",
+    )
+    .execute(&fx.app.pool)
+    .await
+    .unwrap();
+    let mut c = fx.app.pool.acquire().await.unwrap();
+    events::append(
+        &mut c,
+        "agent.ended",
+        &json!({"session": "as_b", "state": "ended", "outcome": "completed"}),
+    )
+    .await
+    .unwrap();
+    drop(c);
+    assert_eq!(fx.brain.auto_distil_step_at(now + 2000).await.unwrap(), 1);
+    assert_eq!(
+        rows(&fx, "\"trigger\" = 'session_end' AND of_session = 'as_b'").await,
+        1
+    );
+}
+
+/// B5-02 review (LOW): a request the tick could not act on yet (too soon after the last run) stays
+/// pending and is acted on later, with the lower hook floor.
+#[tokio::test]
+async fn a_request_stays_pending_until_the_session_is_looked_at() {
+    let fx = fx().await;
+    let (room, now) = quiet_room(&fx).await;
+    let ws = json!({"repo": ALPHA, "base": "main", "branch": "b"});
+    let s = chain_session_in(&fx, &["anthropic"], Some(&ws)).await;
+    sqlx::query("UPDATE core_agent_sessions SET state = 'running' WHERE id = ?")
+        .bind(&s)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    waiting(&fx, &s, now - 100).await;
+    turns(&fx, &s, "BIG", 3, 6_000).await;
+    assert_eq!(fx.brain.auto_distil_step_at(now + 10).await.unwrap(), 1);
+    settle(&fx, &room).await;
+
+    // Under the plain floor, so only the request can take it.
+    say(
+        &fx,
+        &s,
+        &[
+            ("user", &pad("SMALL question", 1_500)),
+            ("assistant", &pad("SMALL answer", 1_500)),
+        ],
+    )
+    .await;
+    let (_, v) = as_session(&fx, &s, Method::POST, "/ai/checkpoint", None).await;
+    assert_eq!(v["requested"], json!(true), "{v}");
+    // Ten seconds after the last run: too soon, the request is kept.
+    assert_eq!(fx.brain.auto_distil_step_at(now + 20).await.unwrap(), 0);
+    assert_eq!(fx.brain.auto_distil_step_at(now + 700).await.unwrap(), 1);
+    assert_eq!(
+        rows(&fx, &format!("\"trigger\" = 'hook' AND of_session = '{s}'")).await,
+        1
+    );
+}
+
+/// B5-02 review (LOW): a checkpoint run holds only its own session's cursor, never the sessions
+/// of other open runs, so committing it cannot move them.
+#[tokio::test]
+async fn a_checkpoint_run_holds_only_its_own_session_cursor() {
+    let fx = fx().await;
+    let (_room, now) = quiet_room(&fx).await;
+    sqlx::query(
+        "INSERT INTO brain_import_runs (id, kind, state, sources) \
+         VALUES ('run-other', 'incremental', 'review', '[\"core_transcript\"]')",
+    )
+    .execute(&fx.app.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO brain_run_cursors (run, source, cursor) \
+         VALUES ('run-other', 'core_transcript', '{\"sessions\":{\"as_other\":7}}')",
+    )
+    .execute(&fx.app.pool)
+    .await
+    .unwrap();
+    session(&fx, "as_cur", Some(ALPHA), "running", None, &[]).await;
+    waiting(&fx, "as_cur", now - 100).await;
+    turns(&fx, "as_cur", "CUR", 3, 6_000).await;
+    assert_eq!(fx.brain.auto_distil_step_at(now + 10).await.unwrap(), 1);
+
+    let source: String =
+        sqlx::query_scalar("SELECT cursor FROM brain_sources WHERE id = 'core_transcript'")
+            .fetch_one(&fx.app.pool)
+            .await
+            .unwrap();
+    assert!(!source.contains("as_other"), "{source}");
+    let held: Vec<String> =
+        sqlx::query_scalar("SELECT cursor FROM brain_run_cursors WHERE run != 'run-other'")
+            .fetch_all(&fx.app.pool)
+            .await
+            .unwrap();
+    assert!(held.iter().all(|c| !c.contains("as_other")), "{held:?}");
 }

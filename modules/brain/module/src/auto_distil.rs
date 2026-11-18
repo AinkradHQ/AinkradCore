@@ -104,6 +104,9 @@ async fn requester(app: &App) -> Result<Option<String>, sqlx::Error> {
     .await
 }
 
+/// Triggers of a running session (B5-02 checkpoints): they share half of a room's `daily_distils`.
+const MID_SESSION: &[&str] = &["checkpoint", "hook"];
+
 /// Queues one distil of `room` (`fresh` undistilled sources) unless a gate says no. One write
 /// transaction: the checks and the insert cannot be split by another tick.
 pub(crate) async fn queue(
@@ -163,16 +166,21 @@ pub(crate) async fn queue(
         .bind(room)
         .fetch_one(&mut *tx)
         .await?;
-    let (in_room, in_all): (i64, i64) = sqlx::query_as(
-        "SELECT coalesce(sum(room = ?), 0), count(*) FROM brain_distils \
-         WHERE created_at >= ? AND \"trigger\" NOT IN ('redistil','tidy','judge')",
+    let (in_room, in_all, mid_room): (i64, i64, i64) = sqlx::query_as(
+        "SELECT coalesce(sum(room = ?1), 0), count(*), \
+                coalesce(sum(room = ?1 AND \"trigger\" IN ('checkpoint','hook')), 0) FROM brain_distils \
+         WHERE created_at >= ?2 AND \"trigger\" NOT IN ('redistil','tidy','judge')",
     )
     .bind(room)
     .bind(&since)
     .fetch_one(&mut *tx)
     .await?;
+    // Mid-session distils (B5-02) may use at most half the room's day: the rest is kept for session ends.
+    let mid_cap = cap / 2;
     let over = if in_room >= cap {
         Some(("room_cap", cap))
+    } else if MID_SESSION.contains(&trigger) && mid_room >= mid_cap {
+        Some(("room_cap", mid_cap))
     } else if in_all >= GLOBAL_DAILY {
         Some(("global_cap", GLOBAL_DAILY))
     } else {

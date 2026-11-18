@@ -3,7 +3,7 @@
 //! needs (stored and candidate vectors) and writes the reinforcement. The caller writes it inside
 //! one change set, so Undo puts the old support, `last_seen_at` and citations back.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ainkrad_core_server::api::App;
 use brain_model::merge::{Decision, Grounding, Known, decide, may_supersede};
@@ -154,17 +154,24 @@ impl Memory {
     }
 }
 
-/// Reinforces record `id`: support + 1, `last_seen_at` = `now`, and each of `sources` it does not
-/// cite yet appended to its citations. The row is touched in `cs` first, so Undo can restore it.
+/// Where a transcript source came from: its path is this plus the AI session id.
+pub(crate) const SESSION_PATH: &str = "core://ai-session/";
+
+/// Reinforces record `id`: `last_seen_at` = `now`, each of `sources` it does not cite yet appended
+/// to its citations, then its support recounted (`recount`), never incremented. A citation from a
+/// session in `loaded_by` (the sessions the Brain gave `id` to, `brain_session_loaded`) is kept but
+/// marked `echo`: it is the record said back, not a new origin. The row is touched in `cs` first, so
+/// Undo can restore it.
 pub async fn reinforce(
     conn: &mut SqliteConnection,
     cs: &mut ChangeSet,
     id: &str,
     sources: &[String],
+    loaded_by: &HashSet<String>,
     now: &str,
 ) -> Result<(), sqlx::Error> {
     cs.touch(conn, id).await?;
-    sqlx::query("UPDATE records SET support = support + 1, last_seen_at = ? WHERE id = ?")
+    sqlx::query("UPDATE records SET last_seen_at = ? WHERE id = ?")
         .bind(now)
         .bind(id)
         .execute(&mut *conn)
@@ -176,17 +183,44 @@ pub async fn reinforce(
     .fetch_one(&mut *conn)
     .await?;
     for s in sources {
+        let path: Option<String> = sqlx::query_scalar("SELECT path FROM sources WHERE item_id = ?")
+            .bind(s)
+            .fetch_optional(&mut *conn)
+            .await?;
+        let echo = path
+            .as_deref()
+            .and_then(|p| p.strip_prefix(SESSION_PATH))
+            .is_some_and(|session| loaded_by.contains(session));
         let added = sqlx::query(
-            "INSERT OR IGNORE INTO record_sources (record, source, position) VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO record_sources (record, source, position, echo) VALUES (?, ?, ?, ?)",
         )
         .bind(id)
         .bind(s)
         .bind(next)
+        .bind(i64::from(echo))
         .execute(&mut *conn)
         .await?
         .rows_affected();
         next += i64::from(added > 0);
     }
+    recount(conn, id).await
+}
+
+/// Sets record `id`'s support to the number of distinct origins that cite it (at least 1): an
+/// origin is one AI session or one document (`sources.device` + `path`), so one source saying a
+/// fact twice, or one session cut into several parts, counts once. `echo` citations do not count. A
+/// cited source that is gone counts as its own origin. The same expression backfills `canon_0009`.
+pub async fn recount(conn: &mut SqliteConnection, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE records SET support = max(1, (\
+             SELECT count(DISTINCT coalesce(s.device || char(10) || s.path, rs.source)) \
+             FROM record_sources rs LEFT JOIN sources s ON s.item_id = rs.source \
+             WHERE rs.record = records.id AND rs.echo = 0)) \
+         WHERE id = ?",
+    )
+    .bind(id)
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }
 

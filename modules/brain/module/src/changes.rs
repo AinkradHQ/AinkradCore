@@ -52,13 +52,18 @@ pub async fn image(conn: &mut SqliteConnection, id: &str) -> Result<Option<Strin
     .await?;
     let Some(row) = row else { return Ok(None) };
     let mut v: Value = serde_json::from_str(&row).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    let sources: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT source, position FROM record_sources WHERE record = ? ORDER BY position, source",
+    let sources: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT source, position, echo FROM record_sources WHERE record = ? ORDER BY position, source",
     )
     .bind(id)
     .fetch_all(&mut *conn)
     .await?;
-    v["_sources"] = json!(sources);
+    // `[source, position]`, plus a third `1` for an echo citation (canon_0009): images written
+    // before echo existed compare equal to today's.
+    v["_sources"] = sources
+        .into_iter()
+        .map(|(s, p, echo)| if echo == 0 { json!([s, p]) } else { json!([s, p, 1]) })
+        .collect();
     Ok(Some(v.to_string()))
 }
 
@@ -117,10 +122,11 @@ async fn restore(
     q.execute(&mut *conn).await?;
     for s in obj["_sources"].as_array().into_iter().flatten() {
         if let (Some(src), Some(pos)) = (s[0].as_str(), s[1].as_i64()) {
-            sqlx::query("INSERT OR REPLACE INTO record_sources (record, source, position) VALUES (?, ?, ?)")
+            sqlx::query("INSERT OR REPLACE INTO record_sources (record, source, position, echo) VALUES (?, ?, ?, ?)")
                 .bind(id)
                 .bind(src)
                 .bind(pos)
+                .bind(s[2].as_i64().unwrap_or(0))
                 .execute(&mut *conn)
                 .await?;
         }

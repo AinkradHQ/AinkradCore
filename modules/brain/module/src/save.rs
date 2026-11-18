@@ -6,7 +6,7 @@
 //! is kept only under the `bodies` key of its `admit.dropped` audit row (the 30-day purge of
 //! `changes::purge_room` clears exactly that key), next to counts and reason codes that stay.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use ainkrad_proto::redact::Redactor;
 use brain_model::merge::{Decision, Grounding, Tier, body_norm, may_supersede};
@@ -17,7 +17,7 @@ use crate::answer::Candidate;
 use crate::changes::ChangeSet;
 use crate::distil::{DistilledBy, auto_ok, log_op};
 use crate::judge::Dropped;
-use crate::merge::{Memory, Prepared, Replace, reinforce, supersede};
+use crate::merge::{Memory, Prepared, Replace, recount, reinforce, supersede};
 use crate::{policy, rand_id};
 
 /// What one save did.
@@ -47,7 +47,8 @@ pub(crate) struct Saved {
 /// the same transaction, so a rerun can never save twice. A candidate saved into memory that names a
 /// record it `replaces` supersedes it when `grounded[i]` is strong enough (`may_supersede`), else
 /// only contests it (B4-02). One change set: "Saved N · reinforced M · dropped K", plus
-/// "· replaced R" when any was.
+/// "· replaced R" when any was. `loaded` maps a record id to the sessions the Brain gave it to
+/// (`loaded::of_room`): their citations of it never raise its support.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn store_candidates(
     pool: &SqlitePool,
@@ -59,7 +60,9 @@ pub(crate) async fn store_candidates(
     now: &str,
     prep: &Prepared,
     grounded: &[Grounding],
+    loaded: &HashMap<String, HashSet<String>>,
 ) -> Result<Saved, sqlx::Error> {
+    let none = HashSet::new();
     let redactor = Redactor::new();
     let (mut n, mut accepted, mut reinforced, mut replaced, mut contested) = (0, 0, 0, 0, 0);
     let mut tx = pool.begin().await?;
@@ -79,7 +82,8 @@ pub(crate) async fn store_candidates(
                 && c.replaces.as_deref() == Some(id.as_str())
                 && may_supersede(&c.kind, &c.kind, g))
         {
-            reinforce(&mut tx, &mut cs, &id, &c.sources, now).await?;
+            let loaded_by = loaded.get(&id).unwrap_or(&none);
+            reinforce(&mut tx, &mut cs, &id, &c.sources, loaded_by, now).await?;
             reinforced += 1;
             continue;
         }
@@ -117,6 +121,8 @@ pub(crate) async fn store_candidates(
             .execute(&mut *tx)
             .await?;
         }
+        // Two sessions stating it in one batch are two origins.
+        recount(&mut tx, &id).await?;
         let mut skip_add = false;
         if auto_ok {
             // Only a fact that really entered memory may retire another.

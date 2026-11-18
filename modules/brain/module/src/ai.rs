@@ -24,6 +24,11 @@
 //!    Nothing here reads a room it did not get from that gate.
 //! 5. The index (`rec_fts`) only nominates ids. The text always comes from `memory` at read time,
 //!    so a stale index can mis-rank but never return a record that left memory.
+//! 6. Every op that hands a record to a session (search, record, decisions, project state,
+//!    evidence) notes `(session, room, record)` in `brain_session_loaded` (`loaded::record`), so the
+//!    no-echo guard cuts it from that session's transcript and it never counts as a new origin.
+
+use std::collections::BTreeMap;
 
 use ainkrad_core::untrusted::wrap;
 use ainkrad_core_server::api::App;
@@ -78,6 +83,23 @@ pub(crate) fn session_of(me: &Caller) -> Result<String, ApiError> {
                 "this route answers AI sessions; use the room routes",
             )
         })
+}
+
+/// Notes the records this answer gives the session (`brain_session_loaded`, B5-02), so the no-echo
+/// guard cuts them from its transcript and merge-on-save never counts it as a new origin of them.
+async fn note_loaded<'a>(
+    app: &App,
+    session: &str,
+    given: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Result<(), ApiError> {
+    let mut by_room: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for (room, id) in given {
+        by_room.entry(room).or_default().push(id.to_owned());
+    }
+    for (room, ids) in by_room {
+        crate::loaded::record(app, session, room, &ids).await?;
+    }
+    Ok(())
 }
 
 /// `room` when the session may see it; else the 404 of an unknown id (audited once per window).
@@ -313,6 +335,7 @@ pub(crate) async fn search(
     let capped = rooms_cut || meaning.as_ref().is_some_and(|m| m.1);
     let meaning = meaning.map(|m| m.0);
     if let (Some(m), "meaning") = (&meaning, mode) {
+        note_loaded(&app, &session, m.iter().map(|h| (h.room.as_str(), h.id.as_str()))).await?;
         return Ok(Json(AiHits {
             hits: m.clone(),
             rooms_searched: open.len(),
@@ -333,6 +356,7 @@ pub(crate) async fn search(
     if let Some(m) = meaning {
         hits = crate::ai_semantic::fuse(hits, m, limit as usize);
     }
+    note_loaded(&app, &session, hits.iter().map(|h| (h.room.as_str(), h.id.as_str()))).await?;
     Ok(Json(AiHits {
         hits,
         rooms_searched: open.len(),
@@ -471,6 +495,7 @@ pub(crate) async fn one(
     let row = row.ok_or_else(|| ApiError::not_found("no such record"))?;
     let mut rec = record_of(&v.id, &row, MAX_BODY)?;
     rec.history = past.filter(|p| !p.is_empty());
+    note_loaded(&app, &session, [(rec.room.as_str(), rec.id.as_str())]).await?;
     Ok(Json(rec))
 }
 
@@ -530,6 +555,12 @@ async fn list(
             .then(x.1.id.cmp(&y.1.id))
     });
     all.truncate(limit as usize);
+    note_loaded(
+        app,
+        &session,
+        all.iter().map(|(_, r)| (r.room.as_str(), r.id.as_str())),
+    )
+    .await?;
     Ok(Json(AiRecords {
         records: all.into_iter().map(|(_, r)| r).collect(),
         rooms_closed: closed,
@@ -627,6 +658,8 @@ pub(crate) async fn evidence(
     )
     .await?;
     ctl.commit().await?;
+    // The session saw evidence of this record: a later paraphrase of it is not a new origin.
+    note_loaded(&app, &session, [(v.id.as_str(), record_id.as_str())]).await?;
     Ok(Json(AiEvidence {
         room: v.id,
         record: record_id,

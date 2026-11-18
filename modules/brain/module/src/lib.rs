@@ -47,6 +47,7 @@ mod imports;
 mod inbox;
 mod index;
 mod judge;
+mod loaded;
 pub mod key;
 mod lore;
 pub mod merge;
