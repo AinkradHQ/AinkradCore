@@ -142,10 +142,10 @@ pub(super) fn image_source_problem(dockerfile: &str) -> Option<String> {
             for part in w.split(',').filter(|_| copies) {
                 let part = part.strip_prefix("--mount=").unwrap_or(part);
                 for key in ["--from=", "from="] {
-                    if let Some(v) = part.strip_prefix(key) {
-                        if let Some(why) = bad("--from", v) {
-                            return Some(why);
-                        }
+                    if let Some(v) = part.strip_prefix(key)
+                        && let Some(why) = bad("--from", v)
+                    {
+                        return Some(why);
                     }
                 }
             }

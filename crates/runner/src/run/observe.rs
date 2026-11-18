@@ -207,10 +207,10 @@ fn logs_of(
     let pgid = child.id();
     let (done, wait) = std::sync::mpsc::channel::<()>();
     let dog = std::thread::spawn(move || {
-        if wait.recv_timeout(timeout) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
-            if let Some(kill) = ainkrad_sys::signal_number("KILL") {
-                let _ = ainkrad_sys::killpg(pgid, kill);
-            }
+        if wait.recv_timeout(timeout) == Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            && let Some(kill) = ainkrad_sys::signal_number("KILL")
+        {
+            let _ = ainkrad_sys::killpg(pgid, kill);
         }
     });
     let lines = newest_lines(BufReader::new(r), keep, window);
@@ -220,9 +220,12 @@ fn logs_of(
     Ok(lines)
 }
 
+/// A project's id and its services (name, state).
+type RunServices = (u64, Vec<(String, String)>);
+
 impl Engine {
     /// The project whose store holds `run`, and its services (name, state).
-    fn run_services(&self, run: &str) -> Result<Option<(u64, Vec<(String, String)>)>, String> {
+    fn run_services(&self, run: &str) -> Result<Option<RunServices>, String> {
         let deadline = Instant::now() + QUICK;
         for p in self.stores() {
             let info = self.status_by(run, p, deadline)?;

@@ -105,14 +105,14 @@ pub fn sanitize(raw: &str) -> String {
     let b = raw.as_bytes();
     let mut chars = raw.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
-        if c.is_ascii_digit() {
-            if let Some(n) = stamp_len(&b[i..]) {
-                // All ASCII, so `i + n` is a boundary; skip what the stamp covered.
-                while chars.peek().is_some_and(|(j, _)| *j < i + n) {
-                    chars.next();
-                }
-                continue;
+        if c.is_ascii_digit()
+            && let Some(n) = stamp_len(&b[i..])
+        {
+            // All ASCII, so `i + n` is a boundary; skip what the stamp covered.
+            while chars.peek().is_some_and(|(j, _)| *j < i + n) {
+                chars.next();
             }
+            continue;
         }
         match c {
             '\x1b' => match chars.peek().map(|(_, n)| *n) {
@@ -178,6 +178,7 @@ fn cost(l: &LogLine) -> usize {
 }
 
 impl Ring {
+    #[cfg(test)]
     pub(super) fn bytes(&self) -> usize {
         self.bytes
     }
@@ -325,13 +326,13 @@ impl RunObs {
                 (None, Some(_)) => continue,
                 _ => {}
             }
-            if let Some(k) = key {
-                if self.newest.as_ref() != Some(&k) {
-                    self.at_newest.clear();
-                    self.at_newest.insert(id);
-                    self.since = Some(at.clone());
-                    self.newest = Some(k);
-                }
+            if let Some(k) = key
+                && self.newest.as_ref() != Some(&k)
+            {
+                self.at_newest.clear();
+                self.at_newest.insert(id);
+                self.since = Some(at.clone());
+                self.newest = Some(k);
             }
             if let Some(text) = self.clean(&service, &text) {
                 self.ring.push(&service, &at, text);
