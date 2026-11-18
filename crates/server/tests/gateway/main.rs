@@ -9,6 +9,7 @@ mod drain;
 mod limits;
 mod local;
 mod pebble;
+mod projects;
 mod renewal;
 
 use std::path::PathBuf;

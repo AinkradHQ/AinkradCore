@@ -33,7 +33,9 @@ tracing = "0.1.44"
 # The gateway (E1-06): one hyper accept loop for unix, loopback and TLS; rustls TLS 1.3 only on
 # ring; instant-acme for certificates (`Specs/2026-10-29-acme-library-decision.md`), x509-parser
 # for a certificate's lifetime.
-hyper = { version = "1.12.0", features = ["server", "http1", "http2"] }
+# `client` and http-body-util (both already in the tree): the Host router's hop to a project (P6-02).
+hyper = { version = "1.12.0", features = ["server", "http1", "http2", "client"] }
+http-body-util = "0.1.5"
 hyper-util = { version = "0.1.21", features = ["server-auto", "server-graceful", "service", "tokio"] }
 instant-acme = { version = "=0.8.5", default-features = false, features = ["ring", "hyper-rustls", "rcgen"] }
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }

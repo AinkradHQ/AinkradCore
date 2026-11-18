@@ -80,6 +80,16 @@ impl Gateway {
                 request_deadline(deadline, req, next)
             }))
             .layer(DefaultBodyLimit::max(limits.body));
+        // The Host router keeps the deadline (to a response head) and caps bodies itself.
+        let projects = match (self.projects, &self.tls) {
+            (Some(router), Some((certs, _))) => {
+                let router = router.layer(middleware::from_fn(move |req: Request, next: Next| {
+                    request_deadline(deadline, req, next)
+                }));
+                Some((Arc::clone(certs), router))
+            }
+            _ => None,
+        };
         let graceful = GracefulShutdown::new();
         let tls = self
             .tls
@@ -102,18 +112,28 @@ impl Gateway {
         let app_admin = app.clone();
         #[cfg(feature = "iroh")]
         let app_iroh = app.clone();
-        let main = accept(self.main, tls, app, &limits, &graceful, closing.subscribe());
+        let main = accept(
+            self.main,
+            tls,
+            app,
+            projects,
+            &limits,
+            &graceful,
+            closing.subscribe(),
+        );
         let http01 = async {
             if let (Some(l80), Some((certs, _))) = (self.http01, &self.tls) {
                 let router = preauth::http01_router(Arc::clone(certs));
                 let l80 = Listener::Tcp(l80);
-                accept(l80, None, router, &limits, &graceful, closing.subscribe()).await;
+                let closing = closing.subscribe();
+                accept(l80, None, router, None, &limits, &graceful, closing).await;
             }
         };
         let admin = async {
             if let Some(admin) = self.admin {
                 let app = app_admin.clone();
-                accept(admin, None, app, &limits, &graceful, closing.subscribe()).await;
+                let closing = closing.subscribe();
+                accept(admin, None, app, None, &limits, &graceful, closing).await;
             }
         };
         #[cfg(feature = "iroh")]
@@ -144,11 +164,13 @@ impl Gateway {
     }
 }
 
-/// Accepts until `closing` is set; each connection is served on its own task.
+/// Accepts until `closing` is set; each connection is served on its own task. With `projects`,
+/// a TLS connection whose SNI is a project host is served by that router alone.
 async fn accept(
     listener: Listener,
     tls: Option<TlsAcceptor>,
     app: Router,
+    projects: Option<(Arc<tls::Certs>, Router)>,
     limits: &Arc<Limits>,
     graceful: &GracefulShutdown,
     mut closing: watch::Receiver<bool>,
@@ -170,7 +192,7 @@ async fn accept(
         let (app, limits, watcher) = (app.clone(), Arc::clone(limits), graceful.watcher());
         match (io, &tls) {
             (Stream::Tcp(tcp), Some(tls)) => {
-                let tls = tls.clone();
+                let (tls, projects) = (tls.clone(), projects.clone());
                 tokio::spawn(async move {
                     let shake = tokio::time::timeout(limits.tls_handshake, tls.accept(tcp));
                     let Ok(Ok(stream)) = shake.await else { return };
@@ -179,6 +201,16 @@ async fn accept(
                         return;
                     }
                     let h2 = stream.get_ref().1.alpn_protocol() == Some(b"h2");
+                    // P6-02: public project traffic is split off here, by SNI, before any Core
+                    // routing: it gets the Host router and no TLS exporter.
+                    let sni = stream.get_ref().1.server_name();
+                    if let Some((certs, router)) = projects
+                        && sni.is_some_and(|n| certs.is_project_host(n))
+                    {
+                        let peer = Peer::Tcp(peer);
+                        serve_conn(stream, h2, peer, router, &limits, watcher).await;
+                        return;
+                    }
                     // TLS 1.3 only, so one exporter for the whole connection.
                     let mut x = [0; 32];
                     let label = ainkrad_proto::v2::EXPORTER_LABEL;

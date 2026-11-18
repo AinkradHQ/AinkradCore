@@ -82,6 +82,8 @@ mod gateway_negative;
 mod gateway_store;
 mod health;
 mod health_harness;
+mod host_router;
+mod host_router_load;
 mod live;
 mod me;
 mod metrics;

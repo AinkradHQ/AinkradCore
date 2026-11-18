@@ -30,6 +30,7 @@ const USAGE: &str = "usage:
                  [--bind <addr:port>] [--host <name>]
                  [--hostname <dns-name> --acme-contact <email>
                  [--acme-directory <url>] [--acme-http01]]
+                 [--projects-domain <domain>]
                  [--trusted-proxy <addr|cidr>[,…]]
                  [--passkeys] [--allow-origin <origin>[,…]] [--allow-plain-runner]
                  [--max-host-load <per-core>]
@@ -74,6 +75,10 @@ nothing. --log-format json writes JSON lines; both formats are redacted (E1-13.4
 Runners connect over TLS, end to end to the Core (a TLS-terminating proxy in front breaks their
 channel-bound proof), or over the Unix socket as the Core's own user; --allow-plain-runner also
 lets them in over plain HTTP from loopback TCP (development and tests only).
+--projects-domain (public only; off unless given) serves https://<slug>.<domain> for exposed
+projects (P6-02): a TLS connection whose SNI is one label under <domain> (not the --hostname, not a
+reserved name) gets the wildcard certificate /etc/ainkrad/projects-wildcard.{pem,key} and the Host
+router, which reaches only the project's running run and never the Core's routes.
 --max-host-load sets the one-minute load per CPU past which a runner's host is refused new
 commands as busy (default 4).
 --iroh (E2-19; off unless given) also serves the same API over iroh, for a Core behind NAT: QUIC with
@@ -372,6 +377,8 @@ struct Serve {
     max_host_load: Option<f64>,
     /// `--iroh`: the opt-in iroh listener (E2-19). Off by default.
     iroh: bool,
+    /// `--projects-domain`: the Host router for `<slug>.<domain>` (P6-02). Off by default.
+    projects_domain: Option<String>,
     /// `--enable-module`: the ids of the modules to mount. None by default.
     modules: Vec<String>,
     iroh_relays: Vec<String>,
@@ -395,6 +402,7 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
         plain_runner: false,
         max_host_load: None,
         iroh: false,
+        projects_domain: None,
         modules: Vec::new(),
         iroh_relays: Vec::new(),
         iroh_bind: Vec::new(),
@@ -436,6 +444,17 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
                 _ => return None,
             },
             "--hostname" => s.hostname = Some(value),
+            "--projects-domain" => {
+                let ok = value.contains('.')
+                    && value.split('.').all(|l| {
+                        !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                    });
+                if !ok {
+                    eprintln!("ainkrad-core-server: --projects-domain {value}: a DNS name");
+                    return None;
+                }
+                s.projects_domain = Some(value.to_ascii_lowercase());
+            }
             "--allow-origin" => {
                 for o in comma_list(&value) {
                     let localhost = o == "http://localhost"
@@ -515,8 +534,13 @@ fn listen(db: &Path, flags: &Serve) -> Result<gateway::Listen, String> {
     let spec = flags.listen.as_deref().unwrap_or("unix:");
     let port = |p: &str| p.parse::<u16>().map_err(|_| format!("{p:?} is not a port"));
     let public = matches!(spec.split(':').next(), Some("public"));
-    if !public && (flags.hostname.is_some() || flags.acme_contact.is_some() || flags.acme_http01) {
-        return Err("--hostname, --acme-* only go with --listen public".into());
+    if !public
+        && (flags.hostname.is_some()
+            || flags.acme_contact.is_some()
+            || flags.acme_http01
+            || flags.projects_domain.is_some())
+    {
+        return Err("--hostname, --acme-*, --projects-domain only go with --listen public".into());
     }
     Ok(match spec.split_once(':').unwrap_or((spec, "")) {
         ("unix", "") => gateway::Listen::Unix(state.join("core.sock")),
@@ -672,6 +696,9 @@ fn enabled(
 
 /// Serves the client API and runs the scheduler and the pusher until SIGTERM or Ctrl-C, then
 /// shuts down cleanly (`USAGE`).
+/// The projects' wildcard certificate (`.pem` chain, `.key`), installed by P6-03.
+const PROJECTS_CERT: &str = "/etc/ainkrad/projects-wildcard";
+
 async fn serve(
     db: &Path,
     mut flags: Serve,
@@ -886,6 +913,18 @@ async fn serve(
             .run(async { drop(stopped_jobs.changed().await) })
             .await
     });
+    if let Some(domain) = &flags.projects_domain {
+        let read = |ext: &str| {
+            let path = format!("{PROJECTS_CERT}.{ext}");
+            std::fs::read_to_string(&path).map_err(|e| format!("reading {path}: {e}"))
+        };
+        let cert = gateway::tls::Cert::from_pem(&read("pem")?, &read("key")?)
+            .map_err(|e| format!("the projects certificate: {e}"))?;
+        let dial = Arc::new(gateway::projects::HubDial(Arc::clone(&app.hub)));
+        let router = gateway::projects::router(app.clone(), dial, domain);
+        gateway = gateway.with_projects(domain, cert, router)?;
+        tracing::info!(%domain, "serving project hosts");
+    }
     let (closing, pool) = (Arc::clone(&app.closing), app.pool.clone());
     let hub = Arc::clone(&app.hub);
     let server = gateway.serve(router(app), Arc::clone(&closing), gateway::SHUTDOWN_GRACE);

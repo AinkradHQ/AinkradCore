@@ -9,6 +9,10 @@
 //! - `p2p` (feature `iroh`, `serve --iroh`): off unless asked for; QUIC over iroh for a Core
 //!   behind NAT. Transport only: every stream carries HTTP/1.1 into the same router.
 //!
+//! - `projects` (P6-02, `serve --projects-domain`): on the public listener, a TLS connection whose
+//!   SNI is `<slug>.<domain>` gets the wildcard certificate and the Host router, never the Core's
+//!   routes; every other SNI (and none) gets the Core as before.
+//!
 //! Before routing, the pre-auth gate (`preauth`) lets four route prefixes through without a
 //! key and refuses everything else unauthenticated.
 
@@ -17,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::Router;
 use tokio::net::{TcpListener, UnixListener};
 
 pub mod acme;
@@ -25,6 +30,7 @@ mod idle;
 #[cfg(feature = "iroh")]
 pub mod p2p;
 pub mod preauth;
+pub mod projects;
 pub mod tls;
 pub mod token;
 
@@ -118,6 +124,8 @@ pub struct Gateway {
     /// The opt-in iroh listener (`with_iroh`): off unless asked for.
     #[cfg(feature = "iroh")]
     iroh: Option<p2p::Listener>,
+    /// The Host router for project SNIs (`with_projects`).
+    projects: Option<Router>,
     limits: Limits,
 }
 
@@ -150,6 +158,7 @@ impl Gateway {
             tls,
             #[cfg(feature = "iroh")]
             iroh: None,
+            projects: None,
             limits,
         })
     }
@@ -172,6 +181,26 @@ impl Gateway {
     /// bootstrapped from the host (handshake spec §7.3). A Unix main listener needs none.
     pub fn with_admin_socket(mut self, path: &std::path::Path) -> std::io::Result<Self> {
         self.admin = Some(bind_unix(path)?);
+        Ok(self)
+    }
+
+    /// Serves project hosts (`<label>.<domain>`) on the public listener with `cert` and
+    /// `router` (`projects::router`), split by SNI before any Core routing. Public only.
+    pub fn with_projects(
+        mut self,
+        domain: &str,
+        cert: tls::Cert,
+        router: Router,
+    ) -> std::io::Result<Self> {
+        let Some((certs, acme)) = &self.tls else {
+            return Err(std::io::Error::other(
+                "project hosts need the public listener",
+            ));
+        };
+        if !certs.set_projects(domain, &acme.hostname, cert) {
+            return Err(std::io::Error::other("project hosts are already set"));
+        }
+        self.projects = Some(router);
         Ok(self)
     }
 
