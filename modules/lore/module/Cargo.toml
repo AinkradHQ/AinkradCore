@@ -12,6 +12,7 @@ ainkrad-core = { path = "../../../crates/core" }
 ainkrad-core-server = { path = "../../../crates/server" }
 ainkrad-embed = { path = "../../../crates/embed" }
 axum = "0.8.9"
+futures-util = "0.3.34"
 getrandom = "0.4.3"
 lore-model = { path = "../model" }
 diffy = "0.4.2"

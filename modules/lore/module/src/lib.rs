@@ -10,6 +10,7 @@
 mod attachments;
 mod backlinks;
 mod embed;
+mod export;
 mod merge;
 mod notes;
 mod save;
@@ -104,6 +105,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/notes/{note}/versions", "read"),
     ("GET", "/notes/{note}/versions/{version}", "read"),
     ("GET", "/attachments/{sha}", "read"),
+    ("GET", "/export", "read"),
 ];
 
 const BODY_LIMITS: &[(&str, &str, usize)] = &[("POST", "/attachments", attachments::BODY_MAX)];
@@ -132,7 +134,8 @@ pub struct Lore {
         versions::create,
         versions::restore,
         attachments::upload,
-        attachments::get
+        attachments::get,
+        export::export
     ),
     components(schemas(
         notes::NoteSummary,
@@ -192,6 +195,7 @@ impl Module for Lore {
                 post(attachments::upload).layer(DefaultBodyLimit::max(attachments::BODY_MAX)),
             )
             .route("/attachments/{sha}", get(attachments::get))
+            .route("/export", get(export::export))
             .route("/today", get(notes::today))
             .layer(axum::Extension(self.clone()))
     }
@@ -226,7 +230,9 @@ impl Module for Lore {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["state", "kind", "project", "day", "q", "tag", "limit"]
+        &[
+            "state", "kind", "project", "day", "q", "tag", "limit", "note",
+        ]
     }
 
     fn scope(&self) -> &'static str {
