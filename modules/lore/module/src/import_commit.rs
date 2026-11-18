@@ -46,7 +46,12 @@ struct Done<'a> {
     prev_run: Option<String>,
 }
 
-async fn done(conn: &mut SqliteConnection, run: &str, seq: i64, d: Done<'_>) -> Result<(), sqlx::Error> {
+async fn done(
+    conn: &mut SqliteConnection,
+    run: &str,
+    seq: i64,
+    d: Done<'_>,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE lore_import_items SET result = ?, note = ?, version = ?, rev_after = ?, prev_hash = ?, prev_run = ? \
          WHERE run = ? AND seq = ?",
@@ -65,22 +70,49 @@ async fn done(conn: &mut SqliteConnection, run: &str, seq: i64, d: Done<'_>) -> 
 }
 
 /// One item. The note is looked at again here: the review may have been open for days.
-async fn apply(conn: &mut SqliteConnection, run: &str, who: &str, it: Item) -> Result<(), ApiError> {
+async fn apply(
+    conn: &mut SqliteConnection,
+    run: &str,
+    who: &str,
+    it: Item,
+) -> Result<(), ApiError> {
     let seq = it.seq;
     if it.mark != "include" || matches!(it.flag.as_deref(), Some("too_large" | "skipped")) {
-        return Ok(done(conn, run, seq, Done { result: "skipped", ..Done::default() }).await?);
+        return Ok(done(
+            conn,
+            run,
+            seq,
+            Done {
+                result: "skipped",
+                ..Done::default()
+            },
+        )
+        .await?);
     }
     if let Some(nid) = &it.match_note {
-        let live = sqlx::query("SELECT import_hash, import_run FROM lore_notes WHERE id = ? AND trashed_at IS NULL")
-            .bind(nid)
-            .fetch_optional(&mut *conn)
-            .await?;
+        let live = sqlx::query(
+            "SELECT import_hash, import_run FROM lore_notes WHERE id = ? AND trashed_at IS NULL",
+        )
+        .bind(nid)
+        .fetch_optional(&mut *conn)
+        .await?;
         if let Some(n) = live {
-            let (imported, prev_run): (Option<String>, Option<String>) = (n.try_get("import_hash")?, n.try_get("import_run")?);
+            let (imported, prev_run): (Option<String>, Option<String>) =
+                (n.try_get("import_hash")?, n.try_get("import_run")?);
             let h = save::load(conn, nid).await?;
             let now = sha_hex(&h.text);
             if now == it.hash {
-                return Ok(done(conn, run, seq, Done { result: "unchanged", note: Some(nid.clone()), ..Done::default() }).await?);
+                return Ok(done(
+                    conn,
+                    run,
+                    seq,
+                    Done {
+                        result: "unchanged",
+                        note: Some(nid.clone()),
+                        ..Done::default()
+                    },
+                )
+                .await?);
             }
             if imported.as_deref() != Some(now.as_str()) {
                 // Edited since the import: keep the note, keep what the file says now as a version.
@@ -93,14 +125,37 @@ async fn apply(conn: &mut SqliteConnection, run: &str, who: &str, it: Item) -> R
                 .await?;
                 let v = match same {
                     Some(v) => v,
-                    None => versions::keep(conn, nid, h.rev, &it.text, "conflict", Some("import"), "system").await?,
+                    None => {
+                        versions::keep(
+                            conn,
+                            nid,
+                            h.rev,
+                            &it.text,
+                            "conflict",
+                            Some("import"),
+                            "system",
+                        )
+                        .await?
+                    }
                 };
-                save::audit_only(conn, "lore.note.conflict", nid, json!({"outcome": "import"})).await?;
-                let d = Done { result: "conflict", note: Some(nid.clone()), version: Some(v), ..Done::default() };
+                save::audit_only(
+                    conn,
+                    "lore.note.conflict",
+                    nid,
+                    json!({"outcome": "import"}),
+                )
+                .await?;
+                let d = Done {
+                    result: "conflict",
+                    note: Some(nid.clone()),
+                    version: Some(v),
+                    ..Done::default()
+                };
                 return Ok(done(conn, run, seq, d).await?);
             }
             let v = versions::snapshot(conn, &h, "auto", None, "system").await?;
-            let rev = save::commit_text(conn, &h, &it.text, "system", "system", Snap::Never).await?;
+            let rev =
+                save::commit_text(conn, &h, &it.text, "system", "system", Snap::Never).await?;
             sqlx::query("UPDATE lore_notes SET import_run = ?, import_hash = ? WHERE id = ?")
                 .bind(run)
                 .bind(&it.hash)
@@ -122,7 +177,18 @@ async fn apply(conn: &mut SqliteConnection, run: &str, who: &str, it: Item) -> R
     let project = match it.project.as_deref() {
         Some(p) => match project_id(conn, p).await {
             Ok(p) => Some(p),
-            Err(_) => return Ok(done(conn, run, seq, Done { result: "skipped", ..Done::default() }).await?),
+            Err(_) => {
+                return Ok(done(
+                    conn,
+                    run,
+                    seq,
+                    Done {
+                        result: "skipped",
+                        ..Done::default()
+                    },
+                )
+                .await?);
+            }
         },
         None => None,
     };
@@ -151,8 +217,22 @@ async fn apply(conn: &mut SqliteConnection, run: &str, who: &str, it: Item) -> R
     .await
     .map_err(notes::store_err)?;
     save::seed(conn, &id, &it.text, &parse).await?;
-    notes::record(conn, "created", "changed", &id, 1, "import", project.as_deref()).await?;
-    let d = Done { result: "created", note: Some(id), rev: Some(1), ..Done::default() };
+    notes::record(
+        conn,
+        "created",
+        "changed",
+        &id,
+        1,
+        "import",
+        project.as_deref(),
+    )
+    .await?;
+    let d = Done {
+        result: "created",
+        note: Some(id),
+        rev: Some(1),
+        ..Done::default()
+    };
     Ok(done(conn, run, seq, d).await?)
 }
 
@@ -204,7 +284,10 @@ pub(crate) async fn commit(
 }
 
 /// `undone`: 1 = put back, 2 = left because the note changed after the import.
-async fn undo_item(conn: &mut SqliteConnection, r: &sqlx::sqlite::SqliteRow) -> Result<i64, ApiError> {
+async fn undo_item(
+    conn: &mut SqliteConnection,
+    r: &sqlx::sqlite::SqliteRow,
+) -> Result<i64, ApiError> {
     let result: String = r.try_get("result")?;
     let note: Option<String> = r.try_get("note")?;
     let version: Option<String> = r.try_get("version")?;
@@ -225,13 +308,18 @@ async fn undo_item(conn: &mut SqliteConnection, r: &sqlx::sqlite::SqliteRow) -> 
             Ok(1)
         }
         "updated" => {
-            let (Ok(h), Some(version)) = (save::load(conn, &note).await, version) else { return Ok(2) };
+            let (Ok(h), Some(version)) = (save::load(conn, &note).await, version) else {
+                return Ok(2);
+            };
             let rev_after: Option<i64> = r.try_get("rev_after")?;
-            let old: Option<String> = sqlx::query_scalar("SELECT text FROM lore_versions WHERE id = ?")
-                .bind(&version)
-                .fetch_optional(&mut *conn)
-                .await?;
-            let Some(old) = old.filter(|_| !h.trashed && rev_after == Some(h.rev)) else { return Ok(2) };
+            let old: Option<String> =
+                sqlx::query_scalar("SELECT text FROM lore_versions WHERE id = ?")
+                    .bind(&version)
+                    .fetch_optional(&mut *conn)
+                    .await?;
+            let Some(old) = old.filter(|_| !h.trashed && rev_after == Some(h.rev)) else {
+                return Ok(2);
+            };
             save::commit_text(conn, &h, &old, "system", "system", Snap::Never).await?;
             sqlx::query("UPDATE lore_notes SET import_hash = ?, import_run = ? WHERE id = ?")
                 .bind(r.try_get::<Option<String>, _>("prev_hash")?)
@@ -243,7 +331,10 @@ async fn undo_item(conn: &mut SqliteConnection, r: &sqlx::sqlite::SqliteRow) -> 
         }
         "conflict" => {
             if let Some(v) = version {
-                sqlx::query("DELETE FROM lore_versions WHERE id = ?").bind(v).execute(&mut *conn).await?;
+                sqlx::query("DELETE FROM lore_versions WHERE id = ?")
+                    .bind(v)
+                    .execute(&mut *conn)
+                    .await?;
             }
             Ok(1)
         }
@@ -258,10 +349,12 @@ pub(crate) async fn undo(State(app): State<App>, Path(run): Path<String>) -> Api
     loop {
         let mut tx = begin_write(&app.pool).await?;
         if state_of(&mut tx, &run, &["committed", "undoing"]).await? == "committed" {
-            let held: i64 = sqlx::query_scalar("SELECT count(*) FROM lore_import_items WHERE run = ? AND result IS NOT NULL")
-                .bind(&run)
-                .fetch_one(&mut *tx)
-                .await?;
+            let held: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM lore_import_items WHERE run = ? AND result IS NOT NULL",
+            )
+            .bind(&run)
+            .fetch_one(&mut *tx)
+            .await?;
             if held == 0 {
                 return Err(ApiError::conflict("the import's details were cleaned up"));
             }

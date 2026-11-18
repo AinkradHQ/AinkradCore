@@ -123,7 +123,8 @@ pub(crate) fn clean_text(b: &[u8]) -> Option<String> {
 /// Reads an uploaded zip. `Err` only for a zip that cannot be taken at all (unreadable, too many entries or files,
 /// too much text); one bad entry is counted in `refused` and the rest is read.
 pub(crate) fn read_zip(bytes: &[u8]) -> Result<Scan, &'static str> {
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|_| "the zip is not valid")?;
+    let mut z =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|_| "the zip is not valid")?;
     if z.len() > ZIP_ENTRIES_MAX {
         return Err("the zip has too many entries");
     }
@@ -191,11 +192,17 @@ fn branch_plain(b: &str) -> bool {
         && !b.contains("..")
         && !b.starts_with('/')
         && !b.ends_with('/')
-        && b.bytes().all(|c| c.is_ascii_alphanumeric() || b"._-/".contains(&c))
+        && b.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"._-/".contains(&c))
 }
 
 /// One git plumbing command, as described in the module docs. Its stderr is dropped: nothing git says reaches a caller.
-async fn git(dir: &Path, args: &[&str], stdin: Option<Vec<u8>>, cap: usize) -> Result<Vec<u8>, &'static str> {
+async fn git(
+    dir: &Path,
+    args: &[&str],
+    stdin: Option<Vec<u8>>,
+    cap: usize,
+) -> Result<Vec<u8>, &'static str> {
     let fail = "the repo copy could not be read";
     let mut cmd = Command::new("git");
     cmd.args([
@@ -216,7 +223,11 @@ async fn git(dir: &Path, args: &[&str], stdin: Option<Vec<u8>>, cap: usize) -> R
     .env("GIT_TERMINAL_PROMPT", "0")
     .env("GIT_NO_REPLACE_OBJECTS", "1")
     .env("GIT_NO_LAZY_FETCH", "1")
-    .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+    .stdin(if stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
     .stdout(Stdio::piped())
     .stderr(Stdio::null())
     .kill_on_drop(true);
@@ -233,7 +244,11 @@ async fn git(dir: &Path, args: &[&str], stdin: Option<Vec<u8>>, cap: usize) -> R
     }
     let mut out = child.stdout.take().ok_or(fail)?;
     let mut buf = Vec::new();
-    let read = tokio::time::timeout(GIT_TIMEOUT, (&mut out).take(cap as u64 + 1).read_to_end(&mut buf)).await;
+    let read = tokio::time::timeout(
+        GIT_TIMEOUT,
+        (&mut out).take(cap as u64 + 1).read_to_end(&mut buf),
+    )
+    .await;
     if read.is_err() || buf.len() > cap {
         let _ = child.kill().await;
         return Err(fail);
@@ -261,7 +276,13 @@ pub(crate) async fn read_mirror(m: &MirrorRef) -> Result<Scan, &'static str> {
         return Err("the repo copy could not be read");
     }
     // Up to ~300 bytes a record; more than this many records is hostile whatever it holds.
-    let tree = git(&m.dir, &["ls-tree", "-r", "-z", "-l", &sha, "--", "Docs", "docs"], None, 4 << 20).await?;
+    let tree = git(
+        &m.dir,
+        &["ls-tree", "-r", "-z", "-l", &sha, "--", "Docs", "docs"],
+        None,
+        4 << 20,
+    )
+    .await?;
     let mut scan = Scan::default();
     let mut wanted: Vec<(String, String, usize)> = Vec::new();
     let mut total = 0usize;
@@ -302,7 +323,9 @@ pub(crate) async fn read_mirror(m: &MirrorRef) -> Result<Scan, &'static str> {
         if !scan.room() || wanted.len() + scan.too_large.len() >= ITEMS_MAX {
             return Err("the repo has too many documents (the limit is 2 000)");
         }
-        let size: usize = size.parse().map_err(|_| "the repo copy could not be read")?;
+        let size: usize = size
+            .parse()
+            .map_err(|_| "the repo copy could not be read")?;
         if size > FILE_MAX {
             scan.too_large.push(path);
             continue;
@@ -316,7 +339,10 @@ pub(crate) async fn read_mirror(m: &MirrorRef) -> Result<Scan, &'static str> {
     if wanted.is_empty() {
         return Ok(scan);
     }
-    let ask: Vec<u8> = wanted.iter().flat_map(|(_, o, _)| format!("{o}\n").into_bytes()).collect();
+    let ask: Vec<u8> = wanted
+        .iter()
+        .flat_map(|(_, o, _)| format!("{o}\n").into_bytes())
+        .collect();
     let cap = total + wanted.len() * 160;
     let out = git(&m.dir, &["cat-file", "--batch"], Some(ask), cap).await?;
     let bad = "the repo copy could not be read";
@@ -367,8 +393,14 @@ mod tests {
         ] {
             assert_eq!(classify_path(bad), PathClass::Refused, "{bad:?}");
         }
-        assert_eq!(classify_path(&format!("{}.md", "a".repeat(600))), PathClass::Refused);
-        assert_eq!(classify_path(&"d/".repeat(20).to_owned()), PathClass::Refused);
+        assert_eq!(
+            classify_path(&format!("{}.md", "a".repeat(600))),
+            PathClass::Refused
+        );
+        assert_eq!(
+            classify_path(&"d/".repeat(20).to_owned()),
+            PathClass::Refused
+        );
         for skip in [
             "x.txt",
             ".git/x.md",
@@ -387,26 +419,44 @@ mod tests {
 
     #[test]
     fn tags_and_front_matter() {
-        assert_eq!(folder_tags("Docs/Plans/Q4 Plans/x.md", 1), ["plans", "q4plans"]);
+        assert_eq!(
+            folder_tags("Docs/Plans/Q4 Plans/x.md", 1),
+            ["plans", "q4plans"]
+        );
         assert_eq!(folder_tags("x.md", 0), Vec::<String>::new());
         let t = vec!["plans".to_owned()];
         assert_eq!(with_tags("# A", &t), "---\ntags: [plans]\n---\n\n# A");
-        assert_eq!(with_tags("---\ntags: [x]\n---\nA", &t), "---\ntags: [x]\n---\nA");
+        assert_eq!(
+            with_tags("---\ntags: [x]\n---\nA", &t),
+            "---\ntags: [x]\n---\nA"
+        );
         assert_eq!(with_tags("# A", &[]), "# A");
         // The tags a note gets are the ones the parser reads back.
         let p = lore_model::parse(&with_tags("# A", &t)).unwrap();
-        assert_eq!((p.title.as_str(), p.tags.as_slice()), ("A", &["plans".to_owned()][..]));
+        assert_eq!(
+            (p.title.as_str(), p.tags.as_slice()),
+            ("A", &["plans".to_owned()][..])
+        );
     }
 
     #[test]
     fn text() {
         assert!(clean_text(b"# ok").is_some());
-        assert!(clean_text(b"a\0b").is_none() && clean_text(&[0xff, 0xfe]).is_none() && clean_text(b"  \n").is_none());
+        assert!(
+            clean_text(b"a\0b").is_none()
+                && clean_text(&[0xff, 0xfe]).is_none()
+                && clean_text(b"  \n").is_none()
+        );
     }
 
     #[test]
     fn branch_names() {
         assert!(branch_plain("main") && branch_plain("feat/x-1.2"));
-        assert!(!branch_plain("a..b") && !branch_plain("-x ") && !branch_plain("a b") && !branch_plain(""));
+        assert!(
+            !branch_plain("a..b")
+                && !branch_plain("-x ")
+                && !branch_plain("a b")
+                && !branch_plain("")
+        );
     }
 }

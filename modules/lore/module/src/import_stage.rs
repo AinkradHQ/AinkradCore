@@ -29,23 +29,53 @@ pub(crate) async fn stage(
         .bind(run)
         .fetch_one(&mut *conn)
         .await?;
-    let bytes: i64 = sqlx::query_scalar("SELECT coalesce(sum(length(text)), 0) FROM lore_import_items WHERE run = ?")
-        .bind(run)
-        .fetch_one(&mut *conn)
-        .await?;
+    let bytes: i64 = sqlx::query_scalar(
+        "SELECT coalesce(sum(length(text)), 0) FROM lore_import_items WHERE run = ?",
+    )
+    .bind(run)
+    .fetch_one(&mut *conn)
+    .await?;
     let add: usize = scan.files.iter().map(|(_, t)| t.len()).sum();
-    if held as usize + scan.files.len() + scan.too_large.len() > ITEMS_MAX || bytes as usize + add > RUN_BYTES_MAX {
+    if held as usize + scan.files.len() + scan.too_large.len() > ITEMS_MAX
+        || bytes as usize + add > RUN_BYTES_MAX
+    {
         return Err(too_large("the import is over its size limit"));
     }
     for (path, text) in &scan.files {
         let tags = folder_tags(path, strip);
         let text = with_tags(text, &tags);
-        let title = lore_model::parse(&text).map(|p| p.title).unwrap_or_else(|_| lore_model::UNTITLED.to_owned());
-        insert(conn, run, path, &format!("{origin_prefix}{path}"), &title, &text, &sha_hex(&text), &tags, project, None).await?;
+        let title = lore_model::parse(&text)
+            .map(|p| p.title)
+            .unwrap_or_else(|_| lore_model::UNTITLED.to_owned());
+        insert(
+            conn,
+            run,
+            path,
+            &format!("{origin_prefix}{path}"),
+            &title,
+            &text,
+            &sha_hex(&text),
+            &tags,
+            project,
+            None,
+        )
+        .await?;
     }
     for path in &scan.too_large {
         let title = path.rsplit('/').next().unwrap_or(path);
-        insert(conn, run, path, &format!("{origin_prefix}{path}"), title, "", "", &[], project, Some("too_large")).await?;
+        insert(
+            conn,
+            run,
+            path,
+            &format!("{origin_prefix}{path}"),
+            title,
+            "",
+            "",
+            &[],
+            project,
+            Some("too_large"),
+        )
+        .await?;
     }
     sqlx::query("UPDATE lore_imports SET refused = refused + ?, ignored = ignored + ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?")
         .bind(scan.refused)
@@ -94,7 +124,11 @@ async fn insert(
 
 /// Flags the items (all, or `only`): an origin already imported (unchanged / changed / conflict), the same content or
 /// title already in Lore, or repeated in the run. Sets each item's default mark; a person's later marks are not touched.
-pub(crate) async fn classify(conn: &mut SqliteConnection, run: &str, only: Option<&[i64]>) -> Result<(), ApiError> {
+pub(crate) async fn classify(
+    conn: &mut SqliteConnection,
+    run: &str,
+    only: Option<&[i64]>,
+) -> Result<(), ApiError> {
     let rows = sqlx::query(
         "SELECT seq, origin, title, hash, project, flag FROM lore_import_items WHERE run = ? ORDER BY seq",
     )
@@ -169,4 +203,3 @@ pub(crate) async fn classify(conn: &mut SqliteConnection, run: &str, only: Optio
     }
     Ok(())
 }
-

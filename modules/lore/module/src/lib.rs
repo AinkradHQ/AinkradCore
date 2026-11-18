@@ -10,11 +10,12 @@
 mod attachments;
 mod backlinks;
 mod embed;
+mod export;
 mod import;
 mod import_commit;
 mod import_read;
+mod import_run;
 mod import_stage;
-mod export;
 mod merge;
 mod notes;
 mod save;
@@ -209,7 +210,9 @@ impl JobHandler for Sweep {
         Box::pin(async move {
             let app = self.0.get().ok_or("the lore module is not attached")?;
             let n = sweep(&app.pool).await.map_err(|e| e.to_string())?
-                + import_commit::sweep(&app.pool).await.map_err(|e| e.to_string())?;
+                + import_commit::sweep(&app.pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
             if n == 0 {
                 run.idle();
             }

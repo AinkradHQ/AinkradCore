@@ -239,7 +239,10 @@ pub(crate) async fn record(
 
 /// The project `ident` names, as the text id a note stores. The Projects store is the authority:
 /// a text that is no existing project's id is refused (no foreign key into a Core table).
-pub(crate) async fn project_id(conn: &mut SqliteConnection, ident: &str) -> Result<String, ApiError> {
+pub(crate) async fn project_id(
+    conn: &mut SqliteConnection,
+    ident: &str,
+) -> Result<String, ApiError> {
     let unknown = || ApiError::bad_request("no such project");
     if ident.is_empty() || ident.len() > 18 || !ident.bytes().all(|c| c.is_ascii_digit()) {
         return Err(unknown());
