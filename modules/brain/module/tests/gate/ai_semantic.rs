@@ -1,4 +1,5 @@
-//! `brainAiSearch` by meaning, with a fake embedder: a vector is an angle read from `ang=NN`.
+//! `brainAiSearch` by meaning, with a fake embedder: a vector is an angle read from `ang=NN`. Meaning
+//! ranks memory records only; the sources of these rooms carry the same angles and must never match.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -6,6 +7,7 @@ use std::time::Duration;
 
 use ainkrad_core::audit::AuditActor;
 use ainkrad_core_server::store::modsettings::ModuleSettings;
+use ainkrad_core::untrusted::OPEN;
 use brain_module::Brain;
 use brain_module::semantic::Embedder;
 use serde_json::{Value, json};
@@ -59,7 +61,7 @@ impl Fake {
 /// Alpha (visible to the session): a paraphrase of the query and an unrelated note.
 async fn setup(brain: Brain) -> (Fx, String, String) {
     let fx = fx_with(brain, 1).await;
-    let alpha = committed_room_named(&fx, "Alpha", &[("Keys", "unrelated source ang=170 ")]).await;
+    let alpha = committed_room_named(&fx, "Alpha", &[("Keys", "SRCMARK-7f3a ang=20 ")]).await;
     put_record(&fx, &alpha, "r1", "fact", "accepted", "rotate the signing keys ang=10 ").await;
     put_record(&fx, &alpha, "r2", "fact", "accepted", "pasta menu ang=90 ").await;
     // Not memory: a candidate (and the source above is never searched by meaning).
@@ -112,8 +114,17 @@ async fn meaning_ranks_a_paraphrase_that_keywords_miss_and_never_reads_hidden_ro
     let hits = v["hits"].as_array().unwrap();
     assert!(hits[0]["text"].as_str().unwrap().contains("signing keys"));
     assert!(hits.iter().all(|h| h["kind"] == "record"));
-    assert!(!v.to_string().contains("unrelated source"));
     assert!(!v.to_string().contains("credentials draft"));
+    assert!(hits[0]["text"].as_str().unwrap().starts_with(OPEN));
+    assert_eq!(v["complete"], true);
+    // The source sits right on the query's angle, so only the memory-only rule keeps it out: in
+    // every hit of both meaning-using modes ("auto" ranks by both), not just the first.
+    for mode in ["auto", "meaning"] {
+        let r = search(&fx, &s, mode).await;
+        for h in r["hits"].as_array().unwrap() {
+            assert!(!h.to_string().contains("SRCMARK-7f3a"), "{mode}: {h}");
+        }
+    }
     assert!(!v.to_string().contains(&beta));
     let m = search(&fx, &s, "meaning").await;
     assert_eq!(m["ranked_by"], "meaning");

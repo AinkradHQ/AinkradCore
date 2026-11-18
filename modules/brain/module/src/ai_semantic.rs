@@ -21,7 +21,8 @@ use crate::semantic::service::similar;
 
 /// How long a search waits for the worker to embed the question.
 pub(crate) const WAIT: Duration = Duration::from_secs(2);
-/// ponytail: newest records per room; an index of vectors if rooms outgrow this.
+/// ponytail: newest records per room; an index of vectors if rooms outgrow this. A room with more
+/// makes the search `complete: false`.
 const MAX_RECORDS: i64 = 500;
 /// Candidates one search may queue for embedding.
 const MAX_QUEUE: usize = 200;
@@ -76,21 +77,28 @@ struct Cand {
     hash: String,
 }
 
-/// The best records by meaning, best first; `None` when meaning cannot answer now.
+/// The best `limit` hits by meaning, best first, and whether `MAX_RECORDS` cut a room; `None` when
+/// meaning cannot answer now.
 pub(crate) async fn rank(
     app: &App,
     b: &Brain,
     q: &str,
     open: &[(Visible, RoomAccess)],
     limit: usize,
-) -> Option<Vec<AiHit>> {
+) -> Option<(Vec<AiHit>, bool)> {
     if !available(app, b).await {
         return None;
     }
     let qv = b.embed_query(q, WAIT).await?;
     let mut cands: Vec<Cand> = vec![];
     let mut rec_text: HashMap<String, String> = HashMap::new();
+    let mut capped = false;
     for (i, (_, a)) in open.iter().enumerate() {
+        let total: i64 = sqlx::query_scalar("SELECT count(*) FROM memory")
+            .fetch_one(a.pool())
+            .await
+            .ok()?;
+        capped |= total > MAX_RECORDS;
         let recs = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT id, body, body_norm FROM memory ORDER BY created_at DESC, id LIMIT {MAX_RECORDS}"
         )))
@@ -141,19 +149,20 @@ pub(crate) async fn rank(
             "SELECT id, type, body, tags, source_ids, created_at FROM memory WHERE id = ?",
         )
         .bind(&c.id)
-        .fetch_one(a.pool())
+        .fetch_optional(a.pool())
         .await
         .ok()?;
+        let Some(r) = r else { continue };
         let rec = record_of(&v.id, &r, LIST_BODY).ok()?;
         hits.push(AiHit {
             room: v.id.clone(),
             kind: "record".to_owned(),
             id: rec.id,
-            started_at: r.try_get("created_at").ok()?,
+            started_at: rec.created_at,
             text: rec.text,
         });
     }
-    Some(hits)
+    Some((hits, capped))
 }
 
 /// Reciprocal-rank fusion of two best-first lists; a hit in both keeps the keyword text (it has the
@@ -184,7 +193,7 @@ mod tests {
     fn h(id: &str) -> AiHit {
         AiHit {
             room: "r".into(),
-            kind: "source".into(),
+            kind: "record".into(),
             id: id.into(),
             started_at: String::new(),
             text: id.into(),

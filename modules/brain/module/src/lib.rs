@@ -208,6 +208,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/ai/rooms", "read"),
     ("GET", "/ai/search", "read"),
     ("GET", "/ai/rooms/{room}/records/{id}", "read"),
+    ("GET", "/ai/rooms/{room}/records/{id}/sources/{source}", "read"),
     ("GET", "/ai/decisions", "read"),
     ("GET", "/ai/project-state", "read"),
     ("POST", "/ai/rooms/{room}/propose", "agent"),
@@ -523,6 +524,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         ai::rooms,
         ai::search,
         ai::one,
+        ai::evidence,
         ai::decisions,
         ai::project_state,
         ai::propose
@@ -607,6 +609,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         ai::AiHits,
         ai::AiRecord,
         ai::AiRecords,
+        ai::AiEvidence,
         ai::Propose,
         ai::Proposed
     ))
@@ -687,6 +690,10 @@ impl Module for Brain {
             .route("/ai/rooms", get(ai::rooms))
             .route("/ai/search", get(ai::search))
             .route("/ai/rooms/{room}/records/{id}", get(ai::one))
+            .route(
+                "/ai/rooms/{room}/records/{id}/sources/{source}",
+                get(ai::evidence),
+            )
             .route("/ai/decisions", get(ai::decisions))
             .route("/ai/project-state", get(ai::project_state))
             .route("/ai/rooms/{room}/propose", post(ai::propose))
@@ -738,6 +745,7 @@ impl Module for Brain {
             "brain.room.access",
             "brain.room.linked",
             "brain.room.unlinked",
+            "brain.ai.evidence",
             "brain.ai.proposed",
             "brain.ai.refused",
             "brain.alias.set",

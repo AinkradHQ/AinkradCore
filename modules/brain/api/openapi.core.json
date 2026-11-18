@@ -1318,6 +1318,7 @@
           "auth.lockout",
           "auth.lockout_cleared",
           "auth.step_up",
+          "brain.ai.evidence",
           "brain.ai.proposed",
           "brain.ai.refused",
           "brain.alias.removed",
