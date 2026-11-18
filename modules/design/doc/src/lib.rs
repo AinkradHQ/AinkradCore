@@ -39,10 +39,12 @@ mod ops;
 mod presence;
 #[cfg(test)]
 mod reset_tests;
+mod text;
 mod trial;
 
 pub use ops::{MAX_GESTURE_OPS, MAX_OPS, MAX_OPS_BYTES, Op, parse_ops};
 pub use presence::{ClockFn, MAX_PEERS, MAX_PRESENCE_BYTES, PEER_TTL_MS, Presence};
+pub use text::byte_of_utf16;
 
 /// A remote update or a full state: the document cap plus framing room.
 pub const MAX_UPDATE_BYTES: usize = MAX_DOC_BYTES + (1 << 20);

@@ -63,6 +63,8 @@ pub struct Host {
     /// Boards the current preview changed (to put back).
     pub(crate) previewed: HashSet<String>,
     pub(crate) rng: u64,
+    /// The text node being edited (V2-04), if any.
+    pub(crate) text: Option<crate::text::Session>,
     held: usize,
     fonts: usize,
     #[cfg(all(feature = "metal", target_os = "macos"))]
@@ -92,6 +94,7 @@ impl Host {
             settle: None,
             previewed: HashSet::new(),
             rng: crate::edits::seed(),
+            text: None,
             held: 0,
             fonts: 0,
             #[cfg(all(feature = "metal", target_os = "macos"))]
@@ -122,6 +125,7 @@ impl Host {
             }
             self.tree = Some(forest(&d));
             self.model = Some(d);
+            self.rebase_text();
         }
         self.model.get_or_insert_with(Doc::default)
     }
@@ -277,6 +281,14 @@ impl Host {
     }
 
     pub fn key(&mut self, key: u32, mods: u32) -> Result<(), i32> {
+        // while editing text, keys are text commands (`de_text_command`); Escape ends editing, nothing else acts
+        if self.text.is_some() {
+            return if key == DE_KEY_ESCAPE {
+                self.text_end()
+            } else {
+                Ok(())
+            };
+        }
         let step = if mods & DE_MOD_SHIFT != 0 { 10.0 } else { 1.0 };
         // a press that has not moved yet is not a gesture to protect; a drag is (keys wait for its end)
         if matches!(self.gesture, Some(crate::interact::Gesture::Press { .. })) {
