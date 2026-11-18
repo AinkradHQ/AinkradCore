@@ -20,6 +20,8 @@ pub(in crate::v2) struct MemFs {
     pub(super) claimed: HashMap<String, u64>,
     /// Every path (and rename target) the client named, in order.
     pub(super) paths: Vec<String>,
+    /// The permissions each open asked for, as sent with the open itself: path, mode.
+    pub(super) open_modes: Vec<(String, Option<u32>)>,
 }
 
 pub(in crate::v2) type Fs = Arc<Mutex<MemFs>>;
@@ -128,11 +130,12 @@ impl Handler for Sftp {
         id: u32,
         filename: String,
         pflags: OpenFlags,
-        _: FileAttributes,
+        attrs: FileAttributes,
     ) -> Result<Handle, StatusCode> {
         self.see(&filename);
         {
             let mut fs = self.fs.lock().unwrap();
+            fs.open_modes.push((filename.clone(), attrs.permissions));
             let there = fs.exists(&filename);
             if pflags.contains(OpenFlags::EXCLUDE) && there {
                 return Err(StatusCode::Failure);

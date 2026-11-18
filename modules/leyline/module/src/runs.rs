@@ -31,6 +31,28 @@ impl Drop for Parked {
     }
 }
 
+/// An approval asked for and not yet spent or voided by the gate itself.
+pub(super) struct Abandon {
+    pub(super) pool: SqlitePool,
+    pub(super) id: String,
+    pub(super) session: String,
+    pub(super) armed: bool,
+}
+
+impl Drop for Abandon {
+    /// The call was dropped while its approval was open: void it in the background.
+    fn drop(&mut self) {
+        if self.armed
+            && let Ok(h) = tokio::runtime::Handle::try_current()
+        {
+            let (pool, id, session) = (self.pool.clone(), self.id.clone(), self.session.clone());
+            h.spawn(async move {
+                let _ = ainkrad_core_server::ops_catalog::abandon_approval(&pool, &id, &session).await;
+            });
+        }
+    }
+}
+
 /// Marks a run still waiting for approval cancelled (a run that has settled is left alone), and
 /// voids its approval so the call parked on it ends at once. True when this call cancelled it.
 pub(crate) async fn cancel(pool: &SqlitePool, run: &str) -> bool {
@@ -252,7 +274,12 @@ pub(super) async fn settle(
                 action: c.action.clone(),
                 op_sha256: hash.to_owned(),
                 principal: who.clone(),
-                steps: c.cmd.as_ref().map(|m| m.steps.clone()).unwrap_or_default(),
+                // A pre-set command's steps, or the one ad-hoc line the gate decided on.
+                steps: match (&c.cmd, c.action) {
+                    (Some(m), _) => m.steps.clone(),
+                    (None, Action::Exec(line)) => vec![line.clone()],
+                    _ => Vec::new(),
+                },
                 tuple: h.tuple.clone(),
             }),
             Verdict::Deny(why) => refused.push((h.id.clone(), *why)),

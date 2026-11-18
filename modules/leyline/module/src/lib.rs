@@ -3,12 +3,14 @@
 //! text out (API and table), `leyline.*` events and audit; and keys (Y1-02): generated or imported,
 //! sealed in the Core's secret store, public data only in the API; and project attachments (Y1-03).
 //! SSH itself runs on a runner (Y2); the command gate (`gate`, Y4-01), host terminals and host-key
-//! trust (Y3-01) are here; so are session history, recording and replay (Y3-02).
+//! trust (Y3-01), making a host a runner (Y8-01), and session history, recording and replay
+//! (Y3-02) are here.
 //!
 //! Module off, the Core is unchanged: the tables are its own `leyline_` namespace, no Core
 //! migration, no Core crate names this module.
 
 mod address;
+mod ai;
 mod alerts;
 mod attach;
 mod cast;
@@ -21,6 +23,7 @@ mod history;
 pub mod hostkeys;
 mod hosts;
 mod keys;
+mod makerunner;
 mod policy;
 /// Terminal recording; public so `benches/relay_tap.rs` can time the relay's tap.
 pub mod record;
@@ -106,6 +109,8 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     // paused recording too; pausing does not (a person who sees one can stop it at once).
     ("PUT", "/hosts/{host}/recording"),
     ("POST", "/sessions/{session}/recording/resume"),
+    // Installs software as root on a host and pairs it: a person at a live step-up.
+    ("POST", "/hosts/{host}/runner"),
 ];
 // POST and PATCH need a step-up only for what widens an AI's reach or repoints a host (`allowed`,
 // address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
@@ -123,6 +128,16 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/sessions/{session}/recording/pause"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
+    ("POST", "/ai/hosts/{host}/exec"),
+    ("POST", "/ai/commands/{command}/run"),
+];
+// The AI routes that reach a host ask a person through the gate itself (T10), never twice, and
+// may wait for that person inside the call.
+const SELF_APPROVED: &[(&str, &str)] = &[
+    ("GET", "/ai/hosts/{host}/files"),
+    ("GET", "/ai/hosts/{host}/file"),
+    ("POST", "/ai/hosts/{host}/exec"),
+    ("POST", "/ai/commands/{command}/run"),
 ];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts", "read"),
@@ -135,6 +150,13 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/commands", "read"),
     ("GET", "/commands/{command}", "read"),
     ("GET", "/runs/{run}", "admin"),
+    // Code Mode (Y7-01): a session acts as its creator without `admin`, so these name scopes a
+    // creator holds. They answer only a session's own calls (`ai::session_only`).
+    ("GET", "/ai/runs/{run}", "agent"),
+    ("GET", "/ai/hosts/{host}/files", "agent"),
+    ("GET", "/ai/hosts/{host}/file", "agent"),
+    ("POST", "/ai/hosts/{host}/exec", "agent"),
+    ("POST", "/ai/commands/{command}/run", "agent"),
     ("GET", "/hosts/{host}/host-keys", "read"),
     // The terminal scope, as the Core's own terminal routes.
     ("POST", "/hosts/{host}/terminals", "terminal"),
@@ -144,6 +166,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/sessions/{session}/recording", "terminal"),
     ("POST", "/sessions/{session}/recording/pause", "terminal"),
     ("POST", "/sessions/{session}/recording/resume", "terminal"),
+    ("POST", "/hosts/{host}/runner", "terminal"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -176,6 +199,11 @@ pub struct Leyline;
         commands::get_run,
         fleet::start,
         fleet::cancel,
+        ai::exec,
+        ai::get_run,
+        ai::run_command,
+        ai::list_files,
+        ai::read_file,
         hostkeys::list,
         hostkeys::trust_route,
         hostkeys::replace_route,
@@ -185,7 +213,8 @@ pub struct Leyline;
         history::set_recording,
         history::replay,
         history::pause,
-        history::resume
+        history::resume,
+        makerunner::make
     ),
     components(schemas(
         hosts::HostView,
@@ -213,6 +242,10 @@ pub struct Leyline;
         fleet::FleetRequest,
         fleet::FleetStarted,
         fleet::Cancelled,
+        ai::ExecRequest,
+        ai::AiRunRequest,
+        ai::FileList,
+        ai::FileText,
         hostkeys::HostKeyView,
         hostkeys::Pick,
         terminal::NewSession,
@@ -220,7 +253,8 @@ pub struct Leyline;
         history::SessionRow,
         history::NewRecording,
         history::HostRecording,
-        history::Paused
+        history::Paused,
+        makerunner::Install
     ))
 )]
 struct Doc;
@@ -242,6 +276,7 @@ impl Module for Leyline {
                 }
             });
         }
+        health::attach(app);
     }
 
     fn routes(&self) -> Router<App> {
@@ -270,6 +305,7 @@ impl Module for Leyline {
                 "/sessions/{session}/recording/resume",
                 post(history::resume),
             )
+            .route("/hosts/{host}/runner", post(makerunner::make))
             .route("/groups", get(hosts::groups))
             .route("/tags", get(hosts::tags))
             .route("/keys", get(keys::list).post(keys::generate))
@@ -286,6 +322,11 @@ impl Module for Leyline {
             .route("/runs/{run}", get(commands::get_run))
             .route("/runs/{run}/cancel", post(fleet::cancel))
             .route("/fleet/runs", post(fleet::start))
+            .route("/ai/hosts/{host}/exec", post(ai::exec))
+            .route("/ai/runs/{run}", get(ai::get_run))
+            .route("/ai/hosts/{host}/files", get(ai::list_files))
+            .route("/ai/hosts/{host}/file", get(ai::read_file))
+            .route("/ai/commands/{command}/run", post(ai::run_command))
             .route("/projects/{project}/hosts", get(attach::list))
             .route(
                 "/projects/{project}/hosts/{host}",
@@ -349,7 +390,7 @@ impl Module for Leyline {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["group", "tag", "limit"]
+        &["group", "tag", "limit", "path"]
     }
 
     fn scope(&self) -> &'static str {
@@ -366,6 +407,10 @@ impl Module for Leyline {
 
     fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
         Some(NON_DESTRUCTIVE)
+    }
+
+    fn self_approved(&self) -> &'static [(&'static str, &'static str)] {
+        SELF_APPROVED
     }
 
     fn notification_kinds(&self) -> &'static [(&'static str, &'static str)] {

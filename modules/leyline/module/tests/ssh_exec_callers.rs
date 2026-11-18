@@ -1,5 +1,6 @@
 //! Y4-02 review, MEDIUM: the Hub's ungated ssh.exec dispatch takes no proof, so only Leyline's `exec.rs`
-//! (which holds the gate's `Authorized`) may call it. Fails when any other source file does.
+//! (which holds the gate's `Authorized`) may call it. Y7-01 review: the same for the SFTP read dispatch.
+//! Fails when any other source file does.
 
 use std::path::{Path, PathBuf};
 
@@ -17,23 +18,21 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-#[test]
-fn only_the_gated_runner_calls_the_ungated_dispatch() {
-    // No `(`: an alias or a value use is a caller too. Comment lines (`//`) do not count. The name
-    // is built from two pieces so this file never holds it whole.
-    let needle = format!("dispatch_ssh_{}", "exec");
+/// Every source file under `crates` and `modules` that mentions `needle` outside a comment line
+/// (no `(`: an alias or a value use is a caller too).
+fn callers(needle: &str) -> Vec<String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let mut files = Vec::new();
     for d in ["crates", "modules"] {
         rust_files(&root.join(d), &mut files);
     }
     assert!(files.len() > 50, "the walk found the source tree");
-    let mut callers: Vec<String> = files
+    let mut found: Vec<String> = files
         .iter()
         .filter(|f| {
             std::fs::read_to_string(f).is_ok_and(|s| {
                 s.lines()
-                    .any(|l| !l.trim_start().starts_with("//") && l.contains(&needle))
+                    .any(|l| !l.trim_start().starts_with("//") && l.contains(needle))
             })
         })
         .map(|f| {
@@ -45,13 +44,30 @@ fn only_the_gated_runner_calls_the_ungated_dispatch() {
                 .into_owned()
         })
         .collect();
-    callers.sort();
+    found.sort();
+    found
+}
+
+const ALLOWED: [&str; 2] = [
+    "crates/server/src/hub/mod.rs",
+    "modules/leyline/module/src/exec.rs",
+];
+
+// The needles are split so this file does not match itself.
+#[test]
+fn only_the_gated_runner_calls_dispatch_ssh_exec() {
     assert_eq!(
-        callers,
-        [
-            "crates/server/src/hub/mod.rs",
-            "modules/leyline/module/src/exec.rs"
-        ],
+        callers(&format!("dispatch_ssh_{}", "exec")),
+        ALLOWED,
         "a new caller of the ungated ssh.exec dispatch"
+    );
+}
+
+#[test]
+fn only_the_gated_runner_calls_dispatch_ssh_sftp_read() {
+    assert_eq!(
+        callers(&format!("dispatch_ssh_sftp_{}", "read")),
+        ALLOWED,
+        "a new caller of the ungated sftp read dispatch"
     );
 }
