@@ -160,7 +160,7 @@ async fn session(fx: &Fx, project: Option<&str>) -> String {
     let policy = json!({"mode": "ask"});
     let new = NewSession {
         runner: &fx.admin.id,
-        harness: "",
+        harness: "claude",
         model: None,
         prompt: None,
         workspace: None,
@@ -234,9 +234,12 @@ async fn as_session(
         b = b.header(header::CONTENT_TYPE, "application/json");
     }
     let req = b.body(Body::from(bytes)).unwrap();
-    let res = origin::scope(org, router(fx.app.clone()).oneshot(req))
-        .await
-        .unwrap();
+    let res = origin::scope(
+        org,
+        ainkrad_core_server::api::v1::router(fx.app.clone()).oneshot(req),
+    )
+    .await
+    .unwrap();
     let status = res.status();
     let bytes = to_bytes(res.into_body(), 1 << 22).await.unwrap();
     (
@@ -464,7 +467,10 @@ async fn as_session_ended(fx: &Fx, s: &str, id: &str) -> (StatusCode, Value) {
         .extension(Client("code_mode".to_owned()))
         .body(Body::empty())
         .unwrap();
-    let res = router(fx.app.clone()).oneshot(req).await.unwrap();
+    let res = ainkrad_core_server::api::v1::router(fx.app.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
     (res.status(), Value::Null)
 }
 
@@ -700,8 +706,10 @@ async fn an_ai_edit_never_writes_into_notes_outside_its_scope() {
 async fn the_ops_are_the_t14_list_and_the_never_ops_do_not_exist() {
     let fx = fx().await;
     let cat = Catalogue::live(&fx.app.modules);
-    let spec: Value =
-        serde_json::from_str(&ainkrad_core_server::api::v1::spec::json_for(&fx.app.modules)).unwrap();
+    let spec: Value = serde_json::from_str(&ainkrad_core_server::api::v1::spec::json_for(
+        &fx.app.modules,
+    ))
+    .unwrap();
     let lore_allow: Vec<_> = allow_list()
         .unwrap()
         .into_iter()

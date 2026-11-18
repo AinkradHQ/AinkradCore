@@ -282,7 +282,9 @@
 ///    `StreamError.host_key`; no route yet. (84 and 85 are the runner Podman facts and the projects API.)
 /// 87: the `secret.runners_changed` audit action (a secret's runner scope changed on its own, with its
 ///    leases dropped); the Leyline key runner sync (Y1-02) is its first user.
-pub const API_MINOR: u32 = 89;
+/// 90: Lore (Core 0.9 epic). Seven `loreAi*` operations in the Code Mode allow-list (`api/ai-ops.allow.json`), each
+///    scoped to the session's project; Lore's own routes, events and audit actions live in `modules/lore/api`.
+pub const API_MINOR: u32 = 90;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

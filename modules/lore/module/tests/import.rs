@@ -95,7 +95,10 @@ async fn send(
         b = b.header(name, value);
     }
     if !body.is_empty() {
-        b = b.header(header::CONTENT_TYPE, ctype);
+        // A bulk route (the zip) needs the declared length, as every real client sends it.
+        b = b
+            .header(header::CONTENT_TYPE, ctype)
+            .header(header::CONTENT_LENGTH, body.len());
     }
     let res = router(fx.app.clone())
         .oneshot(b.body(Body::from(body)).unwrap())
@@ -320,22 +323,18 @@ async fn upload_review_commit_reimport_and_undo() {
             .iter()
             .any(|v| v["kind"] == "conflict")
     );
-    // Undo the first: what it created goes to the trash (reversible), nothing is deleted.
+    // Undo the first: both notes changed after it (Alpha by the person, Beta by the second run and its undo), so
+    // both are left alone (R4-01 review fix) and nothing is trashed or deleted.
     ok(&fx, Method::POST, &format!("/imports/{id}/undo"), None).await;
-    assert!(
-        ok(&fx, Method::GET, "/notes", None)
-            .await
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    let live = ok(&fx, Method::GET, "/notes", None).await;
+    assert_eq!(live.as_array().unwrap().len(), 2);
     assert_eq!(
         scalar(
             &fx,
             "SELECT count(*) || '' FROM lore_notes WHERE trashed_at IS NOT NULL"
         )
         .await,
-        "2"
+        "0"
     );
     let runs = ok(&fx, Method::GET, "/imports", None).await;
     assert_eq!(runs.as_array().unwrap().len(), 2);
@@ -506,8 +505,27 @@ async fn a_hostile_zip_is_refused_entry_by_entry() {
 async fn too_large_files_are_flagged_not_read() {
     let fx = fx().await;
     let p = project(&fx, "alpha").await;
+    // Past the signed-body cap an item cannot arrive as JSON, so the big file comes in a zip (16 MiB cap).
     let big = "x".repeat(1_100_000);
-    let run = upload(&fx, &p, &[("big.md", &big), ("ok.md", "# Ok\n")]).await;
+    let z = zip_of(&[("big.md", big.as_bytes()), ("ok.md", b"# Ok\n")]);
+    let run = ok(
+        &fx,
+        Method::POST,
+        "/imports",
+        Some(json!({"source": "upload", "project": p})),
+    )
+    .await;
+    let id = run["id"].as_str().unwrap();
+    let (s, v) = send(
+        &fx,
+        Method::POST,
+        &format!("/imports/{id}/zip"),
+        z,
+        "application/zip",
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let run = ok(&fx, Method::POST, &format!("/imports/{id}/finish"), None).await;
     assert_eq!(run["flags"]["too_large"], 1);
     assert_eq!(run["include"], 1);
 }
@@ -668,7 +686,10 @@ async fn apple_notes_run_has_its_own_origins() {
         Some(json!({"source": "apple_notes", "project": p})),
     )
     .await;
-    assert_eq!((run["source"].as_str(), run["state"].as_str()), (Some("apple_notes"), Some("staging")));
+    assert_eq!(
+        (run["source"].as_str(), run["state"].as_str()),
+        (Some("apple_notes"), Some("staging"))
+    );
     let id = run["id"].as_str().unwrap().to_owned();
     ok(
         &fx,

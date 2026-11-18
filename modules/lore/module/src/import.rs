@@ -278,7 +278,10 @@ pub(crate) async fn add_zip(
     }
     // At most 2 zips inflate at once: each can hold 64 MiB of text in memory.
     static ZIPS: Semaphore = Semaphore::const_new(2);
-    let _slot = ZIPS.acquire().await.map_err(|_| ApiError::bad_request("the zip is not valid"))?;
+    let _slot = ZIPS
+        .acquire()
+        .await
+        .map_err(|_| ApiError::bad_request("the zip is not valid"))?;
     let scan = tokio::task::spawn_blocking(move || read_zip(&body))
         .await
         .map_err(|_| ApiError::bad_request("the zip is not valid"))?
