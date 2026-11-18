@@ -40,6 +40,7 @@ mod imports;
 mod inbox;
 mod index;
 pub mod key;
+mod lore;
 mod overview;
 pub mod overview_select;
 pub mod overview_write;
