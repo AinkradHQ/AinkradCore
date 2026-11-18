@@ -56,7 +56,7 @@ fn name_ok(s: &str) -> bool {
     (1..=100).contains(&s.chars().count()) && s == s.trim() && !s.chars().any(char::is_control)
 }
 
-fn doc_id_ok(s: &str) -> bool {
+pub(crate) fn doc_id_ok(s: &str) -> bool {
     s.len() == 19 && s.starts_with("dd_") && s[3..].bytes().all(|c| c.is_ascii_hexdigit())
 }
 
@@ -115,7 +115,7 @@ fn store_err(e: sqlx::Error) -> ApiError {
     }
 }
 
-async fn record(
+pub(crate) async fn record(
     conn: &mut SqliteConnection,
     op: &str,
     id: &str,
@@ -154,7 +154,7 @@ pub(crate) async fn project_id(
 }
 
 /// An active doc, or the fixed refusal (not found / archived).
-async fn editable(conn: &mut SqliteConnection, id: &str) -> Result<(), ApiError> {
+pub(crate) async fn editable(conn: &mut SqliteConnection, id: &str) -> Result<(), ApiError> {
     let none = || ApiError::not_found("no such design");
     if !doc_id_ok(id) {
         return Err(none());

@@ -10,6 +10,7 @@ mod asset_links;
 mod assets;
 mod collections;
 mod docs;
+mod package;
 mod sniff;
 mod svg;
 
@@ -21,6 +22,8 @@ use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
 use serde_json::Value;
 use utoipa::OpenApi;
+
+pub use package::import_dir;
 
 pub const MODULE: &str = "design";
 
@@ -36,6 +39,12 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0002_design_assets",
         up: include_str!("../migrations/0002_design_assets.up.sql"),
         down: include_str!("../migrations/0002_design_assets.down.sql"),
+    },
+    Migration {
+        version: 3,
+        name: "0003_design_mockups",
+        up: include_str!("../migrations/0003_design_mockups.up.sql"),
+        down: include_str!("../migrations/0003_design_mockups.down.sql"),
     },
 ];
 
@@ -80,6 +89,8 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("DELETE", "/collections/{id}/items/{sha}"),
     ("PUT", "/collections/{id}/projects/{project}"),
     ("DELETE", "/collections/{id}/projects/{project}"),
+    ("PUT", "/docs/{doc}/package/files"),
+    ("POST", "/docs/{doc}/package/manifest"),
 ];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/docs", "read"),
@@ -89,9 +100,14 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/assets/{sha}/data", "read"),
     ("GET", "/collections", "read"),
     ("GET", "/collections/{id}", "read"),
+    ("GET", "/docs/{doc}/package", "read"),
+    ("GET", "/docs/{doc}/package/files", "read"),
 ];
 // A signed upload is read whole to check its signature: the file cap plus nothing else.
-const BODY_LIMITS: &[(&str, &str, usize)] = &[("POST", "/assets", assets::MAX_BODY)];
+const BODY_LIMITS: &[(&str, &str, usize)] = &[
+    ("POST", "/assets", assets::MAX_BODY),
+    ("PUT", "/docs/{doc}/package/files", assets::MAX_BODY),
+];
 
 #[derive(Default, Clone, Copy)]
 pub struct Design;
@@ -122,7 +138,11 @@ pub struct Design;
         collections::put_item,
         collections::remove_item,
         collections::link,
-        collections::unlink
+        collections::unlink,
+        package::put,
+        package::file,
+        package::get,
+        package::seal
     ),
     components(schemas(
         docs::DocView,
@@ -134,7 +154,9 @@ pub struct Design;
         collections::Item,
         collections::NewCollection,
         collections::CollectionPatch,
-        collections::ItemBody
+        collections::ItemBody,
+        package::FileView,
+        package::PackageView
     ))
 )]
 struct Doc;
@@ -153,6 +175,14 @@ impl Module for Design {
                 "/docs/{doc}/projects/{project}",
                 put(docs::link).delete(docs::unlink),
             )
+            .route("/docs/{doc}/package", get(package::get))
+            .route(
+                "/docs/{doc}/package/files",
+                get(package::file)
+                    .put(package::put)
+                    .layer(DefaultBodyLimit::max(assets::MAX_BODY)),
+            )
+            .route("/docs/{doc}/package/manifest", post(package::seal))
             .route(
                 "/assets",
                 get(assets::list)
@@ -222,7 +252,7 @@ impl Module for Design {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["state", "kind", "project", "name", "tag", "q", "collection"]
+        &["state", "kind", "project", "name", "tag", "q", "collection", "path"]
     }
 
     fn scope(&self) -> &'static str {

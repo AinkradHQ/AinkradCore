@@ -23,7 +23,7 @@ use sqlx::{Row, SqliteConnection};
 use utoipa::ToSchema;
 
 use crate::docs::{In, project_id};
-use crate::sniff::{Class, kinds, sniff};
+use crate::sniff::{Class, has_svg_marker, kinds, sniff};
 use crate::{Design, svg};
 
 pub(crate) const MAX_BODY: usize = 25 * 1024 * 1024;
@@ -177,9 +177,7 @@ pub(crate) async fn upload(
     }
     let (mime, class) = sniff(&body).ok_or_else(unsupported)?;
     // A raster, PDF, font or zip that is also an SVG (a polyglot) is refused: browsers sniff it.
-    if class != Class::Svg
-        && String::from_utf8_lossy(&body[..body.len().min(4096)]).contains("<svg")
-    {
+    if class != Class::Svg && has_svg_marker(&body) {
         return Err(unsupported());
     }
     let data: Bytes = if class == Class::Svg {
