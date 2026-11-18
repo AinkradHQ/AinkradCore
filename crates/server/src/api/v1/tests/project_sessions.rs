@@ -297,3 +297,109 @@ async fn a_launch_leases_nothing_for_a_workspace_that_names_copies_it_has_no_pro
     assert!(may(repo).await);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn a_session_of_a_project_needs_an_admin_device() {
+    let fx = fx().await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let id = project(&fx, "shop").await;
+    add(&fx, id, "web", "https://github.com/acme/web.git", true).await;
+    // An `agent` device may start sessions, but not ones that fetch a project's repos with the
+    // project's connection (fetching them is `admin`): refused before anything is built.
+    let agent = fx.enroll("agent-only", &["agent"]).await;
+    let body = json!({"runner": vm.id, "harness": "claude", "project_id": id});
+    let r = send(
+        &fx.app,
+        req(
+            Method::POST,
+            "/api/v1/agent-sessions",
+            Some(&agent),
+            Some(body),
+        ),
+    )
+    .await;
+    assert_eq!(
+        code(&r),
+        (StatusCode::FORBIDDEN, "forbidden_scope"),
+        "{}",
+        r.1
+    );
+}
+
+#[test]
+fn a_lease_outlasts_the_relays_clone_limit() {
+    assert!(crate::mirrors::LEASE_SECS > 30 * 60);
+}
+
+#[tokio::test]
+async fn a_full_lease_table_fails_the_grant_with_a_reason() {
+    let dir = tmp("p3-02-full");
+    let m = Mirrors::new(dir.join("mirrors"));
+    for i in 0..4096 {
+        m.grant(&format!("d{i}"), 1, "k", 100).unwrap();
+    }
+    assert!(m.grant("one-more", 1, "k", 100).is_err());
+    // A device that already holds one renews it; expired leases make room.
+    m.grant("d0", 1, "k", 100).unwrap();
+    m.grant("one-more", 1, "k", 100 + crate::mirrors::LEASE_SECS + 1)
+        .unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn ending_a_session_revokes_its_leases_unless_a_sibling_still_runs() {
+    let mut fx = fx().await;
+    let dir = tmp("p3-02-release");
+    fx.app.mirrors = Some(Arc::new(Mirrors::new(dir.join("mirrors"))));
+    let (path, _) = remote(&dir);
+    let path = path.to_str().unwrap().to_owned();
+    let mine = project(&fx, "mine").await;
+    let repo = add(&fx, mine, "web", &path, true).await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let policy = json!({"mode": "ask"});
+    let ws = json!({"repo": "https://github.com/acme/web.git", "base": "main",
+                    "branch": "b", "mirror": repo});
+    let new = NewSession {
+        runner: &vm.id,
+        harness: "claude",
+        model: None,
+        prompt: None,
+        workspace: Some(&ws),
+        policy: &policy,
+        secrets: &[],
+        created_by: &fx.dev.id,
+    };
+    let sys = ainkrad_core::audit::AuditActor::System;
+    let mut made = Vec::new();
+    for _ in 0..2 {
+        let s = store::create(&fx.app.pool, &new, sys, NOW).await.unwrap();
+        store::set_project(&fx.app.pool, &s.id, mine).await.unwrap();
+        made.push(store::get(&fx.app.pool, &s.id).await.unwrap().unwrap());
+    }
+    let m = fx.app.mirrors.clone().unwrap();
+    let may = || {
+        let (app, m, dev) = (fx.app.clone(), m.clone(), vm.id.clone());
+        async move {
+            crate::mirrors::servable(&app, &m, &dev, repo)
+                .await
+                .unwrap()
+                .is_some()
+        }
+    };
+    crate::mirrors::grant_now(&fx.app, &vm.id, repo).await;
+    assert!(may().await);
+    let outcome = json!({"kind": "succeeded"});
+    // The first ends while the second still lives on the same runner: the lease stays.
+    store::end(&fx.app.pool, &made[0].id, "ended", &outcome, NOW)
+        .await
+        .unwrap();
+    crate::mirrors::release_session(&fx.app, &made[0]).await;
+    assert!(may().await, "a sibling session still needs the copy");
+    // The last one ends: the lease goes.
+    store::end(&fx.app.pool, &made[1].id, "ended", &outcome, NOW)
+        .await
+        .unwrap();
+    crate::mirrors::release_session(&fx.app, &made[1]).await;
+    assert!(!may().await);
+    let _ = std::fs::remove_dir_all(dir);
+}

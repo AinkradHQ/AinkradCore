@@ -47,6 +47,7 @@ pub mod pair;
 mod pairing;
 pub mod passkey;
 mod projects;
+mod projects_github;
 mod runner_control;
 mod runners;
 pub mod scopes;
@@ -90,6 +91,12 @@ pub const QUERY: &[&str] = &[
     "origin",
     "nobody_watching",
     "archived",
+    // GET /projects/github/repos (P2-01)
+    "connection",
+    "project",
+    "q",
+    "page",
+    "per_page",
     "service",
 ];
 
@@ -397,6 +404,11 @@ pub fn router(app: App) -> Router {
             "/api/v1/projects/{id}",
             get(projects::get).patch(projects::update),
         )
+        .route("/api/v1/projects/github/repos", get(projects_github::list))
+        .route(
+            "/api/v1/projects/from-github",
+            post(projects_github::create),
+        )
         .route("/api/v1/projects/{id}/archive", post(projects::archive))
         .route("/api/v1/projects/{id}/repos", post(projects::add_repo))
         .route(
@@ -406,6 +418,18 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/projects/{id}/repos/{repo}/primary",
             post(projects::set_primary),
+        )
+        .route(
+            "/api/v1/projects/{id}/spec",
+            get(projects::run_spec::latest).put(projects::run_spec::save),
+        )
+        .route(
+            "/api/v1/projects/{id}/spec/versions",
+            get(projects::run_spec::versions),
+        )
+        .route(
+            "/api/v1/projects/{id}/spec/versions/{version}",
+            get(projects::run_spec::version),
         )
         .route(
             "/api/v1/projects/{id}/repos/{repo}/fetch",

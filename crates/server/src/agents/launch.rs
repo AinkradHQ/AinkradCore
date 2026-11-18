@@ -285,13 +285,8 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
             return Err(e);
         }
     }
-    // From here the harness may start on this account whatever the answer: it is final.
-    // A session cancelled meanwhile is not started.
-    if !resume && !crate::store::alloc::mark_or_release(&app.pool, &s.id).await? {
-        app.agents.leases.lock().unwrap().remove(&s.id);
-        return Ok(());
-    }
-    // The repo copies a project session clones are leased to this runner now, at every start.
+    // The repo copies a project session clones are leased to this runner now, at every start, and
+    // before the account is committed to: a fetch that fails must not fail a session holding one.
     if let Err(why) = project_mirrors(app, s).await {
         fail(app, s, &why).await;
         return Err(Refusal::Runner(StreamError::new(
@@ -306,6 +301,12 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
             instructions = Some(text);
             break;
         }
+    }
+    // From here the harness may start on this account whatever the answer: it is final.
+    // A session cancelled meanwhile is not started.
+    if !resume && !crate::store::alloc::mark_or_release(&app.pool, &s.id).await? {
+        app.agents.leases.lock().unwrap().remove(&s.id);
+        return Ok(());
     }
     let wait = app.agents.config.answer;
     let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();

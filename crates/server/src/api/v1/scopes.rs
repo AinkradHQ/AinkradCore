@@ -168,6 +168,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PUT", "/api/v1/prices", "admin"),
     ("GET", "/api/v1/projects", "read"),
     ("POST", "/api/v1/projects", "admin"),
+    // It reads private repo names with the connection's token.
+    ("GET", "/api/v1/projects/github/repos", "admin"),
+    ("POST", "/api/v1/projects/from-github", "admin"),
     ("GET", "/api/v1/projects/{id}", "read"),
     ("PATCH", "/api/v1/projects/{id}", "admin"),
     ("POST", "/api/v1/projects/{id}/archive", "admin"),
@@ -177,6 +180,14 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
         "POST",
         "/api/v1/projects/{id}/repos/{repo}/primary",
         "admin",
+    ),
+    ("GET", "/api/v1/projects/{id}/spec", "read"),
+    ("PUT", "/api/v1/projects/{id}/spec", "admin"),
+    ("GET", "/api/v1/projects/{id}/spec/versions", "read"),
+    (
+        "GET",
+        "/api/v1/projects/{id}/spec/versions/{version}",
+        "read",
     ),
     ("POST", "/api/v1/projects/{id}/repos/{repo}/fetch", "admin"),
     // The Core's repo copies, to runners: upload side only; receive-pack answers 403 `read_only`.
@@ -259,11 +270,14 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("GET", "/api/v1/system/logs/backup"),
     // Projects (P1-02): every write decides what the Core fetches and which repos a session gets.
     ("POST", "/api/v1/projects"),
+    ("POST", "/api/v1/projects/from-github"),
     ("PATCH", "/api/v1/projects/{id}"),
     ("POST", "/api/v1/projects/{id}/archive"),
     ("POST", "/api/v1/projects/{id}/repos"),
     ("DELETE", "/api/v1/projects/{id}/repos/{repo}"),
     ("POST", "/api/v1/projects/{id}/repos/{repo}/primary"),
+    // Run spec (P4-01): it decides what containers run on a runner.
+    ("PUT", "/api/v1/projects/{id}/spec"),
     // Secrets (E2-07): every write, and a lease, the only way a value leaves the Core.
     ("POST", "/api/v1/secrets"),
     ("PUT", "/api/v1/secrets/{id}"),

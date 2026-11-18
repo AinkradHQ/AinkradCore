@@ -1304,6 +1304,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/from-github": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createProjectFromGithub"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/github/repos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listGithubRepos"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}": {
         parameters: {
             query?: never;
@@ -1394,6 +1426,54 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["setProjectRepoPrimary"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/spec": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getProjectSpec"];
+        put: operations["saveProjectSpec"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/spec/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listProjectSpecVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/spec/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getProjectSpecVersion"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2545,6 +2625,14 @@ export interface components {
         BudgetDeleted: {
             deleted: boolean;
         };
+        Build: {
+            /** @description Build context inside that repo; default `.`. */
+            context?: string | null;
+            /** @description Path of the Dockerfile inside that repo; default `Dockerfile`. */
+            dockerfile?: string | null;
+            /** @description A repo of the project. */
+            repo: string;
+        };
         /**
          * @description An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first
          *     entry that has one to give.
@@ -3010,6 +3098,40 @@ export interface components {
             /** Format: int64 */
             user_id: number;
         };
+        GithubOwner: {
+            /** @description The user or organisation. */
+            owner: string;
+            repos: components["schemas"]["GithubRepo"][];
+        };
+        GithubRepo: {
+            default_branch: string;
+            description: string;
+            /** @description `owner/name`. */
+            full_name: string;
+            name: string;
+            private: boolean;
+        };
+        GithubRepoList: {
+            /**
+             * Format: int64
+             * @description The connection the repos were read with.
+             */
+            connection_id: number;
+            has_more: boolean;
+            /** @description This page's repos grouped by owner; owners and repos by name. */
+            owners: components["schemas"]["GithubOwner"][];
+            /** Format: int64 */
+            page: number;
+            /** Format: int64 */
+            per_page: number;
+            /**
+             * Format: int64
+             * @description Repos matching `q`, over all pages.
+             */
+            total: number;
+            /** @description GitHub has more repos than Core reads (1000); use `q` to narrow. */
+            truncated: boolean;
+        };
         /** @description One lease of a group's grant: hand `lease` to the runner. No `Debug`. */
         GroupLease: {
             expires_at: components["schemas"]["Timestamp"];
@@ -3075,6 +3197,10 @@ export interface components {
             identity_fingerprint?: string | null;
             server_version?: string | null;
             supported_minors?: number[] | null;
+        };
+        Health: {
+            /** @description Run inside the container, one line of 1-512 characters; exit 0 is healthy. */
+            cmd: string;
         };
         /** @description A program installed on the host, as the helper's manifest and checks say. */
         HostBinary: {
@@ -3455,6 +3581,22 @@ export interface components {
             site?: string | null;
             token?: string | null;
         };
+        NewGithubProject: {
+            /**
+             * Format: int64
+             * @description Default: the workspace's GitHub default.
+             */
+            connection_id?: number | null;
+            /** @description Default: the first repo's name. */
+            name?: string | null;
+            /** @description 1-10 repos as `owner/name`; the first is primary. */
+            repos: string[];
+            /**
+             * @description Default: made from the name; a taken or reserved one gets `-2`, `-3`, ... An explicit slug
+             *     that is taken is 409 `conflict`.
+             */
+            slug?: string | null;
+        };
         NewGroupLease: {
             /** @description The runner's device id, `d_…`. */
             runner: string;
@@ -3560,6 +3702,12 @@ export interface components {
             runners?: string[] | null;
             /** @description The API key; written, never read back. */
             value: string;
+        };
+        NewRunSpec: {
+            /** @description Where it came from; default `manual`. */
+            origin?: string | null;
+            /** @description The spec; see `RunSpec`. */
+            spec: components["schemas"]["RunSpec"];
         };
         /** @description A new secret. Deliberately no `Debug`. */
         NewSecret: {
@@ -3721,6 +3869,15 @@ export interface components {
             name: string;
             provider: string;
             updated_at: components["schemas"]["Timestamp"];
+        };
+        Port: {
+            /** @description Give it a public URL (when the project is exposed); at most one per service. */
+            expose?: boolean;
+            /**
+             * Format: int32
+             * @description The container port, 1-65535. It is only ever published on the runner's loopback.
+             */
+            port: number;
         };
         /** @description A price: millionths of a dollar per million tokens, and when the provider's list price was read. */
         PriceBookEntry: {
@@ -3942,6 +4099,37 @@ export interface components {
             kind?: string | null;
             runners?: string[] | null;
             value: string;
+        };
+        /** @description The whole spec: its services by name. */
+        RunSpec: {
+            /**
+             * @description 1-16 services. A name is 1-20 of `a-z0-9-`, starting with a letter: it is the service's
+             *     network alias and part of its public host name.
+             */
+            services: {
+                [key: string]: components["schemas"]["Service"];
+            };
+        };
+        /** @description A version without its spec. */
+        RunSpecSummary: {
+            created_at: components["schemas"]["Timestamp"];
+            created_by: string;
+            origin: string;
+            /** Format: int64 */
+            version: number;
+        };
+        RunSpecVersion: {
+            created_at: components["schemas"]["Timestamp"];
+            /** @description The device that saved it. */
+            created_by: string;
+            /** @description `manual`, `compose`, `package_json`, `makefile` or `run_sh`. */
+            origin: string;
+            spec: components["schemas"]["RunSpec"];
+            /**
+             * Format: int64
+             * @description 1 for the first save, then one more each time.
+             */
+            version: number;
         };
         /** @description A paired runner and its live state. */
         Runner: {
@@ -4177,6 +4365,32 @@ export interface components {
              * @description 1 when stored, one more per rotation.
              */
             version: number;
+        };
+        /** @description One container. Exactly one of `image` and `build`. */
+        Service: {
+            /** @description Build the image from a Dockerfile in one of the project's repos. */
+            build?: components["schemas"]["Build"];
+            /** @description Replaces the image's command; at most 64 arguments. */
+            command?: string[] | null;
+            /** @description Services that must be started (and healthy, when they have a `health`) first. */
+            depends_on?: string[];
+            /** @description Environment. A value is plain text or contains `${secret:NAME}` references. */
+            env?: {
+                [key: string]: string;
+            };
+            health?: components["schemas"]["Health"];
+            /** @description An image reference such as `postgres:17` or `ghcr.io/acme/app@sha256:...`. */
+            image?: string | null;
+            /** @description At most 8 ports the service listens on. */
+            ports?: components["schemas"]["Port"][];
+            /** @description Mount this project repo's checkout at `/repo/<name>`. */
+            repo?: string | null;
+            /** @description Named volumes: volume name to the absolute container path it is mounted at. */
+            volumes?: {
+                [key: string]: string;
+            };
+            /** @description Absolute path inside the container; default is the image's. */
+            workdir?: string | null;
         };
         SessionGrant: {
             /** @description Until when the session is elevated (E1-09); null when it is not. */
@@ -8012,6 +8226,75 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    createProjectFromGithub: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewGithubProject"];
+            };
+        };
+        responses: {
+            /** @description Created with source `github` (audited and emitted as `project.created`), its repos added with GitHub's names and default branches, and the connection bound to it (scope `project`, audited `connection.bound`). 400 for a bad repo, name or slug; 404 for a repo the connection cannot see; 409 `conflict` for a taken explicit slug or a repeated repo, `no_connection` when none is set up */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listGithubRepos: {
+        parameters: {
+            query?: {
+                /** @description A connection id; default the project's, else the workspace default. */
+                connection?: number;
+                /** @description The project's id, to prefer the connection bound to it. */
+                project?: string;
+                /** @description Case-insensitive text in `owner/name`. */
+                q?: string;
+                /** @description From 1; default 1. */
+                page?: number;
+                /** @description 1-100; default 30. */
+                per_page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The repos visible to the project's GitHub connection (else the workspace default), grouped by owner, searchable and paged. 409 `no_connection` when none is set up; GitHub's own failures are `auth_failed` or `unreachable` (502) and `rate_limited` (429), each a fixed sentence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GithubRepoList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     getProject: {
         parameters: {
             query?: never;
@@ -8225,6 +8508,132 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getProjectSpec: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The newest run spec version. 404 for no such project or when it has no spec yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSpecVersion"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    saveProjectSpec: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewRunSpec"];
+            };
+        };
+        responses: {
+            /** @description Saved as the next version (audited and emitted as `project.spec_saved`). 400 `invalid_spec` names the bad field (unknown or forbidden key, more than 16 services or 8 ports, a bad image, a malformed `${secret:NAME}`, a repo the project does not have); 404 for no such project; 409 `conflict` when it is archived */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSpecVersion"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listProjectSpecVersions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every version, newest first, without the spec. 404 for no such project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSpecSummary"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getProjectSpecVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The version number */
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description That version. 404 for no such project or version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSpecVersion"];
                 };
             };
             400: components["responses"]["BadRequest"];

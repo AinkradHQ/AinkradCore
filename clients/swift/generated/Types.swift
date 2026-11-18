@@ -331,6 +331,12 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/projects`.
     /// - Remark: Generated from `#/paths//api/v1/projects/post(createProject)`.
     func createProject(_ input: Operations.CreateProject.Input) async throws -> Operations.CreateProject.Output
+    /// - Remark: HTTP `POST /api/v1/projects/from-github`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/from-github/post(createProjectFromGithub)`.
+    func createProjectFromGithub(_ input: Operations.CreateProjectFromGithub.Input) async throws -> Operations.CreateProjectFromGithub.Output
+    /// - Remark: HTTP `GET /api/v1/projects/github/repos`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/github/repos/get(listGithubRepos)`.
+    func listGithubRepos(_ input: Operations.ListGithubRepos.Input) async throws -> Operations.ListGithubRepos.Output
     /// - Remark: HTTP `GET /api/v1/projects/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)`.
     func getProject(_ input: Operations.GetProject.Input) async throws -> Operations.GetProject.Output
@@ -352,6 +358,18 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/projects/{id}/repos/{repo}/primary`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/primary/post(setProjectRepoPrimary)`.
     func setProjectRepoPrimary(_ input: Operations.SetProjectRepoPrimary.Input) async throws -> Operations.SetProjectRepoPrimary.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/spec`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/get(getProjectSpec)`.
+    func getProjectSpec(_ input: Operations.GetProjectSpec.Input) async throws -> Operations.GetProjectSpec.Output
+    /// - Remark: HTTP `PUT /api/v1/projects/{id}/spec`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/put(saveProjectSpec)`.
+    func saveProjectSpec(_ input: Operations.SaveProjectSpec.Input) async throws -> Operations.SaveProjectSpec.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/spec/versions`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/versions/get(listProjectSpecVersions)`.
+    func listProjectSpecVersions(_ input: Operations.ListProjectSpecVersions.Input) async throws -> Operations.ListProjectSpecVersions.Output
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/spec/versions/{version}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/versions/{version}/get(getProjectSpecVersion)`.
+    func getProjectSpecVersion(_ input: Operations.GetProjectSpecVersion.Input) async throws -> Operations.GetProjectSpecVersion.Output
     /// - Remark: HTTP `PUT /api/v1/push-token`.
     /// - Remark: Generated from `#/paths//api/v1/push-token/put(setPushToken)`.
     func setPushToken(_ input: Operations.SetPushToken.Input) async throws -> Operations.SetPushToken.Output
@@ -1642,6 +1660,28 @@ extension APIProtocol {
             body: body
         ))
     }
+    /// - Remark: HTTP `POST /api/v1/projects/from-github`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/from-github/post(createProjectFromGithub)`.
+    public func createProjectFromGithub(
+        headers: Operations.CreateProjectFromGithub.Input.Headers = .init(),
+        body: Operations.CreateProjectFromGithub.Input.Body
+    ) async throws -> Operations.CreateProjectFromGithub.Output {
+        try await createProjectFromGithub(Operations.CreateProjectFromGithub.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/github/repos`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/github/repos/get(listGithubRepos)`.
+    public func listGithubRepos(
+        query: Operations.ListGithubRepos.Input.Query = .init(),
+        headers: Operations.ListGithubRepos.Input.Headers = .init()
+    ) async throws -> Operations.ListGithubRepos.Output {
+        try await listGithubRepos(Operations.ListGithubRepos.Input(
+            query: query,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `GET /api/v1/projects/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/get(getProject)`.
     public func getProject(
@@ -1719,6 +1759,52 @@ extension APIProtocol {
         headers: Operations.SetProjectRepoPrimary.Input.Headers = .init()
     ) async throws -> Operations.SetProjectRepoPrimary.Output {
         try await setProjectRepoPrimary(Operations.SetProjectRepoPrimary.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/spec`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/get(getProjectSpec)`.
+    public func getProjectSpec(
+        path: Operations.GetProjectSpec.Input.Path,
+        headers: Operations.GetProjectSpec.Input.Headers = .init()
+    ) async throws -> Operations.GetProjectSpec.Output {
+        try await getProjectSpec(Operations.GetProjectSpec.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/projects/{id}/spec`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/put(saveProjectSpec)`.
+    public func saveProjectSpec(
+        path: Operations.SaveProjectSpec.Input.Path,
+        headers: Operations.SaveProjectSpec.Input.Headers = .init(),
+        body: Operations.SaveProjectSpec.Input.Body
+    ) async throws -> Operations.SaveProjectSpec.Output {
+        try await saveProjectSpec(Operations.SaveProjectSpec.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/spec/versions`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/versions/get(listProjectSpecVersions)`.
+    public func listProjectSpecVersions(
+        path: Operations.ListProjectSpecVersions.Input.Path,
+        headers: Operations.ListProjectSpecVersions.Input.Headers = .init()
+    ) async throws -> Operations.ListProjectSpecVersions.Output {
+        try await listProjectSpecVersions(Operations.ListProjectSpecVersions.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/{id}/spec/versions/{version}`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/spec/versions/{version}/get(getProjectSpecVersion)`.
+    public func getProjectSpecVersion(
+        path: Operations.GetProjectSpecVersion.Input.Path,
+        headers: Operations.GetProjectSpecVersion.Input.Headers = .init()
+    ) async throws -> Operations.GetProjectSpecVersion.Output {
+        try await getProjectSpecVersion(Operations.GetProjectSpecVersion.Input(
             path: path,
             headers: headers
         ))
