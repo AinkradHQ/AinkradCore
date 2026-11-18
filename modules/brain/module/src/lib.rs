@@ -54,6 +54,8 @@ pub mod overview_write;
 mod policy;
 mod project_rooms;
 pub mod propose;
+mod redistil;
+mod redistil_routes;
 pub mod retention;
 mod review;
 pub mod rooms;
@@ -130,6 +132,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0010_brain_one_open_distil.up.sql"),
         down: include_str!("../migrations/0010_brain_one_open_distil.down.sql"),
     },
+    Migration {
+        version: 11,
+        name: "brain_redistil",
+        up: include_str!("../migrations/0011_brain_redistil.up.sql"),
+        down: include_str!("../migrations/0011_brain_redistil.down.sql"),
+    },
 ];
 
 /// Employer and client rooms commit like any other room. Ahmed, 2026-11-15: "no need to hold the import bcz of backup".
@@ -143,6 +151,7 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/rooms/{room}/claims"),
     ("PATCH", "/rooms/{room}/policy"),
     ("PUT", "/rooms/{room}/access"),
+    ("POST", "/rooms/{room}/redistil"),
 ];
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports"),
@@ -166,6 +175,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("PATCH", "/rooms/{room}/overview/instructions"),
     ("POST", "/rooms/{room}/inbox/{id}"),
     ("POST", "/rooms/{room}/changes/{id}/undo"),
+    ("POST", "/rooms/{room}/redistil/dry-run"),
     ("PUT", "/sources/{id}"),
     ("POST", "/ai/rooms/{room}/propose"),
     ("PUT", "/projects/{project}/room"),
@@ -240,6 +250,8 @@ struct Inner {
     /// Set while the automatic distil triggers run (`auto_distil`), and when they last scanned the rooms.
     auto_busy: AtomicBool,
     auto_scan: AtomicI64,
+    /// Set while the re-distil job looks at its run (`redistil`).
+    redistilling: AtomicBool,
     overviewing: AtomicBool,
     /// Rooms held for a backup before 0.8.5 were imported this process (`commit::release_held`).
     held_released: AtomicBool,
@@ -528,6 +540,9 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         change_routes::one,
         change_routes::undo_route,
         retention::preview,
+        redistil_routes::apply,
+        redistil_routes::dry_run,
+        redistil_routes::list,
         distil::start,
         distil::list,
         overview::get,
@@ -619,6 +634,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         change_routes::ChangeDetail,
         change_routes::UndoResult,
         retention::RetentionPreview,
+        redistil_routes::RedistilView,
         policy::PolicyView,
         policy::PolicyPatch,
         policy::PolicyAccount,
@@ -694,6 +710,14 @@ impl Module for Brain {
                 post(change_routes::undo_route),
             )
             .route("/rooms/{room}/retention", get(retention::preview))
+            .route(
+                "/rooms/{room}/redistil",
+                get(redistil_routes::list).post(redistil_routes::apply),
+            )
+            .route(
+                "/rooms/{room}/redistil/dry-run",
+                post(redistil_routes::dry_run),
+            )
             .route("/rooms/{room}/distil", post(distil::start))
             .route("/rooms/{room}/distils", get(distil::list))
             .route("/rooms/{room}/overview", get(overview::get))
@@ -780,6 +804,10 @@ impl Module for Brain {
             "brain.change.undone",
             "brain.room.purged",
             "brain.room.compacted",
+            "brain.redistil.started",
+            "brain.redistil.done",
+            "brain.redistil.previewed",
+            "brain.redistil.failed",
         ]
     }
 
@@ -797,6 +825,7 @@ impl Module for Brain {
             project_rooms::job(self),
             changes::job(self),
             retention::job(self),
+            redistil::job(self),
         ]
     }
 

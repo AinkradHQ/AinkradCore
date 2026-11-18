@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use utoipa::{IntoParams, ToSchema};
 
-use crate::changes::undo;
+use crate::changes::{Refused, undo};
 use crate::inbox::open_room;
 use crate::{Brain, code, record};
 
@@ -185,7 +185,7 @@ pub(crate) async fn one(
 
 #[utoipa::path(post, path = "/rooms/{room}/changes/{id}/undo", operation_id = "brainUndoChange", tag = "brain",
     params(("room" = String, Path, description = "Room id"), ("id" = String, Path, description = "Change id")),
-    responses((status = 200, description = "Rows put back; rows changed since are kept and listed. A second call changes nothing. A purge is a 409 (person only)", body = UndoResult)))]
+    responses((status = 200, description = "Rows put back; rows changed since are kept and listed. A second call changes nothing. A purge, or a change older than 30 days, is a 409 (person only)", body = UndoResult)))]
 pub(crate) async fn undo_route(
     State(app): State<App>,
     Extension(b): Extension<Brain>,
@@ -199,8 +199,19 @@ pub(crate) async fn undo_route(
     let done = undo(&mut tx, &id, &now).await?;
     let done = match done {
         None => return Err(ApiError::not_found("no such change")),
-        Some(Err(())) => {
-            return Err(code(409, "not_undoable", "a purge removed its rows for good"));
+        Some(Err(Refused::Purge)) => {
+            return Err(code(
+                409,
+                "not_undoable",
+                "a purge removed its rows for good",
+            ));
+        }
+        Some(Err(Refused::Expired)) => {
+            return Err(code(
+                409,
+                "undo_expired",
+                "this change is older than 30 days and can no longer be undone",
+            ));
         }
         Some(Ok(d)) => d,
     };
@@ -232,4 +243,3 @@ pub(crate) async fn undo_route(
         already_undone: done.already_undone,
     }))
 }
-

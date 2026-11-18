@@ -117,12 +117,14 @@ async fn restore(
     q.execute(&mut *conn).await?;
     for s in obj["_sources"].as_array().into_iter().flatten() {
         if let (Some(src), Some(pos)) = (s[0].as_str(), s[1].as_i64()) {
-            sqlx::query("INSERT OR REPLACE INTO record_sources (record, source, position) VALUES (?, ?, ?)")
-                .bind(id)
-                .bind(src)
-                .bind(pos)
-                .execute(&mut *conn)
-                .await?;
+            sqlx::query(
+                "INSERT OR REPLACE INTO record_sources (record, source, position) VALUES (?, ?, ?)",
+            )
+            .bind(id)
+            .bind(src)
+            .bind(pos)
+            .execute(&mut *conn)
+            .await?;
         }
     }
     Ok(())
@@ -156,7 +158,11 @@ impl ChangeSet {
     }
 
     /// Records the row's image before the writer changes it (once per id; a new id has none).
-    pub async fn touch(&mut self, conn: &mut SqliteConnection, record: &str) -> Result<(), sqlx::Error> {
+    pub async fn touch(
+        &mut self,
+        conn: &mut SqliteConnection,
+        record: &str,
+    ) -> Result<(), sqlx::Error> {
         if self.seen.iter().all(|(r, _)| r != record) {
             let before = image(conn, record).await?;
             self.seen.push((record.to_owned(), before));
@@ -215,19 +221,30 @@ pub struct Undone {
     pub already_undone: bool,
 }
 
-/// Undoes `change` in the caller's transaction. None: no such change set. Err(()): a purge, which
-/// holds no row images and cannot be undone.
+/// Why a change set cannot be undone.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Refused {
+    /// A purge holds no row images.
+    Purge,
+    /// Older than `PURGE_DAYS`: the evidence of what it archived may be compacted or purged by now.
+    Expired,
+}
+
+/// Undoes `change` in the caller's transaction. None: no such change set. Err: it cannot be undone
+/// (`Refused`); a change set is undoable for `PURGE_DAYS` after it was made.
 pub async fn undo(
     tx: &mut SqliteConnection,
     change: &str,
     now: &str,
-) -> Result<Option<Result<Undone, ()>>, sqlx::Error> {
+) -> Result<Option<Result<Undone, Refused>>, sqlx::Error> {
     // The claim is the first write, so two Undo calls cannot both restore.
     let claimed = sqlx::query(
-        "UPDATE changes SET undone_at = ? WHERE id = ? AND undone_at IS NULL AND kind <> 'purge'",
+        "UPDATE changes SET undone_at = ?1 WHERE id = ?2 AND undone_at IS NULL AND kind <> 'purge' \
+         AND julianday(at) >= julianday(?1) - ?3",
     )
     .bind(now)
     .bind(change)
+    .bind(PURGE_DAYS)
     .execute(&mut *tx)
     .await?
     .rows_affected();
@@ -238,20 +255,24 @@ pub async fn undo(
             .await?;
         return Ok(row.map(|r| {
             if r.get::<String, _>("kind") == "purge" {
-                Err(())
-            } else {
+                Err(Refused::Purge)
+            } else if r.get::<Option<String>, _>("undone_at").is_some() {
                 Ok(Undone {
                     restored: vec![],
                     skipped: vec![],
                     already_undone: true,
                 })
+            } else {
+                Err(Refused::Expired)
             }
         }));
     }
-    let rows = sqlx::query("SELECT record, before, after FROM change_rows WHERE change = ? ORDER BY seq DESC")
-        .bind(change)
-        .fetch_all(&mut *tx)
-        .await?;
+    let rows = sqlx::query(
+        "SELECT record, before, after FROM change_rows WHERE change = ? ORDER BY seq DESC",
+    )
+    .bind(change)
+    .fetch_all(&mut *tx)
+    .await?;
     let mut out = Undone {
         restored: vec![],
         skipped: vec![],
@@ -271,8 +292,15 @@ pub async fn undo(
         }
     }
     for (record, before, after) in changed {
-        unlink_successor(&mut *tx, &record, before.as_deref(), after.as_deref(), &out.restored, now)
-            .await?;
+        unlink_successor(
+            &mut *tx,
+            &record,
+            before.as_deref(),
+            after.as_deref(),
+            &out.restored,
+            now,
+        )
+        .await?;
         out.skipped.push(record);
     }
     Ok(Some(Ok(out)))
@@ -331,11 +359,12 @@ pub async fn purge_room(
     cutoff: &str,
 ) -> Result<(usize, usize), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let ids: Vec<String> =
-        sqlx::query_scalar("SELECT id FROM records WHERE archived_at IS NOT NULL AND archived_at < ?")
-            .bind(cutoff)
-            .fetch_all(&mut *tx)
-            .await?;
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM records WHERE archived_at IS NOT NULL AND archived_at < ?",
+    )
+    .bind(cutoff)
+    .fetch_all(&mut *tx)
+    .await?;
     for id in &ids {
         sqlx::query("DELETE FROM change_rows WHERE record = ?")
             .bind(id)
@@ -389,8 +418,13 @@ impl Brain {
                 .await?;
         let mut total = 0;
         for room in rooms {
-            let Ok(pool) =
-                files::open_migrated(&files::room_path(&files::root(app), &room), &key, false, CANON).await
+            let Ok(pool) = files::open_migrated(
+                &files::room_path(&files::root(app), &room),
+                &key,
+                false,
+                CANON,
+            )
+            .await
             else {
                 continue;
             };
