@@ -91,17 +91,19 @@ fn presence(text: &str, origin: &str, conn: u64) -> Option<String> {
     {
         return None;
     }
-    if p
-        .view
-        .is_some_and(|v| v.iter().any(|n| !n.is_finite() || n.abs() > MAX_COORD) || v[2] <= 0.0 || v[3] <= 0.0)
-    {
+    if p.view.is_some_and(|v| {
+        v.iter().any(|n| !n.is_finite() || n.abs() > MAX_COORD) || v[2] <= 0.0 || v[3] <= 0.0
+    }) {
         return None;
     }
     let sel = p.selection.unwrap_or_default();
     if sel.len() > MAX_SELECTION || sel.iter().any(|s| !is_node_id(s)) {
         return None;
     }
-    Some(json!({"peer": origin, "conn": conn, "cursor": p.cursor, "selection": sel, "view": p.view}).to_string())
+    Some(
+        json!({"peer": origin, "conn": conn, "cursor": p.cursor, "selection": sel, "view": p.view})
+            .to_string(),
+    )
 }
 
 fn frame(tag: u8, seq: i64, body: &[u8]) -> Message {

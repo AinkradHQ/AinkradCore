@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use design_model::limits::MAX_NAME_CHARS;
+use design_model::limits::{MAX_NAME_CHARS, MAX_ORDER_LEN};
 use design_model::{Doc, Meta, Node, NodeType, Token};
 use serde_json::{Map, Number as JsonNumber, Value};
 use yrs::branch::{Branch, BranchPtr};
@@ -162,7 +162,13 @@ pub(crate) fn node_out<T: ReadTxn>(txn: &T, out: Out) -> R<Node> {
                         .map_err(|_| "unknown node type")?,
                 )
             }
-            "order" => order = Some(string(any(v)?)?),
+            "order" => {
+                let o = string(any(v)?)?;
+                if o.len() > MAX_ORDER_LEN {
+                    return Err("order too long".into());
+                }
+                order = Some(o)
+            }
             "move" => mv = Some(read_move(&any(v)?)?),
             "name" => {
                 name = string(any(v)?)?;
