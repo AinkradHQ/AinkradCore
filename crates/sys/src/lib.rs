@@ -32,6 +32,27 @@ pub const INVENTORY: &[(&str, &str)] = &[
         "pre_exec closure: one raw close_range syscall with integer arguments",
     ),
     (
+        "pty_child_on_exec",
+        "pre_exec closure: setsid, ioctl(TIOCSCTTY), fcntl, dup2 and close_range with integer arguments",
+    ),
+    (
+        "tty_size",
+        "libc::ioctl(TIOCGWINSZ) into a winsize we own, on a borrowed descriptor",
+    ),
+    (
+        "raw_mode",
+        "libc::tcgetattr, cfmakeraw and tcsetattr on a termios we own, on a borrowed descriptor",
+    ),
+    (
+        "pipe_setup",
+        "libc::fcntl(F_GETFL, F_SETFL, F_SETPIPE_SZ) with integer arguments, on a borrowed descriptor",
+    ),
+    ("no_dump", "libc::prctl(PR_SET_DUMPABLE, 0): integers only"),
+    (
+        "adopt_fd",
+        "libc::fcntl(F_GETFD) probe, then OwnedFd::from_raw_fd on a descriptor the caller says it was handed",
+    ),
+    (
         "sandbox_child",
         "pre_exec closure: prctl(PR_SET_PDEATHSIG) and fcntl(F_SETFD) with integer arguments",
     ),
@@ -91,6 +112,175 @@ pub fn close_fds_on_exec(cmd: &mut std::process::Command) {
     }
     #[cfg(not(target_os = "linux"))]
     let _ = cmd;
+}
+
+/// Makes the PTY slave on stdin the child's controlling terminal and hands it `fd` as descriptor 3
+/// (the key handoff of `ssh-pty`: a pipe the parent filled and closed) and, when given, `report` as
+/// descriptor 4 (the write end of a pipe the parent reads after the child ended).
+///
+/// Invariant this relies on: every descriptor the terminal host holds is close-on-exec (Rust's
+/// standard library opens everything that way, and the host opens nothing by hand), so exec drops
+/// whatever is above 4 on every OS. On Linux, `close_range` additionally marks everything above the
+/// handed descriptors close-on-exec before the exec, against a descriptor that was not. An old
+/// kernel (ENOSYS, EINVAL) or a seccomp filter (EPERM) is tolerated because of that invariant; any
+/// other error fails the spawn instead of leaving the descriptors open (`pre_exec` may not log: it
+/// runs between fork and exec, where nothing may allocate).
+#[allow(unsafe_code)]
+pub fn pty_child_on_exec(
+    cmd: &mut std::process::Command,
+    fd: std::os::fd::RawFd,
+    report: Option<std::os::fd::RawFd>,
+) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: `pre_exec` is unsafe because its closure runs between fork and exec. This one only
+    // makes integer-argument syscalls (setsid, ioctl, fcntl, dup2, close_range): it allocates
+    // nothing, takes no lock and touches no memory of ours, so it is async-signal-safe.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::setsid() == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            #[allow(clippy::cast_lossless)]
+            if libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            // Both sources are first moved out of 3 and 4 (close-on-exec copies at 10 or above), so
+            // neither `dup2` below can land on the other's source.
+            let key = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 10);
+            if key == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            let rep = match report {
+                Some(report) => libc::fcntl(report, libc::F_DUPFD_CLOEXEC, 10),
+                None => -1,
+            };
+            if report.is_some() && rep == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::dup2(key, 3) == -1 || (rep != -1 && libc::dup2(rep, 4) == -1) {
+                return Err(io::Error::last_os_error());
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let first: u32 = if report.is_some() { 5 } else { 4 };
+                if libc::syscall(libc::SYS_close_range, first, u32::MAX, 4u32) == -1 {
+                    let e = io::Error::last_os_error();
+                    if !matches!(
+                        e.raw_os_error(),
+                        Some(libc::ENOSYS | libc::EINVAL | libc::EPERM)
+                    ) {
+                        return Err(e);
+                    }
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
+/// Makes a pipe end non-blocking and, on Linux, asks for a capacity of `size` bytes (the request
+/// may be refused or rounded: it is best effort). A write that would block then fails with
+/// `WouldBlock` instead of hanging.
+#[allow(unsafe_code)]
+pub fn pipe_setup(fd: std::os::fd::BorrowedFd<'_>, size: usize) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let raw = fd.as_raw_fd();
+    // SAFETY: fcntl(2) with integer arguments on a descriptor borrowed for the call; no memory.
+    let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
+    if flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: as above.
+    if unsafe { libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let size = libc::c_int::try_from(size).unwrap_or(libc::c_int::MAX);
+        // SAFETY: as above; a refusal (EPERM over the pipe limit) is ignored on purpose.
+        let _ = unsafe { libc::fcntl(raw, libc::F_SETPIPE_SZ, size) };
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = size;
+    Ok(())
+}
+
+/// Keeps this process's memory out of core dumps and away from `ptrace` by other processes of the
+/// same user (Linux; elsewhere nothing). Best effort.
+#[allow(unsafe_code)]
+pub fn no_dump() {
+    #[cfg(target_os = "linux")]
+    // SAFETY: prctl(PR_SET_DUMPABLE, 0) takes integers and touches no memory of ours.
+    unsafe {
+        libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
+    }
+}
+
+/// Takes ownership of descriptor `fd` the caller was handed by its parent (e.g. 3), so dropping the
+/// result closes it. Fails when `fd` is not open.
+#[allow(unsafe_code)]
+pub fn adopt_fd(fd: std::os::fd::RawFd) -> io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: fcntl(F_GETFD) takes integers and only reports whether `fd` is open.
+    if unsafe { libc::fcntl(fd, libc::F_GETFD) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `fd` is open (just probed) and the caller states it is handed over to us alone, so
+    // nothing else closes it: single ownership.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+}
+
+/// The size of the terminal on `fd`, as `(rows, cols)`.
+#[allow(unsafe_code)]
+pub fn tty_size(fd: std::os::fd::BorrowedFd<'_>) -> io::Result<(u16, u16)> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: an all-zero `winsize` is a valid value (integers only).
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    // SAFETY: TIOCGWINSZ writes one `winsize` through the pointer, which is ours and live; `fd` is
+    // borrowed, so open for the call.
+    if unsafe { libc::ioctl(fd.as_raw_fd(), libc::TIOCGWINSZ as _, &mut ws) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((ws.ws_row, ws.ws_col))
+}
+
+/// The terminal settings of a descriptor, put back on drop.
+pub struct RawMode<'a> {
+    fd: std::os::fd::BorrowedFd<'a>,
+    saved: libc::termios,
+}
+
+/// Switches the terminal on `fd` to raw mode (no echo, no line editing, no signals from keys):
+/// bytes go through as typed. The returned guard restores the old settings on drop.
+#[allow(unsafe_code)]
+pub fn raw_mode(fd: std::os::fd::BorrowedFd<'_>) -> io::Result<RawMode<'_>> {
+    use std::os::fd::AsRawFd;
+    let raw = fd.as_raw_fd();
+    // SAFETY: an all-zero `termios` is a valid value (integers only); tcgetattr fills it.
+    let mut t: libc::termios = unsafe { std::mem::zeroed() };
+    // SAFETY: tcgetattr writes one `termios` through a pointer that is ours and live; failure
+    // (not a terminal) is reported.
+    if unsafe { libc::tcgetattr(raw, &mut t) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let saved = t;
+    // SAFETY: cfmakeraw only edits the `termios` we own.
+    unsafe { libc::cfmakeraw(&mut t) };
+    // SAFETY: tcsetattr reads one `termios` through a pointer that is ours and live.
+    if unsafe { libc::tcsetattr(raw, libc::TCSANOW, &t) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(RawMode { fd, saved })
+}
+
+impl Drop for RawMode<'_> {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: tcsetattr reads the `termios` we saved; the descriptor is borrowed for as long as
+        // this guard lives. A failure leaves the terminal as it is.
+        unsafe { libc::tcsetattr(self.fd.as_raw_fd(), libc::TCSANOW, &self.saved) };
+    }
 }
 
 /// For a sandbox the runner starts (Design V6-01), in the child just before exec: it gets SIGKILL

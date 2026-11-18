@@ -363,8 +363,14 @@ impl SshDriver {
             return Err(exists());
         }
         let flags = OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::EXCLUDE;
+        // The mode rides the open itself: the file never exists with the server's umask, so a file
+        // meant for its owner alone is never readable by others, not even before its first byte.
+        let attrs = FileAttributes {
+            permissions: req.mode.map(|m| m & 0o7777),
+            ..FileAttributes::default()
+        };
         let mut file = or_cancel(cancel, async {
-            sftp.open_with_flags(tmp, flags).await.map_err(sftp_err)
+            (sftp.open_with_flags_and_attributes(tmp, flags, attrs).await).map_err(sftp_err)
         })
         .await?;
         // The sender may send one window before any grant; each write hands its bytes back.
