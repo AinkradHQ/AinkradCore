@@ -65,8 +65,8 @@ async fn a_request_that_is_invalid_anyway_leases_nothing() {
     let r = run(&fx, &id).await;
     assert_eq!(r.state, "failed");
     assert!(
-        r.error.unwrap().contains("spec.services.web"),
-        "the spec is refused first"
+        r.error.unwrap().contains("limits"),
+        "the request is refused first"
     );
     assert_eq!(leases(&fx).await, 0);
 }
