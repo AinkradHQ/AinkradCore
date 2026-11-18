@@ -1,21 +1,25 @@
 # Project containers reach the internet but not the host itself, the cloud metadata service (169.254.169.254) or the
 # host's private ranges (Core 0.9 Projects, P5-02). Rootless Podman's outbound traffic leaves the host from processes of
 # the ainkrad-run user (pasta), so one nftables table matches that uid: deploy/run-egress.nft, installed by --with-run.
-# It survives nftables.service: a restart of it (its `flush ruleset`) restarts this unit after it (PartOf + After).
-# A `flush ruleset` by hand is not seen here; ainkrad-run@.service re-loads the table before every run op instead, and
-# the runner refuses to start a run while this unit is not active.
+# It survives nftables.service: a restart of it (its `flush ruleset`) restarts this unit after it (PartOf + After), and a
+# reload of it reloads this one (ReloadPropagatedFrom). Anything else that removes the table (a `flush ruleset` by hand)
+# is undone within a minute by ainkrad-run-egress.timer, and ainkrad-run@.service re-loads it before every run op.
+# Stopping this unit never removes the table (no ExecStop): fail closed.
+# Every load that is then listed back touches /run/ainkrad-run-egress.ok; the runner (no CAP_NET_ADMIN, it cannot read
+# nftables) reports run_caps and starts runs only while that marker is fresh (crates/runner/src/v2/run.rs).
 [Unit]
 Description=Ainkrad project runs: egress block for the ainkrad-run user
 Documentation=https://github.com/AinkradHQ/AinkradCore
 Before=ainkrad-runner.service
 After=nftables.service
 PartOf=nftables.service
+ReloadPropagatedFrom=nftables.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/sbin/nft -f /etc/ainkrad-runner/run-egress.nft
-ExecStop=/usr/sbin/nft delete table inet ainkrad_run_egress
+ExecStart=/bin/sh -c '/usr/sbin/nft -f /etc/ainkrad-runner/run-egress.nft && /usr/sbin/nft list table inet ainkrad_run_egress >/dev/null && touch /run/ainkrad-run-egress.ok'
+ExecReload=/bin/sh -c '/usr/sbin/nft -f /etc/ainkrad-runner/run-egress.nft && /usr/sbin/nft list table inet ainkrad_run_egress >/dev/null && touch /run/ainkrad-run-egress.ok'
 
 [Install]
 WantedBy=multi-user.target nftables.service

@@ -10,7 +10,7 @@ const LIMITS: RunLimits = RunLimits {
     pids: 128,
 };
 
-fn start(run: &str, project: u64, spec: serde_json::Value) -> RunStart {
+pub(super) fn start(run: &str, project: u64, spec: serde_json::Value) -> RunStart {
     serde_json::from_value(serde_json::json!({
         "run": run, "project": project, "spec": spec,
         "limits": {"cpus": LIMITS.cpus, "memory_mb": LIMITS.memory_mb, "pids": LIMITS.pids},
@@ -65,7 +65,7 @@ fn create_args_confine_the_container() {
 }
 
 /// A git repo at `dir` with `files` (path, contents) and `links` (path, target) committed.
-fn repo(dir: &Path, files: &[(&str, &[u8])], links: &[(&str, &Path)]) {
+pub(super) fn repo(dir: &Path, files: &[(&str, &[u8])], links: &[(&str, &Path)]) {
     std::fs::create_dir_all(dir).unwrap();
     for (f, body) in files {
         std::fs::create_dir_all(dir.join(f).parent().unwrap()).unwrap();
@@ -92,7 +92,7 @@ fn repo(dir: &Path, files: &[(&str, &[u8])], links: &[(&str, &Path)]) {
 }
 
 /// `git bundle create <to> HEAD` of `dir`.
-fn bundle(dir: &Path, to: &Path) {
+pub(super) fn bundle(dir: &Path, to: &Path) {
     let ok = Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -143,6 +143,8 @@ fn checkouts_past_the_byte_cap_are_refused_before_the_tree_is_written() {
     let engine = |cap| Engine {
         podman: "podman".into(),
         root: d.clone(),
+        projects: d.join("projects"),
+        networks: d.join("networks"),
         env_dir: d.join("env"),
         runtime_dir: None,
         checkout_cap: cap,
@@ -235,24 +237,26 @@ fn ps_output_reads_as_runs_and_a_dead_service_fails_its_run() {
 // --- On a host with rootless Podman (the run host): `cargo test -p ainkrad-runner run:: -- --ignored`,
 // as the user the helper runs as. They pull docker.io alpine:3 and nginx:alpine, and clean up.
 
-const ALPINE: &str = "docker.io/library/alpine:3";
+pub(super) const ALPINE: &str = "docker.io/library/alpine:3";
 const NGINX: &str = "docker.io/library/nginx:alpine";
 
-struct Host {
-    engine: Engine,
-    tmp: PathBuf,
+pub(super) struct Host {
+    pub(super) engine: Engine,
+    pub(super) tmp: PathBuf,
     projects: Vec<u64>,
     runs: Vec<String>,
 }
 
 impl Host {
-    fn new(name: &str) -> Self {
+    pub(super) fn new(name: &str) -> Self {
         let tmp = std::env::temp_dir().join(format!("run-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         Self {
             engine: Engine {
                 podman: "podman".into(),
                 root: tmp.join("runs"),
+                projects: tmp.join("projects"),
+                networks: tmp.join("networks"),
                 env_dir: tmp.join("env"),
                 runtime_dir: None,
                 checkout_cap: MAX_CHECKOUT_BYTES,
@@ -264,7 +268,7 @@ impl Host {
     }
 
     /// A project id no one else uses.
-    fn project(&mut self, n: u64) -> u64 {
+    pub(super) fn project(&mut self, n: u64) -> u64 {
         let p = 900_000_000 + u64::from(std::process::id()) * 10 + n;
         self.projects.push(p);
         p
@@ -274,9 +278,15 @@ impl Host {
         self.start_with(req, &BTreeMap::new())
     }
 
-    fn start_with(&mut self, req: &RunStart, bundles: &BTreeMap<String, PathBuf>) -> RunInfo {
+    pub(super) fn start_with(
+        &mut self,
+        req: &RunStart,
+        bundles: &BTreeMap<String, PathBuf>,
+    ) -> RunInfo {
         self.runs.push(req.run.clone());
-        self.engine.start(req, bundles).unwrap()
+        self.engine
+            .start(req, bundles, Instant::now() + START_BUDGET)
+            .unwrap()
     }
 }
 
@@ -286,31 +296,36 @@ impl Drop for Host {
             let _ = self.engine.stop(r);
         }
         for p in &self.projects {
-            let _ = podman(&["network", "rm", "-f", &network(*p)]);
-            let vols = podman(&[
-                "volume",
-                "ls",
-                "-q",
-                "--filter",
-                &format!("label=ainkrad.project={p}"),
-            ]);
+            let _ = podman(&self.engine, *p, &["network", "rm", "-f", &network(*p)]);
+            let vols = podman(
+                &self.engine,
+                *p,
+                &[
+                    "volume",
+                    "ls",
+                    "-q",
+                    "--filter",
+                    &format!("label=ainkrad.project={p}"),
+                ],
+            );
             for v in vols.split_whitespace() {
-                let _ = podman(&["volume", "rm", "-f", v]);
+                let _ = podman(&self.engine, *p, &["volume", "rm", "-f", v]);
             }
+            // The project's own store holds files of the user namespace's uids: Podman removes them.
+            let _ = podman(&self.engine, *p, &["system", "reset", "-f"]);
         }
         let _ = std::fs::remove_dir_all(&self.tmp);
     }
 }
 
-fn podman(args: &[&str]) -> String {
-    let o = Command::new("podman").args(args).output().unwrap();
+pub(super) fn podman(e: &Engine, project: u64, args: &[&str]) -> String {
+    let o = e.podman_cmd(project, args).output().unwrap();
     String::from_utf8_lossy(&o.stdout).trim().to_owned()
 }
 
 /// `sh -c` in a container: whether it exited 0.
-fn sh_ok(ctr: &str, script: &str) -> bool {
-    Command::new("podman")
-        .args(["exec", ctr, "sh", "-c", script])
+fn sh_ok(e: &Engine, project: u64, ctr: &str, script: &str) -> bool {
+    e.podman_cmd(project, &["exec", ctr, "sh", "-c", script])
         .status()
         .unwrap()
         .success()
@@ -381,18 +396,29 @@ fn the_env_file_is_gone_after_start_and_ports_listen_on_loopback_only() {
     assert_eq!(r.phase, RunPhase::Running, "{r:?}");
     let ctr = container(&run, "web");
     // The env reached the container, and no env file is left behind.
-    assert_eq!(podman(&["exec", &ctr, "printenv", "GREETING"]), "hello-run");
+    assert_eq!(
+        podman(&h.engine, p, &["exec", &ctr, "printenv", "GREETING"]),
+        "hello-run"
+    );
     let left: Vec<_> = std::fs::read_dir(&h.engine.env_dir).unwrap().collect();
     assert!(left.is_empty(), "env files left: {left:?}");
     // The memory cap is hard (swap = memory) and the network isolated.
-    let mem = podman(&[
-        "inspect",
-        "-f",
-        "{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}",
-        &ctr,
-    ]);
+    let mem = podman(
+        &h.engine,
+        p,
+        &[
+            "inspect",
+            "-f",
+            "{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}",
+            &ctr,
+        ],
+    );
     assert_eq!(mem, "134217728 134217728");
-    let net = podman(&["network", "inspect", "-f", "{{.Options}}", &network(p)]);
+    let net = podman(
+        &h.engine,
+        p,
+        &["network", "inspect", "-f", "{{.Options}}", &network(p)],
+    );
     assert!(net.contains("isolate:true"), "{net}");
     // Published on 127.0.0.1 only: the host's listener table has it on loopback and nowhere else.
     let hp = r.services[0].ports[0].host_port;
@@ -428,31 +454,44 @@ fn a_container_cannot_reach_another_projects_network() {
     let a = h.start(&start(&format!("t{id}a"), pa, spec.clone()));
     let b = h.start(&start(&format!("t{id}b"), pb, spec));
     assert_eq!((a.phase, b.phase), (RunPhase::Running, RunPhase::Running));
-    let ip = |run: &str| {
-        podman(&[
-            "inspect",
-            "-f",
-            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-            &container(run, "web"),
-        ])
+    let ip = |p: u64, run: &str| {
+        podman(
+            &h.engine,
+            p,
+            &[
+                "inspect",
+                "-f",
+                "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+                &container(run, "web"),
+            ],
+        )
     };
-    let a_ip = ip(&format!("t{id}a"));
+    let a_ip = ip(pa, &format!("t{id}a"));
     let (a_probe, b_probe) = (
         container(&format!("t{id}a"), "probe"),
         container(&format!("t{id}b"), "probe"),
     );
     // Inside a project: by service name.
-    assert!(sh_ok(&a_probe, "wget -T 5 -q -O /dev/null http://web/"));
     assert!(sh_ok(
+        &h.engine,
+        pa,
+        &a_probe,
+        "wget -T 5 -q -O /dev/null http://web/"
+    ));
+    assert!(sh_ok(
+        &h.engine,
+        pa,
         &a_probe,
         &format!("wget -T 5 -q -O /dev/null http://{a_ip}/")
     ));
     // From the other project: not by IP, not by name.
     assert!(!sh_ok(
+        &h.engine,
+        pb,
         &b_probe,
         &format!("wget -T 5 -q -O /dev/null http://{a_ip}/")
     ));
-    let b_web = ip(&format!("t{id}b"));
+    let b_web = ip(pb, &format!("t{id}b"));
     assert_ne!(a_ip, b_web);
 }
 
@@ -472,10 +511,15 @@ fn the_cloud_metadata_address_and_the_host_itself_are_unreachable() {
     let ctr = container(&run, "probe");
     // A TCP connect, not an HTTP answer: the metadata service answers some paths with errors anyway.
     assert!(
-        sh_ok(&ctr, "nc -w 5 example.com 80 </dev/null"),
+        sh_ok(&h.engine, p, &ctr, "nc -w 5 example.com 80 </dev/null"),
         "the internet is reachable"
     );
-    assert!(!sh_ok(&ctr, "nc -w 5 169.254.169.254 80 </dev/null"));
+    assert!(!sh_ok(
+        &h.engine,
+        p,
+        &ctr,
+        "nc -w 5 169.254.169.254 80 </dev/null"
+    ));
     // The host itself: its own address (the listener is on every address) and the host alias.
     let l = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
     let port = l.local_addr().unwrap().port();
@@ -487,7 +531,12 @@ fn the_cloud_metadata_address_and_the_host_itself_are_unreachable() {
         .to_owned();
     for target in [host_ip.as_str(), "host.containers.internal"] {
         assert!(
-            !sh_ok(&ctr, &format!("nc -w 3 {target} {port} </dev/null")),
+            !sh_ok(
+                &h.engine,
+                p,
+                &ctr,
+                &format!("nc -w 3 {target} {port} </dev/null")
+            ),
             "reached the host at {target}:{port}"
         );
     }
@@ -548,10 +597,13 @@ fn builds_stay_in_their_checkout_mount_it_read_only_and_leave_no_image() {
     let r = h.start_with(&good, &b);
     assert_eq!(r.phase, RunPhase::Running, "{r:?}");
     let web = container(&good.run, "web");
-    assert!(sh_ok(&web, "test -f /repo/web/Dockerfile"));
-    assert!(!sh_ok(&web, "touch /repo/web/x"), "/repo is writable");
+    assert!(sh_ok(&h.engine, p, &web, "test -f /repo/web/Dockerfile"));
+    assert!(
+        !sh_ok(&h.engine, p, &web, "touch /repo/web/x"),
+        "/repo is writable"
+    );
     let tag = format!("localhost/{}-web:{}", network(p), good.run);
-    assert!(podman(&["images", "-q", &tag]).len() > 1);
+    assert!(podman(&h.engine, p, &["images", "-q", &tag]).len() > 1);
     h.engine.stop(&good.run).unwrap();
-    assert_eq!(podman(&["images", "-q", &tag]), "");
+    assert_eq!(podman(&h.engine, p, &["images", "-q", &tag]), "");
 }

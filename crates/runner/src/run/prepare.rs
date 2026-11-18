@@ -117,10 +117,14 @@ const HOST_TRANSPORTS: &[&str] = &[
 ];
 
 /// Why a Dockerfile may not be built: a `FROM` image or a `--from=` (also `--mount=...,from=`)
-/// that names a host transport. Instructions are joined across `\` continuations.
+/// that names a host transport, or holds a `$` (an `ARG` would choose the transport only at build
+/// time, past this check). Instructions are joined across `\` continuations.
 pub(super) fn image_source_problem(dockerfile: &str) -> Option<String> {
     let joined = dockerfile.replace("\\\r\n", " ").replace("\\\n", " ");
     let bad = |what: &str, v: &str| {
+        if v.contains('$') {
+            return Some(format!("{what} {v} uses a variable; name the image itself"));
+        }
         let l = v.trim_matches(['"', '\'']).to_ascii_lowercase();
         HOST_TRANSPORTS
             .iter()
@@ -197,8 +201,9 @@ impl Engine {
         exec(reset, "git reset", left(deadline, CLONE_MAX)).map(drop)
     }
 
-    /// Builds service `name` from its repo, capped like its containers; the build's processes
-    /// live in a user slice of their own (its pids cap), stopped when the build ends.
+    /// Builds service `name` from its repo in the project's own store, capped like its containers;
+    /// the build's processes live in a user slice of their own (its pids cap), stopped when the
+    /// build ends. Its `TMPDIR` is the run's own (`RUN --mount=type=cache` keeps its cache there).
     pub(super) fn build(
         &self,
         req: &RunStart,
@@ -219,45 +224,106 @@ impl Engine {
         }
         let (ctx, file) = (ctx.display().to_string(), file.display().to_string());
         let tag = format!("localhost/{}-{name}:{}", network(req.project), req.run);
-        let hex: String = req.run.bytes().map(|c| format!("{c:02x}")).collect();
-        let slice = format!("ainkradbuild_{hex}.slice");
+        let slice = build_slice(&req.run, name);
+        // Held while the slice exists: a helper starting meanwhile leaves the slice alone
+        // (`reap_build_slices`). Released (and the file gone) only after the slice is stopped.
+        let lock_path = self.root.join(format!(".{slice}.lock"));
+        let lock = std::fs::File::create(&lock_path).map_err(|e| format!("build lock: {e}"))?;
+        lock.lock().map_err(|e| format!("build lock: {e}"))?;
+        let tmp = self.root.join(&req.run).join("tmp");
+        super::private_dir(&tmp)?;
         let l = req.limits;
         let mem = format!("{}m", l.memory_mb);
         let quota = format!("{:.0}", l.cpus * 100_000.0);
         // No pids cap, no build.
-        self.systemctl(&[
-            "set-property",
-            "--runtime",
-            &slice,
-            &format!("TasksMax={}", l.pids),
-        ])?;
-        let r = self.podman_t(
+        let capped = self.systemctl(
             &[
-                "build",
-                "-q",
-                "--pull=always",
-                "--layers=false",
-                "--cgroup-parent",
+                "set-property",
+                "--runtime",
                 &slice,
-                "--memory",
-                &mem,
-                "--memory-swap",
-                &mem,
-                "--cpu-period",
-                "100000",
-                "--cpu-quota",
-                &quota,
-                "-t",
-                &tag,
-                "-f",
-                &file,
-                &ctx,
+                &format!("TasksMax={}", l.pids),
             ],
-            left(deadline, BUILD_MAX),
+            deadline,
         );
-        // Whatever the build left in its slice dies with it.
-        let _ = self.systemctl(&["stop", &slice]);
-        let _ = self.systemctl(&["revert", &slice]);
+        let r = capped.and_then(|_| {
+            let mut cmd = self.podman_cmd(
+                req.project,
+                &[
+                    "build",
+                    "-q",
+                    "--pull=always",
+                    "--layers=false",
+                    "--cgroup-parent",
+                    &slice,
+                    "--memory",
+                    &mem,
+                    "--memory-swap",
+                    &mem,
+                    "--cpu-period",
+                    "100000",
+                    "--cpu-quota",
+                    &quota,
+                    "-t",
+                    &tag,
+                    "-f",
+                    &file,
+                    &ctx,
+                ],
+            );
+            cmd.env("TMPDIR", &tmp);
+            exec(cmd, "podman build", left(deadline, BUILD_MAX))
+        });
+        // Whatever the build left in its slice dies with it; a cleanup gets its own short time.
+        let cleanup = Instant::now() + QUICK;
+        let _ = self.systemctl(&["stop", &slice], cleanup);
+        let _ = self.systemctl(&["revert", &slice], cleanup);
+        let _ = std::fs::remove_file(&lock_path);
+        drop(lock);
         r.map(|_| tag)
+    }
+
+    /// Build slices a dead helper left behind (no build holds their lock): stopped and reverted,
+    /// so their processes go. Called when the helper starts.
+    pub fn reap_build_slices(&self) {
+        let deadline = Instant::now() + QUICK;
+        let Ok(units) = self.systemctl(
+            &[
+                "list-units",
+                "--all",
+                "--plain",
+                "--no-legend",
+                "ainkradbuild_*.slice",
+            ],
+            deadline,
+        ) else {
+            return;
+        };
+        for slice in units.lines().filter_map(|l| l.split_whitespace().next()) {
+            if !stale_slice(&self.root, slice) {
+                continue;
+            }
+            let _ = self.systemctl(&["stop", slice], deadline);
+            let _ = self.systemctl(&["revert", slice], deadline);
+        }
+    }
+}
+
+/// One build's user slice: hex, because `-` in a slice name means nesting.
+pub(super) fn build_slice(run: &str, service: &str) -> String {
+    let hex: String = format!("{run}/{service}")
+        .bytes()
+        .map(|c| format!("{c:02x}"))
+        .collect();
+    format!("ainkradbuild_{hex}.slice")
+}
+
+/// An `ainkradbuild_*.slice` whose build lock under `root` is not held (or gone).
+pub(super) fn stale_slice(root: &Path, slice: &str) -> bool {
+    if !slice.starts_with("ainkradbuild_") || !slice.ends_with(".slice") || slice.contains('/') {
+        return false;
+    }
+    match std::fs::File::open(root.join(format!(".{slice}.lock"))) {
+        Ok(f) => f.try_lock().is_ok(),
+        Err(_) => true,
     }
 }

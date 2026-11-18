@@ -118,6 +118,17 @@ pub struct Redactor {
     pending: Vec<(String, String)>,
 }
 
+/// The secret values a `Redactor` holds are wiped when it drops (it lives as long as a socket or
+/// a request that masks with it). Copies made by `clone` are wiped when they drop too.
+impl Drop for Redactor {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        for (_, v) in self.known.iter_mut().chain(self.pending.iter_mut()) {
+            v.zeroize();
+        }
+    }
+}
+
 impl Redactor {
     pub fn new() -> Self {
         Self::default()

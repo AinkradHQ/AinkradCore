@@ -31,10 +31,8 @@ fn the_expose_label_is_set_even_when_nothing_is_exposed() {
 }
 
 #[test]
-fn a_start_and_its_cleanup_fit_the_helper_units_runtime() {
-    // `RuntimeMaxSec=1800` in deploy/systemd/ainkrad-run@.service.
-    let sum = START_BUDGET + OVERRUN + STOP_MAX;
-    assert!(sum < Duration::from_secs(1800), "{sum:?}");
+fn each_start_bound_child_fits_the_start_budget() {
+    // The sum of every phase against the unit's `RuntimeMaxSec` is in `tests_review2`.
     // The phases each start-bound child may take never exceed the budget on their own.
     for cap in [CLONE_MAX, BUILD_MAX, CREATE_MAX, HEALTH_WAIT] {
         assert!(cap < START_BUDGET);
@@ -52,6 +50,10 @@ fn host_image_transports_are_refused_in_from_and_copy_from() {
         "FROM alpine\nCOPY --from=OCI-ARCHIVE:/x /a /b\n",
         "FROM alpine\nRUN --mount=type=bind,from=dir:/x,target=/m true\n",
         "FROM \\\n  oci:/x\n",
+        "ARG B=oci-archive:/x\nFROM ${B}\n",
+        "ARG B=oci-archive:/x\nFROM $B AS a\n",
+        "ARG B=dir:/x\nFROM alpine\nCOPY --from=${B} /a /b\n",
+        "ARG B=dir:/x\nFROM alpine\nRUN --mount=type=bind,from=$B,target=/m true\n",
     ] {
         assert!(p(bad).is_some(), "{bad:?}");
     }
@@ -60,6 +62,7 @@ fn host_image_transports_are_refused_in_from_and_copy_from() {
         "FROM docker.io/library/alpine AS b\nCOPY --from=b /a /b\n",
         "FROM dirty/img\nCOPY --from=dirty /a /b\n",
         "# FROM oci:/x\nFROM alpine\n",
+        "FROM --platform=$BUILDPLATFORM alpine\n",
     ] {
         assert!(p(ok).is_none(), "{ok:?}");
     }

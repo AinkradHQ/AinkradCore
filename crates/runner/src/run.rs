@@ -16,9 +16,14 @@
 //!   the build context and Dockerfile must resolve (symlinks included) inside the run's own
 //!   checkout, builds pull their base images (`--pull=always`, never another project's build) and
 //!   keep no shared layer cache, and a run's built images are removed when it stops;
+//! - each project has its own Podman store (`--root`/`--runroot` under [`Engine::projects`]), so a
+//!   Dockerfile's `FROM containers-storage:…`, `COPY --from` or `RUN --mount=from=` finds only that
+//!   project's images, and each build has its own `TMPDIR` (the `RUN --mount=type=cache` dir);
 //! - builds get the project's caps (memory, swap, CPU, and its pids in a per-build user slice),
 //!   every child (`git`, `podman`) has its own timeout, its own process group killed on timeout,
-//!   and dies with the helper (`PR_SET_PDEATHSIG`); the whole start fits in [`START_BUDGET`];
+//!   and dies with the helper (`PR_SET_PDEATHSIG`); the whole start fits in [`START_BUDGET`], and
+//!   the cleanup of a failed one in [`CLEANUP_BUDGET`], both inside the unit's `RuntimeMaxSec`;
+//! - container logs are capped (`k8s-file`, 10 MiB);
 //! - checkouts are capped in number (16) and in bytes on disk ([`MAX_CHECKOUT_BYTES`]), measured
 //!   before the work tree is written;
 //! - ports are published on `127.0.0.1` only, at a port Podman picks;
@@ -37,15 +42,19 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use ainkrad_proto::v2::{RunInfo, RunLimits, RunList, RunPhase, RunService, RunStart};
+use ainkrad_proto::v2::{RunInfo, RunLimits, RunPhase, RunService, RunStart};
 
 pub mod helper;
+pub mod observe;
 mod prepare;
 mod ps;
 #[cfg(test)]
 mod review_tests;
+mod state;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_review2;
 
 pub use prepare::inside;
 use prepare::{exec, left};
@@ -58,14 +67,16 @@ const LABEL_SERVICE: &str = "ainkrad.service";
 const LABEL_EXPOSE: &str = "ainkrad.expose";
 /// How long a service with a health check has to turn healthy.
 const HEALTH_WAIT: Duration = Duration::from_secs(120);
-/// A whole start: below the helper unit's `RuntimeMaxSec=1800` by what the work after its deadline
-/// can take ([`OVERRUN`] and [`STOP_MAX`]; the sum is tested), so the cleanup of a failed one fits.
+/// A whole start, from the first bundle byte read to the answer (the check that the run has no
+/// containers yet included). With what may run outside it (the helper's slice reap at launch, the
+/// request read, [`OVERRUN`] and the failed start's [`CLEANUP_BUDGET`]) it stays below the helper
+/// unit's `RuntimeMaxSec=1800`; a test sums every phase against the unit.
 pub const START_BUDGET: Duration = Duration::from_secs(1200);
-/// What one step already begun can add past the deadline: a build's `set-property` plus its two
-/// slice reaps (each [`QUICK`]); later builds are refused at once (`build`).
-pub const OVERRUN: Duration = Duration::from_secs(3 * QUICK.as_secs());
-/// `stop` of a failed start: six podman calls (status, ps, stop, rm, images, rmi), each [`QUICK`].
-pub const STOP_MAX: Duration = Duration::from_secs(6 * QUICK.as_secs());
+/// What one step already begun can add past the deadline: a build's slice stop and revert, which
+/// share one [`QUICK`] of their own; later builds are refused at once (`build`).
+pub const OVERRUN: Duration = QUICK;
+/// A stop (the cleanup of a failed start included): every podman call of it within this.
+pub const CLEANUP_BUDGET: Duration = Duration::from_secs(240);
 /// Each child's own cap (within what is left of [`START_BUDGET`]).
 const QUICK: Duration = Duration::from_secs(60);
 const CLONE_MAX: Duration = Duration::from_secs(300);
@@ -88,6 +99,12 @@ pub struct Engine {
     pub podman: String,
     /// Run dirs (checkouts) live under it: `<root>/<run>`.
     pub root: PathBuf,
+    /// Each project's own Podman store: `<projects>/<project>/storage` (`--root`) and `…/runroot`
+    /// (`--runroot`). Images, containers and volumes of one project are not in another's store.
+    pub projects: PathBuf,
+    /// Network definitions (`--network-config-dir`), shared so every project network gets its own
+    /// subnet; the names are the helper's own (`ainkrad-p<id>`).
+    pub networks: PathBuf,
     /// Env files, briefly: a private tmpfs dir.
     pub env_dir: PathBuf,
     /// The user's runtime dir, given to Podman as `XDG_RUNTIME_DIR` (with its bus); `None` keeps
@@ -97,9 +114,10 @@ pub struct Engine {
     pub checkout_cap: u64,
 }
 
-/// The helper's `containers.conf` (`<root>/containers.conf`, via `CONTAINERS_CONF`): lock numbers
-/// of the shared-memory lock manager are per store, so the projects sharing this user's store
-/// would share them; file locks are not numbered.
+/// The helper's `containers.conf` (`<root>/containers.conf`, via `CONTAINERS_CONF`). Every project
+/// has its own store, but the shared-memory lock manager keeps one segment per user, and each store
+/// hands out its lock numbers from it on its own, so two projects' containers could get the same
+/// lock. File locks live under the store's own `--tmpdir` ([`Engine::store_args`]): per store.
 pub fn containers_conf() -> &'static str {
     "[engine]\nlock_type = \"file\"\n"
 }
@@ -158,6 +176,14 @@ pub fn create_args(
         &limits.pids.to_string(),
         "--security-opt",
         "no-new-privileges",
+        // Logs live in the project's store; capped so a chatty service cannot fill the disk.
+        // (Podman's k8s-file truncates at max-size; max-file is passed for drivers that rotate.)
+        "--log-driver",
+        "k8s-file",
+        "--log-opt",
+        "max-size=10m",
+        "--log-opt",
+        "max-file=2",
         "--pull",
         // A build's own tag is never pulled; a registry image is, when missing.
         if s.build.is_some() {
@@ -222,18 +248,20 @@ fn failed(run: &RunStart, service: &str, reason: String) -> RunInfo {
 }
 
 impl Engine {
-    /// The helper's: `$HOME/runs`; env files in `/run/user/<uid>` (tmpfs), its own uid's (a unit
+    /// The helper's: `$HOME/runs`, stores in `$HOME/projects`; env files in `/run/user/<uid>` (tmpfs), its own uid's (a unit
     /// cannot name another user's uid with a specifier, so it is not taken from the environment).
     pub fn from_env() -> Result<Self, String> {
         let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
         let runtime = PathBuf::from(format!("/run/user/{}", ainkrad_sys::getuid()));
-        let root = PathBuf::from(home).join("runs");
+        let root = PathBuf::from(&home).join("runs");
         private_dir(&root)?;
         std::fs::write(root.join("containers.conf"), containers_conf())
             .map_err(|e| format!("writing containers.conf: {e}"))?;
         Ok(Self {
             podman: "podman".to_owned(),
             root,
+            projects: PathBuf::from(&home).join("projects"),
+            networks: PathBuf::from(&home).join("networks"),
             env_dir: runtime.join("ainkrad-env"),
             runtime_dir: Some(runtime),
             checkout_cap: MAX_CHECKOUT_BYTES,
@@ -256,33 +284,39 @@ impl Engine {
         cmd
     }
 
-    /// `podman args…` within `timeout`: its stdout, or its stderr as the reason.
-    fn podman_t(&self, args: &[&str], timeout: Duration) -> Result<String, String> {
+    /// `podman <store of project> args…`, not run yet.
+    fn podman_cmd(&self, project: u64, args: &[&str]) -> Command {
         let mut cmd = self.user_cmd(&self.podman);
-        cmd.args(args);
+        cmd.args(self.store_args(project)).args(args);
+        cmd
+    }
+
+    /// `podman args…` in `project`'s store within `timeout`: its stdout, or its stderr as the reason.
+    fn podman_t(&self, project: u64, args: &[&str], timeout: Duration) -> Result<String, String> {
         exec(
-            cmd,
+            self.podman_cmd(project, args),
             &format!("podman {}", args.first().unwrap_or(&"")),
             timeout,
         )
     }
 
-    fn podman(&self, args: &[&str]) -> Result<String, String> {
-        self.podman_t(args, QUICK)
+    /// A quick podman call, within what is left of `deadline`.
+    fn podman(&self, project: u64, args: &[&str], deadline: Instant) -> Result<String, String> {
+        self.podman_t(project, args, left(deadline, QUICK))
     }
 
-    /// `systemctl --user args…` (the user's manager: build slices).
-    fn systemctl(&self, args: &[&str]) -> Result<String, String> {
+    /// `systemctl --user args…` (the user's manager: build slices), within what is left of `deadline`.
+    fn systemctl(&self, args: &[&str], deadline: Instant) -> Result<String, String> {
         let mut cmd = self.user_cmd("systemctl");
         cmd.arg("--user").args(args);
-        exec(cmd, "systemctl", QUICK)
+        exec(cmd, "systemctl", left(deadline, QUICK))
     }
 
     /// The project's network, isolated from every other (`--opt isolate=true`). One that exists
     /// without isolation is refused, never used.
-    fn ensure_network(&self, project: u64) -> Result<(), String> {
+    fn ensure_network(&self, project: u64, deadline: Instant) -> Result<(), String> {
         let n = network(project);
-        if let Ok(json) = self.podman(&["network", "inspect", &n]) {
+        if let Ok(json) = self.podman(project, &["network", "inspect", &n], deadline) {
             let v: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
             return match v[0]["options"]["isolate"].as_str() {
                 Some("true") => Ok(()),
@@ -292,89 +326,39 @@ impl Engine {
             };
         }
         let label = format!("{LABEL_PROJECT}={project}");
-        self.podman(&[
-            "network",
-            "create",
-            "--opt",
-            "isolate=true",
-            "--label",
-            &label,
-            &n,
-        ])
+        self.podman(
+            project,
+            &[
+                "network",
+                "create",
+                "--opt",
+                "isolate=true",
+                "--label",
+                &label,
+                &n,
+            ],
+            deadline,
+        )
         .map(drop)
     }
 
-    fn ps(&self, filter: &str) -> Result<Vec<RunInfo>, String> {
-        runs_from_ps(&self.podman(&["ps", "-a", "--filter", filter, "--format", "json"])?)
-    }
-
-    /// One run's state; `Stopped` when it has no container.
-    pub fn status(&self, run: &str, project: u64) -> Result<RunInfo, String> {
-        let filter = format!("label={LABEL_RUN}={run}");
-        Ok(self.ps(&filter)?.pop().unwrap_or(RunInfo {
-            run: run.to_owned(),
-            project,
-            phase: RunPhase::Stopped,
-            failed_service: None,
-            reason: None,
-            services: Vec::new(),
-        }))
-    }
-
-    /// Every run on this host (the reconcile after a runner restart).
-    pub fn list(&self) -> Result<RunList, String> {
-        Ok(RunList {
-            runs: self.ps(&format!("label={LABEL_RUN}"))?,
-        })
-    }
-
-    /// Stops and removes the run's containers (`stop -t 10`); volumes and the network stay.
-    pub fn stop(&self, run: &str) -> Result<RunInfo, String> {
-        let before = self.status(run, 0)?;
-        let filter = format!("label={LABEL_RUN}={run}");
-        let ids = self.podman(&["ps", "-a", "-q", "--filter", &filter])?;
-        let ids: Vec<&str> = ids.split_whitespace().collect();
-        if !ids.is_empty() {
-            let _ = self.podman(&[&["stop", "-t", "10"][..], &ids].concat());
-            self.podman(&[&["rm", "-f"][..], &ids].concat())?;
-        }
-        // The run's own builds (`localhost/ainkrad-p<project>-<service>:<run>`).
-        let images = self.podman(&["images", "--format", "{{.Repository}}:{{.Tag}}"])?;
-        let tag = format!(":{run}");
-        let built: Vec<&str> = images
-            .lines()
-            .filter(|i| i.starts_with("localhost/ainkrad-p") && i.ends_with(&tag))
-            .collect();
-        if !built.is_empty() {
-            let _ = self.podman(&[&["rmi", "-f"][..], &built].concat());
-        }
-        if ainkrad_proto::v2::valid_run_id(run) {
-            let _ = std::fs::remove_dir_all(self.root.join(run));
-        }
-        Ok(RunInfo {
-            phase: RunPhase::Stopped,
-            failed_service: None,
-            reason: None,
-            services: Vec::new(),
-            ..before
-        })
-    }
-
-    /// Starts `req` (secrets already in its env). `bundles` are the checkouts, as git bundles, by
-    /// repo. A service that fails to build, start or turn healthy answers `Failed` naming it; a
-    /// start that fails in any way is stopped first, so nothing of it is left.
+    /// Starts `req` (secrets already in its env) by `deadline` (the helper's: [`START_BUDGET`]
+    /// from before the bundles were read). `bundles` are the checkouts, as git bundles, by repo. A
+    /// service that fails to build, start or turn healthy answers `Failed` naming it; a start that
+    /// fails in any way is stopped first, so nothing of it is left.
     pub fn start(
         &self,
         req: &RunStart,
         bundles: &BTreeMap<String, PathBuf>,
+        deadline: Instant,
     ) -> Result<RunInfo, String> {
         if let Some(p) = req.problem() {
             return Err(p);
         }
-        if !self.status(&req.run, req.project)?.services.is_empty() {
+        if !self.find_by(&req.run, deadline)?.services.is_empty() {
             return Err(format!("run {} already has containers", req.run));
         }
-        let r = self.launch(req, bundles, Instant::now() + START_BUDGET);
+        let r = self.launch(req, bundles, deadline);
         if !matches!(&r, Ok(i) if i.phase != RunPhase::Failed) {
             let _ = self.stop(&req.run);
         }
@@ -388,7 +372,12 @@ impl Engine {
         deadline: Instant,
     ) -> Result<RunInfo, String> {
         let order = req.spec.start_order().ok_or("a depends_on cycle")?;
-        self.ensure_network(req.project)?;
+        private_dir(&self.projects.join(req.project.to_string()))?;
+        private_dir(&self.networks)?;
+        if let Some(r) = &self.runtime_dir {
+            private_dir(&r.join(network(req.project)))?;
+        }
+        self.ensure_network(req.project, deadline)?;
         let repos = self.root.join(&req.run).join("repos");
         private_dir(&repos)?;
         let mut used = 0;
@@ -403,7 +392,11 @@ impl Engine {
         let label = format!("{LABEL_PROJECT}={}", req.project);
         for v in req.spec.services.values().flat_map(|s| s.volumes.keys()) {
             let name = format!("{}-{v}", network(req.project));
-            self.podman(&["volume", "create", "--ignore", "--label", &label, &name])?;
+            self.podman(
+                req.project,
+                &["volume", "create", "--ignore", "--label", &label, &name],
+                deadline,
+            )?;
         }
         // Every image is built before any container starts: no service of the run is up while
         // the project's build steps run.
@@ -433,7 +426,7 @@ impl Engine {
         }
         // A crash right after start shows here rather than at the next status.
         std::thread::sleep(Duration::from_secs(2));
-        self.status(&req.run, req.project)
+        self.status_by(&req.run, req.project, deadline)
     }
 
     /// `podman create` with the env in a private file removed right after, then `podman start`.
@@ -473,10 +466,14 @@ impl Engine {
             run_dir,
         );
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        self.podman_t(&args, left(deadline, CREATE_MAX))?;
+        self.podman_t(req.project, &args, left(deadline, CREATE_MAX))?;
         drop(env);
-        self.podman(&["start", &container(&req.run, name)])
-            .map(drop)
+        self.podman(
+            req.project,
+            &["start", &container(&req.run, name)],
+            deadline,
+        )
+        .map(drop)
     }
 
     /// Running, and (with a health check) healthy within [`HEALTH_WAIT`] and the start's own
@@ -493,12 +490,16 @@ impl Engine {
         loop {
             std::thread::sleep(Duration::from_secs(1));
             let state = self
-                .podman(&[
-                    "inspect",
-                    "--format",
-                    "{{.State.Status}} {{.State.ExitCode}}",
-                    &ctr,
-                ])
+                .podman(
+                    req.project,
+                    &[
+                        "inspect",
+                        "--format",
+                        "{{.State.Status}} {{.State.ExitCode}}",
+                        &ctr,
+                    ],
+                    start_deadline,
+                )
                 .map_err(|e| format!("{name}: {e}"))?;
             let mut f = state.split_whitespace();
             match (f.next(), f.next()) {
@@ -508,7 +509,11 @@ impl Engine {
                 }
                 (None, _) => return Err(format!("{name} is gone")),
             }
-            if !health || self.podman(&["healthcheck", "run", &ctr]).is_ok() {
+            if !health
+                || self
+                    .podman(req.project, &["healthcheck", "run", &ctr], start_deadline)
+                    .is_ok()
+            {
                 return Ok(());
             }
             if Instant::now() > deadline {

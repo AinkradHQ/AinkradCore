@@ -12,8 +12,12 @@ table inet ainkrad_run_egress {
     meta skuid "ainkrad-run" ip daddr 127.0.0.53 meta l4proto { tcp, udp } th dport 53 accept
     # Every other address of the host itself (loopback, its own private and public addresses).
     meta skuid "ainkrad-run" fib daddr type local reject
-    # Cloud metadata (169.254.169.254), private and special-purpose ranges.
-    meta skuid "ainkrad-run" ip daddr { 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15 } reject
-    meta skuid "ainkrad-run" ip6 daddr { fc00::/7, fe80::/10 } reject
+    # Cloud metadata (169.254.169.254), Azure's WireServer (168.63.129.16, public address space), private and
+    # special-purpose ranges, multicast, and the reserved block with broadcast (240/4 holds 255.255.255.255).
+    meta skuid "ainkrad-run" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 168.63.129.16/32, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/4, 240.0.0.0/4 } reject
+    # IPv6 is deny-by-default: a cloud network's own global prefix (VM to VM) is ordinary 2000::/3 space that no static
+    # rule can tell from the internet, and ULA, link-local and multicast go with it. DNS is the IPv4 stub above, so
+    # names still resolve, and clients fall back to IPv4 at once (reject, not drop).
+    meta skuid "ainkrad-run" meta nfproto ipv6 reject
   }
 }
