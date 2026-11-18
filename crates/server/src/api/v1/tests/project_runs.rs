@@ -443,22 +443,9 @@ async fn a_run_resolves_secrets_by_the_projects_group_only() {
     let mut conn = fx.app.pool.acquire().await.unwrap();
     let project = projects::get(&mut conn, p).await.unwrap();
     drop(conn);
-    // Even with a group on the project, the secret outside it is still not found.
-    sqlx::query("INSERT INTO core_secret_groups (name, created_at, updated_at) VALUES ('project-shop', ?, ?)")
-        .bind(&now)
-        .bind(&now)
-        .execute(&fx.app.pool)
-        .await
-        .unwrap();
-    let gid: i64 =
-        sqlx::query_scalar("SELECT id FROM core_secret_groups WHERE name = 'project-shop'")
-            .fetch_one(&fx.app.pool)
-            .await
-            .unwrap();
-    let grouped = projects::Project {
-        secret_group: Some(gid),
-        ..project
-    };
+    // The project has its own group since it was created; the secret outside it is still not found.
+    let gid = project.secret_group.expect("a project made with a group");
+    let grouped = project;
     let e = runs::project_secret(&fx.app.pool, &grouped, "api_key").await;
     assert!(e.is_err(), "ungrouped secret must not resolve");
     sqlx::query("UPDATE core_secrets SET group_id = ? WHERE name = 'shop.api_key'")
