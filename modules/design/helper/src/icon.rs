@@ -1,7 +1,8 @@
 //! The Icon Composer `.icon` check: a zip of `icon.json` plus image layers. Every length the zip
 //! states is checked against the file before it is used; entries are inflated with a hard cap and
 //! their CRC compared, so a zip bomb, a lying header or a path that climbs out is refused before any
-//! layer reaches an image decoder.
+//! layer reaches an image decoder. Only `icon.json` and `.png`/`.jpg`/`.jpeg`/`.svg` layers are allowed
+//! (directories aside), and an SVG layer with script, entities or an outside link is refused.
 
 use std::io::Read;
 
@@ -123,6 +124,30 @@ fn read(b: &[u8], e: &Entry) -> Result<Vec<u8>, &'static str> {
     Ok(out)
 }
 
+/// An SVG layer is not drawn by this renderer, but it is served later: refuse script, entities
+/// and any reference that is not to its own fragment.
+fn svg_ok(b: &[u8]) -> Result<(), &'static str> {
+    let text = std::str::from_utf8(b).map_err(|_| "an SVG layer is not UTF-8")?;
+    let lower = text.to_ascii_lowercase();
+    if !lower.contains("<svg") {
+        return Err("an SVG layer is not SVG");
+    }
+    if lower.contains("<script") || lower.contains("<!entity") || lower.contains("<!doctype") {
+        return Err("an SVG layer has script or entities");
+    }
+    for (i, _) in lower.match_indices("href") {
+        let rest = lower[i + 4..].trim_start();
+        let Some(v) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let v = v.trim_start().trim_start_matches(['"', '\'']);
+        if !v.starts_with('#') {
+            return Err("an SVG layer links outside itself");
+        }
+    }
+    Ok(())
+}
+
 pub fn check(b: &[u8]) -> Result<(), &'static str> {
     let list = entries(b)?;
     let mut total = 0u64;
@@ -153,11 +178,9 @@ pub fn check(b: &[u8]) -> Result<(), &'static str> {
                 return Err("an image layer does not decode");
             }
         } else if lower.ends_with(".svg") {
-            // Not drawn by this renderer; kept inert (the Core sanitises SVG it serves).
-            let text = std::str::from_utf8(&bytes).map_err(|_| "an SVG layer is not UTF-8")?;
-            if !text.contains("<svg") {
-                return Err("an SVG layer is not SVG");
-            }
+            svg_ok(&bytes)?;
+        } else {
+            return Err("the zip holds a file that is not icon.json or an image layer");
         }
     }
     if !manifest {

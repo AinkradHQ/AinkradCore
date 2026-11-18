@@ -161,4 +161,27 @@ fn only_design_ops_take_the_design_path() {
         .err()
         .unwrap();
     assert_eq!(e.code, ErrorCode::InvalidArgs);
+    // A design command passes the filter and is then refused only for want of a runner.
+    let check = Command::DesignCheck(ainkrad_proto::v2::DesignCheck {
+        kind: "font".into(),
+        data: String::new(),
+    });
+    let e = hub.dispatch_design("dv_runner", check).err().unwrap();
+    assert_eq!(e.code, ErrorCode::Offline);
+}
+
+/// Review M2: a sandbox that did not start (`spawn_failed`) is not a verdict: the asset stays pending.
+#[tokio::test]
+async fn a_sandbox_that_did_not_start_leaves_it_pending() {
+    let (app, dir) = app("spawn").await;
+    let a = pending(&app, 'a', "font").await;
+    play(&app, runner(&app), |_| {
+        Body::Error(StreamError::new(
+            ErrorCode::SpawnFailed,
+            "the design sandbox did not start: bwrap: Unknown option --disable-userns",
+        ))
+    });
+    assert_eq!(check_pending(&app).await.unwrap(), 0);
+    assert_eq!(state(&app, &a).await, "pending");
+    std::fs::remove_dir_all(dir).unwrap();
 }

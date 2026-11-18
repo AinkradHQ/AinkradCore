@@ -107,7 +107,7 @@ fn icon_zips_pass_only_when_whole_and_plain() {
         0,
     );
     assert_eq!(icon::check(&good), Ok(()));
-    let svg = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
+    let svg = b"<svg xmlns='http://www.w3.org/2000/svg'><use href='#a'/></svg>";
     assert_eq!(
         icon::check(&zip(&[("icon.json", j, false), ("a.svg", svg, true)], 0)),
         Ok(())
@@ -134,6 +134,69 @@ fn icon_zips_pass_only_when_whole_and_plain() {
             ),
         ),
         ("not-zip", b"PK\x03\x04 nothing".to_vec()),
+        (
+            "other-file",
+            zip(
+                &[("icon.json", j, false), ("run.sh", b"#!/bin/sh", false)],
+                0,
+            ),
+        ),
+        (
+            "ds-store",
+            zip(&[("icon.json", j, false), (".DS_Store", b"x", false)], 0),
+        ),
+        (
+            "svg-script",
+            zip(
+                &[
+                    ("icon.json", j, false),
+                    ("a.svg", b"<svg><script>alert(1)</script></svg>", false),
+                ],
+                0,
+            ),
+        ),
+        (
+            "svg-entity",
+            zip(
+                &[
+                    ("icon.json", j, false),
+                    (
+                        "a.svg",
+                        br#"<!DOCTYPE s [<!ENTITY a "x">]><svg>&a;</svg>"#,
+                        false,
+                    ),
+                ],
+                0,
+            ),
+        ),
+        (
+            "svg-href",
+            zip(
+                &[
+                    ("icon.json", j, false),
+                    (
+                        "a.svg",
+                        br#"<svg><image href="https://example.com/x.png"/></svg>"#,
+                        false,
+                    ),
+                ],
+                0,
+            ),
+        ),
+        (
+            "svg-xlink",
+            zip(
+                &[
+                    ("icon.json", j, false),
+                    (
+                        "a.svg",
+                        br#"<svg><use xlink:href = 'file:///etc/passwd'/></svg>"#,
+                        false,
+                    ),
+                ],
+                0,
+            ),
+        ),
         ("truncated", good[..good.len() - 30].to_vec()),
     ];
     for (name, z) in cases {

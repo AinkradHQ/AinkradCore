@@ -1,8 +1,10 @@
 //! Font and Icon Composer checks (V6-01, T8): an upload of either is stored `pending` and inert. The
 //! Core never parses it; this job sends it to a runner's sandboxed `ainkrad-design` helper
 //! (`design.check`) and records the verdict: `ok` (served from then on) or `refused`. A helper that
-//! crashes or hits a limit on the file is a refusal too. No capable runner, a busy one or a lost
-//! answer leaves the asset `pending` for the next run. Audit and events carry the sha256 only.
+//! crashes or hits a limit on the file is a refusal too. No capable runner, a busy one, a sandbox
+//! that did not start (`spawn_failed`) or a lost answer leaves the asset `pending` for the next run.
+//! Audit and events carry the sha256 only. The runner is the trust root for the verdict: every runner
+//! is paired by the Core's one owner (a hostile runner's "ok" still only reaches sandboxed helpers).
 
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;

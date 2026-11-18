@@ -14,7 +14,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use tokio::sync::oneshot;
 
-use super::{DesignConfig, DesignDriver, path_ok};
+use super::shot::path_ok;
+use super::{DesignConfig, DesignDriver, sandbox};
 
 /// A helper script in its own directory (bound read-only into the sandbox like the real one).
 fn helper(name: &str, body: &str) -> (PathBuf, PathBuf) {
@@ -167,6 +168,160 @@ async fn an_oversized_job_is_refused_before_anything_runs() {
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::TooLarge);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A fake Chromium (`design.shot`) that plants something in `/out` instead of a screenshot.
+fn shot_with(name: &str, body: &str) -> (PathBuf, DesignDriver) {
+    let (dir, p) = helper(name, body);
+    let mut c = DesignConfig::new(dir.join("unused"), Some(p));
+    c.timeout = Duration::from_secs(5);
+    (dir, DesignDriver::new(c))
+}
+
+fn a_shot() -> Command {
+    Command::DesignShot(DesignShot {
+        files: vec![DesignShotFile {
+            path: "index.html".into(),
+            data: STANDARD.encode("<p>x</p>"),
+        }],
+        entry: "index.html".into(),
+        width: 10,
+        height: 10,
+        scale: 1.0,
+    })
+}
+
+/// Review H1: `/out` is a tmpfs inside the sandbox. Whatever is planted there (a link to /dev/zero,
+/// a FIFO, a flood of files) is never opened by the runner, which gets only a capped stdout.
+#[tokio::test]
+async fn planted_out_files_cost_only_the_job() {
+    for (name, body) in [
+        ("zero", "ln -s /dev/zero /out/shot.png"),
+        ("fifo", "mkfifo /out/shot.png"),
+        (
+            "flood",
+            "for i in $(seq 1 64); do head -c 1048576 /dev/zero > /out/f$i 2>/dev/null; done; exit 0",
+        ),
+        ("host", "ln -s /etc/hostname /out/shot.png"),
+    ] {
+        let (dir, d) = shot_with(name, body);
+        let t = Instant::now();
+        let e = run(&d, &a_shot()).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::DesignFailed, "{name}: {e:?}");
+        assert!(
+            t.elapsed() < Duration::from_secs(8),
+            "{name}: {:?}",
+            t.elapsed()
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// Review M2: a sandbox that never reached the helper is `spawn_failed` (no verdict on the file);
+/// once it did, a failure is `design_failed`.
+#[test]
+fn a_sandbox_failure_is_not_a_verdict() {
+    let e =
+        sandbox::outcome(Ok(1), vec![], b"bwrap: Unknown option --disable-userns\n").unwrap_err();
+    assert_eq!(e.code, ErrorCode::SpawnFailed, "{e:?}");
+    let e = sandbox::outcome(Ok(125), vec![], b"").unwrap_err();
+    assert_eq!(e.code, ErrorCode::SpawnFailed, "{e:?}");
+    let e = sandbox::outcome(
+        Ok(2),
+        vec![],
+        b"ainkrad-design: started\nthe job is not valid\n",
+    )
+    .unwrap_err();
+    assert_eq!(e.code, ErrorCode::DesignFailed);
+    assert!(e.message.contains("the job is not valid"), "{e:?}");
+    let e = sandbox::outcome(
+        Err("it was killed by a signal (a crash)"),
+        vec![],
+        b"ainkrad-design: started\n",
+    );
+    assert_eq!(e.unwrap_err().code, ErrorCode::DesignFailed);
+    assert_eq!(sandbox::outcome(Ok(0), b"{}".to_vec(), b"").unwrap(), b"{}");
+}
+
+/// The probe runs the real sandbox (flags, seccomp, limits script), so an old bubblewrap that
+/// lacks a flag fails it instead of failing every job later.
+#[test]
+fn the_probe_runs_the_real_sandbox() {
+    let c = DesignConfig::new(PathBuf::from("/usr/bin/true"), None);
+    assert!(
+        sandbox::probe(&c),
+        "this host's bubblewrap runs the design sandbox"
+    );
+}
+
+/// Review L4: the seccomp deny-list holds inside the sandbox (keyctl answers EPERM).
+#[tokio::test]
+async fn the_seccomp_list_holds_inside() {
+    let nr = if cfg!(target_arch = "x86_64") {
+        250
+    } else {
+        219
+    };
+    let body = format!(
+        r#"python3 -I -c 'import ctypes,os,json
+l=ctypes.CDLL(None,use_errno=True)
+r=l.syscall({nr},0,-1,0)
+e=ctypes.get_errno()
+print(json.dumps({{"ok":r==-1 and e==1,"reason":"keyctl gave %d errno %d"%(r,e)}}))'"#
+    );
+    let (dir, p) = helper("seccomp", &body);
+    let (ok, why) = checked(run(&driver(p), &check(b"x")).await.unwrap());
+    assert!(ok, "{why:?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Review M3: a job in a systemd user scope (`MemoryMax`, `TasksMax`) runs and still ends on its
+/// memory cap. Skipped where the runner's user has no systemd manager.
+#[tokio::test]
+async fn the_scope_caps_memory_in_the_kernel() {
+    let mut probe = DesignConfig::new(PathBuf::from("/usr/bin/true"), None);
+    probe.scope = true;
+    if !sandbox::probe(&probe) {
+        eprintln!("SKIPPED: no systemd user scope for this user");
+        return;
+    }
+    let (dir, p) = helper(
+        "scope",
+        r#"m=$(head -c 1048576 /dev/zero | tr '\0' a); x=""; while true; do x="$x$m"; done"#,
+    );
+    let mut c = DesignConfig::new(p, None);
+    c.scope = true;
+    c.timeout = Duration::from_secs(60);
+    c.max_rss = 64 << 20;
+    c.max_vm = 4 << 30;
+    let e = run(&DesignDriver::new(c), &check(b"x")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::DesignFailed, "{e:?}");
+    assert!(!e.message.contains("time limit"), "{e:?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Review L5: job directories a crashed runner left behind are removed at start; fresh ones stay.
+#[test]
+fn leftover_job_dirs_are_swept() {
+    let tmp = std::env::temp_dir().join(format!("design-sweep-{}", std::process::id()));
+    let old = tmp.join("ainkrad-design-old");
+    let new = tmp.join("ainkrad-design-new");
+    let other = tmp.join("something-else");
+    for d in [&old, &new, &other] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let past = std::time::SystemTime::now() - Duration::from_secs(3600);
+    std::fs::File::open(&old)
+        .unwrap()
+        .set_modified(past)
+        .unwrap();
+    std::fs::File::open(&other)
+        .unwrap()
+        .set_modified(past)
+        .unwrap();
+    sandbox::sweep(&tmp, Duration::from_secs(600));
+    assert!(!old.exists() && new.exists() && other.exists());
+    std::fs::remove_dir_all(tmp).unwrap();
 }
 
 #[test]
