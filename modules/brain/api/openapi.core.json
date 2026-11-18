@@ -8278,7 +8278,7 @@
             ]
           },
           "source": {
-            "description": "Sync one source of the Core's: `core_transcript` (the default), `jira` or `github`.",
+            "description": "Sync one source of the Core's: `core_transcript` (the default), `jira`, `github` or `lore`.",
             "type": [
               "string",
               "null"

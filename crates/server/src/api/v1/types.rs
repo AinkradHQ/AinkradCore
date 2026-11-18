@@ -282,9 +282,11 @@
 ///    `StreamError.host_key`; no route yet. (84 and 85 are the runner Podman facts and the projects API.)
 /// 87: the `secret.runners_changed` audit action (a secret's runner scope changed on its own, with its
 ///    leases dropped); the Leyline key runner sync (Y1-02) is its first user.
-/// 90: Leyline interactive SSH (Y2-02; 88 is the runner SFTP ops, 89 the Leyline hosts' projects). Runner wire protocol only
-///    (`runner.schema.json`): `PtyOpen.ssh` (`SshTerminal`: the runner starts its own `ssh-pty` as the terminal's
-///    program, keys over an inherited pipe). No route yet.
+/// 90: Lore (Core 0.9 epic). Seven `loreAi*` operations in the Code Mode allow-list (`api/ai-ops.allow.json`), each
+///    scoped to the session's project; Lore's own routes, events and audit actions live in `modules/lore/api`.
+/// 92: Leyline (Core 0.9 epic; 91 is Design). The runner wire protocol gains the ssh ops (exec, sftp, agent) and
+///    `PtyOpen.ssh` (`SshTerminal`: the runner starts its own `ssh-pty`, keys over an inherited pipe); eight
+///    `leyline*` operations join the Code Mode allow-list; Leyline's routes live in `modules/leyline/api`.
 pub const API_MINOR: u32 = 92;
 
 use serde::{Deserialize, Serialize};

@@ -178,7 +178,9 @@ fn the_committed_allow_list_matches_the_real_contract() {
     let allow: Vec<Allowed> = allow_list()
         .expect("api/ai-ops.allow.json reads")
         .into_iter()
-        .filter(|a| !a.op.starts_with("brainAi") && !a.op.starts_with("leyline"))
+        .filter(|a| {
+            !a.op.starts_with("brainAi") && !a.op.starts_with("loreAi") && !a.op.starts_with("leyline")
+        })
         .collect();
     let spec: Value = serde_json::from_str(&crate::api::v1::spec::json()).unwrap();
     let bad = check(&spec, &allow);

@@ -14,15 +14,8 @@ use brain_model::semantic::{
 use serde_json::json;
 use sqlx::SqliteConnection;
 
-/// A local sentence embedder. Returns one unit vector per text, in order.
-pub trait Embedder: Send + Sync {
-    fn model_id(&self) -> &str;
-    fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String>;
-    /// How many threads `embed` may use (default one). A model that cannot limit itself ignores it.
-    fn set_threads(&self, _n: usize) {}
-    /// How many tokens of each item `embed` reads: 128 (default) or 256. A fake may ignore it.
-    fn set_max_tokens(&self, _n: usize) {}
-}
+/// The local sentence embedder trait lives in `ainkrad-embed` (R2-01); re-exported so call sites stay.
+pub use ainkrad_embed::Embedder;
 
 /// The cut-offs a run uses: duplicates, topic rooms, merge hints. Higher means fewer suggestions.
 #[derive(Debug, Clone, Copy, PartialEq)]
