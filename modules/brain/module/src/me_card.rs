@@ -10,8 +10,8 @@
 //!    provider policy (`check_chain`, the rule of every other op). A codex session therefore gets the
 //!    card only if the personal room allows OpenAI. A room that fails, is closed or cannot be read adds
 //!    nothing, silently: no error names a room, a record or a reason. No chain means nothing.
-//! 3. Content (>= 2 distinct sources, or a person decision; never `origin = 'ai'`): stable `preference`/`rule` records only (no `project-state`, `task`, `summary`; no
-//!    `valid_to`, archived or contested record), seen by at least two sources or set by the person.
+//! 3. Content (a person decision, or >= 2 transcript sessions cited by >= 2 distil runs; never `origin = 'ai'`): stable `preference`/`rule` records only (no `project-state`, `task`, `summary`; no
+//!    `valid_to`, archived or contested record), cited by two sessions from two distil runs, or set by the person.
 //!    That is what keeps a project fact out of a card that every session gets.
 //! 4. Budget: `BUDGET_TOKENS` (chars / 4). The text is third-party-derived; the caller that sends it
 //!    (`brainAiContext`, B7-03) wraps it in the outside-data envelope. Every line keeps its id.
@@ -22,6 +22,7 @@ use ainkrad_core_server::store::{agents, alloc};
 use sqlx::{Row, SqlitePool};
 
 use crate::Brain;
+use crate::answer_turns::{is_transcript, kind_of};
 use crate::card::{CHARS_PER_TOKEN, CONTESTED, Card, LINE_CHARS, one_line};
 use crate::claim::check_chain;
 use crate::policy;
@@ -30,7 +31,7 @@ pub const BUDGET_TOKENS: usize = 300;
 /// The only room kinds the card reads.
 const ME_KINDS: &str = "('personal','global-safe')";
 /// A person decided it: made it, edited it, or accepted it (`auto` = the room policy decided).
-/// Never `support`: its meaning is changing (#359); distinct origins are counted from the citations.
+/// Never `support`: its meaning is changing (#359); evidence is counted from the citations.
 const PERSON: &str = "(origin = 'person' OR edited_by_person = 1 \
     OR (decided_by IS NOT NULL AND decided_by <> 'auto'))";
 const HEADING: &str = "About the person:\n";
@@ -54,30 +55,56 @@ pub(crate) async fn me_rooms(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Err
     .await
 }
 
+/// Two transcript citations from different sessions (`sources.path` is one per session: every
+/// `PART_BYTES` part of a Core session shares `core://ai-session/{id}`, a runner's is its file) AND
+/// different distil runs. One distil answer, however many sessions it cites, is never enough.
+fn cross_run(cites: &[(String, String, Option<String>)]) -> bool {
+    let t: Vec<_> = cites
+        .iter()
+        .filter(|(k, _, _)| is_transcript(kind_of(k)))
+        .collect();
+    t.iter().any(|a| {
+        t.iter()
+            .any(|b| a.1 != b.1 && matches!((&a.2, &b.2), (Some(x), Some(y)) if x != y))
+    })
+}
+
 /// One room file's stable preferences and rules, best first.
 pub(crate) async fn candidates(pool: &SqlitePool) -> Result<Vec<Cand>, sqlx::Error> {
     let sql = format!(
-        "SELECT id, body, support, coalesce(last_seen_at, created_at) AS seen FROM memory \
+        "SELECT id, body, support, coalesce(last_seen_at, created_at) AS seen, coalesce({PERSON}, 0) AS person \
+         FROM memory \
          WHERE type IN ('preference','rule') AND origin <> 'ai' \
-           AND ({PERSON} OR (SELECT count(DISTINCT s.item_id) FROM record_sources rs \
-                              JOIN sources s ON s.item_id = rs.source WHERE rs.record = memory.id) >= 2) \
            AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE value IN {CONTESTED}) \
-         ORDER BY support DESC, seen DESC, id LIMIT ?"
+         ORDER BY support DESC, seen DESC, id"
     );
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
-        .bind(PER_ROOM)
-        .fetch_all(pool)
-        .await?;
-    rows.iter()
-        .map(|r| {
-            Ok(Cand {
-                id: r.try_get("id")?,
-                body: r.try_get("body")?,
-                support: r.try_get("support")?,
-                seen: r.try_get("seen")?,
-            })
-        })
-        .collect()
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql)).fetch_all(pool).await?;
+    let mut out = vec![];
+    for r in &rows {
+        let id: String = r.try_get("id")?;
+        if r.try_get::<i64, _>("person")? == 0 {
+            let cites: Vec<(String, String, Option<String>)> = sqlx::query_as(
+                "SELECT s.source_kind, s.path, rs.run FROM record_sources rs \
+                 JOIN sources s ON s.item_id = rs.source WHERE rs.record = ?",
+            )
+            .bind(&id)
+            .fetch_all(pool)
+            .await?;
+            if !cross_run(&cites) {
+                continue;
+            }
+        }
+        out.push(Cand {
+            id,
+            body: r.try_get("body")?,
+            support: r.try_get("support")?,
+            seen: r.try_get("seen")?,
+        });
+        if out.len() as i64 == PER_ROOM {
+            break;
+        }
+    }
+    Ok(out)
 }
 
 /// The card from candidates of every passing room: best supported first, then newest, one line
@@ -226,7 +253,36 @@ mod tests {
         (dir, p)
     }
 
-    /// A record cited by `n` distinct sources (support is set high on purpose: it must not count).
+    /// One citation of `rec`: a source of `kind` at `path`, cited by distil run `run`.
+    async fn cite(p: &SqlitePool, rec: &str, item: &str, kind: &str, path: &str, run: &str) {
+        sqlx::query(
+            "INSERT INTO sources (item_id, content_hash, source_kind, device, path, author_kind, author_name, title, text, started_at, run, assigned_by) \
+             VALUES (?, ?, ?, 'd', ?, 'person', 'a', 't', 'x', '2026-11-01T00:00:00Z', 'r', 'user')",
+        )
+        .bind(item)
+        .bind(item)
+        .bind(kind)
+        .bind(path)
+        .execute(p)
+        .await
+        .unwrap();
+        let pos: i64 = sqlx::query_scalar("SELECT count(*) FROM record_sources WHERE record = ?")
+            .bind(rec)
+            .fetch_one(p)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO record_sources (record, source, position, run) VALUES (?, ?, ?, ?)")
+            .bind(rec)
+            .bind(item)
+            .bind(pos)
+            .bind(run)
+            .execute(p)
+            .await
+            .unwrap();
+    }
+
+    /// A record (support is set high on purpose: it must not count) cited by `n` transcript
+    /// sessions, each in its own distil run.
     async fn put(p: &SqlitePool, id: &str, kind: &str, body: &str, tags: &str, n: i64, origin: &str) {
         sqlx::query(
             "INSERT INTO records (id, type, status, body, tags, created_at, support, last_seen_at, origin) \
@@ -242,23 +298,49 @@ mod tests {
         .unwrap();
         for i in 0..n {
             let item = format!("{id}-s{i}");
-            sqlx::query(
-                "INSERT INTO sources (item_id, content_hash, source_kind, device, path, author_kind, author_name, title, text, started_at, run, assigned_by) \
-                 VALUES (?, ?, 'doc', 'd', 'p', 'person', 'a', 't', 'x', '2026-11-01T00:00:00Z', 'r', 'user')",
-            )
-            .bind(&item)
-            .bind(&item)
-            .execute(p)
-            .await
-            .unwrap();
-            sqlx::query("INSERT INTO record_sources (record, source, position) VALUES (?, ?, ?)")
-                .bind(id)
-                .bind(&item)
-                .bind(i)
-                .execute(p)
-                .await
-                .unwrap();
+            cite(p, id, &item, "claude_code", &format!("runner://x/{id}-{i}"), &format!("run-{i}")).await;
         }
+    }
+
+    async fn qualifies(p: &SqlitePool, id: &str) -> bool {
+        candidates(p).await.unwrap().iter().any(|c| c.id == id)
+    }
+
+    #[tokio::test]
+    async fn two_sources_of_one_session_do_not_qualify() {
+        let (_d, p) = room().await;
+        put(&p, "r", "rule", "Be brief.", "[]", 0, "distil").await;
+        // Two parts of one Core session, cited by two different runs.
+        cite(&p, "r", "a", "core_transcript", "core://ai-session/s1", "run-1").await;
+        cite(&p, "r", "b", "core_transcript", "core://ai-session/s1", "run-2").await;
+        assert!(!qualifies(&p, "r").await);
+    }
+
+    #[tokio::test]
+    async fn two_sessions_in_one_run_do_not_qualify() {
+        let (_d, p) = room().await;
+        put(&p, "r", "rule", "Be brief.", "[]", 0, "distil").await;
+        cite(&p, "r", "a", "core_transcript", "core://ai-session/s1", "run-1").await;
+        cite(&p, "r", "b", "core_transcript", "core://ai-session/s2", "run-1").await;
+        assert!(!qualifies(&p, "r").await);
+    }
+
+    #[tokio::test]
+    async fn two_sessions_across_two_runs_qualify() {
+        let (_d, p) = room().await;
+        put(&p, "r", "rule", "Be brief.", "[]", 0, "distil").await;
+        cite(&p, "r", "a", "core_transcript", "core://ai-session/s1", "run-1").await;
+        cite(&p, "r", "b", "claude_code", "runner://x/s2", "run-2").await;
+        assert!(qualifies(&p, "r").await);
+    }
+
+    #[tokio::test]
+    async fn a_lore_note_plus_a_session_does_not_qualify() {
+        let (_d, p) = room().await;
+        put(&p, "r", "rule", "Be brief.", "[]", 0, "distil").await;
+        cite(&p, "r", "a", "core_transcript", "core://ai-session/s1", "run-1").await;
+        cite(&p, "r", "b", "note", "lore://note/n1", "run-2").await;
+        assert!(!qualifies(&p, "r").await);
     }
 
     #[tokio::test]

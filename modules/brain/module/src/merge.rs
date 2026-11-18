@@ -155,12 +155,13 @@ impl Memory {
 }
 
 /// Reinforces record `id`: support + 1, `last_seen_at` = `now`, and each of `sources` it does not
-/// cite yet appended to its citations. The row is touched in `cs` first, so Undo can restore it.
+/// cite yet appended to its citations (each stamped with the distil `run` that cited it). The row is touched in `cs` first, so Undo can restore it.
 pub async fn reinforce(
     conn: &mut SqliteConnection,
     cs: &mut ChangeSet,
     id: &str,
     sources: &[String],
+    run: &str,
     now: &str,
 ) -> Result<(), sqlx::Error> {
     cs.touch(conn, id).await?;
@@ -177,11 +178,12 @@ pub async fn reinforce(
     .await?;
     for s in sources {
         let added = sqlx::query(
-            "INSERT OR IGNORE INTO record_sources (record, source, position) VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO record_sources (record, source, position, run) VALUES (?, ?, ?, ?)",
         )
         .bind(id)
         .bind(s)
         .bind(next)
+        .bind(run)
         .execute(&mut *conn)
         .await?
         .rows_affected();

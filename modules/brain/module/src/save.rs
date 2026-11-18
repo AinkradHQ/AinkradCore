@@ -79,7 +79,7 @@ pub(crate) async fn store_candidates(
                 && c.replaces.as_deref() == Some(id.as_str())
                 && may_supersede(&c.kind, &c.kind, g))
         {
-            reinforce(&mut tx, &mut cs, &id, &c.sources, now).await?;
+            reinforce(&mut tx, &mut cs, &id, &c.sources, distil, now).await?;
             reinforced += 1;
             continue;
         }
@@ -109,11 +109,12 @@ pub(crate) async fn store_candidates(
         .await?;
         for (pos, s) in c.sources.iter().enumerate() {
             sqlx::query(
-                "INSERT OR IGNORE INTO record_sources (record, source, position) VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO record_sources (record, source, position, run) VALUES (?, ?, ?, ?)",
             )
             .bind(&id)
             .bind(s)
             .bind(pos as i64)
+            .bind(distil)
             .execute(&mut *tx)
             .await?;
         }

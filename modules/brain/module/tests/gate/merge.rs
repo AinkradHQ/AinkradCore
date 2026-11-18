@@ -85,6 +85,7 @@ async fn one_fact_from_three_sessions_is_one_record_and_undo_restores_it() {
         &mut cs,
         "rec-1",
         &["s2".to_owned()],
+        "run-1",
         "2026-11-11T10:00:00Z",
     )
     .await
@@ -94,6 +95,7 @@ async fn one_fact_from_three_sessions_is_one_record_and_undo_restores_it() {
         &mut cs,
         "rec-1",
         &["s3".to_owned(), "s1".to_owned()],
+        "run-2",
         "2026-11-12T10:00:00Z",
     )
     .await
