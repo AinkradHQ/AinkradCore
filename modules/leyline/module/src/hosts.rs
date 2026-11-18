@@ -203,7 +203,7 @@ impl Fields {
 
 /// Whether this session has a live step-up. A Code Mode caller never does (its session id is not a
 /// real session), so an AI can never widen a host or repoint it.
-fn elevated(app: &App, me: &Caller) -> bool {
+pub(crate) fn elevated(app: &App, me: &Caller) -> bool {
     let now = app.clock.unix();
     app.auth
         .session(&me.session, &me.device.id, now)
