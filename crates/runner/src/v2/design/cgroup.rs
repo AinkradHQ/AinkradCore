@@ -115,7 +115,8 @@ impl JobCgroup {
             .open(self.dir.join("cgroup.procs"))
     }
 
-    #[cfg(test)]
+    /// Only the Linux-only cgroup tests read it (`tests_review2`).
+    #[cfg(all(test, target_os = "linux"))]
     pub(super) fn dir(&self) -> &Path {
         &self.dir
     }
