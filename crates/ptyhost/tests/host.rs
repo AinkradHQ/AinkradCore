@@ -169,6 +169,30 @@ async fn fd3_hands_the_child_a_pipe_and_nothing_else_leaks() {
     ack(&dir, &id, &mut r, &mut w).await;
 }
 
+/// Y2-02 (#310 follow-up): what a `Spec::fd3` child writes on descriptor 4 comes back as the exit's
+/// `host_key`, from a real child process (both fd copies are taken before either `dup2`); a child
+/// that writes nothing there reports none.
+#[tokio::test]
+async fn fd4_report_comes_back_with_the_exit() {
+    for (script, want) in [
+        (
+            "cat <&3 >/dev/null; printf '{\"hop\":1,\"fingerprint\":\"SHA256:abc\"}' >&4; exit 71",
+            true,
+        ),
+        ("cat <&3 >/dev/null; exit 0", false),
+    ] {
+        let dir = tmp();
+        let mut s = sh(script);
+        s.fd3 = Some(ainkrad_ptyhost::pty::Hidden(STANDARD.encode("k")));
+        let (id, mut r, mut w) = start(&dir, &s).await;
+        let mut out = Vec::new();
+        let exit = read_until(&mut r, &mut out, |_| false).await.unwrap();
+        let got = exit.host_key.map(|h| (h.hop, h.fingerprint));
+        assert_eq!(got, want.then(|| (1, "SHA256:abc".to_owned())), "{script}");
+        ack(&dir, &id, &mut r, &mut w).await;
+    }
+}
+
 /// E2-02.1: a size change reaches the child (`SIGWINCH` and the new size).
 #[tokio::test]
 async fn a_resize_reaches_the_child() {

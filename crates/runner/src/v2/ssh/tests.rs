@@ -173,10 +173,12 @@ async fn capacity_is_the_exec_drivers() {
     assert_eq!(d.slot().unwrap_err().code, ErrorCode::Busy);
     let commands = d.info().unwrap().commands;
     assert_eq!(commands[0], OP_SSH_EXEC);
-    // ... the sftp ops (Y2-03), all of them, and the feature flag of interactive terminals (Y2-02).
-    assert_eq!(commands.len(), 1 + 7 + 1);
+    // ... the sftp ops (Y2-03), all of them, the Mac-direct agent pair (Y6-01), and the feature flag of
+    // interactive terminals (Y2-02).
+    assert_eq!(commands.len(), 1 + 7 + 2 + 1);
     assert!(commands[1..8].iter().all(|c| c.starts_with("ssh.sftp.")));
-    assert_eq!(commands[8], FEATURE_PTY_SSH);
+    assert!(commands[8..10].iter().all(|c| c.starts_with("ssh.agent.")));
+    assert_eq!(commands[10], FEATURE_PTY_SSH);
 }
 
 #[tokio::test]

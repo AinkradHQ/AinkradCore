@@ -139,14 +139,18 @@ pub fn pty_child_on_exec(
             // Both sources are first moved out of 3 and 4 (close-on-exec copies at 10 or above), so
             // neither `dup2` below can land on the other's source.
             let key = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 10);
-            if key == -1 || libc::dup2(key, 3) == -1 {
+            if key == -1 {
                 return Err(io::Error::last_os_error());
             }
-            if let Some(report) = report {
-                let rep = libc::fcntl(report, libc::F_DUPFD_CLOEXEC, 10);
-                if rep == -1 || libc::dup2(rep, 4) == -1 {
-                    return Err(io::Error::last_os_error());
-                }
+            let rep = match report {
+                Some(report) => libc::fcntl(report, libc::F_DUPFD_CLOEXEC, 10),
+                None => -1,
+            };
+            if report.is_some() && rep == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::dup2(key, 3) == -1 || (rep != -1 && libc::dup2(rep, 4) == -1) {
+                return Err(io::Error::last_os_error());
             }
             #[cfg(target_os = "linux")]
             {

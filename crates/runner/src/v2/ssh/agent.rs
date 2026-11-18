@@ -234,7 +234,7 @@ fn userauth_ok(data: &[u8], key: &Held, bind: &Bind) -> Option<()> {
     let (has_sig, algo, blob) = (d.u8()?, d.string()?, d.string()?);
     let host_ok = !hostbound || d.string()? == bind.host.as_slice();
     let algo_ok =
-        ALGOS.iter().any(|a| *a == algo) && algo == key.key.algorithm().as_str().as_bytes();
+        ALGOS.contains(&algo) && algo == key.key.algorithm().as_str().as_bytes();
     (sid == bind.sid.as_slice()
         && kind == USERAUTH_REQUEST
         && user == key.user.as_bytes()
@@ -325,6 +325,8 @@ async fn accept(live: Arc<Live>, listener: UnixListener, dir: PathBuf) {
     let slots = Arc::new(Semaphore::new(MAX_CONNS));
     // Not a sleep for the TTL: tokio's clock stops while the Mac sleeps, the wall clock does not.
     let mut tick = tokio::time::interval(TICK);
+    // After a long pause (a slept Mac, a test's jump in time) one check is enough, not one per missed second.
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             a = listener.accept() => match a {

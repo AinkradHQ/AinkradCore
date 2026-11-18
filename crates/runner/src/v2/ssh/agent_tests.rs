@@ -132,6 +132,49 @@ async fn login(server: &Server, sock: &str, key: &PrivateKey) -> bool {
 
 use tokio::net::TcpStream;
 
+/// Runs the machine's own OpenSSH `ssh` (the ready command: `ssh -F <config>`) against a fixture host.
+/// `Authenticated to` in the verbose log is the login the agent signed for.
+async fn real_ssh(config: &str, port: u16) -> (bool, String) {
+    let out = tokio::process::Command::new("ssh")
+        .args([
+            "-F",
+            config,
+            "-v",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=20",
+        ])
+        .args(["-p", &port.to_string(), "me@127.0.0.1", "exit"])
+        .output()
+        .await
+        .expect("an OpenSSH `ssh` on PATH");
+    let log = String::from_utf8_lossy(&out.stderr).into_owned();
+    (log.contains("Authenticated to"), log)
+}
+
+/// The real thing, not a russh client: OpenSSH's `ssh` through the agent's own `ssh_config`. Needs an
+/// `ssh` on PATH, so it is not part of the normal run: `cargo test -p ainkrad-runner real_openssh -- --ignored`.
+#[tokio::test]
+#[ignore = "needs OpenSSH ssh on PATH (run with --ignored; the epic build runs it on the Air)"]
+async fn real_openssh_ssh_to_the_bound_host_works_and_to_a_second_host_is_refused() {
+    let (d, _keys) = driver(1);
+    let (a, b) = (serve("A", true).await, serve("B", true).await);
+    let loaded = d
+        .agent_load(&req("ld_real", 3600, vec![("l_1", a.pin())]))
+        .await
+        .unwrap();
+    let (ok, log) = real_ssh(&loaded.config, a.port).await;
+    assert!(ok, "the bound host: {log}");
+    let (ok, log) = real_ssh(&loaded.config, b.port).await;
+    assert!(!ok, "the second host signed: {log}");
+    let done = d.agent_drop(&SshAgentDrop {
+        id: "ld_real".into(),
+    });
+    assert_eq!((done.signatures, done.was_live), (1, true));
+    assert!(done.refused >= 1);
+}
+
 #[tokio::test]
 async fn ssh_to_the_bound_host_works_and_to_another_host_through_the_same_socket_is_refused() {
     let (d, keys) = driver(1);
@@ -432,11 +475,14 @@ async fn five_minutes_without_the_core_ends_every_agent_but_a_return_in_time_doe
     let back = d.agent_drop(&SshAgentDrop { id: "ld_1".into() });
     assert!(back.was_live, "a link that came back ended the agent");
     d.link_lost();
+    // The grace timer starts when its task first runs: let it, or the 299 s below is not counted from here.
+    tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(299)).await;
     tokio::task::yield_now().await;
     assert!(!*d.agents.live.lock().unwrap()["ld_2"].stop.borrow());
     tokio::time::advance(Duration::from_secs(2)).await;
-    for _ in 0..4 {
+    // The agent's own 1 s timer and the grace timer both need the runtime: give them turns.
+    for _ in 0..50 {
         tokio::task::yield_now().await;
     }
     assert!(!d.agent_drop(&SshAgentDrop { id: "ld_2".into() }).was_live);

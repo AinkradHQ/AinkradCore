@@ -63,8 +63,8 @@ pub mod ticket;
 mod trace;
 pub use runner_control::ToolOps;
 pub use terminals::{
-    Ended, MAX_SMALL_FILE, OutputTap, Rooms, SftpJob, Terminal, TerminalSize, check_ssh_open,
-    open_ssh, reconcile as reconcile_terminals, sftp_job, sweep as sweep_terminals,
+    Ended, MAX_SMALL_FILE, MAX_UPLOAD, OutputTap, Rooms, SftpJob, Terminal, TerminalSize,
+    check_ssh_open, open_ssh, reconcile as reconcile_terminals, sftp_job, sweep as sweep_terminals,
     sweep_loop as terminal_sweep_loop, type_into,
 };
 pub use trace::{ApiError, ApiResult, error_id};

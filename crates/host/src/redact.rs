@@ -7,7 +7,10 @@
 //! be masked here, and the helper does not hold the secrets. That is why runner and backup logs
 //! need a step-up in the Core.
 
-pub use ainkrad_proto::redact::{mask_runs, names_text, one, url_creds};
+pub use ainkrad_proto::redact::one;
+// Only the tests reach the other passes through this module.
+#[cfg(test)]
+use ainkrad_proto::redact::{mask_runs, names_text, url_creds};
 
 const PEM_BEGIN: &str = "-----BEGIN ";
 const PEM_END: &str = "-----END ";

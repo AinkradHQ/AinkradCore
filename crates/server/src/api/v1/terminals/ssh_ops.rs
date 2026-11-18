@@ -18,8 +18,8 @@
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, Command, Control, Output, PtyAttach, SftpMkdir, SftpRemove, SftpWrite, SshRoute,
-    StreamError,
+    Body, Command, Control, Output, PtyAttach, STREAM_WINDOW, SftpMkdir, SftpRemove, SftpWrite,
+    SshRoute, StreamError,
 };
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -31,6 +31,10 @@ use super::{
 
 /// A file sent this way is at most this many bytes: it rides one frame inside the first window.
 pub const MAX_SMALL_FILE: usize = 4096;
+/// A file a person uploads (the host page) is at most this many bytes; it is sent in credited frames.
+pub const MAX_UPLOAD: usize = 64 << 20;
+/// One frame of an upload (the runner refuses a frame over the credit it granted).
+const UPLOAD_FRAME: usize = 32 * 1024;
 /// A whole job, dial included.
 const JOB_WAIT: Duration = Duration::from_secs(60);
 
@@ -46,6 +50,8 @@ pub enum SftpJob<'a> {
         mode: u32,
         bytes: &'a [u8],
     },
+    /// One file of at most [`MAX_UPLOAD`] bytes replaced whole (the host page), sent within the runner's credit.
+    Upload { path: &'a str, bytes: &'a [u8] },
 }
 
 fn sftp_failed(e: &StreamError) -> ApiError {
@@ -79,6 +85,21 @@ pub async fn sftp_job(
 ) -> Result<(), ApiError> {
     need_terminal_scope(me)?;
     let (command, bytes) = match job {
+        SftpJob::Upload { path, bytes } => {
+            if bytes.len() > MAX_UPLOAD {
+                return Err(ApiError::bad_request("the file is too big for this job"));
+            }
+            (
+                Command::SshSftpWrite(SftpWrite {
+                    route,
+                    path: path.to_owned(),
+                    overwrite: true,
+                    size: Some(bytes.len() as u64),
+                    mode: None,
+                }),
+                Some(bytes),
+            )
+        }
         SftpJob::Mkdir(p) => (
             Command::SshSftpMkdir(SftpMkdir {
                 route,
@@ -110,6 +131,8 @@ pub async fn sftp_job(
             )
         }
     };
+    // A big upload gets time to move: a minute, plus a second per 256 KiB.
+    let wait = JOB_WAIT + Duration::from_secs((bytes.map_or(0, <[u8]>::len) >> 18) as u64);
     let mut d = app
         .hub
         .dispatch_elevated(runner, command, app.hub.terminal_elevation(me))
@@ -117,15 +140,36 @@ pub async fn sftp_job(
     let stream = d.stream;
     let run = async {
         if let Some(b) = bytes {
-            let data = Body::Output(Output {
-                data: STANDARD.encode(b),
-            });
+            // The runner starts with one window and grants more as it writes: wait for credit
+            // before a frame that would pass it (a small file never waits).
+            let mut allowed = STREAM_WINDOW as usize;
+            for part in b.chunks(UPLOAD_FRAME) {
+                while allowed < part.len() {
+                    match d.next().await {
+                        Some(Body::Credit(c)) => {
+                            allowed = allowed.saturating_add(usize::try_from(c.bytes).unwrap_or(0));
+                        }
+                        Some(Body::Error(e)) => return Err(sftp_failed(&e)),
+                        Some(_) => {}
+                        None => {
+                            return Err(ApiError::new(
+                                axum::http::StatusCode::BAD_GATEWAY,
+                                "sftp_failed",
+                                "the runner went away",
+                            ));
+                        }
+                    }
+                }
+                let data = Body::Output(Output {
+                    data: STANDARD.encode(part),
+                });
+                app.hub
+                    .send_terminal(runner, stream, data)
+                    .map_err(|e| sftp_failed(&e))?;
+                allowed -= part.len();
+            }
             app.hub
-                .send_terminal(runner, stream, data)
-                .and_then(|()| {
-                    app.hub
-                        .send_terminal(runner, stream, Body::Control(Control::Eof))
-                })
+                .send_terminal(runner, stream, Body::Control(Control::Eof))
                 .map_err(|e| sftp_failed(&e))?;
         }
         loop {
@@ -143,7 +187,7 @@ pub async fn sftp_job(
             }
         }
     };
-    match tokio::time::timeout(JOB_WAIT, run).await {
+    match tokio::time::timeout(wait, run).await {
         Ok(r) => r,
         Err(_) => {
             // A close cancels the job: a write leaves nothing behind on the host.

@@ -174,11 +174,11 @@ fn a_big_type_is_cut_to_fit() {
 #[test]
 fn the_committed_allow_list_matches_the_real_contract() {
     // A module's operations are not in the core contract: the module's own gate test checks them
-    // against the live catalogue with the module mounted (brain: `ai.rs`).
+    // against the live catalogue with the module mounted (brain: `ai.rs`, leyline: `tests/code_mode.rs`).
     let allow: Vec<Allowed> = allow_list()
         .expect("api/ai-ops.allow.json reads")
         .into_iter()
-        .filter(|a| !a.op.starts_with("brainAi"))
+        .filter(|a| !a.op.starts_with("brainAi") && !a.op.starts_with("leyline"))
         .collect();
     let spec: Value = serde_json::from_str(&crate::api::v1::spec::json()).unwrap();
     let bad = check(&spec, &allow);
