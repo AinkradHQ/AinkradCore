@@ -1368,6 +1368,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/repos/{repo}/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["fetchProjectRepo"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/repos/{repo}/primary": {
         parameters: {
             query?: never;
@@ -8271,6 +8287,38 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Removed with its mirror row (audited as `project.repo_removed`); the project as it now is. 404 for no such project or repo; 409 `conflict` for an archived project or the primary while others remain */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    fetchProjectRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The repo's id */
+                repo: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Core fetched the repo's remote now ("Fetch now"); the project as it now is. A fetch that failed is still 200: the repo's `mirror.error` says why and `mirror.head` is the older head, kept. A fetch already running for the repo is not started again nor waited for: the state as it is comes back. 404 for no such project or repo; 409 `conflict` for an archived project; 503 `mirrors_unavailable` when this Core keeps no repo copies */
             200: {
                 headers: {
                     [name: string]: unknown;

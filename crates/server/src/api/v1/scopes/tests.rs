@@ -62,6 +62,8 @@ fn every_state_changing_privileged_route_is_destructive_or_excepted() {
         ("PATCH", "/api/v1/agent-sessions/{id}"),
         // The local terminal path's detach: it ends the caller's own lease and grants nothing.
         ("DELETE", "/api/v1/terminals/{id}/local"),
+        // A fetch of the remote into the Core's own copy: it reads the remote and changes no one's access.
+        ("POST", "/api/v1/projects/{id}/repos/{repo}/fetch"),
     ];
     for (m, t, scope) in ROUTES {
         let privileged = !matches!(*scope, "read" | "runner");

@@ -13,6 +13,7 @@ use sqlx::sqlite::{SqlitePool, SqliteRow};
 use super::projects::{self, Who};
 use super::secrets::Error;
 
+pub mod compose;
 pub mod spec;
 
 pub use spec::RunSpec;

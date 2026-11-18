@@ -165,6 +165,7 @@ use super::{
         projects::secrets::list,
         projects::secrets::set,
         projects::secrets::delete,
+        projects::fetch_now,
         secrets::list,
         secrets::create,
         secrets::rotate,
