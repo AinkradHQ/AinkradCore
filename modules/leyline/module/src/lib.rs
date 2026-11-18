@@ -91,11 +91,11 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/hosts"),
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
-    ("POST", "/hosts/{host}/host-keys/trust"),
     ("POST", "/commands"),
     ("PATCH", "/commands/{command}"),
     ("DELETE", "/commands/{command}"),
     ("POST", "/commands/{command}/run"),
+    ("POST", "/hosts/{host}/host-keys/trust"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
 ];
@@ -107,12 +107,12 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/keys", "read"),
     ("GET", "/keys/{key}", "read"),
     ("GET", "/projects/{project}/hosts", "read"),
+    ("GET", "/commands", "read"),
+    ("GET", "/commands/{command}", "read"),
+    ("GET", "/runs/{run}", "admin"),
     ("GET", "/hosts/{host}/host-keys", "read"),
     // The terminal scope, as the Core's own terminal routes.
     ("POST", "/hosts/{host}/terminals", "terminal"),
-    ("GET", "/commands", "read"),
-    ("GET", "/commands/{command}", "read"),
-    ("GET", "/runs/{run}", "read"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -136,17 +136,17 @@ pub struct Leyline;
         attach::list,
         attach::attach,
         attach::detach,
-        hostkeys::list,
-        hostkeys::trust_route,
-        hostkeys::replace_route,
-        terminal::open,
         commands::list,
         commands::create,
         commands::get,
         commands::patch,
         commands::remove,
         commands::run,
-        commands::get_run
+        commands::get_run,
+        hostkeys::list,
+        hostkeys::trust_route,
+        hostkeys::replace_route,
+        terminal::open
     ),
     components(schemas(
         hosts::HostView,
@@ -162,10 +162,6 @@ pub struct Leyline;
         attach::HostProject,
         attach::Role,
         attach::Detached,
-        hostkeys::HostKeyView,
-        hostkeys::Pick,
-        terminal::NewSession,
-        terminal::SessionView,
         commands::CommandView,
         commands::NewCommand,
         commands::CommandPatch,
@@ -174,7 +170,11 @@ pub struct Leyline;
         commands::RunRequest,
         commands::RunStarted,
         commands::RunView,
-        commands::RunHost
+        commands::RunHost,
+        hostkeys::HostKeyView,
+        hostkeys::Pick,
+        terminal::NewSession,
+        terminal::SessionView
     ))
 )]
 struct Doc;
@@ -260,17 +260,17 @@ impl Module for Leyline {
             "leyline.host.detached",
             "leyline.key.created",
             "leyline.key.deleted",
+            "leyline.command.created",
+            "leyline.command.changed",
+            "leyline.command.deleted",
+            "leyline.alert.opened",
+            "leyline.alert.resolved",
             "leyline.hostkey.seen",
             "leyline.hostkey.changed",
             "leyline.hostkey.trusted",
             "leyline.hostkey.replaced",
             "leyline.session.opened",
             "leyline.session.ended",
-            "leyline.command.created",
-            "leyline.command.changed",
-            "leyline.command.deleted",
-            "leyline.alert.opened",
-            "leyline.alert.resolved",
             "leyline.run.requested",
             "leyline.run.approval",
             "leyline.run.allowed",

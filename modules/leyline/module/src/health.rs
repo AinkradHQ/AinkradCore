@@ -6,7 +6,7 @@
 //! - The prober is the principal `system:health` (`Principal::health`, built only here). Its whole
 //!   power is `Action::Probe`, decided by the gate's one table; every probe holds an `Authorized`
 //!   from `gate::authorize_many` and is sent only through `exec::build`, the same path a pre-set
-//!   command takes (lease per hop, pinned keys, `still_valid` right before dispatch). Health can
+//!   command takes (lease per hop, pinned keys, `gate::checked` right before dispatch). Health can
 //!   never trust or replace a host key, and runs no text but the constant `PROBE`.
 //! - A host whose key (or any jump hop's) has no TRUSTED host key is not probed at all, and a runner
 //!   that answers `host_key_unknown` / `host_key_changed` records nothing: "we could not verify the
@@ -30,7 +30,7 @@ use tokio::task::JoinSet;
 
 use crate::alerts;
 use crate::exec;
-use crate::gate::{Action, Authorized, Principal, authorize_many, finish, still_valid};
+use crate::gate::{Action, Authorized, Principal, authorize_many, checked, finish};
 use crate::hostkeys;
 
 /// Probes in flight on one runner.
@@ -208,16 +208,26 @@ enum Seen {
 }
 
 async fn measure(app: &App, limits: &Limits, auth: &Authorized) -> Seen {
-    let Ok((target, hops, runner)) = exec::chain(app, auth.host_id()).await else {
+    // The runner is read from the gate's check, to queue behind it; the probe itself is built from a
+    // second `checked` taken after the wait, and dispatched from that very read (nothing re-read).
+    let Ok(first) = checked(app, auth).await else {
         return Seen::Unknown;
     };
-    let Ok(_permit) = limits.of(&runner).acquire_owned().await else {
+    let Ok(_permit) = limits.of(&first.runner).acquire_owned().await else {
         return Seen::Unknown;
     };
-    if still_valid(app, auth).await.is_err() {
+    let Ok(link) = checked(app, auth).await else {
         return Seen::Unknown;
-    }
-    let Ok((runner, exec)) = exec::build(app, auth, PROBE, PROBE_TIMEOUT).await else {
+    };
+    // The host ids along the path, in dialling order (jump hosts, then the target): a runner names a
+    // hop by its position, never by an id.
+    let path: Vec<String> = link
+        .hops
+        .iter()
+        .chain([&link.target])
+        .map(|s| s.id.clone())
+        .collect();
+    let Ok((runner, exec)) = exec::build(app, auth, PROBE, PROBE_TIMEOUT, link).await else {
         return Seen::Unknown;
     };
     let t = Instant::now();
@@ -232,6 +242,19 @@ async fn measure(app: &App, limits: &Limits, auth: &Authorized) -> Seen {
         // The host answered the connection but refused the key: it is up.
         Err(e) if e.code == ErrorCode::SshAuthFailed => Seen::Up(Facts::default(), ms),
         Err(e) if e.code == ErrorCode::SshFailed => Seen::Down,
+        // Not down, not a sample: the host (or a jump hop) presented another key. The hop's own
+        // host id is alerted, and `saw` stores the fingerprint for a person to compare.
+        Err(e) if e.code == ErrorCode::HostKeyChanged => {
+            if let Some(k) = e
+                .host_key
+                .filter(|k| hostkeys::fingerprint_ok(&k.fingerprint))
+                && let Some(id) = path.get(usize::from(k.hop))
+                && let Err(err) = hostkeys::saw(app, id, &k.fingerprint, true).await
+            {
+                tracing::error!(error = %err.message, "recording a changed host key failed");
+            }
+            Seen::Unknown
+        }
         // Not down, not a sample: the host (or a jump hop) presented another key. The hop's own
         // host id is alerted, and `saw` stores the fingerprint for a person to compare.
         Err(e) if e.code == ErrorCode::HostKeyChanged => {

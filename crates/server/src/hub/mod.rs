@@ -446,6 +446,14 @@ impl Hub {
         command: Command,
         _proof: Elevated,
     ) -> Result<Dispatched, StreamError> {
+        // `ssh.exec` has its own entry for a module that holds the gate's proof; a step-up alone
+        // never reaches a host through here.
+        if matches!(command, Command::SshExec(_)) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "ssh.exec is not sent through dispatch_elevated",
+            ));
+        }
         self.send_command(runner, command)
     }
 
@@ -468,10 +476,12 @@ impl Hub {
         self.send_command(runner, command)
     }
 
-    /// `ssh.exec` for a module that holds its own gate's proof (Leyline: dispatch takes the gate's
-    /// `Authorized`, which only the gate can make). Only this one op: it carries no key (the
-    /// runner redeems leases), and a host key the Core has not pinned ends it before any login.
-    /// Anything else a module could send still needs [`Hub::dispatch_elevated`].
+    /// `ssh.exec` for a module that runs its own gate first. This takes NO proof: the Hub cannot see
+    /// a module's gate, so nothing here checks one. The only caller allowed is Leyline's
+    /// `modules/leyline/module/src/exec.rs`, whose `run` takes the gate's `Authorized`; a test
+    /// (`modules/leyline/module/tests/ssh_exec_callers.rs`) fails if any other file calls it. It
+    /// carries no key (the runner redeems leases), and a host key the Core has not pinned ends it
+    /// before any login. Anything else a module could send still needs [`Hub::dispatch_elevated`].
     pub fn dispatch_ssh_exec(
         self: &Arc<Self>,
         runner: &str,
