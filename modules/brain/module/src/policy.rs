@@ -42,7 +42,12 @@ pub(crate) struct Policy {
     pub review_days: i64,
     /// Compact fully distilled sources older than this many days; none = keep (the default).
     pub retention_days: Option<u32>,
+    /// Automatic distils a day (0 = off); the ceiling is `MAX_DAILY_DISTILS`.
+    pub daily_distils: u32,
 }
+
+/// The most automatic distils a day a person may set (the column allows 1000; this bounds cost).
+pub const MAX_DAILY_DISTILS: u32 = 50;
 
 impl Policy {
     pub fn local_only(&self) -> bool {
@@ -60,7 +65,7 @@ impl Policy {
 
 pub(crate) async fn load(app: &App, room: &str) -> Result<Policy, ApiError> {
     let r = sqlx::query(
-        "SELECT r.name, r.review_days, p.allowed_providers, p.auto_accept, p.min_sources, p.lease_hours, p.retention_days \
+        "SELECT r.name, r.review_days, p.allowed_providers, p.auto_accept, p.min_sources, p.lease_hours, p.retention_days, p.daily_distils \
          FROM brain_rooms r JOIN brain_room_policy p ON p.room = r.id WHERE r.id = ? AND r.state = 'active'",
     )
     .bind(room)
@@ -80,6 +85,7 @@ pub(crate) async fn load(app: &App, room: &str) -> Result<Policy, ApiError> {
         retention_days: r
             .try_get::<Option<i64>, _>("retention_days")?
             .and_then(|d| u32::try_from(d).ok()),
+        daily_distils: u32::try_from(r.try_get::<i64, _>("daily_distils")?).unwrap_or(0),
     })
 }
 
@@ -104,6 +110,8 @@ pub struct PolicyView {
     pub review_days: i64,
     /// Sources older than this many days that are fully distilled lose their text and keep a citation stub. Null (the default) keeps everything.
     pub retention_days: Option<u32>,
+    /// Automatic distils a day for the room: 0 is off, the most is 50 (default 12).
+    pub daily_distils: u32,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -144,6 +152,7 @@ async fn view(app: &App, room: &str, p: &Policy) -> Result<PolicyView, sqlx::Err
         lease_hours: p.lease_hours,
         review_days: p.review_days,
         retention_days: p.retention_days,
+        daily_distils: p.daily_distils,
     })
 }
 
@@ -157,6 +166,8 @@ pub struct PolicyPatch {
     pub min_sources: Option<u32>,
     /// Compaction is permanent. 1 to 3650 turns it on (step-up; a person only); 0 turns it off (keep). Check `GET /rooms/{room}/retention` first for what it would compact.
     pub retention_days: Option<u32>,
+    /// Automatic distils a day: 0 turns auto-distil off for the room, the most is 50. A person only (an AI session is refused); no step-up, it only bounds cost.
+    pub daily_distils: Option<u32>,
 }
 
 #[utoipa::path(get, path = "/rooms/{room}/policy", operation_id = "brainRoomPolicy", tag = "brain",
@@ -203,29 +214,49 @@ pub(crate) async fn patch(
     }
     if let Some(d) = req.retention_days {
         if d > crate::retention::MAX_DAYS {
-            return Err(ApiError::bad_request("retention_days is 0 (keep) or 1 to 3650"));
+            return Err(ApiError::bad_request(
+                "retention_days is 0 (keep) or 1 to 3650",
+            ));
         }
         // Compaction cannot be undone: only a person turns it on (the route also needs a step-up).
         if d > 0 && me.session.starts_with(crate::ai::SESSION) {
-            return Err(crate::code(403, "person_only", "an AI session cannot turn on retention"));
+            return Err(crate::code(
+                403,
+                "person_only",
+                "an AI session cannot turn on retention",
+            ));
         }
         p.retention_days = (d > 0).then_some(d);
     }
+    if let Some(n) = req.daily_distils {
+        if n > MAX_DAILY_DISTILS {
+            return Err(ApiError::bad_request("daily_distils is 0 (off) to 50"));
+        }
+        if me.session.starts_with(crate::ai::SESSION) {
+            return Err(crate::code(
+                403,
+                "person_only",
+                "an AI session cannot change daily_distils",
+            ));
+        }
+        p.daily_distils = n;
+    }
     let mut tx = begin_write(&app.pool).await?;
     sqlx::query(
-        "UPDATE brain_room_policy SET allowed_providers = ?, auto_accept = ?, min_sources = ?, retention_days = ? WHERE room = ?",
+        "UPDATE brain_room_policy SET allowed_providers = ?, auto_accept = ?, min_sources = ?, retention_days = ?, daily_distils = ? WHERE room = ?",
     )
     .bind(json!(p.allowed).to_string())
     .bind(json!(p.auto_accept).to_string())
     .bind(i64::try_from(p.min_sources).unwrap_or(1))
     .bind(p.retention_days)
+    .bind(i64::from(p.daily_distils))
     .bind(&room)
     .execute(&mut *tx)
     .await?;
     record(
         &mut tx,
         "brain.room.policy",
-        json!({"room": room, "allowed": p.allowed, "auto_accept": p.auto_accept, "min_sources": p.min_sources, "retention_days": p.retention_days}),
+        json!({"room": room, "allowed": p.allowed, "auto_accept": p.auto_accept, "min_sources": p.min_sources, "retention_days": p.retention_days, "daily_distils": p.daily_distils}),
         None,
     )
     .await?;
