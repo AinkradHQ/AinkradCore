@@ -234,6 +234,8 @@ pub(crate) async fn forget_refused(app: &App, b: &Brain, st: &SqlitePool) {
 /// One transaction; `content_hash` is indexed (vectors_0003), so this is one lookup per hash.
 pub(crate) async fn delete(app: &App, b: &Brain, hashes: &[String]) -> Result<(), ApiError> {
     let p = pool(app, b).await?;
+    // The freed pages are zeroed: a deleted vector is not left in the file.
+    sqlx::query("PRAGMA secure_delete = ON").execute(&p).await?;
     let mut tx = p.begin().await?;
     for h in hashes {
         sqlx::query("DELETE FROM vectors WHERE content_hash = ?")

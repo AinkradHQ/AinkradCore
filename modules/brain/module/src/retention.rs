@@ -3,12 +3,12 @@
 //! Security model. Compaction destroys text for good, so: the default is keep (`retention_days`
 //! NULL); turning it on is a person-only PATCH of the room policy behind a step-up (Touch ID); the
 //! daily job reads only that setting, never a request; `GET /rooms/{room}/retention` is the dry run
-//! and writes nothing. A source is compacted only when ALL hold: it is older than N days, a
-//! distillation took it (`distilled`) and no run of the room is still open, it is not waiting for a
+//! and writes nothing. A source is compacted only when ALL hold: it is older than N days (counted from the later of its date and its import), a
+//! distillation took it (`distilled`) and that run finished (`done`; a failed or open run does not count), it is not waiting for a
 //! re-distil (`redistil`), and no `candidate` record and no record archived inside the 30-day undo
 //! window cites it (Undo must find its evidence). The stub keeps title, hash, path, dates and
 //! author; `text` becomes '' and `compacted_at` is set, so `brainAiEvidence` answers "compacted".
-//! The search index and the stored vector of the text are dropped, `brain_seen` keeps the hash so
+//! The search index rows and the stored vector of the text are dropped (freed pages zeroed), `brain_seen` keeps the hash so
 //! the item is never re-imported. Idempotent (a compacted source is not selected again), audited
 //! in the room (`retention.compacted`) and on the Core (`brain.room.compacted`, counts only).
 
@@ -29,26 +29,56 @@ use utoipa::{IntoParams, ToSchema};
 use crate::changes::PURGE_DAYS;
 use crate::distil::log_op;
 use crate::{Brain, files, record, vectors};
-use files::CANON;
+use files::{CANON, INDEX};
 
 /// The longest retention a room can set (ten years).
 pub const MAX_DAYS: u32 = 3650;
 /// Daily, 04:23 UTC (after the 03:17 purge).
 const CRON: &str = "23 4 * * *";
 
-/// Which sources may go. `?1` the age cutoff, `?2` the start of the undo window, `?3` a JSON list of
-/// the room's open distil run ids. The `source_ids` arm mirrors `brainAiEvidence`: writers may still
-/// fill only that list.
-const ELIGIBLE: &str = "SELECT s.item_id, s.content_hash, length(s.text) AS chars FROM sources s \
-    WHERE s.compacted_at IS NULL AND s.redistil IS NULL AND s.distilled IS NOT NULL \
-    AND s.distilled NOT IN (SELECT value FROM json_each(?3)) \
-    AND coalesce(s.ended_at, s.started_at) < ?1 \
-    AND NOT EXISTS (SELECT 1 FROM records r \
-        WHERE (r.status = 'candidate' OR (r.archived_at IS NOT NULL AND r.archived_at >= ?2)) \
-        AND (EXISTS (SELECT 1 FROM record_sources rs WHERE rs.record = r.id AND rs.source = s.item_id) \
-             OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(r.source_ids) THEN r.source_ids ELSE '[]' END) j \
-                        WHERE j.value = s.item_id))) \
-    ORDER BY s.item_id";
+/// The most sources one run compacts in one room; the rest wait for the next day.
+const PER_RUN: i64 = 500;
+
+/// Which sources may go, as a WHERE over `sources s`. `?1` the age cutoff, `?2` the start of the undo
+/// window, `?3` a JSON list of the room's DONE distil run ids (a failed, rejected or open run never
+/// counts as having read a source). A source is as old as the later of its own date and the time it
+/// was imported (its `source.add`/`source.update` op), so an old chat export is not compacted the day
+/// after it arrives. The `source_ids` arm mirrors `brainAiEvidence`: writers may still fill only that
+/// list. Every subquery is uncorrelated (read once), except the op-log lookup, which `op_log_ref`
+/// serves. One text, used by the read and, with the hash, by the write.
+macro_rules! eligible_where {
+    () => {
+        "s.compacted_at IS NULL AND s.redistil IS NULL AND s.distilled IS NOT NULL \
+         AND s.distilled IN (SELECT value FROM json_each(?3)) \
+         AND max(coalesce(s.ended_at, s.started_at), \
+                 coalesce((SELECT max(o.at) FROM op_log o WHERE o.ref = s.item_id \
+                           AND o.op IN ('source.add', 'source.update')), '')) < ?1 \
+         AND s.item_id NOT IN ( \
+             SELECT rs.source FROM records r JOIN record_sources rs ON rs.record = r.id \
+               WHERE r.status = 'candidate' OR (r.archived_at IS NOT NULL AND r.archived_at >= ?2) \
+             UNION \
+             SELECT j.value FROM records r, \
+                    json_each(CASE WHEN json_valid(r.source_ids) THEN r.source_ids ELSE '[]' END) j \
+               WHERE r.status = 'candidate' OR (r.archived_at IS NOT NULL AND r.archived_at >= ?2) \
+             UNION \
+             SELECT json_extract(j.value, '$[0]') FROM change_rows cr JOIN changes c ON c.id = cr.change, \
+                    json_each(CASE WHEN json_valid(cr.before) THEN cr.before ELSE '{}' END, '$._sources') j \
+               WHERE c.undone_at IS NULL AND c.at >= ?2 AND json_extract(j.value, '$[0]') IS NOT NULL)"
+    };
+}
+
+/// `?4` is the most sources to return (-1: all).
+const ELIGIBLE: &str = concat!(
+    "SELECT s.item_id, s.content_hash, length(s.text) AS chars FROM sources s WHERE ",
+    eligible_where!(),
+    " ORDER BY s.item_id LIMIT ?4"
+);
+
+/// The write re-checks everything: `?4` is now, `?5` the item id, `?6` the hash that was read.
+const COMPACT: &str = concat!(
+    "UPDATE sources AS s SET text = '', compacted_at = ?4 WHERE s.item_id = ?5 AND s.content_hash = ?6 AND ",
+    eligible_where!()
+);
 
 /// A source the room would compact.
 pub struct Candidate {
@@ -57,28 +87,44 @@ pub struct Candidate {
     pub chars: i64,
 }
 
-/// Runs of `room` that have not finished: their sources are still being read.
-async fn open_runs(app: &App, room: &str) -> Result<String, sqlx::Error> {
-    let ids: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM brain_distils WHERE room = ? AND state IN ('queued','needs_local_model','waiting','running')",
-    )
-    .bind(room)
-    .fetch_all(&app.pool)
-    .await?;
+/// The binds `?1..?3` of the eligibility test.
+pub struct Window {
+    cutoff: String,
+    undo: String,
+    done: String,
+}
+
+impl Window {
+    pub fn new(now_unix: i64, days: u32, done_runs: &str) -> Self {
+        Self {
+            cutoff: iso_of_unix(now_unix - i64::from(days) * 86_400),
+            undo: iso_of_unix(now_unix - PURGE_DAYS * 86_400),
+            done: done_runs.to_owned(),
+        }
+    }
+}
+
+/// Runs of `room` that finished well: only their sources count as read.
+async fn done_runs(app: &App, room: &str) -> Result<String, sqlx::Error> {
+    let ids: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM brain_distils WHERE room = ? AND state = 'done'")
+            .bind(room)
+            .fetch_all(&app.pool)
+            .await?;
     Ok(json!(ids).to_string())
 }
 
-/// The sources `days` of retention would compact now. Reads only.
+/// Up to `limit` of the sources `w` would compact now (-1: all). Reads only.
 pub async fn eligible(
     pool: &SqlitePool,
-    now_unix: i64,
-    days: u32,
-    open_runs: &str,
+    w: &Window,
+    limit: i64,
 ) -> Result<Vec<Candidate>, sqlx::Error> {
     let rows = sqlx::query(ELIGIBLE)
-        .bind(iso_of_unix(now_unix - i64::from(days) * 86_400))
-        .bind(iso_of_unix(now_unix - PURGE_DAYS * 86_400))
-        .bind(open_runs)
+        .bind(&w.cutoff)
+        .bind(&w.undo)
+        .bind(&w.done)
+        .bind(limit)
         .fetch_all(pool)
         .await?;
     rows.iter()
@@ -92,41 +138,50 @@ pub async fn eligible(
         .collect()
 }
 
-/// Drops the text of `cands` (re-checked in the write, so a source taken for a re-distil since the
-/// read is left alone), logs the ops and writes one audit row. Returns how many were compacted.
+/// What `compact` did.
+pub struct Compacted {
+    pub ids: Vec<String>,
+    pub chars: i64,
+}
+
+/// Drops the text of `cands` in one write-locking transaction (`BEGIN IMMEDIATE`), each one
+/// re-checked against the whole eligibility test and its content hash in the UPDATE itself: a
+/// source that changed, was taken for a re-distil or got cited since the read is left alone. Logs
+/// the ops and writes one audit row.
 pub async fn compact(
     pool: &SqlitePool,
+    w: &Window,
     now: &str,
     cands: &[Candidate],
-) -> Result<usize, sqlx::Error> {
-    let mut tx = pool.begin().await?;
-    let mut n = 0;
-    let mut chars = 0;
+) -> Result<Compacted, sqlx::Error> {
+    let mut tx = begin_write(pool).await?;
+    let mut out = Compacted { ids: vec![], chars: 0 };
     for c in cands {
-        let done = sqlx::query(
-            "UPDATE sources SET text = '', compacted_at = ? \
-             WHERE item_id = ? AND compacted_at IS NULL AND redistil IS NULL",
-        )
-        .bind(now)
-        .bind(&c.item_id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        let done = sqlx::query(COMPACT)
+            .bind(&w.cutoff)
+            .bind(&w.undo)
+            .bind(&w.done)
+            .bind(now)
+            .bind(&c.item_id)
+            .bind(&c.content_hash)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
         if done == 1 {
-            n += 1;
-            chars += c.chars;
+            out.chars += c.chars;
+            out.ids.push(c.item_id.clone());
             log_op(&mut tx, "source.compacted", &c.item_id, now).await?;
         }
     }
-    if n > 0 {
+    if !out.ids.is_empty() {
         sqlx::query("INSERT INTO room_audit (action, detail, at) VALUES ('retention.compacted', ?, ?)")
-            .bind(json!({"sources": n, "chars": chars}).to_string())
+            .bind(json!({"sources": out.ids.len(), "chars": out.chars}).to_string())
             .bind(now)
             .execute(&mut *tx)
             .await?;
     }
     tx.commit().await?;
-    Ok(n)
+    Ok(out)
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -167,7 +222,8 @@ pub(crate) async fn preview(
         return Err(ApiError::bad_request("days is 1 to 3650"));
     }
     let access = crate::inbox::open_room(&app, &b, &room).await?;
-    let found = eligible(access.pool(), app.clock.unix(), days, &open_runs(&app, &room).await?).await;
+    let w = Window::new(app.clock.unix(), days, &done_runs(&app, &room).await?);
+    let found = eligible(access.pool(), &w, -1).await;
     access.pool().close().await;
     let found = found?;
     Ok(Json(RetentionPreview {
@@ -203,36 +259,88 @@ impl Brain {
             else {
                 continue;
             };
-            let runs = open_runs(app, &room).await?;
-            let done = async {
-                let found = eligible(&pool, app.clock.unix(), days, &runs).await?;
-                if found.is_empty() {
-                    return Ok::<_, ApiError>((0, 0));
-                }
-                // The stored meaning of the text goes first: a failure here compacts nothing, and
-                // the next run tries again.
-                let hashes: Vec<String> = found.iter().map(|c| c.content_hash.clone()).collect();
-                vectors::delete(app, self, &hashes).await?;
-                let chars = found.iter().map(|c| c.chars).sum::<i64>();
-                Ok((compact(&pool, &app.clock.now(), &found).await?, chars))
-            }
-            .await;
+            let done = self.compact_room(app, &key, &room, days, &pool).await;
             pool.close().await;
-            let (n, chars) = done?;
+            // One room's failure is logged; the other rooms still run.
+            let (n, chars) = match done {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(room = %room, code = %e.code, error = %e.message, "retention failed for a room");
+                    continue;
+                }
+            };
             if n > 0 {
                 total += n;
-                let mut ctl = begin_write(&app.pool).await?;
-                record(
-                    &mut ctl,
-                    "brain.room.compacted",
-                    json!({"room": room, "sources": n, "chars": chars, "days": days}),
-                    None,
-                )
-                .await?;
-                ctl.commit().await?;
+                let audit = async {
+                    let mut ctl = begin_write(&app.pool).await?;
+                    record(
+                        &mut ctl,
+                        "brain.room.compacted",
+                        json!({"room": room, "sources": n, "chars": chars, "days": days}),
+                        None,
+                    )
+                    .await?;
+                    ctl.commit().await?;
+                    Ok::<_, ApiError>(())
+                }
+                .await;
+                if let Err(e) = audit {
+                    tracing::warn!(room = %room, error = %e.message, "the Core audit of a compaction failed");
+                }
             }
         }
         Ok(total)
+    }
+
+    /// One room: compacts up to `PER_RUN` sources, scrubs their text from the search index, then
+    /// drops the stored vectors of every compacted source (this run's and any an earlier run left
+    /// behind when its delete failed). Returns `(sources compacted, chars)`.
+    async fn compact_room(
+        &self,
+        app: &App,
+        key: &[u8; 32],
+        room: &str,
+        days: u32,
+        pool: &SqlitePool,
+    ) -> Result<(usize, i64), ApiError> {
+        // Freed pages are zeroed, not left holding the text.
+        sqlx::query("PRAGMA secure_delete = ON").execute(pool).await?;
+        let w = Window::new(app.clock.unix(), days, &done_runs(app, room).await?);
+        let found = eligible(pool, &w, PER_RUN).await?;
+        let done = if found.is_empty() {
+            Compacted { ids: vec![], chars: 0 }
+        } else {
+            compact(pool, &w, &app.clock.now(), &found).await?
+        };
+        if !done.ids.is_empty() {
+            let file = files::index_path(&files::root(app), room);
+            if file.exists() {
+                let index = files::open_migrated(&file, key, false, INDEX)
+                    .await
+                    .map_err(|e| crate::code(500, "index_unavailable", e.to_string()))?;
+                let scrub = async {
+                    sqlx::query("PRAGMA secure_delete = ON").execute(&index).await?;
+                    for id in &done.ids {
+                        sqlx::query("DELETE FROM fts WHERE item_id = ?").bind(id).execute(&index).await?;
+                    }
+                    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(&index).await?;
+                    Ok::<_, sqlx::Error>(())
+                }
+                .await;
+                index.close().await;
+                scrub?;
+            }
+        }
+        // ponytail: sweeps every compacted source's vector each run; one indexed delete per hash.
+        let hashes: Vec<String> =
+            sqlx::query_scalar("SELECT content_hash FROM sources WHERE compacted_at IS NOT NULL")
+                .fetch_all(pool)
+                .await?;
+        if !hashes.is_empty() {
+            vectors::delete(app, self, &hashes).await?;
+        }
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(pool).await?;
+        Ok((done.ids.len(), done.chars))
     }
 }
 

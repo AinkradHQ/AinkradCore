@@ -219,6 +219,11 @@ async fn advance_inner(app: &App, b: &Brain) -> Result<(), ApiError> {
             launch(app, b, &d, &by).await
         };
         if let Err(e) = step {
+            // The run will never take its sources: they go back, or retention would count them
+            // as read.
+            if let Err(g) = give_back(app, b, &d).await {
+                tracing::warn!(error = ?g, distil = %d.id, "sources of a failed distil could not be given back");
+            }
             set_state(
                 app,
                 &d.id,
@@ -469,6 +474,7 @@ pub(crate) async fn answer_of(app: &App, session: &str) -> Result<Option<String>
 
 async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     let Some(session) = d.session.as_deref() else {
+        give_back(app, b, d).await?;
         return Ok(set_state(app, &d.id, "failed", "no session", None).await?);
     };
     let s = ainkrad_core_server::store::agents::get(&app.pool, session).await?;
