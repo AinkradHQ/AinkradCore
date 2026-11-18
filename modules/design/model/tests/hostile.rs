@@ -24,6 +24,7 @@ fn node(
         parent: parent.map(str::to_string),
         order: order.into(),
         clock: 1,
+        prev: None,
         name: String::new(),
         props: props.as_object().unwrap().clone(),
         text,
@@ -246,6 +247,7 @@ fn remote_clocks_are_bounded() {
         parent: Some(PAGE.into()),
         order: "z".into(),
         clock,
+        prev: None,
     };
     assert!(!d.apply_remote_move(id, rec(u64::MAX)));
     assert!(!d.apply_remote_move(id, rec(design_model::limits::MAX_CLOCK_JUMP + 10)));

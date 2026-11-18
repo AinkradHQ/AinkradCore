@@ -113,6 +113,7 @@ fn frame(parent: &str, order: &str) -> Node {
         parent: Some(parent.into()),
         order: order.into(),
         clock: 1,
+        prev: None,
         name: String::new(),
         props: Default::default(),
         text: None,
@@ -128,6 +129,7 @@ fn base_doc(n: usize) -> Doc {
             parent: None,
             order: "a".into(),
             clock: 0,
+            prev: None,
             name: String::new(),
             props: Default::default(),
             text: None,
@@ -211,7 +213,12 @@ fn crossing_moves_break_the_same_way_in_either_order() {
         vec![id(1)],
         "equal clocks: the higher id loses its link"
     );
-    assert_eq!(f.detached, vec![id(1)]);
+    assert_eq!(f.reverted, vec![id(1)], "the losing move is reverted");
+    assert!(f.detached.is_empty(), "nothing is detached");
+    assert!(
+        f.children[PAGE].contains(&id(1)),
+        "back under its old parent"
+    );
     assert_eq!(
         f.children[&id(1)],
         vec![id(0)],
@@ -229,6 +236,7 @@ fn move_of(d: &Doc, i: &str) -> MoveRecord {
         parent: n.parent.clone(),
         order: n.order.clone(),
         clock: n.clock,
+        prev: n.prev.clone(),
     }
 }
 
@@ -319,6 +327,7 @@ fn n(ty: NodeType, parent: &str, order: &str, props: Value) -> Node {
         parent: Some(parent.into()),
         order: order.into(),
         clock: 1,
+        prev: None,
         name: String::new(),
         props: props.as_object().unwrap().clone(),
         text: None,
@@ -495,4 +504,36 @@ fn the_crate_does_not_depend_on_skia() {
             "design-model must not depend on {banned}"
         );
     }
+}
+
+#[test]
+fn a_losing_move_is_never_reverted_under_a_leaf() {
+    // a crossing pair whose loser claims a rect as its previous parent (a hostile stored `prev`): it surfaces
+    // detached instead of putting children under a leaf
+    let mut a = base_doc(2);
+    a.nodes.insert(
+        "n_leafaaaaaaaa".into(),
+        Node {
+            ty: NodeType::Rect,
+            parent: Some(PAGE.into()),
+            order: "z".into(),
+            clock: 1,
+            prev: None,
+            name: String::new(),
+            props: Default::default(),
+            text: None,
+        },
+    );
+    // the crossing pair as two replicas' moves merged (a local move would refuse the cycle)
+    for (n, parent) in [(0, 1), (1, 0)] {
+        let node = a.nodes.get_mut(&id(n)).unwrap();
+        node.parent = Some(id(parent));
+        node.clock = 5;
+    }
+    a.nodes.get_mut(&id(1)).unwrap().prev = Some("n_leafaaaaaaaa".into());
+    let f = forest(&a);
+    assert_eq!(f.broken, vec![id(1)]);
+    assert!(f.reverted.is_empty(), "not reverted under a leaf");
+    assert_eq!(f.detached, vec![id(1)]);
+    assert!(!f.children.contains_key("n_leafaaaaaaaa"));
 }
