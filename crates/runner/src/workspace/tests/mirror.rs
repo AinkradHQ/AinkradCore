@@ -132,6 +132,8 @@ async fn a_project_checkout_is_cloned_from_the_core_copy_and_cannot_touch_it() {
 }
 
 fn script_hook(path: &Path) {
+    // The checkout is cloned with `--template=`, so `.git/hooks` does not exist yet.
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, "#!/bin/sh\ntrue\n").unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
