@@ -408,6 +408,18 @@ pub fn router(app: App) -> Router {
             post(projects::set_primary),
         )
         .route(
+            "/api/v1/projects/{id}/spec",
+            get(projects::run_spec::latest).put(projects::run_spec::save),
+        )
+        .route(
+            "/api/v1/projects/{id}/spec/versions",
+            get(projects::run_spec::versions),
+        )
+        .route(
+            "/api/v1/projects/{id}/spec/versions/{version}",
+            get(projects::run_spec::version),
+        )
+        .route(
             "/api/v1/projects/{id}/repos/{repo}/fetch",
             post(projects::fetch_now),
         )

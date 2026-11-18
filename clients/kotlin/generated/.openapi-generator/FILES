@@ -66,6 +66,7 @@ src/main/kotlin/ainkrad/client/models/AuditPage.kt
 src/main/kotlin/ainkrad/client/models/BindChain.kt
 src/main/kotlin/ainkrad/client/models/Binding.kt
 src/main/kotlin/ainkrad/client/models/BudgetDeleted.kt
+src/main/kotlin/ainkrad/client/models/Build.kt
 src/main/kotlin/ainkrad/client/models/Chain.kt
 src/main/kotlin/ainkrad/client/models/ChainBinding.kt
 src/main/kotlin/ainkrad/client/models/ChainEntry.kt
@@ -101,6 +102,7 @@ src/main/kotlin/ainkrad/client/models/GroupLeaseGrant.kt
 src/main/kotlin/ainkrad/client/models/Handshake.kt
 src/main/kotlin/ainkrad/client/models/HandshakeBody.kt
 src/main/kotlin/ainkrad/client/models/HandshakeProof.kt
+src/main/kotlin/ainkrad/client/models/Health.kt
 src/main/kotlin/ainkrad/client/models/HostBinary.kt
 src/main/kotlin/ainkrad/client/models/HostStatus.kt
 src/main/kotlin/ainkrad/client/models/HostUnit.kt
@@ -142,6 +144,7 @@ src/main/kotlin/ainkrad/client/models/NewPool.kt
 src/main/kotlin/ainkrad/client/models/NewProject.kt
 src/main/kotlin/ainkrad/client/models/NewProjectRepo.kt
 src/main/kotlin/ainkrad/client/models/NewProviderAccount.kt
+src/main/kotlin/ainkrad/client/models/NewRunSpec.kt
 src/main/kotlin/ainkrad/client/models/NewSecret.kt
 src/main/kotlin/ainkrad/client/models/NewSecretGroup.kt
 src/main/kotlin/ainkrad/client/models/NewTerminal.kt
@@ -156,6 +159,7 @@ src/main/kotlin/ainkrad/client/models/PasskeyRegistrationOptions.kt
 src/main/kotlin/ainkrad/client/models/PastRetention.kt
 src/main/kotlin/ainkrad/client/models/PolicyResult.kt
 src/main/kotlin/ainkrad/client/models/Pool.kt
+src/main/kotlin/ainkrad/client/models/Port.kt
 src/main/kotlin/ainkrad/client/models/PriceBookEntry.kt
 src/main/kotlin/ainkrad/client/models/ProjectInfo.kt
 src/main/kotlin/ainkrad/client/models/ProjectRepo.kt
@@ -171,6 +175,9 @@ src/main/kotlin/ainkrad/client/models/ReplaceKey.kt
 src/main/kotlin/ainkrad/client/models/RestartBody.kt
 src/main/kotlin/ainkrad/client/models/Restarted.kt
 src/main/kotlin/ainkrad/client/models/RotateSecret.kt
+src/main/kotlin/ainkrad/client/models/RunSpec.kt
+src/main/kotlin/ainkrad/client/models/RunSpecSummary.kt
+src/main/kotlin/ainkrad/client/models/RunSpecVersion.kt
 src/main/kotlin/ainkrad/client/models/Runner.kt
 src/main/kotlin/ainkrad/client/models/RunnerAccounts.kt
 src/main/kotlin/ainkrad/client/models/RunnerDriver.kt
@@ -183,6 +190,7 @@ src/main/kotlin/ainkrad/client/models/SecretDeleted.kt
 src/main/kotlin/ainkrad/client/models/SecretGroupDeleted.kt
 src/main/kotlin/ainkrad/client/models/SecretGroupInfo.kt
 src/main/kotlin/ainkrad/client/models/SecretInfo.kt
+src/main/kotlin/ainkrad/client/models/Service.kt
 src/main/kotlin/ainkrad/client/models/SessionGrant.kt
 src/main/kotlin/ainkrad/client/models/SessionLimits.kt
 src/main/kotlin/ainkrad/client/models/SessionRequest.kt
