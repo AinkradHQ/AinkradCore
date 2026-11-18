@@ -10,7 +10,13 @@
 //!   the runner redeems itself. A host or hop with no key is refused (the runner needs a key to
 //!   start the connection).
 //! - Each hop is pinned to the fingerprints a person trusted (`hostkeys`); none pinned means the
-//!   runner stops at the host key and the fingerprint is stored for a person to compare.
+//!   runner stops at the host key and the fingerprint is stored for a person to compare. The
+//!   fingerprint comes only from the runner's structured exit report (`TerminalExit::host_key`,
+//!   written by `ssh-pty` itself over a private descriptor, set only when no shell ever started and
+//!   `ssh-pty` made a reserved exit code 70 or 71). The terminal's output is never parsed: a remote
+//!   shell controls it, and its own exit status 70 to 72 is made 1 by `ssh-pty`.
+//! - Every Core refusal (scope, size, caps, runner, a key on every hop) comes before the first
+//!   lease; a lease granted for an open that then fails is revoked.
 //! - An ssh terminal goes only to a runner that lists `pty.ssh`: an older one would open a LOCAL
 //!   shell. Checked here before any lease is made, and by the hub on every dispatch.
 //! - The session row ends with the terminal (exit, host-key refusal, or the runner lost).
@@ -18,7 +24,7 @@
 use ainkrad_core::audit::NewAuditEvent;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{
-    ApiError, ApiResult, BY, Caller, Ended, TerminalSize, open_ssh,
+    ApiError, ApiResult, BY, Caller, Ended, TerminalSize, check_ssh_open, open_ssh,
 };
 use ainkrad_core_server::store::gov::LOCAL_ENROL_SAS;
 use ainkrad_core_server::store::{audit, begin_write, events, secrets};
@@ -76,8 +82,17 @@ async fn runner_of(conn: &mut SqliteConnection, via: Option<String>) -> Result<S
     .ok_or_else(|| refuse("no_runner", "the host has no runner to reach it by"))
 }
 
-/// One machine on the path, with its lease and the keys a person pinned.
-async fn hop(app: &App, me: &Caller, runner: &str, host: &str) -> Result<SshHop, ApiError> {
+/// One machine on the path as stored: where, who, which key, and the fingerprints pinned.
+struct Stop {
+    address: String,
+    port: u16,
+    user: String,
+    secret: String,
+    pinned: Vec<String>,
+}
+
+/// Reads one machine of the path; no lease yet. A host with no key is refused here.
+async fn stop(app: &App, host: &str) -> Result<Stop, ApiError> {
     let mut conn = app.pool.acquire().await?;
     let r = sqlx::query(
         "SELECT h.address, h.port, h.username, k.secret FROM leyline_hosts h \
@@ -91,10 +106,20 @@ async fn hop(app: &App, me: &Caller, runner: &str, host: &str) -> Result<SshHop,
     let secret = secret
         .ok_or_else(|| refuse("host_needs_key", "every host on the path needs an ssh key"))?;
     let pinned = hostkeys::trusted(&mut conn, host).await?;
-    drop(conn);
+    Ok(Stop {
+        address: r.try_get("address")?,
+        port: u16::try_from(r.try_get::<i64, _>("port")?).unwrap_or(22),
+        user: r.try_get("username")?,
+        secret,
+        pinned,
+    })
+}
+
+/// The lease for one stop, redeemable by `runner` only.
+async fn hop(app: &App, me: &Caller, runner: &str, s: Stop) -> Result<SshHop, ApiError> {
     let (lease, _) = secrets::lease(
         &app.pool,
-        &secret,
+        &s.secret,
         runner,
         None,
         &me.device.id,
@@ -104,19 +129,30 @@ async fn hop(app: &App, me: &Caller, runner: &str, host: &str) -> Result<SshHop,
     )
     .await?;
     Ok(SshHop {
-        host: r.try_get("address")?,
-        port: u16::try_from(r.try_get::<i64, _>("port")?).unwrap_or(22),
-        user: r.try_get("username")?,
-        pinned_keys: pinned,
+        host: s.address,
+        port: s.port,
+        user: s.user,
+        pinned_keys: s.pinned,
         lease,
     })
 }
 
-/// Everything `open` needs, checked and leased. `chain` is the jump hosts then the target.
+/// Drops leases that were granted and will not be redeemed (best effort: an unredeemed lease also
+/// expires on its own).
+async fn revoke(app: &App, leases: &[String]) {
+    for l in leases {
+        let _ = secrets::revoke_lease(&app.pool, l).await;
+    }
+}
+
+/// Everything `open` needs, checked and leased. `chain` is the jump hosts then the target. Every
+/// refusal the Core can know of comes before the first lease: terminal scope, size, caps, the
+/// runner, and a key on every hop. A lease that fails part-way revokes the ones already granted.
 async fn prepare(
     app: &App,
     me: &Caller,
     id: &str,
+    size: TerminalSize,
 ) -> Result<(String, SshTerminal, Vec<String>), ApiError> {
     let (via, jumps): (Option<String>, String) = {
         let mut conn = app.pool.acquire().await?;
@@ -129,8 +165,8 @@ async fn prepare(
         let mut conn = app.pool.acquire().await?;
         runner_of(&mut conn, via).await?
     };
-    // Before any lease: a runner that cannot do this would open a local shell, and a lease for it
-    // would be spent for nothing.
+    // A runner that cannot do this would open a local shell, and a lease for it would be spent
+    // for nothing.
     let can = app.hub.runners().get(&runner).is_some_and(|r| {
         r.online
             && r.drivers
@@ -143,11 +179,23 @@ async fn prepare(
             "the runner is offline or too old to open ssh terminals",
         ));
     }
+    check_ssh_open(app, me, &runner, size).await?;
     let mut chain: Vec<String> = serde_json::from_str(&jumps).unwrap_or_default();
     chain.push(id.to_owned());
-    let mut hops = Vec::new();
+    let mut stops = Vec::new();
     for h in &chain {
-        hops.push(hop(app, me, &runner, h).await?);
+        stops.push(stop(app, h).await?);
+    }
+    let mut hops = Vec::new();
+    for s in stops {
+        match hop(app, me, &runner, s).await {
+            Ok(h) => hops.push(h),
+            Err(e) => {
+                let leased: Vec<String> = hops.iter().map(|h| h.lease.clone()).collect();
+                revoke(app, &leased).await;
+                return Err(e);
+            }
+        }
     }
     let target = hops.pop().expect("the chain ends with the host");
     Ok((runner, SshTerminal { target, hops }, chain))
@@ -188,8 +236,17 @@ async fn start(
     auth: &Authorized,
 ) -> Result<SessionView, ApiError> {
     let (id, run, who) = (auth.host_id(), auth.run_id(), auth.principal().label());
-    let (runner, ssh, chain) = prepare(app, me, id).await?;
-    let (t, ended) = open_ssh(app, me, &runner, ssh, size).await?;
+    let (runner, ssh, chain) = prepare(app, me, id, size).await?;
+    let leased: Vec<String> = (ssh.hops.iter().chain([&ssh.target]))
+        .map(|h| h.lease.clone())
+        .collect();
+    let (t, ended) = match open_ssh(app, me, &runner, ssh, size).await {
+        Ok(opened) => opened,
+        Err(e) => {
+            revoke(app, &leased).await;
+            return Err(e);
+        }
+    };
     let session = new_id("ls_");
     let mut tx = begin_write(&app.pool).await?;
     sqlx::query(
@@ -212,10 +269,14 @@ async fn start(
     tx.commit().await?;
     let (a, s) = (app.clone(), session.clone());
     tokio::spawn(async move {
-        if let Ok(end) = ended.await {
-            if conclude(&a, &s, &chain, end).await.is_err() {
-                tracing::warn!("a leyline session could not be closed out");
-            }
+        // The monitor went without telling us how it ended: the runner (or the Core's hold on it)
+        // is lost, which is what the session records.
+        let end = ended.await.unwrap_or(Ended {
+            lost: true,
+            ..Ended::default()
+        });
+        if conclude(&a, &s, &chain, end).await.is_err() {
+            tracing::warn!("a leyline session could not be closed out");
         }
     });
     Ok(SessionView {
@@ -249,24 +310,6 @@ async fn note(
     Ok(())
 }
 
-/// The fingerprint and hop of the host-key line `ssh-pty` prints: `host key unknown|changed:
-/// SHA256:... (hop N); ...`. Anything that does not parse is nothing (the exit code still ends the
-/// session with its reason).
-fn refused_key(head: &str, what: &str) -> Option<(String, usize)> {
-    if what.is_empty() {
-        return None;
-    }
-    let line = head.split(&format!("{what}: ")).nth(1)?;
-    let (fp, rest) = line.split_once(' ')?;
-    let hop = rest
-        .strip_prefix("(hop ")?
-        .split_once(')')?
-        .0
-        .parse()
-        .ok()?;
-    hostkeys::fingerprint_ok(fp).then(|| (fp.to_owned(), hop))
-}
-
 /// The session ends with its terminal; a host-key refusal also leaves the key for a person.
 async fn conclude(app: &App, session: &str, chain: &[String], end: Ended) -> Result<(), ApiError> {
     let reason = match (end.lost, end.exit_code) {
@@ -277,16 +320,14 @@ async fn conclude(app: &App, session: &str, chain: &[String], end: Ended) -> Res
         (_, Some(SSH_PTY_EXIT_FAILED)) => "failed",
         _ => "exited",
     };
-    let (what, changed) = match reason {
-        "host_key_unknown" => ("host key unknown", false),
-        "host_key_changed" => ("host key changed", true),
-        _ => ("", false),
-    };
+    // The runner's structured report, only for the reserved codes `ssh-pty` alone can exit with.
     // The hop is a host too: its key belongs to that host, not to the target.
-    if let Some((fp, hop)) = refused_key(&end.head, what)
-        && let Some(host) = chain.get(hop)
+    if matches!(reason, "host_key_unknown" | "host_key_changed")
+        && let Some(k) = &end.host_key
+        && hostkeys::fingerprint_ok(&k.fingerprint)
+        && let Some(host) = chain.get(usize::from(k.hop))
     {
-        hostkeys::saw(app, host, &fp, changed).await?;
+        hostkeys::saw(app, host, &k.fingerprint, reason == "host_key_changed").await?;
     }
     let mut tx = begin_write(&app.pool).await?;
     let host: String = sqlx::query_scalar(
@@ -303,20 +344,19 @@ async fn conclude(app: &App, session: &str, chain: &[String], end: Ended) -> Res
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::refused_key;
-
-    #[test]
-    fn the_refusal_line_gives_the_fingerprint_and_the_hop() {
-        let fp = format!("SHA256:{}", "a".repeat(43));
-        let head = format!("connecting\r\nhost key unknown: {fp} (hop 1); not trusted\r\n");
-        assert_eq!(refused_key(&head, "host key unknown"), Some((fp, 1)));
-        assert_eq!(refused_key(&head, "host key changed"), None);
-        assert_eq!(
-            refused_key("host key unknown: nonsense (hop 0)", "host key unknown"),
-            None
-        );
-        assert_eq!(refused_key("", ""), None);
+/// At Core start: a session row still open belongs to a terminal whose monitor died with the
+/// previous process, so nobody will ever end it. Closed as `runner_lost`.
+pub(crate) async fn close_orphans(app: &App) -> Result<(), ApiError> {
+    let mut tx = begin_write(&app.pool).await?;
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "UPDATE leyline_sessions SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), end_reason = 'runner_lost' \
+         WHERE ended_at IS NULL RETURNING id, host_id",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for (id, host) in &rows {
+        note(&mut tx, "ended", id, host).await?;
     }
+    tx.commit().await?;
+    Ok(())
 }

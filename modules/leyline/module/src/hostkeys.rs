@@ -84,8 +84,9 @@ pub(crate) async fn trusted(
     .await
 }
 
-/// Stores a key a runner reported (`seen`), once; `true` when it was new. A key already known in
-/// any state is left as it is.
+/// Stores a key a runner reported (`seen`), once; `true` when it was new. A trusted or seen key is
+/// left as it is; a `replaced` one that the host presents again becomes `seen`, so a person can
+/// trust it again (a host that went back to an old key).
 pub(crate) async fn saw(
     app: &App,
     host: &str,
@@ -103,8 +104,19 @@ pub(crate) async fn saw(
     .await?
     .rows_affected()
         == 1;
-    // A changed key is an alert every time it is met; a first sight is noted once.
-    if new || changed {
+    let revived = !new
+        && sqlx::query(
+            "UPDATE leyline_host_keys SET state = 'seen', trusted_by = NULL, trusted_at = NULL \
+             WHERE host_id = ? AND fingerprint = ? AND state = 'replaced'",
+        )
+        .bind(host)
+        .bind(fingerprint)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+            == 1;
+    // A changed key is an alert every time it is met; a first sight (or a return) is noted once.
+    if new || revived || changed {
         let op = if changed { "changed" } else { "seen" };
         note(&mut tx, op, host, "leyline.hostkey").await?;
     }

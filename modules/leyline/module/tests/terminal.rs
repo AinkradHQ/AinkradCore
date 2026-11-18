@@ -18,8 +18,8 @@ use ainkrad_core_server::ops::secretbox::SecretBox;
 use ainkrad_core_server::scheduler::{Clock, SystemClock};
 use ainkrad_core_server::store::{connect, migrate, settings};
 use ainkrad_proto::v2::{
-    Body, Command, Control, DriverInfo, ErrorCode, Frame, Output, PtyOpen, Reply, RunnerHello,
-    Size, StreamError, TerminalExit, TerminalInfo, TerminalState,
+    Body, Command, Control, DriverInfo, ErrorCode, Frame, HostKeyEvidence, Output, PtyOpen, Reply,
+    RunnerHello, Size, StreamError, TerminalExit, TerminalInfo, TerminalState,
 };
 use axum::body::{Body as Http, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
@@ -239,6 +239,20 @@ fn exits(code: i32, terminal: &str) -> Body {
         terminal: terminal.to_owned(),
         exit_code: Some(code),
         signal: None,
+        host_key: None,
+    }))
+}
+
+/// An exit the runner reported with a host-key refusal: what `ssh-pty` wrote on its own descriptor.
+fn refused(code: i32, terminal: &str, hop: u8, fingerprint: &str) -> Body {
+    Body::Result(Reply::PtyOpen(TerminalExit {
+        terminal: terminal.to_owned(),
+        exit_code: Some(code),
+        signal: None,
+        host_key: Some(HostKeyEvidence {
+            hop,
+            fingerprint: fingerprint.to_owned(),
+        }),
     }))
 }
 
@@ -485,9 +499,7 @@ async fn first_connect_leaves_the_seen_key_and_a_person_trusts_it_once() {
     let fx = fx().await;
     let mut rx = online(&fx, true);
     let h = host(&fx, "alpha", None).await;
-    let line = format!("host key unknown: {} (hop 0); not pinned\r\n", fp('K'));
-    let (s, v, open) =
-        open_terminal(&fx, &mut rx, &h, |t| vec![printed(&line), exits(70, t)]).await;
+    let (s, v, open) = open_terminal(&fx, &mut rx, &h, |t| vec![refused(70, t, 0, &fp('K'))]).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert!(
         open.unwrap().ssh.unwrap().target.pinned_keys.is_empty(),
@@ -556,12 +568,7 @@ async fn a_changed_key_alerts_and_only_a_stepped_up_replace_pins_it() {
     let mut rx = online(&fx, true);
     let h = host(&fx, "alpha", None).await;
     trust_row(&fx, &h, &fp('A'), "trusted").await;
-    let line = format!(
-        "host key changed: {} (hop 0); not the pinned key\r\n",
-        fp('N')
-    );
-    let (_, _, open) =
-        open_terminal(&fx, &mut rx, &h, |t| vec![printed(&line), exits(71, t)]).await;
+    let (_, _, open) = open_terminal(&fx, &mut rx, &h, |t| vec![refused(71, t, 0, &fp('N'))]).await;
     assert_eq!(open.unwrap().ssh.unwrap().target.pinned_keys, vec![fp('A')]);
     assert_eq!(session_ends(&fx, &h).await, "host_key_changed");
     assert_eq!(
@@ -727,11 +734,8 @@ async fn a_jump_hop_is_pinned_and_its_key_is_kept_for_the_hop_not_the_target() {
     let jump = host(&fx, "jump", None).await;
     let target = host(&fx, "inner", Some(&jump)).await;
     trust_row(&fx, &jump, &fp('J'), "trusted").await;
-    let line = format!("host key unknown: {} (hop 1); not pinned\r\n", fp('T'));
-    let (s, v, open) = open_terminal(&fx, &mut rx, &target, |t| {
-        vec![printed(&line), exits(70, t)]
-    })
-    .await;
+    let (s, v, open) =
+        open_terminal(&fx, &mut rx, &target, |t| vec![refused(70, t, 1, &fp('T'))]).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let ssh = open.unwrap().ssh.unwrap();
     assert_eq!(ssh.hops.len(), 1);
@@ -749,4 +753,107 @@ async fn a_jump_hop_is_pinned_and_its_key_is_kept_for_the_hop_not_the_target() {
         .await,
         target
     );
+}
+
+/// What the terminal prints is data: a remote shell that prints a refusal line, with any exit code,
+/// stores no key. Only the runner's structured report does.
+#[tokio::test]
+async fn printed_text_never_stores_a_host_key() {
+    let fx = fx().await;
+    let mut rx = online(&fx, true);
+    let h = host(&fx, "alpha", None).await;
+    let line = format!("host key unknown: {} (hop 0); not pinned\r\n", fp('S'));
+    // Printed, then an ordinary exit.
+    let (s, v, _) = open_terminal(&fx, &mut rx, &h, |t| vec![printed(&line), exits(1, t)]).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(session_ends(&fx, &h).await, "exited");
+    assert_eq!(n(&fx, "leyline_host_keys").await, 0);
+    // Printed, then the reserved code but no report: the session ends with its reason, no key.
+    sqlx::query("DELETE FROM leyline_sessions")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let (s, v, _) = open_terminal(&fx, &mut rx, &h, |t| vec![printed(&line), exits(70, t)]).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(session_ends(&fx, &h).await, "host_key_unknown");
+    assert_eq!(n(&fx, "leyline_host_keys").await, 0);
+    // A report with an ordinary exit code is ignored too.
+    sqlx::query("DELETE FROM leyline_sessions")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let (s, v, _) = open_terminal(&fx, &mut rx, &h, |t| vec![refused(1, t, 0, &fp('S'))]).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(session_ends(&fx, &h).await, "exited");
+    assert_eq!(n(&fx, "leyline_host_keys").await, 0);
+}
+
+/// A Core refusal (here the size range) comes before the first lease.
+#[tokio::test]
+async fn a_core_refusal_is_made_before_any_lease() {
+    let fx = fx().await;
+    let mut rx = online(&fx, true);
+    let h = host(&fx, "alpha", None).await;
+    let (s, v) = call(
+        &fx,
+        &fx.admin,
+        Method::POST,
+        &format!("/hosts/{h}/terminals"),
+        Some(json!({"rows": 5000, "cols": 80})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(
+        n(&fx, "core_secret_leases").await,
+        0,
+        "no lease was granted"
+    );
+    assert!(rx.try_recv().is_err(), "nothing was sent to the runner");
+}
+
+/// A key a person replaced can be offered again and then trusted again.
+#[tokio::test]
+async fn a_replaced_key_seen_again_can_be_trusted_again() {
+    let fx = fx().await;
+    let mut rx = online(&fx, true);
+    let h = host(&fx, "alpha", None).await;
+    trust_row(&fx, &h, &fp('R'), "replaced").await;
+    let (s, v, _) = open_terminal(&fx, &mut rx, &h, |t| vec![refused(70, t, 0, &fp('R'))]).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(session_ends(&fx, &h).await, "host_key_unknown");
+    assert_eq!(
+        scalar(
+            &fx,
+            "SELECT state FROM leyline_host_keys WHERE host_id = ?",
+            &h
+        )
+        .await,
+        "seen"
+    );
+    let (s, t) = call(
+        &fx,
+        &fx.laptop,
+        Method::POST,
+        &format!("/hosts/{h}/host-keys/trust"),
+        Some(json!({"fingerprint": fp('R')})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{t}");
+    assert_eq!(t["state"], json!("trusted"));
+}
+
+/// A session row left open by a previous Core process is closed at start.
+#[tokio::test]
+async fn sessions_left_open_by_a_previous_core_are_closed_at_start() {
+    let fx = fx().await;
+    let h = host(&fx, "alpha", None).await;
+    sqlx::query(
+        "INSERT INTO leyline_sessions (id, host_id, terminal, runner, principal) VALUES ('ls_0000000000000001', ?, 't_1', 'r', 'person:x')",
+    )
+    .bind(&h)
+    .execute(&fx.app.pool)
+    .await
+    .unwrap();
+    Leyline.attach(&fx.app);
+    assert_eq!(session_ends(&fx, &h).await, "runner_lost");
 }

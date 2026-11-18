@@ -385,7 +385,7 @@ fn abandon(app: &App, runner: &str, terminal: &str) {
 }
 
 /// Watches `terminal` on `d` until it exits, then records the exit. `tap`, when given, is told
-/// how it ended (after the row is settled) and what it printed first.
+/// how it ended (after the row is settled).
 fn monitor(
     app: &App,
     terminal: String,
@@ -395,26 +395,17 @@ fn monitor(
     let a = app.clone();
     let id = terminal.clone();
     let task = tokio::spawn(async move {
-        let mut head: Vec<u8> = Vec::new();
-        let mut seen = |b64: &str| {
-            if head.len() < HEAD_BYTES
-                && let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64)
-            {
-                head.extend_from_slice(&bytes[..bytes.len().min(HEAD_BYTES - head.len())]);
-            }
-        };
         let mut end = Ended {
             lost: true,
             ..Ended::default()
         };
         while let Some(body) = d.next().await {
             match body {
-                Body::Output(o) => seen(&o.data),
-                Body::Control(Control::Snapshot(s)) => seen(&s.data),
                 Body::Result(Reply::PtyOpen(exit) | Reply::PtyAttach(exit)) => {
                     end.lost = false;
                     end.exit_code = exit.exit_code;
                     end.signal = exit.signal.clone();
+                    end.host_key = exit.host_key.clone();
                     ended(&a, &id, exit.exit_code, exit.signal).await;
                     break;
                 }
@@ -423,7 +414,6 @@ fn monitor(
             }
         }
         if let Some(tap) = tap {
-            end.head = String::from_utf8_lossy(&head).into_owned();
             let _ = tap.send(end);
         }
     });
@@ -891,28 +881,22 @@ pub struct Ended {
     pub exit_code: Option<i32>,
     pub signal: Option<String>,
     pub lost: bool,
-    /// The first bytes the terminal printed (at most `HEAD_BYTES`), lossily decoded.
-    pub head: String,
+    /// A host-key refusal the runner reported in the exit (set only when the connection failed
+    /// before any shell started). Never read from the terminal's output.
+    pub host_key: Option<ainkrad_proto::v2::HostKeyEvidence>,
 }
 
-/// Enough for the one line `ssh-pty` prints before it ends on a host-key refusal.
-const HEAD_BYTES: usize = 4096;
-
-/// Opens a terminal on `runner` for `me`: the caps, the runner's `pty.open`, the row, the audit
-/// row and the monitor. The route that calls it passed the terminal scope and the step-up.
-async fn open(
+/// Every refusal the Core makes before it starts a terminal: size, the per-device and per-runner
+/// caps (counted by the caller under the create lock) and a usable runner. Returns that runner.
+async fn admit(
     app: &App,
     me: &Caller,
     runner: &str,
     size: TerminalSize,
-    spec: Spec,
-    tap: Option<tokio::sync::oneshot::Sender<Ended>>,
-) -> Result<Terminal, ApiError> {
+) -> Result<gov::Device, ApiError> {
     if !(1..=1000).contains(&size.rows) || !(1..=1000).contains(&size.cols) {
         return Err(ApiError::bad_request("terminal size is out of range"));
     }
-    // The caps are counted and used up under one lock, so concurrent creates cannot overshoot.
-    let _turn = app.terminals.create.lock().await;
     reap(app).await?;
     let mine = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM core_terminals WHERE opened_by=? AND status IN ('created','running')",
@@ -948,6 +932,22 @@ async fn open(
             "runner terminal limit reached",
         ));
     }
+    Ok(runner)
+}
+
+/// Opens a terminal on `runner` for `me`: the caps, the runner's `pty.open`, the row, the audit
+/// row and the monitor. The route that calls it passed the terminal scope and the step-up.
+async fn open(
+    app: &App,
+    me: &Caller,
+    runner: &str,
+    size: TerminalSize,
+    spec: Spec,
+    tap: Option<tokio::sync::oneshot::Sender<Ended>>,
+) -> Result<Terminal, ApiError> {
+    // The caps are counted and used up under one lock, so concurrent creates cannot overshoot.
+    let _turn = app.terminals.create.lock().await;
+    let runner = admit(app, me, runner, size).await?;
     let scrollback = (
         store::settings::value(&app.pool, Key::TerminalScrollbackBytes, Scope::Server).await?,
         store::settings::value(&app.pool, Key::TerminalScrollbackBudget, Scope::Server).await?,
@@ -1008,11 +1008,47 @@ async fn open(
     row(app, &info.terminal).await
 }
 
+fn need_terminal_scope(me: &Caller) -> Result<(), ApiError> {
+    if me.device.scopes.iter().any(|s| s == "terminal") {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        axum::http::StatusCode::FORBIDDEN,
+        "forbidden_scope",
+        "this device may not open terminals",
+    ))
+}
+
+/// Every refusal [`open_ssh`] would make on its own (the terminal scope, the size range, the
+/// per-device and per-runner caps, a usable runner), without opening anything. A module calls it
+/// BEFORE it leases any secret for the terminal, so a refusal costs no lease. It is a check, not a
+/// reservation: `open_ssh` checks again, and a module revokes what it leased when that fails.
+///
+/// # Errors
+///
+/// The same as [`open_ssh`]'s checks.
+pub async fn check_ssh_open(
+    app: &App,
+    me: &Caller,
+    runner: &str,
+    size: TerminalSize,
+) -> Result<(), ApiError> {
+    need_terminal_scope(me)?;
+    let _turn = app.terminals.create.lock().await;
+    admit(app, me, runner, size).await.map(|_| ())
+}
+
 /// An interactive SSH terminal for a module (Leyline): the same open as `POST /terminals` (caps,
-/// row, audit, monitor), with `ssh` as the `PtyOpen`. The caller's route passed the module's gate;
-/// this needs the caller to hold the `terminal` scope, like the terminal routes. The answer is the
-/// terminal and a channel that says how it ended. The hub refuses `ssh` to a runner that does not
-/// list `pty.ssh` (it would open a local shell), whoever asks.
+/// row, audit, monitor), with `ssh` as the `PtyOpen`. This needs the caller to hold the `terminal`
+/// scope, like the terminal routes. The answer is the terminal and a channel that says how it
+/// ended. The hub refuses `ssh` to a runner that does not list `pty.ssh` (it would open a local
+/// shell), whoever asks.
+///
+/// REQUIREMENT ON THE CALLER (not enforced here: the gate lives in another crate, so no type this
+/// crate defines could only be made by it): the module must have passed its own gate for this
+/// exact host and action (Leyline: `gate::authorize(Terminal)` returns an `Authorized`, which
+/// `terminal::start` holds for the whole call), and must call [`check_ssh_open`] before it leases
+/// any key. Nothing else may call this function. A new caller needs the same review as the gate.
 ///
 /// # Errors
 ///
@@ -1024,13 +1060,7 @@ pub async fn open_ssh(
     ssh: ainkrad_proto::v2::SshTerminal,
     size: TerminalSize,
 ) -> Result<(Terminal, tokio::sync::oneshot::Receiver<Ended>), ApiError> {
-    if !me.device.scopes.iter().any(|s| s == "terminal") {
-        return Err(ApiError::new(
-            axum::http::StatusCode::FORBIDDEN,
-            "forbidden_scope",
-            "this device may not open terminals",
-        ));
-    }
+    need_terminal_scope(me)?;
     let (tx, rx) = tokio::sync::oneshot::channel();
     let spec = Spec {
         program: None,

@@ -136,6 +136,18 @@ impl Module for Leyline {
         MODULE
     }
 
+    fn attach(&self, app: &App) {
+        // A host terminal's monitor lives in the process: rows left open by the last one are over.
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let app = app.clone();
+            rt.spawn(async move {
+                if terminal::close_orphans(&app).await.is_err() {
+                    tracing::warn!("leyline sessions left open could not be closed");
+                }
+            });
+        }
+    }
+
     fn routes(&self) -> Router<App> {
         Router::new()
             .route("/hosts", get(hosts::list).post(hosts::create))

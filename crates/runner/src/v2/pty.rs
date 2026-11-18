@@ -23,7 +23,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ainkrad_proto::v2::{
     Body, Control, Credit, DRIVER_PTY, DriverInfo, Emit, ErrorCode, OP_PTY_ATTACH, OP_PTY_CLOSE,
     OP_PTY_OPEN, Outflow, Output, PtyOpen, Reply, SCROLLBACK_BUDGET, SCROLLBACK_BYTES,
-    SIGNAL_HOST_LOST, SIGNALS, STREAM_WINDOW, Snapshot, StreamError, TerminalExit, TerminalInfo,
+    SIGNAL_HOST_LOST, SIGNALS, SSH_PTY_EXIT_HOST_KEY_CHANGED, SSH_PTY_EXIT_HOST_KEY_UNKNOWN,
+    STREAM_WINDOW, Snapshot, StreamError, TerminalExit, TerminalInfo,
 };
 use ainkrad_ptyhost::client::{HostReader, HostWriter, connect, launch, new_id, scan};
 use ainkrad_ptyhost::host::scrollback_dir;
@@ -160,6 +161,13 @@ fn exit_of(terminal: &str, e: &Exit) -> TerminalExit {
         terminal: terminal.to_owned(),
         exit_code: e.code,
         signal: e.signal.clone(),
+        // Only a refusal's own exit codes carry it, and only `ssh-pty` can exit with those.
+        host_key: e.host_key.clone().filter(|_| {
+            matches!(
+                e.code,
+                Some(SSH_PTY_EXIT_HOST_KEY_UNKNOWN | SSH_PTY_EXIT_HOST_KEY_CHANGED)
+            )
+        }),
     }
 }
 
@@ -170,6 +178,7 @@ fn lost_exit(terminal: &str) -> TerminalExit {
         terminal: terminal.to_owned(),
         exit_code: None,
         signal: Some(SIGNAL_HOST_LOST.to_owned()),
+        host_key: None,
     }
 }
 
