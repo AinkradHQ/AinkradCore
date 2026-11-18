@@ -2,6 +2,7 @@
 //! only (no tool calls, no tool output, no reasoning), in the one item format. The transcript was
 //! redacted by the runner and by the Core when stored, and the intake cleans it again.
 
+use ainkrad_proto::v2::said_block;
 use brain_model::item::{Author, AuthorKind, Item, MAX_TEXT, Origin, SourceKind, hash_of};
 use serde_json::Value;
 
@@ -15,22 +16,22 @@ const PART_BYTES: usize = MAX_TEXT - 4096;
 /// and a harness's native log lines (`message.role` / `content` blocks), as imported files have.
 pub(crate) fn render(body: &Value) -> Option<String> {
     let core = match body["type"].as_str() {
-        Some("assistant_text") => Some("Assistant"),
-        Some("message") => Some("User"),
+        Some("assistant_text") => Some(false),
+        Some("message") => Some(true),
         _ => None,
     };
-    if let Some(who) = core {
+    if let Some(user) = core {
         let text = body["text"].as_str()?.trim();
-        return (!text.is_empty()).then(|| format!("{who}: {text}"));
+        return (!text.is_empty()).then(|| said_block(user, text));
     }
     let role = body["message"]["role"]
         .as_str()
         .or_else(|| body["role"].as_str())
         .or_else(|| body["type"].as_str())
         .or_else(|| body["event"].as_str())?;
-    let who = match role {
-        "user" => "User",
-        "assistant" => "Assistant",
+    let user = match role {
+        "user" => true,
+        "assistant" => false,
         _ => return None,
     };
     let content = if body["message"]["content"].is_null() {
@@ -49,7 +50,7 @@ pub(crate) fn render(body: &Value) -> Option<String> {
         _ => return None,
     };
     let text = text.trim();
-    (!text.is_empty()).then(|| format!("{who}: {text}"))
+    (!text.is_empty()).then(|| said_block(user, text))
 }
 
 pub(crate) fn ulid(now_ms: u64) -> String {

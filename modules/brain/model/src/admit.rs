@@ -15,6 +15,8 @@ pub const Q_HI: f32 = 0.70;
 pub const Q_GROUND_FLOOR: f32 = 0.34;
 /// Q: below this grounding share the body is flagged `weak_grounding` (a reason only).
 pub const Q_GROUND_WEAK: f32 = 0.60;
+/// Q: share of a rule's content words that must occur in ONE user turn of ONE cited source.
+pub const Q_USER_GROUNDING: f32 = 0.70;
 /// Q: shortest body, in characters and in words.
 pub const Q_MIN_CHARS: usize = 12;
 pub const Q_MIN_WORDS: usize = 3;
@@ -147,6 +149,21 @@ const STOP: &[&str] = &[
     "every", "any", "all", "في", "من", "على", "الى", "عن", "هذا", "هذه", "ذلك", "التي", "الذي",
     "كان", "مع", "هو", "هي", "ثم", "او",
 ];
+
+/// More stop words for the user-turn check only (the corpus bands stay), folded as `norm` folds.
+const STOP_USER: &[&str] = &[
+    "just", "like", "make", "sure", "some", "more", "very", "much", "what", "which", "there",
+    "here", "they", "them", "these", "those", "been", "being", "does", "did", "how", "who", "why",
+    "where", "while", "because", "only", "out", "get", "got", "let", "please", "علي", "الي", "الذين",
+    "كانت", "يكون", "انه", "بعد", "قبل", "عند", "حتي", "لكن", "بين", "كما", "ايضا", "هناك", "عليه",
+];
+
+/// Distinct content stems of `s`: words of 3+ characters, stop words (English, Arabic) dropped.
+pub fn content_stems(s: &str) -> HashSet<String> {
+    let stop = |t: &str| STOP.contains(&t) || STOP_USER.contains(&t);
+    let keep = |t: &String| t.chars().count() >= 3 && !stop(t);
+    tokens(s).into_iter().filter(keep).map(|t| stem(&t)).collect()
+}
 
 const GREET: &[&str] = &[
     "hi",
