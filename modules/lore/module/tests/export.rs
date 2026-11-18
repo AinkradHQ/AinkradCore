@@ -31,7 +31,7 @@ impl Drop for Fx {
     }
 }
 
-/// A Core with Lore migrated and mounted (or, `on = false`, a Core that does not carry it).
+/// A Core with Lore migrated and mounted.
 async fn fx() -> Fx {
     static N: AtomicUsize = AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -275,7 +275,7 @@ async fn hostile_titles_cannot_escape_the_folder() {
         assert!(n.starts_with("personal/") && n.ends_with(".md"), "{n}");
         let stem = &n["personal/".len()..];
         assert!(
-            !stem.contains(['/', '\\', '.']) || stem.matches('.').count() == 1,
+            !stem.trim_end_matches(".md").contains(['/', '\\', '.']),
             "{n}"
         );
         assert!(!n.contains("..") && !n.chars().any(char::is_control), "{n}");
