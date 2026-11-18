@@ -249,6 +249,8 @@ async fn main() -> ExitCode {
         ["ssh-pty"] => return ainkrad_runner::v2::ssh_pty_main().await,
         // The root side of one-click tool install (systemd socket activation, see `toolhelper`).
         ["tools-helper"] => return ainkrad_runner::toolhelper::main(),
+        // Project runs: Podman as ainkrad-run (systemd socket activation, see `run`).
+        ["run-helper"] => return ainkrad_runner::run::helper::main(),
         ["mcp-forward", port, sock] => {
             return ainkrad_runner::mcp_bridge::forward_main(port, sock, false).await;
         }

@@ -69,21 +69,45 @@ pub struct Daemon {
     pub control: Option<Arc<super::control::Control>>,
     pub tls: Option<Arc<rustls::ClientConfig>>,
     pub backoff: Backoff,
+    /// The runner's checkout root (its work root): a run's checkouts must lie under it.
+    pub run_checkouts: PathBuf,
 }
 
 impl Daemon {
-    /// `ssh.exec`, redeeming key leases with this runner's own signed requests; offered where
-    /// `exec.run` is (`SshDriver::info`).
-    fn ssh_driver(&self) -> Option<Arc<super::SshDriver>> {
+    /// Redeems leases with this runner's own signed requests.
+    fn redeem(&self) -> Option<super::agent::secrets::Redeem> {
         let url = self.enrolment.lock().unwrap().url.clone();
         let client = Arc::new(Client::new(&url, self.tls.clone()).ok()?);
-        let redeem = super::agent::secrets::http_redeem(
+        Some(super::agent::secrets::http_redeem(
             client,
             Arc::clone(&self.key),
             Arc::clone(&self.enrolment),
-        );
-        let ssh = super::SshDriver::new(Arc::clone(&self.exec), redeem);
+        ))
+    }
+
+    /// `ssh.exec`; offered where `exec.run` is (`SshDriver::info`).
+    fn ssh_driver(&self) -> Option<Arc<super::SshDriver>> {
+        let ssh = super::SshDriver::new(Arc::clone(&self.exec), self.redeem()?);
         ssh.info().map(|_| Arc::new(ssh))
+    }
+
+    /// Project runs; offered where the run helper is installed (`RunDriver::info`).
+    fn run_driver(&self) -> Option<Arc<super::RunDriver>> {
+        // The runner refuses runs itself unless its policy has them on (the Core checks too).
+        if !self.control.as_ref().is_some_and(|c| c.active.runs) {
+            return None;
+        }
+        let run = super::RunDriver::new(
+            crate::run::helper::SOCKET,
+            self.redeem()?,
+            self.run_checkouts.clone(),
+        );
+        // The Core's repo copies are read through the agent driver's mirror path, where it is on.
+        let run = match &self.agents {
+            Some(agents) => run.with_clones(Arc::clone(agents)),
+            None => run,
+        };
+        run.info().map(|_| Arc::new(run))
     }
 
     /// Runs until `stop` turns true (`Ok`) or a configuration error (`Err`).
@@ -108,6 +132,9 @@ impl Daemon {
         }
         if let Some(design) = super::DesignDriver::discover() {
             session = session.with_design(Arc::new(design));
+        }
+        if let Some(run) = self.run_driver() {
+            session = session.with_run(run);
         }
         let mut delay = self.backoff.min;
         let mut refused = 0;
@@ -205,11 +232,17 @@ pub async fn from_state(
     let agents = agents.map(|a| {
         let client = Client::new(&url, tls.clone()).map(Arc::new);
         let agent = Arc::new(match client {
-            Ok(c) => a.with_redeem(super::agent::secrets::http_redeem(
-                c,
-                Arc::clone(&key),
-                Arc::clone(&enrolment),
-            )),
+            Ok(c) => a
+                .with_mirror(super::mirror::http_upstream(
+                    Arc::clone(&c),
+                    Arc::clone(&key),
+                    Arc::clone(&enrolment),
+                ))
+                .with_redeem(super::agent::secrets::http_redeem(
+                    c,
+                    Arc::clone(&key),
+                    Arc::clone(&enrolment),
+                )),
             Err(_) => a,
         });
         // A tier that goes away mid-life ends the sessions that need it (E8a-09.3).
@@ -234,6 +267,7 @@ pub async fn from_state(
         control,
         tls,
         backoff: Backoff::default(),
+        run_checkouts: super::cli::runtime_paths(&state.0)[1].clone(),
     };
     daemon.run(stop).await
 }
@@ -305,6 +339,7 @@ mod tests {
                 max: Duration::from_millis(20),
                 refused: Duration::from_millis(20),
             },
+            run_checkouts: PathBuf::from("/nonexistent"),
         }
     }
 

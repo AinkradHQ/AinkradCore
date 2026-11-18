@@ -13,7 +13,7 @@ use ainkrad_core::audit::{NewAuditEvent, OriginKind};
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY};
 use ainkrad_core_server::jobs::Job;
-use ainkrad_core_server::module::{Module, ModuleSetting, Zeroizing};
+use ainkrad_core_server::module::{BoxFut, Module, ModuleSetting, Zeroizing};
 use ainkrad_core_server::store::{Migration, audit, events};
 use axum::routing::{get, patch, post, put};
 use axum::{Extension, Json, Router};
@@ -722,6 +722,33 @@ impl Module for Brain {
             "brain.alias.set",
             "brain.alias.removed",
         ]
+    }
+
+    fn project_session<'a>(
+        &'a self,
+        app: &'a App,
+        session: &'a str,
+        project: i64,
+        by: &'a str,
+    ) -> BoxFut<'a, Result<(), String>> {
+        Box::pin(project_rooms::claim_for_session(app, session, project, by))
+    }
+
+    fn project_launch<'a>(
+        &'a self,
+        app: &'a App,
+        session: &'a str,
+        project: i64,
+    ) -> BoxFut<'a, Result<(), String>> {
+        Box::pin(project_rooms::require_claim(app, session, project))
+    }
+
+    fn session_instructions<'a>(
+        &'a self,
+        app: &'a App,
+        session: &'a str,
+    ) -> BoxFut<'a, Option<String>> {
+        Box::pin(project_rooms::instructions_for_session(app, self, session))
     }
 
     fn query_names(&self) -> &'static [&'static str] {

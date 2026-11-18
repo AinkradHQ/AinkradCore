@@ -310,7 +310,7 @@ async fn insert_successor(
                 false => format!("{NOTE}\n\n{p}"),
             },
         );
-    let id = crate::auth::crypto::random_id("as_");
+    let id = crate::auth::crypto::session_id();
     sqlx::query(
         "INSERT INTO core_agent_sessions (id, runner, harness, model, prompt, workspace, policy, \
          secrets, state, created_by, created_at, updated_at, user_id, agent, chain_id, chain, \

@@ -99,6 +99,17 @@ pub enum Command {
     SshAgentLoad(super::SshAgentLoad),
     #[serde(rename = "ssh.agent.drop")]
     SshAgentDrop(super::SshAgentDrop),
+    #[serde(rename = "run.start")]
+    RunStart(super::RunStart),
+    #[serde(rename = "run.stop")]
+    RunStop(super::RunStop),
+    #[serde(rename = "run.status")]
+    RunStatus(super::RunStatusReq),
+    #[serde(rename = "run.observe")]
+    RunObserve(super::RunObserveReq),
+    /// A TCP stream to an exposed port of a live run (P6-01); bytes are `output` frames.
+    #[serde(rename = "port.open")]
+    PortOpen(super::PortOpen),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -149,6 +160,11 @@ impl Command {
             Self::DesignFidelity(_) => super::OP_DESIGN_FIDELITY,
             Self::SshAgentLoad(_) => super::OP_SSH_AGENT_LOAD,
             Self::SshAgentDrop(_) => super::OP_SSH_AGENT_DROP,
+            Self::RunStart(_) => super::OP_RUN_START,
+            Self::RunStop(_) => super::OP_RUN_STOP,
+            Self::RunStatus(_) => super::OP_RUN_STATUS,
+            Self::RunObserve(_) => super::OP_RUN_OBSERVE,
+            Self::PortOpen(_) => super::OP_PORT_OPEN,
             Self::Unknown => "unknown",
         }
     }
@@ -280,6 +296,19 @@ pub enum Reply {
     SshAgentLoad(super::SshAgentLoaded),
     #[serde(rename = "ssh.agent.drop")]
     SshAgentDrop(super::SshAgentDropped),
+    /// `run.start` and `run.stop` answer with the run's state; `run.status` with every run asked for.
+    #[serde(rename = "run.start")]
+    RunStart(super::RunInfo),
+    #[serde(rename = "run.stop")]
+    RunStop(super::RunInfo),
+    #[serde(rename = "run.status")]
+    RunStatus(super::RunList),
+    /// `run.observe`: service metrics and the new log lines of one run.
+    #[serde(rename = "run.observe")]
+    RunObserve(super::RunObserve),
+    /// The last frame of `port.open`.
+    #[serde(rename = "port.open")]
+    PortOpen(super::PortClosed),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

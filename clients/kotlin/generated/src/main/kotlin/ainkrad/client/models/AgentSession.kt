@@ -54,6 +54,7 @@ import kotlinx.serialization.Contextual
  * @param outcome Once over: `{\"kind\": \"succeeded\" | \"failed\" | \"cancelled\" | \"token_cap\" | \"stalled\" | \"lost\", \"reason\": …}`.
  * @param plan Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`).
  * @param policy Its permission mode now: `ask`, `accept_edits` or `sandboxed` (the create's `policy.mode`, or the latest `setAgentSessionMode`).
+ * @param projectId The project it was started for (`createAgentSession` with `project_id`): its workspace is that project's repos, cloned from the Core's copies. Absent for any other session.
  * @param repicked How many accounts a launch refused after the pick before the one it holds (at most 2).
  * @param resumes How many times it was resumed.
  * @param run The run it belongs to: its first attempt's id. A failover is a new session (an attempt) of the same run; filter `listAgentSessions` with `run`.
@@ -179,6 +180,10 @@ data class AgentSession (
     /* Its permission mode now: `ask`, `accept_edits` or `sandboxed` (the create's `policy.mode`, or the latest `setAgentSessionMode`). */
     @SerialName(value = "policy")
     val policy: kotlin.String? = null,
+
+    /* The project it was started for (`createAgentSession` with `project_id`): its workspace is that project's repos, cloned from the Core's copies. Absent for any other session. */
+    @SerialName(value = "project_id")
+    val projectId: kotlin.Long? = null,
 
     /* How many accounts a launch refused after the pick before the one it holds (at most 2). */
     @SerialName(value = "repicked")

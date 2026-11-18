@@ -65,6 +65,8 @@ type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub const MAX_WAIT: Duration = Duration::from_secs(25);
 
 /// Entries one `agent.read` answers with at most (the rest on the next).
+/// The session id every project run's clone is made under (`as_run<run id>`, P5-05).
+pub(super) const RUN_SESSION_PREFIX: &str = "as_run";
 const READ_BATCH: usize = 256;
 const MAX_ENTRY_BYTES: usize = 256 * 1024;
 const MAX_BATCH_BYTES: usize = 1024 * 1024;
@@ -197,6 +199,8 @@ trait Harness: Send + Sync {
         helper: Option<&'a std::path::Path>,
     ) -> Fut<'a, Result<PathBuf, String>>;
     fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()>;
+    fn discard_agent_workspaces(&self, name: &str, prefix: bool, keep: &[String]);
+    fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream);
     fn work_dir(&self, job: &Job) -> Option<PathBuf>;
 }
 
@@ -240,6 +244,12 @@ impl<E: Executor> Harness for E {
     }
     fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()> {
         Box::pin(Executor::cleanup_agent_workspace(self, session, generation))
+    }
+    fn discard_agent_workspaces(&self, name: &str, prefix: bool, keep: &[String]) {
+        Executor::discard_agent_workspaces(self, name, prefix, keep);
+    }
+    fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream) {
+        Executor::set_mirror_upstream(self, up);
     }
     fn work_dir(&self, job: &Job) -> Option<PathBuf> {
         Executor::work_dir(self, job)
@@ -350,7 +360,10 @@ impl AgentDriver {
         secrets::sweep(&config.secrets_dir)?;
         secrets::private_dir(&config.dir)?;
         let sessions = reload(&config);
-        executor.recover_agent_workspaces(&sessions.keys().cloned().collect::<Vec<_>>());
+        let adopted: Vec<String> = sessions.keys().cloned().collect();
+        executor.recover_agent_workspaces(&adopted);
+        // A run's clone (P5-05) is deleted when its start ends; one a crash left is leftover.
+        executor.discard_agent_workspaces(RUN_SESSION_PREFIX, true, &adopted);
         Ok(Self {
             config,
             harness: Arc::new(executor),
@@ -370,6 +383,31 @@ impl AgentDriver {
     pub fn with_redeem(mut self, redeem: Redeem) -> Self {
         self.redeem = Some(redeem);
         self
+    }
+
+    /// How a project repo's copy on the Core is read (`mirror::http_upstream`).
+    pub fn with_mirror(self, up: crate::workspace::relay::Upstream) -> Self {
+        self.harness.set_mirror_upstream(up);
+        self
+    }
+
+    /// A project run's checkouts (P5-05): cloned from the Core's copies exactly as a session's are
+    /// (leased by the Core to this runner, through the loopback relay), under a session id of the
+    /// run's own. `Err` is why they could not be made.
+    pub async fn run_workspace(
+        &self,
+        session: &str,
+        workspace: &Workspace,
+    ) -> Result<PathBuf, String> {
+        self.harness
+            .prepare_agent_workspace(session, 0, workspace, None)
+            .await
+    }
+
+    /// Deletes what `run_workspace` made (or half made), saved work included: the run's helper
+    /// holds its own copy by now, and a session's `session-wip` is never cleaned.
+    pub fn discard_run_workspace(&self, session: &str) {
+        self.harness.discard_agent_workspaces(session, false, &[]);
     }
 
     pub fn with_versions(mut self, versions: BTreeMap<String, String>) -> Self {
@@ -461,6 +499,12 @@ impl AgentDriver {
     pub fn start(self: &Arc<Self>, req: AgentStart) -> Result<AgentEvents, StreamError> {
         if !valid_session(&req.session) {
             return Err(refuse(ErrorCode::InvalidArgs, "a session id is as_…"));
+        }
+        if req.session.starts_with(RUN_SESSION_PREFIX) {
+            return Err(refuse(
+                ErrorCode::InvalidArgs,
+                "session ids starting as_run belong to project runs",
+            ));
         }
         if req.secrets.iter().any(|s| !secrets::valid_var(&s.var)) {
             return Err(refuse(
@@ -603,7 +647,7 @@ impl AgentDriver {
             token_caps: None,
             policy: req.policy.clone(),
             issue_key: None,
-            instructions: None,
+            instructions: req.instructions.clone(),
             account: None,
             fallbacks: vec![],
             limits: None,

@@ -23,13 +23,21 @@ import kotlinx.serialization.Contextual
 /**
  * What changes; an omitted field is kept.
  *
+ * @param cpuLimit CPUs a run may use, 0.1 to 16.
  * @param description 
  * @param expose 
+ * @param idleMinutes Idle stop, 5 to 1440 minutes.
+ * @param memLimitMb Memory a run may use, 64 to 32768 MB.
  * @param name 
+ * @param slug The link name (the slug); refused while the project runs or holds secrets.
  */
 @Serializable
 
 data class UpdateProject (
+
+    /* CPUs a run may use, 0.1 to 16. */
+    @SerialName(value = "cpu_limit")
+    val cpuLimit: kotlin.Double? = null,
 
     @SerialName(value = "description")
     val description: kotlin.String? = null,
@@ -37,8 +45,20 @@ data class UpdateProject (
     @SerialName(value = "expose")
     val expose: kotlin.Boolean? = null,
 
+    /* Idle stop, 5 to 1440 minutes. */
+    @SerialName(value = "idle_minutes")
+    val idleMinutes: kotlin.Long? = null,
+
+    /* Memory a run may use, 64 to 32768 MB. */
+    @SerialName(value = "mem_limit_mb")
+    val memLimitMb: kotlin.Long? = null,
+
     @SerialName(value = "name")
-    val name: kotlin.String? = null
+    val name: kotlin.String? = null,
+
+    /* The link name (the slug); refused while the project runs or holds secrets. */
+    @SerialName(value = "slug")
+    val slug: kotlin.String? = null
 
 ) {
 

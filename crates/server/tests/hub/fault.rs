@@ -137,6 +137,7 @@ async fn a_cut_mid_stream_loses_nothing_and_answers_once() {
             max: Duration::from_millis(200),
             ..Backoff::default()
         },
+        run_checkouts: std::path::PathBuf::from("/nonexistent"),
     };
     let (stop, stopping) = tokio::sync::watch::channel(false);
     let running = tokio::spawn(daemon.run(stopping));

@@ -26,6 +26,11 @@ pub struct Workspace {
     /// leases its push on it, so a rewritten branch lands only over the head it last saw.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_head: Option<String>,
+    /// A project repo (P3-02): clone it from the Core's copy of that repo id, not from `repo`
+    /// (which stays its remote, for the checkout's `origin`). Only the Core sets it, for a session
+    /// of a project; the Core serves the copy to this runner only while it holds a lease for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirror: Option<i64>,
 }
 
 impl Workspace {
@@ -38,6 +43,9 @@ impl Workspace {
                 .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
         if bad_name {
             return Some(format!("bad repo name {:?}", self.name));
+        }
+        if self.mirror.is_some_and(|m| m < 1) {
+            return Some("bad mirror repo id".into());
         }
         if self.also.len() > 15 || self.also.iter().any(|w| !w.also.is_empty()) {
             return Some("too many or nested repositories".into());

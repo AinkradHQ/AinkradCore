@@ -21,6 +21,10 @@ ignore = [
   # RUSTSEC-2026-0543 (chrono, "unmaintained", no vulnerability): reached through ainkrad-core-server; date formatting only.
   # Drop when the dependents move to jiff/time. Time-boxed: re-check by 2026-12-08.
   { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained (no vulnerability): date formatting only; re-check 2026-12-08" },
+  # RUSTSEC-2024-0449 (unsafe-libyaml, "unmaintained", no vulnerability): reached through serde_yaml, which the compose
+  # converter (P4-02, package add allowed by Ahmed 2026-11-17) uses to read a compose file as text; the file is
+  # size-capped and alias-capped before it is parsed. Drop when a maintained YAML parser replaces it. Re-check 2026-12-18.
+  { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml unmaintained (no vulnerability): compose converter only, input size-capped; re-check 2026-12-18" },
 ]
 
 [licenses]

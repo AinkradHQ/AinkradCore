@@ -116,6 +116,17 @@ pub fn random_id(prefix: &str) -> String {
     format!("{prefix}{body}")
 }
 
+/// A session id (`as_` + 26 Crockford characters) that never starts `as_run`: the runner keeps
+/// that prefix for a project run's clone and refuses an agent session under it.
+pub fn session_id() -> String {
+    loop {
+        let id = random_id("as_");
+        if !id.starts_with("as_run") {
+            return id;
+        }
+    }
+}
+
 /// Whether `id` is `prefix` + 26 lowercase Crockford characters, the first at most `7` (128
 /// bits).
 pub fn is_id(id: &str, prefix: &str) -> bool {

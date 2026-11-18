@@ -8,7 +8,7 @@
 //! handshake (`ACME_ALPN`).
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rustls::ServerConfig;
@@ -98,6 +98,15 @@ pub struct Certs {
     alpn_challenge: RwLock<Option<Arc<CertifiedKey>>>,
     /// HTTP-01: token to key authorization.
     http01: RwLock<HashMap<String, String>>,
+    /// The projects' wildcard (P6-02), set once at start: `*.<domain>` minus the Core's own host.
+    projects: OnceLock<Projects>,
+}
+
+#[derive(Debug)]
+struct Projects {
+    domain: String,
+    core: String,
+    key: Arc<CertifiedKey>,
 }
 
 impl Certs {
@@ -132,6 +141,26 @@ impl Certs {
         self.live.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
+    /// Serves `cert` (the Cloudflare Origin CA wildcard) for every project host under `domain`;
+    /// `core` (the ACME hostname) keeps its own certificate. Once: false when already set.
+    pub fn set_projects(&self, domain: &str, core: &str, cert: Cert) -> bool {
+        self.projects
+            .set(Projects {
+                domain: domain.to_ascii_lowercase(),
+                core: core.to_ascii_lowercase(),
+                key: cert.key,
+            })
+            .is_ok()
+    }
+
+    /// Whether `name` (an SNI) is a project's host: one label under the projects domain, not
+    /// reserved and not the Core's own. Such a connection never reaches the Core's routes.
+    pub fn is_project_host(&self, name: &str) -> bool {
+        self.projects
+            .get()
+            .is_some_and(|p| super::projects::label(name, &p.domain, &p.core).is_some())
+    }
+
     pub fn set_alpn_challenge(&self, key: Option<Arc<CertifiedKey>>) {
         *self
             .alpn_challenge
@@ -148,6 +177,11 @@ impl ResolvesServerCert for Certs {
                 .read()
                 .unwrap_or_else(|p| p.into_inner())
                 .clone();
+        }
+        if let (Some(p), Some(name)) = (self.projects.get(), hello.server_name())
+            && super::projects::label(name, &p.domain, &p.core).is_some()
+        {
+            return Some(Arc::clone(&p.key));
         }
         // None before the first certificate: the handshake fails, nothing panics.
         self.live().map(|c| c.key)

@@ -38,6 +38,10 @@ pub struct RunnerPolicy {
     /// Off by default; an older Core's policy without it reads as off.
     #[serde(default)]
     pub share_history: bool,
+    /// The runner takes project runs (`run.start`). Off by default; the Core places runs only on
+    /// runners that have it on. An older policy without it reads as off.
+    #[serde(default)]
+    pub runs: bool,
 }
 
 impl RunnerPolicy {
