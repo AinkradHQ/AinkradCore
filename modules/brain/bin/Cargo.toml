@@ -20,5 +20,5 @@ reqwest = { version = "0.12.28", default-features = false }
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "process", "net", "time"] }
 
 [features]
-# Local semantic help for sorting imported items (see brain-module). Off in the shipped build until it is wired.
-semantic = ["brain-module/semantic"]
+# Local semantic help for sorting imported items (see brain-module). On in the shipped build (scripts/release/build.sh); Lore search uses the same model.
+semantic = ["brain-module/semantic", "lore-module/semantic"]

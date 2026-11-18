@@ -41,17 +41,31 @@ pub(crate) async fn snapshot(
             return Ok(id);
         }
     }
+    keep(conn, &h.id, h.rev, &h.text, kind, name, origin).await
+}
+
+/// Stores `text` as a version of `note` (its head at `rev`, or text a merge or import could not keep) and
+/// prunes to the cap.
+pub(crate) async fn keep(
+    conn: &mut SqliteConnection,
+    note: &str,
+    rev: i64,
+    text: &str,
+    kind: &str,
+    name: Option<&str>,
+    origin: &str,
+) -> Result<String, ApiError> {
     let id = rand_id("lv_");
     sqlx::query(
         "INSERT INTO lore_versions (id, note, kind, name, rev, text, origin, created_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
     )
     .bind(&id)
-    .bind(&h.id)
+    .bind(note)
     .bind(kind)
     .bind(name)
-    .bind(h.rev)
-    .bind(&h.text)
+    .bind(rev)
+    .bind(text)
     .bind(origin)
     .execute(&mut *conn)
     .await?;
@@ -60,7 +74,7 @@ pub(crate) async fn snapshot(
          ORDER BY CASE kind WHEN 'auto' THEN 0 WHEN 'conflict' THEN 1 ELSE 2 END, created_at, rowid \
          LIMIT MAX((SELECT count(*) FROM lore_versions WHERE note = ?1) - ?3, 0))",
     )
-    .bind(&h.id)
+    .bind(note)
     .bind(&id)
     .bind(VERSIONS_MAX)
     .execute(&mut *conn)
