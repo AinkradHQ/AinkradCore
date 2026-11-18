@@ -102,8 +102,9 @@ async fn who(app: &App, session: &str) -> Result<Option<Who>, sqlx::Error> {
     let project: Option<i64> =
         sqlx::query_scalar("SELECT project_id FROM core_agent_sessions WHERE id = ?")
             .bind(&s.id)
-            .fetch_one(&app.pool)
-            .await?;
+            .fetch_optional(&app.pool)
+            .await?
+            .flatten();
     Ok(Some(Who {
         session: s.id,
         runner: s.runner,
@@ -156,10 +157,15 @@ pub(crate) async fn visible_rooms(app: &App, session: &str) -> Result<Vec<Visibl
     // The one room linked to the session's project; never matched by name.
     let linked: Option<String> = match w.project {
         Some(p) => {
-            sqlx::query_scalar("SELECT room FROM brain_project_rooms WHERE project = ?")
-                .bind(p.to_string())
-                .fetch_optional(&app.pool)
-                .await?
+            // An archived project revokes its room.
+            sqlx::query_scalar(
+                "SELECT r.room FROM brain_project_rooms r \
+                 JOIN core_projects p ON CAST(p.id AS TEXT) = r.project \
+                 WHERE r.project = ? AND p.state != 'archived'",
+            )
+            .bind(p.to_string())
+            .fetch_optional(&app.pool)
+            .await?
         }
         None => None,
     };

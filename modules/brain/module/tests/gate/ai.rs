@@ -23,13 +23,18 @@ fn ws(repo: &str) -> Value {
 /// Projects epic does) to the active room named after the repo's folder, when there is one.
 pub async fn session(fx: &Fx, repo: &str, providers: &[&str]) -> String {
     let s = session_unlinked(fx, repo, providers).await;
-    let base = repo.rsplit(['/', ':']).next().unwrap().trim_end_matches(".git");
-    let room: Option<String> =
-        sqlx::query_scalar("SELECT id FROM brain_rooms WHERE lower(name) = lower(?) AND state = 'active'")
-            .bind(base)
-            .fetch_optional(&fx.app.pool)
-            .await
-            .unwrap();
+    let base = repo
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap()
+        .trim_end_matches(".git");
+    let room: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM brain_rooms WHERE lower(name) = lower(?) AND state = 'active'",
+    )
+    .bind(base)
+    .fetch_optional(&fx.app.pool)
+    .await
+    .unwrap();
     if let Some(room) = room {
         link_session(fx, &s, &room).await;
     }
@@ -41,26 +46,38 @@ pub async fn session_unlinked(fx: &Fx, repo: &str, providers: &[&str]) -> String
     chain_session_in(fx, providers, Some(&ws(repo))).await
 }
 
-/// Makes a new project, links it to `room` and records it on session `s`.
+/// Links session `s` to `room`'s project (making one when the room has none: the link is 1:1).
 pub async fn link_session(fx: &Fx, s: &str, room: &str) {
-    let n: i64 = sqlx::query_scalar("SELECT count(*) + 1 FROM core_projects")
-        .fetch_one(&fx.app.pool)
-        .await
-        .unwrap();
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO core_projects (slug, name, source, created_at, updated_at) \
-         VALUES (?, 'P', 'manual', '2026-11-18T00:00:00Z', '2026-11-18T00:00:00Z') RETURNING id",
-    )
-    .bind(format!("p{n}"))
-    .fetch_one(&fx.app.pool)
-    .await
-    .unwrap();
-    sqlx::query("INSERT INTO brain_project_rooms (project, room) VALUES (?, ?)")
-        .bind(id.to_string())
-        .bind(room)
-        .execute(&fx.app.pool)
-        .await
-        .unwrap();
+    let linked: Option<String> =
+        sqlx::query_scalar("SELECT project FROM brain_project_rooms WHERE room = ?")
+            .bind(room)
+            .fetch_optional(&fx.app.pool)
+            .await
+            .unwrap();
+    let id: i64 = match linked {
+        Some(p) => p.parse().unwrap(),
+        None => {
+            let n: i64 = sqlx::query_scalar("SELECT count(*) + 1 FROM core_projects")
+                .fetch_one(&fx.app.pool)
+                .await
+                .unwrap();
+            let id: i64 = sqlx::query_scalar(
+                "INSERT INTO core_projects (slug, name, source, created_at, updated_at) \
+                 VALUES (?, 'P', 'manual', '2026-11-18T00:00:00Z', '2026-11-18T00:00:00Z') RETURNING id",
+            )
+            .bind(format!("p{n}"))
+            .fetch_one(&fx.app.pool)
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO brain_project_rooms (project, room) VALUES (?, ?)")
+                .bind(id.to_string())
+                .bind(room)
+                .execute(&fx.app.pool)
+                .await
+                .unwrap();
+            id
+        }
+    };
     sqlx::query("UPDATE core_agent_sessions SET project_id = ? WHERE id = ?")
         .bind(id)
         .bind(s)
@@ -178,6 +195,65 @@ async fn room_visibility_follows_the_project_room_link_not_the_name() {
     // A linked project does not see another project's room either.
     assert!(!ids(&fx, &linked).await.contains(&alpha));
     assert!(!ids(&fx, &linked).await.contains(&beta));
+}
+
+async fn exec(fx: &Fx, sql: &str, bind: &str) {
+    sqlx::query(sql)
+        .bind(bind)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_linked_room_is_hidden_when_archived_denied_unlinked_or_its_project_archived() {
+    let fx = fx().await;
+    let room = committed_room_named(&fx, "Alpha", &[("A", "alpha text")]).await;
+    let twin = committed_room_named(&fx, "Alpha", &[("T", "twin text")]).await;
+    let s = session_unlinked(&fx, ALPHA, &["anthropic"]).await;
+    link_session(&fx, &s, &room).await;
+    // Two active rooms with the one name: only the linked one.
+    assert_eq!(ids(&fx, &s).await, std::slice::from_ref(&room));
+    assert!(!ids(&fx, &s).await.contains(&twin));
+
+    // Policy denies the chain.
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("/rooms/{room}/policy"),
+        Some(json!({"model": "local_only"})),
+    )
+    .await;
+    assert!(ids(&fx, &s).await.is_empty());
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("/rooms/{room}/policy"),
+        Some(json!({"model": "cloud"})),
+    )
+    .await;
+    assert_eq!(ids(&fx, &s).await, std::slice::from_ref(&room));
+
+    // Archived project revokes its room; active again restores it.
+    exec(&fx, "UPDATE core_projects SET state = 'archived' WHERE CAST(id AS TEXT) = (SELECT project FROM brain_project_rooms WHERE room = ?)", &room).await;
+    assert!(ids(&fx, &s).await.is_empty());
+    exec(&fx, "UPDATE core_projects SET state = 'active' WHERE CAST(id AS TEXT) = (SELECT project FROM brain_project_rooms WHERE room = ?)", &room).await;
+    assert_eq!(ids(&fx, &s).await, std::slice::from_ref(&room));
+
+    // Unlinking hides it from the live session.
+    exec(&fx, "DELETE FROM brain_project_rooms WHERE room = ?", &room).await;
+    assert!(ids(&fx, &s).await.is_empty());
+    link_session(&fx, &s, &room).await;
+    assert_eq!(ids(&fx, &s).await, std::slice::from_ref(&room));
+
+    // Archived room is hidden.
+    exec(
+        &fx,
+        "UPDATE brain_rooms SET state = 'archived' WHERE id = ?",
+        &room,
+    )
+    .await;
+    assert!(ids(&fx, &s).await.is_empty());
 }
 
 #[tokio::test]
