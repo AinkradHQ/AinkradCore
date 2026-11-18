@@ -16,7 +16,11 @@ use crate::ffi::{DE_ERR_ARG, DE_ERR_INVALID};
 use crate::host::{Host, MAX_COORD, MAX_VIEW};
 
 pub(crate) const MAX_PEERS: usize = 64;
-pub(crate) const MAX_MESSAGE: usize = 4096;
+pub(crate) const MAX_MESSAGE: usize = 8192;
+/// The relay's input limit (`ws.rs` `MAX_PRESENCE_BYTES`); the relay adds `peer`, `conn` and escapes, so what reaches
+/// the engine can be larger than what was sent, hence `MAX_MESSAGE` above.
+#[cfg(test)]
+const RELAY_INPUT: usize = 4096;
 pub(crate) const MAX_SELECTION: usize = 256;
 pub(crate) const MAX_LABEL: usize = 40;
 pub(crate) const TTL_MS: u64 = 30_000;
@@ -78,12 +82,17 @@ fn peer_ok(p: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b':' | b'-'))
 }
 
+/// Unicode format characters that reorder or hide text: bidi controls, zero-width marks, the BOM.
+fn is_format(c: char) -> bool {
+    matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
 fn label_of(v: Option<&Value>, peer: &str) -> String {
     let l: String = v
         .and_then(Value::as_str)
         .unwrap_or("")
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !c.is_control() && !is_format(*c))
         .take(MAX_LABEL)
         .collect();
     let l = l.trim();
@@ -387,6 +396,28 @@ mod tests {
             p.apply(&msg(3, "person:d_b", ""), TTL_MS + 5),
             "a known conn updates"
         );
+    }
+
+    #[test]
+    fn a_message_at_the_relay_limit_survives_reserialising() {
+        // a relay-sized selection, as the relay re-serialises it (ids escaped, peer and conn added)
+        let ids = vec![r#""n_aaaaaaaaaaaa""#; 200].join(",");
+        let sent = format!(r#"{{"label":"Ana","selection":[{ids}],"pad":"{}"}}"#, "x".repeat(RELAY_INPUT - 3500));
+        assert!(sent.len() <= RELAY_INPUT);
+        let mut v: Value = serde_json::from_str(&sent).unwrap();
+        v["peer"] = json!("session:as_aaaaaaaaaaaaaaaaaaaa");
+        v["conn"] = json!(18446744073709551615u64);
+        let text = v.to_string();
+        assert!(Peers::default().apply(&text, 0));
+        assert!(MAX_MESSAGE >= 2 * RELAY_INPUT);
+    }
+
+    #[test]
+    fn labels_lose_format_characters() {
+        let mut p = Peers::default();
+        let m = msg(1, "person:d_a", "").replace("Ana", "A\\u202Eb\\u200Bc\\u2066d\\u2069e\\uFEFFf\\u200Fg");
+        assert!(p.apply(&m, 0));
+        assert_eq!(p.marks(0, |_| None)[0].label, "Abcdefg");
     }
 
     #[test]

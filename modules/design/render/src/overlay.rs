@@ -142,6 +142,25 @@ pub fn draw(canvas: &Canvas, cam: &Camera, o: &Overlay) {
     }
 }
 
+/// Outlines drawn per peer; the full selection stays in the peer list.
+pub const MAX_PEER_OUTLINES: usize = 32;
+
+thread_local! {
+    /// The chip font, built once per thread (the default typeface lookup is not free).
+    static CHIP_FONT: Option<Font> = FontMgr::new()
+        .legacy_make_typeface(None, FontStyle::default())
+        .map(|t| Font::from_typeface(t, 11.0));
+}
+
+/// Screen rects of a peer's selection that touch `clip` (all when unknown), at most [`MAX_PEER_OUTLINES`].
+fn visible_outlines(sel: &[Rect], cam: &Camera, clip: Option<Rect>) -> Vec<Rect> {
+    sel.iter()
+        .map(|r| screen(cam, *r))
+        .filter(|r| clip.is_none_or(|c| c.intersects(r)))
+        .take(MAX_PEER_OUTLINES)
+        .collect()
+}
+
 /// Rounded-rect markers only: an outline per selected node, a small rounded square at the cursor and a rounded chip
 /// with the label beside it.
 fn draw_peer(canvas: &Canvas, cam: &Camera, p: &PeerMark) {
@@ -151,8 +170,7 @@ fn draw_peer(canvas: &Canvas, cam: &Camera, p: &PeerMark) {
     line.set_style(PaintStyle::Stroke);
     line.set_stroke_width(1.5);
     line.set_color(c);
-    for r in &p.selected {
-        let r = screen(cam, *r);
+    for r in visible_outlines(&p.selected, cam, canvas.local_clip_bounds()) {
         canvas.draw_rrect(RRect::new_rect_xy(r, 2.0, 2.0), &line);
     }
     let Some((wx, wy)) = p.cursor else { return };
@@ -164,9 +182,7 @@ fn draw_peer(canvas: &Canvas, cam: &Camera, p: &PeerMark) {
         RRect::new_rect_xy(Rect::from_xywh(x - 3.0, y - 3.0, 7.0, 7.0), 2.0, 2.0),
         &fill,
     );
-    let font = FontMgr::new()
-        .legacy_make_typeface(None, FontStyle::default())
-        .map(|t| Font::from_typeface(t, 11.0));
+    let font = CHIP_FONT.with(|f| f.clone());
     let (w, h, pad) = match &font {
         Some(f) => (f.measure_str(&p.label, None).0, 16.0, 6.0),
         None => (0.0, 16.0, 6.0),
@@ -194,5 +210,22 @@ fn draw_peer(canvas: &Canvas, cam: &Camera, p: &PeerMark) {
             f,
             &ink,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_outlines_skip_off_screen_and_cap() {
+        let cam = Camera::default();
+        let clip = Some(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
+        let on = Rect::from_xywh(10.0, 10.0, 5.0, 5.0);
+        let off = Rect::from_xywh(5000.0, 5000.0, 5.0, 5.0);
+        assert_eq!(visible_outlines(&[off, on, off], &cam, clip).len(), 1);
+        let many = vec![on; MAX_PEER_OUTLINES + 20];
+        assert_eq!(visible_outlines(&many, &cam, clip).len(), MAX_PEER_OUTLINES);
+        assert_eq!(visible_outlines(&[off], &cam, None).len(), 1, "no clip, no culling");
     }
 }
