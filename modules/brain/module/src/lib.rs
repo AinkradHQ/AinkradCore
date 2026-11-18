@@ -32,6 +32,7 @@ mod answer_turns;
 mod auto_distil;
 mod backfill;
 pub mod card;
+pub mod me_card;
 mod change_routes;
 pub mod changes;
 pub mod cipher;
@@ -124,6 +125,12 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "brain_v2",
         up: include_str!("../migrations/0009_brain_v2.up.sql"),
         down: include_str!("../migrations/0009_brain_v2.down.sql"),
+    },
+    Migration {
+        version: 10,
+        name: "brain_one_open_distil",
+        up: include_str!("../migrations/0010_brain_one_open_distil.up.sql"),
+        down: include_str!("../migrations/0010_brain_one_open_distil.down.sql"),
     },
 ];
 
@@ -625,6 +632,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         ai::AiHits,
         ai::AiRecord,
         ai::AiRecords,
+        ai::AiPast,
         ai::AiEvidence,
         ai_propose::Propose,
         ai_propose::Proposed

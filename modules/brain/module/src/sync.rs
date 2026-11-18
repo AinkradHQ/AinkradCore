@@ -645,6 +645,19 @@ pub(crate) struct Outcome {
     pub new_rooms: i64,
 }
 
+/// Whether a proposal may be filed into an existing room by name alone. The proposal's kind guess
+/// must match the room's kind, else it goes to review as a new room. A `personal` or `global-safe`
+/// room is never reached by a name match from import or transcript content: only Lore's personal
+/// notes (proposal id `p-lore-*`, lore.rs) route there.
+fn may_route(room_kind: Option<&str>, kind_guess: &str, proposal: &str) -> bool {
+    match room_kind {
+        None => true, // no such room: the caller skips it anyway
+        Some(k) if k != kind_guess => false,
+        Some("personal" | "global-safe") => proposal.starts_with("p-lore-"),
+        Some(_) => true,
+    }
+}
+
 /// A proposal that names a room the user already has needs no new review (plan §3.2, stage 10):
 /// it is accepted and committed into that room as `assigned_by = 'rule'`. A new room or Unsorted
 /// stays in review and raises one notice. A run with nothing left to review closes.
@@ -664,6 +677,10 @@ pub(crate) async fn route_known(app: &App, b: &Brain, run: &str) -> Result<Outco
                 .bind(room_id(&name))
                 .fetch_optional(&app.pool)
                 .await?;
+        let kind_guess: String = p.try_get("kind_guess")?;
+        if !may_route(kind.as_deref(), &kind_guess, &id) {
+            continue;
+        }
         let held = kind
             .as_deref()
             .is_some_and(|k| (k == "employer" || k == "client") && !ROOM_BACKUP_READY);
@@ -832,4 +849,22 @@ pub(crate) fn job(b: &Brain) -> Job {
         Schedule::Every(SYNC_EVERY_SECS),
         Arc::new(SyncJob(b.clone())),
     )
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::may_route;
+
+    #[test]
+    fn a_project_folder_named_like_the_personal_room_does_not_land_in_it() {
+        // An import proposal named "Me" guessed as a product: kind differs, so it goes to review.
+        assert!(!may_route(Some("personal"), "product", "p-1"));
+        // Even a guess of `personal` from import content is not enough: only Lore routes there.
+        assert!(!may_route(Some("personal"), "personal", "p-1"));
+        assert!(!may_route(Some("global-safe"), "global-safe", "p-2"));
+        assert!(may_route(Some("personal"), "personal", "p-lore-me"));
+        // Other rooms: the kind must match.
+        assert!(may_route(Some("product"), "product", "p-3"));
+        assert!(!may_route(Some("product"), "client", "p-3"));
+    }
 }

@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use ainkrad_proto::redact::Redactor;
-use brain_model::merge::{Decision, body_norm};
+use brain_model::merge::{Decision, Grounding, Tier, body_norm, may_supersede};
 use serde_json::json;
 use sqlx::SqlitePool;
 
@@ -17,7 +17,7 @@ use crate::answer::Candidate;
 use crate::changes::ChangeSet;
 use crate::distil::{DistilledBy, auto_ok, log_op};
 use crate::judge::Dropped;
-use crate::merge::{Memory, Prepared, reinforce};
+use crate::merge::{Memory, Prepared, Replace, reinforce, supersede};
 use crate::{policy, rand_id};
 
 /// What one save did.
@@ -29,6 +29,11 @@ pub(crate) struct Saved {
     pub accepted: i64,
     /// Existing facts that were repeated instead of getting a new row.
     pub reinforced: i64,
+    /// Memory records a saved candidate superseded (B4-02).
+    pub replaced: i64,
+    /// Saved candidates whose `replaces` was too weakly grounded: the target stays in force and the
+    /// new record `contests` it.
+    pub contested: i64,
     /// Candidates dropped before the save (not records; logged in `admit.dropped`).
     pub dropped: i64,
     /// The change set, when anything changed.
@@ -39,9 +44,12 @@ pub(crate) struct Saved {
 /// kinds the room auto-accepts go straight to `accepted`. A candidate the memory already holds
 /// (B4-01) reinforces that record instead of adding a row. `dropped` is logged as one
 /// `admit.dropped` audit row, and the distil's parked judge state (`distil.pending`) is removed in
-/// the same transaction, so a rerun can never save twice. One change set: "Saved N · reinforced M ·
-/// dropped K". `ai` marks a proposal from an AI session (`ai_propose.rs`): its rows get
-/// `origin = 'ai'` and its change set is of kind `ai`.
+/// the same transaction, so a rerun can never save twice. A candidate saved into memory that names a
+/// record it `replaces` supersedes it when `grounded[i]` is strong enough (`may_supersede`), else
+/// only contests it (B4-02). One change set: "Saved N · reinforced M · dropped K", plus
+/// "· replaced R" when any was. `ai` marks a proposal from an AI session (`ai_propose.rs`): its rows
+/// get `origin = 'ai'` and its change set is of kind `ai`; it passes no grounding, so it can never
+/// supersede.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn store_candidates(
     pool: &SqlitePool,
@@ -52,10 +60,11 @@ pub(crate) async fn store_candidates(
     by: &DistilledBy,
     now: &str,
     prep: &Prepared,
+    grounded: &[Grounding],
     ai: bool,
 ) -> Result<Saved, sqlx::Error> {
     let redactor = Redactor::new();
-    let (mut n, mut accepted, mut reinforced) = (0, 0, 0);
+    let (mut n, mut accepted, mut reinforced, mut replaced, mut contested) = (0, 0, 0, 0, 0);
     let mut tx = pool.begin().await?;
     let mut cs = ChangeSet::new(if ai { "ai" } else { "distil" }, now);
     let mut memory = Memory::load(&mut tx, prep).await?;
@@ -63,10 +72,17 @@ pub(crate) async fn store_candidates(
         let body = redactor.text(c.body.trim());
         let norm = body_norm(&body);
         let same_as = c.same_as.as_deref();
-        if let Decision::Reinforce { id, .. } =
+        let g = grounded.get(i).copied().unwrap_or_default();
+        // A near-identical wording of the record it `replaces` is a changed fact ("Fridays" ->
+        // "Mondays"), not a repeat: the model's `replaces` beats the meaning tier, but only when the
+        // supersede is allowed (the meaning tier only matches one kind); else the reinforce stands.
+        if let Decision::Reinforce { id, tier } =
             memory.decide(&c.kind, &norm, prep.candidate(i), same_as)
+            && !(tier == Tier::Meaning
+                && c.replaces.as_deref() == Some(id.as_str())
+                && may_supersede(&c.kind, &c.kind, g))
         {
-            reinforce(&mut tx, &mut cs, &id, &c.sources, now).await?;
+            reinforce(&mut tx, &mut cs, &id, &c.sources, distil, now).await?;
             reinforced += 1;
             continue;
         }
@@ -97,16 +113,35 @@ pub(crate) async fn store_candidates(
         .await?;
         for (pos, s) in c.sources.iter().enumerate() {
             sqlx::query(
-                "INSERT OR IGNORE INTO record_sources (record, source, position) VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO record_sources (record, source, position, run) VALUES (?, ?, ?, ?)",
             )
             .bind(&id)
             .bind(s)
             .bind(pos as i64)
+            .bind(distil)
             .execute(&mut *tx)
             .await?;
         }
+        let mut skip_add = false;
         if auto_ok {
-            memory.add(&id, &c.kind, &norm, prep.candidate(i));
+            // Only a fact that really entered memory may retire another.
+            if let Some(old) = &c.replaces {
+                match supersede(&mut tx, &mut cs, old, &id, g, now).await? {
+                    Replace::Superseded => {
+                        memory.remove(old);
+                        replaced += 1;
+                    }
+                    Replace::Contested => {
+                        contested += 1;
+                        // Never reinforced, not even by a later candidate in this batch.
+                        skip_add = true;
+                    }
+                    Replace::Ignored => {}
+                }
+            }
+            if !skip_add {
+                memory.add(&id, &c.kind, &norm, prep.candidate(i));
+            }
         }
         log_op(
             &mut tx,
@@ -144,19 +179,20 @@ pub(crate) async fn store_candidates(
     .bind(distil)
     .execute(&mut *tx)
     .await?;
-    let summary = format!("Saved {n} · reinforced {reinforced} · dropped {k}");
-    let change = cs
-        .commit(
-            &mut tx,
-            &summary,
-            json!({"saved": n, "reinforced": reinforced, "dropped": k}),
-        )
-        .await?;
+    let mut summary = format!("Saved {n} · reinforced {reinforced} · dropped {k}");
+    if replaced > 0 {
+        summary.push_str(&format!(" · replaced {replaced}"));
+    }
+    let counts = json!({"saved": n, "reinforced": reinforced, "dropped": k,
+        "replaced": replaced, "contested": contested});
+    let change = cs.commit(&mut tx, &summary, counts).await?;
     tx.commit().await?;
     Ok(Saved {
         saved: n,
         accepted,
         reinforced,
+        replaced,
+        contested,
         dropped: k,
         change,
     })

@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use ainkrad_core_server::api::App;
-use brain_model::merge::{Decision, Known, decide};
+use brain_model::merge::{Decision, Grounding, Known, decide, may_supersede};
 use brain_model::semantic::normalized;
 use sqlx::{SqliteConnection, SqlitePool};
 
@@ -89,7 +89,8 @@ struct Row {
     vec: Option<Vec<f32>>,
 }
 
-/// The facts in force in the room (the `memory` view) as the decision sees them, kept current as a
+/// The uncontested facts in force in the room (the `memory` view; a contested record is never
+/// reinforced, B4-02 round 4) as the decision sees them, kept current as a
 /// batch saves, so a fact worded twice in one answer merges with itself.
 pub(crate) struct Memory(Vec<Row>);
 
@@ -99,7 +100,7 @@ impl Memory {
         prep: &Prepared,
     ) -> Result<Self, sqlx::Error> {
         let rows: Vec<(String, String, String, Option<String>)> =
-            sqlx::query_as("SELECT id, type, body, body_norm FROM memory")
+            sqlx::query_as("SELECT id, type, body, body_norm FROM memory WHERE contests IS NULL")
                 .fetch_all(conn)
                 .await?;
         Ok(Self(
@@ -137,6 +138,11 @@ impl Memory {
         decide(kind, norm, vec, same_as, &known)
     }
 
+    /// A record that left memory in this batch (superseded), so later candidates cannot merge into it.
+    pub(crate) fn remove(&mut self, id: &str) {
+        self.0.retain(|r| r.id != id);
+    }
+
     /// A record saved in memory in this batch.
     pub(crate) fn add(&mut self, id: &str, kind: &str, norm: &str, vec: Option<&[f32]>) {
         self.0.push(Row {
@@ -149,12 +155,13 @@ impl Memory {
 }
 
 /// Reinforces record `id`: support + 1, `last_seen_at` = `now`, and each of `sources` it does not
-/// cite yet appended to its citations. The row is touched in `cs` first, so Undo can restore it.
+/// cite yet appended to its citations (each stamped with the distil `run` that cited it). The row is touched in `cs` first, so Undo can restore it.
 pub async fn reinforce(
     conn: &mut SqliteConnection,
     cs: &mut ChangeSet,
     id: &str,
     sources: &[String],
+    run: &str,
     now: &str,
 ) -> Result<(), sqlx::Error> {
     cs.touch(conn, id).await?;
@@ -171,15 +178,99 @@ pub async fn reinforce(
     .await?;
     for s in sources {
         let added = sqlx::query(
-            "INSERT OR IGNORE INTO record_sources (record, source, position) VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO record_sources (record, source, position, run) VALUES (?, ?, ?, ?)",
         )
         .bind(id)
         .bind(s)
         .bind(next)
+        .bind(run)
         .execute(&mut *conn)
         .await?
         .rows_affected();
         next += i64::from(added > 0);
     }
     Ok(())
+}
+
+/// What a `replaces` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Replace {
+    /// `old` left memory, `new` took its place.
+    Superseded,
+    /// The evidence was too weak: `old` stays in force and `new.contests` names it, for room tidy
+    /// (B9-01) to reconcile. Never an Inbox item: saving stays automatic.
+    Contested,
+    /// No such target in memory, or `old == new`: nothing written.
+    Ignored,
+}
+
+/// Supersedes memory record `old` with `new` (B4-02), in `cs`, so Undo restores both rows. `old` keeps
+/// its row as history: `superseded_by` = `new` and `valid_to` = the moment `new` became true (the
+/// `memory` view filters on `valid_to`, so setting it is what removes `old` from memory); `new` gets
+/// `supersedes` = `old` and that moment as `valid_from`. The moment is the earliest source `new` cites,
+/// else `now`, never before `old` began.
+///
+/// Security model: a true record is never retired on weak evidence (`may_supersede`): `new` must be
+/// of `old`'s kind and `g` must say it is grounded in one user turn (or, for a task or project
+/// state, in one cited Jira or GitHub item), so an assistant turn, a tool result or a document cannot
+/// retire a record of any kind. Without that, `old` stays in force and `new` is marked as contesting
+/// it. Ignored: an `old` that is not in memory (unknown, archived, already superseded), or `old ==
+/// new`. `new` must be saved and cited already.
+pub async fn supersede(
+    conn: &mut SqliteConnection,
+    cs: &mut ChangeSet,
+    old: &str,
+    new: &str,
+    g: Grounding,
+    now: &str,
+) -> Result<Replace, sqlx::Error> {
+    if old == new {
+        return Ok(Replace::Ignored);
+    }
+    let target: Option<(String, String)> =
+        sqlx::query_as("SELECT type, coalesce(valid_from, created_at) FROM memory WHERE id = ?")
+            .bind(old)
+            .fetch_optional(&mut *conn)
+            .await?;
+    let Some((kind, began)) = target else {
+        return Ok(Replace::Ignored);
+    };
+    let new_kind: Option<String> = sqlx::query_scalar("SELECT type FROM records WHERE id = ?")
+        .bind(new)
+        .fetch_optional(&mut *conn)
+        .await?;
+    let Some(new_kind) = new_kind else {
+        return Ok(Replace::Ignored);
+    };
+    if !may_supersede(&new_kind, &kind, g) {
+        cs.touch(conn, new).await?;
+        sqlx::query("UPDATE records SET contests = ? WHERE id = ?")
+            .bind(old)
+            .bind(new)
+            .execute(&mut *conn)
+            .await?;
+        return Ok(Replace::Contested);
+    }
+    let first_source: Option<String> = sqlx::query_scalar(
+        "SELECT min(s.started_at) FROM record_sources rs JOIN sources s ON s.item_id = rs.source WHERE rs.record = ?",
+    )
+    .bind(new)
+    .fetch_one(&mut *conn)
+    .await?;
+    let at = first_source.unwrap_or_else(|| now.to_owned()).max(began);
+    cs.touch(conn, old).await?;
+    cs.touch(conn, new).await?;
+    sqlx::query("UPDATE records SET valid_to = ?, superseded_by = ? WHERE id = ?")
+        .bind(&at)
+        .bind(new)
+        .bind(old)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("UPDATE records SET valid_from = ?, supersedes = ? WHERE id = ?")
+        .bind(&at)
+        .bind(old)
+        .bind(new)
+        .execute(&mut *conn)
+        .await?;
+    Ok(Replace::Superseded)
 }

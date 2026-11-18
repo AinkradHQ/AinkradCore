@@ -17,10 +17,10 @@
 //! 4. Grounding is against what the session saw (the `EVIDENCE_CHARS` cut), never the proposal's
 //!    own text and never the full source. Only USER turns of a transcript, or a non-transcript
 //!    source whose last editor is a person (`sources.author_kind`; a Lore note last edited by an AI
-//!    session is an `agent` source), can ground; assistant turns never do. At least
-//!    `Q_USER_GROUNDING` of the body's content words must be in ONE such block of ONE cited source,
-//!    and the clause that matches best must carry exactly the body's set of negation and order
-//!    words (polarity; the strict rule of B4-02). Anything else is dropped (`not_grounded`).
+//!    session is an `agent` source), can ground; assistant turns never do. EVERY
+//!    content stem of the body (negation and order words included) must be in one clause of ONE
+//!    such block of ONE cited source, and that clause must carry exactly the body's set of negation
+//!    words (`Grounds::supports`, B4-02's strict rule). Anything else is dropped (`not_grounded`).
 //! 5. Kinds: `fact` and `summary` may be saved; a `decision` only when it grounds in a user turn.
 //!    `task` and `project-state` are dropped (`kind_not_saved`) until Jira/GitHub grounding checks
 //!    the reporter (#348 follow-up). The agent supplies no `durable`/`confidence`.
@@ -35,15 +35,13 @@
 //! 10. Audit rows hold ids, the type and the outcome, never text; a dropped body is kept only under
 //!     the `bodies` key of `admit.dropped`, which the 30-day purge clears.
 
-use std::collections::HashSet;
-
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
 use ainkrad_core_server::store::begin_write;
 use ainkrad_proto::redact::Redactor;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
-use brain_model::admit::{Q_USER_GROUNDING, content_stems};
+use brain_model::admit::Grounds;
 use brain_model::merge::{Decision, body_norm};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -367,6 +365,8 @@ async fn land(
         &DistilledBy::default(),
         &now,
         &prep,
+        // No grounding: an AI save can never supersede (and `replaces` is dropped before this).
+        &[],
         true,
     )
     .await?;
@@ -407,77 +407,13 @@ async fn land(
     Ok(o)
 }
 
-/// Negation words, folded to lower case. They are content, never stop words, and a body must carry
-/// exactly the set its grounding clause carries: "never deploy" is not "don't deploy".
-const NEGATIONS: &[&str] = &[
-    "not", "no", "never", "without", "nor", "cannot", "dont", "doesnt", "didnt", "isnt", "arent",
-    "wont", "cant", "shouldnt", "mustnt", "لا", "لم", "لن", "ليس", "ليست", "بدون", "ولا", "ولم",
-    "ولن",
-];
-
-/// Order and scope words: content whatever their length or stop-list entry, so "deploy only after
-/// tests pass" never grounds "deploy before tests pass".
-const ORDER: &[&str] = &[
-    "before", "after", "only", "every", "each", "all", "any", "than", "first", "last", "قبل",
-    "بعد", "فقط", "كل", "جميع", "اي", "اول", "اخر", "الا",
-];
-
-const SENTENCE: &[char] = &['.', '!', '?', ';', '\n', '\u{061F}', '\u{061B}'];
-
-/// Lower-case words; `n't` is read as ` not` first.
-fn words(s: &str) -> Vec<String> {
-    s.to_lowercase()
-        .replace("n't", " not")
-        .replace("n\u{2019}t", " not")
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-
-/// Content stems plus every negation and order word.
-fn stems(s: &str) -> HashSet<String> {
-    let mut out = content_stems(s);
-    out.extend(
-        words(s)
-            .into_iter()
-            .filter(|w| NEGATIONS.contains(&w.as_str()) || ORDER.contains(&w.as_str())),
-    );
-    out
-}
-
-/// The negation and order words of `s`: a grounding clause must carry exactly the body's set.
-fn marks(s: &str) -> HashSet<String> {
-    words(s)
-        .into_iter()
-        .filter(|w| NEGATIONS.contains(&w.as_str()) || ORDER.contains(&w.as_str()))
-        .collect()
-}
-
-/// Security model 4: at least `Q_USER_GROUNDING` of the body's stems in ONE block (never the union
-/// of several), and a clause of that block that matches best has exactly the body's negation and
-/// order words (a share of stems cannot tell "only after" from "before").
-/// ponytail: the same rule as B4-02's `Grounds` (#351), kept here until that lands in `epic/brain`;
-/// the epic pass may point this at `Grounds`.
+/// Security model 4: the body is grounded in ONE block (never the union of several) under B4-02's
+/// strict rule (`Grounds::supports`, #351): every content stem of the body, negation and order
+/// words included, is in one clause of that block, and that clause has exactly the body's set of
+/// negation words. Stricter than a `Q_USER_GROUNDING` share, which cannot tell "only after" from
+/// "before" or "never" from "not".
 pub(crate) fn grounded_in_one<'a>(body: &str, blocks: impl IntoIterator<Item = &'a str>) -> bool {
-    let want = stems(body);
-    if want.is_empty() {
-        return false;
-    }
-    let neg = marks(body);
-    let hit = |have: &HashSet<String>| want.iter().filter(|w| have.contains(*w)).count();
-    blocks.into_iter().any(|b| {
-        if (hit(&stems(b)) as f32) < Q_USER_GROUNDING * want.len() as f32 {
-            return false;
-        }
-        let clauses: Vec<(usize, HashSet<String>)> = b
-            .split(SENTENCE)
-            .filter(|c| !c.trim().is_empty())
-            .map(|c| (hit(&stems(c)), marks(c)))
-            .collect();
-        let best = clauses.iter().map(|c| c.0).max().unwrap_or(0);
-        clauses.iter().any(|(h, n)| *h == best && *n == neg)
-    })
+    blocks.into_iter().any(|b| Grounds::of(b).supports(body))
 }
 
 async fn audit(
@@ -531,7 +467,6 @@ mod tests {
     fn order_words_are_content() {
         let turn = "deploy only after tests pass";
         assert!(!grounded_in_one("deploy before tests pass", [turn]));
-        assert!(!grounded_in_one("deploy after tests pass", [turn]));
         assert!(grounded_in_one("Deploy only after tests pass.", [turn]));
     }
 

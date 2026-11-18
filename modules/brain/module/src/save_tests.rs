@@ -58,6 +58,7 @@ async fn save(pool: &SqlitePool, out: &[Candidate], dropped: &[Dropped]) -> Save
         &DistilledBy::default(),
         NOW,
         &Prepared::default(),
+        &[],
         false,
     )
     .await
@@ -224,4 +225,88 @@ async fn an_admitted_fact_is_saved_or_merged_and_one_undo_restores_everything() 
         .await
         .unwrap();
     assert_eq!(support, 1);
+}
+
+/// B4-02 round 4: a contested record is left out of the related block and is never reinforced,
+/// not by a later save and not by a later candidate of the same batch.
+#[tokio::test]
+async fn a_contested_record_is_not_related_and_never_reinforced() {
+    let (_d, pool) = room().await;
+    save(&pool, &[cand("fact", GOOD)], &[]).await;
+    let old: String = sqlx::query_scalar("SELECT id FROM records")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let body = "Deploys now go out on Mondays through scripts/deploy.sh only.";
+    let mut changed = cand("fact", body);
+    changed.replaces = Some(old.clone());
+    let s = save(&pool, &[changed, cand("fact", body)], &[]).await;
+    assert_eq!((s.contested, s.replaced, s.reinforced), (1, 0, 0));
+    let contested: String = sqlx::query_scalar("SELECT id FROM records WHERE contests = ?")
+        .bind(&old)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let related = crate::distil::related_in(&pool).await.unwrap();
+    assert!(related.iter().any(|r| r.id == old));
+    assert!(related.iter().all(|r| r.id != contested));
+    // A later save of the same wording does not reinforce it either.
+    let s = save(&pool, &[cand("fact", body)], &[]).await;
+    assert_eq!(s.reinforced, 0);
+    let support: i64 = sqlx::query_scalar("SELECT support FROM records WHERE id = ?")
+        .bind(&contested)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(support, 1);
+}
+
+/// B3-04 merge: an AI proposal passes no grounding (`&[]`), so even a `task` that names a record it
+/// `replaces` can never supersede it. The same save with a user-turn grounding does, which shows
+/// the empty grounding is what holds.
+#[tokio::test]
+async fn an_ai_save_never_supersedes() {
+    let task = "Rotate the deploy keys in scripts/deploy.sh before Friday.";
+    let next = "Rotate the deploy keys in scripts/deploy.sh before Monday.";
+    for (ai, grounded, superseded) in [
+        (true, vec![], false),
+        (
+            false,
+            vec![Grounding {
+                user_turn: true,
+                structured_item: false,
+            }],
+            true,
+        ),
+    ] {
+        let (_d, pool) = room().await;
+        save(&pool, &[cand("task", task)], &[]).await;
+        let old: String = sqlx::query_scalar("SELECT id FROM records")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let mut c = cand("task", next);
+        c.replaces = Some(old.clone());
+        let s = store_candidates(
+            &pool,
+            "dst-2",
+            &[c],
+            &[],
+            &policy(),
+            &DistilledBy::default(),
+            NOW,
+            &Prepared::default(),
+            &grounded,
+            ai,
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.replaced == 1, superseded, "ai = {ai}");
+        let in_force: i64 = sqlx::query_scalar("SELECT count(*) FROM memory WHERE id = ?")
+            .bind(&old)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(in_force == 1, !superseded, "ai = {ai}");
+    }
 }
