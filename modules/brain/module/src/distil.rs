@@ -931,6 +931,8 @@ mod tests {
             min_sources: 1,
             lease_hours: 1,
             review_days: 1,
+            retention_days: None,
+            daily_distils: 12,
         }
     }
 

@@ -20,6 +20,7 @@ mod keys;
 mod lore;
 mod merge;
 mod overview;
+mod policy_card;
 mod project_rooms;
 mod query;
 mod redistil;

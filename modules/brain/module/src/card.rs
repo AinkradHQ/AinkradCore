@@ -10,9 +10,12 @@
 //! record line keeps its id.
 
 use ainkrad_core_server::api::App;
-use ainkrad_core_server::api::v1::ApiError;
+use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
+use axum::extract::{Path, State};
+use axum::{Extension, Json};
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
+use utoipa::ToSchema;
 
 use crate::ai::cut;
 
@@ -40,7 +43,7 @@ pub struct ProjectHead {
     pub repos: Vec<String>,
 }
 
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, ToSchema, Debug, PartialEq)]
 pub struct Card {
     pub text: String,
     /// The records on the card, in order.
@@ -106,6 +109,22 @@ pub async fn head(app: &App, room: &str) -> Result<Head, ApiError> {
 /// The card of `room`, whose open file is `pool`. `now` only decides which tasks and states are stale.
 pub async fn build(app: &App, pool: &SqlitePool, room: &str, now: &str) -> Result<Card, ApiError> {
     Ok(compose(pool, &head(app, room).await?, now).await?)
+}
+
+#[utoipa::path(get, path = "/rooms/{room}/card", operation_id = "brainRoomCard", tag = "brain",
+    params(("room" = String, Path, description = "Room id")),
+    responses((status = 200, description = "The room card as text, with the ids of the records on it (person only; the room must be open). An AI session gets the card through `brainAiContext`.", body = Card)))]
+pub(crate) async fn get(
+    State(app): State<App>,
+    Extension(b): Extension<crate::Brain>,
+    Extension(me): Extension<Caller>,
+    Path(room): Path<String>,
+) -> ApiResult<Card> {
+    crate::change_routes::person_only(&me)?;
+    let access = crate::inbox::open_room(&app, &b, &room).await?;
+    let card = build(&app, access.pool(), &room, &app.clock.now()).await;
+    access.pool().close().await;
+    Ok(Json(card?))
 }
 
 pub(crate) fn one_line(s: &str, n: usize) -> String {

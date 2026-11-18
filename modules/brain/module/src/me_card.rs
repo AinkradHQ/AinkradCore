@@ -202,6 +202,7 @@ mod tests {
             lease_hours: 24,
             review_days: 90,
             retention_days: None,
+            daily_distils: 12,
         }
     }
 

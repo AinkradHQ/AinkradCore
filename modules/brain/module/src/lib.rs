@@ -230,6 +230,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/rooms/{room}/search", "read"),
     ("GET", "/rooms/{room}/latest", "read"),
     ("GET", "/rooms/{room}/policy", "read"),
+    ("GET", "/rooms/{room}/card", "read"),
     ("GET", "/rooms/{room}/distils", "read"),
     ("GET", "/rooms/{room}/inbox", "read"),
     ("GET", "/rooms/{room}/overview", "read"),
@@ -568,6 +569,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         overview::progress_route,
         overview::instructions,
         policy::get,
+        card::get,
         policy::patch,
         project_rooms::link_route,
         project_rooms::unlink_route,
@@ -655,6 +657,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         retention::RetentionPreview,
         redistil_routes::RedistilView,
         policy::PolicyView,
+        card::Card,
         policy::PolicyPatch,
         policy::PolicyAccount,
         project_rooms::ProjectRoomLink,
@@ -757,6 +760,7 @@ impl Module for Brain {
                 "/rooms/{room}/policy",
                 get(policy::get).patch(policy::patch),
             )
+            .route("/rooms/{room}/card", get(card::get))
             .route("/rooms/{room}/access", get(access::get).put(access::put))
             .route(
                 "/projects/{project}/room",
