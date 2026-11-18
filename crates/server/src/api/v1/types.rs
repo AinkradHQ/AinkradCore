@@ -286,7 +286,10 @@
 ///    version, step-up), `GET /projects/{id}/spec/versions` (`listProjectSpecVersions`) and
 ///    `GET /projects/{id}/spec/versions/{version}` (`getProjectSpecVersion`). 400 `invalid_spec` names the bad field.
 ///    Registers the event kind and audit action `project.spec_saved`.
-pub const API_MINOR: u32 = 92;
+/// 94: project runs (P5-02). Runner wire protocol only (`runner.schema.json`): driver `run` with ops `run.start`
+///    (`RunStart` -> `RunInfo`), `run.stop` (`RunStop` -> `RunInfo`) and `run.status` (`RunStatusReq` -> `RunList`);
+///    no route yet. (90-93 are taken by open PRs.)
+pub const API_MINOR: u32 = 94;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
