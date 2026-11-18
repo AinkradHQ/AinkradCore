@@ -1,5 +1,5 @@
 //! The sandbox one design job runs in (the security model is in `design.rs`): the command
-//! (systemd scope, bubblewrap, seccomp, limits script), the probe, the outcome, the job directory.
+//! (job cgroup, bubblewrap, seccomp, limits script), the probe, the outcome, the job directory.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -8,20 +8,24 @@ use std::time::Duration;
 use ainkrad_proto::v2::{ErrorCode, StreamError};
 use tokio::io::AsyncReadExt;
 
-use super::{DesignConfig, MAX_STDOUT, failed, seccomp};
+use super::cgroup::JobCgroup;
+use super::{DesignConfig, MAX_STDOUT, TIME_LIMIT, failed, seccomp};
 
 /// Marks that the sandbox is up and the limits are set: anything that fails before it is the
 /// sandbox's failure, not the job's.
 const STARTED: &str = "ainkrad-design: started";
-/// Kernel task cap of a job's scope.
-const TASKS_MAX: u32 = 256;
+/// Kernel task cap of a job: its cgroup's `pids.max`, and `ulimit -u` inside the sandbox.
+pub(super) const TASKS_MAX: u32 = 256;
 /// Bytes of `/out` (a tmpfs): Chromium's screenshot and nothing else.
 const OUT_BYTES: u64 = 8 << 20;
 const BWRAP: &str = "/usr/bin/bwrap";
 
-/// Sets the limits, then becomes the program: `$1` seconds of CPU, `$2` KiB of address space.
-const LIMITS: &str = "ulimit -S -t \"$1\" && ulimit -H -t \"$1\" && ulimit -S -f 65536 && ulimit -H -f 65536 \
-    && ulimit -S -c 0 && ulimit -H -c 0 && ulimit -S -v \"$2\" && ulimit -H -v \"$2\" || exit 125; shift 2; \
+/// Sets the limits, then becomes the program: `$1` seconds of CPU, `$2` KiB of address space, 256
+/// processes (RLIMIT_NPROC counts per user namespace, so this is the sandbox's own; it holds with
+/// or without a job cgroup).
+pub(super) const LIMITS: &str = "ulimit -S -t \"$1\" && ulimit -H -t \"$1\" && ulimit -S -f 65536 && ulimit -H -f 65536 \
+    && ulimit -S -c 0 && ulimit -H -c 0 && ulimit -S -v \"$2\" && ulimit -H -v \"$2\" \
+    && ulimit -S -u 256 && ulimit -H -u 256 || exit 125; shift 2; \
     echo 'ainkrad-design: started' >&2; exec \"$@\"";
 
 /// A finished run as its answer: stdout on success; `spawn_failed` when the sandbox never reached
@@ -47,6 +51,13 @@ pub(super) fn outcome(
             ));
         }
         Ok(code) => format!("it exited with status {code}"),
+        // Wall clock runs out under load as much as on the file: not a verdict on it.
+        Err(why) if why == TIME_LIMIT => {
+            return Err(StreamError::new(
+                ErrorCode::DesignLimit,
+                format!("the design helper stopped: {why}"),
+            ));
+        }
         Err(why) => why.to_owned(),
     };
     let after = err.split_once(STARTED).map_or("", |(_, a)| a);
@@ -56,9 +67,18 @@ pub(super) fn outcome(
     )))
 }
 
-/// The whole command for one job: `systemd-run --user --scope` when configured, then bubblewrap
-/// with the seccomp filter on an inherited descriptor, then the limits script and `program`. The
-/// returned file holds that descriptor open until the spawn.
+/// What a spawned job's command needs kept until it ends: the seccomp program's descriptor (until
+/// the spawn), the job cgroup's `cgroup.procs` (until the spawn) and the job cgroup (until the job
+/// is over: dropping it kills whatever is left and removes it).
+pub(super) struct Keep {
+    _filter: std::fs::File,
+    _procs: Option<std::fs::File>,
+    _cgroup: Option<JobCgroup>,
+}
+
+/// The whole command for one job: bubblewrap with the seccomp filter on an inherited descriptor,
+/// then the limits script and `program`; with the runner's delegated cgroups, the child joins a
+/// fresh job cgroup (`memory.max`, `pids.max`) before it execs bubblewrap.
 pub(super) fn command(
     cfg: &DesignConfig,
     job: &Job,
@@ -66,7 +86,7 @@ pub(super) fn command(
     args: &[String],
     bind: Option<&Path>,
     vm: Option<u64>,
-) -> std::io::Result<(std::process::Command, std::fs::File)> {
+) -> std::io::Result<(std::process::Command, Keep)> {
     use std::os::fd::AsRawFd;
     let bpf =
         seccomp::program().ok_or_else(|| std::io::Error::other("no seccomp table for this CPU"))?;
@@ -74,24 +94,22 @@ pub(super) fn command(
     std::fs::write(&path, bpf)?;
     let filter = std::fs::File::open(&path)?;
     let fd = filter.as_raw_fd();
-    let mut c = if cfg.scope {
-        let mut c = std::process::Command::new("systemd-run");
-        c.args(["--user", "--scope", "--quiet", "--collect", "-p"])
-            .arg(format!("MemoryMax={}", cfg.max_rss))
-            .args(["-p", &format!("TasksMax={TASKS_MAX}"), "--", BWRAP]);
-        c
-    } else {
-        std::process::Command::new(BWRAP)
-    };
+    let mut c = std::process::Command::new(BWRAP);
     c.env_clear();
-    // systemd-run finds the user manager through these; bubblewrap clears them for the job.
-    for k in ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] {
-        if let Some(v) = std::env::var_os(k).filter(|_| cfg.scope) {
-            c.env(k, v);
-        }
-    }
     ainkrad_sys::close_fds_on_exec(&mut c);
     ainkrad_sys::sandbox_child(&mut c, Some(fd));
+    let cgroup = match &cfg.cgroups {
+        Some(cg) => Some(cg.job(cfg.max_rss, TASKS_MAX)?),
+        None => None,
+    };
+    let procs = match &cgroup {
+        Some(j) => {
+            let f = j.procs()?;
+            ainkrad_sys::join_cgroup(&mut c, &f);
+            Some(f)
+        }
+        None => None,
+    };
     c.args(sandbox_args(&job.dir, bind))
         .args(["--seccomp", &fd.to_string(), "--"])
         .args(["/bin/bash", "-c", LIMITS, "design"])
@@ -99,14 +117,21 @@ pub(super) fn command(
         .arg(vm.map_or("unlimited".to_owned(), |v| (v / 1024).to_string()))
         .arg(program)
         .args(args);
-    Ok((c, filter))
+    Ok((
+        c,
+        Keep {
+            _filter: filter,
+            _procs: procs,
+            _cgroup: cgroup,
+        },
+    ))
 }
 
-/// Whether this exact sandbox (scope, bubblewrap flags and the helper's bind, seccomp, limits
+/// Whether this exact sandbox (job cgroup, bubblewrap flags and the helper's bind, seccomp, limits
 /// script) runs `/bin/true`.
 pub(super) fn probe(cfg: &DesignConfig) -> bool {
     let Ok(job) = Job::new() else { return false };
-    let Ok((mut c, _filter)) = command(
+    let Ok((mut c, _keep)) = command(
         cfg,
         &job,
         Path::new("/bin/true"),
@@ -149,8 +174,9 @@ pub(super) fn sweep(tmp: &Path, age: Duration) {
     }
 }
 
-/// The bubblewrap arguments for a job in `dir`; `bind`'s directory is bound read-only where it lies
-/// (the helper, or Chromium and the files beside it).
+/// The bubblewrap arguments for a job in `dir`; `bind` is bound read-only where it lies: the
+/// helper's own file (never its directory, which may hold the runner or anything else), or
+/// Chromium's directory (it needs the libraries and `.pak` files beside it).
 pub(super) fn sandbox_args(dir: &Path, bind: Option<&Path>) -> Vec<String> {
     let mut a: Vec<String> = [
         "--die-with-parent",
@@ -207,12 +233,9 @@ pub(super) fn sandbox_args(dir: &Path, bind: Option<&Path>) -> Vec<String> {
             Err(_) => {}
         }
     }
-    if let Some(home) = bind
-        .and_then(Path::parent)
-        .filter(|p| !p.starts_with("/usr"))
-    {
-        let h = home.to_string_lossy().into_owned();
-        a.extend(["--ro-bind".into(), h.clone(), h]);
+    if let Some(b) = bind.filter(|p| !p.starts_with("/usr")) {
+        let b = b.to_string_lossy().into_owned();
+        a.extend(["--ro-bind".into(), b.clone(), b]);
     }
     let path = |s: &str| dir.join(s).to_string_lossy().into_owned();
     a.extend([

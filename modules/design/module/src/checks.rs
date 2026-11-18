@@ -1,8 +1,9 @@
 //! Font and Icon Composer checks (V6-01, T8): an upload of either is stored `pending` and inert. The
 //! Core never parses it; this job sends it to a runner's sandboxed `ainkrad-design` helper
 //! (`design.check`) and records the verdict: `ok` (served from then on) or `refused`. A helper that
-//! crashes or hits a limit on the file is a refusal too. No capable runner, a busy one, a sandbox
-//! that did not start (`spawn_failed`) or a lost answer leaves the asset `pending` for the next run.
+//! crashes or hits a memory, CPU or process limit on the file is a refusal too. Running out of wall
+//! clock (`design_limit`: load can cause it), no capable runner, a busy one, a sandbox that did not
+//! start (`spawn_failed`) or a lost answer leaves the asset `pending` for the next run.
 //! Audit and events carry the sha256 only. The runner is the trust root for the verdict: every runner
 //! is paired by the Core's one owner (a hostile runner's "ok" still only reaches sandboxed helpers).
 
@@ -51,6 +52,9 @@ pub(crate) fn verdict(o: &Result<Body, StreamError>) -> Option<bool> {
     match o {
         Ok(Body::Result(Reply::DesignCheck(c))) => Some(c.ok),
         // The file crashed the helper, ran it out of a limit, or is too big to send: refused.
+        // A wall-clock stop (`DesignLimit`) is not among them: it stays pending.
+        // ponytail: a file that always times out is re-tried every run (one slot for 60 s); add a
+        // per-asset attempt count if that ever crowds out real checks.
         Err(e) if matches!(e.code, ErrorCode::DesignFailed | ErrorCode::TooLarge) => Some(false),
         _ => None,
     }
@@ -143,3 +147,6 @@ pub(crate) fn job() -> Job {
         Arc::new(CheckJob),
     )
 }
+
+#[cfg(test)]
+mod tests_review2;

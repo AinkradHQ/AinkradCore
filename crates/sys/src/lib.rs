@@ -35,6 +35,10 @@ pub const INVENTORY: &[(&str, &str)] = &[
         "sandbox_child",
         "pre_exec closure: prctl(PR_SET_PDEATHSIG) and fcntl(F_SETFD) with integer arguments",
     ),
+    (
+        "join_cgroup",
+        "pre_exec closure: one write(2) of a static one-byte buffer to a descriptor we own",
+    ),
 ];
 
 /// Makes the calling process the leader of a new session and process group, with no
@@ -126,6 +130,35 @@ pub fn sandbox_child(cmd: &mut std::process::Command, keep: Option<std::os::fd::
     }
     #[cfg(not(target_os = "linux"))]
     let _ = (cmd, keep);
+}
+
+/// Moves the child into the cgroup whose `cgroup.procs` is open as `procs` (writes `0`, "me"),
+/// between fork and exec: everything it then starts is born inside that cgroup's limits. The spawn
+/// fails when the move does. Keep `procs` open until the spawn. Linux only; elsewhere nothing is
+/// done.
+#[allow(unsafe_code)]
+pub fn join_cgroup(cmd: &mut std::process::Command, procs: &std::fs::File) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::process::CommandExt;
+        let fd = procs.as_raw_fd();
+        // SAFETY: `pre_exec` is unsafe because its closure runs between fork and exec. This one
+        // makes one write(2) of a static one-byte buffer to a descriptor the parent keeps open
+        // across the spawn: no allocation, no lock, so it is async-signal-safe. A failure is
+        // reported and the spawn fails.
+        unsafe {
+            cmd.pre_exec(move || {
+                if libc::write(fd, b"0".as_ptr().cast(), 1) == 1 {
+                    Ok(())
+                } else {
+                    Err(io::Error::last_os_error())
+                }
+            });
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (cmd, procs);
 }
 
 /// Sends `signal` to every process in the group `pgid`. `Ok(false)` when the group is gone

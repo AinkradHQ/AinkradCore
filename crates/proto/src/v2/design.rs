@@ -5,8 +5,9 @@
 //!
 //! Every byte travels inline as standard base64, so one job and one answer each stay under the
 //! Core's 8 MiB message cap: at most [`DESIGN_MAX_INPUT`] bytes of job in, a [`DESIGN_MAX_PNG`] PNG out.
-//! A helper that fails, crashes or is stopped at a limit is answered `design_failed`; the runner
-//! itself never parses the job's files.
+//! A helper that fails, crashes or is stopped at a memory, CPU or process limit is answered
+//! `design_failed`; one that runs out of wall clock `design_limit` (no verdict on the input). The
+//! runner itself never parses the job's files.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
