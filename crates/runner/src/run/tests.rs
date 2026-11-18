@@ -284,7 +284,9 @@ impl Host {
         bundles: &BTreeMap<String, PathBuf>,
     ) -> RunInfo {
         self.runs.push(req.run.clone());
-        self.engine.start(req, bundles).unwrap()
+        self.engine
+            .start(req, bundles, Instant::now() + START_BUDGET)
+            .unwrap()
     }
 }
 

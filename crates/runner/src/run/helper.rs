@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ainkrad_proto::v2::RunStart;
 use serde::{Deserialize, Serialize};
@@ -76,6 +76,7 @@ fn receive(
     start: &RunStart,
     lens: &[u64],
     dir: &Path,
+    deadline: Instant,
 ) -> Result<BTreeMap<String, PathBuf>, String> {
     if lens.len() != start.checkouts.len()
         || lens.iter().any(|l| *l > MAX_BUNDLE)
@@ -89,10 +90,22 @@ fn receive(
     for (c, len) in start.checkouts.iter().zip(lens) {
         let path = dir.join(&c.repo);
         let mut f = std::fs::File::create(&path).map_err(|e| e.to_string())?;
-        let got =
-            std::io::copy(&mut (&mut *stream).take(*len), &mut f).map_err(|e| e.to_string())?;
-        if got != *len {
-            return Err(format!("the bundle of {} was cut short", c.repo));
+        // Chunked, so a slow sender cannot spend more than the start's own budget.
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut got = 0u64;
+        while got < *len {
+            if Instant::now() >= deadline {
+                return Err("the bundles were not sent in time".to_owned());
+            }
+            let want = buf
+                .len()
+                .min(usize::try_from(*len - got).unwrap_or(usize::MAX));
+            let n = stream.read(&mut buf[..want]).map_err(|e| e.to_string())?;
+            if n == 0 {
+                return Err(format!("the bundle of {} was cut short", c.repo));
+            }
+            f.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+            got += n as u64;
         }
         out.insert(c.repo.clone(), path);
     }
@@ -108,9 +121,11 @@ fn handle(engine: &Engine, stream: &mut UnixStream, req: Request) -> Result<Valu
             if let Some(p) = start.problem() {
                 return Err(p);
             }
+            // The start's budget runs from here, so the bundles' upload counts against it.
+            let deadline = Instant::now() + super::START_BUDGET;
             let dir = engine.root.join(format!(".incoming-{}", start.run));
-            let got = receive(stream, &start, &bundles, &dir);
-            let r = got.and_then(|b| engine.start(&start, &b));
+            let got = receive(stream, &start, &bundles, &dir, deadline);
+            let r = got.and_then(|b| engine.start(&start, &b, deadline));
             let _ = std::fs::remove_dir_all(&dir);
             v(r)
         }

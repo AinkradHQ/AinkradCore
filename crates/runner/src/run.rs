@@ -48,9 +48,9 @@ pub mod helper;
 pub mod observe;
 mod prepare;
 mod ps;
-mod state;
 #[cfg(test)]
 mod review_tests;
+mod state;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -67,10 +67,15 @@ const LABEL_SERVICE: &str = "ainkrad.service";
 const LABEL_EXPOSE: &str = "ainkrad.expose";
 /// How long a service with a health check has to turn healthy.
 const HEALTH_WAIT: Duration = Duration::from_secs(120);
-/// A whole start: below the helper unit's `RuntimeMaxSec=1800`, so the cleanup of a failed one fits.
-pub const START_BUDGET: Duration = Duration::from_secs(1500);
+/// A whole start, from the first bundle byte read to the answer (the check that the run has no
+/// containers yet included). With what may run outside it (the helper's slice reap at launch, the
+/// request read, [`OVERRUN`] and the failed start's [`CLEANUP_BUDGET`]) it stays below the helper
+/// unit's `RuntimeMaxSec=1800`; a test sums every phase against the unit.
+pub const START_BUDGET: Duration = Duration::from_secs(1200);
+/// What one step already begun can add past the deadline: a build's slice stop and revert, which
+/// share one [`QUICK`] of their own; later builds are refused at once (`build`).
+pub const OVERRUN: Duration = QUICK;
 /// A stop (the cleanup of a failed start included): every podman call of it within this.
-/// `START_BUDGET + CLEANUP_BUDGET` stays below `RuntimeMaxSec` (a test reads the unit).
 pub const CLEANUP_BUDGET: Duration = Duration::from_secs(240);
 /// Each child's own cap (within what is left of [`START_BUDGET`]).
 const QUICK: Duration = Duration::from_secs(60);
@@ -107,6 +112,14 @@ pub struct Engine {
     pub runtime_dir: Option<PathBuf>,
     /// [`MAX_CHECKOUT_BYTES`], lower in tests.
     pub checkout_cap: u64,
+}
+
+/// The helper's `containers.conf` (`<root>/containers.conf`, via `CONTAINERS_CONF`). Every project
+/// has its own store, but the shared-memory lock manager keeps one segment per user, and each store
+/// hands out its lock numbers from it on its own, so two projects' containers could get the same
+/// lock. File locks live under the store's own `--tmpdir` ([`Engine::store_args`]): per store.
+pub fn containers_conf() -> &'static str {
+    "[engine]\nlock_type = \"file\"\n"
 }
 
 /// The env file of one container, removed when dropped (on every path, errors included).
@@ -240,9 +253,13 @@ impl Engine {
     pub fn from_env() -> Result<Self, String> {
         let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
         let runtime = PathBuf::from(format!("/run/user/{}", ainkrad_sys::getuid()));
+        let root = PathBuf::from(&home).join("runs");
+        private_dir(&root)?;
+        std::fs::write(root.join("containers.conf"), containers_conf())
+            .map_err(|e| format!("writing containers.conf: {e}"))?;
         Ok(Self {
             podman: "podman".to_owned(),
-            root: PathBuf::from(&home).join("runs"),
+            root,
             projects: PathBuf::from(&home).join("projects"),
             networks: PathBuf::from(&home).join("networks"),
             env_dir: runtime.join("ainkrad-env"),
@@ -254,6 +271,10 @@ impl Engine {
     /// `prog`, with the user's runtime dir and bus when set.
     fn user_cmd(&self, prog: &str) -> Command {
         let mut cmd = Command::new(prog);
+        let conf = self.root.join("containers.conf");
+        if conf.is_file() {
+            cmd.env("CONTAINERS_CONF", conf);
+        }
         if let Some(r) = &self.runtime_dir {
             cmd.env("XDG_RUNTIME_DIR", r).env(
                 "DBUS_SESSION_BUS_ADDRESS",
@@ -321,21 +342,23 @@ impl Engine {
         .map(drop)
     }
 
-    /// Starts `req` (secrets already in its env). `bundles` are the checkouts, as git bundles, by
-    /// repo. A service that fails to build, start or turn healthy answers `Failed` naming it; a
-    /// start that fails in any way is stopped first, so nothing of it is left.
+    /// Starts `req` (secrets already in its env) by `deadline` (the helper's: [`START_BUDGET`]
+    /// from before the bundles were read). `bundles` are the checkouts, as git bundles, by repo. A
+    /// service that fails to build, start or turn healthy answers `Failed` naming it; a start that
+    /// fails in any way is stopped first, so nothing of it is left.
     pub fn start(
         &self,
         req: &RunStart,
         bundles: &BTreeMap<String, PathBuf>,
+        deadline: Instant,
     ) -> Result<RunInfo, String> {
         if let Some(p) = req.problem() {
             return Err(p);
         }
-        if !self.find(&req.run)?.services.is_empty() {
+        if !self.find_by(&req.run, deadline)?.services.is_empty() {
             return Err(format!("run {} already has containers", req.run));
         }
-        let r = self.launch(req, bundles, Instant::now() + START_BUDGET);
+        let r = self.launch(req, bundles, deadline);
         if !matches!(&r, Ok(i) if i.phase != RunPhase::Failed) {
             let _ = self.stop(&req.run);
         }
