@@ -111,6 +111,8 @@ struct Rec {
     demote: i64,
     support: i64,
     seen: String,
+    /// An AI session wrote it (`brainAiPropose`): its line says `origin=ai` (B3-04).
+    ai: bool,
 }
 
 /// Fetches `memory` rows of one room that may be shown, in `order`, at most `n`.
@@ -123,7 +125,7 @@ async fn fetch(
 ) -> Result<Vec<Rec>, sqlx::Error> {
     let sql = format!(
         "SELECT id, body, body_norm, {DEMOTE_SQL} AS demote, {SUPPORT_SQL} AS support, \
-                coalesce(last_seen_at, created_at) AS seen \
+                coalesce(last_seen_at, created_at) AS seen, origin = 'ai' AS ai \
          FROM memory WHERE {NOT_CONTESTED} \
            AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE value IN {CONTESTED}) \
          ORDER BY {order} LIMIT {n}"
@@ -143,6 +145,7 @@ async fn fetch(
                 demote: r.try_get("demote")?,
                 support: r.try_get("support")?,
                 seen: r.try_get("seen")?,
+                ai: r.try_get("ai")?,
                 body,
             })
         })
@@ -358,7 +361,8 @@ pub(crate) async fn context(
 
     let mut first = true;
     for r in order {
-        let line = format!("- [{}] {}\n", r.id, one_line(&r.body, LINE_CHARS));
+        let origin = if r.ai { ", origin=ai" } else { "" };
+        let line = format!("- [{}{origin}] {}\n", r.id, one_line(&r.body, LINE_CHARS));
         let part = if first { format!("Memory:\n{line}") } else { line };
         if !body.put(&part, &[(r.room.clone(), r.id.clone())]) {
             break;
