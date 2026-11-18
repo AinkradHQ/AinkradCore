@@ -40,6 +40,7 @@ pub mod eval;
 pub mod files;
 mod imports;
 mod inbox;
+pub mod merge;
 mod index;
 pub mod key;
 mod lore;

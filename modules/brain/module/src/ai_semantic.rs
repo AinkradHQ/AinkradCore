@@ -33,7 +33,7 @@ pub(crate) async fn available(app: &App, b: &Brain) -> bool {
 }
 
 /// The text a record is embedded as (cut on a char boundary).
-fn embed_text(body: &str) -> String {
+pub(crate) fn embed_text(body: &str) -> String {
     let mut end = body.len().min(EMBED_CHARS);
     while !body.is_char_boundary(end) {
         end -= 1;
