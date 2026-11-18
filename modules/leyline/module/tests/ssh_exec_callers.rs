@@ -18,9 +18,9 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 #[test]
-fn only_the_gated_runner_calls_dispatch_ssh_exec() {
-    // No `(`: an alias or a value use (`let f = Hub::dispatch_ssh_exec`) is a caller too. Split so
-    // this file does not match itself.
+fn only_the_gated_runner_calls_the_ungated_dispatch() {
+    // No `(`: an alias or a value use is a caller too. Comment lines (`//`) do not count. The name
+    // is built from two pieces so this file never holds it whole.
     let needle = format!("dispatch_ssh_{}", "exec");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let mut files = Vec::new();
@@ -30,7 +30,12 @@ fn only_the_gated_runner_calls_dispatch_ssh_exec() {
     assert!(files.len() > 50, "the walk found the source tree");
     let mut callers: Vec<String> = files
         .iter()
-        .filter(|f| std::fs::read_to_string(f).is_ok_and(|s| s.contains(&needle)))
+        .filter(|f| {
+            std::fs::read_to_string(f).is_ok_and(|s| {
+                s.lines()
+                    .any(|l| !l.trim_start().starts_with("//") && l.contains(&needle))
+            })
+        })
         .map(|f| {
             f.canonicalize()
                 .unwrap()

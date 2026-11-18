@@ -7,7 +7,7 @@
 //!   gate is asked about; the gate alone applies the command's scope, rule and confirm semantics,
 //!   and a host it refuses is stored `refused` with its reason.
 //! - Every host's steps run through `exec::run`, which calls `gate::still_valid` before each step
-//!   and sends only through `dispatch_ssh_exec`. This file sends nothing itself.
+//!   and sends only through that module. This file sends nothing itself.
 //! - Cancel reaches no host: it ends the run (so `still_valid` refuses every later step), skips
 //!   queued hosts and stops waiting on running ones; a run still waiting for approval is cancelled
 //!   too and its approval voided. A session cancels or reads only its own runs (`commands::owns`).
@@ -35,7 +35,9 @@ use utoipa::ToSchema;
 use crate::attach;
 use crate::commands::{find_cmd, owns};
 use crate::exec::{self, Cancel, stopped};
-use crate::gate::{Action, Authorized, Principal, cancel as cancel_waiting, finish, gate_many};
+use crate::gate::{
+    Action, Authorized, Fleet, Principal, cancel as cancel_waiting, finish, gate_many,
+};
 use crate::hosts::{In, find};
 
 /// Hosts running at once; the rest of the fleet waits for a slot.
@@ -69,7 +71,8 @@ pub struct FleetRequest {
 pub struct FleetStarted {
     /// The run's id (`lr_...`); read it with `GET /runs/{run}`, one result per host.
     pub run: String,
-    /// `running`, or `denied` when no host may run it (the reasons are on the run).
+    /// `running`, `denied` when no host may run it (the reasons are on the run), or `cancelled` when
+    /// a cancel landed while it waited for approval.
     pub state: String,
     /// Hosts past the gate.
     pub started: usize,
@@ -83,7 +86,13 @@ pub struct Cancelled {
 }
 
 /// Every host the request names, once, in the order named.
-async fn targets(conn: &mut SqliteConnection, r: &FleetRequest) -> Result<Vec<String>, ApiError> {
+///
+/// With a group, tag or project, also how the card describes the picked hosts: built from the
+/// resolved values (the lowercased tag, the project's id, the role), and the ids named directly.
+async fn targets(
+    conn: &mut SqliteConnection,
+    r: &FleetRequest,
+) -> Result<(Vec<String>, Option<Fleet>), ApiError> {
     if r.hosts.len() > MAX_HOSTS {
         return Err(ApiError::bad_request("name at most 100 hosts"));
     }
@@ -103,6 +112,20 @@ async fn targets(conn: &mut SqliteConnection, r: &FleetRequest) -> Result<Vec<St
     };
     for h in &r.hosts {
         ids.push(find(conn, &h.chars().take(256).collect::<String>()).await?);
+    }
+    let named = ids.clone();
+    let mut by_what = Vec::new();
+    if let Some(g) = &r.group {
+        by_what.push(format!("group {g}"));
+    }
+    if let Some(t) = &tag {
+        by_what.push(format!("tag {t}"));
+    }
+    if let Some(p) = &project {
+        by_what.push(match &r.role {
+            Some(role) => format!("project {p} (role {role})"),
+            None => format!("project {p}"),
+        });
     }
     let by = [
         (
@@ -138,26 +161,11 @@ async fn targets(conn: &mut SqliteConnection, r: &FleetRequest) -> Result<Vec<St
     if ids.len() > MAX_HOSTS {
         return Err(ApiError::bad_request("that is more than 100 hosts"));
     }
-    Ok(ids)
-}
-
-/// What an approval card calls this fleet: the group, tag or project it was picked by, else the
-/// number of hosts named.
-fn label(r: &FleetRequest, n: usize) -> String {
-    let mut parts = Vec::new();
-    if let Some(g) = &r.group {
-        parts.push(format!("group {g}"));
-    }
-    if let Some(t) = &r.tag {
-        parts.push(format!("tag {t}"));
-    }
-    if let Some(p) = &r.project {
-        parts.push(format!("project {p}"));
-    }
-    if !r.hosts.is_empty() {
-        parts.push(format!("{} named", r.hosts.len()));
-    }
-    format!("{} ({n})", parts.join(", "))
+    let fleet = (!by_what.is_empty()).then(|| Fleet {
+        named,
+        label: by_what.join(", "),
+    });
+    Ok((ids, fleet))
 }
 
 #[utoipa::path(post, path = "/fleet/runs", operation_id = "leylineStartFleetRun", tag = "leyline",
@@ -168,7 +176,7 @@ pub(crate) async fn start(
     Extension(me): Extension<Caller>,
     In(req): In<FleetRequest>,
 ) -> ApiResult<FleetStarted> {
-    let (cmd, ids) = {
+    let (cmd, (ids, fleet)) = {
         let mut conn = app.pool.acquire().await?;
         let id = find_cmd(&mut conn, &req.command).await?;
         (id, targets(&mut conn, &req).await?)
@@ -181,10 +189,24 @@ pub(crate) async fn start(
         &hosts,
         &Action::Preset(cmd),
         req.confirm == Some(true),
-        Some(&label(&req, ids.len())),
+        fleet.as_ref(),
     )
     .await?;
     let (started, refused) = (gated.authorized.len(), gated.refused.len());
+    // A cancel that landed while the call waited for approval stands: nothing is started, and the
+    // rows the cancel skipped are not touched again.
+    let state: Option<String> = sqlx::query_scalar("SELECT state FROM leyline_runs WHERE id = ?")
+        .bind(&gated.run)
+        .fetch_optional(&app.pool)
+        .await?;
+    if state.as_deref() == Some("cancelled") {
+        return Ok(Json(FleetStarted {
+            run: gated.run,
+            state: "cancelled".to_owned(),
+            started: 0,
+            refused,
+        }));
+    }
     if started > 0 {
         let (tx, rx) = watch::channel(false);
         LIVE.lock().unwrap().insert(gated.run.clone(), tx);

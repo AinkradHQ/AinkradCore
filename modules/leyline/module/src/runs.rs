@@ -151,8 +151,9 @@ pub(super) fn redacted(s: &str) -> String {
     ainkrad_proto::redact::one(s)
 }
 
-/// Whether `s` holds a secret written out. A masked value that is only a `$VAR`, `${NAME}` or
-/// `$(...)` reference is not one: the card can show it as written.
+/// Whether `s` holds a secret written out. A masked value that is only a `$NAME` or `${NAME}`
+/// reference is not one: the card can show it as written. `$(...)` is not accepted: its inner
+/// text can hold the secret itself.
 pub(crate) fn literal_secret(s: &str) -> bool {
     let masked = redacted(s);
     if masked == s {
@@ -187,7 +188,7 @@ pub(crate) fn literal_secret(s: &str) -> bool {
 
 const MARK: &str = "[redacted:";
 
-/// A value made only of `$NAME`, `${NAME}` and `$(...)`, with optional quotes and auth scheme word.
+/// A value made only of `$NAME` and `${NAME}`, with optional quotes and auth scheme word.
 fn only_refs(span: &str) -> bool {
     let mut t = span.trim().trim_matches(['"', '\'']);
     if let Some((w, rest)) = t.split_once(' ')
@@ -213,16 +214,6 @@ fn only_refs(span: &str) -> bool {
                     return false;
                 }
                 i += n + 2;
-            }
-            Some(b'(') => {
-                let mut depth = 0;
-                let Some(n) = b[i..].iter().position(|c| {
-                    depth += i32::from(*c == b'(') - i32::from(*c == b')');
-                    depth == 0
-                }) else {
-                    return false;
-                };
-                i += n + 1;
             }
             Some(c) if c.is_ascii_alphabetic() || *c == b'_' => {
                 while b.get(i).is_some_and(|c| name(*c)) {
@@ -270,7 +261,7 @@ pub(super) async fn settle(
     }
     for (id, why) in &refused {
         sqlx::query(
-            "UPDATE leyline_run_hosts SET state = 'refused', reason = ? WHERE run_id = ? AND host_id = ?",
+            "UPDATE leyline_run_hosts SET state = 'refused', reason = ? WHERE run_id = ? AND host_id = ? AND state <> 'skipped'",
         )
         .bind(*why)
         .bind(run)

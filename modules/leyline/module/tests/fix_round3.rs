@@ -33,7 +33,7 @@ async fn a_confirm_command_from_a_session_asks_on_a_read_only_host_too() {
     let (ai, dev) = session(&fx, "as_ro").await;
     let action = Action::Preset(c["id"].as_str().unwrap().into());
     let app = fx.app.clone();
-    let h = tokio::spawn(async move { authorize(&app, &ai, "ro", &action).await });
+    let h = tokio::spawn(async move { authorize_confirmed(&app, &ai, "ro", &action, true).await });
     let req = parked(&fx, "as_ro").await;
     decide_approval(&fx.app, "as_ro", &req, false, &dev)
         .await
@@ -95,7 +95,7 @@ async fn a_literal_secret_in_a_step_is_refused_but_a_variable_is_not() {
         assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
         assert!(v.to_string().contains("contains a secret"), "{v}");
     }
-    let c = mk(&fx, json!({"name": "ok", "steps": ["export DB_PASSWORD=$DB_PASSWORD", "curl -H \"Authorization: Bearer ${TOKEN}\" x", "login --pw=$(cat /run/pw)"]})).await;
+    let c = mk(&fx, json!({"name": "ok", "steps": ["export DB_PASSWORD=$DB_PASSWORD", "curl -H \"Authorization: Bearer ${TOKEN}\" x"]})).await;
     let path = format!("/commands/{}", c["id"].as_str().unwrap());
     let (s, v) = call(
         &fx,
@@ -138,4 +138,25 @@ async fn a_variable_value_is_shown_on_the_card_and_a_literal_one_is_refused() {
         .await
         .unwrap();
     assert!(h.await.unwrap().is_err()); // parked (shown), then the person said no
+}
+
+#[tokio::test]
+async fn a_command_substitution_value_is_a_literal_secret_and_plain_authorize_never_confirms() {
+    let fx = fx().await;
+    let (s, v) = call(
+        &fx,
+        &fx.admin,
+        Method::POST,
+        "/commands",
+        Some(json!({"name": "bad", "steps": ["PASSWORD=$(echo hunter2)"]})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert!(v.to_string().contains("contains a secret"), "{v}");
+    add(&fx, "web", "allowed").await;
+    let c = mk(&fx, json!({"name": "c", "steps": ["one"], "confirm": true})).await;
+    let action = Action::Preset(c["id"].as_str().unwrap().into());
+    let who = person(&fx).await;
+    let e = authorize(&fx.app, &who, "web", &action).await.unwrap_err();
+    assert_eq!(e.code, "confirm_required");
 }

@@ -97,43 +97,63 @@ async fn a_run_waiting_for_approval_can_be_cancelled_and_its_approval_is_void() 
     );
 }
 
-#[tokio::test]
-async fn the_fleet_card_shows_a_count_and_a_label_not_every_host() {
-    let fx = fx().await;
+/// Starts a fleet as a session that waits for approval; returns what the card showed.
+async fn card(fx: std::sync::Arc<Fx>, id: &str, body: serde_json::Value) -> Pending {
+    let (_, dev) = session(&fx, id).await;
+    let me = caller(&fx, &dev, &format!("code_mode:{id}")).await;
+    let f = fx.clone();
+    let h =
+        tokio::spawn(
+            async move { as_caller(&f, me, Method::POST, "/fleet/runs", Some(body)).await },
+        );
+    let p = parked(&fx, id).await;
+    decide_approval(&fx.app, id, &p.id, false, &dev)
+        .await
+        .unwrap();
+    let _ = h.await;
+    p
+}
+
+async fn edge_hosts(fx: &Fx) {
     for n in ["a1", "a2", "a3"] {
         let body = json!({"name": n, "address": format!("{n}.example.com"), "username": "deploy",
             "ai_rule": "ask", "group": "edge"});
-        let (s, v) = call(&fx, &fx.admin, Method::POST, "/hosts", Some(body)).await;
+        let (s, v) = call(fx, &fx.admin, Method::POST, "/hosts", Some(body)).await;
         assert_eq!(s, StatusCode::OK, "{v}");
     }
-    mk(&fx, json!({"name": "c", "steps": ["one"]})).await;
-    let (ai, dev) = session(&fx, "as_f").await;
-    let me = caller(&fx, &dev, "code_mode:as_f").await;
-    let _ = ai;
-    let fx2 = std::sync::Arc::new(fx);
-    let f = fx2.clone();
-    let h = tokio::spawn(async move {
-        as_caller(
-            &f,
-            me,
-            Method::POST,
-            "/fleet/runs",
-            Some(json!({"command": "c", "group": "edge"})),
-        )
-        .await
-    });
-    let p = parked(&fx2, "as_f").await;
-    assert_eq!(p.args["hosts"], 3, "{}", p.args);
+    mk(fx, json!({"name": "c", "steps": ["one"]})).await;
+}
+
+#[tokio::test]
+async fn the_fleet_card_counts_picked_hosts_and_always_lists_named_ones() {
+    let fx = std::sync::Arc::new(fx().await);
+    edge_hosts(&fx).await;
+    let p = card(fx.clone(), "as_f", json!({"command": "c", "group": "edge"})).await;
+    assert_eq!(p.args["picked"], 3, "{}", p.args);
     assert!(
-        p.args["fleet"].as_str().unwrap().contains("group edge"),
+        p.args["picked_by"].as_str().unwrap().contains("group edge"),
         "{}",
         p.args
     );
     assert!(!p.args.to_string().contains("a1"), "{}", p.args);
-    decide_approval(&fx2.app, "as_f", &p.id, false, &dev)
-        .await
-        .unwrap();
-    let _ = h.await;
+    // a host named directly is listed even when the group also holds it
+    let p = card(
+        fx.clone(),
+        "as_g",
+        json!({"command": "c", "hosts": ["a1"], "group": "edge"}),
+    )
+    .await;
+    assert_eq!(p.args["hosts"], json!(["a1"]), "{}", p.args);
+    assert_eq!(p.args["picked"], 2, "{}", p.args);
+    // named only: every name, no label
+    let p = card(
+        fx.clone(),
+        "as_h",
+        json!({"command": "c", "hosts": ["a1", "a2"]}),
+    )
+    .await;
+    assert_eq!(p.args["hosts"], json!(["a1", "a2"]), "{}", p.args);
+    assert!(p.args.get("picked_by").is_none(), "{}", p.args);
 }
 
 #[tokio::test]
@@ -157,4 +177,53 @@ async fn a_session_reaches_only_its_own_runs() {
     // a person still reads and cancels everything
     let (s, _) = call(&fx, &fx.admin, Method::GET, &format!("/runs/{run}"), None).await;
     assert_eq!(s, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_cancel_during_approval_is_what_the_fleet_start_answers() {
+    let fx = std::sync::Arc::new(fx().await);
+    edge_hosts(&fx).await;
+    let (_, dev) = session(&fx, "as_x").await;
+    let me = caller(&fx, &dev, "code_mode:as_x").await;
+    let f = fx.clone();
+    let h = tokio::spawn(async move {
+        as_caller(
+            &f,
+            me,
+            Method::POST,
+            "/fleet/runs",
+            Some(json!({"command": "c", "group": "edge"})),
+        )
+        .await
+    });
+    parked(&fx, "as_x").await;
+    let run = states(
+        &fx,
+        "SELECT id FROM leyline_runs WHERE principal = ?",
+        "session:as_x",
+    )
+    .await
+    .remove(0);
+    let (s, _) = call(
+        &fx,
+        &fx.admin,
+        Method::POST,
+        &format!("/runs/{run}/cancel"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, v) = h.await.unwrap();
+    assert_eq!(
+        (s, v["state"].as_str()),
+        (StatusCode::OK, Some("cancelled")),
+        "{v}"
+    );
+    let hosts = states(
+        &fx,
+        "SELECT state FROM leyline_run_hosts WHERE run_id = ?",
+        &run,
+    )
+    .await;
+    assert!(hosts.iter().all(|s| s == "skipped"), "{hosts:?}");
 }
