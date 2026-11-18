@@ -293,14 +293,15 @@ async fn a_package_is_drafted_sealed_and_served_only_as_an_inert_attachment() {
     )
     .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
-    // The package pins its bytes: the asset cannot be deleted while it is used.
+    // A package's bytes are not library assets (the asset routes do not see them), so they cannot be deleted there.
     let sha: String =
         sqlx::query_scalar("SELECT sha256 FROM design_mockup_files WHERE path = 'app.css'")
             .fetch_one(&fx.app.pool)
             .await
             .unwrap();
     let (s, _) = call(&fx, Method::DELETE, &format!("/assets/{sha}"), None).await;
-    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(files(&fx).await, 4, "the package still holds its files");
     // Not a mockup, and audit carries ids only.
     let (_, d) = call(
         &fx,
