@@ -27,5 +27,6 @@ mod rooms;
 mod runner_history;
 mod semantic;
 mod sorting;
+mod supersede;
 mod sync;
 mod tidy;

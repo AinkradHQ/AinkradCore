@@ -630,6 +630,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         ai::AiHits,
         ai::AiRecord,
         ai::AiRecords,
+        ai::AiPast,
         ai::AiEvidence,
         ai::Propose,
         ai::Proposed
