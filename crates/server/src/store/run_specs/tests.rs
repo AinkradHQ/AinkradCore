@@ -238,6 +238,10 @@ async fn invalid_specs_are_refused_with_the_path_of_the_bad_field() {
             "services.web.workdir",
         ),
         (
+            with(|v| v["services"]["web"]["workdir"] = json!("/a:/etc,ro")),
+            "services.web.workdir",
+        ),
+        (
             with(|v| v["services"]["web"]["command"] = json!([])),
             "services.web.command",
         ),

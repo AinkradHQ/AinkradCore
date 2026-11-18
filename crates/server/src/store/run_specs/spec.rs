@@ -36,14 +36,19 @@ pub struct RunSpec {
 #[serde(deny_unknown_fields)]
 pub struct Service {
     /// An image reference such as `postgres:17` or `ghcr.io/acme/app@sha256:...`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     /// Build the image from a Dockerfile in one of the project's repos.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<Build>,
     /// Mount this project repo's checkout at `/repo/<name>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
     /// Absolute path inside the container; default is the image's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
     /// Replaces the image's command; at most 64 arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<Vec<String>>,
     /// Environment. A value is plain text or contains `${secret:NAME}` references.
     #[serde(default)]
@@ -57,6 +62,7 @@ pub struct Service {
     /// Services that must be started (and healthy, when they have a `health`) first.
     #[serde(default)]
     pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<Health>,
 }
 
@@ -66,8 +72,10 @@ pub struct Build {
     /// A repo of the project.
     pub repo: String,
     /// Path of the Dockerfile inside that repo; default `Dockerfile`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dockerfile: Option<String>,
     /// Build context inside that repo; default `.`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
 }
 
@@ -312,11 +320,11 @@ fn cycle(spec: &RunSpec) -> Result<(), Problem> {
     Ok(())
 }
 
-/// An absolute path inside the container: no `..`, `.` or empty parts, no NUL or newline.
+/// An absolute path inside the container: no `..`, `.` or empty parts, no NUL, newline, `:` or `,` (Podman's mount syntax).
 fn abs_path_problem(p: &str) -> Option<&'static str> {
     let ok = p.len() <= 255
         && p.starts_with('/')
-        && !p.contains(['\0', '\n', '\r'])
+        && !p.contains([':', ',', '\0', '\n', '\r'])
         && (p == "/" || p[1..].split('/').all(|c| !matches!(c, "" | "." | "..")));
     (!ok).then_some("an absolute container path of up to 255 characters, with no .. parts")
 }
