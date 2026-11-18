@@ -1,7 +1,12 @@
-//! V1-03 acceptance at the CRDT layer: replicas converge through the gate, a hostile update is refused, crossing moves
-//! revert, a rebalance does not undo a concurrent move, and a refused update poisons the replica.
+//! V1-03 acceptance at the document layer (ported from `design-crdt` in V1-05): replicas converge through the gate, a
+//! hostile update is refused, crossing moves revert, a rebalance does not undo a concurrent move, and an update
+//! refused after integration poisons the replica. Since V1-05 the Core's replica runs the shared gate, whose layout
+//! layer refuses some shapes BEFORE integration (`Malformed`, replica untouched) that `design-crdt` caught after it
+//! (`Invalid`, poisoned); the expectations below say which.
 
-use design_crdt::{MAX_UPDATE_BYTES, NodeType, Refused, Replica};
+use design_doc::{
+    MAX_JSON_DEPTH, MAX_PEER_UPDATE_BYTES as MAX_UPDATE_BYTES, NodeType, Refused, Replica,
+};
 use design_model::tree::forest;
 use serde_json::{Value, json};
 use yrs::branch::{Branch, BranchPtr};
@@ -46,7 +51,7 @@ fn server_with_page() -> Replica {
 
 fn client_of(server: &Replica) -> Replica {
     let mut c = Replica::new();
-    c.apply_trusted(&server.state()).unwrap();
+    c.apply_remote(&server.state()).unwrap();
     c
 }
 
@@ -142,7 +147,7 @@ fn clients_converge_on_a_thousand_random_concurrent_ops() {
         for (ci, c) in clients.iter_mut().enumerate() {
             for (from, d) in &diffs {
                 if *from != ci {
-                    c.apply_trusted(d).unwrap();
+                    c.apply_remote(d).unwrap();
                 }
             }
         }
@@ -182,8 +187,8 @@ fn crossing_moves_revert_the_loser_instead_of_detaching_it() {
     r.unwrap();
     for u in [&u1, &u2] {
         let d = server.apply_remote(u).unwrap().unwrap();
-        c1.apply_trusted(&d).unwrap();
-        c2.apply_trusted(&d).unwrap();
+        c1.apply_remote(&d).unwrap();
+        c2.apply_remote(&d).unwrap();
     }
     let m = server.read().unwrap();
     assert_eq!(c1.read().unwrap(), m);
@@ -213,8 +218,8 @@ fn a_rebalance_does_not_undo_a_concurrent_move() {
     r.unwrap();
     for u in [&u1, &u2] {
         let d = server.apply_remote(u).unwrap().unwrap();
-        c1.apply_trusted(&d).unwrap();
-        c2.apply_trusted(&d).unwrap();
+        c1.apply_remote(&d).unwrap();
+        c2.apply_remote(&d).unwrap();
     }
     let m = server.read().unwrap();
     assert_eq!(c1.read().unwrap(), m);
@@ -244,11 +249,12 @@ fn hostile_updates_are_refused_and_poison_the_replica() {
             Refused::Malformed,
         ),
         (
+            // the layout knows three roots: refused before integration
             "foreign root",
             forge(&server, |t| {
                 t.get_or_insert_map("evil").insert(t, "k", 1);
             }),
-            Refused::Invalid(String::new()),
+            Refused::Malformed,
         ),
         (
             "bad node id",
@@ -314,11 +320,12 @@ fn hostile_updates_are_refused_and_poison_the_replica() {
             Refused::ClockTooHigh,
         ),
         (
+            // the layout: a node must be a map, refused before integration
             "wrong shape: node is a string",
             forge(&server, |t| {
                 nm(t).insert(t, id(5).as_str(), "oops");
             }),
-            Refused::Invalid(String::new()),
+            Refused::Malformed,
         ),
     ];
     for (name, bytes, want) in cases {
@@ -331,6 +338,10 @@ fn hostile_updates_are_refused_and_poison_the_replica() {
         if got != Refused::TooLarge && got != Refused::Malformed {
             // it had been integrated: the replica must refuse everything now
             assert_eq!(s.apply_remote(&[0, 0]), Err(Refused::Poisoned), "{name}");
+        } else {
+            // refused before integration: the replica is untouched and still usable
+            assert!(!s.is_poisoned(), "{name}");
+            assert_eq!(s.apply_remote(&[0, 0]), Ok(None), "{name}");
         }
     }
 }
@@ -493,8 +504,8 @@ fn nested(depth: usize) -> Vec<u8> {
 fn hostile_encodings_are_refused_before_yrs_sees_them() {
     let server = server_with_page();
     // honest depth passes the scan, absurd depth is refused without recursing (yrs itself would abort the process)
-    assert!(design_crdt::guard::scan(&nested(3)).is_ok());
-    for bytes in [nested(100_000), nested(design_crdt::guard::MAX_DEPTH + 2)] {
+    assert!(design_doc::guard::scan(&nested(3)).is_ok());
+    for bytes in [nested(100_000), nested(MAX_JSON_DEPTH + 2)] {
         let mut s = client_of(&server);
         assert_eq!(s.apply_remote(&bytes), Err(Refused::Malformed));
         // refused before anything was integrated: the replica is still usable
@@ -552,14 +563,14 @@ fn hostile_encodings_are_refused_before_yrs_sees_them() {
             Some("hi"),
         )
     });
-    assert!(design_crdt::guard::scan(&u).is_ok());
-    assert!(design_crdt::guard::scan(&c.state()).is_ok());
+    assert!(design_doc::guard::scan(&u).is_ok());
+    assert!(design_doc::guard::scan(&c.state()).is_ok());
 }
 
 #[test]
 fn a_chain_of_small_nested_updates_is_refused_at_the_step_that_nests() {
     // Nested maps are stored flat, so no single update looks deep. Each small update here adds one level under a
-    // node's props; the gate trial-applies each to the Core's own replica and refuses the first that leaves the schema.
+    // node's props; the gate refuses the first that leaves the layout, before the replica integrates it.
     let mut server = server_with_page();
     let mut c = client_of(&server);
     let (_, u) = c.edit(|e| {
@@ -606,7 +617,7 @@ fn a_chain_of_small_nested_updates_is_refused_at_the_step_that_nests() {
         Some(0),
         "a nested shared type inside props is never accepted"
     );
-    // the poisoned replica is not stored anywhere: a rebuild from what was stored equals the state before
+    // nothing of it is stored anywhere: a rebuild from what was stored equals the state before
     let rebuilt = Replica::from_stored([before.as_slice()]).unwrap();
     assert_eq!(rebuilt.read().unwrap().nodes[&id(1)].props.len(), 0);
 }
@@ -720,6 +731,8 @@ fn nesting_deeper_than_node_then_props_is_refused_in_every_shape() {
     }
 }
 
+/// `design-crdt` refused these after integrating them (`Invalid`, poisoned); the gate's layout layer now refuses
+/// every one before the replica sees it (`Malformed`, untouched).
 #[test]
 fn the_list_part_of_a_map_and_the_map_part_of_a_text_are_refused() {
     let mut server = server_with_page();
@@ -793,9 +806,10 @@ fn the_list_part_of_a_map_and_the_map_part_of_a_text_are_refused() {
     for (name, bytes) in cases {
         let mut s = client_of(&server);
         let r = s.apply_remote(&bytes);
-        assert!(matches!(r, Err(Refused::Invalid(_))), "{name}: {r:?}");
-        assert!(s.is_poisoned(), "{name}");
-        assert_eq!(s.apply_remote(&[0, 0]), Err(Refused::Poisoned), "{name}");
+        assert_eq!(r, Err(Refused::Malformed), "{name}");
+        assert!(!s.is_poisoned(), "{name}");
+        assert_eq!(s.apply_remote(&[0, 0]), Ok(None), "{name}");
+        assert_eq!(s.read().unwrap(), server.read().unwrap(), "{name}");
     }
 }
 
@@ -834,7 +848,7 @@ fn update_of(runs: &[Vec<u8>], deletes: &[(u64, u64, u64)]) -> Vec<u8> {
 
 #[test]
 fn a_client_twice_in_one_update_and_clocks_past_u32_are_refused() {
-    use design_crdt::guard::scan;
+    use design_doc::guard::scan;
     assert!(scan(&update_of(&[run(7, 0, "a")], &[])).is_ok());
     assert!(scan(&update_of(&[run(7, 0, "a"), run(8, 0, "b")], &[])).is_ok());
     // the same client twice: the second run would restart the clock and make every dependency check meaningless
@@ -873,7 +887,7 @@ fn the_dependency_check_is_linear_in_the_update() {
     let dels: Vec<(u64, u64, u64)> = (1..=40_000u64).map(|c| (c, 0, 1)).collect();
     let bytes = update_of(&runs, &dels);
     let t = std::time::Instant::now();
-    let f = design_crdt::guard::scan_facts(&bytes).unwrap();
+    let f = design_doc::guard::scan_facts(&bytes).unwrap();
     f.check_known(|_| 0).unwrap();
     assert!(
         t.elapsed() < std::time::Duration::from_secs(5),
@@ -968,32 +982,11 @@ fn resending_a_held_block_mislabelled_cannot_deepen_the_real_chain() {
     assert_eq!(h.join().expect("no abort"), 20_000);
 }
 
-#[test]
-fn a_held_block_is_never_a_parent_or_origin_taken_from_the_update() {
-    // `resolve_types` against an index: the update's own claim about a held id is ignored, the index is the truth
-    use design_crdt::guard::scan_facts;
-    let bytes = resend_mislabel(7, 4, "k");
-    let f = scan_facts(&bytes).unwrap();
-    let mut index = std::collections::HashMap::new();
-    index.insert((7u64, 4u64), 2u8); // the real item at clock 4 is a props map (depth 2)
-    let known = |_: u64| 5; // the replica holds clocks 0..5 of every client
-    assert_eq!(
-        f.resolve_types(&index, &known, true),
-        Err(Refused::Malformed),
-        "3 levels deep"
-    );
-    index.insert((7, 4), 1); // were it a node map, a props map under it is fine, and the mislabel changes nothing
-    let got = f.resolve_types(&index, &known, true).unwrap();
-    assert_eq!(got, vec![((7, 5), 2)]);
-    // an id the index does not know is refused, not guessed from the update
-    index.clear();
-    assert_eq!(
-        f.resolve_types(&index, &known, true),
-        Err(Refused::Malformed)
-    );
-}
+// `a_held_block_is_never_a_parent_or_origin_taken_from_the_update` tested `design-crdt`'s depth index, which V1-05
+// replaced by the layout shadow: ported as `layered_tests::a_held_block_is_judged_by_what_the_replica_holds`.
 
-/// Cost of the gate per update on a big document: `cargo test --release -p design-crdt -- --ignored --nocapture cost`.
+/// Cost of the gate per update on a big document:
+/// `cargo test --release -p design-doc --test replica -- --ignored --nocapture cost`.
 #[test]
 #[ignore]
 fn cost_of_one_update_on_a_big_document() {

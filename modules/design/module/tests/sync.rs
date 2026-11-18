@@ -14,7 +14,7 @@ use ainkrad_core_server::auth::testing::TestDevice;
 use ainkrad_core_server::module::Module;
 use ainkrad_core_server::scheduler::{Clock, SystemClock};
 use ainkrad_core_server::store::{connect, gov, migrate};
-use design_crdt::{NodeType, Replica};
+use design_doc::{NodeType, Replica};
 use design_model::tree::forest;
 use design_module::{Design, Limits};
 use futures_util::{SinkExt, StreamExt};
@@ -181,7 +181,9 @@ async fn client(fx: &Fx) -> (Ws, Replica) {
     let mut ws = connect_doc(fx, None).await;
     let mut r = Replica::new();
     match next(&mut ws).await {
-        F::Bin(2, _, s) => r.apply_trusted(&s).unwrap(),
+        F::Bin(2, _, s) => {
+            r.apply_remote(&s).unwrap();
+        }
         f => panic!("expected a snapshot, got {f:?}"),
     }
     (ws, r)
@@ -206,7 +208,7 @@ async fn catch_up(ws: &mut Ws, r: &mut Replica, want: &design_model::Doc) {
             return;
         }
         if let F::Bin(1, _, u) = next(ws).await {
-            r.apply_trusted(&u).unwrap();
+            r.apply_remote(&u).unwrap();
         }
     }
     panic!("never converged");
@@ -268,7 +270,7 @@ async fn a_hostile_update_is_refused_the_peer_dropped_and_the_doc_untouched() {
         .unwrap();
     // 1. a node outside the schema
     let mut evil = Replica::new();
-    evil.apply_trusted(&a.state()).unwrap();
+    evil.apply_remote(&a.state()).unwrap();
     let bad = evil
         .edit(|e| {
             e.insert_node(
@@ -290,7 +292,7 @@ async fn a_hostile_update_is_refused_the_peer_dropped_and_the_doc_untouched() {
     );
     // 2. a move clock far above the document's: a refused remote update closes the connection too
     let mut c = Replica::new();
-    c.apply_trusted(&a.state()).unwrap();
+    c.apply_remote(&a.state()).unwrap();
     let far = c
         .edit(|e| {
             e.insert_node(
@@ -639,7 +641,7 @@ async fn a_refused_update_is_quarantined_and_never_reaches_another_device() {
     assert_eq!(rows.len(), 1, "only the update that passed the trial apply");
     let mut from_log = Replica::new();
     for r in &rows {
-        from_log.apply_trusted(r).unwrap();
+        from_log.apply_remote(r).unwrap();
     }
     assert_eq!(
         from_log.read().unwrap(),
@@ -655,7 +657,7 @@ async fn a_refused_update_is_quarantined_and_never_reaches_another_device() {
     let mut via_cursor = Replica::new();
     while let F::Bin(t, _, body) = next(&mut ws).await {
         assert!(t == 1 || t == 2);
-        via_cursor.apply_trusted(&body).unwrap();
+        via_cursor.apply_remote(&body).unwrap();
         if via_cursor.read().unwrap().nodes.len() == 2 {
             break;
         }

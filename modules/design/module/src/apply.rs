@@ -373,7 +373,7 @@ mod tests {
 }
 
 /// The flows through a real actor and a real store. They go through `Actor::edit`, which hands the typed ops' update to
-/// the replica gate, so they need `design-doc` and `design-crdt` on one document layout (V1-05).
+/// the replica gate, and a `design_doc::Live` whose updates pass the replica gate.
 #[cfg(test)]
 mod flow {
     use std::sync::Arc;

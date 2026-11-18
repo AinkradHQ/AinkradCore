@@ -1,11 +1,12 @@
-//! The document actor: one live `design_crdt::Replica` per open design, shared by every socket and, later, AI ops.
+//! The document actor: one live `design_doc::Replica` per open design, shared by every socket and, later, AI ops.
 //!
-//! SECURITY MODEL (read with `design_crdt`'s)
+//! SECURITY MODEL (read with `design_doc`'s: its `gate` and `replica` modules)
 //! - Reaching a doc takes a signed device request with the module scope (`admin`): the route is not in `ROUTE_SCOPES`,
 //!   so it keeps the deny-by-default module scope. Revocation and a scope change cut the socket within the backstop
 //!   (`ws.rs`). Every peer may write: there is no read-only socket in this story.
-//! - Nothing a peer sends is trusted. An update goes through `Replica::apply_remote` (size, decode, schema, clock and
-//!   node budgets, via the model crate) BEFORE it is stored or shown to anyone. A refusal is a protocol violation: the
+//! - Nothing a peer sends is trusted. An update goes through `Replica::apply_remote`, the same gate the App engine runs
+//!   (raw-byte scan, dependencies, the T1 layout, guarded decode, a trial copy; then schema, clock and node budgets via
+//!   the model crate), BEFORE it is stored or shown to anyone. A refusal is a protocol violation: the
 //!   socket is closed with a code and the replica is rebuilt from storage, so no half-applied update survives.
 //! - Persist, then broadcast: the diff that was integrated is written to `design_updates` in a write transaction, and
 //!   only after the commit is it sent to the other peers and acknowledged to the sender. A crash loses nothing that
@@ -24,8 +25,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use design_crdt::{Refused, Replica};
-use design_doc::Live;
+use design_doc::{Live, Refused, Replica};
 use design_model::limits::MAX_DOC_BYTES;
 use sqlx::{Row, SqlitePool};
 use tokio::sync::{Mutex, broadcast};
@@ -110,6 +110,13 @@ pub enum EditError {
     DocFull,
     Store,
 }
+
+// `Live` sits in `State` behind the actor's lock, held across awaits: it must be `Send` (yrs `sync` feature; no `Rc`).
+const _: fn() = || {
+    fn send<T: Send>() {}
+    send::<Live>();
+    send::<Replica>();
+};
 
 struct State {
     replica: Replica,
@@ -264,7 +271,10 @@ impl Actor {
             // the replica could not be rebuilt earlier: not the peer's doing
             Err(Refused::Poisoned | Refused::Busy) => return Err(Refusal::Store),
             Err(e) => {
-                self.rebuild(st).await;
+                // a refusal before integration leaves the replica as it was; only a poisoned one is rebuilt
+                if st.replica.is_poisoned() {
+                    self.rebuild(st).await;
+                }
                 return Err(Refusal::Violation(e));
             }
         };
@@ -461,6 +471,12 @@ impl Actor {
             }
         };
         let bytes = live.outbox(true);
+        // #331: the engine's outbox holds at most `MAX_PEER_UPDATE_BYTES` per send. An edit that does not fit whole
+        // (the oldest update is over it, or more is queued than one update takes) is refused, never half-sent.
+        if live.outbox_stuck() || !live.outbox(false).is_empty() {
+            st.live = None;
+            return Err(EditError::TooLarge);
+        }
         if bytes.is_empty() {
             return Ok((out, st.last_seq));
         }

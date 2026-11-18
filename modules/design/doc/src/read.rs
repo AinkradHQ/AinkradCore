@@ -1,6 +1,7 @@
-//! Reading a yrs document back as the model's types, strictly. Whatever a peer wrote is untrusted: a node must be
-//! exactly the shape below, a prop value must be plain JSON (no nested shared type, no sub-document, no buffer), and
-//! anything else is an error, never skipped. Every read is bounded by the size of what was stored.
+//! Reading a yrs document back as the model's types, strictly (from `design-crdt`, V1-03; since V1-05 the only
+//! reader: the Core reads a whole document strictly, the App engine skips a node that does not read). Whatever a peer
+//! wrote is untrusted: a node must be exactly the shape below, a prop value must be plain JSON (no nested shared type,
+//! no sub-document, no buffer), and anything else is an error. Every read is bounded by the size of what was stored.
 //!
 //! The node entry (`nodes[<id>]`, a map):
 //!   `type`  string                 a `NodeType`
@@ -13,16 +14,19 @@
 
 use std::collections::HashMap;
 
-use design_model::limits::MAX_NAME_CHARS;
+use design_model::limits::{MAX_NAME_CHARS, MAX_ORDER_LEN};
 use design_model::{Doc, Meta, Node, NodeType, Token};
 use serde_json::{Map, Number as JsonNumber, Value};
 use yrs::branch::{Branch, BranchPtr};
 use yrs::types::map::MapRef;
 use yrs::{Any, GetString, Map as _, Number, Out, ReadTxn, Text as _};
 
+use crate::MAX_JSON_DEPTH;
+
 /// Items in the list part of a branch. A map's list part and a text's map part are never written by an honest peer
 /// and are invisible to every read, so they are refused instead of stored.
-/// Countable content of a branch (a text: its length in UTF-16 units).
+/// Countable content of a branch (a text: its length in UTF-16 units, as every replica is made with
+/// `OffsetKind::Utf16`, `crate::new_ydoc`).
 fn branch_len_content(b: &impl AsRef<Branch>) -> u32 {
     b.as_ref().content_len()
 }
@@ -31,14 +35,13 @@ pub(crate) fn branch_len(b: &impl AsRef<Branch>) -> u32 {
     b.as_ref().len()
 }
 
-/// JSON nesting a prop may have (the model's validators are shallower; this stops a deep value being built at all).
-const MAX_JSON_DEPTH: usize = 16;
 /// The largest integer every JavaScript-compatible peer can hold exactly.
 const MAX_SAFE: i64 = (1 << 53) - 1;
 
 pub(crate) type R<T> = Result<T, String>;
 
-fn json(a: &Any, depth: usize) -> R<Value> {
+/// `Any` -> JSON: at most `MAX_JSON_DEPTH` deep, finite numbers, no `undefined`, no buffers.
+pub(crate) fn json(a: &Any, depth: usize) -> R<Value> {
     if depth > MAX_JSON_DEPTH {
         return Err("value nested too deeply".into());
     }
@@ -87,7 +90,8 @@ fn opt_string(a: &Any) -> R<Option<String>> {
     }
 }
 
-fn clock(a: &Any) -> R<u64> {
+/// A non-negative integer every JavaScript peer holds exactly (a clock, a version).
+pub(crate) fn clock(a: &Any) -> R<u64> {
     let n = match a {
         Any::Number(Number::Int(i)) => *i,
         Any::Number(Number::Float(f)) if f.fract() == 0.0 && f.abs() <= MAX_SAFE as f64 => {
@@ -99,6 +103,21 @@ fn clock(a: &Any) -> R<u64> {
         .ok()
         .filter(|c| *c <= MAX_SAFE as u64)
         .ok_or_else(|| "clock out of range".into())
+}
+
+/// The `move` register as written: parent `p`, clock `c`, previous parent `f` (null = none).
+pub(crate) fn move_any(parent: Option<&str>, clock: u64, prev: Option<&str>) -> Any {
+    let s = |p: Option<&str>| p.map_or(Any::Null, |p| Any::String(p.into()));
+    Any::Map(
+        [
+            ("p".to_string(), s(parent)),
+            ("c".to_string(), Any::Number(Number::Int(clock as i64))),
+            ("f".to_string(), s(prev)),
+        ]
+        .into_iter()
+        .collect::<HashMap<_, _>>()
+        .into(),
+    )
 }
 
 /// `{p, c, f}`: exactly these keys.
@@ -119,9 +138,14 @@ fn read_move(a: &Any) -> R<(Option<String>, u64, Option<String>)> {
 
 /// One node, or `None` when the id is not in the map.
 pub(crate) fn node<T: ReadTxn>(txn: &T, nodes: &MapRef, id: &str) -> R<Option<Node>> {
-    let Some(out) = nodes.get(txn, id) else {
-        return Ok(None);
-    };
+    match nodes.get(txn, id) {
+        Some(out) => node_out(txn, out).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// One node from its entry in `nodes`.
+pub(crate) fn node_out<T: ReadTxn>(txn: &T, out: Out) -> R<Node> {
     let Out::YMap(m) = out else {
         return Err("node is not a map".into());
     };
@@ -138,7 +162,13 @@ pub(crate) fn node<T: ReadTxn>(txn: &T, nodes: &MapRef, id: &str) -> R<Option<No
                         .map_err(|_| "unknown node type")?,
                 )
             }
-            "order" => order = Some(string(any(v)?)?),
+            "order" => {
+                let o = string(any(v)?)?;
+                if o.len() > MAX_ORDER_LEN {
+                    return Err("order too long".into());
+                }
+                order = Some(o)
+            }
             "move" => mv = Some(read_move(&any(v)?)?),
             "name" => {
                 name = string(any(v)?)?;
@@ -190,7 +220,7 @@ pub(crate) fn node<T: ReadTxn>(txn: &T, nodes: &MapRef, id: &str) -> R<Option<No
     let (Some(ty), Some(order), Some((parent, clock, prev))) = (ty, order, mv) else {
         return Err("node lacks type, order or move".into());
     };
-    Ok(Some(Node {
+    Ok(Node {
         ty,
         parent,
         order,
@@ -199,7 +229,7 @@ pub(crate) fn node<T: ReadTxn>(txn: &T, nodes: &MapRef, id: &str) -> R<Option<No
         name,
         props,
         text,
-    }))
+    })
 }
 
 /// `meta`: `system` (string) and `version` (integer), nothing else.

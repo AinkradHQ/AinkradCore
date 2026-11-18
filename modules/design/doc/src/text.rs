@@ -1,6 +1,6 @@
 //! Text offsets (V2-04). The engine, Skia paragraph and `NSTextInputClient` all count UTF-16 code units; yrs here
-//! counts bytes (`OffsetKind::Bytes`, the default). A `splice` op carries UTF-16 offsets and is turned into bytes
-//! against the text it was checked on.
+//! counts UTF-16 too (`new_ydoc`). A `splice` op carries UTF-16 offsets; they are checked against the text (they must
+//! not fall inside a character) and applied as they are.
 
 /// The byte offset of UTF-16 offset `u` in `s`, or `None` past the end or inside a character (a surrogate pair).
 pub fn byte_of_utf16(s: &str, u: usize) -> Option<usize> {
@@ -160,16 +160,5 @@ mod tests {
         assert!(!l.read().nodes[T].props.contains_key("w"), "the set");
         assert!(l.undo());
         assert_eq!(text(&l), "", "the whole word at once");
-    }
-
-    #[test]
-    fn a_splice_is_placed_by_the_live_text_not_a_stale_cached_model() {
-        let mut l = live("hello");
-        let mut stale = l.read(); // "hello"
-        l.apply_ops(&[splice(0, 0, "日")]).unwrap(); // the live text is now "日hello"
-        // validated against the stale "hello" (offset 5 is its end); written at UTF-16 offset 5 of the live text
-        l.apply_gesture_ops(&mut stale, &[splice(5, 0, "!")])
-            .unwrap();
-        assert_eq!(text(&l), "日hell!o");
     }
 }

@@ -20,6 +20,8 @@ pub const DE_ERR_RESET: i32 = -10;
 /// Three resets within a minute: remote updates are no longer applied. Local edits still work and still go out; free
 /// the engine and open the design again.
 pub const DE_ERR_HALTED: i32 = -11;
+/// No thread could be started for a remote update; nothing changed. Retry later.
+pub const DE_ERR_BUSY: i32 = -12;
 
 /// `de_sync_apply` targets.
 pub const DE_DOC: u32 = 0;
@@ -76,6 +78,8 @@ pub const DE_MAX_ENGINES: usize = 64;
 pub const DE_MAX_SYNC_BYTES: usize = 33 << 20;
 pub const DE_MAX_JSON_BYTES: usize = 1 << 20;
 pub const DE_MAX_ID_BYTES: usize = 128;
+/// Ids one `de_select` takes.
+pub const DE_MAX_SELECT_IDS: usize = 4096;
 pub const DE_MAX_BLOB_BYTES: usize = 25 << 20;
 
 // Literals for the header; kept equal to the document crate's caps.

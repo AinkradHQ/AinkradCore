@@ -9,8 +9,10 @@
 mod apply;
 mod asset_links;
 mod assets;
+mod checks;
 mod collections;
 mod docs;
+mod fidelity;
 mod package;
 mod review;
 mod sniff;
@@ -29,6 +31,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use utoipa::OpenApi;
 
+pub use checks::check_pending;
+pub use fidelity::{FLAG_PERCENT, Measured, measure};
 pub use package::import_dir;
 
 pub const MODULE: &str = "design";
@@ -57,6 +61,12 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0004_design_review",
         up: include_str!("../migrations/0004_design_review.up.sql"),
         down: include_str!("../migrations/0004_design_review.down.sql"),
+    },
+    Migration {
+        version: 5,
+        name: "0005_design_check_attempts",
+        up: include_str!("../migrations/0005_design_check_attempts.up.sql"),
+        down: include_str!("../migrations/0005_design_check_attempts.down.sql"),
     },
 ];
 
@@ -89,6 +99,8 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/docs"),
     ("PATCH", "/docs/{doc}"),
+    ("POST", "/docs/{doc}/take-over"),
+    ("POST", "/docs/{doc}/resume"),
     ("PUT", "/docs/{doc}/projects/{project}"),
     ("DELETE", "/docs/{doc}/projects/{project}"),
     ("POST", "/assets"),
@@ -162,6 +174,8 @@ pub use sync::Limits;
         docs::get,
         docs::patch,
         docs::archive,
+        docs::take_over,
+        docs::resume,
         docs::link,
         docs::unlink,
         assets::upload,
@@ -237,6 +251,8 @@ impl Module for Design {
             .route("/docs", get(docs::list).post(docs::create))
             .route("/docs/{doc}", get(docs::get).patch(docs::patch))
             .route("/docs/{doc}/archive", post(docs::archive))
+            .route("/docs/{doc}/take-over", post(docs::take_over))
+            .route("/docs/{doc}/resume", post(docs::resume))
             .route("/docs/{doc}/sync", get(ws::sync))
             .route(
                 "/docs/{doc}/projects/{project}",
@@ -334,11 +350,14 @@ impl Module for Design {
             "design.doc.created",
             "design.doc.changed",
             "design.doc.archived",
+            "design.doc.taken_over",
+            "design.doc.resumed",
             "design.doc.linked",
             "design.doc.unlinked",
             "design.asset.created",
             "design.asset.changed",
             "design.asset.deleted",
+            "design.asset.checked",
             "design.asset.linked",
             "design.asset.unlinked",
             "design.collection.created",
@@ -354,6 +373,15 @@ impl Module for Design {
             "design.approval.approved",
             "design.approval.withdrawn",
         ]
+    }
+
+    /// V6-01: fonts and Icon Composer zips go to a runner's sandboxed helper (`checks`).
+    fn jobs(&self) -> Vec<ainkrad_core_server::jobs::Job> {
+        vec![checks::job()]
+    }
+
+    fn attach(&self, app: &App) {
+        let _ = checks::APP.set(app.clone());
     }
 
     fn query_names(&self) -> &'static [&'static str] {

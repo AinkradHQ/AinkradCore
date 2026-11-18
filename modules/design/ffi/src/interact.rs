@@ -159,6 +159,10 @@ impl Host {
             return Err(DE_ERR_ARG);
         }
         self.refresh();
+        self.local_cursor = Some(self.camera.to_world(x, y));
+        if phase == DE_POINTER_DOWN {
+            self.stop_follow();
+        }
         if let Some(r) = self.text_pointer(phase, x, y, mods) {
             self.refresh();
             return r;
@@ -409,7 +413,10 @@ impl Host {
     }
 
     pub(crate) fn overlay(&self) -> Overlay {
-        let mut o = Overlay::default();
+        let mut o = Overlay {
+            peers: self.remote_marks(),
+            ..Overlay::default()
+        };
         let ids = match &self.gesture {
             Some(Gesture::Edit(e)) => {
                 o.guides = e.guides.clone();
@@ -456,6 +463,7 @@ impl Host {
     /// Pan by a scroll delta; past the content bounds the pan is rubber-banded.
     pub fn scroll(&mut self, dx: f32, dy: f32) -> Result<(), i32> {
         finite(&[dx, dy], MAX_COORD)?;
+        self.stop_follow();
         self.settle = None;
         let (pan, (w, h)) = (self.camera.pan, self.camera.view);
         let p = match self.ranges() {

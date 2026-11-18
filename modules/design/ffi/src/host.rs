@@ -30,6 +30,7 @@ pub fn code(e: Error) -> i32 {
         Error::Malformed(_) | Error::Refused(_) => DE_ERR_INVALID,
         Error::Reset => DE_ERR_RESET,
         Error::Halted => DE_ERR_HALTED,
+        Error::Busy => DE_ERR_BUSY,
     }
 }
 
@@ -44,7 +45,7 @@ pub(crate) fn finite(v: &[f32], lim: f32) -> Result<(), i32> {
 pub struct Host {
     doc_id: String,
     pub(crate) live: Live,
-    system: Live,
+    pub(crate) system: Live,
     /// The document as last read out of `live` (None = changed since), and its tree.
     pub(crate) model: Option<Doc>,
     pub(crate) tree: Option<Forest>,
@@ -65,6 +66,9 @@ pub struct Host {
     pub(crate) rng: u64,
     /// The text node being edited (V2-04), if any.
     pub(crate) text: Option<crate::text::Session>,
+    /// Other people and AI sessions (V2-06), the pointer's last world position, follow mode.
+    pub(crate) peers: crate::presence::Peers,
+    pub(crate) local_cursor: Option<(f32, f32)>,
     held: usize,
     fonts: usize,
     #[cfg(all(feature = "metal", target_os = "macos"))]
@@ -95,6 +99,8 @@ impl Host {
             previewed: HashSet::new(),
             rng: crate::edits::seed(),
             text: None,
+            peers: Default::default(),
+            local_cursor: None,
             held: 0,
             fonts: 0,
             #[cfg(all(feature = "metal", target_os = "macos"))]
@@ -112,7 +118,7 @@ impl Host {
         self.loaded = false;
     }
 
-    fn model(&mut self) -> &Doc {
+    pub(crate) fn model(&mut self) -> &Doc {
         if self.model.is_none() {
             let d = self.live.read();
             self.selection.retain(|id| d.nodes.contains_key(id));
@@ -169,16 +175,22 @@ impl Host {
         r.map_err(code)
     }
 
-    /// `true` when something was undone / redone.
-    pub fn undo(&mut self, redo: bool) -> bool {
+    /// `Ok(true)` when something was undone / redone; `DE_ERR_TOO_LARGE` when it would exceed the update budget
+    /// (reverted, the document is as it was).
+    pub fn undo(&mut self, redo: bool) -> Result<bool, i32> {
         self.cancel();
         let did = if redo {
-            self.live.redo()
+            self.live.redo_checked()
         } else {
-            self.live.undo()
+            self.live.undo_checked()
         };
         self.changed();
-        did
+        did.map_err(code)
+    }
+
+    /// An oversized update blocks the outbox: reported by `de_sync_outbox` as `DE_ERR_TOO_LARGE`.
+    pub fn outbox_stuck(&self) -> bool {
+        self.live.outbox_stuck()
     }
 
     fn delete_selection(&mut self) -> Result<(), i32> {
@@ -244,6 +256,7 @@ impl Host {
 
     /// Frame the selection (everything when nothing is selected).
     pub fn fit_selection(&mut self) {
+        self.stop_follow();
         self.refresh();
         let ids = self.top_selected();
         match crate::interact::union(ids.iter().filter_map(|id| self.rect(id))) {
@@ -256,6 +269,7 @@ impl Host {
     }
 
     pub fn fit(&mut self) {
+        self.stop_follow();
         self.settle = None;
         self.refresh();
         if let Some(r) = self.renderer.as_mut() {
@@ -270,6 +284,7 @@ impl Host {
         if !(factor.is_finite() && factor > 0.0 && factor <= 100.0) {
             return Err(DE_ERR_ARG);
         }
+        self.stop_follow();
         self.settle = None;
         let before = self.camera;
         self.camera.zoom_at(factor, x, y);

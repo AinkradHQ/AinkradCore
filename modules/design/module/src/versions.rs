@@ -359,11 +359,21 @@ pub(crate) async fn restore(
     )
     .await?;
     tx.commit().await?;
-    let (_, seq) = lease
+    let edited = lease
         .actor
         .edit(&person(&me), |live| restore_into(live, &blob))
-        .await
-        .map_err(edit_err)?;
+        .await;
+    let seq = match edited {
+        Ok((_, seq)) => seq,
+        Err(e) => {
+            // nothing was restored (too large for one update, refused, paused...): the safety version is not needed
+            sqlx::query("DELETE FROM design_versions WHERE id = ?")
+                .bind(&before)
+                .execute(&app.pool)
+                .await?;
+            return Err(edit_err(e));
+        }
+    };
     let mut tx = begin_write(&app.pool).await?;
     note(
         &mut tx,
