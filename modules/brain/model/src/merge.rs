@@ -81,16 +81,15 @@ pub struct Grounding {
     pub structured_item: bool,
 }
 
-/// B4-02 security rule, one for every kind: a true record is never retired on weak evidence. A
-/// `replaces` supersedes its target only when both are of one kind and the candidate passes the
-/// strict test (`Grounding`) on a user turn, or, for a `task` or `project-state`, on one cited Jira
-/// or GitHub item's tool-set fields. Lexical overlap cannot read meaning, so the test is strict
-/// rather than tuned: anything less saves the candidate alone (if admitted), keeps the target in
-/// force, and marks the two contested. A contested record never steers (ranks last, labelled).
+/// B4-02 security rule (fallback, round 4): lexical grounding cannot read word order or meaning, so
+/// a `replaces` of a `rule`, `preference`, `decision` or `fact` never supersedes: it always saves
+/// the candidate alone (if admitted), keeps the target in force, and marks the two contested. Only a
+/// `task` or `project-state` of one kind supersedes, when the candidate passes the strict test
+/// (`Grounding`) on one user-turn clause or on one cited Jira or GitHub item's tool-set fields. A contested record never steers (ranks last, labelled).
 pub fn may_supersede(candidate_kind: &str, target_kind: &str, g: Grounding) -> bool {
     candidate_kind == target_kind
-        && (g.user_turn
-            || (g.structured_item && matches!(candidate_kind, "task" | "project-state")))
+        && matches!(candidate_kind, "task" | "project-state")
+        && (g.user_turn || g.structured_item)
 }
 
 /// B4-02: a record of this kind goes stale, and ranks down, once it was last in use before the room's
@@ -230,12 +229,14 @@ mod tests {
             "project-state",
         ] {
             assert!(!may_supersede(kind, kind, none), "{kind}");
-            assert!(may_supersede(kind, kind, user), "{kind}");
+            let strict = matches!(kind, "task" | "project-state");
+            assert_eq!(may_supersede(kind, kind, user), strict, "{kind}");
         }
         assert!(may_supersede("task", "task", item));
         assert!(may_supersede("project-state", "project-state", item));
         for kind in ["rule", "preference", "fact", "decision"] {
             assert!(!may_supersede(kind, kind, item), "{kind}");
+            assert!(!may_supersede(kind, kind, user), "{kind}");
         }
         assert!(!may_supersede("fact", "rule", user));
         assert!(!may_supersede("task", "project-state", item));

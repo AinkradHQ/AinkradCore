@@ -117,6 +117,7 @@ pub(crate) async fn store_candidates(
             .execute(&mut *tx)
             .await?;
         }
+        let mut skip_add = false;
         if auto_ok {
             // Only a fact that really entered memory may retire another.
             if let Some(old) = &c.replaces {
@@ -125,11 +126,17 @@ pub(crate) async fn store_candidates(
                         memory.remove(old);
                         replaced += 1;
                     }
-                    Replace::Contested => contested += 1,
+                    Replace::Contested => {
+                        contested += 1;
+                        // Never reinforced, not even by a later candidate in this batch.
+                        skip_add = true;
+                    }
                     Replace::Ignored => {}
                 }
             }
-            memory.add(&id, &c.kind, &norm, prep.candidate(i));
+            if !skip_add {
+                memory.add(&id, &c.kind, &norm, prep.candidate(i));
+            }
         }
         log_op(
             &mut tx,

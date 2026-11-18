@@ -270,11 +270,12 @@ pub(crate) fn pick_runner(app: &App) -> Option<String> {
     all.into_iter().next()
 }
 
-/// The room's current memory, newest first, from which the prompt's related block is picked.
-async fn related_in(pool: &SqlitePool) -> Result<Vec<Related>, sqlx::Error> {
+/// The room's current memory, newest first, from which the prompt's related block is picked. A
+/// contested record is left out, so a later distil cannot `same_as`-reinforce it (B4-02 round 4).
+pub(crate) async fn related_in(pool: &SqlitePool) -> Result<Vec<Related>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT id, type, body FROM records WHERE status = 'accepted' AND valid_to IS NULL \
-         AND archived_at IS NULL ORDER BY created_at DESC LIMIT 500",
+         AND archived_at IS NULL AND contests IS NULL ORDER BY created_at DESC LIMIT 500",
     )
     .fetch_all(pool)
     .await?;

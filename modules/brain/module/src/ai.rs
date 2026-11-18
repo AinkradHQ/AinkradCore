@@ -205,9 +205,10 @@ pub struct AiHit {
     pub(crate) demote: i64,
 }
 
-/// The kind of the record a `memory` row contests (B4-02 round 3), for its label (`record_of`).
+/// The kind of the record a `memory` row contests (B4-02 round 3), for its label (`record_of`);
+/// NULL when that record is archived or purged, which the label shows as "(gone)".
 pub(crate) const CONTESTS_KIND: &str =
-    "(SELECT t.type FROM records t WHERE t.id = memory.contests) AS contests_kind";
+    "(SELECT t.type FROM records t WHERE t.id = memory.contests AND t.archived_at IS NULL) AS contests_kind";
 
 #[derive(Serialize, ToSchema)]
 pub struct AiHits {
@@ -423,7 +424,8 @@ pub(crate) fn record_of(
         .try_get::<Option<String>, _>("contests_kind")
         .ok()
         .flatten();
-    if let (Some(c), Some(k)) = (contests, contests_kind) {
+    if let Some(c) = contests {
+        let k = contests_kind.as_deref().unwrap_or("gone");
         text = format!("contests record {c} ({k}), unresolved\n{text}");
     }
     Ok(AiRecord {

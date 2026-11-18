@@ -89,7 +89,8 @@ struct Row {
     vec: Option<Vec<f32>>,
 }
 
-/// The facts in force in the room (the `memory` view) as the decision sees them, kept current as a
+/// The uncontested facts in force in the room (the `memory` view; a contested record is never
+/// reinforced, B4-02 round 4) as the decision sees them, kept current as a
 /// batch saves, so a fact worded twice in one answer merges with itself.
 pub(crate) struct Memory(Vec<Row>);
 
@@ -99,7 +100,7 @@ impl Memory {
         prep: &Prepared,
     ) -> Result<Self, sqlx::Error> {
         let rows: Vec<(String, String, String, Option<String>)> =
-            sqlx::query_as("SELECT id, type, body, body_norm FROM memory")
+            sqlx::query_as("SELECT id, type, body, body_norm FROM memory WHERE contests IS NULL")
                 .fetch_all(conn)
                 .await?;
         Ok(Self(

@@ -225,3 +225,37 @@ async fn an_admitted_fact_is_saved_or_merged_and_one_undo_restores_everything() 
         .unwrap();
     assert_eq!(support, 1);
 }
+
+/// B4-02 round 4: a contested record is left out of the related block and is never reinforced,
+/// not by a later save and not by a later candidate of the same batch.
+#[tokio::test]
+async fn a_contested_record_is_not_related_and_never_reinforced() {
+    let (_d, pool) = room().await;
+    save(&pool, &[cand("fact", GOOD)], &[]).await;
+    let old: String = sqlx::query_scalar("SELECT id FROM records")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let body = "Deploys now go out on Mondays through scripts/deploy.sh only.";
+    let mut changed = cand("fact", body);
+    changed.replaces = Some(old.clone());
+    let s = save(&pool, &[changed, cand("fact", body)], &[]).await;
+    assert_eq!((s.contested, s.replaced, s.reinforced), (1, 0, 0));
+    let contested: String = sqlx::query_scalar("SELECT id FROM records WHERE contests = ?")
+        .bind(&old)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let related = crate::distil::related_in(&pool).await.unwrap();
+    assert!(related.iter().any(|r| r.id == old));
+    assert!(related.iter().all(|r| r.id != contested));
+    // A later save of the same wording does not reinforce it either.
+    let s = save(&pool, &[cand("fact", body)], &[]).await;
+    assert_eq!(s.reinforced, 0);
+    let support: i64 = sqlx::query_scalar("SELECT support FROM records WHERE id = ?")
+        .bind(&contested)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(support, 1);
+}

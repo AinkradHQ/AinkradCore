@@ -191,8 +191,8 @@ async fn the_moment_never_precedes_the_old_record_began() {
 #[tokio::test]
 async fn without_a_cited_source_the_moment_is_now() {
     let (_d, p) = pool().await;
-    record(&p, "old", "fact", T0).await;
-    record(&p, "new", "fact", NOW).await;
+    record(&p, "old", "task", T0).await;
+    record(&p, "new", "task", NOW).await;
     assert!(run(&p, "old", "new").await.0);
     assert_eq!(row(&p, "new").await.0.as_deref(), Some(NOW));
 }
@@ -236,6 +236,22 @@ async fn a_weakly_grounded_replaces_of_any_kind_only_contests() {
     }
 }
 
+/// Round 4: lexical grounding cannot read meaning, so even a user-grounded `replaces` of these
+/// kinds only contests.
+#[tokio::test]
+async fn a_replaces_of_a_rule_preference_decision_or_fact_always_contests() {
+    for kind in ["rule", "preference", "decision", "fact"] {
+        for g in [USER, ITEM] {
+            let (_d, p) = pool().await;
+            record(&p, "old", kind, T0).await;
+            record(&p, "new", kind, NOW).await;
+            assert_eq!(run_g(&p, "old", "new", g).await.0, Replace::Contested, "{kind}");
+            assert!(in_memory(&p, "old").await, "{kind}");
+            assert_eq!(contests(&p, "new").await.as_deref(), Some("old"), "{kind}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_jira_or_github_item_grounds_only_a_task_or_project_state() {
     for (kind, ok) in [
@@ -270,13 +286,13 @@ async fn a_replaces_across_kinds_never_supersedes() {
 async fn undo_after_a_later_reinforce_does_not_leave_a_chain_in_force() {
     // (a) The successor was saved by the undone change set: Undo archives it.
     let (_d, p) = pool().await;
-    record(&p, "old", "decision", T0).await;
+    record(&p, "old", "task", T0).await;
     let mut tx = p.begin().await.unwrap();
     let mut cs = ChangeSet::new("distil", NOW);
     cs.touch(&mut tx, "new").await.unwrap();
     sqlx::query(
         "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, body_norm, last_seen_at) \
-         VALUES ('new', 'decision', 'accepted', 'body of new', '[]', '[]', ?, 'body of new', ?)",
+         VALUES ('new', 'task', 'accepted', 'body of new', '[]', '[]', ?, 'body of new', ?)",
     )
     .bind(NOW)
     .bind(NOW)
@@ -303,8 +319,8 @@ async fn undo_after_a_later_reinforce_does_not_leave_a_chain_in_force() {
 
     // (b) The successor existed before: Undo puts its link back instead.
     let (_d, p) = pool().await;
-    record(&p, "old", "decision", T0).await;
-    record(&p, "new", "decision", NOW).await;
+    record(&p, "old", "task", T0).await;
+    record(&p, "new", "task", NOW).await;
     let (done, change) = run(&p, "old", "new").await;
     assert!(done);
     reinforce_later(&p, "new").await;
@@ -474,5 +490,29 @@ async fn a_contested_record_ranks_last_and_says_what_it_contests() {
         json!({"room": room, "id": "rec-a"}),
     )
     .await;
+    assert!(one["text"].as_str().unwrap().contains(label), "{one}");
+}
+
+/// Round 4: when the contested record is archived (or purged) the label still shows, as "(gone)".
+#[tokio::test]
+async fn a_contested_label_stays_when_its_target_is_gone() {
+    let fx = fx().await;
+    let room = committed_room_named(&fx, "Alpha", &[("Notes", "a note")]).await;
+    put_record(&fx, &room, "rec-a", "fact", "accepted", "ship on friday").await;
+    put_record(&fx, &room, "rec-c", "fact", "accepted", "ship on monday").await;
+    let p = canon_pool(&fx, &room).await;
+    sqlx::query("UPDATE records SET contests = 'rec-c' WHERE id = 'rec-a'")
+        .execute(&p)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE records SET archived_at = '2026-11-11T10:00:00Z' WHERE id = 'rec-c'")
+        .execute(&p)
+        .await
+        .unwrap();
+    p.close().await;
+    open_room(&fx, &room).await;
+    let s = session(&fx, ALPHA, &["anthropic"]).await;
+    let one = read(&fx, &s, "brainAiRecord", json!({"room": room, "id": "rec-a"})).await;
+    let label = "contests record rec-c (gone), unresolved";
     assert!(one["text"].as_str().unwrap().contains(label), "{one}");
 }
