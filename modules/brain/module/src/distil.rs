@@ -19,17 +19,19 @@ use ainkrad_core_server::store::{alloc, begin_write};
 use ainkrad_proto::redact::Redactor;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
-use brain_model::merge::{Decision, body_norm};
+use brain_model::merge::{Decision, Tier, body_norm};
 use serde::Serialize;
 use serde_json::json;
 use sqlx::{Row, SqlitePool};
 use utoipa::ToSchema;
 
-use crate::answer::{Candidate, Known, Related, Source, build_prompt, parse_output, pick_related};
+use crate::answer::{
+    Candidate, Known, Related, Source, build_prompt, parse_output, pick_related, user_grounded,
+};
 use crate::changes::ChangeSet;
 use crate::claim::{self, check_chain};
 use crate::files::{self, CANON};
-use crate::merge::{Memory, Prepared, reinforce};
+use crate::merge::{Memory, Prepared, reinforce, supersede};
 use crate::policy::{self, AUTO_KINDS};
 use crate::transcripts::render;
 use crate::{Brain, code, rand_id, record};
@@ -526,8 +528,18 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
         out.iter().map(|c| r.text(c.body.trim())).collect()
     };
     let prep = crate::merge::prepare(app, b, &pool, &bodies).await;
-    let (n, accepted, reinforced) =
-        store_candidates(&pool, &d.id, &out, &p, &by, &app.clock.now(), &prep).await?;
+    let grounded: Vec<bool> = out.iter().map(|c| user_grounded(c, &known)).collect();
+    let (n, accepted, reinforced, replaced) = store_candidates(
+        &pool,
+        &d.id,
+        &out,
+        &p,
+        &by,
+        &app.clock.now(),
+        &prep,
+        &grounded,
+    )
+    .await?;
     // Facts that went straight into memory get their vectors now, off the request path.
     if accepted > 0
         && let Ok(rows) = sqlx::query_as::<_, (Option<String>, String)>(
@@ -552,7 +564,7 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     record(
         &mut tx,
         "brain.distil.done",
-        json!({"room": d.room, "distil": d.id, "candidates": n, "auto_accepted": accepted, "reinforced": reinforced}),
+        json!({"room": d.room, "distil": d.id, "candidates": n, "auto_accepted": accepted, "reinforced": reinforced, "replaced": replaced}),
         (waiting > 0).then(|| {
             (
                 "brain.inbox",
@@ -597,7 +609,10 @@ pub(crate) async fn distilled_by(
 /// Writes the candidates into the room as `records`, with their op-log and outbox rows, in one
 /// transaction; kinds the room auto-accepts go straight to `accepted`. A candidate the memory already
 /// holds (B4-01) reinforces that record instead of adding a row. All of it is one change set.
-/// Returns (stored, auto-accepted, reinforced).
+/// A candidate that names a memory record it `replaces` supersedes it (B4-02) when it is saved into
+/// memory; `grounded[i]` says candidate `i` is grounded in a user turn (needed to replace a rule).
+/// Returns (stored, auto-accepted, reinforced, replaced).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn store_candidates(
     pool: &SqlitePool,
     distil: &str,
@@ -606,18 +621,21 @@ pub(crate) async fn store_candidates(
     by: &DistilledBy,
     now: &str,
     prep: &Prepared,
-) -> Result<(i64, i64, i64), sqlx::Error> {
+    grounded: &[bool],
+) -> Result<(i64, i64, i64, i64), sqlx::Error> {
     let redactor = Redactor::new();
-    let (mut n, mut accepted, mut reinforced) = (0, 0, 0);
+    let (mut n, mut accepted, mut reinforced, mut replaced) = (0, 0, 0, 0);
     let mut tx = pool.begin().await?;
     let mut cs = ChangeSet::new("distil", now);
     let mut memory = Memory::load(&mut tx, prep).await?;
     for (i, c) in out.iter().enumerate() {
         let body = redactor.text(c.body.trim());
         let norm = body_norm(&body);
-        // `same_as` arrives with the v2 prompt (B3-02); the exact and meaning tiers work without it.
-        if let Decision::Reinforce { id, .. } =
-            memory.decide(&c.kind, &norm, prep.candidate(i), None)
+        // A near-identical wording of the record it `replaces` is a changed fact ("Fridays" ->
+        // "Mondays"), not a repeat: the model's `replaces` beats the meaning tier.
+        if let Decision::Reinforce { id, tier } =
+            memory.decide(&c.kind, &norm, prep.candidate(i), c.same_as.as_deref())
+            && !(tier == Tier::Meaning && c.replaces.as_deref() == Some(id.as_str()))
         {
             reinforce(&mut tx, &mut cs, &id, &c.sources, now).await?;
             reinforced += 1;
@@ -660,6 +678,22 @@ pub(crate) async fn store_candidates(
             .await?;
         }
         if auto_ok {
+            // Only a fact that really entered memory may retire another; a candidate for the Inbox
+            // leaves the old record in force until a person accepts it.
+            if let Some(old) = &c.replaces
+                && supersede(
+                    &mut tx,
+                    &mut cs,
+                    old,
+                    &id,
+                    grounded.get(i).copied().unwrap_or(false),
+                    now,
+                )
+                .await?
+            {
+                memory.remove(old);
+                replaced += 1;
+            }
             memory.add(&id, &c.kind, &norm, prep.candidate(i));
         }
         log_op(
@@ -676,15 +710,15 @@ pub(crate) async fn store_candidates(
         n += 1;
         accepted += i64::from(auto_ok);
     }
-    let summary = format!("Saved {n} · reinforced {reinforced}");
+    let summary = format!("Saved {n} · reinforced {reinforced} · replaced {replaced}");
     cs.commit(
         &mut tx,
         &summary,
-        json!({"saved": n, "reinforced": reinforced}),
+        json!({"saved": n, "reinforced": reinforced, "replaced": replaced}),
     )
     .await?;
     tx.commit().await?;
-    Ok((n, accepted, reinforced))
+    Ok((n, accepted, reinforced, replaced))
 }
 
 /// An op-log row and its outbox row (BM-04 §5.4), in the caller's transaction.

@@ -70,6 +70,24 @@ pub fn decide(
     Decision::Insert
 }
 
+/// B4-02 security rule: a `replaces` that targets a `rule` or `preference` (standing instructions a
+/// person gave) takes effect only when the replacing candidate is itself grounded in a user turn;
+/// otherwise it is ignored and the candidate is saved without superseding anything.
+pub fn may_replace(target_kind: &str, grounded_in_user_turn: bool) -> bool {
+    !matches!(target_kind, "rule" | "preference") || grounded_in_user_turn
+}
+
+/// B4-02: a record of this kind goes stale, and ranks down, once it was last in use before the room's
+/// review cut-off. Other kinds never go stale.
+pub fn is_stale(kind: &str, last_seen: &str, cutoff: &str) -> bool {
+    matches!(kind, "project-state" | "task") && last_seen < cutoff
+}
+
+/// The same test as `is_stale`, as an SQL expression of one `?` (the cut-off, ISO text) over the
+/// `records` / `memory` columns. A gate test keeps the two equal.
+pub const STALE_SQL: &str =
+    "(type IN ('project-state','task') AND coalesce(last_seen_at, created_at) < ?)";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +183,24 @@ mod tests {
             decide("fact", "same", Some(&A), Some("a"), &known),
             Decision::Insert
         );
+    }
+
+    #[test]
+    fn a_replace_of_a_rule_needs_a_user_turn() {
+        assert!(!may_replace("rule", false));
+        assert!(!may_replace("preference", false));
+        assert!(may_replace("rule", true));
+        assert!(may_replace("project-state", false));
+        assert!(may_replace("fact", false));
+    }
+
+    #[test]
+    fn only_old_project_state_and_tasks_are_stale() {
+        let cut = "2026-08-01T00:00:00Z";
+        assert!(is_stale("project-state", "2026-07-01T00:00:00Z", cut));
+        assert!(is_stale("task", "2026-07-01T00:00:00Z", cut));
+        assert!(!is_stale("task", "2026-09-01T00:00:00Z", cut));
+        assert!(!is_stale("decision", "2026-01-01T00:00:00Z", cut));
+        assert!(!is_stale("rule", "2026-01-01T00:00:00Z", cut));
     }
 }

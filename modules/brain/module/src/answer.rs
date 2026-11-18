@@ -215,6 +215,12 @@ fn user_said(c: &Candidate, known: &Known) -> bool {
     hit as f32 / body.len() as f32 >= USER_GROUNDING
 }
 
+/// Is the candidate's body backed by what the user said in the sources it cites? The check `parse_output`
+/// applies to rules and preferences, exposed for the `replaces` rule of B4-02 (`merge::supersede`).
+pub(crate) fn user_grounded(c: &Candidate, known: &Known) -> bool {
+    user_said(c, known)
+}
+
 /// The answer as candidates, or why it is rejected. A fenced block is unwrapped; anything else
 /// around the JSON, an unknown field, a bad kind, an empty or oversize body, a source id that is
 /// not in the batch, a `same_as`/`replaces` that was not shown (or both at once) or a bad

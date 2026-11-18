@@ -11,7 +11,9 @@
 use ainkrad_core::untrusted::wrap;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
+use ainkrad_core_server::scheduler::iso_of_unix;
 use ainkrad_core_server::store::begin_write;
+use brain_model::merge::STALE_SQL;
 use ainkrad_proto::redact::Redactor;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
@@ -24,6 +26,7 @@ use crate::access::{Visible, visible_room, visible_rooms};
 use crate::answer::KINDS;
 use crate::distil::log_op;
 use crate::inbox::open_room;
+use crate::policy;
 use crate::index::{fts, words};
 use crate::rooms::RoomAccess;
 use crate::{Brain, code, rand_id, record};
@@ -185,6 +188,16 @@ pub struct AiHits {
     pub ranked_by: Option<String>,
 }
 
+/// The time before which a `project-state` or `task` last in use is stale in `room` (B4-02): the
+/// room's `review_days` ago. Stale ones rank after fresh ones in every retrieval op.
+pub(crate) async fn stale_cutoff(app: &App, room: &str) -> String {
+    let days = policy::load(app, room).await.map_or(90, |p| p.review_days);
+    iso_of_unix(app.clock.unix() - days * 86_400)
+}
+
+/// Longest chain of replaced records `brainAiRecord` follows.
+const MAX_HISTORY: usize = 10;
+
 pub(crate) fn cut(s: &str, n: usize) -> (String, bool) {
     let t = s.trim();
     if t.chars().count() <= n {
@@ -225,15 +238,16 @@ pub(crate) async fn search(
     for (v, a) in &open {
         let cond = vec!["body LIKE ?"; ws.len()].join(" AND ");
         let sql = format!(
-            "SELECT id, type, body, tags, source_ids, created_at FROM records WHERE status = 'accepted' AND {cond} \
-             ORDER BY created_at DESC, id LIMIT {limit}"
+            "SELECT id, type, body, tags, source_ids, created_at, {STALE_SQL} AS stale FROM records WHERE status = 'accepted' AND {cond} \
+             ORDER BY stale, created_at DESC, id LIMIT {limit}"
         );
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(stale_cutoff(&app, &v.id).await);
         for w in &ws {
             query = query.bind(format!("%{w}%"));
         }
         for r in query.fetch_all(a.pool()).await? {
             recs.push((
+                r.try_get::<i64, _>("stale")? != 0,
                 r.try_get::<String, _>("created_at")?,
                 record_of(&v.id, &r, LIST_BODY)?,
             ));
@@ -267,12 +281,13 @@ pub(crate) async fn search(
             ranked_by: Some("meaning".to_owned()),
         }));
     }
-    recs.sort_by(|x, y| y.0.cmp(&x.0));
+    // Fresh before stale (B4-02), then newest first.
+    recs.sort_by(|x, y| x.0.cmp(&y.0).then(y.1.cmp(&x.1)));
     srcs.sort_by(|x, y| x.0.total_cmp(&y.0));
     let mut hits: Vec<AiHit> = recs
         .into_iter()
         .take(limit.div_ceil(2) as usize)
-        .map(|(at, r)| AiHit {
+        .map(|(_, at, r)| AiHit {
             room: r.room,
             kind: "record".to_owned(),
             id: r.id,
@@ -307,6 +322,49 @@ pub struct AiRecord {
     /// Its tags and body, inside the outside-text envelope; a list cuts a long body.
     pub text: String,
     pub truncated: bool,
+    /// Only `brainAiRecord`: what this record replaced, newest first (B4-02), so "what was true in
+    /// March" stays answerable. A replaced record is reachable only through its successor in memory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<Vec<AiPast>>,
+}
+
+/// A record a current one replaced. `text` is outside data, like every record text.
+#[derive(Serialize, ToSchema)]
+pub struct AiPast {
+    pub id: String,
+    pub valid_from: Option<String>,
+    pub valid_to: Option<String>,
+    pub text: String,
+}
+
+/// The records `id` replaced, newest first, following `supersedes` links (at most `MAX_HISTORY`).
+async fn history_of(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+) -> Result<Vec<AiPast>, sqlx::Error> {
+    let mut out = vec![];
+    let mut next: Option<String> = sqlx::query_scalar("SELECT supersedes FROM records WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&mut *conn)
+        .await?
+        .flatten();
+    while let Some(old) = next.take().filter(|_| out.len() < MAX_HISTORY) {
+        let Some(r) = sqlx::query("SELECT * FROM records WHERE id = ? AND status = 'accepted' AND archived_at IS NULL")
+            .bind(&old)
+            .fetch_optional(&mut *conn)
+            .await?
+        else {
+            break;
+        };
+        out.push(AiPast {
+            valid_from: r.try_get::<Option<String>, _>("valid_from").ok().flatten(),
+            valid_to: r.try_get::<Option<String>, _>("valid_to").ok().flatten(),
+            text: record_of("", &r, LIST_BODY)?.text,
+            id: old,
+        });
+        next = r.try_get::<Option<String>, _>("supersedes").ok().flatten();
+    }
+    Ok(out)
 }
 
 pub(crate) fn record_of(
@@ -337,6 +395,7 @@ pub(crate) fn record_of(
         kind,
         id,
         truncated,
+        history: None,
     })
 }
 
@@ -356,9 +415,15 @@ pub(crate) async fn one(
         .bind(&id)
         .fetch_optional(a.pool())
         .await?;
+    let past = match &row {
+        Some(_) => Some(history_of(&mut *a.pool().acquire().await?, &id).await?),
+        None => None,
+    };
     a.pool().close().await;
     let row = row.ok_or_else(|| ApiError::not_found("no such record"))?;
-    Ok(Json(record_of(&v.id, &row, MAX_BODY)?))
+    let mut rec = record_of(&v.id, &row, MAX_BODY)?;
+    rec.history = past.filter(|p| !p.is_empty());
+    Ok(Json(rec))
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -392,24 +457,30 @@ async fn list(
     let (open, closed) = open_all(app, b, rooms, named).await?;
     let marks = vec!["?"; kinds.len()].join(",");
     let sql = format!(
-        "SELECT * FROM records WHERE status = 'accepted' AND type IN ({marks}) \
-         ORDER BY created_at DESC, id LIMIT {limit}"
+        "SELECT *, {STALE_SQL} AS stale FROM records WHERE status = 'accepted' AND type IN ({marks}) \
+         ORDER BY stale, created_at DESC, id LIMIT {limit}"
     );
     let mut all = vec![];
     for (v, a) in &open {
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
+        let mut query =
+            sqlx::query(sqlx::AssertSqlSafe(sql.clone())).bind(stale_cutoff(app, &v.id).await);
         for k in kinds {
             query = query.bind(*k);
         }
         for r in query.fetch_all(a.pool()).await? {
-            all.push(record_of(&v.id, &r, LIST_BODY)?);
+            all.push((r.try_get::<i64, _>("stale")? != 0, record_of(&v.id, &r, LIST_BODY)?));
         }
         a.pool().close().await;
     }
-    all.sort_by(|x, y| y.created_at.cmp(&x.created_at).then(x.id.cmp(&y.id)));
+    // Fresh before stale (B4-02), then newest first.
+    all.sort_by(|x, y| {
+        (x.0.cmp(&y.0))
+            .then(y.1.created_at.cmp(&x.1.created_at))
+            .then(x.1.id.cmp(&y.1.id))
+    });
     all.truncate(limit as usize);
     Ok(Json(AiRecords {
-        records: all,
+        records: all.into_iter().map(|(_, r)| r).collect(),
         rooms_closed: closed,
     }))
 }
