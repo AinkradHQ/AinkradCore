@@ -49,7 +49,7 @@ pub(crate) async fn record(
 pub struct RunView {
     /// `li_` and 12 base32 characters.
     pub id: String,
-    /// `mirror` or `upload`.
+    /// `mirror`, `upload` or `apple_notes`.
     pub source: String,
     pub project: Option<String>,
     pub repo: Option<String>,
