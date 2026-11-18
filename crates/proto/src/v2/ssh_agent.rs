@@ -25,6 +25,8 @@ pub struct AgentKey {
     /// `SHA256:<base64>` fingerprints of the host keys this key may sign for: the pins of the one
     /// machine it logs in to. Never empty (a key with nothing pinned could sign for anyone).
     pub pinned_keys: Vec<String>,
+    /// The login user on that machine: a sign request for any other user is refused.
+    pub user: String,
 }
 
 /// Not derived: a lease names a secret, and no log line or panic message should carry it.
@@ -33,6 +35,7 @@ impl std::fmt::Debug for AgentKey {
         f.debug_struct("AgentKey")
             .field("lease", &"[hidden]")
             .field("pinned_keys", &self.pinned_keys)
+            .field("user", &self.user)
             .finish()
     }
 }

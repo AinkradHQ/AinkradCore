@@ -12,7 +12,9 @@ CREATE TABLE leyline_direct (
     socket       TEXT,
     ended_at     TEXT,
     end_reason   TEXT CHECK (end_reason IS NULL OR end_reason IN ('revoked', 'expired', 'failed')),
-    signatures   INTEGER
+    signatures   INTEGER,
+    -- The runner answered the drop. 0: the Core sends it again whenever that runner is online.
+    runner_reached INTEGER NOT NULL DEFAULT 0 CHECK (runner_reached IN (0, 1))
 );
 -- One open lease per host, decided by the table, not by a race between two requests.
 CREATE UNIQUE INDEX leyline_direct_open ON leyline_direct (host_id) WHERE ended_at IS NULL;

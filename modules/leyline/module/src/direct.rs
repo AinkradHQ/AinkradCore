@@ -7,26 +7,35 @@
 //!   action (an AI session or the prober is refused there), and the create route is a step-up route.
 //!   What reaches a runner exists only because the gate returned an `Authorized`, which is finished
 //!   (ok or failed) when the call is over.
-//! - The key never reaches the Core's API or the App. The Core sends the runner one secret lease per
-//!   machine on the path (each redeemable once, by that runner only); the runner holds the keys in
-//!   memory and signs only inside an ssh session bound to the host key pinned for that key's own
-//!   machine (see the runner's `ssh/agent.rs`: every sign request is checked there). The runner is
-//!   put in each key's runner list only while a lease is open (`keys::sync_runners`).
+//! - The key never reaches the Core's API or the App. The Core sends the runner one single-use lease
+//!   per machine on the path, minted for that runner only: the key is opened here
+//!   (`secrets::open_for_module`, audited `secret.used`) and held in the Core's memory under a lease
+//!   id (`Agents::stash`) until the runner redeems it or the load is over. The key's stored runner
+//!   list is NOT changed, so no other lease path (the admin `POST /secrets/.../leases`, an AI
+//!   Session's `secrets:`) can reach the Mac runner, and no other lease of the key is dropped. The
+//!   runner holds the keys in memory and signs only inside an ssh session bound to the host key
+//!   pinned for that key's own machine, for that machine's user (see the runner's `ssh/agent.rs`:
+//!   every sign request is checked there).
+//! - The agent ops have one way out of the Core, an `SshAgentLine` the hub hands out once; this
+//!   file takes it and keeps it private (`line`).
 //! - Nothing is leased for a path with an unpinned machine: a person trusts host keys first, so the
 //!   agent always has pins to bind to.
 //! - One open lease per host (a unique index). It ends on revoke, on its TTL (a Core timer that
 //!   outlives restarts, and the runner's own deadline), or when the runner loses the Core for 5
 //!   minutes. A revoke whose runner cannot be reached still ends the row and says so
-//!   (`runner_reached: false`); the runner's own deadline then bounds it.
+//!   (`runner_reached: false`, stored); the Core sends the drop again whenever that runner is online,
+//!   until it answers or the lease's own deadline has passed (`redrop`).
 //! - Rows and audit carry ids, the runner, times and the signature count: never a key, a lease or a
 //!   fingerprint of a key. Runner failures are answered with fixed texts.
 
+use std::sync::Mutex;
 use std::time::Duration;
 
 use ainkrad_core::audit::NewAuditEvent;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY, Caller};
-use ainkrad_core_server::hub::RunnerState;
+use ainkrad_core_server::agents::Ephemeral;
+use ainkrad_core_server::hub::{Dispatched, RunnerState, SshAgentLine};
 use ainkrad_core_server::scheduler::iso_of_unix;
 use ainkrad_core_server::store::{audit, begin_write, events, secrets};
 use ainkrad_proto::v2::{
@@ -36,10 +45,13 @@ use ainkrad_proto::v2::{
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::SqliteConnection;
 use utoipa::ToSchema;
+use zeroize::Zeroizing;
 
 use crate::gate::{self, Action, Authorized, Principal};
 use crate::hosts::{In, find};
@@ -52,6 +64,12 @@ const MIN_TTL: u32 = 60;
 /// How long the runner has to answer a load (it redeems leases first) or a drop.
 const LOAD_WAIT: Duration = Duration::from_secs(45);
 const DROP_WAIT: Duration = Duration::from_secs(10);
+/// How long a minted key lease waits for the runner (it redeems at once, inside `LOAD_WAIT`).
+const MINT_SECS: i64 = 60;
+/// How often ended leases the runner never heard of are looked at again.
+const REDROP_EVERY: Duration = Duration::from_secs(5);
+/// The Mac's clock may run behind the Core's: a late drop is still sent this long past a deadline.
+const SKEW_SECS: i64 = 300;
 
 #[derive(Deserialize, ToSchema)]
 pub struct NewDirect {
@@ -107,16 +125,36 @@ fn runner_err(e: &StreamError) -> ApiError {
     }
 }
 
+/// The hub's one agent line, taken on first use (one per hub; a test process has several).
+static LINES: Mutex<Vec<SshAgentLine>> = Mutex::new(Vec::new());
+
+fn line_send(app: &App, runner: &str, cmd: SshAgentCommand) -> Result<Dispatched, ApiError> {
+    let mut lines = LINES.lock().unwrap();
+    lines.retain(|l| !l.is_dead());
+    if !lines.iter().any(|l| l.serves(&app.hub)) {
+        // Someone else took this hub's line: fail closed.
+        let taken = app.hub.take_ssh_agent_line().ok_or_else(|| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                "the agent line is not this module's",
+            )
+        })?;
+        lines.push(taken);
+    }
+    let line = lines.iter().find(|l| l.serves(&app.hub));
+    line.expect("pushed above")
+        .dispatch(runner, cmd)
+        .map_err(|e| runner_err(&e))
+}
+
 async fn call(
     app: &App,
     runner: &str,
     cmd: SshAgentCommand,
     wait: Duration,
 ) -> Result<Body, ApiError> {
-    let sent = app
-        .hub
-        .dispatch_ssh_agent(runner, cmd)
-        .map_err(|e| runner_err(&e))?;
+    let sent = line_send(app, runner, cmd)?;
     match tokio::time::timeout(wait, sent.outcome()).await {
         Ok(done) => done.map_err(|e| runner_err(&e)),
         Err(_) => Err(wrong("runner_timeout", "the runner did not answer in time")),
@@ -176,14 +214,13 @@ pub(crate) async fn lease(
         find(&mut conn, &host).await?
     };
     let auth = gate::authorize(&app, &Principal::of(&me), &id, &Action::Direct).await?;
-    let done = start(&app, &me, &auth, req).await;
+    let done = start(&app, &auth, req).await;
     gate::finish(&app, auth, done.is_ok()).await?;
     Ok(Json(done?))
 }
 
 async fn start(
     app: &App,
-    me: &Caller,
     auth: &Authorized,
     req: NewDirect,
 ) -> Result<DirectView, ApiError> {
@@ -216,7 +253,7 @@ async fn start(
     let id = new_id("ld_");
     let expires = app.clock.unix() + i64::from(ttl);
     let started = open_row(app, &id, host, &runner, auth, expires).await?;
-    let loaded = load(app, me, &id, &runner, ttl, &stops).await;
+    let loaded = load(app, &id, &runner, ttl, &stops).await;
     let loaded = match loaded {
         Ok(l) => l,
         Err(e) => {
@@ -289,41 +326,30 @@ async fn open_row(
     Ok(started)
 }
 
-/// Puts the runner in each key's list, leases every key to it and has the runner load the agent.
+/// Mints one single-use lease of each key for the runner (the keys' stored scope unchanged) and has
+/// the runner load the agent.
 async fn load(
     app: &App,
-    me: &Caller,
     id: &str,
     runner: &str,
     ttl: u32,
     stops: &[Stop],
 ) -> Result<ainkrad_proto::v2::SshAgentLoaded, ApiError> {
-    crate::keys::sync_runners(app).await?;
     let mut keys = Vec::new();
     let mut leased: Vec<String> = Vec::new();
     for s in stops {
-        match secrets::lease(
-            &app.pool,
-            &s.secret,
-            runner,
-            None,
-            &me.device.id,
-            BY,
-            &app.clock.now(),
-            app.clock.unix(),
-        )
-        .await
-        {
-            Ok((lease, _)) => {
+        match mint(app, &s.secret, runner).await {
+            Ok(lease) => {
                 leased.push(lease.clone());
                 keys.push(AgentKey {
                     lease,
                     pinned_keys: s.pinned.clone(),
+                    user: s.user.clone(),
                 });
             }
             Err(e) => {
-                revoke(app, &leased).await;
-                return Err(e.into());
+                revoke(app, runner, &leased);
+                return Err(e);
             }
         }
     }
@@ -334,7 +360,7 @@ async fn load(
     });
     let answer = call(app, runner, cmd, LOAD_WAIT).await;
     // Whatever happened, a lease the runner did not redeem is of no use to anyone.
-    revoke(app, &leased).await;
+    revoke(app, runner, &leased);
     match answer? {
         Body::Result(Reply::SshAgentLoad(l)) if sane(&l.socket) && sane(&l.config) => Ok(l),
         _ => Err(wrong(
@@ -344,9 +370,46 @@ async fn load(
     }
 }
 
-async fn revoke(app: &App, leases: &[String]) {
+/// Opens key `secret` (a `leyline.` name: `open_for_module` opens nothing else) and holds its
+/// OpenSSH text for `runner` under a fresh lease id, redeemable once, for `MINT_SECS`.
+async fn mint(app: &App, secret: &str, runner: &str) -> Result<String, ApiError> {
+    let sealer = app.secrets.as_deref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "secrets_unavailable",
+            "this Core has no master key loaded",
+        )
+    })?;
+    let b64 = secrets::open_for_module(&app.pool, sealer, crate::MODULE, secret, "direct").await?;
+    // A key's value is its OpenSSH text in base64 (`file` kind); the runner takes text as it is.
+    let raw = Zeroizing::new(
+        STANDARD
+            .decode(b64.as_bytes())
+            .map_err(|_| wrong("runner_failed", "a stored key is unusable"))?,
+    );
+    let text = Zeroizing::new(
+        std::str::from_utf8(&raw)
+            .map_err(|_| wrong("runner_failed", "a stored key is unusable"))?
+            .to_owned(),
+    );
+    let lease = new_id("l_");
+    let now = app.clock.unix();
+    let held = Ephemeral {
+        runner: runner.to_owned(),
+        var: secret.to_owned(),
+        value: text,
+        expires: now + MINT_SECS,
+    };
+    if !app.agents.stash(&lease, held, now) {
+        return Err(wrong("runner_busy", "too many credentials await redemption"));
+    }
+    Ok(lease)
+}
+
+/// Takes back every minted lease the runner did not redeem.
+fn revoke(app: &App, runner: &str, leases: &[String]) {
     for l in leases {
-        let _ = secrets::revoke_lease(&app.pool, l).await;
+        let _ = app.agents.take_ephemeral(l, runner, i64::MIN);
     }
 }
 
@@ -401,8 +464,9 @@ async fn end(app: &App, id: &str, reason: &'static str) -> Result<Option<DirectE
         _ => (0, false),
     };
     let mut tx = begin_write(&app.pool).await?;
-    sqlx::query("UPDATE leyline_direct SET signatures = ? WHERE id = ?")
+    sqlx::query("UPDATE leyline_direct SET signatures = ?, runner_reached = ? WHERE id = ?")
         .bind(signatures)
+        .bind(reached)
         .bind(id)
         .execute(&mut *tx)
         .await?;
@@ -414,8 +478,6 @@ async fn end(app: &App, id: &str, reason: &'static str) -> Result<Option<DirectE
     let extra = json!({"runner": runner, "signatures": signatures, "runner_reached": reached});
     note(&mut tx, op, id, &host, extra).await?;
     tx.commit().await?;
-    // The runner leaves the key lists (and loses any lease it still held).
-    crate::keys::sync_runners(app).await?;
     Ok(Some(DirectEnded {
         id: id.to_owned(),
         signatures,
@@ -486,5 +548,58 @@ pub(crate) async fn resume(app: &App) -> Result<(), ApiError> {
     for (id, expires) in rows {
         watch(app.clone(), id, expires);
     }
+    let app = app.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(REDROP_EVERY).await;
+            if redrop(&app).await.is_err() {
+                tracing::warn!("leyline direct drops could not be sent again");
+            }
+        }
+    });
     Ok(())
+}
+
+/// Sends the drop again for every ended lease whose runner never answered it, now that the runner
+/// is online (it said hello again, or the link came back). A lease past its own deadline is left:
+/// the runner's wall-clock deadline has ended that agent already. Returns how many were reached.
+pub(crate) async fn redrop(app: &App) -> Result<usize, ApiError> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, runner FROM leyline_direct \
+         WHERE ended_at IS NOT NULL AND runner_reached = 0 AND expires_unix > ?",
+    )
+    .bind(app.clock.unix() - SKEW_SECS)
+    .fetch_all(&app.pool)
+    .await?;
+    let mut reached = 0;
+    for (id, runner) in rows {
+        if !app.hub.online(&runner) {
+            continue;
+        }
+        let dropping = SshAgentCommand::Drop(SshAgentDrop { id: id.clone() });
+        let Ok(Body::Result(Reply::SshAgentDrop(d))) =
+            call(app, &runner, dropping, DROP_WAIT).await
+        else {
+            continue;
+        };
+        let signatures = i64::try_from(d.signatures).unwrap_or(i64::MAX);
+        let mut tx = begin_write(&app.pool).await?;
+        sqlx::query(
+            "UPDATE leyline_direct SET runner_reached = 1, \
+             signatures = max(coalesce(signatures, 0), ?) WHERE id = ?",
+        )
+        .bind(signatures)
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
+        let host: String = sqlx::query_scalar("SELECT host_id FROM leyline_direct WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&mut *tx)
+            .await?;
+        let extra = json!({"runner": runner, "signatures": signatures, "runner_reached": true});
+        note(&mut tx, "dropped", &id, &host, extra).await?;
+        tx.commit().await?;
+        reached += 1;
+    }
+    Ok(reached)
 }

@@ -326,6 +326,7 @@ impl Module for Leyline {
             "leyline.direct.revoked",
             "leyline.direct.expired",
             "leyline.direct.failed",
+            "leyline.direct.dropped",
             "leyline.run.requested",
             "leyline.run.approval",
             "leyline.run.allowed",

@@ -30,7 +30,7 @@
 //!   drivers, capacity and load, for the API (`api::v1::runners`) and the `runner.*` events.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -280,6 +280,44 @@ pub struct Hub {
     streams: AtomicU64,
     /// Runner connection tasks alive (handshake included); `drained` waits for zero.
     live: tokio::sync::watch::Sender<usize>,
+    /// The one [`SshAgentLine`] was handed out.
+    ssh_agent_taken: AtomicBool,
+}
+
+/// The only way to send `ssh.agent.load` / `ssh.agent.drop` (Leyline Mac-direct). It has no public
+/// constructor: [`Hub::take_ssh_agent_line`] hands out ONE per hub, to the first caller, and every
+/// later call gets `None`. Leyline's `direct.rs` takes it on first use and keeps it in a private
+/// static, behind entry points that take the gate's `Authorized`; any other code that takes it
+/// first makes Mac-direct fail closed. A test (`modules/leyline/module/tests/ssh_agent_callers.rs`)
+/// also fails if any file of the workspace but `direct.rs` calls `take_ssh_agent_line`.
+pub struct SshAgentLine {
+    hub: std::sync::Weak<Hub>,
+}
+
+impl SshAgentLine {
+    /// This line was taken from `hub`.
+    pub fn serves(&self, hub: &Arc<Hub>) -> bool {
+        std::ptr::eq(self.hub.as_ptr(), Arc::as_ptr(hub))
+    }
+
+    /// The hub is gone (only a test drops one).
+    pub fn is_dead(&self) -> bool {
+        self.hub.strong_count() == 0
+    }
+
+    /// Sends one agent op. Neither carries a key (the runner redeems leases), and only these two
+    /// commands can be sent here.
+    pub fn dispatch(
+        &self,
+        runner: &str,
+        command: ainkrad_proto::v2::SshAgentCommand,
+    ) -> Result<Dispatched, StreamError> {
+        let hub = self
+            .hub
+            .upgrade()
+            .ok_or_else(|| err(ErrorCode::Offline, "the runner is not connected"))?;
+        hub.send_command(runner, command.into())
+    }
 }
 
 /// A dispatched command's frames: `output` (and a terminal's `control`), then one `result` or
@@ -354,6 +392,7 @@ impl Hub {
             generations: AtomicU64::new(1),
             streams: AtomicU64::new(1),
             live: tokio::sync::watch::Sender::new(0),
+            ssh_agent_taken: AtomicBool::new(false),
         }
     }
 
@@ -460,18 +499,11 @@ impl Hub {
         self.send_command(runner, command)
     }
 
-    /// `ssh.agent.load` / `ssh.agent.drop` (Leyline Mac-direct) for a module that runs its own gate
-    /// first. This takes NO proof: the Hub cannot see a module's gate, so nothing here checks one.
-    /// The only caller allowed is Leyline's `modules/leyline/module/src/direct.rs`, whose entry
-    /// points take the gate's `Authorized`; a test (`tests/ssh_agent_callers.rs`) fails if any other
-    /// file calls it. Neither op carries a key (the runner redeems leases), and only these two
-    /// commands can be sent here.
-    pub fn dispatch_ssh_agent(
-        self: &Arc<Self>,
-        runner: &str,
-        command: ainkrad_proto::v2::SshAgentCommand,
-    ) -> Result<Dispatched, StreamError> {
-        self.send_command(runner, command.into())
+    /// The one [`SshAgentLine`] of this hub: `Some` to the first caller only.
+    pub fn take_ssh_agent_line(self: &Arc<Self>) -> Option<SshAgentLine> {
+        (!self.ssh_agent_taken.swap(true, Ordering::SeqCst)).then(|| SshAgentLine {
+            hub: Arc::downgrade(self),
+        })
     }
 
     /// The sole non-code agent operation. Transcript reads do not need elevation, but are

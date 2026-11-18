@@ -173,7 +173,52 @@ pub(crate) fn profile(spec: &Spec, program: &OsStr) -> String {
             }
         }
     }
+    // Mac-direct agent sockets (Leyline Y6-01: `ainkrad-ssh.*` in the runner's own temporary
+    // directory, which the runner names in `AINKRAD_SANDBOX_HIDE_TMP`) are denied by name, last, so
+    // no grant above reaches them. Every unix-socket connect is denied above already; this also
+    // keeps the directory's files (the socket, its ssh_config) out of reach.
+    let hide = Path::new(env(spec, "AINKRAD_SANDBOX_HIDE_TMP"));
+    if hide.is_absolute() {
+        for dir in spellings(hide) {
+            match regex_quote(&dir) {
+                Some(r) => s.push_str(&format!(
+                    "(deny file-read* file-write* (regex #\"^{r}/ainkrad-ssh\\.\"))\n"
+                )),
+                // A path a regex literal cannot hold: the whole directory goes instead.
+                None => s.push_str(&format!(
+                    "(deny file-read* file-write* (subpath \"{}\"))\n",
+                    quote(Path::new(&dir))
+                )),
+            }
+        }
+    }
     s
+}
+
+/// `dir` as Seatbelt may see it: `/var` is a link to `/private/var`, so both spellings.
+fn spellings(dir: &Path) -> Vec<String> {
+    let d = dir.to_string_lossy().trim_end_matches('/').to_owned();
+    let other = match (d.strip_prefix("/private/var/"), d.strip_prefix("/var/")) {
+        (Some(rest), _) => Some(format!("/var/{rest}")),
+        (_, Some(rest)) => Some(format!("/private/var/{rest}")),
+        _ => None,
+    };
+    std::iter::once(d).chain(other).collect()
+}
+
+/// `s` with every regex metacharacter escaped; `None` for what a `#"..."` literal cannot hold.
+fn regex_quote(s: &str) -> Option<String> {
+    if s.contains(['"', '#']) || s.chars().any(char::is_control) {
+        return None;
+    }
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if r"\.^$|()[]{}*+?".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    Some(out)
 }
 
 /// One forwarder slot of a macOS sandbox: the runner's unix socket, the executable run inside as

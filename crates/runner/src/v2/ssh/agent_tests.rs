@@ -1,5 +1,6 @@
 //! The Mac-direct agent (Y6-01): host binding with real russh clients against two fixture hosts, the
-//! protocol's refusals, revoke, a TTL under a faked clock, the uid check, and what is on disk.
+//! protocol's refusals, one bind per connection, the strict sign-request parse, revoke, a TTL under
+//! a faked wall clock, the uid check, and what is on disk.
 
 use ainkrad_proto::v2::AgentKey;
 use russh::client;
@@ -18,6 +19,7 @@ fn req(id: &str, ttl: u32, keys: Vec<(&str, Vec<String>)>) -> SshAgentLoad {
             .map(|(lease, pins)| AgentKey {
                 lease: lease.to_owned(),
                 pinned_keys: pins,
+                user: "me".to_owned(),
             })
             .collect(),
     }
@@ -30,9 +32,9 @@ fn driver(n: usize) -> (SshDriver, Vec<PrivateKey>) {
     (ssh(&leases), keys)
 }
 
-/// A fake clock the test moves.
-fn fake() -> (Clock, Arc<Mutex<Instant>>) {
-    let now = Arc::new(Mutex::new(Instant::now()));
+/// A fake wall clock the test moves.
+fn fake() -> (Clock, Arc<Mutex<SystemTime>>) {
+    let now = Arc::new(Mutex::new(SystemTime::now()));
     let n = Arc::clone(&now);
     (Arc::new(move || *n.lock().unwrap()), now)
 }
@@ -60,15 +62,31 @@ fn bind_msg(host: &PrivateKey, sid: &[u8], signer: &PrivateKey, forwarded: u8) -
 }
 
 fn userauth(sid: &[u8], user: &PrivateKey) -> Vec<u8> {
+    userauth_with(sid, user, b"me", b"publickey", 1, b"ssh-ed25519", None)
+}
+
+/// A userauth request with each field chosen; `host` is the host-bound method's trailing host key.
+fn userauth_with(
+    sid: &[u8],
+    user: &PrivateKey,
+    name: &[u8],
+    method: &[u8],
+    has_sig: u8,
+    algo: &[u8],
+    host: Option<&[u8]>,
+) -> Vec<u8> {
     let mut d = Vec::new();
     put(&mut d, sid);
     d.push(50);
-    put(&mut d, b"me");
+    put(&mut d, name);
     put(&mut d, b"ssh-connection");
-    put(&mut d, b"publickey");
-    d.push(1);
-    put(&mut d, b"ssh-ed25519");
+    put(&mut d, method);
+    d.push(has_sig);
+    put(&mut d, algo);
     put(&mut d, &user.public_key().to_bytes().unwrap());
+    if let Some(h) = host {
+        put(&mut d, h);
+    }
     d
 }
 
@@ -182,26 +200,33 @@ async fn a_bind_must_be_signed_by_the_host_key_not_forwarded_and_for_a_pinned_ho
         .await
         .unwrap()
         .socket;
-    let mut s = connect(&sock).await;
-    // The pinned host's key presented, but the session id signed by somebody else.
-    assert_eq!(
-        ask(&mut s, &bind_msg(&host, b"sid", &other, 0)).await,
-        [FAILURE]
-    );
-    // A forwarded bind (ssh -A): the remote host could use the key.
-    assert_eq!(
-        ask(&mut s, &bind_msg(&host, b"sid", &host, 1)).await,
-        [FAILURE]
-    );
-    // A host key nobody pinned, properly signed.
-    assert_eq!(
-        ask(&mut s, &bind_msg(&other, b"sid", &other, 0)).await,
-        [FAILURE]
-    );
-    // None of those bound anything.
     let data = userauth(b"sid", &keys[0]);
+    let good = bind_msg(&host, b"sid", &host, 0);
+    // Each bad bind on a connection of its own: the pinned host's key presented but the session id
+    // signed by somebody else; a forwarded bind (ssh -A: the remote host could use the key); a host
+    // key nobody pinned, properly signed. Each poisons its connection: a valid bind after it is
+    // refused, and nothing is signed there.
+    for bad in [
+        bind_msg(&host, b"sid", &other, 0),
+        bind_msg(&host, b"sid", &host, 1),
+        bind_msg(&other, b"sid", &other, 0),
+    ] {
+        let mut s = connect(&sock).await;
+        assert_eq!(ask(&mut s, &bad).await, [FAILURE]);
+        assert_eq!(
+            ask(&mut s, &good).await,
+            [FAILURE],
+            "a bind after a refused one"
+        );
+        assert_eq!(ask(&mut s, &sign_msg(&keys[0], &data)).await, [FAILURE]);
+    }
+    // A second bind, even a good one, poisons the connection too.
+    let mut s = connect(&sock).await;
+    bound(&mut s, &host, b"sid").await;
+    assert_eq!(ask(&mut s, &good).await, [FAILURE], "a second bind");
     assert_eq!(ask(&mut s, &sign_msg(&keys[0], &data)).await, [FAILURE]);
-    // The real bind works, and its signature verifies under the user's key.
+    // The real bind on a fresh connection works, and its signature verifies under the user's key.
+    let mut s = connect(&sock).await;
     bound(&mut s, &host, b"sid").await;
     let r = ask(&mut s, &sign_msg(&keys[0], &data)).await;
     assert_eq!(r[0], SIGN_RESPONSE);
@@ -262,7 +287,7 @@ async fn a_drop_closes_connections_and_the_socket_within_two_seconds() {
         ask(&mut s, &sign_msg(&keys[0], &data)).await[0],
         SIGN_RESPONSE
     );
-    let t = Instant::now();
+    let t = std::time::Instant::now();
     let done = d.agent_drop(&SshAgentDrop { id: "ld_1".into() });
     assert_eq!((done.was_live, done.signatures), (true, 1));
     let eof = tokio::time::timeout(Duration::from_secs(2), s.read(&mut [0u8; 1]))
@@ -321,7 +346,7 @@ async fn a_peer_with_another_uid_is_closed_before_a_byte_is_read() {
     let sock = d
         .load_agent(
             &req("ld_1", 3600, vec![("l_1", vec![fp(&new_key())])]),
-            Arc::new(Instant::now),
+            Arc::new(SystemTime::now),
             Some(u32::MAX - 7),
         )
         .await
@@ -415,4 +440,184 @@ async fn five_minutes_without_the_core_ends_every_agent_but_a_return_in_time_doe
         tokio::task::yield_now().await;
     }
     assert!(!d.agent_drop(&SshAgentDrop { id: "ld_2".into() }).was_live);
+}
+
+#[tokio::test]
+async fn a_sign_request_is_parsed_to_its_last_byte_and_every_field_must_match() {
+    let (d, keys) = driver(1);
+    let host = new_key();
+    let sock = d
+        .agent_load(&req("ld_1", 3600, vec![("l_1", vec![fp(&host)])]))
+        .await
+        .unwrap()
+        .socket;
+    let mut s = connect(&sock).await;
+    bound(&mut s, &host, b"sid").await;
+    let hk = host.public_key().to_bytes().unwrap();
+    let other = new_key().public_key().to_bytes().unwrap();
+    let k = &keys[0];
+    let mut trailing = userauth(b"sid", k);
+    trailing.push(0);
+    for (why, data) in [
+        (
+            "another user",
+            userauth_with(b"sid", k, b"root", b"publickey", 1, b"ssh-ed25519", None),
+        ),
+        (
+            "no signature flag",
+            userauth_with(b"sid", k, b"me", b"publickey", 0, b"ssh-ed25519", None),
+        ),
+        (
+            "another algorithm",
+            userauth_with(b"sid", k, b"me", b"publickey", 1, b"rsa-sha2-256", None),
+        ),
+        (
+            "an allowed algorithm not the key's",
+            userauth_with(
+                b"sid",
+                k,
+                b"me",
+                b"publickey",
+                1,
+                b"ecdsa-sha2-nistp256",
+                None,
+            ),
+        ),
+        (
+            "host-bound to another host key",
+            userauth_with(
+                b"sid",
+                k,
+                b"me",
+                b"publickey-hostbound-v00@openssh.com",
+                1,
+                b"ssh-ed25519",
+                Some(&other),
+            ),
+        ),
+        (
+            "host-bound without its host key",
+            userauth_with(
+                b"sid",
+                k,
+                b"me",
+                b"publickey-hostbound-v00@openssh.com",
+                1,
+                b"ssh-ed25519",
+                None,
+            ),
+        ),
+        ("trailing bytes", trailing),
+    ] {
+        assert_eq!(ask(&mut s, &sign_msg(k, &data)).await, [FAILURE], "{why}");
+    }
+    // The key blob in the data must be the signing key's.
+    let mut wrong_blob = Vec::new();
+    put(&mut wrong_blob, b"sid");
+    wrong_blob.push(50);
+    for f in [&b"me"[..], b"ssh-connection", b"publickey"] {
+        put(&mut wrong_blob, f);
+    }
+    wrong_blob.push(1);
+    put(&mut wrong_blob, b"ssh-ed25519");
+    put(&mut wrong_blob, &other);
+    assert_eq!(ask(&mut s, &sign_msg(k, &wrong_blob)).await, [FAILURE]);
+    // Trailing bytes after the request's flags.
+    let mut m = sign_msg(k, &userauth(b"sid", k));
+    m.push(0);
+    assert_eq!(ask(&mut s, &m).await, [FAILURE]);
+    // Host-bound to the bound host key, and the plain method: signed.
+    let bound_data = userauth_with(
+        b"sid",
+        k,
+        b"me",
+        b"publickey-hostbound-v00@openssh.com",
+        1,
+        b"ssh-ed25519",
+        Some(&hk),
+    );
+    assert_eq!(
+        ask(&mut s, &sign_msg(k, &bound_data)).await[0],
+        SIGN_RESPONSE
+    );
+    assert_eq!(
+        ask(&mut s, &sign_msg(k, &userauth(b"sid", k))).await[0],
+        SIGN_RESPONSE
+    );
+}
+
+#[tokio::test]
+async fn the_key_used_is_the_one_whose_pins_hold_the_bound_host() {
+    // One key leased twice: for host A, and for host B. A connection bound to B signs with the
+    // entry pinned for B, not the first entry that has the same blob.
+    let leases = Leases::default();
+    let key = leases.key("l_1");
+    let pem = leases.keys.lock().unwrap()["l_1"].clone();
+    leases.add("l_2", &pem);
+    let d = ssh(&leases);
+    let (a, b) = (new_key(), new_key());
+    let mut r = req(
+        "ld_1",
+        3600,
+        vec![("l_1", vec![fp(&a)]), ("l_2", vec![fp(&b)])],
+    );
+    r.keys[1].user = "other".to_owned();
+    let sock = d.agent_load(&r).await.unwrap().socket;
+    let mut s = connect(&sock).await;
+    bound(&mut s, &b, b"sid").await;
+    // B's entry has user `other`: `me` (A's user) is refused on B, `other` is signed.
+    let me = userauth(b"sid", &key);
+    assert_eq!(ask(&mut s, &sign_msg(&key, &me)).await, [FAILURE]);
+    let other = userauth_with(
+        b"sid",
+        &key,
+        b"other",
+        b"publickey",
+        1,
+        b"ssh-ed25519",
+        None,
+    );
+    assert_eq!(ask(&mut s, &sign_msg(&key, &other)).await[0], SIGN_RESPONSE);
+}
+
+#[tokio::test]
+async fn a_wall_clock_past_the_deadline_ends_the_agent_without_any_request() {
+    // The Mac slept: tokio's clock did not move, the wall clock did. The timer looks at the wall
+    // clock, so the socket goes and the keys are cleared with no request arriving.
+    let (d, _) = driver(1);
+    let (clock, now) = fake();
+    let sock = d
+        .load_agent(
+            &req("ld_1", 60, vec![("l_1", vec![fp(&new_key())])]),
+            clock,
+            None,
+        )
+        .await
+        .unwrap()
+        .socket;
+    *now.lock().unwrap() += Duration::from_secs(3600);
+    let dir = Path::new(&sock).parent().unwrap().to_owned();
+    let t = std::time::Instant::now();
+    while dir.exists() {
+        assert!(t.elapsed() < Duration::from_secs(3), "the directory stayed");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let live = Arc::clone(&d.agents.live.lock().unwrap()["ld_1"]);
+    assert!(
+        live.keys.lock().unwrap().is_empty(),
+        "the keys stayed in memory"
+    );
+    assert!(!d.agent_drop(&SshAgentDrop { id: "ld_1".into() }).was_live);
+}
+
+#[tokio::test]
+async fn a_drop_clears_the_keys_from_memory() {
+    let (d, _) = driver(1);
+    d.agent_load(&req("ld_1", 3600, vec![("l_1", vec![fp(&new_key())])]))
+        .await
+        .unwrap();
+    let live = Arc::clone(&d.agents.live.lock().unwrap()["ld_1"]);
+    assert_eq!(live.keys.lock().unwrap().len(), 1);
+    d.agent_drop(&SshAgentDrop { id: "ld_1".into() });
+    assert!(live.keys.lock().unwrap().is_empty());
 }

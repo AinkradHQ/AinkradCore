@@ -190,12 +190,16 @@ async fn n(fx: &Fx, table: &str) -> i64 {
 
 /// The runner goes online as a Mac that offers (or not) the agent ops.
 fn online(fx: &Fx, agent: bool) -> Receiver<Frame> {
+    online_as(fx, &fx.runner.id, agent)
+}
+
+fn online_as(fx: &Fx, runner: &str, agent: bool) -> Receiver<Frame> {
     let mut ssh = vec!["ssh.exec".to_owned(), "pty.ssh".to_owned()];
     if agent {
         ssh.extend(["ssh.agent.load", "ssh.agent.drop"].map(str::to_owned));
     }
     fx.app.hub.fake_runner(
-        &fx.runner.id,
+        runner,
         RunnerHello {
             drivers: vec![DriverInfo {
                 name: "ssh".to_owned(),
@@ -282,6 +286,8 @@ async fn a_lease_goes_through_the_gate_with_one_lease_per_machine_and_only_pinne
     let pins: Vec<_> = load.keys.iter().map(|k| k.pinned_keys.clone()).collect();
     assert_eq!(pins, vec![vec![fp('J')], vec![fp('A')]]);
     assert!(load.keys.iter().all(|k| k.lease.starts_with("l_")));
+    // Each key with its own machine's login user.
+    assert!(load.keys.iter().all(|k| k.user == "deploy"));
     assert_eq!(
         v["ready"],
         json!(
@@ -309,7 +315,7 @@ async fn a_lease_goes_through_the_gate_with_one_lease_per_machine_and_only_pinne
         format!("person:{}", fx.admin.id)
     );
     assert_eq!(
-        n(&fx, "audit_log WHERE action = 'leyline.direct.leased'").await,
+        n(&fx, "audit_events WHERE action = 'leyline.direct.leased'").await,
         1
     );
     assert!(!v.to_string().contains("l_"), "a lease in the answer: {v}");
@@ -404,7 +410,7 @@ async fn one_lease_per_host_and_a_revoke_drops_the_agent_and_records_what_it_did
         "3"
     );
     assert_eq!(
-        n(&fx, "audit_log WHERE action = 'leyline.direct.revoked'").await,
+        n(&fx, "audit_events WHERE action = 'leyline.direct.revoked'").await,
         1
     );
     // Nothing left to revoke; and the host can be leased again.
@@ -463,5 +469,154 @@ async fn a_load_the_runner_refuses_leaves_no_open_lease_and_no_lease_behind() {
         )
         .await,
         "done"
+    );
+}
+
+/// A request of `dev` to a Core route (not the module's).
+async fn core_call(fx: &Fx, dev: &TestDevice, path: &str, body: Value) -> (StatusCode, Value) {
+    let bytes = body.to_string();
+    let mut b = Request::builder()
+        .method(Method::POST)
+        .uri(path)
+        .header(header::HOST, HOST)
+        .header(header::CONTENT_TYPE, "application/json");
+    for (name, value) in dev.headers("POST", path, bytes.as_bytes()) {
+        b = b.header(name, value);
+    }
+    let res = router(fx.app.clone())
+        .oneshot(b.body(Http::from(bytes)).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let text = to_bytes(res.into_body(), 1 << 22).await.unwrap();
+    (status, serde_json::from_slice(&text).unwrap_or(Value::Null))
+}
+
+#[tokio::test]
+async fn a_lease_mints_a_single_use_key_for_the_mac_without_widening_the_key_scope() {
+    let fx = fx().await;
+    // The Mac is not the host's runner: it is in no key's runner list.
+    let mac = enroll(&fx.app, "mac", "runner", &["runner"]).await;
+    let mut rx = online_as(&fx, &mac.id, true);
+    let h = host(&fx, "alpha", None).await;
+    trust_row(&fx, &h, &fp('A'), "trusted").await;
+    let secret = scalar(
+        &fx,
+        "SELECT k.secret FROM leyline_keys k JOIN leyline_hosts h ON h.key_id = k.id WHERE h.id = ?",
+        &h,
+    )
+    .await;
+    let runners_sql = "SELECT runners FROM core_secrets WHERE name = ?";
+    let before = scalar(&fx, runners_sql, &secret).await;
+    let changes = "audit_events WHERE action = 'secret.runners_changed'";
+    let changed_before = n(&fx, changes).await;
+    // A lease of the key's own (unredeemed) to the host's runner: a Mac-direct lease must not drop it.
+    let (s, own) = core_call(
+        &fx,
+        &fx.admin,
+        &format!("/api/v1/secrets/{secret}/leases"),
+        json!({"runner": fx.runner.id}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{own}");
+    let ask = call(
+        &fx,
+        &fx.admin,
+        Method::POST,
+        &format!("/hosts/{h}/direct"),
+        Some(json!({})),
+    );
+    let runner = async {
+        let f = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+            .await
+            .expect("the Core sent nothing")
+            .expect("the link closed");
+        let Some(Body::Command(Command::SshAgentLoad(load))) = f.body().unwrap() else {
+            panic!("not an agent.load")
+        };
+        let lease = load.keys[0].lease.clone();
+        // The Mac redeems it: the key's OpenSSH text, once.
+        let first = core_call(&fx, &mac, "/api/v1/secret-leases/redeem", json!({"lease": lease})).await;
+        let again = core_call(&fx, &mac, "/api/v1/secret-leases/redeem", json!({"lease": lease})).await;
+        fx.app
+            .hub
+            .fake_reply(&mac.id, Frame::new(f.stream_id, 0, loaded()));
+        (first, again)
+    };
+    let ((s, v), (first, again)) = tokio::join!(ask, runner);
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(first.0, StatusCode::OK, "{}", first.1);
+    assert!(
+        first.1["value"]
+            .as_str()
+            .unwrap()
+            .starts_with("-----BEGIN OPENSSH PRIVATE KEY-----")
+    );
+    assert_eq!(again.0, StatusCode::NOT_FOUND, "a second redemption");
+    // The stored scope did not move, nothing was audited as a scope change, the other lease lives.
+    assert_eq!(scalar(&fx, runners_sql, &secret).await, before);
+    assert!(!before.contains(&mac.id));
+    assert_eq!(n(&fx, changes).await, changed_before);
+    let (s, _) = core_call(
+        &fx,
+        &fx.runner,
+        "/api/v1/secret-leases/redeem",
+        json!({"lease": own["lease"]}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "the host runner's own lease was dropped");
+    // And no other lease path reaches the Mac: the admin route refuses it (not in scope).
+    let (s, v) = core_call(
+        &fx,
+        &fx.admin,
+        &format!("/api/v1/secrets/{secret}/leases"),
+        json!({"runner": mac.id}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+}
+
+#[tokio::test]
+async fn a_drop_the_runner_never_got_is_sent_again_when_it_is_back() {
+    let fx = fx().await;
+    let mut rx = online(&fx, true);
+    let h = host(&fx, "alpha", None).await;
+    trust_row(&fx, &h, &fp('A'), "trusted").await;
+    let (s, v, c) = lease(&fx, &fx.admin, &mut rx, &h, loaded()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let Some(Command::SshAgentLoad(load)) = c else {
+        panic!("no agent.load")
+    };
+    // The revoke's drop is lost: the row ends, unreached.
+    let path = format!("/hosts/{h}/direct/revoke");
+    let lost = Body::Error(StreamError::new(ErrorCode::Lost, "gone"));
+    let ask = call(&fx, &fx.admin, Method::POST, &path, None);
+    let (a, _) = tokio::join!(ask, serve(&fx, &mut rx, lost));
+    assert_eq!(a.0, StatusCode::OK, "{}", a.1);
+    assert_eq!(a.1["runner_reached"], json!(false));
+    let reached = "SELECT CAST(runner_reached AS TEXT) FROM leyline_direct WHERE id = ?";
+    assert_eq!(scalar(&fx, reached, &load.id).await, "0");
+    // The runner says hello again; the Core's watch (every 5 s) sends the drop again.
+    let mut rx = online(&fx, true);
+    Leyline.attach(&fx.app);
+    let answer = Body::Result(Reply::SshAgentDrop(SshAgentDropped {
+        was_live: true,
+        signatures: 2,
+        refused: 0,
+    }));
+    let Command::SshAgentDrop(d) = serve(&fx, &mut rx, answer).await else {
+        panic!("not a drop")
+    };
+    assert_eq!(d.id, load.id);
+    for _ in 0..50 {
+        if scalar(&fx, reached, &load.id).await == "1" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(scalar(&fx, reached, &load.id).await, "1");
+    assert_eq!(
+        n(&fx, "audit_events WHERE action = 'leyline.direct.dropped'").await,
+        1
     );
 }

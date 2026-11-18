@@ -12,8 +12,7 @@
 //!
 //! Who may be leased a key: each key's secret carries its own runner list (`sync_runners`): the
 //! active `via_runner` of every host that uses the key directly, and of every host that has a host
-//! using it as a jump hop (the built-in runner stands for an unset `via_runner`), and the runner of
-//! every open Mac-direct lease for such a host (`leyline_direct`, Y6-01). A key no host
+//! using it as a jump hop (the built-in runner stands for an unset `via_runner`). A key no host
 //! uses has no runner. The group's own list stays empty.
 //!
 //! ECDSA keys are parsed, not validated: the `ssh-key` curve features (`p256`, `p384`) pull
@@ -420,14 +419,7 @@ pub(crate) async fn sync_runners(app: &App) -> Result<(), ApiError> {
         "SELECT k.secret, h.via_runner FROM leyline_keys k, leyline_hosts h WHERE h.key_id = k.id \
          UNION \
          SELECT k.secret, h.via_runner FROM leyline_keys k, leyline_hosts hop, leyline_hosts h, \
-                json_each(h.jump_chain) j WHERE hop.key_id = k.id AND j.value = hop.id \
-         UNION \
-         SELECT k.secret, d.runner FROM leyline_direct d, leyline_hosts h, leyline_keys k \
-                WHERE d.ended_at IS NULL AND h.id = d.host_id AND k.id = h.key_id \
-         UNION \
-         SELECT k.secret, d.runner FROM leyline_direct d, leyline_hosts h, \
-                json_each(h.jump_chain) j, leyline_hosts hop, leyline_keys k \
-                WHERE d.ended_at IS NULL AND h.id = d.host_id AND hop.id = j.value AND k.id = hop.key_id",
+                json_each(h.jump_chain) j WHERE hop.key_id = k.id AND j.value = hop.id",
     )
     .fetch_all(&mut *tx)
     .await?;
