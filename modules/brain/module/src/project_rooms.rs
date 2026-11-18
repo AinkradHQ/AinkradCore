@@ -193,8 +193,9 @@ async fn make(app: &App, b: &Brain, id: i64, name: &str) -> Result<(), ApiError>
         .bind(name)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("INSERT INTO brain_room_policy (room) VALUES (?)")
+    sqlx::query("INSERT INTO brain_room_policy (room, auto_accept) VALUES (?, ?)")
         .bind(&room)
+        .bind(crate::policy::AUTO_ACCEPT_ALL)
         .execute(&mut *tx)
         .await?;
     record(
