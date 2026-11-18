@@ -97,7 +97,12 @@ impl Ca {
     /// A leaf for `localhost`, valid from now for `days`, with a fresh serial: its PEM chain
     /// and PEM key.
     pub fn leaf(&self, days: i64) -> (String, String) {
-        let mut params = CertificateParams::new(vec!["localhost".to_owned()]).unwrap();
+        self.leaf_for("localhost", days)
+    }
+
+    /// `leaf` for another name (a wildcard such as `*.proj.test` included).
+    pub fn leaf_for(&self, name: &str, days: i64) -> (String, String) {
+        let mut params = CertificateParams::new(vec![name.to_owned()]).unwrap();
         params.not_before = time::OffsetDateTime::now_utc() - time::Duration::minutes(1);
         params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(days);
         let serial = (u64::from(std::process::id()) << 20) + SERIAL.fetch_add(1, Ordering::Relaxed);

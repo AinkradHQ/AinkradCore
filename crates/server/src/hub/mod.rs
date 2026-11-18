@@ -318,6 +318,22 @@ impl Dispatched {
         Some(body)
     }
 
+    /// The next frame without granting credit for it: a port stream (the Host router) grants
+    /// with [`Dispatched::grant_read`] only once its public client has taken the bytes.
+    pub(crate) async fn next_ungranted(&mut self) -> Option<Body> {
+        self.rx.recv().await
+    }
+
+    /// The dispatcher passed `bytes` of output on: the runner may send as many more.
+    pub(crate) fn grant_read(&self, bytes: u64) {
+        self.hub.grant(&self.runner, self.stream, bytes);
+    }
+
+    /// A non-retained frame to the runner on this stream (port bytes, a `close`).
+    pub(crate) fn send(&self, body: Body) -> Result<(), StreamError> {
+        self.hub.send_terminal(&self.runner, self.stream, body)
+    }
+
     /// The command's last frame, skipping its output.
     pub async fn outcome(mut self) -> Result<Body, StreamError> {
         while let Some(body) = self.next().await {
@@ -437,7 +453,6 @@ impl Hub {
     /// leaves here, because the public router has no caller to step up. The runner serves only an
     /// `expose: true` port of a live run (see `ainkrad_proto::v2::PortOpen`), and the router checks
     /// the project's expose toggle before it asks.
-    #[allow(dead_code)] // the Host router (P6-02) is its caller
     pub(crate) fn dispatch_port(
         self: &Arc<Self>,
         runner: &str,
