@@ -256,7 +256,11 @@ async fn guarded(
     lim: &Limits,
     (method, hash, args): (&Method, &str, &Value),
 ) -> Done {
-    if op.risk != Risk::Risky {
+    // A module route that asks a person itself (Leyline's gate) is not parked twice: its own
+    // policy decides, and its approval is the same Core-held `cm_` request (T11).
+    if op.risk != Risk::Risky
+        || crate::api::v1::scopes::self_approved(method, &op.path, &app.modules)
+    {
         return send(app, op, req, lim, method).await;
     }
     let reason = if crate::api::v1::scopes::destructive(method, &op.path, &app.modules) {
@@ -367,11 +371,14 @@ async fn send(app: &App, op: &Op, req: &Req<'_>, lim: &Limits, method: &Method) 
     let Ok(request) = request else {
         return deny("bad_args", "not a valid target", Some(op));
     };
-    let sent = tokio::time::timeout(
-        lim.call_wall,
-        crate::api::v1::router(app.clone()).oneshot(request),
-    )
-    .await;
+    // A route that may wait for a person inside its handler gets that wait on top of its time.
+    let wall = if crate::api::v1::scopes::self_approved(method, &op.path, &app.modules) {
+        lim.call_wall + req.approval
+    } else {
+        lim.call_wall
+    };
+    let sent =
+        tokio::time::timeout(wall, crate::api::v1::router(app.clone()).oneshot(request)).await;
     drop(flight);
     let fail = |code: &str, msg: &str| Done {
         op: Some((op.id.clone(), op.risk)),

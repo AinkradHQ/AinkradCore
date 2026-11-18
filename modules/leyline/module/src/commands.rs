@@ -470,7 +470,11 @@ pub struct RunView {
 #[utoipa::path(get, path = "/runs/{run}", operation_id = "leylineGetRun", tag = "leyline",
     params(("run" = String, Path, description = "The run's id")),
     responses((status = 200, description = "The run and each host's result", body = RunView)))]
-pub(crate) async fn get_run(State(app): State<App>, Path(id): Path<String>) -> ApiResult<RunView> {
+pub(crate) async fn get_run(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<RunView> {
     let id: String = id.chars().take(64).collect();
     let r = sqlx::query(
         "SELECT id, command_id, action, principal, state, created_at, ended_at FROM leyline_runs WHERE id = ?",
@@ -498,7 +502,7 @@ pub(crate) async fn get_run(State(app): State<App>, Path(id): Path<String>) -> A
             })
         })
         .collect::<Result<_, sqlx::Error>>()?;
-    Ok(Json(RunView {
+    let mut view = RunView {
         id: r.try_get("id")?,
         command_id: r.try_get("command_id")?,
         action: r.try_get("action")?,
@@ -507,5 +511,8 @@ pub(crate) async fn get_run(State(app): State<App>, Path(id): Path<String>) -> A
         created_at: r.try_get("created_at")?,
         ended_at: r.try_get("ended_at")?,
         hosts,
-    }))
+    };
+    // An AI session reads only its own runs, their output as outside data (Y7-01).
+    crate::ai::for_ai(&me, &mut view)?;
+    Ok(Json(view))
 }

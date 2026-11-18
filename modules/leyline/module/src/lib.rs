@@ -8,6 +8,7 @@
 //! migration, no Core crate names this module.
 
 mod address;
+mod ai;
 mod attach;
 mod commands;
 mod exec;
@@ -67,6 +68,16 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/commands/{command}/run"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
+    ("POST", "/ai/hosts/{host}/exec"),
+    ("POST", "/ai/commands/{command}/run"),
+];
+// The AI routes that reach a host ask a person through the gate itself (T10), never twice, and
+// may wait for that person inside the call.
+const SELF_APPROVED: &[(&str, &str)] = &[
+    ("GET", "/ai/hosts/{host}/files"),
+    ("GET", "/ai/hosts/{host}/file"),
+    ("POST", "/ai/hosts/{host}/exec"),
+    ("POST", "/ai/commands/{command}/run"),
 ];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts", "read"),
@@ -79,6 +90,12 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/commands", "read"),
     ("GET", "/commands/{command}", "read"),
     ("GET", "/runs/{run}", "read"),
+    // Code Mode (Y7-01): a session acts as its creator without `admin`, so these name scopes a
+    // creator holds. They answer only a session's own calls (`ai::session_only`).
+    ("GET", "/ai/hosts/{host}/files", "read"),
+    ("GET", "/ai/hosts/{host}/file", "read"),
+    ("POST", "/ai/hosts/{host}/exec", "agent"),
+    ("POST", "/ai/commands/{command}/run", "agent"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -108,7 +125,11 @@ pub struct Leyline;
         commands::patch,
         commands::remove,
         commands::run,
-        commands::get_run
+        commands::get_run,
+        ai::exec,
+        ai::run_command,
+        ai::list_files,
+        ai::read_file
     ),
     components(schemas(
         hosts::HostView,
@@ -132,7 +153,11 @@ pub struct Leyline;
         commands::RunRequest,
         commands::RunStarted,
         commands::RunView,
-        commands::RunHost
+        commands::RunHost,
+        ai::ExecRequest,
+        ai::AiRunRequest,
+        ai::FileList,
+        ai::FileText
     ))
 )]
 struct Doc;
@@ -163,6 +188,10 @@ impl Module for Leyline {
             )
             .route("/commands/{command}/run", post(commands::run))
             .route("/runs/{run}", get(commands::get_run))
+            .route("/ai/hosts/{host}/exec", post(ai::exec))
+            .route("/ai/hosts/{host}/files", get(ai::list_files))
+            .route("/ai/hosts/{host}/file", get(ai::read_file))
+            .route("/ai/commands/{command}/run", post(ai::run_command))
             .route("/projects/{project}/hosts", get(attach::list))
             .route(
                 "/projects/{project}/hosts/{host}",
@@ -203,7 +232,7 @@ impl Module for Leyline {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["group", "tag"]
+        &["group", "tag", "path"]
     }
 
     fn scope(&self) -> &'static str {
@@ -220,6 +249,10 @@ impl Module for Leyline {
 
     fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
         Some(NON_DESTRUCTIVE)
+    }
+
+    fn self_approved(&self) -> &'static [(&'static str, &'static str)] {
+        SELF_APPROVED
     }
 
     fn openapi(&self) -> Value {

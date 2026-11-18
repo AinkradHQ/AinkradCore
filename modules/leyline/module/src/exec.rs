@@ -100,17 +100,25 @@ fn cut(s: String) -> String {
     format!("{}\n[output cut]", &s[..n])
 }
 
+/// The authorised host's target and jump hops, each with a fresh one-use lease, and the runner
+/// that connects. Fixed sentences only.
+pub(crate) async fn route(
+    app: &App,
+    auth: &Authorized,
+) -> Result<(SshHop, Vec<SshHop>, String), String> {
+    let (target, hops, runner) = chain(app, auth.host_id()).await.map_err(str::to_owned)?;
+    let target = hop(app, auth, &runner, target).await?;
+    let mut v = Vec::new();
+    for h in hops {
+        v.push(hop(app, auth, &runner, h).await?);
+    }
+    Ok((target, v, runner))
+}
+
 /// One `ssh.exec` of `step` on the authorised host: leases, hops, dispatch, the answer.
 async fn one(app: &App, auth: &Authorized, step: &str) -> Result<ExecResult, String> {
     let fixed = |s: &str| s.to_owned();
-    let (target, hops, runner) = chain(app, auth.host_id()).await.map_err(|e| fixed(e))?;
-    let (target, hops) = (hop(app, auth, &runner, target).await?, {
-        let mut v = Vec::new();
-        for h in hops {
-            v.push(hop(app, auth, &runner, h).await?);
-        }
-        v
-    });
+    let (target, hops, runner) = route(app, auth).await?;
     let exec = SshExec {
         target,
         hops,
@@ -131,7 +139,7 @@ async fn one(app: &App, auth: &Authorized, step: &str) -> Result<ExecResult, Str
     }
 }
 
-fn why(c: ErrorCode) -> String {
+pub(crate) fn why(c: ErrorCode) -> String {
     match c {
         ErrorCode::Offline => "the runner is not connected",
         ErrorCode::Busy => "the runner is busy",

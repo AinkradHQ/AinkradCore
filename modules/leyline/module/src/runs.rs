@@ -167,7 +167,12 @@ pub(super) async fn settle(
                 action: c.action.clone(),
                 op_sha256: hash.to_owned(),
                 principal: who.clone(),
-                steps: c.cmd.as_ref().map(|m| m.steps.clone()).unwrap_or_default(),
+                // A pre-set command's steps, or the one ad-hoc line the gate decided on.
+                steps: match (&c.cmd, c.action) {
+                    (Some(m), _) => m.steps.clone(),
+                    (None, Action::Exec(line)) => vec![line.clone()],
+                    _ => Vec::new(),
+                },
                 tuple: h.tuple.clone(),
             }),
             Verdict::Deny(why) => refused.push((h.id.clone(), *why)),

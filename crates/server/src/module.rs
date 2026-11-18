@@ -219,6 +219,15 @@ pub trait Module: Send + Sync + 'static {
         None
     }
 
+    /// `(method, path template)` of the module's routes that ask a person themselves, through the
+    /// Core-held Code Mode approval (`ops_catalog::create_approval`), decided by the module's own
+    /// policy (Leyline's gate: `allowed` runs, `ask` asks, `read_only` refuses). A `risky` Code
+    /// Mode op on such a route is not parked a second time by the dispatcher. Never honoured for
+    /// a destructive route (its step-up still stands behind a dispatcher approval). None by default.
+    fn self_approved(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
     /// The scheduler jobs the module declares (E2-11), recorded at start by `jobs::register`
     /// and run by the `jobs::Engine`. None by default. A job's name is unique within the module.
     fn jobs(&self) -> Vec<crate::jobs::Job> {
