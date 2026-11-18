@@ -10,9 +10,12 @@ workspace = true
 [dependencies]
 ainkrad-core = { path = "../../../crates/core" }
 ainkrad-core-server = { path = "../../../crates/server" }
+# V6-01: the `design.check` command a runner's helper answers.
+ainkrad-proto = { path = "../../../crates/proto" }
 axum = "0.8.9"
 design-crdt = { path = "../crdt" }
 design-model = { path = "../model" }
+base64 = "0.22.1"
 getrandom = "0.4.3"
 libc = "0.2.191"
 quick-xml = "0.42.0"

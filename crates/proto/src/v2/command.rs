@@ -81,6 +81,16 @@ pub enum Command {
     SshSftpRename(super::SftpRename),
     #[serde(rename = "ssh.sftp.remove")]
     SshSftpRemove(super::SftpRemove),
+    #[serde(rename = "design.render")]
+    DesignRender(super::DesignRender),
+    #[serde(rename = "design.measure")]
+    DesignMeasure(super::DesignMeasure),
+    #[serde(rename = "design.review")]
+    DesignReview(super::DesignReview),
+    #[serde(rename = "design.check")]
+    DesignCheck(super::DesignCheck),
+    #[serde(rename = "design.shot")]
+    DesignShot(super::DesignShot),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -122,6 +132,11 @@ impl Command {
             Self::SshSftpMkdir(_) => super::OP_SFTP_MKDIR,
             Self::SshSftpRename(_) => super::OP_SFTP_RENAME,
             Self::SshSftpRemove(_) => super::OP_SFTP_REMOVE,
+            Self::DesignRender(_) => super::OP_DESIGN_RENDER,
+            Self::DesignMeasure(_) => super::OP_DESIGN_MEASURE,
+            Self::DesignReview(_) => super::OP_DESIGN_REVIEW,
+            Self::DesignCheck(_) => super::OP_DESIGN_CHECK,
+            Self::DesignShot(_) => super::OP_DESIGN_SHOT,
             Self::Unknown => "unknown",
         }
     }
@@ -235,6 +250,16 @@ pub enum Reply {
     SshSftpRename(super::SftpDone),
     #[serde(rename = "ssh.sftp.remove")]
     SshSftpRemove(super::SftpDone),
+    #[serde(rename = "design.render")]
+    DesignRender(super::DesignImage),
+    #[serde(rename = "design.measure")]
+    DesignMeasure(super::DesignBoxes),
+    #[serde(rename = "design.review")]
+    DesignReview(super::DesignFindings),
+    #[serde(rename = "design.check")]
+    DesignCheck(super::DesignChecked),
+    #[serde(rename = "design.shot")]
+    DesignShot(super::DesignImage),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

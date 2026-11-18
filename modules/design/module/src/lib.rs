@@ -8,6 +8,7 @@
 
 mod asset_links;
 mod assets;
+mod checks;
 mod collections;
 mod docs;
 mod package;
@@ -27,6 +28,7 @@ use std::sync::Arc;
 use utoipa::OpenApi;
 
 pub use package::import_dir;
+pub use checks::check_pending;
 
 pub const MODULE: &str = "design";
 
@@ -266,6 +268,7 @@ impl Module for Design {
             "design.asset.created",
             "design.asset.changed",
             "design.asset.deleted",
+            "design.asset.checked",
             "design.asset.linked",
             "design.asset.unlinked",
             "design.collection.created",
@@ -274,6 +277,15 @@ impl Module for Design {
             "design.collection.linked",
             "design.collection.unlinked",
         ]
+    }
+
+    /// V6-01: fonts and Icon Composer zips go to a runner's sandboxed helper (`checks`).
+    fn jobs(&self) -> Vec<ainkrad_core_server::jobs::Job> {
+        vec![checks::job()]
+    }
+
+    fn attach(&self, app: &App) {
+        let _ = checks::APP.set(app.clone());
     }
 
     fn query_names(&self) -> &'static [&'static str] {

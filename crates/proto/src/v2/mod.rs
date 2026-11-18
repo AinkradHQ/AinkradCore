@@ -43,6 +43,7 @@ mod attach;
 mod auth;
 mod command;
 mod control;
+mod design;
 mod gateway;
 mod history;
 pub mod local;
@@ -58,6 +59,7 @@ pub use attach::*;
 pub use auth::*;
 pub use command::*;
 pub use control::*;
+pub use design::*;
 pub use gateway::*;
 pub use history::*;
 pub use login::*;
@@ -536,6 +538,9 @@ pub enum ErrorCode {
     SftpFailed,
     /// A transfer over `SFTP_MAX_BYTES`.
     TooLarge,
+    /// `design.*`: the helper (or Chromium) failed, crashed, or was stopped at a limit; `message` says
+    /// which. The input is what it could not handle; the runner itself is unaffected.
+    DesignFailed,
     /// A code from a newer peer. Never sent.
     #[serde(other)]
     Unknown,

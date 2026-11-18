@@ -468,6 +468,46 @@ impl Hub {
         self.send_command(runner, command)
     }
 
+    /// Design helper ops (V6-01): the runner runs its own fixed `ainkrad-design` helper, or headless
+    /// Chromium, in a sandbox with no network, on data the Core sends; no program or path the caller
+    /// chooses runs. So a module may send them without a step-up. Only the five design commands pass.
+    pub fn dispatch_design(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+    ) -> Result<Dispatched, StreamError> {
+        let design = matches!(
+            command,
+            Command::DesignRender(_)
+                | Command::DesignMeasure(_)
+                | Command::DesignReview(_)
+                | Command::DesignCheck(_)
+                | Command::DesignShot(_)
+        );
+        if !design {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "only design.* ops use the design path",
+            ));
+        }
+        self.send_command(runner, command)
+    }
+
+    /// A runner with no socket, for tests that play it: the Core's frames to it come out of the
+    /// receiver, and [`Hub::answer_for_tests`] hands its frames to the hub.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn connect_for_tests(&self, device: &str, hello: RunnerHello) -> mpsc::Receiver<Frame> {
+        let (tx, rx) = mpsc::channel(64);
+        self.register(device, device, hello, tx, Arc::new(Notify::new()), 0);
+        rx
+    }
+
+    /// A frame from a runner connected by [`Hub::connect_for_tests`].
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn answer_for_tests(&self, device: &str, frame: Frame) {
+        self.received(device, frame);
+    }
+
     fn send_command(
         self: &Arc<Self>,
         runner: &str,
