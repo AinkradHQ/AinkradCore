@@ -110,7 +110,35 @@ impl Workspaces {
         args: &[&str],
         helper: Option<&Path>,
     ) -> Result<std::process::Output, String> {
+        self.git_output_in(dir, args, helper, false).await
+    }
+
+    /// As [`git_with_credentials`](Self::git_with_credentials) with `http` allowed as the only
+    /// transport: for the loopback relay to the Core's copies, never for a repo URL.
+    pub(super) async fn git_relay(&self, dir: &Path, args: &[&str]) -> Result<String, String> {
+        let out = self.git_output_in(dir, args, None, true).await?;
+        match out.status.success() {
+            true => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+            false => Err(format!(
+                "git {} failed: {}",
+                args.first().unwrap_or(&"command"),
+                tail(&String::from_utf8_lossy(&out.stderr), 500)
+            )),
+        }
+    }
+
+    async fn git_output_in(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        helper: Option<&Path>,
+        http: bool,
+    ) -> Result<std::process::Output, String> {
         let mut cmd = self.command(dir, &[]);
+        if http {
+            cmd.args(["-c", "protocol.http.allow=always"])
+                .env("GIT_ALLOW_PROTOCOL", "http");
+        }
         if let Some(helper) = helper {
             // Only the path is passed, never the credential. The broker helper verifies host.
             let path = helper

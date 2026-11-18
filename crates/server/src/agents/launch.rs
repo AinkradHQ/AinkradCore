@@ -89,6 +89,7 @@ fn start_command(
     s: &Session,
     secrets: Vec<SecretGrant>,
     gateway: Option<Box<ainkrad_proto::v2::GatewayGrant>>,
+    instructions: Option<String>,
     resume: bool,
 ) -> Result<Command, Refusal> {
     let bad = || {
@@ -124,7 +125,32 @@ fn start_command(
             0
         },
         live: s.conversation,
+        instructions,
     }))
+}
+
+/// Leases the Core's copies of the repos `s`'s workspace names to its runner (P3-02, see
+/// `crate::mirrors`). A workspace naming copies without a project to lease them for is refused:
+/// only a project's session may read them, whatever the workspace says.
+pub(crate) async fn project_mirrors(app: &App, s: &Session) -> Result<(), String> {
+    let Some(w) = s
+        .workspace
+        .as_ref()
+        .and_then(|w| serde_json::from_value::<ainkrad_proto::runner::Workspace>(w.clone()).ok())
+    else {
+        return Ok(());
+    };
+    let repos: Vec<i64> = std::iter::once(&w)
+        .chain(&w.also)
+        .filter_map(|w| w.mirror)
+        .collect();
+    if repos.is_empty() {
+        return Ok(());
+    }
+    let project = s
+        .project_id
+        .ok_or("the workspace names repo copies but the session has no project")?;
+    crate::mirrors::for_session(app, &s.runner, project, &repos).await
 }
 
 /// Whether `s` may go to its runner now.
@@ -161,7 +187,7 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
         let why = "the runner is not connected";
         return Err(Refusal::Runner(StreamError::new(ErrorCode::Offline, why)));
     }
-    if let Err(e) = start_command(s, Vec::new(), None, resume) {
+    if let Err(e) = start_command(s, Vec::new(), None, None, resume) {
         fail(app, s, &describe(&e)).await;
         return Err(e);
     }
@@ -259,6 +285,23 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
             return Err(e);
         }
     }
+    // The repo copies a project session clones are leased to this runner now, at every start, and
+    // before the account is committed to: a fetch that fails must not fail a session holding one.
+    if let Err(why) = project_mirrors(app, s).await {
+        fail(app, s, &why).await;
+        return Err(Refusal::Runner(StreamError::new(
+            ErrorCode::InvalidArgs,
+            why,
+        )));
+    }
+    // What a module says the session starts with, read at every start (P3-03).
+    let mut instructions = None;
+    for module in app.modules.iter() {
+        if let Some(text) = module.session_instructions(app, &s.id).await {
+            instructions = Some(text);
+            break;
+        }
+    }
     // From here the harness may start on this account whatever the answer: it is final.
     // A session cancelled meanwhile is not started.
     if !resume && !crate::store::alloc::mark_or_release(&app.pool, &s.id).await? {
@@ -270,7 +313,13 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
     match ask(
         app,
         &s.runner,
-        start_command(s, secrets.clone(), leased.gateway.clone(), resume)?,
+        start_command(
+            s,
+            secrets.clone(),
+            leased.gateway.clone(),
+            instructions,
+            resume,
+        )?,
         wait,
         proof,
     )

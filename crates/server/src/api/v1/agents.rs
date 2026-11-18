@@ -27,6 +27,7 @@ use ainkrad_proto::v2::{AgentDecide, AgentMode, AgentStop, AgentSubagentStop, Co
 
 pub(super) mod access;
 pub(in crate::api::v1) mod attach;
+pub(in crate::api::v1) mod project;
 pub(in crate::api::v1) mod sched;
 mod types;
 use sched::{AgentWaiting, create_named, listed, page, shown};
@@ -137,6 +138,9 @@ pub struct AgentSession {
     /// reports it after the start. A worktree is moved away when its run ends, so an ended
     /// session's folder may no longer exist.
     pub folder: Option<String>,
+    /// The project it was started for (`createAgentSession` with `project_id`): its workspace is
+    /// that project's repos, cloned from the Core's copies. Absent for any other session.
+    pub project_id: Option<i64>,
     /// While `running`: what the answer that runs now has cost so far, in micro-dollars, from the
     /// harness's mid-turn token reports (its `usage_so_far` entries) at the price book's rates for
     /// the session's model. 0 when its message has just started it; absent when no answer runs or
@@ -169,6 +173,7 @@ impl From<Session> for AgentSession {
                 .map(|t| ts(&crate::scheduler::iso_of_unix(t))),
             title: s.title,
             folder: s.folder,
+            project_id: s.project_id,
             turn_cost_approximate: Some(turn_cost.is_some() && s.turn_cost_approx),
             turn_cost_usd_micros: turn_cost,
             can_stop_subagents: Some(false),
@@ -364,18 +369,42 @@ pub async fn create(
     let draws_account = b.chain.is_some() || b.agent.is_some();
     let policy =
         agents::with_account_floor(policy, draws_account || agents::holds_account(&secrets));
+    let admin = me.device.scopes.iter().any(|scope| scope == "admin");
+    // A project's session: the Core builds the workspace; a client may not name a mirror itself.
+    // Its launch fetches the project's repos with the project's connection (the owner's token),
+    // which `POST /projects/{id}/repos/{repo}/fetch` does under `admin`: so this needs `admin`
+    // too, and the Brain's room claim (`brainClaimRoom`, `admin`) is then the caller's own right.
+    // This route is DESTRUCTIVE, so the gate has already required a step-up for either.
+    let built = match b.project_id {
+        Some(_) if !admin => {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden_scope",
+                "a session of a project needs an admin device",
+            ));
+        }
+        Some(_) if b.workspace.is_some() => {
+            return Err(ApiError::bad_request(
+                "project_id and workspace exclude each other",
+            ));
+        }
+        Some(id) => Some(project::workspace_for(&app, id).await?),
+        None => {
+            project::no_mirror(b.workspace.as_ref())?;
+            None
+        }
+    };
     let new = store::NewSession {
         runner: &b.runner,
         harness: &b.harness,
         model: b.model.as_deref(),
         // No first message (absent or empty): the session starts waiting for one.
         prompt: b.prompt.as_deref().filter(|p| !p.is_empty()),
-        workspace: b.workspace.as_ref(),
+        workspace: built.as_ref().or(b.workspace.as_ref()),
         policy: &policy,
         secrets: &secrets,
         created_by: &me.device.id,
     };
-    let admin = me.device.scopes.iter().any(|scope| scope == "admin");
     let access = access::checked(&app, admin, b.connection_access.as_deref())?;
     let s = if b.chain.is_some() || b.agent.is_some() {
         create_named(&app, &me, &new, admin, b.chain, b.agent.as_deref()).await?
@@ -391,6 +420,16 @@ pub async fn create(
             return Err(e);
         }
         store::create(&app.pool, &new, BY, &app.clock.now()).await?
+    };
+    let s = match b.project_id {
+        Some(id) => {
+            project::attach(&app, &me, &s, id).await?;
+            Session {
+                project_id: Some(id),
+                ..s
+            }
+        }
+        None => s,
     };
     // A live conversation, where the runner offers it; titled by its first message.
     let live = b.live.unwrap_or(true) && agents::offers_live(&app, &s.runner);

@@ -96,7 +96,7 @@ pub struct ProjectInfo {
     pub updated_at: Timestamp,
 }
 
-async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError> {
+pub(super) async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError> {
     let mut conn = app.pool.acquire().await?;
     let mut repos = Vec::new();
     for r in store::repos(&mut conn, p.id).await? {
@@ -153,7 +153,7 @@ fn num(s: &str, what: &str) -> Result<i64, ApiError> {
         .ok_or_else(|| ApiError::not_found(format!("no such {what}")))
 }
 
-fn who<'a>(me: &'a Caller, now: &'a str) -> Who<'a> {
+pub(super) fn who<'a>(me: &'a Caller, now: &'a str) -> Who<'a> {
     Who {
         by_device: &me.device.id,
         actor: BY,

@@ -194,11 +194,17 @@ pub async fn from_state(
     let agents = agents.map(|a| {
         let client = Client::new(&url, tls.clone()).map(Arc::new);
         let agent = Arc::new(match client {
-            Ok(c) => a.with_redeem(super::agent::secrets::http_redeem(
-                c,
-                Arc::clone(&key),
-                Arc::clone(&enrolment),
-            )),
+            Ok(c) => a
+                .with_mirror(super::mirror::http_upstream(
+                    Arc::clone(&c),
+                    Arc::clone(&key),
+                    Arc::clone(&enrolment),
+                ))
+                .with_redeem(super::agent::secrets::http_redeem(
+                    c,
+                    Arc::clone(&key),
+                    Arc::clone(&enrolment),
+                )),
             Err(_) => a,
         });
         // A tier that goes away mid-life ends the sessions that need it (E8a-09.3).

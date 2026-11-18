@@ -229,6 +229,7 @@ async fn a_forged_advertisement_is_caught_by_the_runner_itself() {
     let forged = IsolationCaps::of(Isolation::Microvm, Kvm::Usable);
     assert!(forged.meets(Isolation::Microvm));
     let mut start = AgentStart {
+        instructions: None,
         session: "as_forged".to_owned(),
         harness: "fake".to_owned(),
         model: None,

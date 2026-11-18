@@ -93,6 +93,103 @@ async fn link(conn: &mut SqliteConnection, project: &str, room: &str) -> Result<
     Ok(())
 }
 
+/// A new AI session of `project` claims the project's room, if it has one (P3-02): the same
+/// claim as `brainClaimRoom` (the room's model policy against the session's whole chain). A
+/// project with no room claims nothing. `Err` is why the claim was refused; the Core then ends the
+/// session unstarted.
+pub(crate) async fn claim_for_session(
+    app: &App,
+    session: &str,
+    project: i64,
+    by: &str,
+) -> Result<(), String> {
+    let room: Option<String> =
+        sqlx::query_scalar("SELECT room FROM brain_project_rooms WHERE project = ?")
+            .bind(project.to_string())
+            .fetch_optional(&app.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    match room {
+        None => Ok(()),
+        Some(room) => crate::claim::claim(app, &room, session, by)
+            .await
+            .map(drop)
+            .map_err(|e| e.message),
+    }
+}
+
+/// The approved instructions of the room `session` claimed (P3-03): read-only, and only what the
+/// person approved in the room's Overview (`instructions_approved_at` set, text not blank). A
+/// session with no claim, a room that will not open, or no approved text gets `None`, and then
+/// starts exactly as before. Nothing here writes to the room or touches the Overview code.
+pub(crate) async fn instructions_for_session(
+    app: &App,
+    b: &Brain,
+    session: &str,
+) -> Option<String> {
+    let room: String = sqlx::query_scalar("SELECT room FROM brain_session_rooms WHERE session = ?")
+        .bind(session)
+        .fetch_optional(&app.pool)
+        .await
+        .ok()??;
+    let pool = crate::distil::canon(app, b, &room).await.ok()?;
+    let text = approved_instructions(&pool).await;
+    pool.close().await;
+    text
+}
+
+/// The approved, non-blank instructions in a room's `room_overview` row.
+async fn approved_instructions(pool: &sqlx::SqlitePool) -> Option<String> {
+    let text: Option<String> = sqlx::query_scalar(
+        "SELECT instructions FROM room_overview \
+         WHERE id = 1 AND instructions_approved_at IS NOT NULL",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()??;
+    text.filter(|t| !t.trim().is_empty())
+}
+
+#[cfg(test)]
+mod instructions_tests {
+    use super::approved_instructions;
+
+    async fn room(text: Option<&str>, approved: Option<&str>) -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE room_overview (id INTEGER PRIMARY KEY, instructions TEXT, \
+             instructions_approved_at TEXT)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO room_overview (id, instructions, instructions_approved_at) VALUES (1, ?, ?)")
+            .bind(text)
+            .bind(approved)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn only_approved_text_is_returned() {
+        let t = Some("Use tabs.");
+        let a = Some("2026-11-18T10:00:00.000Z");
+        assert_eq!(approved_instructions(&room(t, a).await).await.as_deref(), t);
+        assert_eq!(approved_instructions(&room(t, None).await).await, None);
+        assert_eq!(approved_instructions(&room(None, a).await).await, None);
+        assert_eq!(
+            approved_instructions(&room(Some(" \n"), a).await).await,
+            None
+        );
+    }
+}
+
 #[utoipa::path(put, path = "/projects/{project}/room", operation_id = "brainLinkProjectRoom", tag = "brain",
     params(("project" = String, Path, description = "The Core project's id")),
     request_body = LinkRoom,
