@@ -43,8 +43,14 @@ pub struct Pick {
     pub fingerprint: String,
 }
 
-const ROWS: &str =
-    "SELECT fingerprint, state, first_seen, trusted_by, trusted_at FROM leyline_host_keys";
+macro_rules! rows {
+    ($tail:literal) => {
+        concat!(
+            "SELECT fingerprint, state, first_seen, trusted_by, trusted_at FROM leyline_host_keys",
+            $tail
+        )
+    };
+}
 
 fn view(r: (String, String, String, Option<String>, Option<String>)) -> HostKeyView {
     HostKeyView {
@@ -132,12 +138,11 @@ pub(crate) async fn list(
 ) -> ApiResult<Vec<HostKeyView>> {
     let mut conn = app.pool.acquire().await?;
     let id = find(&mut conn, &host).await?;
-    let rows: Vec<(String, String, String, Option<String>, Option<String>)> = sqlx::query_as(
-        &format!("{ROWS} WHERE host_id = ? ORDER BY first_seen, fingerprint"),
-    )
-    .bind(id)
-    .fetch_all(&mut *conn)
-    .await?;
+    let rows: Vec<(String, String, String, Option<String>, Option<String>)> =
+        sqlx::query_as(rows!(" WHERE host_id = ? ORDER BY first_seen, fingerprint"))
+            .bind(id)
+            .fetch_all(&mut *conn)
+            .await?;
     Ok(Json(rows.into_iter().map(view).collect()))
 }
 
@@ -238,7 +243,7 @@ async fn write(
         "leyline.hostkey",
     )
     .await?;
-    let row = sqlx::query_as(&format!("{ROWS} WHERE host_id = ? AND fingerprint = ?"))
+    let row = sqlx::query_as(rows!(" WHERE host_id = ? AND fingerprint = ?"))
         .bind(id)
         .bind(fingerprint)
         .fetch_one(&mut *tx)
