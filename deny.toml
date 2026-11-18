@@ -21,6 +21,9 @@ ignore = [
   # RUSTSEC-2026-0543 (chrono, "unmaintained", no vulnerability): reached through ainkrad-core-server; date formatting only.
   # Drop when the dependents move to jiff/time. Time-boxed: re-check by 2026-12-08.
   { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained (no vulnerability): date formatting only; re-check 2026-12-08" },
+  # RUSTSEC-2026-0215 (smallstr, "unmaintained", no vulnerability): a small-string type inside yrs (the Design CRDT,
+  # V2-02). Drop when yrs moves off it. Time-boxed: re-check by 2026-12-17.
+  { id = "RUSTSEC-2026-0215", reason = "smallstr unmaintained (no vulnerability): inside yrs; re-check 2026-12-17" },
 ]
 
 [licenses]

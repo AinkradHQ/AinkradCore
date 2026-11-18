@@ -32,7 +32,7 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for In<T> {
 }
 
 /// `"field": null` clears; an absent field keeps.
-fn some<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+pub(crate) fn some<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     d: D,
 ) -> Result<Option<Option<T>>, D::Error> {
     Option::<T>::deserialize(d).map(Some)
@@ -140,7 +140,10 @@ async fn record(
 
 /// The project `ident` names, as the text id a link stores. The Projects store is the authority:
 /// a text that is no existing project's id is refused (no foreign key into a Core table).
-async fn project_id(conn: &mut SqliteConnection, ident: &str) -> Result<String, ApiError> {
+pub(crate) async fn project_id(
+    conn: &mut SqliteConnection,
+    ident: &str,
+) -> Result<String, ApiError> {
     let unknown = || ApiError::bad_request("no such project");
     if ident.is_empty() || ident.len() > 18 || !ident.bytes().all(|c| c.is_ascii_digit()) {
         return Err(unknown());

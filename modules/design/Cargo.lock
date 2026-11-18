@@ -1037,12 +1037,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "design-crdt"
+name = "design-doc"
 version = "0.1.0"
 dependencies = [
  "design-model",
+ "serde",
  "serde_json",
  "yrs",
+]
+
+[[package]]
+name = "design-ffi"
+version = "0.1.0"
+dependencies = [
+ "design-doc",
+ "design-model",
+ "design-render",
+ "metal",
+ "serde_json",
+ "skia-bindings",
 ]
 
 [[package]]
@@ -1061,17 +1074,15 @@ dependencies = [
  "ainkrad-core",
  "ainkrad-core-server",
  "axum",
- "design-crdt",
- "design-model",
  "futures-util",
  "getrandom 0.4.3",
+ "quick-xml",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "tokio",
- "tokio-tungstenite",
  "tower",
- "tracing",
  "utoipa",
 ]
 

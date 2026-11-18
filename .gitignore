@@ -8,5 +8,9 @@ target/
 /fuzz/corpus/
 /modules/design/model/fuzz/artifacts/
 /modules/design/model/fuzz/corpus/
+/modules/design/ffi/fuzz/artifacts/
+/modules/design/doc/fuzz/artifacts/
+/modules/design/doc/fuzz/corpus/
+/modules/design/ffi/fuzz/corpus/
 /modules/lore/model/fuzz/artifacts/
 /modules/lore/model/fuzz/corpus/
