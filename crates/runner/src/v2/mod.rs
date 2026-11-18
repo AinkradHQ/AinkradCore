@@ -42,7 +42,7 @@ mod session;
 mod ssh;
 pub mod termbox;
 mod tools;
-pub use design::{DesignConfig, DesignDriver};
+pub use design::{Cgroups, DesignConfig, DesignDriver};
 pub use exec::{ExecConfig, ExecDriver};
 pub use pty::{PtyConfig, PtyDriver};
 pub use sandbox::ProcessSandbox;

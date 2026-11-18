@@ -541,6 +541,9 @@ pub enum ErrorCode {
     /// `design.*`: the helper (or Chromium) failed, crashed, or was stopped at a limit; `message` says
     /// which. The input is what it could not handle; the runner itself is unaffected.
     DesignFailed,
+    /// `design.*`: the helper (or Chromium) ran out of wall clock. Load on the runner can cause it as
+    /// much as the input, so it is no verdict on the file: try again later.
+    DesignLimit,
     /// A code from a newer peer. Never sent.
     #[serde(other)]
     Unknown,

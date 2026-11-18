@@ -92,10 +92,18 @@ ProtectProc=invisible
 # measured alone on Ubuntu 26.04: ProcSubset=pid (bwrap also reads /proc/sys/kernel/overflowuid), and
 # ProtectKernelTunables, ProtectKernelLogs, ProtectHostname (they overmount /proc/sys and /proc/kmsg).
 # What still holds: an unprivileged user with no capabilities (so /proc/sys, /sys, the hostname and the kernel
-# log are not writable or readable to it anyway), NoNewPrivileges, ProtectKernelModules, ProtectControlGroups,
+# log are not writable or readable to it anyway), NoNewPrivileges, ProtectKernelModules, ProtectControlGroups=private,
 # ProtectClock, and ProtectProc=invisible (other users' processes stay hidden).
 ProtectKernelModules=yes
-ProtectControlGroups=yes
+# Design jobs (crates/runner/src/v2/design/cgroup.rs) get one child cgroup each under this unit's own subtree, with
+# memory.max and pids.max: Delegate= hands the subtree to the runner's user, and `private` mounts only it, writable, in a
+# cgroup namespace (systemd 257+; the rest of the hierarchy stays out of reach). Without it design jobs run on their
+# ulimits and the runner's RSS watch alone. DelegateSubgroup= starts the runner itself in <unit>/runner, so the unit's
+# own cgroup holds no process and can enable memory and pids for the job children (also after a restart, when terminal
+# hosts that outlived the old runner (KillMode=process) are still there).
+Delegate=yes
+DelegateSubgroup=runner
+ProtectControlGroups=private
 ProtectClock=yes
 
 # --- Privileges ---

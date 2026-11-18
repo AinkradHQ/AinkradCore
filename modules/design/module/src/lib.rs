@@ -53,6 +53,13 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0003_design_mockups.up.sql"),
         down: include_str!("../migrations/0003_design_mockups.down.sql"),
     },
+    // 0004 is taken by the open design-ops PR (#327).
+    Migration {
+        version: 5,
+        name: "0005_design_check_attempts",
+        up: include_str!("../migrations/0005_design_check_attempts.up.sql"),
+        down: include_str!("../migrations/0005_design_check_attempts.down.sql"),
+    },
 ];
 
 /// T8: 25 MB per asset, 2 GB for the library; both can only be lowered by the person (the upload
@@ -84,6 +91,8 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/docs"),
     ("PATCH", "/docs/{doc}"),
+    ("POST", "/docs/{doc}/take-over"),
+    ("POST", "/docs/{doc}/resume"),
     ("PUT", "/docs/{doc}/projects/{project}"),
     ("DELETE", "/docs/{doc}/projects/{project}"),
     ("POST", "/assets"),
@@ -146,6 +155,8 @@ pub use sync::Limits;
         docs::get,
         docs::patch,
         docs::archive,
+        docs::take_over,
+        docs::resume,
         docs::link,
         docs::unlink,
         assets::upload,
@@ -198,6 +209,8 @@ impl Module for Design {
             .route("/docs", get(docs::list).post(docs::create))
             .route("/docs/{doc}", get(docs::get).patch(docs::patch))
             .route("/docs/{doc}/archive", post(docs::archive))
+            .route("/docs/{doc}/take-over", post(docs::take_over))
+            .route("/docs/{doc}/resume", post(docs::resume))
             .route("/docs/{doc}/sync", get(ws::sync))
             .route(
                 "/docs/{doc}/projects/{project}",
@@ -265,6 +278,8 @@ impl Module for Design {
             "design.doc.created",
             "design.doc.changed",
             "design.doc.archived",
+            "design.doc.taken_over",
+            "design.doc.resumed",
             "design.doc.linked",
             "design.doc.unlinked",
             "design.asset.created",

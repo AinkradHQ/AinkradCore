@@ -1,55 +1,75 @@
-//! The live design document (V2-02, T1, T3): one `yrs::Doc` in the T1 layout,
+//! The design document (T1, T3), the single doc crate since V1-05: one `yrs::Doc` layout,
 //!
 //! ```text
-//! nodes:  Map<id, Map{type, parent, order, clock, name, props: Map, text?: Text}>
+//! nodes:  Map<id, Map{type, order, move: {p, c, f}, name, props: Map, text?: Text}>
 //! meta:   Map{system, version}
 //! tokens: Map<name, {kind, day, night}>          (system docs only)
 //! ```
 //!
-//! read out as a `design_model::Doc`, edited only through typed [`Op`]s that the model's validators check first
-//! (all-or-nothing, one transaction, one undo step), with sync bytes in/out (yrs update v1) and presence (yrs
-//! awareness). Everything read from the CRDT is treated as hostile: a node with a missing or malformed field is
-//! skipped, prop JSON is depth-capped, and the model's resolver bounds the rest.
+//! (`read` documents the node entry; `move` is ONE register for parent, clock and previous parent, so concurrent
+//! moves never tear and a losing crossing move is reverted), shared by two owners:
 //!
-//! Trust note: yrs decodes, encodes, converts and drops nested values recursively, so nesting is where a hostile
-//! update could exhaust the stack (an abort, not a panic). Two guards: every `Any` in a remote update is decoded
-//! through `decode` (depth-capped at `MAX_JSON_DEPTH`, no collection longer than the bytes), and a node whose props
-//! hold a nested yrs map, array or text (no op writes one) is never read, and `layout` refuses any remote block outside
-//! the T1 layout before yrs integrates it (nesting depth, list-side content, clock wrap). A panic inside yrs while applying resets the
-//! replica (`Error::Reset`) instead of aborting. The Core (V1-03) reuses `apply_remote` and gets the same guards; it
-//! must still trial-apply an update before it stores or relays it.
+//! - [`Live`], the App engine's document (V2-02): read out as a `design_model::Doc`, edited only through typed
+//!   [`Op`]s that the model's validators check first (all-or-nothing, one transaction, one undo step), with sync bytes
+//!   in/out (yrs update v1) and presence (yrs awareness). A node that does not read strictly is skipped and the
+//!   model's resolver bounds the rest. A panic inside yrs resets the replica (`Error::Reset`) instead of aborting.
+//! - [`Replica`], the Core's document (V1-03, from `design-crdt`): the one place a device's update is accepted,
+//!   validated and turned into the diff the Core stores and relays; a refusal poisons it and the owner rebuilds it.
+//!
+//! SECURITY MODEL: both owners take remote bytes only through `gate` (its module docs list every layer and why).
+//! The Core additionally validates every node an update touched with the model crate, caps move clocks and the node
+//! and token budgets (`Replica::verify`); clients apply what the Core accepted, in the Core's order.
 
 use std::sync::{Arc, Mutex};
 
 use design_model::limits::{MAX_DOC_BYTES, MAX_NODES, MAX_TOKENS};
-use design_model::{Doc, Meta, Node, NodeType, Token};
-use serde_json::{Map as JMap, Number, Value};
+use design_model::{Doc, Meta, Token};
+use serde_json::Value;
 use yrs::undo::{Options as UndoOptions, UndoManager};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
-use yrs::{
-    Any, Doc as YDoc, GetString, Map, MapRef, Origin, Out, ReadTxn, StateVector, Transact, Update,
-};
+use yrs::{Any, Doc as YDoc, Map, MapRef, Origin, Out, ReadTxn, StateVector, Transact};
 
 mod decode;
+mod edit;
+mod gate;
+pub mod guard;
 #[cfg(test)]
 mod layered_tests;
 mod layout;
 mod ops;
 mod presence;
+mod read;
+mod replica;
 #[cfg(test)]
 mod reset_tests;
 mod text;
 mod trial;
 
+pub use design_model::{Doc as Model, NodeType};
+pub use edit::Editor;
+pub use gate::Refused;
 pub use ops::{MAX_GESTURE_OPS, MAX_OPS, MAX_OPS_BYTES, Op, parse_ops};
 pub use presence::{ClockFn, MAX_PEERS, MAX_PRESENCE_BYTES, PEER_TTL_MS, Presence};
+pub use replica::{MAX_PEER_UPDATE_BYTES, Replica};
 pub use text::byte_of_utf16;
 
-/// A remote update or a full state: the document cap plus framing room.
+/// What the engine accepts from the Core: one relayed update or a full state (the document cap plus framing room).
+/// What a device may SEND is smaller, `MAX_PEER_UPDATE_BYTES`: the Core refuses more, so the engine's outbox and its
+/// batches stay under that.
 pub const MAX_UPDATE_BYTES: usize = MAX_DOC_BYTES + (1 << 20);
-/// Prop JSON nesting read out of the CRDT (the validators accept far less).
-pub const MAX_JSON_DEPTH: usize = 32;
+/// `Any` nesting anywhere in an update and in what is read back (the validators accept far less). One value for every
+/// layer: `design-crdt` scanned to 24 and read props to 16, the engine decoded to 32; V1-05 keeps the strictest.
+pub const MAX_JSON_DEPTH: usize = 16;
+
+/// Every replica, trial copy and peer counts text in UTF-16 units, like Yjs and every JS client (the yrs default counts
+/// UTF-8 bytes, and `read` compares a text's length with its strings).
+pub(crate) fn new_ydoc() -> YDoc {
+    YDoc::with_options(yrs::Options {
+        offset_kind: yrs::OffsetKind::Utf16,
+        ..yrs::Options::default()
+    })
+}
 
 const LOCAL: &str = "local";
 const REMOTE: &str = "remote";
@@ -80,12 +100,8 @@ pub struct Live {
     tokens: MapRef,
     undo: UndoManager<()>,
     outbox: Arc<Mutex<Vec<Vec<u8>>>>,
-    /// What the replica holds, placed in the T1 layout (fed by every committed update; gates remote ones).
-    shadow: Arc<Mutex<layout::Shadow>>,
-    /// Committed updates the shadow could not place (should stay 0; each one is logged).
-    shadow_misses: Arc<std::sync::atomic::AtomicU64>,
-    /// The trial copy remote updates are tried on first (`trial`).
-    trial: Option<trial::Trial>,
+    /// Every remote update passes it (`gate`); it sees every committed one.
+    gate: gate::Gate,
     /// When the last resets happened (ms, the presence clock), for the breaker.
     resets: Vec<u64>,
     halted: bool,
@@ -108,35 +124,21 @@ impl Live {
     }
 
     fn build(clock: presence::ClockFn, outbox: Arc<Mutex<Vec<Vec<u8>>>>) -> Live {
-        let doc = YDoc::new();
+        let doc = new_ydoc();
         let nodes = doc.get_or_insert_map("nodes");
         let meta = doc.get_or_insert_map("meta");
         let tokens = doc.get_or_insert_map("tokens");
         let ob = outbox.clone();
-        let shadow: Arc<Mutex<layout::Shadow>> = Arc::default();
-        let sh = shadow.clone();
-        let shadow_misses: Arc<std::sync::atomic::AtomicU64> = Arc::default();
-        let misses = shadow_misses.clone();
         let remote = Origin::from(REMOTE);
         // Everything this replica did (edits, undo, redo) goes out; what came in does not echo back. Everything
-        // committed, either way, is placed in the shadow layout.
-        doc.observe_update_v1("outbox", move |txn, e| {
-            if let Ok(mut sh) = sh.lock() {
-                match sh.check(&e.update, txn.before_state()) {
-                    Ok(l) => sh.learn(l),
-                    Err(err) => {
-                        misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        eprintln!("design-doc: the layout shadow could not place a committed update: {err}");
-                    }
-                }
-            }
+        // committed, either way, is placed in the gate's shadow layout.
+        let gate = gate::Gate::watch(&doc, move |txn, update| {
             if txn.origin() != Some(&remote)
                 && let Ok(mut o) = ob.lock()
             {
-                o.push(e.update.clone());
+                o.push(update.to_vec());
             }
-        })
-        .expect("a fresh doc has no transaction open");
+        });
         let mut undo = UndoManager::with_options(UndoOptions::default());
         undo.expand_scope(&doc, &nodes);
         undo.expand_scope(&doc, &meta);
@@ -148,9 +150,7 @@ impl Live {
             tokens,
             undo,
             outbox,
-            shadow,
-            shadow_misses,
-            trial: None,
+            gate,
             resets: vec![],
             halted: false,
         }
@@ -160,7 +160,9 @@ impl Live {
         self.presence.doc()
     }
 
-    /// A remote update (v1) from the Core relay. Not undoable here, never echoed to the outbox.
+    /// A remote update (v1) from the Core relay, through every layer of `gate`. Not undoable here, never echoed to
+    /// the outbox. A refusal leaves the replica as it was (`Malformed`; the text says "resync" when the update only
+    /// builds on state this replica lacks), except `Reset`.
     pub fn apply_remote(&mut self, update: &[u8]) -> Result<(), Error> {
         if update.len() > MAX_UPDATE_BYTES {
             return Err(Error::TooLarge);
@@ -168,102 +170,26 @@ impl Live {
         if self.halted {
             return Err(Error::Halted);
         }
-        let (u, refs) = decode::update(update)?;
-        self.no_gap(&u, &refs)?;
-        let have = self.doc().transact().state_vector();
-        self.shadow
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .check(update, &have)
-            .map_err(Error::Malformed)?;
-        // second, independent layer: the update on a trial copy, on a big stack, then a walk of what yrs built
-        let since = self
-            .trial
-            .as_ref()
-            .map_or_else(StateVector::default, |t| t.sv.clone());
-        let base = self.doc().transact().encode_state_as_update_v1(&since);
-        self.trial = trial::run(self.trial.take(), base, update);
-        if self.trial.is_none() {
-            return Err(Error::Malformed(
-                "the update fails the layout on a trial copy".into(),
-            ));
-        }
-        // and the real apply on a big stack too, so nothing yrs does with remote content recurses on ours
-        let r = trial::big_stack(|| self.integrate(u)).unwrap_or(Err(Error::Reset));
+        let doc = self.doc().clone();
+        let u = self.gate.admit(&doc, update).map_err(|r| match r {
+            Refused::TooLarge => Error::TooLarge,
+            r => Error::Malformed(r.to_string()),
+        })?;
+        // the real apply on a big stack too, so nothing yrs does with remote content recurses on ours. Pending is
+        // tolerated here: `no_gap` keeps remote bytes out of it, and after a reset the engine's own unsent edits sit
+        // pending until the resync (`reset`).
+        let r = match trial::big_stack(|| gate::integrate(&doc, u, REMOTE)) {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(gate::Failed::Refused(m))) => Err(Error::Malformed(m)),
+            Ok(Err(gate::Failed::Panicked)) | Err(_) => Err(Error::Reset),
+        };
         if r.is_err() {
-            self.trial = None; // it holds the update; rebuild from the replica next time
+            self.gate.drop_trial(); // it holds the update; rebuild from the replica next time
         }
         if r == Err(Error::Reset) {
             self.reset();
         }
         r
-    }
-
-    /// Refuse a remote update that yrs would have to keep as "pending": one whose blocks for some client start past
-    /// what this replica has, that refers to a block (origin, parent) neither this replica nor the update holds, or
-    /// that deletes beyond both. The Core relays updates in order and a diff starts at our state vector, so an honest
-    /// update never needs pending; the host answers this error with a resync. yrs's pending path is where the
-    /// use-after-free and the re-encode panics live (fuzz target `apply`, `fuzz/regressions/*`), so remote bytes never
-    /// reach it.
-    fn no_gap(&self, u: &Update, refs: &[yrs::ID]) -> Result<(), Error> {
-        let have = self.doc().transact().state_vector();
-        // what the update itself inserts (one contiguous run per client: a client listed twice is refused at decode)
-        let ins = u.insertions(true);
-        let held = |id: &yrs::ID| id.clock < have.get(&id.client) || ins.contains(id);
-        let deletable = |c: &yrs::ClientID, r: &std::ops::Range<u32>| {
-            let from = r.start.max(have.get(c));
-            from >= r.end
-                || (ins.contains(&yrs::ID::new(*c, from))
-                    && ins.contains(&yrs::ID::new(*c, r.end - 1)))
-        };
-        if u.state_vector_lower()
-            .iter()
-            .any(|(c, lower)| *lower > have.get(c))
-            || !refs.iter().all(held)
-            || u.delete_set()
-                .iter()
-                .any(|(c, rs)| rs.iter().any(|r| !deletable(c, r)))
-        {
-            return Err(Error::Malformed(
-                "update does not follow this replica's state; resync".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Apply `u` (remote origin). A panic inside yrs is reported as `Error::Reset`; the caller resets.
-    fn integrate(&mut self, u: Update) -> Result<(), Error> {
-        // A panic while integrating must not unwind through the open transaction: its drop commits, and a second
-        // panic there would abort. The inner catch ends the first panic before the transaction drops; the outer one
-        // catches a panic in that commit or in the probe.
-        let mut panicked = false;
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut txn = self.doc().transact_mut_with(REMOTE);
-            let r = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                txn.apply_update(u)
-            })) {
-                Ok(r) => r.map_err(|e| Error::Malformed(e.to_string())),
-                Err(_) => {
-                    panicked = true;
-                    Err(Error::Reset)
-                }
-            };
-            drop(txn);
-            // Probe: yrs keeps updates it cannot integrate yet as "pending" and re-encodes them later, which panics
-            // for some it accepted. Do that now, so a bad pending update resets here, attributed to the remote
-            // update, and not on the user's next edit or sync. Cheap: only the pending part is encoded.
-            if !panicked {
-                let t = self.doc().transact();
-                if t.has_missing_updates() {
-                    let _ = t.encode_state_as_update_v1(&t.state_vector());
-                }
-            }
-            r
-        }));
-        match r {
-            Ok(r) if !panicked => r,
-            _ => Err(Error::Reset),
-        }
     }
 
     pub fn state_vector(&self) -> Vec<u8> {
@@ -300,7 +226,7 @@ impl Live {
         let mut fresh = Live::build(clock, self.outbox.clone());
         for q in &queued {
             if let Ok((u, _)) = decode::update(q) {
-                let _ = fresh.integrate(u);
+                let _ = gate::integrate(fresh.doc(), u, REMOTE);
             }
         }
         fresh.halted = self.halted || resets.len() >= MAX_RESETS;
@@ -322,10 +248,11 @@ impl Live {
         }
     }
 
-    /// Local updates not yet sent, merged into one update of at most `MAX_UPDATE_BYTES` (empty when there are none).
-    /// More pending than that: the oldest that fit, the rest wait for the next call. `take` = drain what is returned.
+    /// Local updates not yet sent, merged into one update of at most `MAX_PEER_UPDATE_BYTES` (what the Core takes;
+    /// empty when there are none). More pending than that: the oldest that fit, the rest wait for the next call.
+    /// `take` = drain what is returned.
     pub fn outbox(&self, take: bool) -> Vec<u8> {
-        self.outbox_under(take, MAX_UPDATE_BYTES)
+        self.outbox_under(take, MAX_PEER_UPDATE_BYTES)
     }
 
     pub(crate) fn outbox_under(&self, take: bool, cap: usize) -> Vec<u8> {
@@ -370,20 +297,23 @@ impl Live {
 
     /// Committed updates the layout shadow could not place since this replica was made (0 in a healthy replica).
     pub fn shadow_misses(&self) -> u64 {
-        self.shadow_misses
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.gate.misses()
     }
 
     pub fn presence(&mut self) -> &mut Presence {
         &mut self.presence
     }
 
-    /// The document as the model reads it. Malformed nodes and tokens are left out.
+    /// The document as the model reads it. A node that does not read strictly (`read::node_out`), a malformed token
+    /// and malformed meta fields are left out.
     pub fn read(&self) -> Doc {
         let txn = self.doc().transact();
         let mut doc = Doc::default();
         for (id, v) in self.nodes.iter(&txn).take(MAX_NODES) {
-            if let Some(n) = read_node(&txn, v) {
+            if !design_model::ids::is_node_id(id) {
+                continue;
+            }
+            if let Ok(n) = read::node_out(&txn, v) {
                 doc.nodes.insert(id.to_string(), n);
             }
         }
@@ -393,99 +323,24 @@ impl Live {
                 _ => None,
             },
             version: match self.meta.get(&txn, "version") {
-                Some(Out::Any(a)) => int(&a).and_then(|v| u32::try_from(v).ok()).unwrap_or(0),
+                Some(Out::Any(a)) => read::clock(&a)
+                    .ok()
+                    .and_then(|v| u32::try_from(v).ok())
+                    .unwrap_or(0),
                 _ => 0,
             },
         };
         for (name, v) in self.tokens.iter(&txn).take(MAX_TOKENS) {
             let Out::Any(a) = v else { continue };
-            if let Some(t) = any_json(&a, 0).and_then(|j| serde_json::from_value::<Token>(j).ok()) {
+            if let Some(t) = read::json(&a, 0)
+                .ok()
+                .and_then(|j| serde_json::from_value::<Token>(j).ok())
+            {
                 doc.tokens.insert(name.to_string(), t);
             }
         }
         doc
     }
-}
-
-fn read_node<T: ReadTxn>(txn: &T, v: Out) -> Option<Node> {
-    let Out::YMap(m) = v else { return None };
-    let s = |k: &str| match m.get(txn, k) {
-        Some(Out::Any(Any::String(s))) => Some(s.to_string()),
-        _ => None,
-    };
-    let ty: NodeType = serde_json::from_value(Value::String(s("type")?)).ok()?;
-    let parent = match m.get(txn, "parent") {
-        Some(Out::Any(Any::String(p))) => Some(p.to_string()),
-        Some(Out::Any(Any::Null)) | None => None,
-        _ => return None,
-    };
-    let clock = match m.get(txn, "clock") {
-        Some(Out::Any(a)) => u64::try_from(int(&a)?).ok()?,
-        _ => 0,
-    };
-    // Props hold plain values only. A nested yrs map, array or text here (which no op writes) would be read by yrs's
-    // recursive `to_json`, and a chain of them, built one small update per level, would exhaust the stack: refuse it.
-    let props = match m.get(txn, "props") {
-        Some(Out::YMap(p)) => {
-            let mut o = JMap::new();
-            for (k, v) in p.iter(txn) {
-                let Out::Any(a) = v else { return None };
-                o.insert(k.to_string(), any_json(&a, 0)?);
-            }
-            o
-        }
-        None => JMap::new(),
-        _ => return None,
-    };
-    let text = match m.get(txn, "text") {
-        Some(Out::YText(t)) => Some(t.get_string(txn)),
-        _ => None,
-    };
-    Some(Node {
-        ty,
-        parent,
-        order: s("order")?,
-        clock,
-        name: s("name").unwrap_or_default(),
-        props,
-        text,
-    })
-}
-
-/// An integral number (yrs keeps JSON integers that went through a float as floats).
-fn int(a: &Any) -> Option<i64> {
-    match a {
-        Any::Number(yrs::Number::Int(i)) => Some(*i),
-        Any::Number(yrs::Number::Float(f)) if f.fract() == 0.0 && f.abs() < 9.0e15 => {
-            Some(*f as i64)
-        }
-        _ => None,
-    }
-}
-
-/// `Any` -> JSON, refusing nesting deeper than `MAX_JSON_DEPTH` and non-finite numbers.
-fn any_json(a: &Any, depth: usize) -> Option<Value> {
-    if depth > MAX_JSON_DEPTH {
-        return None;
-    }
-    Some(match a {
-        Any::Null | Any::Undefined => Value::Null,
-        Any::Bool(b) => Value::Bool(*b),
-        Any::Number(yrs::Number::Int(i)) => Value::Number((*i).into()),
-        Any::Number(yrs::Number::Float(f)) => Value::Number(Number::from_f64(*f)?),
-        Any::String(s) => Value::String(s.to_string()),
-        Any::Buffer(_) => return None,
-        Any::Array(xs) => Value::Array(
-            xs.iter()
-                .map(|x| any_json(x, depth + 1))
-                .collect::<Option<_>>()?,
-        ),
-        Any::Map(m) => Value::Object(
-            m.iter()
-                .map(|(k, v)| Some((k.clone(), any_json(v, depth + 1)?)))
-                .collect::<Option<_>>()?,
-        ),
-    })
 }
 
 /// JSON -> `Any` (the value already passed the validators, so its depth is small).

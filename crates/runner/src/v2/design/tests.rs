@@ -107,7 +107,11 @@ async fn a_hanging_helper_is_stopped_at_its_time_limit() {
     let mut c = DesignConfig::new(p, None);
     c.timeout = Duration::from_secs(1);
     let e = run(&DesignDriver::new(c), &check(b"x")).await.unwrap_err();
-    assert_eq!(e.code, ErrorCode::DesignFailed);
+    // The wall clock (`design_limit`) or the 1 s CPU cap (SIGXCPU, `design_failed`), whichever is first.
+    assert!(
+        matches!(e.code, ErrorCode::DesignLimit | ErrorCode::DesignFailed),
+        "{e:?}"
+    );
     assert!(
         e.message.contains("time") || e.message.contains("signal"),
         "{e:?}"
@@ -275,30 +279,7 @@ print(json.dumps({{"ok":r==-1 and e==1,"reason":"keyctl gave %d errno %d"%(r,e)}
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// Review M3: a job in a systemd user scope (`MemoryMax`, `TasksMax`) runs and still ends on its
-/// memory cap. Skipped where the runner's user has no systemd manager.
-#[tokio::test]
-async fn the_scope_caps_memory_in_the_kernel() {
-    let mut probe = DesignConfig::new(PathBuf::from("/usr/bin/true"), None);
-    probe.scope = true;
-    if !sandbox::probe(&probe) {
-        eprintln!("SKIPPED: no systemd user scope for this user");
-        return;
-    }
-    let (dir, p) = helper(
-        "scope",
-        r#"m=$(head -c 1048576 /dev/zero | tr '\0' a); x=""; while true; do x="$x$m"; done"#,
-    );
-    let mut c = DesignConfig::new(p, None);
-    c.scope = true;
-    c.timeout = Duration::from_secs(60);
-    c.max_rss = 64 << 20;
-    c.max_vm = 4 << 30;
-    let e = run(&DesignDriver::new(c), &check(b"x")).await.unwrap_err();
-    assert_eq!(e.code, ErrorCode::DesignFailed, "{e:?}");
-    assert!(!e.message.contains("time limit"), "{e:?}");
-    std::fs::remove_dir_all(dir).unwrap();
-}
+// Review M3 (the kernel memory cap) moved to `tests_review2.rs`: job cgroups replaced the scope.
 
 /// Review L5: job directories a crashed runner left behind are removed at start; fresh ones stay.
 #[test]

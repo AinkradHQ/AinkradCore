@@ -282,3 +282,23 @@ fn search_ranks_by_words_and_hides_ops_outside_the_scopes() {
     );
     assert!(search(&c, &both, "thing", None).to_string().len() < 8 * 1024);
 }
+
+#[test]
+fn design_take_over_and_resume_never_reach_a_session() {
+    let on_disk = allow_list().unwrap();
+    for op in NOT_EXPOSED_OPS {
+        assert!(
+            on_disk.iter().all(|a| a.op != *op),
+            "{op} is in ai-ops.allow.json"
+        );
+    }
+    let spec = json!({"paths": {"/modules/design/v1/docs/{doc}/take-over": {
+        "post": {"operationId": "designTakeOver", "responses": {"204": {}}}}}});
+    let every = allow(&[("designTakeOver", Some(Risk::Risky))]);
+    assert!(
+        check(&spec, &every)
+            .iter()
+            .any(|b| b.contains("not exposed"))
+    );
+    assert!(build(&spec, &every).ops.is_empty());
+}

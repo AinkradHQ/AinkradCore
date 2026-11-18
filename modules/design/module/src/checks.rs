@@ -1,8 +1,9 @@
 //! Font and Icon Composer checks (V6-01, T8): an upload of either is stored `pending` and inert. The
 //! Core never parses it; this job sends it to a runner's sandboxed `ainkrad-design` helper
 //! (`design.check`) and records the verdict: `ok` (served from then on) or `refused`. A helper that
-//! crashes or hits a limit on the file is a refusal too. No capable runner, a busy one, a sandbox
-//! that did not start (`spawn_failed`) or a lost answer leaves the asset `pending` for the next run.
+//! crashes or hits a memory, CPU or process limit on the file is a refusal too. Running out of wall
+//! clock (`design_limit`: load can cause it), no capable runner, a busy one, a sandbox that did not
+//! start (`spawn_failed`) or a lost answer leaves the asset `pending` for the next run.
 //! Audit and events carry the sha256 only. The runner is the trust root for the verdict: every runner
 //! is paired by the Core's one owner (a hostile runner's "ok" still only reaches sandboxed helpers).
 
@@ -21,6 +22,8 @@ use base64::engine::general_purpose::STANDARD;
 const EVERY_SECS: u64 = 30;
 /// Assets checked per run; the next run takes the rest.
 const PER_RUN: i64 = 4;
+/// Wall-clock stops (`design_limit`) on one asset before it is refused: a file that never finishes.
+pub(crate) const MAX_LIMITS: i64 = 3;
 const WAIT: Duration = Duration::from_secs(120);
 
 /// The app the job runs on (a job handler is given none); set by `Module::attach`.
@@ -51,6 +54,8 @@ pub(crate) fn verdict(o: &Result<Body, StreamError>) -> Option<bool> {
     match o {
         Ok(Body::Result(Reply::DesignCheck(c))) => Some(c.ok),
         // The file crashed the helper, ran it out of a limit, or is too big to send: refused.
+        // A wall-clock stop (`DesignLimit`) is not among them: it stays pending.
+        // Three of them on one asset refuse it (`tried`).
         Err(e) if matches!(e.code, ErrorCode::DesignFailed | ErrorCode::TooLarge) => Some(false),
         _ => None,
     }
@@ -72,13 +77,36 @@ async fn decide(app: &App, sha: &str, ok: bool) -> Result<(), sqlx::Error> {
     tx.commit().await
 }
 
+/// Whether a dispatch's outcome is a wall-clock stop, which counts against the asset.
+pub(crate) fn timed_out(o: &Result<Body, StreamError>) -> bool {
+    matches!(o, Err(e) if e.code == ErrorCode::DesignLimit)
+}
+
+/// Records an attempt that decided nothing: the time, and a wall-clock stop counted. The third
+/// wall-clock stop refuses the asset; whether it did.
+async fn tried(app: &App, sha: &str, limited: bool) -> Result<bool, sqlx::Error> {
+    let attempts: i64 = sqlx::query_scalar(
+        "UPDATE design_assets SET check_tried_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), \
+         check_attempts = check_attempts + ? WHERE sha256 = ? RETURNING check_attempts",
+    )
+    .bind(i64::from(limited))
+    .bind(sha)
+    .fetch_one(&app.pool)
+    .await?;
+    if limited && attempts >= MAX_LIMITS {
+        decide(app, sha, false).await?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// Checks up to `PER_RUN` pending assets; how many were decided.
 pub async fn check_pending(app: &App) -> Result<usize, String> {
     let db = |e: sqlx::Error| e.to_string();
     let rows: Vec<(String, String, i64)> = sqlx::query_as(
         "SELECT sha256, kind, size FROM design_assets \
          WHERE check_state = 'pending' AND kind IN ('font', 'icon_composer') \
-         ORDER BY created_at, sha256 LIMIT ?",
+         ORDER BY COALESCE(check_tried_at, ''), created_at, sha256 LIMIT ?",
     )
     .bind(PER_RUN)
     .fetch_all(&app.pool)
@@ -113,10 +141,16 @@ pub async fn check_pending(app: &App) -> Result<usize, String> {
                 decide(app, &sha, ok).await.map_err(db)?;
                 decided += 1;
             }
-            None => tracing::info!(
-                code = ?outcome.as_ref().err().map(|e| e.code),
-                "a design asset check did not finish; it stays pending"
-            ),
+            None => {
+                if tried(app, &sha, timed_out(&outcome)).await.map_err(db)? {
+                    decided += 1;
+                } else {
+                    tracing::info!(
+                        code = ?outcome.as_ref().err().map(|e| e.code),
+                        "a design asset check did not finish; it stays pending"
+                    );
+                }
+            }
         }
     }
     Ok(decided)
@@ -143,3 +177,6 @@ pub(crate) fn job() -> Job {
         Arc::new(CheckJob),
     )
 }
+
+#[cfg(test)]
+mod tests_review2;

@@ -108,10 +108,8 @@ fn icon_zips_pass_only_when_whole_and_plain() {
     );
     assert_eq!(icon::check(&good), Ok(()));
     let svg = b"<svg xmlns='http://www.w3.org/2000/svg'><use href='#a'/></svg>";
-    assert_eq!(
-        icon::check(&zip(&[("icon.json", j, false), ("a.svg", svg, true)], 0)),
-        Ok(())
-    );
+    // Round 2: SVG layers are refused outright, even a plain one (`tests/svg_layers.rs`).
+    assert!(icon::check(&zip(&[("icon.json", j, false), ("a.svg", svg, true)], 0)).is_err());
     let bomb = vec![0u8; 80 << 20];
     let cases: Vec<(&str, Vec<u8>)> = vec![
         ("traversal", zip(&[("../icon.json", j, false)], 0)),

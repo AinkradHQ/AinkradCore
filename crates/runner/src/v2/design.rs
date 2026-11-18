@@ -12,15 +12,17 @@
 //!   files) is ever opened by the runner. Chromium's screenshot comes back on stdout, read by
 //!   `head -c` inside the sandbox and capped again outside. The runner's state, keys and HOME are
 //!   not there.
-//! - Limits: 60 s of wall clock and of CPU, 2 GiB of address space for the helper, 64 MiB per
-//!   written file, at most 2 jobs at once (`busy` past that). Where the runner's user has a systemd
-//!   manager, each job runs in its own transient scope with `MemoryMax` 1 GiB and `TasksMax` 256 (a
-//!   kernel limit); everywhere, the runner also polls the whole process tree's resident memory from
-//!   outside and kills it over 1 GiB. A sandbox dies with the runner (`PR_SET_PDEATHSIG`), and job
+//! - Limits: 60 s of wall clock and 30 s of CPU (so a spinning file is `design_failed` and only load is `design_limit`), 2 GiB of address space for the helper, 64 MiB per
+//!   written file, 256 processes (`ulimit -u`), at most 2 jobs at once (`busy` past that). In the
+//!   runner unit (`Delegate=yes`), each job runs in its own child cgroup of the unit's subtree with
+//!   `memory.max` 1 GiB and `pids.max` 256 (kernel limits, `cgroup.rs`); everywhere, the runner also
+//!   polls the whole process tree's resident memory from outside and kills it over 1 GiB. The
+//!   cgroup tests mean something only when run inside that real unit. A sandbox dies with the runner (`PR_SET_PDEATHSIG`), and job
 //!   directories a crash left behind are removed at start.
 //! - Whatever it prints is data: parsed into the one reply type the op allows, size-capped. A
-//!   failure, crash or limit of the helper is `design_failed`; a sandbox that did not start (before
-//!   the helper ran) is `spawn_failed`, so the Core does not take it as a verdict on the file.
+//!   failure, crash or limit of the helper is `design_failed`; running out of wall clock is
+//!   `design_limit` (load can cause it, so the Core keeps the asset pending); a sandbox that did not
+//!   start (before the helper ran) is `spawn_failed`, so the Core does not take either as a verdict.
 //! - Trust: a `design.check` verdict is the runner's word, and the Core records it as such. Every
 //!   runner is paired by the one owner of the Core, so a runner is the trust root for checks; a
 //!   compromised runner could pass a hostile font, which then still only ever reaches other sandboxed
@@ -44,14 +46,19 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 pub const DRIVER: &str = "design";
 /// Where an installed runner finds them (`deploy/install-linux.sh`).
 const HELPER: &str = "/usr/local/bin/ainkrad-design";
+const CHROMIUM_DIR: &str = "/usr/local/lib/ainkrad-chromium";
 const CHROMIUM: &str = "/usr/local/lib/ainkrad-chromium/chrome-headless-shell";
+/// Why a job that ran out of wall clock stopped (answered `design_limit`, not `design_failed`).
+const TIME_LIMIT: &str = "it ran past its time limit";
 /// What the helper may print: a PNG in base64 plus its JSON.
 const MAX_STDOUT: usize = DESIGN_MAX_PNG / 3 * 4 + (1 << 20);
 
+mod cgroup;
 mod sandbox;
 mod seccomp;
 mod shot;
 
+pub use cgroup::Cgroups;
 use sandbox::{Job, command, outcome, probe, read_capped, sweep, tree_rss};
 use shot::{png_size, shot_args};
 
@@ -65,8 +72,9 @@ pub struct DesignConfig {
     pub max_rss: u64,
     /// The helper's address space (Chromium reserves terabytes of it, so it gets only `max_rss`).
     pub max_vm: u64,
-    /// Run each job in a transient systemd user scope with `MemoryMax`/`TasksMax`.
-    pub scope: bool,
+    /// The runner unit's delegated cgroup: each job gets a child with `memory.max` = `max_rss`
+    /// and `pids.max` 256. `None` outside that unit.
+    pub cgroups: Option<Arc<Cgroups>>,
 }
 
 impl DesignConfig {
@@ -78,7 +86,7 @@ impl DesignConfig {
             timeout: Duration::from_secs(60),
             max_rss: 1 << 30,
             max_vm: 2 << 30,
-            scope: false,
+            cgroups: None,
         }
     }
 }
@@ -102,6 +110,26 @@ fn find(env: &str, beside: &str, installed: &str) -> Option<PathBuf> {
         .find(|p| p.is_absolute() && p.is_file())
 }
 
+/// Whether Chromium at `p` may be bound read-only into the sandbox with its whole folder: the
+/// installed folder, or one holding nothing but Chromium. Never the runner's own folder, nor one
+/// that holds an `ainkrad-*` file (the runner, the helper, a key).
+fn chromium_ok(p: &Path) -> bool {
+    let Some(dir) = p.parent() else { return false };
+    if dir == Path::new(CHROMIUM_DIR) {
+        return true;
+    }
+    let ours = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.canonicalize().ok()?.parent().map(Path::to_path_buf));
+    if ours.as_deref() == Some(dir) {
+        return false;
+    }
+    std::fs::read_dir(dir).is_ok_and(|d| {
+        d.flatten()
+            .all(|e| !e.file_name().to_string_lossy().starts_with("ainkrad-"))
+    })
+}
+
 impl DesignDriver {
     pub fn new(config: DesignConfig) -> Self {
         let slots = Arc::new(Semaphore::new(config.capacity as usize));
@@ -109,18 +137,20 @@ impl DesignDriver {
     }
 
     /// The driver when this host has the helper and this exact sandbox starts (`probe`); `None`
-    /// otherwise. A systemd user scope is used when one can be made.
+    /// otherwise. Job cgroups are used when the runner unit's subtree is delegated.
     pub fn discover() -> Option<Self> {
         if !cfg!(target_os = "linux") {
             return None;
         }
         sweep(&std::env::temp_dir(), Duration::from_secs(600));
         let helper = find("AINKRAD_DESIGN_HELPER", "ainkrad-design", HELPER)?;
-        let chromium = find("AINKRAD_CHROMIUM", "chrome-headless-shell", CHROMIUM);
+        let chromium = find("AINKRAD_CHROMIUM", "chrome-headless-shell", CHROMIUM)
+            .and_then(|p| p.canonicalize().ok())
+            .filter(|p| chromium_ok(p));
         let mut config = DesignConfig::new(helper, chromium);
-        config.scope = true;
+        config.cgroups = Cgroups::delegated().map(Arc::new);
         if !probe(&config) {
-            config.scope = false;
+            config.cgroups = None;
             if !probe(&config) {
                 tracing::warn!(
                     "design helper found, but its sandbox does not start: design ops are off"
@@ -128,7 +158,7 @@ impl DesignDriver {
                 return None;
             }
             tracing::info!(
-                "design jobs run without a systemd scope: the memory limit is the runner's own watch"
+                "design jobs run without a job cgroup: the memory limit is the runner's own watch"
             );
         }
         Some(Self::new(config))
@@ -227,8 +257,14 @@ impl DesignDriver {
                 ));
             }
         };
+        // The helper alone; Chromium with the files beside it.
         let bind = match command {
-            Command::DesignShot(_) => self.config.chromium.clone(),
+            Command::DesignShot(_) => self
+                .config
+                .chromium
+                .as_ref()
+                .and_then(|c| c.parent())
+                .map(Path::to_path_buf),
             _ => Some(self.config.helper.clone()),
         };
         let out = self
@@ -247,7 +283,7 @@ impl DesignDriver {
         vm: Option<u64>,
         cancel: oneshot::Receiver<()>,
     ) -> Result<Vec<u8>, StreamError> {
-        let (c, _filter) =
+        let (c, keep) =
             command(&self.config, job, program, args, bind, vm).map_err(|e| internal(&e))?;
         let mut c = tokio::process::Command::from(c);
         c.stdin(Stdio::null())
@@ -269,10 +305,11 @@ impl DesignDriver {
         let stopped = loop {
             tokio::select! {
                 s = child.wait() => break s.map_err(|e| internal(&e))?.code().ok_or("it was killed by a signal (a crash)"),
-                () = &mut deadline => break Err("it ran past its time limit"),
+                () = &mut deadline => break Err(TIME_LIMIT),
                 _ = &mut cancel => {
                     let _ = child.start_kill();
                     let _ = child.wait().await;
+                    keep.release().await;
                     return Err(StreamError::new(ErrorCode::Cancelled, "cancelled"));
                 }
                 _ = tick.tick() => {
@@ -287,6 +324,8 @@ impl DesignDriver {
             let _ = child.start_kill();
             let _ = child.wait().await;
         }
+        // Whatever of the tree outlived bubblewrap dies with the job cgroup.
+        keep.release().await;
         let out = stdout.await.unwrap_or_default();
         let err = stderr.await.unwrap_or_default();
         outcome(stopped, out, &err)
@@ -346,3 +385,7 @@ fn internal(e: &dyn std::fmt::Display) -> StreamError {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
+#[cfg(all(test, target_os = "linux"))]
+mod tests_review2;
+#[cfg(all(test, target_os = "linux"))]
+mod tests_review3;
