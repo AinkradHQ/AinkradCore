@@ -20,6 +20,7 @@
 //! The Core additionally validates every node an update touched with the model crate, caps move clocks and the node
 //! and token budgets (`Replica::verify`); clients apply what the Core accepted, in the Core's order.
 
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use design_model::limits::{MAX_DOC_BYTES, MAX_NODES, MAX_TOKENS};
@@ -34,6 +35,8 @@ mod decode;
 mod edit;
 mod gate;
 pub mod guard;
+#[cfg(test)]
+mod followup_tests;
 #[cfg(test)]
 mod layered_tests;
 mod layout;
@@ -87,6 +90,8 @@ pub enum Error {
     /// `MAX_RESETS` resets within `RESET_WINDOW_MS`: remote updates are no longer applied (no resync loop). Local
     /// edits still work and still go out; close the design and open it again.
     Halted,
+    /// No thread could be started for the update: nothing changed, retry later (not a reset).
+    Busy,
 }
 
 /// The reset breaker: this many resets within the window halts remote updates.
@@ -105,6 +110,8 @@ pub struct Live {
     /// When the last resets happened (ms, the presence clock), for the breaker.
     resets: Vec<u64>,
     halted: bool,
+    /// The oldest unsent update is over the cap, so nothing behind it can go out (`outbox_stuck`).
+    stuck: std::sync::atomic::AtomicBool,
 }
 
 impl Default for Live {
@@ -153,6 +160,7 @@ impl Live {
             gate,
             resets: vec![],
             halted: false,
+            stuck: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -173,6 +181,7 @@ impl Live {
         let doc = self.doc().clone();
         let u = self.gate.admit(&doc, update).map_err(|r| match r {
             Refused::TooLarge => Error::TooLarge,
+            Refused::Busy => Error::Busy,
             r => Error::Malformed(r.to_string()),
         })?;
         // the real apply on a big stack too, so nothing yrs does with remote content recurses on ours. Pending is
@@ -181,6 +190,7 @@ impl Live {
         let r = match trial::big_stack(|| gate::integrate(&doc, u, REMOTE)) {
             Ok(Ok(_)) => Ok(()),
             Ok(Err(gate::Failed::Refused(m))) => Err(Error::Malformed(m)),
+            Err(Refused::Busy) => Err(Error::Busy), // the thread never started: nothing was integrated
             Ok(Err(gate::Failed::Panicked)) | Err(_) => Err(Error::Reset),
         };
         if r.is_err() {
@@ -255,16 +265,29 @@ impl Live {
         self.outbox_under(take, MAX_PEER_UPDATE_BYTES)
     }
 
+    /// `true` while the oldest unsent update is over `MAX_PEER_UPDATE_BYTES`: `outbox` returns nothing and will not
+    /// until the document is re-opened. The host reports it as an error instead of an idle queue.
+    pub fn outbox_stuck(&self) -> bool {
+        self.stuck.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn outbox_under(&self, take: bool, cap: usize) -> Vec<u8> {
         let mut o = self.outbox.lock().unwrap_or_else(|e| e.into_inner());
         if o.is_empty() {
+            self.stuck.store(false, Ordering::Relaxed);
             return vec![];
         }
-        // the oldest updates whose sizes add up to `cap` (always one: local batches are refused over the cap)
+        // the oldest updates whose sizes add up to `cap`. One over the cap on its own never goes out (the relay
+        // refuses it): it stays queued, with an error, instead of being retried forever by the caller.
         let (mut n, mut sum) = (0, 0);
-        while n < o.len() && (n == 0 || sum + o[n].len() <= cap) {
+        while n < o.len() && sum + o[n].len() <= cap {
             sum += o[n].len();
             n += 1;
+        }
+        self.stuck.store(n == 0, Ordering::Relaxed);
+        if n == 0 {
+            eprintln!("design-doc: the oldest unsent update is over {cap} bytes and is not sent");
+            return vec![];
         }
         match yrs::merge_updates_v1(o[..n].iter().map(Vec::as_slice)) {
             Ok(merged) if n == 1 || merged.len() <= cap => {
@@ -281,13 +304,57 @@ impl Live {
 
     /// `false` also when yrs failed and the replica was reset (the next sync call reports it).
     pub fn undo(&mut self) -> bool {
-        self.recover(|l| Ok(l.undo.undo_blocking()))
-            .unwrap_or(false)
+        self.undo_checked().unwrap_or(false)
     }
 
     pub fn redo(&mut self) -> bool {
-        self.recover(|l| Ok(l.undo.redo_blocking()))
-            .unwrap_or(false)
+        self.redo_checked().unwrap_or(false)
+    }
+
+    /// Like `undo`, but says why nothing happened: `TooLarge` when the undo would make an update over
+    /// `MAX_PEER_UPDATE_BYTES` (it is reverted, the document is as it was).
+    pub fn undo_checked(&mut self) -> Result<bool, Error> {
+        self.step(false, MAX_PEER_UPDATE_BYTES)
+    }
+
+    pub fn redo_checked(&mut self) -> Result<bool, Error> {
+        self.step(true, MAX_PEER_UPDATE_BYTES)
+    }
+
+    /// One undo or redo, held to the same size budget as an edit (`commit`): what it wrote must fit `cap`, else the
+    /// opposite step puts the content back and `TooLarge` is returned. Both steps went out as local updates (the
+    /// peers' clocks must stay gapless), so the outbox tail is replaced by one small diff from the state before.
+    pub(crate) fn step(&mut self, redo: bool, cap: usize) -> Result<bool, Error> {
+        self.recover(|l| {
+            let sv = l.doc().transact().state_vector();
+            let queued = |l: &Live| l.outbox.lock().unwrap_or_else(|e| e.into_inner()).len();
+            let before = queued(l);
+            let did = if redo {
+                l.undo.redo_blocking()
+            } else {
+                l.undo.undo_blocking()
+            };
+            let big = l.outbox.lock().unwrap_or_else(|e| e.into_inner())[before..]
+                .iter()
+                .any(|u| u.len() > cap);
+            if !did || !big {
+                return Ok(did);
+            }
+            if redo {
+                l.undo.undo_blocking();
+            } else {
+                l.undo.redo_blocking();
+            }
+            let net = l.doc().transact().encode_state_as_update_v1(&sv);
+            // the net diff replaces the tail only when it fits; else the tail stays as written (peers need every
+            // clock) and `outbox_stuck` reports that it cannot go out in one update
+            if net.len() <= cap {
+                let mut o = l.outbox.lock().unwrap_or_else(|e| e.into_inner());
+                o.truncate(before);
+                o.push(net);
+            }
+            Err(Error::TooLarge)
+        })
     }
 
     #[cfg(test)]

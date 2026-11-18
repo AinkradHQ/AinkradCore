@@ -20,6 +20,9 @@ use crate::gate::Refused;
 /// The stack for the trial and for applying remote updates to the replica.
 #[cfg(not(fuzzing))]
 pub(crate) const BIG_STACK: usize = 1 << 30;
+/// Tried when the 1 GiB reservation cannot be made (a tight address space or ulimit); still far above the default.
+#[cfg(not(fuzzing))]
+pub(crate) const FALLBACK_STACK: usize = 1 << 28;
 
 pub(crate) struct Trial {
     doc: Doc,
@@ -34,18 +37,37 @@ pub(crate) fn big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Result<T, Refu
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|_| Refused::Malformed)
 }
 
-/// Run `f` on a thread with `BIG_STACK` and wait for it: `Busy` when no thread could start (`f` did not run),
-/// `Malformed` when `f` panicked.
+/// Run `f` on a thread with `BIG_STACK` (`FALLBACK_STACK` when that cannot be reserved) and wait for it: `Busy` when
+/// no thread could start (`f` did not run), `Malformed` when `f` panicked.
 #[cfg(not(fuzzing))]
 pub(crate) fn big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Result<T, Refused> {
+    big_stack_of(&[BIG_STACK, FALLBACK_STACK], f)
+}
+
+/// `big_stack` with the stack sizes to try, in order (a failed spawn consumes `f`, so it waits in a slot).
+#[cfg(not(fuzzing))]
+pub(crate) fn big_stack_of<T: Send>(
+    sizes: &[usize],
+    f: impl FnOnce() -> T + Send,
+) -> Result<T, Refused> {
+    let slot = std::sync::Mutex::new(Some(f));
+    let run = || {
+        let f = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+        f.map(|f| f())
+    };
     std::thread::scope(|s| {
-        match std::thread::Builder::new()
-            .stack_size(BIG_STACK)
-            .spawn_scoped(s, f)
-        {
-            Ok(h) => h.join().map_err(|_| Refused::Malformed),
-            Err(_) => Err(Refused::Busy),
+        for &size in sizes {
+            if let Ok(h) = std::thread::Builder::new()
+                .stack_size(size)
+                .spawn_scoped(s, run)
+            {
+                return h
+                    .join()
+                    .map_err(|_| Refused::Malformed)?
+                    .ok_or(Refused::Busy);
+            }
         }
+        Err(Refused::Busy)
     })
 }
 

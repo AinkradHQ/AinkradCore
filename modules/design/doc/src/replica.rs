@@ -135,17 +135,18 @@ impl Replica {
     }
 
     /// Integrate bytes from a source this process already trusts (the Core's own broadcast, on a client; the store).
-    /// Still scanned structurally first (cheap), and a yrs panic is invalid input, never a crash.
-    pub fn apply_trusted(&mut self, update: &[u8]) -> Result<(), Refused> {
+    /// Still scanned structurally first (cheap), then integrated on a big stack like every remote update
+    /// (`gate::integrate` also turns a yrs panic into an error). Crate-private: a caller outside takes
+    /// `apply_remote`, which verifies.
+    pub(crate) fn apply_trusted(&mut self, update: &[u8]) -> Result<(), Refused> {
         crate::guard::scan(update)?;
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let doc = self.doc.clone();
+        trial::big_stack(|| {
             let u = Update::decode_v1(update).map_err(|_| Refused::Malformed)?;
-            self.doc
-                .transact_mut()
-                .apply_update(u)
+            gate::integrate(&doc, u, REMOTE)
+                .map(|_| ())
                 .map_err(|_| Refused::Malformed)
-        }))
-        .unwrap_or(Err(Refused::Malformed))
+        })?
     }
 
     /// True once an update was refused after it was integrated, or the owner could not rebuild: the content must not

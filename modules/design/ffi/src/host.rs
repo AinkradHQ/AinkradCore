@@ -30,6 +30,7 @@ pub fn code(e: Error) -> i32 {
         Error::Malformed(_) | Error::Refused(_) => DE_ERR_INVALID,
         Error::Reset => DE_ERR_RESET,
         Error::Halted => DE_ERR_HALTED,
+        Error::Busy => DE_ERR_BUSY,
     }
 }
 
@@ -174,16 +175,22 @@ impl Host {
         r.map_err(code)
     }
 
-    /// `true` when something was undone / redone.
-    pub fn undo(&mut self, redo: bool) -> bool {
+    /// `Ok(true)` when something was undone / redone; `DE_ERR_TOO_LARGE` when it would exceed the update budget
+    /// (reverted, the document is as it was).
+    pub fn undo(&mut self, redo: bool) -> Result<bool, i32> {
         self.cancel();
         let did = if redo {
-            self.live.redo()
+            self.live.redo_checked()
         } else {
-            self.live.undo()
+            self.live.undo_checked()
         };
         self.changed();
-        did
+        did.map_err(code)
+    }
+
+    /// An oversized update blocks the outbox: reported by `de_sync_outbox` as `DE_ERR_TOO_LARGE`.
+    pub fn outbox_stuck(&self) -> bool {
+        self.live.outbox_stuck()
     }
 
     fn delete_selection(&mut self) -> Result<(), i32> {

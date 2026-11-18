@@ -38,6 +38,9 @@
 // the engine and open the design again.
 #define DE_ERR_HALTED -11
 
+// No thread could be started for a remote update; nothing changed. Retry later.
+#define DE_ERR_BUSY -12
+
 // `de_sync_apply` targets.
 #define DE_DOC 0
 
@@ -246,7 +249,8 @@ int32_t de_edit(uint64_t h,
                 const uint8_t *json,
                 size_t len);
 
-// 1 when something was undone, 0 when there was nothing to undo.
+// 1 when something was undone, 0 when there was nothing to undo, DE_ERR_TOO_LARGE when the undo would exceed the
+// update budget (nothing changed).
 int32_t de_undo(uint64_t h);
 
 int32_t de_redo(uint64_t h);
