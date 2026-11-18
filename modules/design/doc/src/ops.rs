@@ -189,12 +189,13 @@ fn check(m: &mut Doc, i: usize, op: &Op) -> Result<Planned, Error> {
             if n.ty != NodeType::Text {
                 return Err(refuse(i, "not a text node"));
             }
-            let (a, b, out) =
+            let (_, _, out) =
                 crate::text::spliced(n.text.as_deref().unwrap_or(""), *at, *del, text)
                     .ok_or_else(|| refuse(i, "range outside the text or inside a character"))?;
             text_str(&out).map_err(|e| refuse(i, e))?;
             n.text = Some(out.clone());
-            Planned::Splice(id.clone(), a as u32, (b - a) as u32, text.clone(), out)
+            // yrs counts UTF-16 units here (`new_ydoc`), so the op's own offsets go in, not the byte ones.
+            Planned::Splice(id.clone(), *at, *del, text.clone(), out)
         }
         Op::Move { id, parent, order } => {
             let clock = m.next_clock();
@@ -300,7 +301,7 @@ impl Live {
         if est <= budget {
             return est;
         }
-        let copy = yrs::Doc::new();
+        let copy = crate::new_ydoc();
         let nodes = copy.get_or_insert_map("nodes");
         let state = self
             .doc()
@@ -369,7 +370,7 @@ enum Planned {
     /// id, parent, order, clock, previous parent.
     Move(String, Option<String>, String, u64, Option<String>),
     Delete(Vec<String>),
-    /// id, byte offset, bytes removed, inserted text, the whole text after (for a node without a yrs text yet)
+    /// id, UTF-16 offset, UTF-16 units removed, inserted text, the whole text after (for a node without a yrs text yet)
     Splice(String, u32, u32, String, String),
 }
 

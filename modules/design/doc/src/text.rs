@@ -1,6 +1,6 @@
 //! Text offsets (V2-04). The engine, Skia paragraph and `NSTextInputClient` all count UTF-16 code units; yrs here
-//! counts bytes (`OffsetKind::Bytes`, the default). A `splice` op carries UTF-16 offsets and is turned into bytes
-//! against the text it was checked on.
+//! counts UTF-16 too (`new_ydoc`). A `splice` op carries UTF-16 offsets; they are checked against the text (they must
+//! not fall inside a character) and applied as they are.
 
 /// The byte offset of UTF-16 offset `u` in `s`, or `None` past the end or inside a character (a surrogate pair).
 pub fn byte_of_utf16(s: &str, u: usize) -> Option<usize> {
