@@ -1,13 +1,13 @@
 //! Meaning-based ranking for `brainAiSearch`: the query is embedded on the one background worker
-//! (bounded wait), scored against the vectors of the records and sources of the rooms the session
-//! may see and has open, and fused with the keyword hits. Nothing here ever looks at a room the
-//! caller did not pass in. Vectors a record or source lacks are queued for the worker, never
-//! computed inline; on a timeout, a model that is off or any error the caller keeps the keyword hits.
+//! (bounded wait), scored against the vectors of the MEMORY records (the `memory` view) of the
+//! rooms the session may see and has open, and fused with the keyword hits. Sources are never
+//! read here (security model: `ai.rs`). Nothing here ever looks at a room the caller did not pass
+//! in. Vectors a record lacks are queued for the worker, never computed inline; on a timeout, a
+//! model that is off or any error the caller keeps the keyword hits.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use ainkrad_core::untrusted::wrap;
 use ainkrad_core_server::api::App;
 use brain_model::semantic::EMBED_CHARS;
 use sha2::{Digest, Sha256};
@@ -15,7 +15,7 @@ use sqlx::Row;
 
 use crate::Brain;
 use crate::access::Visible;
-use crate::ai::{AiHit, LIST_BODY, cut, record_of};
+use crate::ai::{AiHit, LIST_BODY, record_of};
 use crate::rooms::RoomAccess;
 use crate::semantic::service::similar;
 
@@ -23,9 +23,9 @@ use crate::semantic::service::similar;
 pub(crate) const WAIT: Duration = Duration::from_secs(2);
 /// Below this cosine a candidate is not "about" the query at all.
 const MIN_SCORE: f32 = 0.35;
-/// ponytail: newest records and the first sources per room; an index of vectors if rooms outgrow this.
+/// ponytail: the newest records per room; an index of vectors if rooms outgrow this. A room with
+/// more makes the search `complete: false`.
 const MAX_RECORDS: i64 = 500;
-const MAX_SOURCES: i64 = 2000;
 /// Candidates one search may queue for embedding.
 const MAX_QUEUE: usize = 200;
 const RRF_K: f32 = 60.0;
@@ -53,28 +53,34 @@ fn record_hash(text: &str) -> String {
 
 struct Cand {
     room: usize,
-    record: bool,
     id: String,
     hash: String,
 }
 
-/// The best `limit` hits by meaning, best first; `None` when meaning cannot answer now.
+/// The best `limit` hits by meaning, best first, and whether `MAX_RECORDS` cut a room; `None` when
+/// meaning cannot answer now.
 pub(crate) async fn rank(
     app: &App,
     b: &Brain,
     q: &str,
     open: &[(Visible, RoomAccess)],
     limit: usize,
-) -> Option<Vec<AiHit>> {
+) -> Option<(Vec<AiHit>, bool)> {
     if !available(app, b).await {
         return None;
     }
     let qv = b.embed_query(q, WAIT).await?;
     let mut cands: Vec<Cand> = vec![];
     let mut rec_text: HashMap<String, String> = HashMap::new();
+    let mut capped = false;
     for (i, (_, a)) in open.iter().enumerate() {
+        let total: i64 = sqlx::query_scalar("SELECT count(*) FROM memory")
+            .fetch_one(a.pool())
+            .await
+            .ok()?;
+        capped |= total > MAX_RECORDS;
         let recs = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id, body FROM records WHERE status = 'accepted' ORDER BY created_at DESC, id LIMIT {MAX_RECORDS}"
+            "SELECT id, body FROM memory ORDER BY created_at DESC, id LIMIT {MAX_RECORDS}"
         )))
         .fetch_all(a.pool())
         .await
@@ -85,23 +91,8 @@ pub(crate) async fn rank(
             rec_text.insert(hash.clone(), text);
             cands.push(Cand {
                 room: i,
-                record: true,
                 id: r.try_get("id").ok()?,
                 hash,
-            });
-        }
-        let srcs = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT item_id, content_hash FROM sources ORDER BY item_id LIMIT {MAX_SOURCES}"
-        )))
-        .fetch_all(a.pool())
-        .await
-        .ok()?;
-        for r in srcs {
-            cands.push(Cand {
-                room: i,
-                record: false,
-                id: r.try_get("item_id").ok()?,
-                hash: r.try_get("content_hash").ok()?,
             });
         }
     }
@@ -114,22 +105,7 @@ pub(crate) async fn rank(
         if queue.len() >= MAX_QUEUE || !seen.insert(c.hash.clone()) {
             continue;
         }
-        let text = if c.record {
-            rec_text.get(&c.hash).cloned()
-        } else {
-            let r = sqlx::query("SELECT title, text FROM sources WHERE item_id = ?")
-                .bind(&c.id)
-                .fetch_optional(open[c.room].1.pool())
-                .await
-                .ok()?;
-            match r {
-                Some(r) => Some(embed_text(
-                    &r.try_get::<String, _>("title").ok()?,
-                    &r.try_get::<String, _>("text").ok()?,
-                )),
-                None => None,
-            }
-        };
+        let text = rec_text.get(&c.hash).cloned();
         queue.extend(text.map(|t| (c.hash.clone(), t)));
     }
     if !queue.is_empty() {
@@ -147,43 +123,24 @@ pub(crate) async fn rank(
         }
         let c = &cands[i.parse::<usize>().ok()?];
         let (v, a) = &open[c.room];
-        if c.record {
-            let r = sqlx::query(
-                "SELECT id, type, body, tags, source_ids, created_at FROM records WHERE id = ?",
-            )
-            .bind(&c.id)
-            .fetch_one(a.pool())
-            .await
-            .ok()?;
-            let rec = record_of(&v.id, &r, LIST_BODY).ok()?;
-            hits.push(AiHit {
-                room: v.id.clone(),
-                kind: "record".to_owned(),
-                id: rec.id,
-                started_at: r.try_get("created_at").ok()?,
-                text: rec.text,
-            });
-        } else {
-            let r = sqlx::query("SELECT title, text, started_at FROM sources WHERE item_id = ?")
-                .bind(&c.id)
-                .fetch_one(a.pool())
-                .await
-                .ok()?;
-            let title: String = r.try_get("title").ok()?;
-            let body: String = r.try_get("text").ok()?;
-            hits.push(AiHit {
-                room: v.id.clone(),
-                kind: "source".to_owned(),
-                text: wrap(
-                    &format!("source {} | {title}", c.id),
-                    &cut(&body, LIST_BODY).0,
-                ),
-                id: c.id.clone(),
-                started_at: r.try_get("started_at").ok()?,
-            });
-        }
+        let r = sqlx::query(
+            "SELECT id, type, body, tags, source_ids, created_at FROM memory WHERE id = ?",
+        )
+        .bind(&c.id)
+        .fetch_optional(a.pool())
+        .await
+        .ok()?;
+        let Some(r) = r else { continue };
+        let rec = record_of(&v.id, &r, LIST_BODY).ok()?;
+        hits.push(AiHit {
+            room: v.id.clone(),
+            kind: "record".to_owned(),
+            id: rec.id,
+            started_at: rec.created_at,
+            text: rec.text,
+        });
     }
-    Some(hits)
+    Some((hits, capped))
 }
 
 /// Reciprocal-rank fusion of two best-first lists; a hit in both keeps the keyword text (it has the
@@ -214,7 +171,7 @@ mod tests {
     fn h(id: &str) -> AiHit {
         AiHit {
             room: "r".into(),
-            kind: "source".into(),
+            kind: "record".into(),
             id: id.into(),
             started_at: String::new(),
             text: id.into(),

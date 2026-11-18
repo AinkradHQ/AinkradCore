@@ -1,4 +1,5 @@
-//! `brainAiSearch` by meaning, with a fake embedder: a vector is an angle read from `ang=NN`.
+//! `brainAiSearch` by meaning, with a fake embedder: a vector is an angle read from `ang=NN`. Meaning
+//! ranks memory records only; the sources of these rooms carry the same angles and must never match.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -6,11 +7,12 @@ use std::time::Duration;
 
 use ainkrad_core::audit::AuditActor;
 use ainkrad_core_server::store::modsettings::ModuleSettings;
+use ainkrad_core::untrusted::OPEN;
 use brain_module::Brain;
 use brain_module::semantic::Embedder;
 use serde_json::{Value, json};
 
-use super::ai::{ALPHA, open_room, read, session};
+use super::ai::{ALPHA, open_room, put_record, read, session};
 use super::common::*;
 
 #[derive(Default)]
@@ -56,6 +58,9 @@ async fn setup(brain: Brain) -> (Fx, String, String) {
         ],
     )
     .await;
+    // The memory layer: the facts the search may rank. The sources above repeat their angles.
+    put_record(&fx, &alpha, "rec-keys", "fact", "accepted", "rotate the signing keys ang=10 ").await;
+    put_record(&fx, &alpha, "rec-lunch", "fact", "accepted", "pasta menu ang=90 ").await;
     let s = session(&fx, ALPHA, &["anthropic"]).await;
     open_room(&fx, &alpha).await;
     (fx, alpha, s)
@@ -89,6 +94,7 @@ async fn meaning_ranks_a_paraphrase_that_keywords_miss_and_never_reads_hidden_ro
     let (fx, _alpha, s) = setup(Brain::with_embedder(fake.clone())).await;
     // A room the session cannot see, with text that would match best.
     let beta = committed_room_named(&fx, "Beta", &[("Secret", "hidden ang=20 ")]).await;
+    put_record(&fx, &beta, "rec-hidden", "fact", "accepted", "hidden ang=20 ").await;
     // Committing Beta embedded it (centroids); what matters is what searching reads from now on.
     fake.seen.lock().unwrap().clear();
     // Keywords alone miss the paraphrase; the first meaning search queues the vectors.
@@ -102,10 +108,9 @@ async fn meaning_ranks_a_paraphrase_that_keywords_miss_and_never_reads_hidden_ro
     assert_eq!(v["ranked_by"], "both");
     let hits = v["hits"].as_array().unwrap();
     assert!(hits[0]["text"].as_str().unwrap().contains("signing keys"));
-    assert!(
-        hits[0]["text"].as_str().unwrap().contains("untrusted")
-            || hits[0]["text"].as_str().unwrap().contains("source")
-    );
+    assert_eq!(hits[0]["kind"], "record");
+    assert!(hits[0]["text"].as_str().unwrap().starts_with(OPEN));
+    assert_eq!(v["complete"], true);
     assert!(!v.to_string().contains(&beta));
     let m = search(&fx, &s, "meaning").await;
     assert_eq!(m["ranked_by"], "meaning");

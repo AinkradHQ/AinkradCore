@@ -89,7 +89,7 @@ pub async fn open_room(fx: &Fx, room: &str) {
 }
 
 /// Records in the room's file, as accepted/candidate/rejected would be.
-async fn put_record(fx: &Fx, room: &str, id: &str, kind: &str, status: &str, body: &str) {
+pub(super) async fn put_record(fx: &Fx, room: &str, id: &str, kind: &str, status: &str, body: &str) {
     let p = canon_pool(fx, room).await;
     sqlx::query(
         "INSERT INTO records (id, type, status, body, tags, source_ids, created_at) \
@@ -326,7 +326,7 @@ async fn a_local_only_room_is_invisible_to_a_cloud_chain_and_a_hidden_room_looks
 }
 
 #[tokio::test]
-async fn only_accepted_records_and_stored_sources_come_back_and_all_of_it_is_outside_data() {
+async fn only_accepted_records_come_back_and_all_of_it_is_outside_data() {
     let fx = fx().await;
     // A source that a refuse rule keeps out never reaches the room.
     let room = committed_room_named(
@@ -393,13 +393,13 @@ async fn only_accepted_records_and_stored_sources_come_back_and_all_of_it_is_out
 
     let v = read(&fx, &s, "brainAiSearch", json!({"q": "friday"})).await;
     let hits = v["hits"].as_array().unwrap();
-    let kinds: Vec<&str> = hits.iter().map(|h| h["kind"].as_str().unwrap()).collect();
+    // Memory only: the imported source ("alpha deploys on friday") never comes back from a search.
     assert!(
-        kinds.contains(&"record") && kinds.contains(&"source"),
+        !hits.is_empty() && hits.iter().all(|h| h["kind"] == "record"),
         "{v}"
     );
     let text = v.to_string();
-    for banned in ["candidate secret", "rejected secret", "quokka"] {
+    for banned in ["candidate secret", "rejected secret", "quokka", "alpha deploys"] {
         assert!(!text.contains(banned), "{banned} leaked: {v}");
     }
     // Each hit is exactly one live envelope; hostile text cannot close its own.
@@ -640,6 +640,7 @@ async fn the_brain_operations_are_in_the_live_catalogue_with_their_risks() {
         ("brainAiRooms", "read"),
         ("brainAiSearch", "read"),
         ("brainAiRecord", "read"),
+        ("brainAiEvidence", "read"),
         ("brainAiDecisions", "read"),
         ("brainAiProjectState", "read"),
         ("brainAiPropose", "write"),
@@ -656,4 +657,144 @@ async fn the_brain_operations_are_in_the_live_catalogue_with_their_risks() {
         "{:?}",
         c.warnings
     );
+}
+
+/// A record with explicit citations and lifecycle columns, for the memory-only gate.
+async fn put_cited(
+    fx: &Fx,
+    room: &str,
+    id: &str,
+    body: &str,
+    cites: &[&str],
+    valid_to: Option<&str>,
+    archived_at: Option<&str>,
+) {
+    let p = canon_pool(fx, room).await;
+    sqlx::query(
+        "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, valid_to, archived_at) \
+         VALUES (?, 'fact', 'accepted', ?, '[]', ?, '2026-11-10T10:00:00Z', ?, ?)",
+    )
+    .bind(id)
+    .bind(body)
+    .bind(json!(cites).to_string())
+    .bind(valid_to)
+    .bind(archived_at)
+    .execute(&p)
+    .await
+    .unwrap();
+    p.close().await;
+}
+
+const MARK: &str = "SRCMARKERq7";
+
+/// The B2-03 gate. AI reads serve memory; raw source text leaves only through `brainAiEvidence`,
+/// for a source a current record cites. Every `brainAi*` op in the live catalogue must be listed
+/// here, so a new op cannot ship without being classified and checked against the marker.
+#[tokio::test]
+async fn no_ai_op_returns_source_text_except_evidence_for_a_cited_pair() {
+    let fx = fx().await;
+    let room = committed_room_named(
+        &fx,
+        "Alpha",
+        &[
+            ("Cited", &format!("pipeline ships weekly {MARK} one")),
+            ("Other", &format!("pipeline other {MARK} two")),
+        ],
+    )
+    .await;
+    let p = canon_pool(&fx, &room).await;
+    let items: Vec<String> = sqlx::query_scalar("SELECT item_id FROM sources ORDER BY title")
+        .fetch_all(&p)
+        .await
+        .unwrap();
+    p.close().await;
+    let (cited, other) = (items[0].as_str(), items[1].as_str());
+    put_cited(&fx, &room, "rec-live", "pipeline ships weekly", &[cited], None, None).await;
+    put_cited(&fx, &room, "rec-none", "pipeline cites nothing", &[], None, None).await;
+    put_cited(&fx, &room, "rec-old", "pipeline old fact", &[cited], Some("2026-11-11T00:00:00Z"), None).await;
+    put_cited(&fx, &room, "rec-arch", "pipeline archived fact", &[cited], None, Some("2026-11-12T00:00:00Z")).await;
+    open_room(&fx, &room).await;
+    let s = session(&fx, ALPHA, &["anthropic"]).await;
+
+    // Every brainAi op, classified. A new op fails this until it is added and checked.
+    let live: Vec<String> = fx
+        .app
+        .catalogue()
+        .ops
+        .keys()
+        .filter(|k| k.starts_with("brainAi"))
+        .cloned()
+        .collect();
+    let calls: Vec<(&str, Value)> = vec![
+        ("brainAiRooms", json!({})),
+        ("brainAiSearch", json!({"q": "pipeline"})),
+        ("brainAiSearch", json!({"q": "pipeline", "mode": "meaning"})),
+        ("brainAiSearch", json!({"q": MARK})),
+        ("brainAiRecord", json!({"room": room, "id": "rec-live"})),
+        ("brainAiDecisions", json!({})),
+        ("brainAiProjectState", json!({})),
+    ];
+    let skipped = ["brainAiEvidence", "brainAiPropose"];
+    for k in &live {
+        assert!(
+            skipped.contains(&k.as_str()) || calls.iter().any(|(o, _)| o == k),
+            "{k} is a brainAi op the memory-only gate does not cover"
+        );
+    }
+    for (o, args) in &calls {
+        let v = read(&fx, &s, o, args.clone()).await;
+        assert!(!v.to_string().contains(MARK), "{o} leaked source text: {v}");
+    }
+    // Search finds the live fact; the archived and superseded ones never come back, from any read.
+    let v = read(&fx, &s, "brainAiSearch", json!({"q": "pipeline"})).await;
+    let found: Vec<&str> = v["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["id"].as_str().unwrap())
+        .collect();
+    assert!(found.contains(&"rec-live") && found.contains(&"rec-none"), "{v}");
+    assert!(!found.contains(&"rec-old") && !found.contains(&"rec-arch"), "{v}");
+    assert_eq!(v["complete"], true);
+    for id in ["rec-old", "rec-arch"] {
+        let (ok_, _, code) = op(&fx, &s, "brainAiRecord", json!({"room": room, "id": id})).await;
+        assert!(!ok_ && code == "not_found", "{id}: {code}");
+    }
+    // The index follows the room: a fact added later is found, one archived later is gone.
+    put_cited(&fx, &room, "rec-new", "pipeline newest fact", &[], None, None).await;
+    let p = canon_pool(&fx, &room).await;
+    sqlx::query("UPDATE records SET archived_at = '2026-11-13T00:00:00Z' WHERE id = 'rec-none'")
+        .execute(&p)
+        .await
+        .unwrap();
+    p.close().await;
+    let v = read(&fx, &s, "brainAiSearch", json!({"q": "pipeline"})).await;
+    let found: Vec<&str> = v["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["id"].as_str().unwrap())
+        .collect();
+    assert!(found.contains(&"rec-new") && !found.contains(&"rec-none"), "{v}");
+
+    // Evidence: the cited pair returns the source, wrapped; nothing else does.
+    let e = read(&fx, &s, "brainAiEvidence", json!({"room": room, "id": "rec-live", "source": cited})).await;
+    let t = e["text"].as_str().unwrap();
+    assert!(t.contains(MARK) && t.starts_with(OPEN) && t.ends_with(CLOSE), "{t}");
+    assert_eq!((e["compacted"].as_bool(), e["record"].as_str()), (Some(false), Some("rec-live")));
+    for (rec, src) in [
+        ("rec-live", other),     // a source the record does not cite
+        ("rec-none", cited),     // a record that cites nothing
+        ("rec-old", cited),      // superseded
+        ("rec-arch", cited),     // archived
+        ("rec-missing", cited),  // unknown record
+        ("rec-live", "no-such"), // unknown source
+    ] {
+        let (ok_, v, code) = op(&fx, &s, "brainAiEvidence", json!({"room": room, "id": rec, "source": src})).await;
+        assert!(!ok_ && code == "not_found" && !v.to_string().contains(MARK), "{rec} {src}: {code}");
+    }
+    // A hidden room is the 404 of an unknown one.
+    let other_room = committed_room_named(&fx, "Beta", &[("B", "beta text")]).await;
+    let (ok_, _, code) = op(&fx, &s, "brainAiEvidence", json!({"room": other_room, "id": "rec-live", "source": cited})).await;
+    assert!(!ok_ && code == "not_found");
 }
