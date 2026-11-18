@@ -21,8 +21,12 @@ pub struct Who<'a> {
     pub now: &'a str,
 }
 
+/// Also every module name (`modules/*`): a secret named `<module>.…` is that module's to open
+/// (`secrets::open_for_module`), so no project may own that prefix. Add a module here when it
+/// is added under `modules/`.
 pub const RESERVED: &[&str] = &[
-    "www", "api", "core", "signin", "admin", "mail", "app", "status", "docs",
+    "www", "api", "core", "signin", "admin", "mail", "app", "status", "docs", "brain", "citadel",
+    "design", "leyline", "lore", "toy",
 ];
 
 #[derive(Debug, Clone, PartialEq)]

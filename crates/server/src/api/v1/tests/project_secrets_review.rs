@@ -114,3 +114,51 @@ async fn generic_create_refuses_an_existing_project_slug_namespace() {
     .await;
     assert_eq!(status(&r), StatusCode::OK, "{}", r.1);
 }
+
+#[tokio::test]
+async fn an_agent_session_cannot_name_a_project_secret() {
+    let mut fx = fx().await;
+    fx.app.secrets = Some(Arc::new(SecretBox::new(&[7; 32])));
+    broker(&fx.app.pool).await;
+    let vm = super::secrets::runner(&fx, "vm").await;
+    let made = call(
+        &fx,
+        Method::POST,
+        "/api/v1/projects",
+        json!({"slug": "shop", "name": "Shop"}),
+    )
+    .await;
+    let id = made.1["id"].as_i64().unwrap();
+    let put = call(
+        &fx,
+        Method::PUT,
+        &format!("/api/v1/projects/{id}/secrets/db_password"),
+        json!({"value": VALUE}),
+    )
+    .await;
+    assert_eq!(put.0, StatusCode::OK, "{}", put.1);
+    let r = call(
+        &fx,
+        Method::POST,
+        "/api/v1/agent-sessions",
+        json!({"runner": vm.id, "harness": "claude",
+               "secrets": [{"name": "shop.db_password", "var": "DB_PASSWORD"}]}),
+    )
+    .await;
+    assert_eq!(status(&r), StatusCode::BAD_REQUEST, "{}", r.1);
+}
+
+#[tokio::test]
+async fn a_module_name_is_not_a_project_slug() {
+    let fx = fx().await;
+    for slug in ["brain", "citadel", "design", "leyline", "lore", "toy"] {
+        let r = call(
+            &fx,
+            Method::POST,
+            "/api/v1/projects",
+            json!({"slug": slug, "name": "X"}),
+        )
+        .await;
+        assert_eq!(status(&r), StatusCode::BAD_REQUEST, "{slug}: {}", r.1);
+    }
+}

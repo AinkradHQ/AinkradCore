@@ -79,3 +79,20 @@ async fn list_is_by_group_id_not_by_name_alone() {
     assert_eq!(got, ["mine"]);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn a_module_cannot_open_a_project_secret() {
+    let (pool, dir, id) = pool().await;
+    seed(&pool, id, &["key"]).await;
+    let sealer = super::fixtures::broker(&pool).await;
+    // Even a module whose name equals the project's slug.
+    let r = secrets::open_for_module(&pool, &sealer, "shop", "shop.key", "test").await;
+    assert!(matches!(
+        r,
+        Err(Error::Refused {
+            code: "not_found",
+            ..
+        })
+    ));
+    let _ = std::fs::remove_dir_all(dir);
+}

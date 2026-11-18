@@ -1022,6 +1022,10 @@ pub async fn open_for_module(
         return refused("not_found", "no such secret");
     }
     let mut tx = super::begin_write(pool).await?;
+    // A project secret (`<slug>.<name>`) is never a module's, whatever the slug is.
+    if super::project_secrets::is_member(&mut tx, name).await? {
+        return refused("not_found", "no such secret");
+    }
     enabled(&mut tx).await?;
     let row = sqlx::query("SELECT id, version, key_id, sealed FROM core_secrets WHERE name = ?")
         .bind(name)

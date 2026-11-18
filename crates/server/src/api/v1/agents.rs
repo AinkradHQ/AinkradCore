@@ -330,6 +330,15 @@ pub async fn create(
             var: s.var,
         })
         .collect();
+    // Project secrets reach runs only through the project run path (P4-04).
+    for s in &secrets {
+        let mut conn = app.pool.acquire().await?;
+        if crate::store::project_secrets::is_member(&mut conn, &s.name).await? {
+            return Err(ApiError::bad_request(
+                "project secrets are used through the project's runs",
+            ));
+        }
+    }
     let mut policy = b.policy.unwrap_or_else(|| {
         serde_json::to_value(ainkrad_proto::runner::Policy::default()).expect("a policy serializes")
     });
