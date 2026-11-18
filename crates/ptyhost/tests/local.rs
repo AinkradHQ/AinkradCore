@@ -190,6 +190,7 @@ fn cat_spec() -> Spec {
         ),
         size: Size { rows: 24, cols: 80 },
         scrollback_bytes: None,
+        fd3: None,
     }
 }
 
