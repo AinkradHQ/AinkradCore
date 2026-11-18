@@ -1,16 +1,29 @@
 //! B4-02: a replaced record leaves memory (`valid_to`), keeps its row as history linked to its
-//! successor, and Undo restores both; a `replaces` aimed at a rule needs a user-grounded candidate;
-//! the SQL staleness test equals the pure one. Every record here is made up.
+//! successor, and Undo restores both; a `replaces` of any kind needs a grounded candidate of the same
+//! kind, else the target stays and the two are contested; Undo after a later reinforce unlinks the
+//! successor; the SQL staleness test equals the pure one. Every record here is made up.
 
-use brain_model::merge::{STALE_SQL, is_stale};
+use brain_model::merge::{Grounding, STALE_SQL, is_stale};
 use brain_module::changes::{ChangeSet, image, undo};
 use brain_module::files::{self, CANON};
-use brain_module::merge::supersede;
+use brain_module::merge::{Replace, reinforce, supersede};
 use sqlx::SqlitePool;
 
 const KEY: [u8; 32] = [7; 32];
 const T0: &str = "2026-11-10T10:00:00Z";
 const NOW: &str = "2026-11-12T10:00:00Z";
+const NONE: Grounding = Grounding {
+    user_turn: false,
+    structured_item: false,
+};
+const USER: Grounding = Grounding {
+    user_turn: true,
+    structured_item: false,
+};
+const ITEM: Grounding = Grounding {
+    user_turn: false,
+    structured_item: true,
+};
 
 async fn pool() -> (tempfile::TempDir, SqlitePool) {
     let dir = tempfile::tempdir().unwrap();
@@ -55,19 +68,31 @@ async fn source(p: &SqlitePool, id: &str, record: &str, at: &str) {
         .unwrap();
 }
 
-/// Runs `supersede(old, new)` in its own change set; returns (superseded, change id when written).
-async fn run(p: &SqlitePool, old: &str, new: &str, grounded: bool) -> (bool, Option<String>) {
+/// Runs `supersede(old, new)` in its own change set; returns (what it did, change id when written).
+async fn run_g(p: &SqlitePool, old: &str, new: &str, g: Grounding) -> (Replace, Option<String>) {
     let mut tx = p.begin().await.unwrap();
     let mut cs = ChangeSet::new("distil", NOW);
-    let done = supersede(&mut tx, &mut cs, old, new, grounded, NOW)
-        .await
-        .unwrap();
+    let done = supersede(&mut tx, &mut cs, old, new, g, NOW).await.unwrap();
     let id = cs
         .commit(&mut tx, "Saved 1 · replaced 1", serde_json::json!({}))
         .await
         .unwrap();
     tx.commit().await.unwrap();
     (done, id)
+}
+
+/// `run_g`, user-grounded; true when it superseded.
+async fn run(p: &SqlitePool, old: &str, new: &str) -> (bool, Option<String>) {
+    let (done, id) = run_g(p, old, new, USER).await;
+    (done == Replace::Superseded, id)
+}
+
+async fn contests(p: &SqlitePool, id: &str) -> Option<String> {
+    sqlx::query_scalar("SELECT contests FROM records WHERE id = ?")
+        .bind(id)
+        .fetch_one(p)
+        .await
+        .unwrap()
 }
 
 async fn in_memory(p: &SqlitePool, id: &str) -> bool {
@@ -100,7 +125,7 @@ async fn a_replaced_record_leaves_memory_stays_as_history_and_undo_restores_both
     );
     drop(conn);
 
-    let (done, change) = run(&p, "old", "new", false).await;
+    let (done, change) = run(&p, "old", "new").await;
     assert!(done);
     // The moment the new fact began: its earliest cited source.
     let at = Some("2026-11-11T09:00:00Z".to_owned());
@@ -137,7 +162,7 @@ async fn the_moment_never_precedes_the_old_record_began() {
     record(&p, "old", "task", "2026-11-10T10:00:00Z").await;
     record(&p, "new", "task", NOW).await;
     source(&p, "s-early", "new", "2026-01-01T00:00:00Z").await;
-    assert!(run(&p, "old", "new", false).await.0);
+    assert!(run(&p, "old", "new").await.0);
     let (_, to, _, _) = row(&p, "old").await;
     assert_eq!(to.as_deref(), Some("2026-11-10T10:00:00Z"));
 }
@@ -147,24 +172,112 @@ async fn without_a_cited_source_the_moment_is_now() {
     let (_d, p) = pool().await;
     record(&p, "old", "fact", T0).await;
     record(&p, "new", "fact", NOW).await;
-    assert!(run(&p, "old", "new", false).await.0);
+    assert!(run(&p, "old", "new").await.0);
     assert_eq!(row(&p, "new").await.0.as_deref(), Some(NOW));
 }
 
 #[tokio::test]
-async fn replacing_a_rule_or_preference_needs_a_user_grounded_candidate() {
-    for kind in ["rule", "preference"] {
+async fn a_weakly_grounded_replaces_of_any_kind_only_contests() {
+    for kind in ["rule", "preference", "fact", "decision", "task", "project-state"] {
         let (_d, p) = pool().await;
         record(&p, "old", kind, T0).await;
         record(&p, "new", kind, NOW).await;
-        let (done, change) = run(&p, "old", "new", false).await;
-        assert!(!done, "{kind} must survive an ungrounded replaces");
-        assert!(change.is_none(), "nothing written");
-        assert!(in_memory(&p, "old").await);
-        assert_eq!(row(&p, "old").await.1, None);
-        assert!(run(&p, "old", "new", true).await.0);
-        assert!(!in_memory(&p, "old").await);
+        let (done, change) = run_g(&p, "old", "new", NONE).await;
+        assert_eq!(done, Replace::Contested, "{kind} must survive an ungrounded replaces");
+        assert!(in_memory(&p, "old").await && in_memory(&p, "new").await, "{kind}");
+        assert_eq!(row(&p, "old").await, (None, None, None, None), "{kind}");
+        assert_eq!(contests(&p, "new").await.as_deref(), Some("old"), "{kind}");
+        // The link is in the change set: Undo takes it back with the save.
+        let mut tx = p.begin().await.unwrap();
+        undo(&mut tx, &change.unwrap(), NOW).await.unwrap().unwrap().unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(contests(&p, "new").await, None, "{kind}");
+        assert!(run(&p, "old", "new").await.0, "{kind}");
+        assert!(!in_memory(&p, "old").await, "{kind}");
     }
+}
+
+#[tokio::test]
+async fn a_jira_or_github_item_grounds_only_a_task_or_project_state() {
+    for (kind, ok) in [("task", true), ("project-state", true), ("fact", false), ("rule", false)] {
+        let (_d, p) = pool().await;
+        record(&p, "old", kind, T0).await;
+        record(&p, "new", kind, NOW).await;
+        let want = if ok { Replace::Superseded } else { Replace::Contested };
+        assert_eq!(run_g(&p, "old", "new", ITEM).await.0, want, "{kind}");
+        assert_eq!(in_memory(&p, "old").await, !ok, "{kind}");
+    }
+}
+
+#[tokio::test]
+async fn a_replaces_across_kinds_never_supersedes() {
+    let (_d, p) = pool().await;
+    record(&p, "old", "rule", T0).await;
+    record(&p, "new", "fact", NOW).await;
+    assert_eq!(run_g(&p, "old", "new", USER).await.0, Replace::Contested);
+    assert!(in_memory(&p, "old").await);
+}
+
+#[tokio::test]
+async fn undo_after_a_later_reinforce_does_not_leave_a_chain_in_force() {
+    // (a) The successor was saved by the undone change set: Undo archives it.
+    let (_d, p) = pool().await;
+    record(&p, "old", "decision", T0).await;
+    let mut tx = p.begin().await.unwrap();
+    let mut cs = ChangeSet::new("distil", NOW);
+    cs.touch(&mut tx, "new").await.unwrap();
+    sqlx::query(
+        "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, body_norm, last_seen_at) \
+         VALUES ('new', 'decision', 'accepted', 'body of new', '[]', '[]', ?, 'body of new', ?)",
+    )
+    .bind(NOW)
+    .bind(NOW)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    let done = supersede(&mut tx, &mut cs, "old", "new", USER, NOW).await.unwrap();
+    assert_eq!(done, Replace::Superseded);
+    let change = cs.commit(&mut tx, "Saved 1 · replaced 1", serde_json::json!({})).await.unwrap();
+    tx.commit().await.unwrap();
+    reinforce_later(&p, "new").await;
+    let skipped = undo_all(&p, &change.unwrap()).await;
+    assert_eq!(skipped, ["new"]);
+    assert!(in_memory(&p, "old").await);
+    assert!(!in_memory(&p, "new").await, "archived, not a second fact in force");
+
+    // (b) The successor existed before: Undo puts its link back instead.
+    let (_d, p) = pool().await;
+    record(&p, "old", "decision", T0).await;
+    record(&p, "new", "decision", NOW).await;
+    let (done, change) = run(&p, "old", "new").await;
+    assert!(done);
+    reinforce_later(&p, "new").await;
+    assert_eq!(undo_all(&p, &change.unwrap()).await, ["new"]);
+    assert!(in_memory(&p, "old").await && in_memory(&p, "new").await);
+    assert_eq!(row(&p, "new").await, (None, None, None, None));
+    assert_eq!(row(&p, "old").await, (None, None, None, None));
+}
+
+/// A later save reinforces `id` in its own change set.
+async fn reinforce_later(p: &SqlitePool, id: &str) {
+    let later = "2026-11-12T12:00:00Z";
+    let mut tx = p.begin().await.unwrap();
+    let mut cs = ChangeSet::new("distil", later);
+    reinforce(&mut tx, &mut cs, id, &[], later).await.unwrap();
+    cs.commit(&mut tx, "Reinforced 1", serde_json::json!({})).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// Undoes `change`; returns the skipped records.
+async fn undo_all(p: &SqlitePool, change: &str) -> Vec<String> {
+    let mut tx = p.begin().await.unwrap();
+    let done = undo(&mut tx, change, "2026-11-13T10:00:00Z")
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    tx.commit().await.unwrap();
+    done.skipped
 }
 
 #[tokio::test]
@@ -173,11 +286,11 @@ async fn a_target_outside_memory_or_the_record_itself_is_ignored() {
     record(&p, "a", "fact", T0).await;
     record(&p, "b", "fact", NOW).await;
     record(&p, "c", "fact", NOW).await;
-    assert!(!run(&p, "a", "a", true).await.0);
-    assert!(!run(&p, "nope", "b", true).await.0);
+    assert_eq!(run_g(&p, "a", "a", USER).await.0, Replace::Ignored);
+    assert_eq!(run_g(&p, "nope", "b", USER).await.0, Replace::Ignored);
     // Already superseded: a second replace of the same target does nothing.
-    assert!(run(&p, "a", "b", false).await.0);
-    assert!(!run(&p, "a", "c", false).await.0);
+    assert!(run(&p, "a", "b").await.0);
+    assert_eq!(run_g(&p, "a", "c", USER).await.0, Replace::Ignored);
     assert_eq!(row(&p, "a").await.3.as_deref(), Some("b"));
     // Archived targets are not in memory either.
     sqlx::query("UPDATE records SET archived_at = ? WHERE id = 'c'")
@@ -186,7 +299,7 @@ async fn a_target_outside_memory_or_the_record_itself_is_ignored() {
         .await
         .unwrap();
     record(&p, "d", "fact", NOW).await;
-    assert!(!run(&p, "c", "d", false).await.0);
+    assert_eq!(run_g(&p, "c", "d", USER).await.0, Replace::Ignored);
 }
 
 #[tokio::test]

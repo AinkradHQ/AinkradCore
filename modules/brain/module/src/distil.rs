@@ -19,7 +19,7 @@ use ainkrad_core_server::store::{alloc, begin_write};
 use ainkrad_proto::redact::Redactor;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
-use brain_model::merge::{Decision, Tier, body_norm};
+use brain_model::merge::{Decision, Grounding, Tier, body_norm, may_supersede};
 use serde::Serialize;
 use serde_json::json;
 use sqlx::{Row, SqlitePool};
@@ -33,7 +33,7 @@ use crate::answer_turns::kind_of;
 use crate::changes::ChangeSet;
 use crate::claim::{self, check_chain};
 use crate::files::{self, CANON};
-use crate::merge::{Memory, Prepared, reinforce, supersede};
+use crate::merge::{Memory, Prepared, Replace, reinforce, supersede};
 use crate::policy::{self, AUTO_KINDS};
 use crate::transcripts::render;
 use crate::{Brain, code, rand_id, record};
@@ -538,7 +538,13 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
         out.iter().map(|c| r.text(c.body.trim())).collect()
     };
     let prep = crate::merge::prepare(app, b, &pool, &bodies).await;
-    let grounded: Vec<bool> = out.iter().map(|c| user_grounded(c, &known)).collect();
+    let grounded: Vec<Grounding> = out
+        .iter()
+        .map(|c| Grounding {
+            user_turn: user_grounded(c, &known),
+            structured_item: structured_grounded(c, &known),
+        })
+        .collect();
     let (n, accepted, reinforced, replaced) = store_candidates(
         &pool,
         &d.id,
@@ -657,7 +663,7 @@ pub(crate) fn known_of(taken: &[(String, String, String)], shown: &serde_json::V
 /// transaction; kinds the room auto-accepts go straight to `accepted`. A candidate the memory already
 /// holds (B4-01) reinforces that record instead of adding a row. All of it is one change set.
 /// A candidate that names a memory record it `replaces` supersedes it (B4-02) when it is saved into
-/// memory; `grounded[i]` says candidate `i` is grounded in a user turn (needed to replace a rule).
+/// memory and `grounded[i]` is strong enough (`may_supersede`); else it only contests it.
 /// Returns (stored, auto-accepted, reinforced, replaced).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn store_candidates(
@@ -668,21 +674,25 @@ pub(crate) async fn store_candidates(
     by: &DistilledBy,
     now: &str,
     prep: &Prepared,
-    grounded: &[bool],
+    grounded: &[Grounding],
 ) -> Result<(i64, i64, i64, i64), sqlx::Error> {
     let redactor = Redactor::new();
-    let (mut n, mut accepted, mut reinforced, mut replaced) = (0, 0, 0, 0);
+    let (mut n, mut accepted, mut reinforced, mut replaced, mut contested) = (0, 0, 0, 0, 0);
     let mut tx = pool.begin().await?;
     let mut cs = ChangeSet::new("distil", now);
     let mut memory = Memory::load(&mut tx, prep).await?;
     for (i, c) in out.iter().enumerate() {
         let body = redactor.text(c.body.trim());
         let norm = body_norm(&body);
+        let g = grounded.get(i).copied().unwrap_or_default();
         // A near-identical wording of the record it `replaces` is a changed fact ("Fridays" ->
-        // "Mondays"), not a repeat: the model's `replaces` beats the meaning tier.
+        // "Mondays"), not a repeat: the model's `replaces` beats the meaning tier, but only when the
+        // supersede is allowed (the meaning tier only matches one kind); else the reinforce stands.
         if let Decision::Reinforce { id, tier } =
             memory.decide(&c.kind, &norm, prep.candidate(i), c.same_as.as_deref())
-            && !(tier == Tier::Meaning && c.replaces.as_deref() == Some(id.as_str()))
+            && !(tier == Tier::Meaning
+                && c.replaces.as_deref() == Some(id.as_str())
+                && may_supersede(&c.kind, &c.kind, g))
         {
             reinforce(&mut tx, &mut cs, &id, &c.sources, now).await?;
             reinforced += 1;
@@ -725,19 +735,15 @@ pub(crate) async fn store_candidates(
         if auto_ok {
             // Only a fact that really entered memory may retire another; a candidate for the Inbox
             // leaves the old record in force until a person accepts it.
-            if let Some(old) = &c.replaces
-                && supersede(
-                    &mut tx,
-                    &mut cs,
-                    old,
-                    &id,
-                    grounded.get(i).copied().unwrap_or(false),
-                    now,
-                )
-                .await?
-            {
-                memory.remove(old);
-                replaced += 1;
+            if let Some(old) = &c.replaces {
+                match supersede(&mut tx, &mut cs, old, &id, g, now).await? {
+                    Replace::Superseded => {
+                        memory.remove(old);
+                        replaced += 1;
+                    }
+                    Replace::Contested => contested += 1,
+                    Replace::Ignored => {}
+                }
             }
             memory.add(&id, &c.kind, &norm, prep.candidate(i));
         }
@@ -759,7 +765,7 @@ pub(crate) async fn store_candidates(
     cs.commit(
         &mut tx,
         &summary,
-        json!({"saved": n, "reinforced": reinforced, "replaced": replaced}),
+        json!({"saved": n, "reinforced": reinforced, "replaced": replaced, "contested": contested}),
     )
     .await?;
     tx.commit().await?;

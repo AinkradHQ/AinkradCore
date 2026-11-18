@@ -5,8 +5,8 @@
 //! (`ainkrad_core::untrusted`), and a source's turns carry their author in a tag the text cannot forge
 //! (`answer_turns`). The prompt tells the model that rules and preferences come only from user turns,
 //! but the answer is checked in code too: a `rule`/`preference` is dropped unless it is grounded in
-//! ONE user turn of ONE source it cites (`user_grounded`: stop words dropped, `Q_USER_GROUNDING` of
-//! its content words), so an instruction an assistant turn, a tool result or a document smuggled in
+//! ONE user turn of ONE source it cites (`user_grounded`: stop words dropped, negations kept,
+//! `Q_USER_GROUNDING` of its content words, the same polarity), so an instruction an assistant turn, a tool result or a document smuggled in
 //! cannot become a rule even when the model obeys it. Only transcript kinds have user turns
 //! (`answer_turns::split`). `same_as` / `replaces` must name ids the prompt showed, else the whole
 //! answer is rejected; one that targets a shown rule or preference is ignored unless the candidate
@@ -15,7 +15,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ainkrad_core::untrusted::wrap;
-use brain_model::admit::{Q_USER_GROUNDING, content_stems};
+use brain_model::admit::Grounds;
 use brain_model::item::SourceKind;
 use serde::Deserialize;
 
@@ -169,9 +169,9 @@ pub fn build_prompt(room: &str, sources: &[Source], related: &[Related]) -> Stri
 /// the rules and preferences.
 #[derive(Default)]
 pub struct Known {
-    sources: HashMap<String, Vec<HashSet<String>>>,
-    /// The content stems of each cited Jira or GitHub item (a structured connection import).
-    structured: HashMap<String, HashSet<String>>,
+    sources: HashMap<String, Vec<Grounds>>,
+    /// Each cited Jira or GitHub item as one block (a structured connection import).
+    structured: HashMap<String, Grounds>,
     shown: HashSet<String>,
     protected: HashSet<String>,
 }
@@ -185,7 +185,7 @@ impl Known {
         let mut k = Self::default();
         for (id, kind, text) in sources {
             if matches!(kind, SourceKind::Jira | SourceKind::Github) {
-                k.structured.insert(id.to_owned(), content_stems(text));
+                k.structured.insert(id.to_owned(), Grounds::of(text));
             }
             k.sources.insert(id.to_owned(), user_turns(text, kind));
         }
@@ -216,8 +216,9 @@ pub(crate) fn json_body(out: &str) -> &str {
     }
 }
 
-/// Is the body backed by what the user said: at least [`Q_USER_GROUNDING`] of its content words
-/// (stop words dropped) in ONE user turn of ONE source it cites, never the union of several.
+/// Is the body backed by what the user said: at least `Q_USER_GROUNDING` of its content words
+/// (stop words dropped, negations kept) in ONE user turn of ONE source it cites, never the union of
+/// several, with the polarity of the turn's clause it matches (`Grounds::ground`).
 pub(crate) fn user_grounded(c: &Candidate, known: &Known) -> bool {
     let turns = c.sources.iter().filter_map(|s| known.sources.get(s));
     grounded_in(&c.body, turns.flatten())
@@ -229,13 +230,8 @@ pub(crate) fn structured_grounded(c: &Candidate, known: &Known) -> bool {
     grounded_in(&c.body, c.sources.iter().filter_map(|s| known.structured.get(s)))
 }
 
-fn grounded_in<'a>(body: &str, blocks: impl Iterator<Item = &'a HashSet<String>>) -> bool {
-    let body = content_stems(body);
-    !body.is_empty()
-        && blocks.into_iter().any(|b| {
-            let hit = body.iter().filter(|w| b.contains(*w)).count();
-            hit as f32 / body.len() as f32 >= Q_USER_GROUNDING
-        })
+fn grounded_in<'a>(body: &str, mut blocks: impl Iterator<Item = &'a Grounds>) -> bool {
+    blocks.any(|b| b.ground(body))
 }
 
 /// The answer as candidates, or why it is rejected. A fenced block is unwrapped; anything else

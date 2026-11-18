@@ -70,11 +70,22 @@ pub fn decide(
     Decision::Insert
 }
 
-/// B4-02 security rule: a `replaces` that targets a `rule` or `preference` (standing instructions a
-/// person gave) takes effect only when the replacing candidate is itself grounded in a user turn;
-/// otherwise it is ignored and the candidate is saved without superseding anything.
-pub fn may_replace(target_kind: &str, grounded_in_user_turn: bool) -> bool {
-    !matches!(target_kind, "rule" | "preference") || grounded_in_user_turn
+/// What backs a candidate: ONE user turn of a source it cites, or ONE cited Jira or GitHub item
+/// (`answer::user_grounded` / `answer::structured_grounded`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Grounding {
+    pub user_turn: bool,
+    pub structured_item: bool,
+}
+
+/// B4-02 security rule, one for every kind: a true record is never retired on weak evidence. A
+/// `replaces` supersedes its target only when both are of one kind and the candidate is grounded in
+/// a user turn, or, for a `task` or `project-state`, in one cited Jira or GitHub item. Otherwise the
+/// candidate is saved alone (if admitted), the target stays in force, and the two are marked contested.
+pub fn may_supersede(candidate_kind: &str, target_kind: &str, g: Grounding) -> bool {
+    candidate_kind == target_kind
+        && (g.user_turn
+            || (g.structured_item && matches!(candidate_kind, "task" | "project-state")))
 }
 
 /// B4-02: a record of this kind goes stale, and ranks down, once it was last in use before the room's
@@ -186,12 +197,27 @@ mod tests {
     }
 
     #[test]
-    fn a_replace_of_a_rule_needs_a_user_turn() {
-        assert!(!may_replace("rule", false));
-        assert!(!may_replace("preference", false));
-        assert!(may_replace("rule", true));
-        assert!(may_replace("project-state", false));
-        assert!(may_replace("fact", false));
+    fn a_supersede_needs_one_kind_and_strong_grounding() {
+        let none = Grounding::default();
+        let user = Grounding {
+            user_turn: true,
+            ..none
+        };
+        let item = Grounding {
+            structured_item: true,
+            ..none
+        };
+        for kind in ["rule", "preference", "fact", "decision", "task", "project-state"] {
+            assert!(!may_supersede(kind, kind, none), "{kind}");
+            assert!(may_supersede(kind, kind, user), "{kind}");
+        }
+        assert!(may_supersede("task", "task", item));
+        assert!(may_supersede("project-state", "project-state", item));
+        for kind in ["rule", "preference", "fact", "decision"] {
+            assert!(!may_supersede(kind, kind, item), "{kind}");
+        }
+        assert!(!may_supersede("fact", "rule", user));
+        assert!(!may_supersede("task", "project-state", item));
     }
 
     #[test]

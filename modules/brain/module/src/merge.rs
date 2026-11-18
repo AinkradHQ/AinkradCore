@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use ainkrad_core_server::api::App;
-use brain_model::merge::{Decision, Known, may_replace, decide};
+use brain_model::merge::{Decision, Grounding, Known, decide, may_supersede};
 use brain_model::semantic::normalized;
 use sqlx::{SqliteConnection, SqlitePool};
 
@@ -189,27 +189,40 @@ pub async fn reinforce(
     Ok(())
 }
 
+/// What a `replaces` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Replace {
+    /// `old` left memory, `new` took its place.
+    Superseded,
+    /// The evidence was too weak: `old` stays in force and `new.contests` names it, for room tidy
+    /// (B9-01) to reconcile. Never an Inbox item: saving stays automatic.
+    Contested,
+    /// No such target in memory, or `old == new`: nothing written.
+    Ignored,
+}
+
 /// Supersedes memory record `old` with `new` (B4-02), in `cs`, so Undo restores both rows. `old` keeps
 /// its row as history: `superseded_by` = `new` and `valid_to` = the moment `new` became true (the
 /// `memory` view filters on `valid_to`, so setting it is what removes `old` from memory); `new` gets
 /// `supersedes` = `old` and that moment as `valid_from`. The moment is the earliest source `new` cites,
 /// else `now`, never before `old` began.
 ///
-/// Security model: `grounded` says the replacing candidate is grounded in a user turn (the
-/// `user_said` check of `answer.rs`). A `replaces` aimed at a `rule` or `preference` without it is
-/// ignored, so an assistant turn or tool output cannot retire a standing instruction. Also ignored:
-/// an `old` that is not in memory (unknown, archived, already superseded), or `old == new`.
-/// Returns whether it superseded. `new` must be saved and cited already.
+/// Security model: a true record is never retired on weak evidence (`may_supersede`): `new` must be
+/// of `old`'s kind and `g` must say it is grounded in one user turn (or, for a task or project
+/// state, in one cited Jira or GitHub item), so an assistant turn, a tool result or a document cannot
+/// retire a record of any kind. Without that, `old` stays in force and `new` is marked as contesting
+/// it. Ignored: an `old` that is not in memory (unknown, archived, already superseded), or `old ==
+/// new`. `new` must be saved and cited already.
 pub async fn supersede(
     conn: &mut SqliteConnection,
     cs: &mut ChangeSet,
     old: &str,
     new: &str,
-    grounded: bool,
+    g: Grounding,
     now: &str,
-) -> Result<bool, sqlx::Error> {
+) -> Result<Replace, sqlx::Error> {
     if old == new {
-        return Ok(false);
+        return Ok(Replace::Ignored);
     }
     let target: Option<(String, String)> =
         sqlx::query_as("SELECT type, coalesce(valid_from, created_at) FROM memory WHERE id = ?")
@@ -217,10 +230,23 @@ pub async fn supersede(
             .fetch_optional(&mut *conn)
             .await?;
     let Some((kind, began)) = target else {
-        return Ok(false);
+        return Ok(Replace::Ignored);
     };
-    if !may_replace(&kind, grounded) {
-        return Ok(false);
+    let new_kind: Option<String> = sqlx::query_scalar("SELECT type FROM records WHERE id = ?")
+        .bind(new)
+        .fetch_optional(&mut *conn)
+        .await?;
+    let Some(new_kind) = new_kind else {
+        return Ok(Replace::Ignored);
+    };
+    if !may_supersede(&new_kind, &kind, g) {
+        cs.touch(conn, new).await?;
+        sqlx::query("UPDATE records SET contests = ? WHERE id = ?")
+            .bind(old)
+            .bind(new)
+            .execute(&mut *conn)
+            .await?;
+        return Ok(Replace::Contested);
     }
     let first_source: Option<String> = sqlx::query_scalar(
         "SELECT min(s.started_at) FROM record_sources rs JOIN sources s ON s.item_id = rs.source WHERE rs.record = ?",
@@ -243,5 +269,5 @@ pub async fn supersede(
         .bind(new)
         .execute(&mut *conn)
         .await?;
-    Ok(true)
+    Ok(Replace::Superseded)
 }

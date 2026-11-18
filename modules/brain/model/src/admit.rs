@@ -158,11 +158,63 @@ const STOP_USER: &[&str] = &[
     "كانت", "يكون", "انه", "بعد", "قبل", "عند", "حتي", "لكن", "بين", "كما", "ايضا", "هناك", "عليه",
 ];
 
-/// Distinct content stems of `s`: words of 3+ characters, stop words (English, Arabic) dropped.
+/// Negation words, folded as `norm` folds. In the user-turn check they are content, never stop words,
+/// and their parity is a text's polarity (B4-02 review): "don't deploy without tests" must not ground
+/// "deploy without tests". `n't` is read as ` not` first (`words`).
+const NEGATIONS: &[&str] = &[
+    "not", "no", "never", "without", "nor", "cannot", "dont", "doesnt", "didnt", "isnt", "arent",
+    "wont", "cant", "shouldnt", "mustnt", "لا", "لم", "لن", "ليس", "ليست", "بدون", "ولا", "ولم", "ولن",
+];
+
+fn words(s: &str) -> Vec<String> {
+    tokens(&norm(s).replace("n't", " not").replace("n\u{2019}t", " not"))
+}
+
+/// An odd number of negation words.
+fn negated(s: &str) -> bool {
+    words(s).iter().filter(|w| NEGATIONS.contains(&w.as_str())).count() % 2 == 1
+}
+
+/// Distinct content stems of `s`: words of 3+ characters and every negation word, stop words
+/// (English, Arabic) dropped.
 pub fn content_stems(s: &str) -> HashSet<String> {
     let stop = |t: &str| STOP.contains(&t) || STOP_USER.contains(&t);
-    let keep = |t: &String| t.chars().count() >= 3 && !stop(t);
-    tokens(s).into_iter().filter(keep).map(|t| stem(&t)).collect()
+    let keep =
+        |t: &String| NEGATIONS.contains(&t.as_str()) || (t.chars().count() >= 3 && !stop(t));
+    words(s).into_iter().filter(keep).map(|t| stem(&t)).collect()
+}
+
+/// One block a body may be grounded in (one user turn, or one cited Jira or GitHub item): its
+/// content stems, and each clause's stems with its polarity.
+#[derive(Debug, Default)]
+pub struct Grounds {
+    stems: HashSet<String>,
+    clauses: Vec<(HashSet<String>, bool)>,
+}
+
+impl Grounds {
+    pub fn of(text: &str) -> Self {
+        let clauses: Vec<(HashSet<String>, bool)> = text
+            .split(['.', '!', '?', ';', '\n', '\u{061F}', '\u{061B}'])
+            .filter(|c| !c.trim().is_empty())
+            .map(|c| (content_stems(c), negated(c)))
+            .collect();
+        let stems = clauses.iter().flat_map(|c| c.0.iter().cloned()).collect();
+        Self { stems, clauses }
+    }
+
+    /// At least [`Q_USER_GROUNDING`] of the body's content stems are here, and the clause that shares
+    /// the most with the body has the body's polarity (a tie passes when one of them has it).
+    pub fn ground(&self, body: &str) -> bool {
+        let b = content_stems(body);
+        let hit = |s: &HashSet<String>| b.iter().filter(|w| s.contains(*w)).count();
+        if b.is_empty() || (hit(&self.stems) as f32 / b.len() as f32) < Q_USER_GROUNDING {
+            return false;
+        }
+        let neg = negated(body);
+        let best = self.clauses.iter().map(|c| hit(&c.0)).max().unwrap_or(0);
+        self.clauses.iter().any(|c| hit(&c.0) == best && c.1 == neg)
+    }
 }
 
 const GREET: &[&str] = &[
@@ -496,5 +548,35 @@ pub fn admit(c: &Candidate, cited: &[Cited], existing: &[&str]) -> Admission {
         score,
         band,
         reasons: soft,
+    }
+}
+
+#[cfg(test)]
+mod grounds_tests {
+    use super::Grounds;
+
+    #[test]
+    fn a_dropped_negation_does_not_ground() {
+        let turn = Grounds::of("Don't deploy on Fridays without tests.");
+        assert!(!turn.ground("Deploy on Fridays without tests."));
+        assert!(turn.ground("Do not deploy on Fridays without tests."));
+        let turn = Grounds::of("Deploy on Fridays without tests.");
+        assert!(!turn.ground("Never deploy on Fridays without tests."));
+        assert!(turn.ground("Deploy on Fridays without tests."));
+    }
+
+    #[test]
+    fn a_dropped_arabic_negation_does_not_ground() {
+        let turn = Grounds::of("لا ننشر يوم الجمعة بدون اختبارات");
+        assert!(!turn.ground("ننشر يوم الجمعة بدون اختبارات"));
+        assert!(turn.ground("لا ننشر يوم الجمعة بدون اختبارات"));
+        let turn = Grounds::of("ننشر يوم الجمعة");
+        assert!(!turn.ground("لن ننشر يوم الجمعة"));
+    }
+
+    #[test]
+    fn polarity_is_read_from_the_matching_clause() {
+        let turn = Grounds::of("No, that one is wrong. Deploy the billing export on Mondays.");
+        assert!(turn.ground("Deploy the billing export on Mondays."));
     }
 }
