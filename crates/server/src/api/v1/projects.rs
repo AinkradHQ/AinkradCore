@@ -7,6 +7,7 @@
 
 pub mod run_spec;
 pub mod secrets;
+pub mod runs;
 
 use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
