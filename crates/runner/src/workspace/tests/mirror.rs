@@ -44,7 +44,12 @@ fn core(copy: PathBuf, seen: Arc<Mutex<Vec<String>>>) -> Upstream {
                 .await
                 .map_err(|e| e.to_string())?;
             let mut body = Vec::new();
-            if advertise {
+            // Version 2 has no service line (as the Core's own serve code).
+            let v2 = call
+                .headers
+                .iter()
+                .any(|(n, v)| n == "git-protocol" && v.contains("version=2"));
+            if advertise && !v2 {
                 body.extend_from_slice(b"001e# service=git-upload-pack\n0000");
             }
             body.extend(out);
