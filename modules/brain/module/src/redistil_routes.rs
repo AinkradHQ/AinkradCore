@@ -3,7 +3,7 @@
 //! does not. Both answer with counts and states, never text. The engine is in `redistil`.
 
 use ainkrad_core_server::api::App;
-use ainkrad_core_server::api::v1::{ApiResult, Caller};
+use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use serde::Serialize;
@@ -11,7 +11,7 @@ use sqlx::Row;
 use utoipa::ToSchema;
 
 use crate::change_routes::person_only;
-use crate::redistil::{start, summary_line};
+use crate::redistil::{cancel as cancel_run, start, summary_line};
 use crate::{Brain, policy};
 
 #[derive(Serialize, ToSchema)]
@@ -20,7 +20,8 @@ pub struct RedistilView {
     pub room: String,
     /// A dry run reads and counts, and writes no memory.
     pub dry_run: bool,
-    /// `running`, `committing`, `done` or `failed` (start it again to resume).
+    /// `running`, `committing`, `done`, `failed` (start it again within 24 hours to resume) or
+    /// `cancelled`.
     pub state: String,
     /// Sources the run reads, and how many it has read.
     pub total: i64,
@@ -102,6 +103,23 @@ pub(crate) async fn dry_run(
     person_only(&me)?;
     let run = start(&app, &b, &me, &room, true).await?;
     show(&app, &run.id).await
+}
+
+#[utoipa::path(post, path = "/rooms/{room}/redistil/cancel", operation_id = "brainRedistilCancel", tag = "brain",
+    params(("room" = String, Path, description = "Room id")),
+    responses((status = 200, description = "Cancels the room's open run, real or dry: its waiting batch is dropped and what it staged and marked is cleared; nothing is archived (person only). 404 when no run is open; 409 `redistil_committing` while the run writes its result", body = RedistilView)))]
+pub(crate) async fn cancel(
+    State(app): State<App>,
+    Extension(b): Extension<Brain>,
+    Extension(me): Extension<Caller>,
+    Path(room): Path<String>,
+) -> ApiResult<RedistilView> {
+    person_only(&me)?;
+    policy::load(&app, &room).await?;
+    match cancel_run(&app, &b, &room).await? {
+        Some(id) => show(&app, &id).await,
+        None => Err(ApiError::not_found("no open re-distil run in this room")),
+    }
 }
 
 #[utoipa::path(get, path = "/rooms/{room}/redistil", operation_id = "brainRedistils", tag = "brain",

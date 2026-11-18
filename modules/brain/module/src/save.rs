@@ -38,6 +38,9 @@ pub(crate) struct Saved {
     pub dropped: i64,
     /// The change set, when anything changed.
     pub change: Option<String>,
+    /// Records a candidate matched by meaning or named in `same_as`, also when that match did not
+    /// end as a reinforce (a re-distil never archives these, B6-01).
+    pub matched: Vec<String>,
 }
 
 /// Writes `out` into the room as `records` with their op-log and outbox rows, in one transaction;
@@ -144,6 +147,7 @@ pub(crate) async fn save_into(
     let none = HashSet::new();
     let redactor = Redactor::new();
     let (mut n, mut accepted, mut reinforced, mut replaced, mut contested) = (0, 0, 0, 0, 0);
+    let mut matched = vec![];
     for (i, c) in out.iter().enumerate() {
         let body = redactor.text(c.body.trim());
         let norm = body_norm(&body);
@@ -152,8 +156,12 @@ pub(crate) async fn save_into(
         // A near-identical wording of the record it `replaces` is a changed fact ("Fridays" ->
         // "Mondays"), not a repeat: the model's `replaces` beats the meaning tier, but only when the
         // supersede is allowed (the meaning tier only matches one kind); else the reinforce stands.
-        if let Decision::Reinforce { id, tier } =
-            memory.decide(&c.kind, &norm, prep.candidate(i), same_as)
+        let decision = memory.decide(&c.kind, &norm, prep.candidate(i), same_as);
+        if let Decision::Reinforce { id, .. } = &decision {
+            matched.push(id.clone());
+        }
+        matched.extend(same_as.map(str::to_owned));
+        if let Decision::Reinforce { id, tier } = decision
             && !(tier == Tier::Meaning
                 && c.replaces.as_deref() == Some(id.as_str())
                 && may_supersede(&c.kind, &c.kind, g))
@@ -259,6 +267,7 @@ pub(crate) async fn save_into(
         contested,
         dropped: k,
         change: None,
+        matched,
     })
 }
 

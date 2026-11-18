@@ -26,22 +26,21 @@ mod access;
 mod ai;
 mod ai_propose;
 mod ai_semantic;
-mod context;
 mod aliases;
 mod answer;
 mod answer_turns;
 mod auto_distil;
 mod backfill;
 pub mod card;
-pub mod me_card;
 mod change_routes;
-mod checkpoint;
 pub mod changes;
+mod checkpoint;
 pub mod cipher;
 mod claim;
 pub mod clean;
 pub mod collectors;
 mod commit;
+mod context;
 mod distil;
 mod echo;
 pub mod eval;
@@ -50,9 +49,10 @@ mod imports;
 mod inbox;
 mod index;
 mod judge;
-mod loaded;
 pub mod key;
+mod loaded;
 mod lore;
+pub mod me_card;
 pub mod merge;
 mod overview;
 pub mod overview_select;
@@ -64,14 +64,14 @@ mod redistil;
 mod redistil_routes;
 pub mod retention;
 mod review;
+mod room_tidy;
+mod room_tidy_run;
 pub mod rooms;
 mod rules_api;
 mod save;
 pub mod semantic;
 mod suggest;
 mod sync;
-mod room_tidy;
-mod room_tidy_run;
 mod tidy;
 pub use tidy::{TidyChange, TidySummary};
 mod transcripts;
@@ -184,6 +184,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/rooms/{room}/inbox/{id}"),
     ("POST", "/rooms/{room}/changes/{id}/undo"),
     ("POST", "/rooms/{room}/redistil/dry-run"),
+    ("POST", "/rooms/{room}/redistil/cancel"),
     ("PUT", "/sources/{id}"),
     ("POST", "/ai/rooms/{room}/propose"),
     ("POST", "/ai/checkpoint"),
@@ -557,6 +558,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         retention::preview,
         redistil_routes::apply,
         redistil_routes::dry_run,
+        redistil_routes::cancel,
         redistil_routes::list,
         distil::start,
         distil::list,
@@ -737,6 +739,10 @@ impl Module for Brain {
                 "/rooms/{room}/redistil/dry-run",
                 post(redistil_routes::dry_run),
             )
+            .route(
+                "/rooms/{room}/redistil/cancel",
+                post(redistil_routes::cancel),
+            )
             .route("/rooms/{room}/distil", post(distil::start))
             .route("/rooms/{room}/distils", get(distil::list))
             .route("/rooms/{room}/overview", get(overview::get))
@@ -836,11 +842,14 @@ impl Module for Brain {
             "brain.redistil.done",
             "brain.redistil.previewed",
             "brain.redistil.failed",
+            "brain.redistil.cancelled",
         ]
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["q", "room", "mode", "status", "limit", "after", "prompt", "budget"]
+        &[
+            "q", "room", "mode", "status", "limit", "after", "prompt", "budget",
+        ]
     }
 
     fn jobs(&self) -> Vec<Job> {

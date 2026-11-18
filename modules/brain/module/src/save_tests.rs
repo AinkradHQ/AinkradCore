@@ -315,3 +315,56 @@ async fn an_ai_save_never_supersedes() {
         assert_eq!(in_force == 1, !superseded, "ai = {ai}");
     }
 }
+
+/// B6-01 review: a reworded task matched by meaning that names the record it `replaces` is saved as
+/// a new record (here only a candidate, the room does not auto-accept tasks), so the old one is not
+/// reinforced. `matched` still names it, and a re-distil never archives it.
+#[tokio::test]
+async fn a_meaning_match_is_reported_even_when_it_ends_as_a_candidate() {
+    let (_d, pool) = room().await;
+    save(
+        &pool,
+        &[cand(
+            "task",
+            "Rotate the deploy keys in scripts/deploy.sh before Friday.",
+        )],
+        &[],
+    )
+    .await;
+    let (old, norm): (String, String) = sqlx::query_as("SELECT id, body_norm FROM records")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let v = vec![1.0, 0.0, 0.0];
+    let prep = Prepared::of(
+        vec![Some(v.clone())],
+        HashMap::from([(crate::ai_semantic::record_hash(&norm), v)]),
+    );
+    let mut c = cand(
+        "task",
+        "Rotate the deploy keys in scripts/deploy.sh before Monday.",
+    );
+    c.replaces = Some(old.clone());
+    let mut p = policy();
+    p.auto_accept.retain(|k| k != "task");
+    let s = store_candidates(
+        &pool,
+        "dst-2",
+        &[c],
+        &[],
+        &p,
+        &DistilledBy::default(),
+        NOW,
+        &prep,
+        &[Grounding {
+            user_turn: true,
+            structured_item: false,
+        }],
+        &HashMap::new(),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!((s.reinforced, s.saved, s.accepted), (0, 1, 0));
+    assert_eq!(s.matched, vec![old]);
+}

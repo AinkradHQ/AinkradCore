@@ -299,7 +299,9 @@ pub(crate) async fn related_in(pool: &SqlitePool) -> Result<Vec<Related>, sqlx::
 }
 
 /// The next sources to read: the room's undistilled ones, or, for a re-distil batch of `run`
-/// (B6-01), the ones that run has not read yet.
+/// (B6-01), the ones that run has not read yet. A text longer than what is left of the prompt is
+/// cut; the cut length goes into `distil.shown`, and a re-distil counts a cut source as unread, so
+/// nothing citing it is archived (`read_in_full`).
 async fn sources_for(pool: &SqlitePool, run: Option<&str>) -> Result<Vec<Source>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT item_id, source_kind, title, text, started_at FROM sources WHERE pointer = 0 AND \
@@ -680,7 +682,8 @@ async fn save(
     // A re-distil batch is staged, not saved: the run writes every batch in one change set (B6-01).
     if let Some(run) = crate::redistil::run_of(app, &d.id).await? {
         let n = out.len();
-        crate::redistil::stage(&pool, &run, &d.id, out, dropped, by, &grounded).await?;
+        let read = read_in_full(&taken, &shown, &out);
+        crate::redistil::stage(&pool, &run, &d.id, &out, &dropped, by, &grounded, &read).await?;
         pool.close().await;
         ainkrad_core_server::store::agents::seal(&app.pool, session).await?;
         return Ok(set_state(app, &d.id, "done", "", Some(("candidates", n as i64))).await?);
@@ -787,6 +790,25 @@ pub(crate) fn may_store(c: &Candidate, policy: &policy::Policy, known: &Known) -
     !(matches!(c.kind.as_str(), "task" | "project-state") && auto_ok(c, policy))
         || user_grounded(c, known)
         || structured_grounded(c, known)
+}
+
+/// The taken sources a re-distil may count as read (B6-01): the prompt showed the whole text (its
+/// `distil.shown` cut is the full length; no cut recorded is not read), and an admitted candidate
+/// cites it. A source whose candidates grounding, the judge or a judge that could not start dropped
+/// is not read, so one empty or hostile batch cannot archive the facts of the sources around it.
+pub(crate) fn read_in_full(
+    taken: &[(String, String, String)],
+    shown: &serde_json::Value,
+    out: &[Candidate],
+) -> Vec<String> {
+    taken
+        .iter()
+        .filter(|(id, _, text)| {
+            shown["cut"][id.as_str()].as_u64() == Some(text.len() as u64)
+                && out.iter().any(|c| c.sources.contains(id))
+        })
+        .map(|(id, _, _)| id.clone())
+        .collect()
 }
 
 /// `text` cut where the prompt cut source `id` (`distil.shown`), on a character boundary.

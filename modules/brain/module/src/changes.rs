@@ -241,12 +241,24 @@ pub struct Undone {
 pub enum Refused {
     /// A purge holds no row images.
     Purge,
-    /// Older than `PURGE_DAYS`: the evidence of what it archived may be compacted or purged by now.
+    /// Older than its Undo window (`undo_days`): the evidence of what it archived may be compacted or
+    /// purged by now.
     Expired,
 }
 
+/// How long a change set of `kind` may be undone: a room tidy for `PURGE_DAYS + TIDY_EXTRA_DAYS`
+/// (90; its archived records are kept that long, `purge_room`, and so is their evidence,
+/// `retention`), every other kind for `PURGE_DAYS` (30).
+pub fn undo_days(kind: &str) -> i64 {
+    if kind == "tidy" {
+        PURGE_DAYS + TIDY_EXTRA_DAYS
+    } else {
+        PURGE_DAYS
+    }
+}
+
 /// Undoes `change` in the caller's transaction. None: no such change set. Err: it cannot be undone
-/// (`Refused`); a change set is undoable for `PURGE_DAYS` after it was made.
+/// (`Refused`); a change set is undoable for `undo_days(kind)` after it was made.
 pub async fn undo(
     tx: &mut SqliteConnection,
     change: &str,
@@ -255,11 +267,12 @@ pub async fn undo(
     // The claim is the first write, so two Undo calls cannot both restore.
     let claimed = sqlx::query(
         "UPDATE changes SET undone_at = ?1 WHERE id = ?2 AND undone_at IS NULL AND kind <> 'purge' \
-         AND julianday(at) >= julianday(?1) - ?3",
+         AND julianday(at) >= julianday(?1) - CASE WHEN kind = 'tidy' THEN ?3 + ?4 ELSE ?3 END",
     )
     .bind(now)
     .bind(change)
     .bind(PURGE_DAYS)
+    .bind(TIDY_EXTRA_DAYS)
     .execute(&mut *tx)
     .await?
     .rows_affected();

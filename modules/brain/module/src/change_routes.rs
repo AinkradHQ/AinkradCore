@@ -210,7 +210,7 @@ pub(crate) async fn undo_route(
             return Err(code(
                 409,
                 "undo_expired",
-                "this change is older than 30 days and can no longer be undone",
+                "this change is older than its Undo window (30 days, 90 for a tidy) and can no longer be undone",
             ));
         }
         Some(Ok(d)) => d,

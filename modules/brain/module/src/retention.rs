@@ -5,7 +5,7 @@
 //! daily job reads only that setting, never a request; `GET /rooms/{room}/retention` is the dry run
 //! and writes nothing. A source is compacted only when ALL hold: it is older than N days (counted from the later of its date and its import), a
 //! distillation took it (`distilled`) and that run finished (`done`; a failed or open run does not count), it is not waiting for a
-//! re-distil (`redistil`), and no `candidate` record and no record archived inside the 30-day undo
+//! re-distil (`redistil`), and no `candidate` record and no record archived inside the 30-day undo (90 for a room tidy)
 //! window cites it (Undo must find its evidence). The stub keeps title, hash, path, dates and
 //! author; `text` becomes '' and `compacted_at` is set, so `brainAiEvidence` answers "compacted".
 //! The search index rows and the stored vector of the text are dropped (freed pages zeroed), `brain_seen` keeps the hash so
@@ -26,10 +26,13 @@ use serde_json::json;
 use sqlx::{Row, SqlitePool};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::changes::PURGE_DAYS;
+use crate::changes::{PURGE_DAYS, TIDY_EXTRA_DAYS};
 use crate::distil::log_op;
 use crate::{Brain, files, record, vectors};
 use files::{CANON, INDEX};
+
+// `eligible_where!` spells the tidy window out as '-60 days'.
+const _: () = assert!(TIDY_EXTRA_DAYS == 60);
 
 /// The longest retention a room can set (ten years).
 pub const MAX_DAYS: u32 = 3650;
@@ -40,7 +43,8 @@ const CRON: &str = "23 4 * * *";
 const PER_RUN: i64 = 500;
 
 /// Which sources may go, as a WHERE over `sources s`. `?1` the age cutoff, `?2` the start of the undo
-/// window, `?3` a JSON list of the room's DONE distil run ids (a failed, rejected or open run never
+/// window (a room tidy's window starts `TIDY_EXTRA_DAYS` earlier: its change sets may be undone for 90
+/// days, `changes::undo_days`), `?3` a JSON list of the room's DONE distil run ids (a failed, rejected or open run never
 /// counts as having read a source). A source is as old as the later of its own date and the time it
 /// was imported (its `source.add`/`source.update` op), so an old chat export is not compacted the day
 /// after it arrives. The `source_ids` arm mirrors `brainAiEvidence`: writers may still fill only that
@@ -63,7 +67,9 @@ macro_rules! eligible_where {
              UNION \
              SELECT json_extract(j.value, '$[0]') FROM change_rows cr JOIN changes c ON c.id = cr.change, \
                     json_each(CASE WHEN json_valid(cr.before) THEN cr.before ELSE '{}' END, '$._sources') j \
-               WHERE c.undone_at IS NULL AND c.at >= ?2 AND json_extract(j.value, '$[0]') IS NOT NULL)"
+               WHERE c.undone_at IS NULL AND json_extract(j.value, '$[0]') IS NOT NULL \
+                 AND c.at >= CASE WHEN c.kind = 'tidy' \
+                                  THEN strftime('%Y-%m-%dT%H:%M:%fZ', ?2, '-60 days') ELSE ?2 END)"
     };
 }
 
@@ -155,7 +161,10 @@ pub async fn compact(
     cands: &[Candidate],
 ) -> Result<Compacted, sqlx::Error> {
     let mut tx = begin_write(pool).await?;
-    let mut out = Compacted { ids: vec![], chars: 0 };
+    let mut out = Compacted {
+        ids: vec![],
+        chars: 0,
+    };
     for c in cands {
         let done = sqlx::query(COMPACT)
             .bind(&w.cutoff)
@@ -174,11 +183,13 @@ pub async fn compact(
         }
     }
     if !out.ids.is_empty() {
-        sqlx::query("INSERT INTO room_audit (action, detail, at) VALUES ('retention.compacted', ?, ?)")
-            .bind(json!({"sources": out.ids.len(), "chars": out.chars}).to_string())
-            .bind(now)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "INSERT INTO room_audit (action, detail, at) VALUES ('retention.compacted', ?, ?)",
+        )
+        .bind(json!({"sources": out.ids.len(), "chars": out.chars}).to_string())
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
     }
     tx.commit().await?;
     Ok(out)
@@ -230,7 +241,10 @@ pub(crate) async fn preview(
         room,
         days,
         would_compact: u32::try_from(found.len()).unwrap_or(u32::MAX),
-        chars: found.iter().map(|c| u64::try_from(c.chars).unwrap_or(0)).sum(),
+        chars: found
+            .iter()
+            .map(|c| u64::try_from(c.chars).unwrap_or(0))
+            .sum(),
     }))
 }
 
@@ -253,9 +267,16 @@ impl Brain {
         .await?;
         let mut total = 0;
         for (room, days) in rooms {
-            let Ok(days) = u32::try_from(days) else { continue };
-            let Ok(pool) =
-                files::open_migrated(&files::room_path(&files::root(app), &room), &key, false, CANON).await
+            let Ok(days) = u32::try_from(days) else {
+                continue;
+            };
+            let Ok(pool) = files::open_migrated(
+                &files::room_path(&files::root(app), &room),
+                &key,
+                false,
+                CANON,
+            )
+            .await
             else {
                 continue;
             };
@@ -304,11 +325,16 @@ impl Brain {
         pool: &SqlitePool,
     ) -> Result<(usize, i64), ApiError> {
         // Freed pages are zeroed, not left holding the text.
-        sqlx::query("PRAGMA secure_delete = ON").execute(pool).await?;
+        sqlx::query("PRAGMA secure_delete = ON")
+            .execute(pool)
+            .await?;
         let w = Window::new(app.clock.unix(), days, &done_runs(app, room).await?);
         let found = eligible(pool, &w, PER_RUN).await?;
         let done = if found.is_empty() {
-            Compacted { ids: vec![], chars: 0 }
+            Compacted {
+                ids: vec![],
+                chars: 0,
+            }
         } else {
             compact(pool, &w, &app.clock.now(), &found).await?
         };
@@ -319,11 +345,18 @@ impl Brain {
                     .await
                     .map_err(|e| crate::code(500, "index_unavailable", e.to_string()))?;
                 let scrub = async {
-                    sqlx::query("PRAGMA secure_delete = ON").execute(&index).await?;
+                    sqlx::query("PRAGMA secure_delete = ON")
+                        .execute(&index)
+                        .await?;
                     for id in &done.ids {
-                        sqlx::query("DELETE FROM fts WHERE item_id = ?").bind(id).execute(&index).await?;
+                        sqlx::query("DELETE FROM fts WHERE item_id = ?")
+                            .bind(id)
+                            .execute(&index)
+                            .await?;
                     }
-                    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(&index).await?;
+                    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+                        .execute(&index)
+                        .await?;
                     Ok::<_, sqlx::Error>(())
                 }
                 .await;
@@ -339,7 +372,9 @@ impl Brain {
         if !hashes.is_empty() {
             vectors::delete(app, self, &hashes).await?;
         }
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(pool).await?;
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(pool)
+            .await?;
         Ok((done.ids.len(), done.chars))
     }
 }

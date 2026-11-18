@@ -4,11 +4,14 @@ CREATE TABLE brain_redistils (
     room         TEXT NOT NULL REFERENCES brain_rooms(id),
     dry_run      INTEGER NOT NULL CHECK (dry_run IN (0, 1)),
     -- running: reading sources in batches; committing: all read, the one write is next (retried until
-    -- it lands); done; failed (3 failures in a row, resumed by starting the same run again).
-    state        TEXT NOT NULL CHECK (state IN ('running', 'committing', 'done', 'failed')),
+    -- it lands); done; failed (3 failures in a row, no local model at the commit, or no progress in
+    -- 12 hours; starting it again within 24 hours resumes it); cancelled (by a person, or a dry run a
+    -- real run replaced).
+    state        TEXT NOT NULL CHECK (state IN ('running', 'committing', 'done', 'failed', 'cancelled')),
     requested_by TEXT NOT NULL,
     started_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL,
+    progress_at  TEXT,                 -- when it last read a source (start, before the first)
     total        INTEGER NOT NULL DEFAULT 0,
     read         INTEGER NOT NULL DEFAULT 0,
     failures     INTEGER NOT NULL DEFAULT 0,
