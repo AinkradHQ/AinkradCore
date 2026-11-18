@@ -20,6 +20,8 @@
 //! - An ssh terminal goes only to a runner that lists `pty.ssh`: an older one would open a LOCAL
 //!   shell. Checked here before any lease is made, and by the hub on every dispatch.
 //! - The session row ends with the terminal (exit, host-key refusal, or the runner lost).
+//! - A host with recording on gets its output (never its input) written by `record`, set up here
+//!   before the terminal's id leaves the Core.
 
 use ainkrad_core::audit::NewAuditEvent;
 use ainkrad_core_server::api::App;
@@ -61,6 +63,8 @@ pub struct SessionView {
     pub terminal: String,
     pub runner: String,
     pub started_at: String,
+    /// The session is being recorded (a person sees this as a visible Recording indicator).
+    pub recording: bool,
 }
 
 fn refuse(code: &'static str, why: &'static str) -> ApiError {
@@ -300,7 +304,18 @@ pub(crate) async fn start(
             .fetch_one(&mut *tx)
             .await?;
     tx.commit().await?;
-    let (a, s) = (app.clone(), session.clone());
+    // Before the monitor below can end the session: a tap set after the end would never be removed.
+    let recording = crate::record::begin(app, &session, id, &t.id, size).await;
+    if recording {
+        let mut c = app.pool.acquire().await?;
+        events::append(
+            &mut c,
+            "leyline.session",
+            &json!({"op": "recording", "id": session, "host": id, "recording": true}),
+        )
+        .await?;
+    }
+    let (a, s, terminal) = (app.clone(), session.clone(), t.id.clone());
     tokio::spawn(async move {
         // The monitor went without telling us how it ended: the runner (or the Core's hold on it)
         // is lost, which is what the session records.
@@ -308,7 +323,10 @@ pub(crate) async fn start(
             lost: true,
             ..Ended::default()
         });
-        if conclude(&a, &s, &chain, end).await.is_err() {
+        let closed = conclude(&a, &s, &chain, end).await;
+        // The recording ends with the terminal: dropping the tap lets its writer finish the file.
+        a.terminals.untap(&terminal);
+        if closed.is_err() {
             tracing::warn!("a leyline session could not be closed out");
         }
     });
@@ -318,6 +336,7 @@ pub(crate) async fn start(
         terminal: t.id,
         runner,
         started_at: started,
+        recording,
     })
 }
 

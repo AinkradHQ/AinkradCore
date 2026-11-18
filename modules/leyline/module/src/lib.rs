@@ -3,7 +3,8 @@
 //! text out (API and table), `leyline.*` events and audit; and keys (Y1-02): generated or imported,
 //! sealed in the Core's secret store, public data only in the API; and project attachments (Y1-03).
 //! SSH itself runs on a runner (Y2); the command gate (`gate`, Y4-01), host terminals and host-key
-//! trust (Y3-01) and making a host a runner (Y8-01) are here.
+//! trust (Y3-01), making a host a runner (Y8-01), and session history, recording and replay
+//! (Y3-02) are here.
 //!
 //! Module off, the Core is unchanged: the tables are its own `leyline_` namespace, no Core
 //! migration, no Core crate names this module.
@@ -12,16 +13,21 @@ mod address;
 mod ai;
 mod alerts;
 mod attach;
+mod cast;
 mod commands;
 mod exec;
 mod fleet;
 pub mod gate;
 mod health;
+mod history;
 pub mod hostkeys;
 mod hosts;
 mod keys;
 mod makerunner;
 mod policy;
+/// Terminal recording; public so `benches/relay_tap.rs` can time the relay's tap.
+pub mod record;
+mod scrub;
 mod terminal;
 mod valid;
 
@@ -81,6 +87,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0007_fleet.up.sql"),
         down: include_str!("../migrations/0007_fleet.down.sql"),
     },
+    Migration {
+        version: 8,
+        name: "0008_recordings",
+        up: include_str!("../migrations/0008_recordings.up.sql"),
+        down: include_str!("../migrations/0008_recordings.down.sql"),
+    },
 ];
 
 // A key write is a secret write: importing needs the step-up like the Core's own secret writes.
@@ -93,6 +105,10 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     // decision that could point a session at an impostor.
     ("POST", "/hosts/{host}/terminals"),
     ("POST", "/hosts/{host}/host-keys/replace"),
+    // Recording on or off both need it: turning it off hides what happens on a host. Resuming a
+    // paused recording too; pausing does not (a person who sees one can stop it at once).
+    ("PUT", "/hosts/{host}/recording"),
+    ("POST", "/sessions/{session}/recording/resume"),
     // Installs software as root on a host and pairs it: a person at a live step-up.
     ("POST", "/hosts/{host}/runner"),
 ];
@@ -109,6 +125,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/fleet/runs"),
     ("POST", "/runs/{run}/cancel"),
     ("POST", "/hosts/{host}/host-keys/trust"),
+    ("POST", "/sessions/{session}/recording/pause"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
     ("POST", "/ai/hosts/{host}/exec"),
@@ -143,6 +160,12 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts/{host}/host-keys", "read"),
     // The terminal scope, as the Core's own terminal routes.
     ("POST", "/hosts/{host}/terminals", "terminal"),
+    ("GET", "/hosts/{host}/sessions", "read"),
+    ("GET", "/projects/{project}/sessions", "read"),
+    // A recording is terminal content: the terminal scope, and a step-up in the handler.
+    ("GET", "/sessions/{session}/recording", "terminal"),
+    ("POST", "/sessions/{session}/recording/pause", "terminal"),
+    ("POST", "/sessions/{session}/recording/resume", "terminal"),
     ("POST", "/hosts/{host}/runner", "terminal"),
 ];
 
@@ -185,6 +208,12 @@ pub struct Leyline;
         hostkeys::trust_route,
         hostkeys::replace_route,
         terminal::open,
+        history::host_sessions,
+        history::project_sessions,
+        history::set_recording,
+        history::replay,
+        history::pause,
+        history::resume,
         makerunner::make
     ),
     components(schemas(
@@ -221,6 +250,10 @@ pub struct Leyline;
         hostkeys::Pick,
         terminal::NewSession,
         terminal::SessionView,
+        history::SessionRow,
+        history::NewRecording,
+        history::HostRecording,
+        history::Paused,
         makerunner::Install
     ))
 )]
@@ -232,6 +265,8 @@ impl Module for Leyline {
     }
 
     fn attach(&self, app: &App) {
+        history::attach(app);
+        health::attach(app);
         // A host terminal's monitor lives in the process: rows left open by the last one are over.
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let app = app.clone();
@@ -258,6 +293,18 @@ impl Module for Leyline {
                 post(hostkeys::replace_route),
             )
             .route("/hosts/{host}/terminals", post(terminal::open))
+            .route("/hosts/{host}/sessions", get(history::host_sessions))
+            .route("/hosts/{host}/recording", put(history::set_recording))
+            .route(
+                "/projects/{project}/sessions",
+                get(history::project_sessions),
+            )
+            .route("/sessions/{session}/recording", get(history::replay))
+            .route("/sessions/{session}/recording/pause", post(history::pause))
+            .route(
+                "/sessions/{session}/recording/resume",
+                post(history::resume),
+            )
             .route("/hosts/{host}/runner", post(makerunner::make))
             .route("/groups", get(hosts::groups))
             .route("/tags", get(hosts::tags))
@@ -328,6 +375,12 @@ impl Module for Leyline {
             "leyline.hostkey.replaced",
             "leyline.session.opened",
             "leyline.session.ended",
+            "leyline.recording.on",
+            "leyline.recording.off",
+            "leyline.recording.replayed",
+            "leyline.recording.paused",
+            "leyline.recording.resumed",
+            "leyline.recording.pruned",
             "leyline.run.requested",
             "leyline.run.approval",
             "leyline.run.allowed",
@@ -337,7 +390,7 @@ impl Module for Leyline {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["group", "tag", "path"]
+        &["group", "tag", "limit", "path"]
     }
 
     fn scope(&self) -> &'static str {
@@ -369,7 +422,9 @@ impl Module for Leyline {
     }
 
     fn jobs(&self) -> Vec<Job> {
-        health::jobs()
+        let mut jobs = health::jobs();
+        jobs.extend(history::jobs());
+        jobs
     }
 
     fn openapi(&self) -> Value {
