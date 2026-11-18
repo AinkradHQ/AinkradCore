@@ -49,9 +49,9 @@ fn hop_by_hop_proxy_and_core_headers_are_not_forwarded() {
         ("upgrade", "h2c"),
         ("proxy-authorization", "Basic x"),
         ("host", "core.ainkrad.io"),
-        ("forwarded", "for=1.2.3.4"),
-        ("x-forwarded-for", "1.2.3.4"),
-        ("x-real-ip", "1.2.3.4"),
+        ("forwarded", "for=203.0.113.44"),
+        ("x-forwarded-for", "203.0.113.44"),
+        ("x-real-ip", "203.0.113.44"),
         ("x-ainkrad-session", "s_1"),
         ("accept", "text/html"),
         ("cookie", "app=1"),
@@ -104,11 +104,11 @@ fn the_primary_port_is_webs_else_the_first_exposed_by_name() {
 fn client_claims_pass_only_from_the_edge() {
     let mut h = HeaderMap::new();
     for (n, v) in [
-        ("cf-connecting-ip", "6.6.6.6"),
+        ("cf-connecting-ip", "203.0.113.66"),
         ("cf-ipcountry", "XX"),
-        ("true-client-ip", "6.6.6.6"),
-        ("x-client-ip", "6.6.6.6"),
-        ("client-ip", "6.6.6.6"),
+        ("true-client-ip", "203.0.113.66"),
+        ("x-client-ip", "203.0.113.66"),
+        ("client-ip", "203.0.113.66"),
         ("accept", "text/html"),
     ] {
         h.append(n, HeaderValue::from_static(v));
@@ -138,7 +138,7 @@ fn the_client_is_cf_connecting_ip_only_from_a_cloudflare_peer() {
     let ip = |s: &str| Some(s.parse::<IpAddr>().unwrap());
     // Direct: the peer, whatever it claims.
     assert_eq!(
-        client_ip(&req("203.0.113.9", Some("6.6.6.6")), &edge),
+        client_ip(&req("203.0.113.9", Some("203.0.113.66")), &edge),
         (ip("203.0.113.9"), false)
     );
     // Through Cloudflare: its header; the edge itself when it sends none or junk.
