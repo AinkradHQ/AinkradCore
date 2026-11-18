@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core"
-version = "0.8.11"
+version = "0.9.0"
 
 [[package]]
 name = "ainkrad-core-citadel"
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core-server"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "age",
  "ainkrad-core",
@@ -183,7 +183,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-gitfixture"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "rcgen",
  "rustls",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-harness"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "ainkrad-sys",
  "getrandom 0.4.3",
@@ -206,7 +206,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-proto"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "schemars",
  "serde",
@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-providers"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "axum",
  "reqwest 0.12.28",
@@ -225,7 +225,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-ptyhost"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "ainkrad-proto",
  "ainkrad-sys",
@@ -241,7 +241,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-runner"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "ainkrad-harness",
  "ainkrad-proto",
@@ -267,14 +267,14 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-sys"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "ainkrad-term"
-version = "0.8.11"
+version = "0.9.0"
 dependencies = [
  "vt100",
 ]
