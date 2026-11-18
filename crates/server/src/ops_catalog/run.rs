@@ -25,6 +25,16 @@ use super::{Op, Risk, args, session_principal};
 use crate::api::App;
 use crate::api::v1::{Caller, Client};
 
+tokio::task_local! {
+    static APPROVAL_LEFT: Duration;
+}
+
+/// How long the Code Mode call now running still waits for a person (the `wait_ms` and the
+/// approval limit), for a module route that asks one itself. `None` outside a Code Mode call.
+pub fn approval_left() -> Option<Duration> {
+    APPROVAL_LEFT.try_with(|d| *d).ok()
+}
+
 /// A flag: absent or null is false.
 fn flag(v: &Value) -> Result<bool, ()> {
     match v {
@@ -377,8 +387,13 @@ async fn send(app: &App, op: &Op, req: &Req<'_>, lim: &Limits, method: &Method) 
     } else {
         lim.call_wall
     };
-    let sent =
-        tokio::time::timeout(wall, crate::api::v1::router(app.clone()).oneshot(request)).await;
+    // The handler learns how long this caller still waits, so an approval it asks for is never
+    // held past it (`approval_left`).
+    let call = APPROVAL_LEFT.scope(
+        req.approval,
+        crate::api::v1::router(app.clone()).oneshot(request),
+    );
+    let sent = tokio::time::timeout(wall, call).await;
     drop(flight);
     let fail = |code: &str, msg: &str| Done {
         op: Some((op.id.clone(), op.risk)),

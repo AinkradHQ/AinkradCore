@@ -47,8 +47,8 @@ use ainkrad_core::settings::{Key, Scope};
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::ApiError;
 use ainkrad_core_server::ops_catalog::{
-    Outcome, Waiting, consume_approval, create_approval, new_approval_id, session_principal,
-    void_approval, wait_approval,
+    Outcome, Waiting, abandon_approval, approval_left, consume_approval, create_approval,
+    new_approval_id, session_principal, void_approval, wait_approval,
 };
 use ainkrad_core_server::store::connections::access;
 use ainkrad_core_server::store::{begin_write, gov, settings};
@@ -68,7 +68,7 @@ use crate::valid::new_id;
 mod runs;
 pub use runs::finish;
 pub(crate) use runs::literal_secret;
-use runs::{Parked, cancel, note, redacted, settle, write_run};
+use runs::{Abandon, Parked, cancel, note, redacted, settle, write_run};
 
 /// `s` with secret shapes masked: what a stored text goes through.
 pub(crate) fn redact_text(s: &str) -> String {
@@ -556,6 +556,13 @@ async fn park_and_settle(
             unreachable!("only an AI session is asked about");
         };
         let id = new_approval_id();
+        // The call dropped (the caller gave up) while the approval is open: it is voided.
+        let mut open = Abandon {
+            pool: app.pool.clone(),
+            id: id.clone(),
+            session: session.clone(),
+            armed: true,
+        };
         let outcome = ask(
             app,
             (&id, session, runner),
@@ -601,6 +608,7 @@ async fn park_and_settle(
             // Approved for something that is no longer there: never spendable later.
             void_approval(&app.pool, &id, session).await?;
         }
+        open.armed = false;
         let why = match (&outcome, spent) {
             (Outcome::Approved(_), true) => None,
             (Outcome::Approved(_), false) if !cmd_same => {
@@ -650,10 +658,18 @@ fn op_hash(action: &Action, cmd: Option<&Cmd>, hosts: &[H]) -> String {
         .collect()
 }
 
+/// A control character or a bidi override: text a card or an exec line must not carry, because the
+/// person would read something other than what runs (U+202A-202E, U+2066-2069).
+pub(crate) fn hides(s: &str) -> bool {
+    s.chars()
+        .any(|c| c.is_control() || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'))
+}
+
 /// A text the card can show exactly as it is: short (a `$VAR`, `${NAME}` or `$(...)` value is shown
-/// as written; a secret written out is not).
-fn too_long(s: &str) -> bool {
-    s.chars().count() > CARD_TEXT
+/// as written; a secret written out is not) and with nothing in it that hides or rewrites what the
+/// person reads.
+pub(crate) fn shows_whole(s: &str) -> bool {
+    s.chars().count() <= CARD_TEXT && !hides(s)
 }
 
 /// Parks the approval of the `ask` hosts and waits for the person.
@@ -686,14 +702,18 @@ async fn ask(
     if texts.iter().any(|t| literal_secret(t)) {
         return Err(refuse("the command contains a secret"));
     }
-    if texts.iter().any(|t| too_long(t)) || args.to_string().len() > CARD_ALL {
+    if texts.iter().any(|t| !shows_whole(t)) || args.to_string().len() > CARD_ALL {
         return Err(refuse("too long to show for approval"));
     }
     let summary = format!("Run {} on {} host(s).", action.op(), names.len());
     let secs = settings::value(&app.pool, Key::CodeModeApprovalSecs, Scope::Server)
         .await
         .map_err(|_| ApiError::from(sqlx::Error::PoolClosed))?;
-    let ttl = u64::try_from(secs).unwrap_or(0);
+    // Never held past what the caller still waits (a Code Mode call's `wait_ms`).
+    let mut ttl = u64::try_from(secs).unwrap_or(0);
+    if let Some(left) = approval_left() {
+        ttl = ttl.min(left.as_secs());
+    }
     let waiting = Waiting::new(&app.code_mode, id);
     create_approval(
         app,
@@ -716,4 +736,32 @@ async fn ask(
     )
     .await?;
     Ok(out)
+}
+
+#[cfg(test)]
+mod hides_tests {
+    use super::*;
+
+    #[test]
+    fn control_and_bidi_text_is_never_shown_whole() {
+        for bad in [
+            "ls\nrm -rf /",
+            "ls\r",
+            "a\u{1b}[2J",
+            "a\tb",
+            "a\0b",
+            "ls \u{202E}gnp.txt",
+            "a\u{202A}b",
+            "a\u{2066}b",
+            "a\u{2069}b",
+        ] {
+            assert!(hides(bad), "{bad:?}");
+            assert!(!shows_whole(bad), "{bad:?}");
+        }
+        for fine in ["uptime", "ls -la /var/log", "echo é世界", "echo \u{200B}x"] {
+            assert!(!hides(fine), "{fine:?}");
+            assert!(shows_whole(fine), "{fine:?}");
+        }
+        assert!(!shows_whole(&"x".repeat(CARD_TEXT + 1)));
+    }
 }

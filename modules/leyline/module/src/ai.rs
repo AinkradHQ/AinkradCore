@@ -35,7 +35,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::commands::{RunRequest, RunStarted, RunView};
 use crate::exec::{sftp, why};
-use crate::gate::{Action, Authorized, Principal, authorize, finish, redact_text};
+use crate::gate::{Action, Authorized, Principal, authorize, finish, hides, redact_text};
 use crate::hosts::{In, find};
 
 /// The most a file read returns (T11).
@@ -97,6 +97,35 @@ fn own_run(me: &Caller, run: &mut RunView) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// A file call's run row: closed by `end`, or as failed in the background when the call is dropped
+/// (the caller timed out), so a run is never left `queued`.
+struct Open {
+    app: App,
+    auth: Option<Authorized>,
+}
+
+impl Open {
+    fn auth(&self) -> &Authorized {
+        self.auth.as_ref().expect("open until it ends")
+    }
+
+    async fn end(mut self, ok: bool) -> Result<(), ApiError> {
+        let auth = self.auth.take().expect("open until it ends");
+        finish(&self.app, auth, ok).await
+    }
+}
+
+impl Drop for Open {
+    fn drop(&mut self) {
+        if let (Some(auth), Ok(h)) = (self.auth.take(), tokio::runtime::Handle::try_current()) {
+            let app = self.app.clone();
+            h.spawn(async move {
+                let _ = finish(&app, auth, false).await;
+            });
+        }
+    }
+}
+
 /// The host a session names, resolved (id, else unique label), then gated.
 async fn gated(app: &App, me: &Caller, host: &str, action: Action) -> Result<Authorized, ApiError> {
     session_only(me)?;
@@ -123,7 +152,7 @@ pub(crate) async fn exec(
     In(req): In<ExecRequest>,
 ) -> ApiResult<RunStarted> {
     let line = req.command.trim();
-    if line.is_empty() || line.len() > MAX_LINE || line.contains('\0') {
+    if line.is_empty() || line.len() > MAX_LINE || hides(line) {
         return Err(ApiError::bad_request("the command is not valid"));
     }
     let auth = gated(&app, &me, &host, Action::Exec(line.to_owned())).await?;
@@ -199,9 +228,13 @@ pub(crate) async fn list_files(
 ) -> ApiResult<FileList> {
     let path = path_of(q)?;
     let auth = gated(&app, &me, &host, Action::FileList(path.clone())).await?;
-    let got = list(&app, &auth, path).await;
-    let label = format!("directory listing on {}", auth.host_id());
-    finish(&app, auth, got.is_ok()).await?;
+    let open = Open {
+        app: app.clone(),
+        auth: Some(auth),
+    };
+    let got = list(&app, open.auth(), path).await;
+    let label = format!("directory listing on {}", open.auth().host_id());
+    open.end(got.is_ok()).await?;
     let e = got.map_err(host_err)?;
     let lines: Vec<String> = e
         .entries
@@ -243,9 +276,13 @@ pub(crate) async fn read_file(
 ) -> ApiResult<FileText> {
     let path = path_of(q)?;
     let auth = gated(&app, &me, &host, Action::FileRead(path.clone())).await?;
-    let got = read(&app, &auth, path).await;
-    let label = format!("file on {}", auth.host_id());
-    finish(&app, auth, got.is_ok()).await?;
+    let open = Open {
+        app: app.clone(),
+        auth: Some(auth),
+    };
+    let got = read(&app, open.auth(), path).await;
+    let label = format!("file on {}", open.auth().host_id());
+    open.end(got.is_ok()).await?;
     let buf = got.map_err(host_err)?;
     Ok(Json(FileText {
         text: wrap(&label, &redact_text(&String::from_utf8_lossy(&buf))),

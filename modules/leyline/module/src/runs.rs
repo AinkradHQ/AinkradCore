@@ -31,6 +31,28 @@ impl Drop for Parked {
     }
 }
 
+/// An approval asked for and not yet spent or voided by the gate itself.
+pub(super) struct Abandon {
+    pub(super) pool: SqlitePool,
+    pub(super) id: String,
+    pub(super) session: String,
+    pub(super) armed: bool,
+}
+
+impl Drop for Abandon {
+    /// The call was dropped while its approval was open: void it in the background.
+    fn drop(&mut self) {
+        if self.armed
+            && let Ok(h) = tokio::runtime::Handle::try_current()
+        {
+            let (pool, id, session) = (self.pool.clone(), self.id.clone(), self.session.clone());
+            h.spawn(async move {
+                let _ = ainkrad_core_server::ops_catalog::abandon_approval(&pool, &id, &session).await;
+            });
+        }
+    }
+}
+
 /// Marks a run still waiting for approval cancelled (a run that has settled is left alone).
 pub(super) async fn cancel(pool: &SqlitePool, run: &str) {
     let done = async {

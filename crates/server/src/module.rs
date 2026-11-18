@@ -379,6 +379,22 @@ pub(crate) fn validate(m: &dyn Module) {
                 "module {id}: route scope {method} {template} matches no documented route"
             );
         }
+        // A route that asks a person itself is one the dispatcher does not park: it must be a real,
+        // documented route, and (a write; a GET has no step-up to class) one the module classed as
+        // needing none.
+        for (method, template) in m.self_approved() {
+            assert!(
+                has(method, template),
+                "module {id}: self-approved {method} {template} matches no documented route"
+            );
+            assert!(
+                method.eq_ignore_ascii_case("GET")
+                    || m.non_destructive().is_some_and(|plain| plain
+                        .iter()
+                        .any(|(m2, t2)| m2.eq_ignore_ascii_case(method) && t2 == template)),
+                "module {id}: self-approved {method} {template} is not in non_destructive"
+            );
+        }
         if let Some(plain) = m.non_destructive() {
             let listed = |list: &[(&str, &str)], method: &str, template: &str| {
                 list.iter()
@@ -611,6 +627,60 @@ mod tests {
         validate(&Writes {
             listed: &[("POST", "/a"), ("PUT", "/b")],
             step_up: &[],
+        });
+    }
+
+    /// A module with one documented POST, `/a`, that claims `own` as self-approved.
+    struct Own {
+        own: &'static [(&'static str, &'static str)],
+        listed: Option<&'static [(&'static str, &'static str)]>,
+    }
+
+    impl Module for Own {
+        fn id(&self) -> &'static str {
+            "own"
+        }
+
+        fn routes(&self) -> Router<App> {
+            Router::new()
+        }
+
+        fn openapi(&self) -> serde_json::Value {
+            serde_json::json!({"paths": {"/a": {"post": {}}}})
+        }
+
+        fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
+            self.listed
+        }
+
+        fn self_approved(&self) -> &'static [(&'static str, &'static str)] {
+            self.own
+        }
+    }
+
+    #[test]
+    fn a_self_approved_route_must_be_documented_and_non_destructive() {
+        validate(&Own {
+            own: &[("POST", "/a")],
+            listed: Some(&[("POST", "/a")]),
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "is not in non_destructive")]
+    fn a_self_approved_route_outside_non_destructive_is_refused() {
+        validate(&Own {
+            own: &[("POST", "/a")],
+            listed: None,
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "matches no documented route")]
+    fn a_self_approved_route_that_is_not_documented_is_refused() {
+        validate(&Own {
+            own: &[("POST", "/nope")],
+            listed: Some(&[("POST", "/a")]),
         });
     }
 }
