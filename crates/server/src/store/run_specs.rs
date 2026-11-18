@@ -202,5 +202,28 @@ pub async fn save(
     })
 }
 
+/// Test fixture: stores `body` as the next version with no validation, so a test can hold a spec
+/// whose secret refs the project's group does not (yet) cover.
+#[cfg(test)]
+pub(crate) async fn save_unchecked(
+    pool: &SqlitePool,
+    project_id: i64,
+    body: &Value,
+    who: Who<'_>,
+) -> Result<(), Error> {
+    sqlx::query(
+        "INSERT INTO core_project_run_specs (project_id, version, spec, origin, created_by, created_at) \
+         VALUES (?1, (SELECT coalesce(max(version), 0) + 1 FROM core_project_run_specs WHERE project_id = ?1), \
+                 ?2, 'manual', ?3, ?4)",
+    )
+    .bind(project_id)
+    .bind(body.to_string())
+    .bind(who.by_device)
+    .bind(who.now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

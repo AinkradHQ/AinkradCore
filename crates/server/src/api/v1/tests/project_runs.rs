@@ -337,7 +337,7 @@ async fn a_reconnecting_runner_settles_the_rows() {
     let (shop, blog, docs) = (
         project(&fx, "shop").await,
         project(&fx, "blog").await,
-        project(&fx, "docs").await,
+        project(&fx, "notes").await,
     );
     let crashed = start(&fx, &link, shop).await.unwrap();
     let vanished = start(&fx, &link, blog).await.unwrap();
@@ -414,7 +414,7 @@ async fn a_run_resolves_secrets_by_the_projects_group_only() {
     let spec = json!({"services": {"web": {"image": "node:22",
                       "env": {"TOKEN": "${secret:api_key}"}}}});
     let now = fx.app.clock.now();
-    run_specs::save(&fx.app.pool, p, &spec, "manual", w(&now))
+    run_specs::save_unchecked(&fx.app.pool, p, &spec, w(&now))
         .await
         .unwrap();
     let seed = |group: Option<i64>| {

@@ -21,7 +21,7 @@ async fn with_secret(fx: &Fx, runner: &str, image: &str) -> i64 {
     let now = fx.app.clock.now();
     let spec = serde_json::json!({"services": {"web": {"image": image,
                                   "env": {"T": "${secret:api_key}"}}}});
-    run_specs::save(&fx.app.pool, p, &spec, "manual", w(&now))
+    run_specs::save_unchecked(&fx.app.pool, p, &spec, w(&now))
         .await
         .unwrap();
     assert_eq!(

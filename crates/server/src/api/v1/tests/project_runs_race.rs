@@ -68,7 +68,7 @@ async fn a_reconcile_during_a_start_does_not_get_the_healthy_run_stopped() {
 #[tokio::test]
 async fn a_start_nobody_is_driving_is_still_promoted_by_a_reconcile() {
     let fx = fx().await;
-    let (link, p) = (Fake::new(), project(&fx, "docs").await);
+    let (link, p) = (Fake::new(), project(&fx, "notes").await);
     let now = fx.app.clock.now();
     let pending = runs::begin_start(&fx.app, &link, p, w(&now)).await.unwrap();
     let id = pending.run.id.clone();
