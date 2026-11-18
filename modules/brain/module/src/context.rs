@@ -25,8 +25,10 @@
 //!    `brain.me_card.served` (record ids only). No text is audited.
 //! 7. Budget: the body is capped (`Q_START_TOKENS` / `Q_PROMPT_TOKENS`, chars / 4); a caller may only
 //!    lower it. `complete: false` says something was cut.
-//! 8. Support is counted as distinct cited sources in `record_sources` (`SUPPORT_SQL`), never the
-//!    raw `support` counter.
+//! 8. Support is counted as distinct cited sources in `record_sources` that are not echoes
+//!    (`SUPPORT_SQL`, `echo = 0`), never the raw `support` counter.
+//! 9. Rate: each session gets a burst of 10 calls, then one a second (429 past that); a budget of 0
+//!    answers empty.
 
 use std::collections::HashSet;
 
@@ -74,8 +76,7 @@ const MAX_QUEUE: usize = 100;
 const NOT_CONTESTED: &str = "contests IS NULL";
 /// Distinct cited sources of a record. Raw `support` is not used (it is being changed to count
 /// origins, B5-02), and this reads the same facts directly.
-const SUPPORT_SQL: &str =
-    "(SELECT count(DISTINCT rs.source) FROM record_sources rs WHERE rs.record = memory.id)";
+const SUPPORT_SQL: &str = "(SELECT count(DISTINCT rs.source) FROM record_sources rs WHERE rs.record = memory.id AND rs.echo = 0)";
 
 #[derive(Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -239,6 +240,13 @@ pub(crate) async fn context(
     Query(q): Query<AiContextQuery>,
 ) -> ApiResult<AiContext> {
     let session = session_of(&me)?;
+    if !b.context_allowed(&session) {
+        return Err(crate::code(
+            429,
+            "rate_limited",
+            "too many context calls; wait a second",
+        ));
+    }
     let start = match q.mode.as_str() {
         "start" => true,
         "prompt" => false,
@@ -257,11 +265,20 @@ pub(crate) async fn context(
     } else {
         Q_PROMPT_TOKENS
     };
+    if q.budget == Some(0) {
+        return Ok(Json(AiContext {
+            mode: q.mode,
+            text: String::new(),
+            ids: vec![],
+            tokens: 0,
+            complete: false,
+        }));
+    }
     let tokens = (q.budget.map_or(max, |n| n as usize)).clamp(50, max);
     let named = q.room.is_some();
-    let (rooms, _) = scope(&app, &session, q.room.as_deref()).await?;
+    let (rooms, rooms_cut) = scope(&app, &session, q.room.as_deref()).await?;
     let solo = rooms.len() == 1;
-    let (open, _closed) = open_all(&app, &b, rooms, named).await?;
+    let (open, closed) = open_all(&app, &b, rooms, named).await?;
 
     let mut body = Body {
         text: String::new(),
@@ -333,7 +350,7 @@ pub(crate) async fn context(
     result?;
     by_support.sort_by(|a, b| (a.demote, b.support, &b.seen).cmp(&(b.demote, a.support, &a.seen)));
     by_recent.sort_by(|a, b| (a.demote, &b.seen).cmp(&(b.demote, &a.seen)));
-    body.complete &= !capped;
+    body.complete &= !capped && !rooms_cut && closed == 0;
 
     // Choose the records: by meaning, by support, then the newest for the rest of the quota.
     let k = if start { Q_START_K } else { Q_PROMPT_K };

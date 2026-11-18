@@ -286,7 +286,11 @@
 ///    scoped to the session's project; Lore's own routes, events and audit actions live in `modules/lore/api`.
 /// 91: Design (Core 0.9 epic). The runner wire protocol gains the `design.*` commands (`api/runner.schema.json`); the
 ///    Design module's own routes live in `modules/design/api`.
-pub const API_MINOR: u32 = 91;
+/// 94: Brain v2 (Core 0.9 epic, assigned 94 after Lore 90, Design 91, Leyline 92, Projects 93). The Brain module's own
+///    routes, audit actions and events live in `modules/brain/api`; the Code Mode allow-list gains the `brainAi*` v2
+///    operations (`api/ai-ops.allow.json`) and the runner wire protocol the Brain hook commands (`api/runner.schema.json`).
+///    Regenerated once, at the epic's build.
+pub const API_MINOR: u32 = 94;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

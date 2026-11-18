@@ -241,6 +241,14 @@ fn negations(s: &str) -> HashSet<String> {
         .collect()
 }
 
+/// The distinct order and scope words of `s` (compared as a set by the strict check).
+fn orders(s: &str) -> HashSet<String> {
+    words(s)
+        .into_iter()
+        .filter(|w| ORDER.contains(&w.as_str()))
+        .collect()
+}
+
 /// Distinct content stems of `s`: words of 3+ characters, every negation word and every order or
 /// scope word, stop words (English, Arabic) dropped.
 pub fn content_stems(s: &str) -> HashSet<String> {
@@ -263,6 +271,7 @@ struct Clause {
     stems: HashSet<String>,
     negated: bool,
     negations: HashSet<String>,
+    orders: HashSet<String>,
 }
 
 /// One block a body may be grounded in (one user turn, or one cited Jira or GitHub item): its
@@ -283,6 +292,7 @@ fn clauses(text: &str, at: &[char]) -> Vec<Clause> {
             stems: content_stems(c),
             negated: negated(c),
             negations: negations(c),
+            orders: orders(c),
         })
         .collect()
 }
@@ -308,16 +318,17 @@ impl Grounds {
 
     /// The strict test a `replaces` needs to retire a record (B4-02 round 3): EVERY content stem of
     /// the body is in ONE clause (split on `.`, `;`, `,`, newlines, `،`, `؛`), and that clause has
-    /// exactly the body's set of negation words. Lexical overlap cannot read meaning, so this is
+    /// exactly the body's set of negation words and of order/scope words (dropping "only" or "all"
+    /// would otherwise ground a broader body). Lexical overlap cannot read meaning, so this is
     /// deliberately strict: anything less is saved as contested, never as a supersede.
     pub fn supports(&self, body: &str) -> bool {
         let b = content_stems(body);
-        let neg = negations(body);
+        let (neg, ord) = (negations(body), orders(body));
         !b.is_empty()
             && self
                 .fine
                 .iter()
-                .any(|c| b.is_subset(&c.stems) && c.negations == neg)
+                .any(|c| b.is_subset(&c.stems) && c.negations == neg && c.orders == ord)
     }
 
     /// At least [`Q_USER_GROUNDING`] of the body's content stems are here, and the clause that shares
@@ -491,16 +502,16 @@ fn ephemeral(body: &str) -> Option<Reason> {
     if lines.iter().any(|l| is_trace_line(l)) {
         return Some(Reason::StackTrace);
     }
-    let logs = lines.iter().filter(|l| is_log_line(l)).count();
-    if logs > 0 && logs * 2 >= lines.len() {
-        return Some(Reason::LogLines);
-    }
     if body.chars().any(|c| c.is_ascii_digit())
         && body
             .chars()
             .all(|c| !c.is_alphabetic() || c == 'T' || c == 'Z')
     {
         return Some(Reason::TimestampOnly);
+    }
+    let logs = lines.iter().filter(|l| is_log_line(l)).count();
+    if logs > 0 && logs * 2 >= lines.len() {
+        return Some(Reason::LogLines);
     }
     let words: Vec<&str> = body.split_whitespace().collect();
     if !words.is_empty()

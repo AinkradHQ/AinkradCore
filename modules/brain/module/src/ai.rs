@@ -297,7 +297,7 @@ pub(crate) async fn search(
     let (rooms, rooms_cut) = scope(&app, &session, q.room.as_deref()).await?;
     let (open, closed) = open_all(&app, &b, rooms, named).await?;
     let key = b.key(&app).await?;
-    let mut recs: Vec<(bool, f64, AiHit)> = vec![];
+    let mut recs: Vec<(i64, f64, AiHit)> = vec![];
     for (v, a) in &open {
         let cutoff = stale_cutoff(&app, &v.id).await;
         for (rank, id) in rec_fts(&app, &key, a, limit, &expr).await? {

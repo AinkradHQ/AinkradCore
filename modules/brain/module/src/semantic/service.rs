@@ -6,7 +6,7 @@
 //! The worker runs one job at a time, so with the default of one embedding thread (the
 //! `semantic.threads` setting) the Core stays responsive on a small host.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -25,6 +25,8 @@ pub struct Service {
     embedder: Mutex<Option<Arc<dyn Embedder>>>,
     cache: Arc<Mutex<VectorCache>>,
     queue: OnceLock<mpsc::UnboundedSender<Job>>,
+    /// Content hashes queued by `queue_embed` and not yet embedded: a repeat call adds none of them again.
+    pending: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Service {
@@ -41,6 +43,10 @@ impl Service {
 
     pub(crate) fn cache(&self) -> &Arc<Mutex<VectorCache>> {
         &self.cache
+    }
+
+    pub(crate) fn pending(&self) -> &Arc<Mutex<HashSet<String>>> {
+        &self.pending
     }
 
     /// Runs `job` on the one background worker, after the jobs queued before it. Needs a runtime.
@@ -133,9 +139,25 @@ impl Brain {
         let (Some(app), Some(e)) = (self.inner.app.get(), self.embedder()) else {
             return;
         };
+        // In-flight dedupe: a hash already queued (by an earlier call) is not queued twice.
+        let pending = self.inner.sem.pending().clone();
+        let items: Vec<(String, String)> = {
+            let mut p = pending.lock().unwrap_or_else(|x| x.into_inner());
+            items
+                .into_iter()
+                .filter(|i| p.insert(i.0.clone()))
+                .collect()
+        };
+        if items.is_empty() {
+            return;
+        }
         let (b, app) = (self.clone(), app.clone());
         self.inner.sem.enqueue(async move {
             let _ = b.embed_now(&app, e, &items).await;
+            let mut p = pending.lock().unwrap_or_else(|x| x.into_inner());
+            for i in &items {
+                p.remove(&i.0);
+            }
         });
     }
 

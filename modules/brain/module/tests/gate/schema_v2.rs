@@ -194,7 +194,7 @@ async fn the_backfill_is_idempotent_and_reopening_changes_nothing() {
     let first = snapshot(&pool).await;
     // Run the backfill statements again (everything after the marker; the DDL above it is not repeatable).
     let backfill = CANON[5].up.split("-- Backfill.").nth(1).unwrap();
-    sqlx::raw_sql(&format!("--{backfill}"))
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("--{backfill}")))
         .execute(&pool)
         .await
         .unwrap();

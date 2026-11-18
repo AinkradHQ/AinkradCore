@@ -177,6 +177,15 @@ pub(crate) async fn step(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError
     }
     // Asked first, then the longest waiting.
     todo.sort_by_key(|(s, asked)| (!asked, s.waiting_since));
+    // Sessions that ran too recently would use up the tick's slots without doing anything: skip them
+    // first (a request of theirs stays pending for a later tick).
+    {
+        let m = b.inner.ckpt.lock().unwrap_or_else(PoisonError::into_inner);
+        todo.retain(|(s, _)| {
+            !m.get(&s.id)
+                .is_some_and(|c| c.ran.is_some_and(|t| now - t < EVERY_SECS))
+        });
+    }
     let mut queued = 0;
     for (s, was_asked) in todo.into_iter().take(MAX_PER_TICK) {
         let state = {

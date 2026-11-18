@@ -205,7 +205,7 @@ async fn room_visibility_follows_the_project_room_link_not_the_name() {
 }
 
 async fn exec(fx: &Fx, sql: &str, bind: &str) {
-    sqlx::query(sql)
+    sqlx::query(sqlx::AssertSqlSafe(sql.to_owned()))
         .bind(bind)
         .execute(&fx.app.pool)
         .await

@@ -245,7 +245,7 @@ async fn the_list_and_see_changes_routes_show_lines_and_before_after_rows() {
     let r2 = rows.iter().find(|r| r["record"] == "r2").unwrap();
     assert_eq!(r2["before"]["body"], "We use Rust");
     assert_eq!(r2["after"]["body"], "We use Rust 1.99");
-    assert_eq!(r2["before"]["_sources"], json!([["s1", 0]]));
+    assert_eq!(r2["before"]["_sources"], json!([["s1", 0, null]]));
     let r3 = rows.iter().find(|r| r["record"] == "r3").unwrap();
     assert!(r3["before"].is_null() && r3["after"].is_object());
     let two = ok(

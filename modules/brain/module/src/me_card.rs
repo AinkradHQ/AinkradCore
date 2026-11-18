@@ -17,7 +17,6 @@
 //!    (`brainAiContext`, B7-03) wraps it in the outside-data envelope. Every line keeps its id.
 
 use ainkrad_core_server::api::App;
-use ainkrad_core_server::api::v1::ApiError;
 use ainkrad_core_server::store::{agents, alloc};
 use sqlx::{Row, SqlitePool};
 

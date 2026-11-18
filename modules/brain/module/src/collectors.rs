@@ -147,12 +147,23 @@ pub(crate) fn adf_text(v: &Value, out: &mut String) {
     }
 }
 
+/// A tool item's author is a person unless the tool says an app or bot filed it: what a bot or a
+/// session writes may carry instructions, so it is never grounded as the person's word.
+fn kind_of(is_bot: bool) -> AuthorKind {
+    if is_bot {
+        AuthorKind::Agent
+    } else {
+        AuthorKind::Person
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn item(
     kind: SourceKind,
     path: String,
     hint: Option<String>,
-    author: &str,
+    author: (&str, AuthorKind),
+
     title: String,
     text: String,
     links: Vec<String>,
@@ -170,8 +181,8 @@ fn item(
         },
         project_hint: hint,
         author: Author {
-            kind: AuthorKind::Person,
-            name: author.chars().take(100).collect(),
+            kind: author.1,
+            name: author.0.chars().take(100).collect(),
         },
         title: title.chars().take(200).collect(),
         text,
@@ -285,7 +296,10 @@ fn jira_item(issue: &Value, updated: i64, now_ms: u64) -> Option<Item> {
         SourceKind::Jira,
         format!("jira://issue/{key}"),
         None,
-        &name(&["reporter", "displayName"]),
+        (
+            &name(&["reporter", "displayName"]),
+            kind_of(str_of(f, &["reporter", "accountType"]) == Some("app")),
+        ),
         format!("{key} {summary}"),
         text,
         vec![],
@@ -394,7 +408,10 @@ fn pr_item(repo: &str, pr: &Value, reviews: &Value, updated: i64, now_ms: u64) -
         SourceKind::Github,
         format!("github://{repo}/pull/{number}"),
         Some(format!("github.com/{repo}")),
-        author,
+        (
+            author,
+            kind_of(str_of(pr, &["user", "type"]) == Some("Bot") || author.ends_with("[bot]")),
+        ),
         format!("{repo}#{number} {title}"),
         text,
         pr["html_url"]

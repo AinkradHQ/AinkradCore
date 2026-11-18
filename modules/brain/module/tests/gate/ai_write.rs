@@ -176,7 +176,8 @@ async fn a_repeat_reinforces_and_a_rule_or_preference_is_refused() {
         ),
     )
     .await;
-    assert_eq!(n, [(2,)]);
+    // One session is one origin: support counts distinct origins, not repeats (#359).
+    assert_eq!(n, [(1,)]);
     // Review fix 6: one session reinforces one record at most once.
     let (_, third) = propose(
         &fx,
@@ -198,7 +199,7 @@ async fn a_repeat_reinforces_and_a_rule_or_preference_is_refused() {
         ),
     )
     .await;
-    assert_eq!(n, [(2,)], "support was not pumped");
+    assert_eq!(n, [(1,)], "support was not pumped");
     // Rules and preferences are for user-turn grounding in distil only; the refusal is the same
     // 400 as any other bad proposal.
     let (st_bad, bad) = propose(
@@ -298,7 +299,12 @@ async fn citations_must_be_sources_this_session_read() {
         (st, st2),
         (StatusCode::BAD_REQUEST, StatusCode::BAD_REQUEST)
     );
-    assert_eq!(unread, unknown);
+    // Same answer; only the per-request error id differs.
+    let same = |mut v: Value| {
+        v.as_object_mut().unwrap().remove("error_id");
+        v
+    };
+    assert_eq!(same(unread.clone()), same(unknown));
     // Another session that read it is no help to this one.
     let other = session(&fx, ALPHA, &["anthropic"]).await;
     let (ok_, _, code) = op(
@@ -310,7 +316,8 @@ async fn citations_must_be_sources_this_session_read() {
     .await;
     assert!(ok_, "{code}");
     let (st, again) = propose(&fx, &w, body.clone()).await;
-    assert_eq!((st, &again), (StatusCode::BAD_REQUEST, &unread));
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    assert_eq!(same(again), same(unread));
     // After this session reads it, the proposal passes.
     read_it(&fx, &w).await;
     let (st, v) = propose(&fx, &w, body).await;
