@@ -170,7 +170,7 @@ pub struct NoteView {
     pub text: String,
 }
 
-fn summary(r: &sqlx::sqlite::SqliteRow) -> Result<NoteSummary, sqlx::Error> {
+pub(crate) fn summary(r: &sqlx::sqlite::SqliteRow) -> Result<NoteSummary, sqlx::Error> {
     let text = |c: &str| r.try_get::<String, _>(c);
     Ok(NoteSummary {
         id: text("id")?,

@@ -8,9 +8,11 @@
 //! migration, no Core crate names this module.
 
 mod backlinks;
+mod embed;
 mod merge;
 mod notes;
 mod save;
+mod search;
 mod versions;
 
 use std::sync::{Arc, OnceLock};
@@ -28,6 +30,25 @@ pub use notes::{TRASH_DAYS, sweep};
 pub use save::rebuild_fts;
 
 pub const MODULE: &str = "lore";
+
+impl Lore {
+    /// A Lore whose search and embedding use `e` (the Core loads the local model; tests pass a fake).
+    pub fn with_embedder(e: Arc<dyn ainkrad_embed::Embedder>) -> Self {
+        let l = Self::default();
+        embed::set(&l.emb, e);
+        l
+    }
+
+    /// One embedding pass now, without the 10 s quiet time the job waits for. Returns notes embedded.
+    pub async fn embed_now(&self, pool: &sqlx::SqlitePool) -> Result<usize, String> {
+        embed::pass(pool, &self.emb, 0, 1000).await
+    }
+
+    /// As `embed_now`, leaving notes written less than `quiet` seconds ago (what the job does with 10).
+    pub async fn embed_quiet(&self, pool: &sqlx::SqlitePool, quiet: i64) -> Result<usize, String> {
+        embed::pass(pool, &self.emb, quiet, 1000).await
+    }
+}
 
 pub static MIGRATIONS: &[Migration] = &[
     Migration {
@@ -48,6 +69,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0003_lore_index.up.sql"),
         down: include_str!("../migrations/0003_lore_index.down.sql"),
     },
+    Migration {
+        version: 4,
+        name: "0004_lore_search",
+        up: include_str!("../migrations/0004_lore_search.up.sql"),
+        down: include_str!("../migrations/0004_lore_search.down.sql"),
+    },
 ];
 
 // The trash is reversible (every row is kept for 30 days), so no write needs a step-up.
@@ -64,6 +91,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/notes", "read"),
     ("GET", "/notes/{note}", "read"),
     ("GET", "/notes/{note}/backlinks", "read"),
+    ("GET", "/search", "read"),
     ("GET", "/notes/{note}/versions", "read"),
     ("GET", "/notes/{note}/versions/{version}", "read"),
 ];
@@ -72,6 +100,8 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
 #[derive(Default, Clone)]
 pub struct Lore {
     app: Arc<OnceLock<App>>,
+    /// The shared local model once it is loaded (R2-02); `None` = search is FTS only, nothing is embedded.
+    emb: embed::Slot,
 }
 
 #[derive(OpenApi)]
@@ -84,6 +114,7 @@ pub struct Lore {
         notes::patch,
         save::put_text,
         backlinks::list,
+        search::search,
         versions::list,
         versions::get,
         versions::create,
@@ -97,6 +128,10 @@ pub struct Lore {
         save::SaveReq,
         save::SaveOut,
         backlinks::Backlink,
+        search::SearchOut,
+        search::Hit,
+        search::Snippet,
+        search::Span,
         versions::VersionSummary,
         versions::VersionView,
         versions::NewVersion,
@@ -136,7 +171,9 @@ impl Module for Lore {
             )
             .route("/notes/{note}/versions/{version}", get(versions::get))
             .route("/notes/{note}/restore", post(versions::restore))
+            .route("/search", get(search::search))
             .route("/today", get(notes::today))
+            .layer(axum::Extension(self.clone()))
     }
 
     fn migrations(&self) -> &'static [Migration] {
@@ -167,7 +204,7 @@ impl Module for Lore {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["state", "kind", "project", "day"]
+        &["state", "kind", "project", "day", "q", "tag", "limit"]
     }
 
     fn scope(&self) -> &'static str {
@@ -196,13 +233,26 @@ impl Module for Lore {
             Schedule::Every(3600),
             Arc::new(Sweep(self.app.clone())),
         );
-        vec![Job {
-            missed: Missed::Skip,
-            ..job
-        }]
+        let embed = Job::new(
+            "embed",
+            Schedule::Every(30),
+            Arc::new(embed::Embed(self.app.clone(), self.emb.clone())),
+        );
+        vec![
+            Job {
+                missed: Missed::Skip,
+                ..job
+            },
+            Job {
+                missed: Missed::Skip,
+                ..embed
+            },
+        ]
     }
 
     fn attach(&self, app: &App) {
         let _ = self.app.set(app.clone());
+        #[cfg(feature = "semantic")]
+        embed::load_in_background(&self.emb);
     }
 }

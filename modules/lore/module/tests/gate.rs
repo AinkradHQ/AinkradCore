@@ -510,8 +510,9 @@ async fn trash_keeps_rows_restore_returns_and_the_sweep_purges() {
         StatusCode::NOT_FOUND
     );
     let job = Lore::default().jobs();
-    assert_eq!(job.len(), 1);
+    assert_eq!(job.len(), 2);
     assert_eq!(job[0].name, "sweep");
+    assert_eq!(job[1].name, "embed");
 }
 
 #[tokio::test]

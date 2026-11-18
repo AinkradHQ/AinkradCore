@@ -2714,6 +2714,42 @@
         ],
         "type": "object"
       },
+      "Hit": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/NoteSummary"
+          },
+          {
+            "properties": {
+              "heading": {
+                "description": "The heading of the best matching section, for a hit by meaning.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "score": {
+                "description": "Higher is better; only comparable within one answer.",
+                "format": "double",
+                "type": "number"
+              },
+              "snippet": {
+                "$ref": "#/components/schemas/Snippet"
+              },
+              "via": {
+                "description": "`text`, `meaning` or `both`: which ranking found it.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "score",
+              "via",
+              "snippet"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "HostBinary": {
         "description": "A program installed on the host, as the helper's manifest and checks say.",
         "properties": {
@@ -4586,6 +4622,10 @@
             },
             "type": "array"
           },
+          "room": {
+            "$ref": "#/components/schemas/ProjectRoom",
+            "description": "The linked Brain room; null when the Brain is off or the project has none."
+          },
           "slug": {
             "description": "A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name.",
             "type": "string"
@@ -4650,6 +4690,22 @@
           "remote_url",
           "default_branch",
           "is_primary"
+        ],
+        "type": "object"
+      },
+      "ProjectRoom": {
+        "description": "The Brain room linked to a project (strictly 1:1).",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "room_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "room_id",
+          "name"
         ],
         "type": "object"
       },
@@ -5480,6 +5536,25 @@
         ],
         "type": "object"
       },
+      "SearchOut": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/Hit"
+            },
+            "type": "array"
+          },
+          "semantic": {
+            "description": "`false` = the model is absent or not loaded yet, so these are text matches only.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "results",
+          "semantic"
+        ],
+        "type": "object"
+      },
       "SecretDeleted": {
         "description": "What a delete answers.",
         "properties": {
@@ -6111,6 +6186,44 @@
             "type": "string"
           }
         ]
+      },
+      "Snippet": {
+        "properties": {
+          "matches": {
+            "description": "The matched words in `text`, in order, not overlapping; empty for a hit by meaning alone.",
+            "items": {
+              "$ref": "#/components/schemas/Span"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "A stretch of the note on one line (newlines become spaces), `…` where it was cut. Note text: outside data.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "matches"
+        ],
+        "type": "object"
+      },
+      "Span": {
+        "description": "A matched word inside a snippet: byte offsets into `Snippet.text`.",
+        "properties": {
+          "end": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
       },
       "StartConnectionFlow": {
         "description": "A sign-in to start.",
@@ -6797,7 +6910,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.88.0"
+    "version": "1.89.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16445,6 +16558,105 @@
               }
             },
             "description": "One version with its text"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/search": {
+      "get": {
+        "operationId": "loreSearch",
+        "parameters": [
+          {
+            "description": "What to find: words (prefix match) and \"quoted phrases\"; at most 300 characters",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`active` (default), `trashed` or `all`",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`note` or `daily`",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only notes of this project id",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only notes with this tag",
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many hits (default 20, at most 50)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchOut"
+                }
+              }
+            },
+            "description": "Hits, best first, with snippets; `semantic` says whether meaning was used"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
