@@ -6,14 +6,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ainkrad_core::audit::AuditActor;
 use ainkrad_core_server::api::{App, router};
 use ainkrad_core_server::auth::Identity;
 use ainkrad_core_server::auth::testing::TestDevice;
 use ainkrad_core_server::module::Module;
 use ainkrad_core_server::scheduler::{Clock, SystemClock};
-use ainkrad_core_server::store::modsettings::ModuleSettings;
-use ainkrad_core_server::store::projects::{self, Who};
 use ainkrad_core_server::store::{connect, migrate};
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
@@ -133,19 +130,35 @@ async fn call(fx: &Fx, method: Method, path: &str, body: Option<Value>) -> (Stat
 }
 
 async fn new_mockup(fx: &Fx) -> String {
-    let (s, v) = call(fx, Method::POST, "/docs", Some(json!({"kind": "mockup", "name": "Pkg"}))).await;
+    let (s, v) = call(
+        fx,
+        Method::POST,
+        "/docs",
+        Some(json!({"kind": "mockup", "name": "Pkg"})),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK, "{v}");
     v["id"].as_str().unwrap().to_owned()
 }
 
 async fn put(fx: &Fx, doc: &str, path: &str, body: Vec<u8>) -> (StatusCode, Value) {
-    let (s, v, _, _) = send(fx, &fx.admin, Method::PUT, &format!("/docs/{doc}/package/files?path={path}"), body).await;
+    let (s, v, _, _) = send(
+        fx,
+        &fx.admin,
+        Method::PUT,
+        &format!("/docs/{doc}/package/files?path={path}"),
+        body,
+    )
+    .await;
     (s, v)
 }
 
 async fn count(fx: &Fx, table: &str) -> i64 {
     let sql = sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")); // test-only, a literal table name
-    sqlx::query_scalar(sql).fetch_one(&fx.app.pool).await.unwrap()
+    sqlx::query_scalar(sql)
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap()
 }
 
 async fn files(fx: &Fx) -> i64 {
@@ -182,7 +195,10 @@ async fn hostile_paths_are_refused_and_nothing_is_stored() {
         let (s, v) = put(&fx, &doc, p, b"<p>x</p>".to_vec()).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{p:?} -> {v}");
     }
-    assert_eq!((files(&fx).await, count(&fx, "design_assets").await), (0, 0));
+    assert_eq!(
+        (files(&fx).await, count(&fx, "design_assets").await),
+        (0, 0)
+    );
 }
 
 #[tokio::test]
@@ -190,26 +206,72 @@ async fn a_package_is_drafted_sealed_and_served_only_as_an_inert_attachment() {
     let fx = fx().await;
     let doc = new_mockup(&fx).await;
     let html = b"<!doctype html><script>fetch('https://evil.test')</script>";
-    for (p, b) in [("index.html", html.to_vec()), ("sub/b.html", b"<p>b</p>".to_vec()), ("app.css", b"a{}".to_vec()), ("art/x.png", png())] {
+    for (p, b) in [
+        ("index.html", html.to_vec()),
+        ("sub/b.html", b"<p>b</p>".to_vec()),
+        ("app.css", b"a{}".to_vec()),
+        ("art/x.png", png()),
+    ] {
         let (s, v) = put(&fx, &doc, p, b).await;
         assert_eq!(s, StatusCode::OK, "{p} {v}");
     }
     let (s, v) = put(&fx, &doc, "INDEX.html", b"<p>again</p>".to_vec()).await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    assert_eq!(files(&fx).await, 4, "a path that differs by case is the same file");
-    let (_, v, _, _) = send(&fx, &fx.admin, Method::GET, &format!("/docs/{doc}/package"), vec![]).await;
+    assert_eq!(
+        files(&fx).await,
+        4,
+        "a path that differs by case is the same file"
+    );
+    let (_, v, _, _) = send(
+        &fx,
+        &fx.admin,
+        Method::GET,
+        &format!("/docs/{doc}/package"),
+        vec![],
+    )
+    .await;
     assert_eq!(v["sealed"], json!(false));
-    let (s, v, _, _) = send(&fx, &fx.admin, Method::POST, &format!("/docs/{doc}/package/manifest"), vec![]).await;
+    let (s, v, _, _) = send(
+        &fx,
+        &fx.admin,
+        Method::POST,
+        &format!("/docs/{doc}/package/manifest"),
+        vec![],
+    )
+    .await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    let names: Vec<&str> = v["manifest"]["screens"].as_array().unwrap().iter().map(|x| x["path"].as_str().unwrap()).collect();
-    assert_eq!(names, ["index.html", "sub/b.html"], "root index first, only html");
+    let names: Vec<&str> = v["manifest"]["screens"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["index.html", "sub/b.html"],
+        "root index first, only html"
+    );
     assert_eq!(v["sealed"], json!(true));
     let (s, v) = put(&fx, &doc, "c.html", b"<p>c</p>".to_vec()).await;
     assert_eq!(s, StatusCode::CONFLICT, "{v}");
-    let (s, _, _, _) = send(&fx, &fx.admin, Method::POST, &format!("/docs/{doc}/package/manifest"), vec![]).await;
+    let (s, _, _, _) = send(
+        &fx,
+        &fx.admin,
+        Method::POST,
+        &format!("/docs/{doc}/package/manifest"),
+        vec![],
+    )
+    .await;
     assert_eq!(s, StatusCode::CONFLICT);
     // Served: never an HTML type, always an attachment.
-    let (s, _, raw, h) = send(&fx, &fx.admin, Method::GET, &format!("/docs/{doc}/package/files?path=sub/b.html"), vec![]).await;
+    let (s, _, raw, h) = send(
+        &fx,
+        &fx.admin,
+        Method::GET,
+        &format!("/docs/{doc}/package/files?path=sub/b.html"),
+        vec![],
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(raw, b"<p>b</p>");
     let get = |n: &str| h.get(n).unwrap().to_str().unwrap().to_owned();
@@ -217,20 +279,44 @@ async fn a_package_is_drafted_sealed_and_served_only_as_an_inert_attachment() {
     assert_eq!(get("content-disposition"), "attachment");
     assert_eq!(get("x-content-type-options"), "nosniff");
     assert!(get("content-security-policy").contains("sandbox"));
-    let (s, _, _, _) = send(&fx, &fx.admin, Method::GET, &format!("/docs/{doc}/package/files?path=nope.html"), vec![]).await;
+    let (s, _, _, _) = send(
+        &fx,
+        &fx.admin,
+        Method::GET,
+        &format!("/docs/{doc}/package/files?path=nope.html"),
+        vec![],
+    )
+    .await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     // The package pins its bytes: the asset cannot be deleted while it is used.
-    let sha: String = sqlx::query_scalar("SELECT sha256 FROM design_mockup_files WHERE path = 'app.css'")
-        .fetch_one(&fx.app.pool).await.unwrap();
+    let sha: String =
+        sqlx::query_scalar("SELECT sha256 FROM design_mockup_files WHERE path = 'app.css'")
+            .fetch_one(&fx.app.pool)
+            .await
+            .unwrap();
     let (s, _) = call(&fx, Method::DELETE, &format!("/assets/{sha}"), None).await;
     assert_eq!(s, StatusCode::CONFLICT);
     // Not a mockup, and audit carries ids only.
-    let (_, d) = call(&fx, Method::POST, "/docs", Some(json!({"kind": "design", "name": "D"}))).await;
+    let (_, d) = call(
+        &fx,
+        Method::POST,
+        "/docs",
+        Some(json!({"kind": "design", "name": "D"})),
+    )
+    .await;
     let (s, _) = put(&fx, d["id"].as_str().unwrap(), "a.html", b"<p/>".to_vec()).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
-    let audit: Vec<String> = sqlx::query_scalar("SELECT details FROM audit_events WHERE action LIKE 'design.%'")
-        .fetch_all(&fx.app.pool).await.unwrap();
-    assert!(audit.iter().all(|d| !d.contains("index.html") && !d.contains("evil")), "{audit:?}");
+    let audit: Vec<String> =
+        sqlx::query_scalar("SELECT details FROM audit_events WHERE action LIKE 'design.%'")
+            .fetch_all(&fx.app.pool)
+            .await
+            .unwrap();
+    assert!(
+        audit
+            .iter()
+            .all(|d| !d.contains("index.html") && !d.contains("evil")),
+        "{audit:?}"
+    );
 }
 
 #[tokio::test]
@@ -248,14 +334,30 @@ async fn bytes_must_match_the_type_and_only_the_fixed_types_are_taken() {
         ("f.woff2", b"wOF2....".to_vec()),
         ("g.zip", b"PK\x03\x04".to_vec()),
         ("h.exe", b"x".to_vec()),
-        ("i.svg", b"<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>x".to_vec()),
+        (
+            "i.svg",
+            b"<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>x".to_vec(),
+        ),
     ] {
         let (s, v) = put(&fx, &doc, p, b).await;
         assert_eq!(s, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{p} {v}");
     }
-    let (s, v) = put(&fx, &doc, "ok.svg", b"<svg xmlns='http://www.w3.org/2000/svg'><script>1</script><rect/></svg>".to_vec()).await;
+    let (s, v) = put(
+        &fx,
+        &doc,
+        "ok.svg",
+        b"<svg xmlns='http://www.w3.org/2000/svg'><script>1</script><rect/></svg>".to_vec(),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    let (_, _, raw, _) = send(&fx, &fx.admin, Method::GET, &format!("/docs/{doc}/package/files?path=ok.svg"), vec![]).await;
+    let (_, _, raw, _) = send(
+        &fx,
+        &fx.admin,
+        Method::GET,
+        &format!("/docs/{doc}/package/files?path=ok.svg"),
+        vec![],
+    )
+    .await;
     assert!(!String::from_utf8(raw).unwrap().contains("script"));
     assert_eq!(files(&fx).await, 1);
 }
@@ -265,7 +367,13 @@ async fn more_than_200_files_or_100_mib_is_refused() {
     let fx = fx().await;
     let doc = new_mockup(&fx).await;
     for i in 0..200 {
-        let (s, v) = put(&fx, &doc, &format!("p{i}.html"), format!("<p>{i}</p>").into_bytes()).await;
+        let (s, v) = put(
+            &fx,
+            &doc,
+            &format!("p{i}.html"),
+            format!("<p>{i}</p>").into_bytes(),
+        )
+        .await;
         assert_eq!(s, StatusCode::OK, "{i} {v}");
     }
     let (s, v) = put(&fx, &doc, "p200.html", b"<p>x</p>".to_vec()).await;
@@ -277,16 +385,32 @@ async fn more_than_200_files_or_100_mib_is_refused() {
 
     let doc = new_mockup(&fx).await;
     for i in 0..4u8 {
-        let (s, v) = put(&fx, &doc, &format!("big{i}.js"), vec![b'a' + i; 25 * 1024 * 1024]).await;
+        let (s, v) = put(
+            &fx,
+            &doc,
+            &format!("big{i}.js"),
+            vec![b'a' + i; 25 * 1024 * 1024],
+        )
+        .await;
         assert_eq!(s, StatusCode::OK, "{i} {v}");
     }
     let (s, v) = put(&fx, &doc, "one-more.js", b"x".to_vec()).await;
     assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE, "{v}");
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM design_mockup_files WHERE doc = ?")
-        .bind(&doc).fetch_one(&fx.app.pool).await.unwrap();
+        .bind(&doc)
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
     assert_eq!(n, 4);
     // A single file over the asset cap is refused before anything is stored.
-    let (s, _, _, _) = send(&fx, &fx.admin, Method::PUT, &format!("/docs/{doc}/package/files?path=huge.js"), vec![b'a'; 25 * 1024 * 1024 + 1]).await;
+    let (s, _, _, _) = send(
+        &fx,
+        &fx.admin,
+        Method::PUT,
+        &format!("/docs/{doc}/package/files?path=huge.js"),
+        vec![b'a'; 25 * 1024 * 1024 + 1],
+    )
+    .await;
     assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
 }
 
@@ -301,21 +425,39 @@ async fn the_import_refuses_symlinks_and_takes_a_clean_folder_whole() {
     std::fs::write(dir.join(".DS_Store"), "skipped").unwrap();
     std::fs::write(dir.join("shots/s.png"), png()).unwrap();
     let skip = vec!["shots".to_owned()];
-    let (doc, n) = design_module::import_dir(&fx.app.pool, &dir, "Imported", &skip).await.unwrap();
+    let (doc, n) = design_module::import_dir(&fx.app.pool, &dir, "Imported", &skip)
+        .await
+        .unwrap();
     assert_eq!(n, 2);
-    let (_, v, _, _) = send(&fx, &fx.admin, Method::GET, &format!("/docs/{doc}/package"), vec![]).await;
-    assert_eq!((v["sealed"].clone(), v["files"].as_array().unwrap().len()), (json!(true), 2));
+    let (_, v, _, _) = send(
+        &fx,
+        &fx.admin,
+        Method::GET,
+        &format!("/docs/{doc}/package"),
+        vec![],
+    )
+    .await;
+    assert_eq!(
+        (v["sealed"].clone(), v["files"].as_array().unwrap().len()),
+        (json!(true), 2)
+    );
 
     // A symlink anywhere (here to a file outside the folder) refuses the whole folder.
     std::os::unix::fs::symlink("/etc/hosts", dir.join("link.html")).unwrap();
     let docs_before = count(&fx, "design_docs").await;
-    let e = design_module::import_dir(&fx.app.pool, &dir, "Bad", &skip).await.unwrap_err();
+    let e = design_module::import_dir(&fx.app.pool, &dir, "Bad", &skip)
+        .await
+        .unwrap_err();
     assert!(e.contains("symlink"), "{e}");
     assert_eq!(count(&fx, "design_docs").await, docs_before);
     // A folder with a bad path (a name with a space) refuses and rolls back too.
     std::fs::remove_file(dir.join("link.html")).unwrap();
     std::fs::write(dir.join("bad name.html"), "x").unwrap();
-    assert!(design_module::import_dir(&fx.app.pool, &dir, "Bad", &skip).await.is_err());
+    assert!(
+        design_module::import_dir(&fx.app.pool, &dir, "Bad", &skip)
+            .await
+            .is_err()
+    );
     assert_eq!(count(&fx, "design_docs").await, docs_before);
 }
 
@@ -324,10 +466,31 @@ async fn a_read_only_device_reads_but_cannot_change_a_package() {
     let fx = fx().await;
     let doc = new_mockup(&fx).await;
     let reader = enroll(&fx.app, "reader", &["read"]).await;
-    let (s, _, _, _) = send(&fx, &reader, Method::GET, &format!("/docs/{doc}/package"), vec![]).await;
+    let (s, _, _, _) = send(
+        &fx,
+        &reader,
+        Method::GET,
+        &format!("/docs/{doc}/package"),
+        vec![],
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
-    let (s, _, _, _) = send(&fx, &reader, Method::PUT, &format!("/docs/{doc}/package/files?path=a.html"), b"<p/>".to_vec()).await;
+    let (s, _, _, _) = send(
+        &fx,
+        &reader,
+        Method::PUT,
+        &format!("/docs/{doc}/package/files?path=a.html"),
+        b"<p/>".to_vec(),
+    )
+    .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
-    let (s, _, _, _) = send(&fx, &reader, Method::POST, &format!("/docs/{doc}/package/manifest"), vec![]).await;
+    let (s, _, _, _) = send(
+        &fx,
+        &reader,
+        Method::POST,
+        &format!("/docs/{doc}/package/manifest"),
+        vec![],
+    )
+    .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
 }

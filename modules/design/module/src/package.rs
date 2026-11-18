@@ -14,8 +14,8 @@ use std::path::Path as FsPath;
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
-use ainkrad_core_server::store::modsettings::ModuleSettings;
 use ainkrad_core_server::store::begin_write;
+use ainkrad_core_server::store::modsettings::ModuleSettings;
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::rejection::QueryRejection;
@@ -30,7 +30,7 @@ use utoipa::ToSchema;
 
 use crate::Design;
 use crate::docs::{doc_id_ok, editable, record};
-use crate::sniff::{has_svg_marker, sniff, Class};
+use crate::sniff::{Class, has_svg_marker, sniff};
 use crate::svg;
 
 pub(crate) const MAX_FILES: i64 = 200;
@@ -156,7 +156,9 @@ pub(crate) async fn put_file(
     if size > max {
         return Err(too_large("the file is over the size limit"));
     }
-    let (mime, k) = ext_of(path).and_then(|e| kind_of(&e)).ok_or_else(unsupported)?;
+    let (mime, k) = ext_of(path)
+        .and_then(|e| kind_of(&e))
+        .ok_or_else(unsupported)?;
     let data: Vec<u8> = match k {
         Kind::Text => {
             if body.contains(&0) || std::str::from_utf8(body).is_err() {
@@ -258,10 +260,12 @@ pub(crate) async fn put_file(
         .execute(&mut *conn)
         .await?;
     }
-    sqlx::query("UPDATE design_docs SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?")
-        .bind(doc)
-        .execute(&mut *conn)
-        .await?;
+    sqlx::query(
+        "UPDATE design_docs SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+    )
+    .bind(doc)
+    .execute(&mut *conn)
+    .await?;
     Ok(file_view(path.to_owned(), sha, size))
 }
 
@@ -293,7 +297,10 @@ async fn seal_in(conn: &mut SqliteConnection, doc: &str) -> Result<Value, ApiErr
     let screens: Vec<Value> = pages
         .iter()
         .map(|p| {
-            let name = p.strip_suffix(".html").or_else(|| p.strip_suffix(".HTML")).unwrap_or(p);
+            let name = p
+                .strip_suffix(".html")
+                .or_else(|| p.strip_suffix(".HTML"))
+                .unwrap_or(p);
             json!({"name": name, "path": p, "states": []})
         })
         .collect();
@@ -341,7 +348,14 @@ pub(crate) async fn put(
         return Err(ApiError::not_found("no such design"));
     }
     let mut tx = begin_write(&app.pool).await?;
-    let out = put_file(&mut tx, &doc, &q.path, &body, &format!("person:{}", me.device.id)).await?;
+    let out = put_file(
+        &mut tx,
+        &doc,
+        &q.path,
+        &body,
+        &format!("person:{}", me.device.id),
+    )
+    .await?;
     tx.commit().await?;
     Ok(Json(out))
 }
@@ -441,7 +455,10 @@ pub(crate) async fn file(
                 "default-src 'none'; sandbox",
             ),
             (header::CONTENT_DISPOSITION, "attachment"),
-            (header::HeaderName::from_static("cross-origin-resource-policy"), "same-origin"),
+            (
+                header::HeaderName::from_static("cross-origin-resource-policy"),
+                "same-origin",
+            ),
         ],
         bytes,
     )
@@ -465,7 +482,8 @@ fn walk(dir: &FsPath, skip: &[String]) -> Result<Vec<(String, std::path::PathBuf
         entries.sort_by_key(|e| e.file_name());
         for e in entries {
             let p = e.path();
-            let meta = std::fs::symlink_metadata(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+            let meta =
+                std::fs::symlink_metadata(&p).map_err(|e| format!("{}: {e}", p.display()))?;
             if meta.file_type().is_symlink() {
                 return Err(format!("{}: a symlink is not allowed", p.display()));
             }
@@ -509,7 +527,10 @@ pub async fn import_dir(
     let mut tx = begin_write(pool).await.map_err(|e| e.to_string())?;
     let mut id = [0u8; 8];
     getrandom::fill(&mut id).map_err(|e| e.to_string())?;
-    let doc = format!("dd_{}", id.iter().map(|x| format!("{x:02x}")).collect::<String>());
+    let doc = format!(
+        "dd_{}",
+        id.iter().map(|x| format!("{x:02x}")).collect::<String>()
+    );
     let err = |e: ApiError| format!("{}: {}", e.status, e.message);
     sqlx::query("INSERT INTO design_docs (id, kind, name, created_by) VALUES (?, 'mockup', ?, ?)")
         .bind(&doc)
@@ -518,7 +539,9 @@ pub async fn import_dir(
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
-    record(&mut tx, "created", &doc, None).await.map_err(|e| e.to_string())?;
+    record(&mut tx, "created", &doc, None)
+        .await
+        .map_err(|e| e.to_string())?;
     for (rel, abs) in &files {
         let bytes = std::fs::read(abs).map_err(|e| format!("{}: {e}", abs.display()))?;
         put_file(&mut tx, &doc, rel, &bytes, by)

@@ -252,7 +252,16 @@ impl Module for Design {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["state", "kind", "project", "name", "tag", "q", "collection", "path"]
+        &[
+            "state",
+            "kind",
+            "project",
+            "name",
+            "tag",
+            "q",
+            "collection",
+            "path",
+        ]
     }
 
     fn scope(&self) -> &'static str {
