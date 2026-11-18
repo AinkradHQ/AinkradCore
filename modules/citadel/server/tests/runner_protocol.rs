@@ -430,6 +430,7 @@ async fn assigns_carry_the_worktree_and_closed_ones_are_pruned() {
         name: "cit".to_owned(),
         also: vec![],
         expected_head: None,
+        mirror: None,
     };
     assert_eq!(job.workspace, Some(want));
     assert_eq!(job.issue_key.as_deref(), Some("CIT-2"));
