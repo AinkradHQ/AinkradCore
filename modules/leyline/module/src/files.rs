@@ -10,7 +10,8 @@
 //!   terminal. A file is at most 64 MiB; a chunk at most 512 KiB.
 //! - Upload chunks wait in Core memory (never on disk), keyed by device, host and path, in order, and
 //!   are written to the host in ONE credited transfer when the last chunk says `done`. At most 4
-//!   uploads wait at once and a stale one is dropped after 10 minutes.
+//!   uploads wait per device (and 32 in all), so one device cannot starve the others; a stale one is
+//!   dropped after 10 minutes.
 //! - Every refusal is a fixed sentence: no path or byte is echoed.
 // ponytail: each chunk is its own gated run and runner connection (the runner pools them); a
 // per-transfer session would save the audit rows if 64 MB transfers become common.
@@ -41,6 +42,7 @@ use crate::hosts::{In, find};
 const CHUNK_MAX: u64 = 512 << 10;
 /// Uploads waiting for their last chunk, and how long one may wait.
 const PENDING_MAX: usize = 4;
+const PENDING_ALL: usize = 32;
 const PENDING_TTL: Duration = Duration::from_secs(600);
 
 #[derive(Serialize, ToSchema)]
@@ -220,11 +222,12 @@ fn waiting() -> &'static Mutex<Waiting> {
 fn add(key: Key, req: &Put, bytes: Vec<u8>) -> Result<Option<Vec<u8>>, ApiError> {
     let mut w = waiting().lock().unwrap();
     w.retain(|_, (_, at)| at.elapsed() < PENDING_TTL);
-    if !w.contains_key(&key) && w.len() >= PENDING_MAX {
+    let mine = w.keys().filter(|k| k.0 == key.0).count();
+    if !w.contains_key(&key) && (mine >= PENDING_MAX || w.len() >= PENDING_ALL) {
         return Err(ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "too_many_uploads",
-            "too many uploads are waiting; try again shortly",
+            "too many uploads are waiting from this device; finish or retry them shortly",
         ));
     }
     let have = w.get(&key).map_or(0, |(v, _)| v.len() as u64);
@@ -327,6 +330,25 @@ mod tests {
             add(k, &put(2, true), b"cd".to_vec()).unwrap().unwrap(),
             b"abcd"
         );
+    }
+
+    #[test]
+    fn one_device_cannot_fill_the_waiting_uploads_for_the_others() {
+        let key = |d: &str, p: &str| (d.to_owned(), "h".to_owned(), p.to_owned());
+        for i in 0..PENDING_MAX {
+            assert!(
+                add(
+                    key("dev-a", &format!("/f{i}")),
+                    &put(0, false),
+                    b"x".to_vec()
+                )
+                .is_ok()
+            );
+        }
+        assert!(add(key("dev-a", "/one-more"), &put(0, false), b"x".to_vec()).is_err());
+        // a chunk of an upload already waiting still goes in, and another device is not blocked
+        assert!(add(key("dev-a", "/f0"), &put(1, false), b"y".to_vec()).is_ok());
+        assert!(add(key("dev-b", "/f0"), &put(0, false), b"x".to_vec()).is_ok());
     }
 
     #[test]
