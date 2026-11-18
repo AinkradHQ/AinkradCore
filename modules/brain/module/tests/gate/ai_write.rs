@@ -226,6 +226,61 @@ async fn a_repeat_reinforces_and_a_rule_or_preference_is_refused() {
     assert_eq!(all, [(0,)]);
 }
 
+/// A session that was shown record R and proposes R's body back is an echo: the citation is kept,
+/// marked `echo`, and R's support does not move.
+#[tokio::test]
+async fn a_session_that_loaded_a_record_and_proposes_it_back_is_an_echo() {
+    let fx = fx().await;
+    let w = world(&fx).await;
+    let p = canon_pool(&fx, &w.room).await;
+    // The source the session cites is its own transcript.
+    sqlx::query("UPDATE sources SET path = ? WHERE item_id = ?")
+        .bind(format!("core://ai-session/{}", w.s))
+        .bind(&w.src)
+        .execute(&p)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO records (id, type, status, body, tags, source_ids, created_at) \
+         VALUES ('rec-r', 'fact', 'accepted', ?, '[]', '[]', '2026-11-10T10:00:00Z')",
+    )
+    .bind(GOOD)
+    .execute(&p)
+    .await
+    .unwrap();
+    p.close().await;
+    read_it(&fx, &w).await;
+    let rec = super::ai::read(
+        &fx,
+        &w.s,
+        "brainAiRecord",
+        json!({"room": w.room, "id": "rec-r"}),
+    )
+    .await;
+    assert!(rec["text"].as_str().unwrap().contains(GOOD), "{rec}");
+    let (_, v) = propose(
+        &fx,
+        &w,
+        json!({"type": "fact", "body": GOOD, "sources": [w.src]}),
+    )
+    .await;
+    assert_eq!(v["status"], "reinforced", "{v}");
+    let support: Vec<(i64,)> = rows(
+        &fx,
+        &w.room,
+        "SELECT support FROM records WHERE id = 'rec-r'",
+    )
+    .await;
+    assert_eq!(support, [(1,)], "an echo does not raise support");
+    let echo: Vec<(i64,)> = rows(
+        &fx,
+        &w.room,
+        "SELECT echo FROM record_sources WHERE record = 'rec-r'",
+    )
+    .await;
+    assert_eq!(echo, [(1,)], "the citation is kept, marked echo");
+}
+
 #[tokio::test]
 async fn citations_must_be_sources_this_session_read() {
     let fx = fx().await;

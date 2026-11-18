@@ -367,8 +367,9 @@ async fn land(
         &prep,
         // No grounding: an AI save can never supersede (and `replaces` is dropped before this).
         &[],
-        // Nothing was loaded for a session by the Brain: a new proposal has no loader to exclude.
-        &std::collections::HashMap::new(),
+        // What the Brain gave sessions in this room: a session that was shown a record and proposes
+        // it back is an echo, never a new origin.
+        &crate::loaded::of_room(app, room).await?,
         true,
     )
     .await?;
