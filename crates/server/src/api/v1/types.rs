@@ -289,7 +289,7 @@
 /// 92: Leyline (Core 0.9 epic). The runner wire protocol gains the ssh ops (exec, sftp, agent) and
 ///    `PtyOpen.ssh` (`SshTerminal`: the runner starts its own `ssh-pty`, keys over an inherited pipe); eight
 ///    `leyline*` operations join the Code Mode allow-list; Leyline's routes live in `modules/leyline/api`.
-/// 92: Project run spec (P4-01). `GET/PUT /projects/{id}/spec` (`getProjectSpec`, `saveProjectSpec`: a save is a new
+/// 92 (second use, Projects P4-01): Project run spec. `GET/PUT /projects/{id}/spec` (`getProjectSpec`, `saveProjectSpec`: a save is a new
 ///    version, step-up), `GET /projects/{id}/spec/versions` (`listProjectSpecVersions`) and
 ///    `GET /projects/{id}/spec/versions/{version}` (`getProjectSpecVersion`). 400 `invalid_spec` names the bad field.
 ///    Registers the event kind and audit action `project.spec_saved`.
@@ -310,7 +310,11 @@
 /// 93: the Projects epic build (assigned 93 of the 0.9 epics: Lore 90, Design 91, Leyline 92, Projects 93) (one bump for every route the epic added after 94: project runs, logs and
 ///    services, run secrets, the public link; and `PATCH /projects/{id}` taking `slug`, `idle_minutes`,
 ///    `cpu_limit` and `mem_limit_mb`). Regenerated once, at the epic's build.
-pub const API_MINOR: u32 = 93;
+/// 94: Brain v2 (Core 0.9 epic, assigned 94 after Lore 90, Design 91, Leyline 92, Projects 93). The Brain module's own
+///    routes, audit actions and events live in `modules/brain/api`; the Code Mode allow-list gains the `brainAi*` v2
+///    operations (`api/ai-ops.allow.json`) and the runner wire protocol the Brain hook commands (`api/runner.schema.json`).
+///    Regenerated once, at the epic's build.
+pub const API_MINOR: u32 = 94;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

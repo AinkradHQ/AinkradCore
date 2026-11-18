@@ -24,9 +24,14 @@ const DEFAULT_LIMIT: u32 = 20;
 const MAX_LIMIT: u32 = 100;
 const MAX_WORDS: usize = 20;
 
-/// Brings `index.db` in line with `canon`; true when it was rebuilt. Sources are only ever added,
-/// so the count and the newest op-log row say whether the index is behind.
+/// Brings `index.db` in line with `canon`; true when anything was rebuilt. Sources are only ever
+/// added, so their count and the newest op-log row say whether `fts` is behind; `rec_fts` (the
+/// facts in force, the `memory` view) is behind when its own stamp moved: a record was added,
+/// archived, superseded or reinforced.
 /// ponytail: a full rebuild, not an incremental add; per-room volumes are small, add `seq > ?` if not.
+/// ponytail: the record stamp is count + body sizes + newest touch + op-log head; an edit that keeps
+/// the length and logs no op is missed. AI reads re-check every hit against `memory`, so a stale row
+/// can mis-rank but never return a record that left memory.
 pub(crate) async fn ensure(
     canon: &SqlitePool,
     index_file: &Path,
@@ -37,46 +42,99 @@ pub(crate) async fn ensure(
     )
     .fetch_one(canon)
     .await?;
+    let rec_stamp: String = sqlx::query_scalar(
+        "SELECT (SELECT count(*) || ':' || coalesce(sum(length(body) + coalesce(length(tags), 0) + support), 0) \
+                || ':' || coalesce(max(coalesce(last_seen_at, created_at)), '') || ':' || coalesce(max(id), '') FROM memory) \
+                || ':' || coalesce((SELECT max(seq) FROM op_log), 0)",
+    )
+    .fetch_one(canon)
+    .await?;
     let index = files::open_migrated(index_file, key, true, INDEX)
         .await
         .map_err(|e| code(500, "index_unavailable", e.to_string()))?;
-    let had: Option<String> = sqlx::query_scalar("SELECT v FROM meta WHERE k = 'stamp'")
-        .fetch_optional(&index)
-        .await?;
-    if had.as_deref() == Some(stamp.as_str()) {
+    let behind = |k: &'static str, want: &str| {
+        let index = index.clone();
+        let want = want.to_owned();
+        async move {
+            let had: Option<String> = sqlx::query_scalar("SELECT v FROM meta WHERE k = ?")
+                .bind(k)
+                .fetch_optional(&index)
+                .await?;
+            Ok::<_, sqlx::Error>(had.as_deref() != Some(want.as_str()))
+        }
+    };
+    let (src_behind, rec_behind) = (
+        behind("stamp", &stamp).await?,
+        behind("rec_stamp", &rec_stamp).await?,
+    );
+    if !src_behind && !rec_behind {
         index.close().await;
         return Ok(false);
     }
     let mut tx = index.begin().await?;
-    sqlx::query("DELETE FROM fts").execute(&mut *tx).await?;
-    let mut after = String::new();
-    loop {
-        let rows = sqlx::query(
-            "SELECT item_id, source_kind, started_at, title, text FROM sources WHERE item_id > ? ORDER BY item_id LIMIT ?",
-        )
-        .bind(&after)
-        .bind(PAGE)
-        .fetch_all(canon)
-        .await?;
-        let Some(last) = rows.last() else { break };
-        after = last.try_get("item_id")?;
-        for r in &rows {
-            sqlx::query("INSERT INTO fts (item_id, source_kind, started_at, title, text) VALUES (?, ?, ?, ?, ?)")
-                .bind(r.try_get::<String, _>("item_id")?)
-                .bind(r.try_get::<String, _>("source_kind")?)
-                .bind(r.try_get::<String, _>("started_at")?)
-                .bind(r.try_get::<String, _>("title")?)
-                .bind(r.try_get::<String, _>("text")?)
-                .execute(&mut *tx)
-                .await?;
+    if src_behind {
+        sqlx::query("DELETE FROM fts").execute(&mut *tx).await?;
+        let mut after = String::new();
+        loop {
+            let rows = sqlx::query(
+                "SELECT item_id, source_kind, started_at, title, text FROM sources WHERE compacted_at IS NULL AND item_id > ? ORDER BY item_id LIMIT ?",
+            )
+            .bind(&after)
+            .bind(PAGE)
+            .fetch_all(canon)
+            .await?;
+            let Some(last) = rows.last() else { break };
+            after = last.try_get("item_id")?;
+            for r in &rows {
+                sqlx::query("INSERT INTO fts (item_id, source_kind, started_at, title, text) VALUES (?, ?, ?, ?, ?)")
+                    .bind(r.try_get::<String, _>("item_id")?)
+                    .bind(r.try_get::<String, _>("source_kind")?)
+                    .bind(r.try_get::<String, _>("started_at")?)
+                    .bind(r.try_get::<String, _>("title")?)
+                    .bind(r.try_get::<String, _>("text")?)
+                    .execute(&mut *tx)
+                    .await?;
+            }
         }
     }
-    sqlx::query(
-        "INSERT INTO meta (k, v) VALUES ('stamp', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
-    )
-    .bind(&stamp)
-    .execute(&mut *tx)
-    .await?;
+    if rec_behind {
+        sqlx::query("DELETE FROM rec_fts").execute(&mut *tx).await?;
+        let mut after = String::new();
+        loop {
+            let rows = sqlx::query(
+                "SELECT id, type, body, tags FROM memory WHERE id > ? ORDER BY id LIMIT ?",
+            )
+            .bind(&after)
+            .bind(PAGE)
+            .fetch_all(canon)
+            .await?;
+            let Some(last) = rows.last() else { break };
+            after = last.try_get("id")?;
+            for r in &rows {
+                sqlx::query("INSERT INTO rec_fts (record, type, body, tags) VALUES (?, ?, ?, ?)")
+                    .bind(r.try_get::<String, _>("id")?)
+                    .bind(r.try_get::<String, _>("type")?)
+                    .bind(r.try_get::<String, _>("body")?)
+                    .bind(r.try_get::<Option<String>, _>("tags")?.unwrap_or_default())
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+    }
+    for (k, v, on) in [
+        ("stamp", &stamp, src_behind),
+        ("rec_stamp", &rec_stamp, rec_behind),
+    ] {
+        if on {
+            sqlx::query(
+                "INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            )
+            .bind(k)
+            .bind(v)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
     tx.commit().await?;
     index.close().await;
     Ok(true)
@@ -159,6 +217,35 @@ pub(crate) async fn fts(
         .collect::<Result<_, sqlx::Error>>()?;
     index.close().await;
     Ok(hits)
+}
+
+/// The best `limit` facts in force of an open room for `expr`: record ids with their bm25 rank (lower
+/// is better). Ids only: the caller reads the text from `memory`, so nothing stale can leave.
+pub(crate) async fn rec_fts(
+    app: &App,
+    key: &[u8; 32],
+    access: &crate::rooms::RoomAccess,
+    limit: u32,
+    expr: &str,
+) -> Result<Vec<(f64, String)>, ApiError> {
+    let file = files::index_path(&files::root(app), access.room());
+    ensure(access.pool(), &file, key).await?;
+    let index = files::open_migrated(&file, key, false, INDEX)
+        .await
+        .map_err(|e| code(500, "index_unavailable", e.to_string()))?;
+    let rows = sqlx::query(
+        "SELECT record, bm25(rec_fts) AS rank FROM rec_fts WHERE rec_fts MATCH ? \
+         ORDER BY bm25(rec_fts), record LIMIT ?",
+    )
+    .bind(expr)
+    .bind(limit)
+    .fetch_all(&index)
+    .await?;
+    index.close().await;
+    Ok(rows
+        .iter()
+        .map(|r| Ok((r.try_get("rank")?, r.try_get("record")?)))
+        .collect::<Result<_, sqlx::Error>>()?)
 }
 
 #[utoipa::path(get, path = "/rooms/{room}/search", operation_id = "brainRoomSearch", tag = "brain",

@@ -6,7 +6,7 @@
 //! rooms. See `docs/Plans/2026-11-11-brain-phase1-import-plan.md` §5.
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicI64};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ainkrad_core::audit::{NewAuditEvent, OriginKind};
@@ -24,31 +24,52 @@ use utoipa::{OpenApi, ToSchema};
 
 mod access;
 mod ai;
+mod ai_propose;
 mod ai_semantic;
 mod aliases;
 mod answer;
+mod answer_turns;
+mod auto_distil;
 mod backfill;
+pub mod card;
+mod change_routes;
+pub mod changes;
+mod checkpoint;
 pub mod cipher;
 mod claim;
 pub mod clean;
 pub mod collectors;
 mod commit;
+mod context;
 mod distil;
+mod echo;
+pub mod eval;
+pub mod eval_census;
 pub mod files;
 mod imports;
 mod inbox;
 mod index;
+mod judge;
 pub mod key;
+mod loaded;
 mod lore;
+pub mod me_card;
+pub mod merge;
 mod overview;
 pub mod overview_select;
 pub mod overview_write;
 mod policy;
 mod project_rooms;
 pub mod propose;
+mod redistil;
+mod redistil_routes;
+pub mod retention;
 mod review;
+mod room_tidy;
+mod room_tidy_run;
 pub mod rooms;
 mod rules_api;
+mod save;
 pub mod semantic;
 mod suggest;
 mod sync;
@@ -108,6 +129,24 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0008_brain_project_rooms.up.sql"),
         down: include_str!("../migrations/0008_brain_project_rooms.down.sql"),
     },
+    Migration {
+        version: 9,
+        name: "brain_v2",
+        up: include_str!("../migrations/0009_brain_v2.up.sql"),
+        down: include_str!("../migrations/0009_brain_v2.down.sql"),
+    },
+    Migration {
+        version: 10,
+        name: "brain_one_open_distil",
+        up: include_str!("../migrations/0010_brain_one_open_distil.up.sql"),
+        down: include_str!("../migrations/0010_brain_one_open_distil.down.sql"),
+    },
+    Migration {
+        version: 11,
+        name: "brain_redistil",
+        up: include_str!("../migrations/0011_brain_redistil.up.sql"),
+        down: include_str!("../migrations/0011_brain_redistil.down.sql"),
+    },
 ];
 
 /// Employer and client rooms commit like any other room. Ahmed, 2026-11-15: "no need to hold the import bcz of backup".
@@ -121,6 +160,7 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/rooms/{room}/claims"),
     ("PATCH", "/rooms/{room}/policy"),
     ("PUT", "/rooms/{room}/access"),
+    ("POST", "/rooms/{room}/redistil"),
 ];
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports"),
@@ -143,8 +183,12 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/overview/write-all"),
     ("PATCH", "/rooms/{room}/overview/instructions"),
     ("POST", "/rooms/{room}/inbox/{id}"),
+    ("POST", "/rooms/{room}/changes/{id}/undo"),
+    ("POST", "/rooms/{room}/redistil/dry-run"),
+    ("POST", "/rooms/{room}/redistil/cancel"),
     ("PUT", "/sources/{id}"),
     ("POST", "/ai/rooms/{room}/propose"),
+    ("POST", "/ai/checkpoint"),
     ("PUT", "/projects/{project}/room"),
     ("DELETE", "/projects/{project}/room"),
 ];
@@ -187,6 +231,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/rooms/{room}/search", "read"),
     ("GET", "/rooms/{room}/latest", "read"),
     ("GET", "/rooms/{room}/policy", "read"),
+    ("GET", "/rooms/{room}/card", "read"),
     ("GET", "/rooms/{room}/distils", "read"),
     ("GET", "/rooms/{room}/inbox", "read"),
     ("GET", "/rooms/{room}/overview", "read"),
@@ -196,10 +241,17 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     // creator holds. They answer only a session's own calls (`ai::session_of`).
     ("GET", "/ai/rooms", "read"),
     ("GET", "/ai/search", "read"),
+    ("GET", "/ai/context", "read"),
     ("GET", "/ai/rooms/{room}/records/{id}", "read"),
+    (
+        "GET",
+        "/ai/rooms/{room}/records/{id}/sources/{source}",
+        "read",
+    ),
     ("GET", "/ai/decisions", "read"),
     ("GET", "/ai/project-state", "read"),
     ("POST", "/ai/rooms/{room}/propose", "agent"),
+    ("POST", "/ai/checkpoint", "agent"),
 ];
 
 #[derive(Default)]
@@ -209,6 +261,17 @@ struct Inner {
     rooms: rooms::Rooms,
     syncing: AtomicBool,
     distilling: AtomicBool,
+    /// Set while the automatic distil triggers run (`auto_distil`), and when they last scanned the rooms.
+    auto_busy: AtomicBool,
+    auto_scan: AtomicI64,
+    /// Set while the re-distil job looks at its run (`redistil`).
+    redistilling: AtomicBool,
+    /// Set while a room tidy step runs (`room_tidy`).
+    tidying: AtomicBool,
+    /// Per AI session: checkpoint requests and runs (`checkpoint`). In memory: losing it on a restart only delays one.
+    ckpt: Mutex<HashMap<String, checkpoint::Ckpt>>,
+    /// Per AI session: the `brainAiContext` token bucket (`context::allow`).
+    ctx_rate: Mutex<HashMap<String, (f64, std::time::Instant)>>,
     overviewing: AtomicBool,
     /// Rooms held for a backup before 0.8.5 were imported this process (`commit::release_held`).
     held_released: AtomicBool,
@@ -229,6 +292,27 @@ pub struct Brain {
 }
 
 impl Brain {
+    /// `brainAiContext` rate limit: a burst of 10 per session, then one call a second.
+    pub(crate) fn context_allowed(&self, session: &str) -> bool {
+        let now = std::time::Instant::now();
+        let mut m = self
+            .inner
+            .ctx_rate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if m.len() > 1000 {
+            m.retain(|_, (_, t)| now.duration_since(*t).as_secs() < 30);
+        }
+        let (n, t) = m.entry(session.to_owned()).or_insert((10.0, now));
+        *n = (*n + now.duration_since(*t).as_secs_f64()).min(10.0);
+        *t = now;
+        if *n < 1.0 {
+            return false;
+        }
+        *n -= 1.0;
+        true
+    }
+
     /// A build whose leases last `secs` seconds (A-3). Never compiled into a release binary.
     #[cfg(feature = "test-support")]
     pub fn with_lease_secs(secs: i64) -> Self {
@@ -493,6 +577,14 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         claim::claim_route,
         inbox::list,
         inbox::decide,
+        change_routes::list,
+        change_routes::one,
+        change_routes::undo_route,
+        retention::preview,
+        redistil_routes::apply,
+        redistil_routes::dry_run,
+        redistil_routes::cancel,
+        redistil_routes::list,
         distil::start,
         distil::list,
         overview::get,
@@ -501,6 +593,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         overview::progress_route,
         overview::instructions,
         policy::get,
+        card::get,
         policy::patch,
         project_rooms::link_route,
         project_rooms::unlink_route,
@@ -508,10 +601,13 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         access::put,
         ai::rooms,
         ai::search,
+        context::context,
         ai::one,
+        ai::evidence,
         ai::decisions,
         ai::project_state,
-        ai::propose
+        ai_propose::propose,
+        checkpoint::request
     ),
     components(schemas(
         BrainStatus,
@@ -578,7 +674,14 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         inbox::InboxRecord,
         inbox::InboxPage,
         inbox::Decision,
+        change_routes::Change,
+        change_routes::ChangeRow,
+        change_routes::ChangeDetail,
+        change_routes::UndoResult,
+        retention::RetentionPreview,
+        redistil_routes::RedistilView,
         policy::PolicyView,
+        card::Card,
         policy::PolicyPatch,
         policy::PolicyAccount,
         project_rooms::ProjectRoomLink,
@@ -587,10 +690,14 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         ai::AiRoom,
         ai::AiHit,
         ai::AiHits,
+        context::AiContext,
         ai::AiRecord,
         ai::AiRecords,
-        ai::Propose,
-        ai::Proposed
+        ai::AiPast,
+        ai::AiEvidence,
+        ai_propose::Propose,
+        ai_propose::Proposed,
+        checkpoint::CheckpointAsked
     ))
 )]
 struct Doc;
@@ -644,6 +751,25 @@ impl Module for Brain {
             .route("/rooms/{room}/claims", post(claim::claim_route))
             .route("/rooms/{room}/inbox", get(inbox::list))
             .route("/rooms/{room}/inbox/{id}", post(inbox::decide))
+            .route("/rooms/{room}/changes", get(change_routes::list))
+            .route("/rooms/{room}/changes/{id}", get(change_routes::one))
+            .route(
+                "/rooms/{room}/changes/{id}/undo",
+                post(change_routes::undo_route),
+            )
+            .route("/rooms/{room}/retention", get(retention::preview))
+            .route(
+                "/rooms/{room}/redistil",
+                get(redistil_routes::list).post(redistil_routes::apply),
+            )
+            .route(
+                "/rooms/{room}/redistil/dry-run",
+                post(redistil_routes::dry_run),
+            )
+            .route(
+                "/rooms/{room}/redistil/cancel",
+                post(redistil_routes::cancel),
+            )
             .route("/rooms/{room}/distil", post(distil::start))
             .route("/rooms/{room}/distils", get(distil::list))
             .route("/rooms/{room}/overview", get(overview::get))
@@ -658,6 +784,7 @@ impl Module for Brain {
                 "/rooms/{room}/policy",
                 get(policy::get).patch(policy::patch),
             )
+            .route("/rooms/{room}/card", get(card::get))
             .route("/rooms/{room}/access", get(access::get).put(access::put))
             .route(
                 "/projects/{project}/room",
@@ -665,10 +792,16 @@ impl Module for Brain {
             )
             .route("/ai/rooms", get(ai::rooms))
             .route("/ai/search", get(ai::search))
+            .route("/ai/context", get(context::context))
             .route("/ai/rooms/{room}/records/{id}", get(ai::one))
+            .route(
+                "/ai/rooms/{room}/records/{id}/sources/{source}",
+                get(ai::evidence),
+            )
             .route("/ai/decisions", get(ai::decisions))
             .route("/ai/project-state", get(ai::project_state))
-            .route("/ai/rooms/{room}/propose", post(ai::propose))
+            .route("/ai/rooms/{room}/propose", post(ai_propose::propose))
+            .route("/ai/checkpoint", post(checkpoint::request))
             .route("/sources", get(sync::sources))
             .route("/sources/{id}", put(sync::put_source))
             .route("/sync", get(sync::status).post(sync::sync_now))
@@ -708,8 +841,12 @@ impl Module for Brain {
             "brain.room.policy",
             "brain.inbox.decided",
             "brain.distil.queued",
+            "brain.distil.capped",
             "brain.distil.done",
             "brain.distil.rejected",
+            "brain.tidy.started",
+            "brain.tidy.done",
+            "brain.tidy.rejected",
             "brain.overview.queued",
             "brain.overview.written",
             "brain.overview.failed",
@@ -717,10 +854,23 @@ impl Module for Brain {
             "brain.room.access",
             "brain.room.linked",
             "brain.room.unlinked",
+            "brain.ai.evidence",
+            "brain.ai.context",
+            "brain.me_card.served",
             "brain.ai.proposed",
+            "brain.ai.checkpoint_requested",
+            "brain.ai.outcome",
             "brain.ai.refused",
             "brain.alias.set",
             "brain.alias.removed",
+            "brain.change.undone",
+            "brain.room.purged",
+            "brain.room.compacted",
+            "brain.redistil.started",
+            "brain.redistil.done",
+            "brain.redistil.previewed",
+            "brain.redistil.failed",
+            "brain.redistil.cancelled",
         ]
     }
 
@@ -752,7 +902,9 @@ impl Module for Brain {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["q", "room", "mode", "status", "limit", "after"]
+        &[
+            "q", "room", "mode", "status", "limit", "after", "prompt", "budget", "days",
+        ]
     }
 
     fn jobs(&self) -> Vec<Job> {
@@ -760,8 +912,13 @@ impl Module for Brain {
             sync::job(self),
             index::job(self),
             distil::job(self),
+            auto_distil::job(self),
             overview::job(self),
             project_rooms::job(self),
+            changes::job(self),
+            retention::job(self),
+            redistil::job(self),
+            room_tidy_run::job(self),
         ]
     }
 

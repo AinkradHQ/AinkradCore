@@ -19,11 +19,20 @@ pub const NOTICE: &str =
 
 const ZWSP: char = '\u{200B}';
 
-/// `s` with every run of three or more `<` or `>` broken up, so it holds no live marker.
-fn defang(s: &str) -> String {
+/// `s` with every run of three or more `<` or `>` broken up, so it holds no live marker, and a
+/// zero-width space after every `@` that is followed by a non-space character, wherever it stands
+/// (after a space, a bracket, a colon, U+FEFF): a CLI that expands `@path` imports (Gemini-style) in
+/// a context file then cannot read a file the text names. An address reads slightly different to the
+/// model, which is fine.
+pub fn defang(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let (mut last, mut run) = (None, 0);
+    let mut after_at = false;
     for c in s.chars() {
+        if after_at && !c.is_whitespace() && c != ZWSP {
+            out.push(ZWSP);
+        }
+        after_at = c == '@';
         if matches!(c, '<' | '>') {
             run = if last == Some(c) { run + 1 } else { 1 };
             if run >= 3 {
@@ -66,6 +75,19 @@ mod tests {
     /// Live markers in `s`: (opens, closes).
     fn live(s: &str) -> (usize, usize) {
         (s.matches("<<<").count(), s.matches(">>>").count())
+    }
+
+    #[test]
+    fn an_at_import_is_broken_wherever_it_stands() {
+        let w = wrap(
+            "l",
+            "@config/mcp_config.json\nsee @a/b (@x/y) k:@p/q \u{FEFF}@z/w and name@host\n  @c",
+        );
+        for live in ["@config", "@a/", "@x/", ":@p", "@z/", "@host", "@c"] {
+            assert!(!w.contains(live), "{live} in {w}");
+        }
+        assert!(w.contains("@\u{200B}config"), "{w}");
+        assert!(w.starts_with(OPEN) && w.ends_with(CLOSE));
     }
 
     #[test]

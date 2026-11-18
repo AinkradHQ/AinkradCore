@@ -1,0 +1,758 @@
+//! B3-01: the admission rules. `admit` scores one candidate fact and says admit, borderline or reject,
+//! with reason codes. Pure and deterministic: no I/O, no model call, no clock. The model's own `durable`
+//! and `confidence` are inputs here, not calls made here. The judge call for the borderline band is B3-03.
+//!
+//! Every `Q_*` constant is a quality-tuning value. It ships as a conservative placeholder (keep more,
+//! reject only the clear junk) and only B1-04 may change it, against the eval on the real data copy.
+
+use std::collections::HashSet;
+
+/// Q: score below this is rejected.
+pub const Q_LO: f32 = 0.40;
+/// Q: score at or above this is admitted. Between `Q_LO` and `Q_HI` is borderline.
+pub const Q_HI: f32 = 0.70;
+/// Q: the share of the body's content words that must appear in the cited text, else rejected.
+pub const Q_GROUND_FLOOR: f32 = 0.34;
+/// Q: below this grounding share the body is flagged `weak_grounding` (a reason only).
+pub const Q_GROUND_WEAK: f32 = 0.60;
+/// Q: share of a rule's content words that must occur in ONE user turn of ONE cited source.
+pub const Q_USER_GROUNDING: f32 = 0.70;
+/// Q: shortest body, in characters and in words.
+pub const Q_MIN_CHARS: usize = 12;
+pub const Q_MIN_WORDS: usize = 3;
+/// Q: longest body in characters; a longer one is not an atomic fact.
+pub const Q_MAX_CHARS: usize = 800;
+/// Q: component weights of the score (they sum to 1.0).
+pub const Q_W_SHAPE: f32 = 0.15;
+pub const Q_W_SPECIFIC: f32 = 0.35;
+pub const Q_W_GROUNDING: f32 = 0.30;
+pub const Q_W_MODEL: f32 = 0.20;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Band {
+    Admit,
+    Borderline,
+    Reject,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reason {
+    TooShort,
+    TooLong,
+    StackTrace,
+    LogLines,
+    TimestampOnly,
+    PathOnly,
+    Greeting,
+    OneOffStatus,
+    Duplicate,
+    NoSource,
+    TaskDone,
+    NeedsUserTurn,
+    Ungrounded,
+    GenericAdvice,
+    ModelNotDurable,
+    LowSpecificity,
+    WeakGrounding,
+}
+
+impl Reason {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::TooShort => "too_short",
+            Self::TooLong => "too_long",
+            Self::StackTrace => "stack_trace",
+            Self::LogLines => "log_lines",
+            Self::TimestampOnly => "timestamp_only",
+            Self::PathOnly => "path_only",
+            Self::Greeting => "greeting",
+            Self::OneOffStatus => "one_off_status",
+            Self::Duplicate => "duplicate",
+            Self::NoSource => "no_source",
+            Self::TaskDone => "task_done",
+            Self::NeedsUserTurn => "needs_user_turn",
+            Self::Ungrounded => "ungrounded",
+            Self::GenericAdvice => "generic_advice",
+            Self::ModelNotDurable => "model_not_durable",
+            Self::LowSpecificity => "low_specificity",
+            Self::WeakGrounding => "weak_grounding",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Candidate<'a> {
+    pub body: &'a str,
+    /// `decision|fact|preference|rule|project-state|task|summary`.
+    pub kind: &'a str,
+    /// The distil model's own verdict, when it gave one.
+    pub durable: Option<bool>,
+    /// The distil model's confidence, 0..1, when it gave one.
+    pub confidence: Option<f32>,
+}
+
+/// A source the candidate cites. Build it once per source and reuse it for every candidate of a batch.
+#[derive(Debug, Clone)]
+pub struct Cited {
+    stems: HashSet<String>,
+    /// The cited text contains a `User:` turn (the proof a rule or preference needs).
+    pub user_turn: bool,
+}
+
+impl Cited {
+    pub fn new(text: &str, user_turn: bool) -> Self {
+        Self {
+            stems: tokens(text).iter().map(|t| stem(t)).collect(),
+            user_turn,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Admission {
+    /// 0..1. A hard reject scores 0.
+    pub score: f32,
+    pub band: Band,
+    pub reasons: Vec<Reason>,
+}
+
+/// Lowercase, Arabic diacritics and tatweel removed, alef/yaa variants folded.
+fn norm(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(*c, '\u{064B}'..='\u{065F}' | '\u{0640}'))
+        .map(|c| match c {
+            'أ' | 'إ' | 'آ' => 'ا',
+            'ى' => 'ي',
+            c => c,
+        })
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn tokens(s: &str) -> Vec<String> {
+    norm(s)
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+// ponytail: a 6-char prefix is the stemmer (request/requests match); real stemming if B1 shows misses.
+fn stem(t: &str) -> String {
+    t.chars().take(6).collect()
+}
+
+const STOP: &[&str] = &[
+    "the", "and", "for", "with", "that", "this", "from", "are", "was", "were", "has", "have",
+    "had", "not", "but", "you", "your", "our", "their", "its", "into", "when", "then", "than",
+    "also", "can", "will", "would", "should", "could", "about", "over", "after", "before", "each",
+    "every", "any", "all", "في", "من", "على", "الى", "عن", "هذا", "هذه", "ذلك", "التي", "الذي",
+    "كان", "مع", "هو", "هي", "ثم", "او",
+];
+
+/// More stop words for the user-turn check only (the corpus bands stay), folded as `norm` folds.
+const STOP_USER: &[&str] = &[
+    "just",
+    "like",
+    "make",
+    "sure",
+    "some",
+    "more",
+    "very",
+    "much",
+    "what",
+    "which",
+    "there",
+    "here",
+    "they",
+    "them",
+    "these",
+    "those",
+    "been",
+    "being",
+    "does",
+    "did",
+    "how",
+    "who",
+    "why",
+    "where",
+    "while",
+    "because",
+    "only",
+    "out",
+    "get",
+    "got",
+    "let",
+    "please",
+    "علي",
+    "الي",
+    "الذين",
+    "كانت",
+    "يكون",
+    "انه",
+    "بعد",
+    "قبل",
+    "عند",
+    "حتي",
+    "لكن",
+    "بين",
+    "كما",
+    "ايضا",
+    "هناك",
+    "عليه",
+];
+
+/// Order and scope words, folded as `norm` folds. In the user-turn checks they are content whatever
+/// their length or stop-list entry (B4-02 round 3): "deploy only after tests pass" must not ground
+/// "deploy before tests pass".
+const ORDER: &[&str] = &[
+    "before", "after", "only", "every", "each", "all", "any", "than", "first", "last", "قبل",
+    "بعد", "فقط", "كل", "جميع", "اي", "اول", "اخر", "الا",
+];
+
+/// Negation words, folded as `norm` folds. In the user-turn check they are content, never stop words,
+/// and their parity is a text's polarity (B4-02 review): "don't deploy without tests" must not ground
+/// "deploy without tests". `n't` is read as ` not` first (`words`).
+const NEGATIONS: &[&str] = &[
+    "not", "no", "never", "without", "nor", "cannot", "dont", "doesnt", "didnt", "isnt", "arent",
+    "wont", "cant", "shouldnt", "mustnt", "لا", "لم", "لن", "ليس", "ليست", "بدون", "ولا", "ولم",
+    "ولن",
+];
+
+fn words(s: &str) -> Vec<String> {
+    tokens(&norm(s).replace("n't", " not").replace("n\u{2019}t", " not"))
+}
+
+/// An odd number of negation words.
+fn negated(s: &str) -> bool {
+    words(s)
+        .iter()
+        .filter(|w| NEGATIONS.contains(&w.as_str()))
+        .count()
+        % 2
+        == 1
+}
+
+/// The distinct negation words of `s` (the strict check compares these sets, not their parity).
+fn negations(s: &str) -> HashSet<String> {
+    words(s)
+        .into_iter()
+        .filter(|w| NEGATIONS.contains(&w.as_str()))
+        .collect()
+}
+
+/// The distinct order and scope words of `s` (compared as a set by the strict check).
+fn orders(s: &str) -> HashSet<String> {
+    words(s)
+        .into_iter()
+        .filter(|w| ORDER.contains(&w.as_str()))
+        .collect()
+}
+
+/// Distinct content stems of `s`: words of 3+ characters, every negation word and every order or
+/// scope word, stop words (English, Arabic) dropped.
+pub fn content_stems(s: &str) -> HashSet<String> {
+    let stop = |t: &str| STOP.contains(&t) || STOP_USER.contains(&t);
+    let keep = |t: &String| {
+        NEGATIONS.contains(&t.as_str())
+            || ORDER.contains(&t.as_str())
+            || (t.chars().count() >= 3 && !stop(t))
+    };
+    words(s)
+        .into_iter()
+        .filter(keep)
+        .map(|t| stem(&t))
+        .collect()
+}
+
+/// A clause of a block: its content stems, its polarity, its negation words.
+#[derive(Debug, Default)]
+struct Clause {
+    stems: HashSet<String>,
+    negated: bool,
+    negations: HashSet<String>,
+    orders: HashSet<String>,
+}
+
+/// One block a body may be grounded in (one user turn, or one cited Jira or GitHub item): its
+/// content stems, and each clause's stems with its polarity. `ground` (admission) uses the clauses
+/// of sentences; `supports` (supersede) the finer clauses.
+#[derive(Debug, Default)]
+pub struct Grounds {
+    stems: HashSet<String>,
+    clauses: Vec<Clause>,
+    /// Split on `,` and Arabic `،` too (B4-02 round 3).
+    fine: Vec<Clause>,
+}
+
+fn clauses(text: &str, at: &[char]) -> Vec<Clause> {
+    text.split(at)
+        .filter(|c| !c.trim().is_empty())
+        .map(|c| Clause {
+            stems: content_stems(c),
+            negated: negated(c),
+            negations: negations(c),
+            orders: orders(c),
+        })
+        .collect()
+}
+
+const SENTENCE: &[char] = &['.', '!', '?', ';', '\n', '\u{061F}', '\u{061B}'];
+const CLAUSE: &[char] = &[
+    '.', '!', '?', ';', ',', '\n', '\u{061F}', '\u{061B}', '\u{060C}',
+];
+
+impl Grounds {
+    pub fn of(text: &str) -> Self {
+        let clauses = clauses(text, SENTENCE);
+        let stems = clauses
+            .iter()
+            .flat_map(|c| c.stems.iter().cloned())
+            .collect();
+        Self {
+            stems,
+            clauses,
+            fine: self::clauses(text, CLAUSE),
+        }
+    }
+
+    /// The strict test a `replaces` needs to retire a record (B4-02 round 3): EVERY content stem of
+    /// the body is in ONE clause (split on `.`, `;`, `,`, newlines, `،`, `؛`), and that clause has
+    /// exactly the body's set of negation words and of order/scope words (dropping "only" or "all"
+    /// would otherwise ground a broader body). Lexical overlap cannot read meaning, so this is
+    /// deliberately strict: anything less is saved as contested, never as a supersede.
+    pub fn supports(&self, body: &str) -> bool {
+        let b = content_stems(body);
+        let (neg, ord) = (negations(body), orders(body));
+        !b.is_empty()
+            && self
+                .fine
+                .iter()
+                .any(|c| b.is_subset(&c.stems) && c.negations == neg && c.orders == ord)
+    }
+
+    /// At least [`Q_USER_GROUNDING`] of the body's content stems are here, and the clause that shares
+    /// the most with the body has the body's polarity (a tie passes when one of them has it).
+    pub fn ground(&self, body: &str) -> bool {
+        let b = content_stems(body);
+        let hit = |s: &HashSet<String>| b.iter().filter(|w| s.contains(*w)).count();
+        if b.is_empty() || (hit(&self.stems) as f32 / b.len() as f32) < Q_USER_GROUNDING {
+            return false;
+        }
+        let neg = negated(body);
+        let best = self
+            .clauses
+            .iter()
+            .map(|c| hit(&c.stems))
+            .max()
+            .unwrap_or(0);
+        self.clauses
+            .iter()
+            .any(|c| hit(&c.stems) == best && c.negated == neg)
+    }
+}
+
+const GREET: &[&str] = &[
+    "hi",
+    "hello",
+    "hey",
+    "thanks",
+    "thank",
+    "ok",
+    "okay",
+    "great",
+    "nice",
+    "cool",
+    "lol",
+    "done",
+    "fixed",
+    "merged",
+    "مرحبا",
+    "اهلا",
+    "شكرا",
+    "تمام",
+    "حسنا",
+];
+
+const NOW: &[&str] = &[
+    "now",
+    "today",
+    "currently",
+    "yesterday",
+    "tonight",
+    "اليوم",
+    "الان",
+    "حاليا",
+    "دلوقتي",
+];
+
+/// A status line on its own is one-off.
+const STATUS_ALONE: &[&str] = &[
+    "build passed",
+    "build failed",
+    "build is green",
+    "tests pass",
+    "tests passed",
+    "tests failed",
+    "ci is green",
+    "ci is red",
+];
+
+/// A status marker is one-off only next to a "now" word.
+const STATUS_NOW: &[&str] = &["working on", "waiting for", "in progress"];
+
+const GENERIC: &[&str] = &[
+    "best practices",
+    "clean code",
+    "write tests",
+    "be careful",
+    "make sure",
+    "double check",
+    "good practice",
+    "readable code",
+    "follow the guidelines",
+    "افضل الممارسات",
+];
+
+const CUES: &[&str] = &[
+    "always",
+    "never",
+    "prefer",
+    "prefers",
+    "use",
+    "uses",
+    "must",
+    "convention",
+    "decided",
+    "requires",
+    "default",
+    "owner",
+    "يفضل",
+    "دائما",
+    "ابدا",
+    "يستخدم",
+    "قررنا",
+    "يجب",
+    "الافتراضي",
+];
+
+const DONE: &[&str] = &[
+    "done",
+    "completed",
+    "fixed",
+    "merged",
+    "finished",
+    "closed",
+    "تم",
+];
+
+fn is_trace_line(t: &str) -> bool {
+    let l = t.trim().to_lowercase();
+    l.contains("traceback (most recent call last)")
+        || l.contains("panicked at")
+        || l.contains("stack backtrace")
+        || l.contains("stack trace")
+        || l.starts_with("exception in thread")
+        || (l.starts_with("file \"") && l.contains(", line "))
+        || (l.starts_with("at ") && l.contains(':') && l.contains('('))
+}
+
+fn digits(b: &[u8], n: usize) -> bool {
+    b.len() >= n && b[..n].iter().all(u8::is_ascii_digit)
+}
+
+fn is_log_line(t: &str) -> bool {
+    let t = t.trim();
+    let b = t.as_bytes();
+    let iso_date = digits(b, 4) && b.get(4) == Some(&b'-');
+    let clock = digits(b, 2) && b.get(2) == Some(&b':');
+    let bracket = t.starts_with("[INFO]")
+        || t.starts_with("[WARN]")
+        || t.starts_with("[ERROR]")
+        || t.starts_with("[DEBUG]")
+        || t.starts_with("[TRACE]");
+    let level = ["INFO:", "WARN:", "ERROR:", "DEBUG:", "TRACE:"]
+        .iter()
+        .any(|p| t.starts_with(p));
+    let tool = [
+        "Compiling ",
+        "Finished ",
+        "npm ERR!",
+        "error[",
+        "BUILD ",
+        "test result:",
+    ]
+    .iter()
+    .any(|p| t.starts_with(p));
+    iso_date || clock || bracket || level || tool
+}
+
+fn has_issue_ref(body: &str) -> bool {
+    let b = body.as_bytes();
+    b.windows(2).any(|w| w[0] == b'#' && w[1].is_ascii_digit())
+}
+
+fn is_path_like(w: &str) -> bool {
+    w.contains('/') || w.contains('\\')
+}
+
+/// The first ephemeral shape found, if any.
+fn ephemeral(body: &str) -> Option<Reason> {
+    let lines: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.iter().any(|l| is_trace_line(l)) {
+        return Some(Reason::StackTrace);
+    }
+    if body.chars().any(|c| c.is_ascii_digit())
+        && body
+            .chars()
+            .all(|c| !c.is_alphabetic() || c == 'T' || c == 'Z')
+    {
+        return Some(Reason::TimestampOnly);
+    }
+    let logs = lines.iter().filter(|l| is_log_line(l)).count();
+    if logs > 0 && logs * 2 >= lines.len() {
+        return Some(Reason::LogLines);
+    }
+    let words: Vec<&str> = body.split_whitespace().collect();
+    if !words.is_empty()
+        && (words.iter().all(|w| is_path_like(w))
+            || (words.len() == 1
+                && words[0].rsplit_once('.').is_some_and(|(_, e)| {
+                    (1..=5).contains(&e.len()) && e.chars().all(|c| c.is_ascii_alphanumeric())
+                })))
+    {
+        return Some(Reason::PathOnly);
+    }
+    let toks = tokens(body);
+    if let Some(first) = toks.first() {
+        let greeting = GREET.contains(&first.as_str())
+            && (toks.len() <= 3
+                || (toks.len() <= 5
+                    && [
+                        "hi",
+                        "hello",
+                        "hey",
+                        "thanks",
+                        "thank",
+                        "مرحبا",
+                        "اهلا",
+                        "شكرا",
+                    ]
+                    .contains(&first.as_str())));
+        if greeting {
+            return Some(Reason::Greeting);
+        }
+    }
+    let n = norm(body);
+    let now = toks.iter().any(|t| NOW.contains(&t.as_str()));
+    let marker = has_issue_ref(body) || STATUS_NOW.iter().any(|p| n.contains(p));
+    if (now && marker) || STATUS_ALONE.iter().any(|p| n.contains(p)) {
+        return Some(Reason::OneOffStatus);
+    }
+    None
+}
+
+/// Anchors of specificity: code-ish token, proper noun, number, durable cue.
+fn anchors(body: &str) -> usize {
+    let words: Vec<&str> = body.split_whitespace().collect();
+    let code = words.iter().any(|w| {
+        w.contains('`')
+            || w.contains('/')
+            || w.contains("::")
+            || w.starts_with("--")
+            || w.contains('_')
+            || w.contains("()")
+            || w.trim_end_matches(['.', ',', ';'])
+                .rsplit_once('.')
+                .is_some_and(|(a, e)| {
+                    !a.is_empty()
+                        && [
+                            "rs", "swift", "ts", "toml", "json", "md", "sql", "sh", "db", "yml",
+                        ]
+                        .contains(&e)
+                })
+            || (w.chars().skip(1).any(|c| c.is_ascii_uppercase())
+                && w.chars().next().is_some_and(|c| c.is_ascii_lowercase()))
+    });
+    let proper = words.iter().skip(1).any(|w| {
+        let w = w.trim_matches(|c: char| !c.is_alphanumeric());
+        w.len() >= 2 && w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+    });
+    let number = words.iter().any(|w| w.chars().any(|c| c.is_ascii_digit()));
+    let cue = tokens(body).iter().any(|t| CUES.contains(&t.as_str()));
+    [code, proper, number, cue].iter().filter(|b| **b).count()
+}
+
+fn grounding(body: &str, cited: &[Cited]) -> f32 {
+    let content: Vec<String> = tokens(body)
+        .into_iter()
+        .filter(|t| t.chars().count() >= 3 && !STOP.contains(&t.as_str()))
+        .map(|t| stem(&t))
+        .collect();
+    if content.is_empty() {
+        return 0.0;
+    }
+    let hit = content
+        .iter()
+        .filter(|s| cited.iter().any(|c| c.stems.contains(*s)))
+        .count();
+    hit as f32 / content.len() as f32
+}
+
+pub fn admit(c: &Candidate, cited: &[Cited], existing: &[&str]) -> Admission {
+    let body = c.body.trim();
+    let mut hard = Vec::new();
+    let mut soft = Vec::new();
+
+    let chars = body.chars().count();
+    let words = body.split_whitespace().count();
+    if chars < Q_MIN_CHARS || words < Q_MIN_WORDS {
+        hard.push(Reason::TooShort);
+    }
+    if chars > Q_MAX_CHARS {
+        hard.push(Reason::TooLong);
+    }
+    hard.extend(ephemeral(body));
+    let nb = norm(body);
+    if existing.iter().any(|e| norm(e.trim()) == nb) {
+        hard.push(Reason::Duplicate);
+    }
+    if cited.is_empty() {
+        hard.push(Reason::NoSource);
+    }
+    let kind = c.kind;
+    if kind == "task" && tokens(body).iter().any(|t| DONE.contains(&t.as_str())) {
+        hard.push(Reason::TaskDone);
+    }
+    if matches!(kind, "rule" | "preference") && !cited.iter().any(|s| s.user_turn) {
+        hard.push(Reason::NeedsUserTurn);
+    }
+    let g = grounding(body, cited);
+    if !cited.is_empty() && g < Q_GROUND_FLOOR {
+        hard.push(Reason::Ungrounded);
+    }
+    if !hard.is_empty() {
+        return Admission {
+            score: 0.0,
+            band: Band::Reject,
+            reasons: hard,
+        };
+    }
+
+    let mut shape: f32 = match words {
+        5..=60 => 1.0,
+        3..=4 | 61..=120 => 0.6,
+        _ => 0.3,
+    };
+    if body.lines().filter(|l| !l.trim().is_empty()).count() > 1 {
+        shape = (shape - 0.2).max(0.0);
+    }
+    let mut specific = (0.2 + 0.25 * anchors(body) as f32).min(1.0);
+    if anchors(body) == 0 {
+        soft.push(Reason::LowSpecificity);
+    }
+    if GENERIC.iter().any(|p| nb.contains(p)) {
+        specific *= 0.4;
+        soft.push(Reason::GenericAdvice);
+    }
+    if g < Q_GROUND_WEAK {
+        soft.push(Reason::WeakGrounding);
+    }
+    let durable = match c.durable {
+        Some(true) => 1.0,
+        Some(false) => {
+            soft.push(Reason::ModelNotDurable);
+            0.0
+        }
+        None => 0.6,
+    };
+    let model = durable
+        * c.confidence
+            .filter(|x| x.is_finite())
+            .map_or(1.0, |x| x.clamp(0.0, 1.0));
+
+    let score = Q_W_SHAPE * shape + Q_W_SPECIFIC * specific + Q_W_GROUNDING * g + Q_W_MODEL * model;
+    let band = if score >= Q_HI {
+        Band::Admit
+    } else if score >= Q_LO {
+        Band::Borderline
+    } else {
+        Band::Reject
+    };
+    Admission {
+        score,
+        band,
+        reasons: soft,
+    }
+}
+
+#[cfg(test)]
+mod grounds_tests {
+    use super::Grounds;
+
+    #[test]
+    fn a_dropped_negation_does_not_ground() {
+        let turn = Grounds::of("Don't deploy on Fridays without tests.");
+        assert!(!turn.ground("Deploy on Fridays without tests."));
+        assert!(turn.ground("Do not deploy on Fridays without tests."));
+        let turn = Grounds::of("Deploy on Fridays without tests.");
+        assert!(!turn.ground("Never deploy on Fridays without tests."));
+        assert!(turn.ground("Deploy on Fridays without tests."));
+    }
+
+    #[test]
+    fn a_dropped_arabic_negation_does_not_ground() {
+        let turn = Grounds::of("لا ننشر يوم الجمعة بدون اختبارات");
+        assert!(!turn.ground("ننشر يوم الجمعة بدون اختبارات"));
+        assert!(turn.ground("لا ننشر يوم الجمعة بدون اختبارات"));
+        let turn = Grounds::of("ننشر يوم الجمعة");
+        assert!(!turn.ground("لن ننشر يوم الجمعة"));
+    }
+
+    #[test]
+    fn polarity_is_read_from_the_matching_clause() {
+        let turn = Grounds::of("No, that one is wrong. Deploy the billing export on Mondays.");
+        assert!(turn.ground("Deploy the billing export on Mondays."));
+    }
+
+    // B4-02 round 3: the strict supersede test.
+    #[test]
+    fn a_negated_clause_never_supports_the_plain_body() {
+        let turn = Grounds::of("No, don't deploy on Fridays");
+        assert!(!turn.supports("deploy on Fridays"));
+        assert!(turn.supports("Don't deploy on Fridays"));
+        // Sets, not parity: "never" is not "not".
+        assert!(!turn.supports("Never deploy on Fridays"));
+        let turn = Grounds::of("لا، لا ننشر يوم الجمعة");
+        assert!(!turn.supports("ننشر يوم الجمعة"));
+    }
+
+    #[test]
+    fn a_swapped_verb_never_supports() {
+        let turn = Grounds::of("always run the full test suite before merging");
+        assert!(!turn.supports("always skip the full test suite before merging"));
+        assert!(turn.supports("Always run the full test suite before merging."));
+    }
+
+    #[test]
+    fn order_and_scope_words_are_content() {
+        let turn = Grounds::of("deploy only after tests pass");
+        assert!(!turn.supports("deploy before tests pass"));
+        assert!(!turn.supports("deploy after any tests pass"));
+        assert!(turn.supports("Deploy only after tests pass."));
+        // Dropping "only" would ground a broader body: the order-word sets must match exactly.
+        assert!(!turn.supports("deploy after tests pass"));
+        let turn = Grounds::of("ننشر فقط بعد نجاح الاختبارات");
+        assert!(!turn.supports("ننشر قبل نجاح الاختبارات"));
+    }
+
+    #[test]
+    fn a_true_restatement_supports_from_one_clause_only() {
+        let turn = Grounds::of("No, that one is wrong. Deploy the billing export on Mondays.");
+        assert!(turn.supports("Deploy the billing export on Mondays."));
+        assert!(turn.supports("deploy billing export Mondays"));
+        // Every stem from ONE clause, never the union of two.
+        let turn = Grounds::of("Deploy the billing export, on Mondays");
+        assert!(!turn.supports("Deploy the billing export on Mondays."));
+    }
+}

@@ -268,6 +268,8 @@ async fn main() -> ExitCode {
         ["mcp-stdio", sock] => {
             return ainkrad_runner::v2::agent::tools::sock::stdio_main(sock).await;
         }
+        // A Claude Code hook of the Brain (B8-03): always exits 0, prints one JSON object or nothing.
+        ["hook", kind, sock] => return ainkrad_runner::v2::agent::hook::main(kind, sock),
         // One script (spawned by the shim, inside the sandbox) and the `ainkrad` CLI.
         #[cfg(feature = "quickjs")]
         ["__script", sock] => return ainkrad_runner::v2::agent::script::child::script_main(sock),

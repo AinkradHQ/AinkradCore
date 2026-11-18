@@ -150,7 +150,7 @@ pub(crate) fn item_of(r: &SqliteRow) -> Result<Item, sqlx::Error> {
         },
         project_hint: r.try_get("project_hint")?,
         author: Author {
-            kind: serde_json::from_value(json!(author)).unwrap_or(AuthorKind::Person),
+            kind: serde_json::from_value(json!(author)).unwrap_or(AuthorKind::Agent),
             name: r.try_get("author_name")?,
         },
         title: r.try_get("title")?,

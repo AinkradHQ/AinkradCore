@@ -1,0 +1,9 @@
+{
+  "room": "fixture-room",
+  "questions": [
+    {"q": "deploy staging", "answers": ["rec-deploy"]},
+    {"q": "database backups", "answers": ["rec-backup", "src-backup"]},
+    {"q": "coffee machine", "answers": ["rec-nothing"]},
+    {"q": "start bundle check", "answers": ["rec-deploy"], "mode": "start"}
+  ]
+}
