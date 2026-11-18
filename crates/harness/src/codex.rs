@@ -34,8 +34,34 @@ pub fn command(spec: &Spec) -> Command {
 
 fn launch(spec: &Spec) -> Launch {
     let program = spec.program.as_deref().unwrap_or("codex".as_ref());
-    Launch::new(program, vec!["app-server".to_owned()])
-        .set("CODEX_HOME", spec.config_dir.as_os_str())
+    let mut args = vec!["app-server".to_owned()];
+    args.extend(hook_flags(spec));
+    Launch::new(program, args).set("CODEX_HOME", spec.config_dir.as_os_str())
+}
+
+/// The Brain checkpoint hooks (B8-04): `PreCompact` and `SessionEnd`, as `-c hooks.<Event>=...`
+/// session flags of this app-server process, running the runner's `hook checkpoint
+/// <socket>` on the session's own tools socket. Only a session with the tools slot gets them. A
+/// session with the slot is sandboxed and so never warm (`work`): its app-server is its own, and
+/// the socket in the flag is its own. Codex runs a hook only once it is trusted: see
+/// [`Codex::trust_hooks`]; there is no `--dangerously-bypass-hook-trust`. `SessionEnd` allows 3 s
+/// at most; the shim gives up sooner.
+fn hook_flags(spec: &Spec) -> Vec<String> {
+    let Some((sock, exe)) = crate::connections::slot(&spec.env) else {
+        return vec![];
+    };
+    let command = crate::connections::checkpoint_hook(&exe, &sock);
+    // A JSON string is a valid TOML basic string.
+    let command = Value::String(command);
+    ["PreCompact", "SessionEnd"]
+        .into_iter()
+        .flat_map(|event| {
+            let hook = format!(
+                "hooks.{event}=[{{hooks=[{{type=\"command\",command={command},timeout=2}}]}}]"
+            );
+            ["-c".to_owned(), hook]
+        })
+        .collect()
 }
 
 /// The spec's MCP file for the Citadel MCP server at `url`: the `mcp_servers` table of a
@@ -68,6 +94,26 @@ pub fn thread_params(spec: &Spec, resume: Option<&str>) -> io::Result<Value> {
         params["excludeTurns"] = true.into();
     }
     Ok(params)
+}
+
+/// The `hooks.state` table that trusts what `hooks/list` (`listed`) reports as ours: a session
+/// flag hook whose command is exactly `ours` and which is `untrusted` or `modified`. Empty when
+/// there is none.
+fn trust_edit(listed: &Value, ours: &str) -> Value {
+    let mut state = serde_json::Map::new();
+    let entries = listed["data"].as_array().into_iter().flatten();
+    for hook in entries.flat_map(|e| e["hooks"].as_array().into_iter().flatten()) {
+        let wanted = hook["source"] == "sessionFlags"
+            && hook["handlerType"] == "command"
+            && hook["command"] == ours
+            && matches!(hook["trustStatus"].as_str(), Some("untrusted" | "modified"));
+        if let (true, Some(key), Some(hash)) =
+            (wanted, hook["key"].as_str(), hook["currentHash"].as_str())
+        {
+            state.insert(key.to_owned(), json!({"trusted_hash": hash}));
+        }
+    }
+    Value::Object(state)
 }
 
 pub struct Codex {
@@ -354,6 +400,11 @@ impl Codex {
             .proc
             .write(&json!({"jsonrpc": "2.0", "method": "initialized"}))
             .await?;
+        // Never fails the start: untrusted hooks are skipped by Codex, and the Core-side
+        // checkpoint covers the session.
+        if let Err(e) = codex.trust_hooks(spec).await {
+            tracing::warn!(harness = "codex", error = %e, "could not trust the checkpoint hooks");
+        }
         let method = if resume.is_some() {
             "thread/resume"
         } else {
@@ -364,6 +415,40 @@ impl Codex {
         let id = codex.thread.clone();
         codex.queued.push_front(HarnessEvent::SessionStarted { id });
         Ok(codex)
+    }
+
+    /// Trusts the checkpoint hooks this runner passed as flags (B8-04), by the protocol's own
+    /// path (what Codex's TUI does when a person approves a hook): `hooks/list` for the cwd, then
+    /// `config/batchWrite` of `hooks.state.<key>.trusted_hash` for each hook that is a session
+    /// flag, ours (the exact command) and not yet trusted. Nothing else is trusted: a hook from the
+    /// workspace or any other layer stays as Codex finds it. A failure leaves the hooks untrusted,
+    /// which Codex skips silently; the caller logs it and carries on. `CODEX_HOME` is per
+    /// session (`~/.ainkrad-runner/.../sessions/<ref>`), so the trust written here is this
+    /// session's own and cannot collide with another's.
+    async fn trust_hooks(&mut self, spec: &Spec) -> io::Result<()> {
+        let flags = hook_flags(spec);
+        if flags.is_empty() {
+            return Ok(());
+        }
+        let (sock, exe) = crate::connections::slot(&spec.env).unwrap_or_default();
+        let ours = crate::connections::checkpoint_hook(&exe, &sock);
+        let id = self
+            .request("hooks/list", json!({"cwds": [spec.cwd]}))
+            .await?;
+        let Ok(listed) = self.response(id).await else {
+            return Ok(());
+        };
+        let state = trust_edit(&listed, &ours);
+        if state.as_object().is_none_or(|o| o.is_empty()) {
+            return Ok(());
+        }
+        let edit = json!({"edits": [{"keyPath": "hooks.state", "value": state,
+            "mergeStrategy": "upsert"}], "reloadUserConfig": true});
+        let id = self.request("config/batchWrite", edit).await?;
+        if let Err(e) = self.response(id).await {
+            tracing::warn!(harness = "codex", error = %e, "could not trust the checkpoint hooks");
+        }
+        Ok(())
     }
 
     async fn request(&mut self, method: &str, params: Value) -> io::Result<u64> {

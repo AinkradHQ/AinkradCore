@@ -21,15 +21,10 @@
 use serde_json::{Value, json};
 
 use crate::Spec;
-use crate::connections::slot;
+use crate::connections::{quoted, slot};
 
 /// Claude's own kill time for a hook, in whole seconds: above the shim's 1.5 s deadline.
 const BACKSTOP_SECS: u64 = 2;
-
-/// `s` single-quoted for `sh`.
-fn quoted(s: &str) -> String {
-    format!("'{}'", s.replace('\'', r"'\''"))
-}
 
 fn entry(exe: &str, kind: &str, sock: &str) -> Value {
     json!([{"hooks": [{"type": "command", "timeout": BACKSTOP_SECS,
@@ -90,6 +85,17 @@ mod tests {
             assert!(h["timeout"].as_u64().unwrap() >= 2, "{event}: above 1.5 s");
         }
         assert_eq!(v["attribution"]["commit"], "", "other settings are kept");
+    }
+
+    #[test]
+    fn codex_and_agy_run_the_same_checkpoint_command_as_claude() {
+        let spec = with_slot();
+        let (sock, exe) = slot(&spec.env).unwrap();
+        let v = flag_of(&spec);
+        assert_eq!(
+            v["hooks"]["PreCompact"][0]["hooks"][0]["command"],
+            crate::connections::checkpoint_hook(&exe, &sock)
+        );
     }
 
     #[test]
