@@ -209,6 +209,22 @@ async fn a_good_answer_is_stored_with_counted_sources_and_instructions_round_tri
     );
     assert!(v["instructions_approved_at"].is_null());
     assert!(v["written_at"].is_string());
+    // `State` and `Last activity` come from the items' dates (the newest made-up one is 2026-11-02),
+    // never from the model's "active" / "today".
+    let f = &v["overview"]["facts"];
+    assert!(
+        f["last_activity"]
+            .as_str()
+            .unwrap()
+            .starts_with("2026-11-02 ("),
+        "{f}"
+    );
+    assert_ne!(f["last_activity"], "today");
+    assert!(
+        matches!(f["state"].as_str(), Some("active" | "quiet" | "dormant")),
+        "{f}"
+    );
+    assert_eq!(f["stack"], "Rust", "the stack is still the model's");
     // Edit and approve; a plain edit later withdraws the approval.
     let url = format!("/rooms/{room}/overview/instructions");
     let p = |b: Value| ok(&fx, Method::PATCH, &url, Some(b));
