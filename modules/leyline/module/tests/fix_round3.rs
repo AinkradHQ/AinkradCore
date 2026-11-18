@@ -33,9 +33,7 @@ async fn a_confirm_command_from_a_session_asks_on_a_read_only_host_too() {
     let (ai, dev) = session(&fx, "as_ro").await;
     let action = Action::Preset(c["id"].as_str().unwrap().into());
     let app = fx.app.clone();
-    let h = tokio::spawn(async move {
-        authorize_confirmed(&app, &ai, "ro", &action, true).await
-    });
+    let h = tokio::spawn(async move { authorize_confirmed(&app, &ai, "ro", &action, true).await });
     let req = parked(&fx, "as_ro").await;
     decide_approval(&fx.app, "as_ro", &req, false, &dev)
         .await
@@ -97,7 +95,7 @@ async fn a_literal_secret_in_a_step_is_refused_but_a_variable_is_not() {
         assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
         assert!(v.to_string().contains("contains a secret"), "{v}");
     }
-    let c = mk(&fx, json!({"name": "ok", "steps": ["export DB_PASSWORD=$DB_PASSWORD", "curl -H \"Authorization: Bearer ${TOKEN}\" x"])})).await;
+    let c = mk(&fx, json!({"name": "ok", "steps": ["export DB_PASSWORD=$DB_PASSWORD", "curl -H \"Authorization: Bearer ${TOKEN}\" x"]})).await;
     let path = format!("/commands/{}", c["id"].as_str().unwrap());
     let (s, v) = call(
         &fx,
