@@ -1,4 +1,4 @@
-//! Y4-02 review, MEDIUM: `Hub::dispatch_ssh_exec` takes no proof, so only Leyline's `exec.rs`
+//! Y4-02 review, MEDIUM: the Hub's ungated ssh.exec dispatch takes no proof, so only Leyline's `exec.rs`
 //! (which holds the gate's `Authorized`) may call it. Fails when any other source file does.
 
 use std::path::{Path, PathBuf};
@@ -19,8 +19,9 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 #[test]
 fn only_the_gated_runner_calls_dispatch_ssh_exec() {
-    // split so this file does not match itself
-    let needle = format!("dispatch_ssh_{}(", "exec");
+    // No `(`: an alias or a value use (`let f = Hub::dispatch_ssh_exec`) is a caller too. Split so
+    // this file does not match itself.
+    let needle = format!("dispatch_ssh_{}", "exec");
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let mut files = Vec::new();
     for d in ["crates", "modules"] {
@@ -42,7 +43,10 @@ fn only_the_gated_runner_calls_dispatch_ssh_exec() {
     callers.sort();
     assert_eq!(
         callers,
-        ["crates/server/src/hub/mod.rs", "modules/leyline/module/src/exec.rs"],
+        [
+            "crates/server/src/hub/mod.rs",
+            "modules/leyline/module/src/exec.rs"
+        ],
         "a new caller of the ungated ssh.exec dispatch"
     );
 }

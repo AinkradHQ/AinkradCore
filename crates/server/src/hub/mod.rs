@@ -446,6 +446,14 @@ impl Hub {
         command: Command,
         _proof: Elevated,
     ) -> Result<Dispatched, StreamError> {
+        // `ssh.exec` has its own entry for a module that holds the gate's proof; a step-up alone
+        // never reaches a host through here.
+        if matches!(command, Command::SshExec(_)) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "ssh.exec is not sent through dispatch_elevated",
+            ));
+        }
         self.send_command(runner, command)
     }
 

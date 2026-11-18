@@ -20,14 +20,19 @@ async fn a_revoked_person_stops_between_steps() {
     let c = mk(&fx, json!({"name": "c", "steps": ["one"]})).await;
     let id = c["id"].as_str().unwrap();
     let who = person(&fx).await;
-    let a = authorize(&fx.app, &who, &h, &Action::Preset(id.into())).await.unwrap();
+    let a = authorize(&fx.app, &who, &h, &Action::Preset(id.into()))
+        .await
+        .unwrap();
     still_valid(&fx.app, &a).await.unwrap();
     sqlx::query("UPDATE core_devices SET revoked_at = '2026-11-18T00:00:00Z' WHERE id = ?")
         .bind(&fx.admin.id)
         .execute(&fx.app.pool)
         .await
         .unwrap();
-    assert_eq!(still_valid(&fx.app, &a).await.unwrap_err().code, "gate_refused");
+    assert_eq!(
+        still_valid(&fx.app, &a).await.unwrap_err().code,
+        "gate_refused"
+    );
 }
 
 #[tokio::test]
@@ -42,7 +47,9 @@ async fn a_jump_hops_connection_is_part_of_the_host() {
     let c = mk(&fx, json!({"name": "c", "steps": ["one"]})).await;
     let id = c["id"].as_str().unwrap();
     let who = person(&fx).await;
-    let a = authorize(&fx.app, &who, &inner, &Action::Preset(id.into())).await.unwrap();
+    let a = authorize(&fx.app, &who, &inner, &Action::Preset(id.into()))
+        .await
+        .unwrap();
     still_valid(&fx.app, &a).await.unwrap();
     let (s, _) = call(
         &fx,
@@ -53,7 +60,10 @@ async fn a_jump_hops_connection_is_part_of_the_host() {
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(still_valid(&fx.app, &a).await.unwrap_err().code, "gate_refused");
+    assert_eq!(
+        still_valid(&fx.app, &a).await.unwrap_err().code,
+        "gate_refused"
+    );
 }
 
 #[tokio::test]
@@ -68,13 +78,17 @@ async fn the_gate_checks_the_commands_scope_per_host() {
     .await;
     let action = Action::Preset(c["id"].as_str().unwrap().into());
     let who = person(&fx).await;
-    let g = authorize_many(&fx.app, &who, &[&inside, &outside], &action).await.unwrap();
+    let g = authorize_many(&fx.app, &who, &[&inside, &outside], &action)
+        .await
+        .unwrap();
     assert_eq!(g.authorized.len(), 1);
     assert_eq!(g.authorized[0].host_id(), inside);
     assert_eq!(g.refused.len(), 1);
     assert_eq!(g.refused[0].0, outside);
     // one host: the same refusal as before the move, a 409
-    let e = authorize(&fx.app, &who, &outside, &action).await.unwrap_err();
+    let e = authorize(&fx.app, &who, &outside, &action)
+        .await
+        .unwrap_err();
     assert_eq!(e.status, StatusCode::CONFLICT);
 }
 
@@ -89,8 +103,13 @@ async fn a_confirm_command_from_a_session_asks_even_on_an_allowed_host() {
     let h = tokio::spawn(async move { authorize(&app, &ai, "web", &action).await });
     // It parks for a person instead of running at once.
     let req = parked(&fx, "as_cf").await;
-    decide_approval(&fx.app, "as_cf", &req, false, &dev).await.unwrap();
-    let r = tokio::time::timeout(Duration::from_secs(10), h).await.unwrap().unwrap();
+    decide_approval(&fx.app, "as_cf", &req, false, &dev)
+        .await
+        .unwrap();
+    let r = tokio::time::timeout(Duration::from_secs(10), h)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(r.is_err(), "denied by the person");
 }
 

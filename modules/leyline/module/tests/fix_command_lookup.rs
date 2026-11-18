@@ -13,7 +13,14 @@ async fn an_id_like_name_is_refused_and_an_exact_id_wins() {
     let real = mk(&fx, json!({"name": "real", "steps": ["true"]})).await;
     let id = real["id"].as_str().unwrap().to_owned();
     for name in ["lc_anything", "LC_Anything", &id] {
-        let (s, _) = call(&fx, &fx.admin, Method::POST, "/commands", Some(json!({"name": name, "steps": ["id"]}))).await;
+        let (s, _) = call(
+            &fx,
+            &fx.admin,
+            Method::POST,
+            "/commands",
+            Some(json!({"name": name, "steps": ["id"]})),
+        )
+        .await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{name}");
     }
     // even if such a name got into the store some other way, the exact id is found first
@@ -22,7 +29,14 @@ async fn an_id_like_name_is_refused_and_an_exact_id_wins() {
         .execute(&fx.app.pool)
         .await
         .unwrap();
-    let (s, v) = call(&fx, &fx.admin, Method::GET, &format!("/commands/{id}"), None).await;
+    let (s, v) = call(
+        &fx,
+        &fx.admin,
+        Method::GET,
+        &format!("/commands/{id}"),
+        None,
+    )
+    .await;
     assert_eq!((s, v["steps"].clone()), (StatusCode::OK, json!(["true"])));
 }
 
@@ -36,7 +50,14 @@ async fn unreadable_steps_are_an_error_not_an_empty_list() {
         .execute(&fx.app.pool)
         .await
         .unwrap();
-    let (s, _) = call(&fx, &fx.admin, Method::GET, &format!("/commands/{id}"), None).await;
+    let (s, _) = call(
+        &fx,
+        &fx.admin,
+        Method::GET,
+        &format!("/commands/{id}"),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
     let h = add(&fx, "web", "allowed").await;
     let (s, _) = run_of(&fx, id, &h).await;

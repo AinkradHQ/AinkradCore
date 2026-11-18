@@ -21,7 +21,8 @@
 //!   (`consume`) before an `Authorized` exists. Denied, expired, ended, lost, already-spent or
 //!   stale approvals never run anything. A fleet with any `ask` host asks once for the run.
 //! - The approval card is shown whole or not at all: a command, path or host list the card would
-//!   have to cut or redact is refused before anything is parked.
+//!   have to cut is refused ("too long to show for approval"), and so is one that holds a secret
+//!   written out ("contains a secret"). A `$VAR`, `${NAME}` or `$(...)` value is shown as written.
 //! - An `Authorized` carries the action and its hash: dispatch takes the command from it, never
 //!   from the caller again. A run left waiting (error, cancelled call) is marked `cancelled`.
 //! - Every call leaves a `leyline_runs` row, per-host rows and audit rows (origin = the principal).
@@ -51,10 +52,10 @@ use ainkrad_core_server::ops_catalog::{
 };
 use ainkrad_core_server::store::connections::access;
 use ainkrad_core_server::store::{begin_write, gov, settings};
+use ainkrad_proto::v2::MAX_SSH_HOPS;
 use axum::http::StatusCode;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use ainkrad_proto::v2::MAX_SSH_HOPS;
 use sqlx::{Row, SqliteConnection};
 
 use crate::commands::{Cmd, Scope, load_cmd};
@@ -66,6 +67,7 @@ use crate::valid::new_id;
 #[path = "runs.rs"]
 mod runs;
 pub use runs::finish;
+pub(crate) use runs::literal_secret;
 use runs::{Parked, cancel, note, redacted, settle, write_run};
 
 /// `s` with secret shapes masked: what a stored text goes through.
@@ -222,7 +224,24 @@ pub async fn authorize(
     host: &str,
     action: &Action,
 ) -> Result<Authorized, ApiError> {
-    let mut g = authorize_many(app, who, &[host], action).await?;
+    authorize_confirmed(app, who, host, action, true).await
+}
+
+/// [`authorize`] for a caller that took `confirm` from its request: a pre-set command flagged
+/// `confirm` is refused (409 `confirm_required`) unless `confirmed`, judged on the command the gate
+/// itself reads, so an edit between the caller's check and the gate cannot slip past.
+///
+/// # Errors
+///
+/// As [`authorize`], and 409 `confirm_required`.
+pub async fn authorize_confirmed(
+    app: &App,
+    who: &Principal,
+    host: &str,
+    action: &Action,
+    confirmed: bool,
+) -> Result<Authorized, ApiError> {
+    let mut g = gate_many(app, who, &[host], action, confirmed).await?;
     match (g.authorized.pop(), g.refused.pop()) {
         (Some(a), _) => Ok(a),
         (None, Some((_, why))) if why == NOT_FOR_HOST => Err(ApiError::conflict(why)),
@@ -241,6 +260,16 @@ pub async fn authorize_many(
     who: &Principal,
     hosts: &[&str],
     action: &Action,
+) -> Result<Gated, ApiError> {
+    gate_many(app, who, hosts, action, true).await
+}
+
+async fn gate_many(
+    app: &App,
+    who: &Principal,
+    hosts: &[&str],
+    action: &Action,
+    confirmed: bool,
 ) -> Result<Gated, ApiError> {
     if hosts.is_empty() || hosts.len() > MAX_HOSTS {
         return Err(ApiError::bad_request("name between 1 and 100 hosts"));
@@ -268,6 +297,13 @@ pub async fn authorize_many(
         }
         _ => None,
     };
+    if cmd.as_ref().is_some_and(|c| c.confirm) && !confirmed {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "confirm_required",
+            "this command must be confirmed: send confirm true",
+        ));
+    }
     // An AI session must be live with a usable creator; the runner it waits on is its own.
     let session_runner = match &who.0 {
         Who::Session(s) => {
@@ -299,11 +335,7 @@ pub async fn authorize_many(
             ) {
                 // A command that wants confirming is not run by an AI on its own, even where
                 // the host allows it.
-                Verdict::Allow
-                    if is_ai && h.rule == Rule::Allowed && cmd.as_ref().is_some_and(|c| c.confirm) =>
-                {
-                    Verdict::Ask
-                }
+                Verdict::Allow if is_ai && cmd.as_ref().is_some_and(|c| c.confirm) => Verdict::Ask,
                 v => v,
             }
         };
@@ -427,7 +459,7 @@ async fn link(
         Some(r) => r.to_owned(),
         None => sqlx::query_scalar(
             "SELECT p.device_id FROM core_pairings p JOIN core_devices d ON d.id = p.device_id \
-             WHERE p.kind = 'runner' AND p.sas = ? AND d.status = 'active' AND d.revoked_at IS NULL LIMIT 1",
+             WHERE p.kind = 'runner' AND p.sas = ? AND d.status = 'active' AND d.revoked_at IS NULL ORDER BY p.device_id LIMIT 1",
         )
         .bind(ainkrad_core_server::store::gov::LOCAL_ENROL_SAS)
         .fetch_optional(&mut *conn)
@@ -618,9 +650,10 @@ fn op_hash(action: &Action, cmd: Option<&Cmd>, hosts: &[H]) -> String {
         .collect()
 }
 
-/// A text the card can show exactly as it is: short and with nothing to redact.
-fn shows_whole(s: &str) -> bool {
-    s.chars().count() <= CARD_TEXT && redacted(s) == s
+/// A text the card can show exactly as it is: short (a `$VAR`, `${NAME}` or `$(...)` value is shown
+/// as written; a secret written out is not).
+fn too_long(s: &str) -> bool {
+    s.chars().count() > CARD_TEXT
 }
 
 /// Parks the approval of the `ask` hosts and waits for the person.
@@ -645,11 +678,15 @@ async fn ask(
     });
     let args = json!({"hosts": names, "detail": detail, "steps": steps});
     // The person approves what the card shows: never a cut or redacted version of it.
-    if !shows_whole(detail)
-        || !steps.iter().all(|t| shows_whole(t))
-        || !names.iter().all(|n| shows_whole(n))
-        || args.to_string().len() > CARD_ALL
-    {
+    let texts: Vec<&str> = [detail]
+        .into_iter()
+        .chain(steps.iter().map(String::as_str))
+        .chain(names.iter().copied())
+        .collect();
+    if texts.iter().any(|t| literal_secret(t)) {
+        return Err(refuse("the command contains a secret"));
+    }
+    if texts.iter().any(|t| too_long(t)) || args.to_string().len() > CARD_ALL {
         return Err(refuse("too long to show for approval"));
     }
     let summary = format!("Run {} on {} host(s).", action.op(), names.len());
