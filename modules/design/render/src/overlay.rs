@@ -2,7 +2,7 @@
 //! marquee and snap guides. World coordinates in, drawn in screen points on top of the artboards in the same frame,
 //! so a drag and its outline never drift apart. Handles are small rounded rects (no circles).
 
-use skia_safe::{Canvas, Color, Paint, PaintStyle, RRect, Rect};
+use skia_safe::{Canvas, Color, Font, FontMgr, FontStyle, Paint, PaintStyle, RRect, Rect};
 
 use crate::camera::Camera;
 
@@ -11,8 +11,32 @@ const GUIDE: Color = Color::new(0xFFFF_375F);
 /// Handle size in points.
 pub const HANDLE: f32 = 7.0;
 
+/// Marker colours for other people and AI sessions (a peer keeps one by its slot).
+const PEER_COLORS: [u32; 6] = [
+    0xFF8B_5CF6,
+    0xFF14_B8A6,
+    0xFFF9_7316,
+    0xFFEC_4899,
+    0xFF84_CC16,
+    0xFF06_B6D4,
+];
+
+/// Another device's or AI session's cursor and selection (V2-06). World coordinates.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PeerMark {
+    pub label: String,
+    /// An AI session: its chip carries a small square mark.
+    pub ai: bool,
+    /// Index into the marker colours (taken modulo their count).
+    pub slot: usize,
+    pub cursor: Option<(f32, f32)>,
+    pub selected: Vec<Rect>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Overlay {
+    /// Other peers, drawn under the local selection.
+    pub peers: Vec<PeerMark>,
     pub hover: Option<Rect>,
     pub selected: Vec<Rect>,
     /// Bounds of the selection; drawn with its eight resize handles.
@@ -55,6 +79,9 @@ fn screen(cam: &Camera, r: Rect) -> Rect {
 
 /// Draw in screen points (the canvas is already scaled to the backing scale).
 pub fn draw(canvas: &Canvas, cam: &Camera, o: &Overlay) {
+    for p in &o.peers {
+        draw_peer(canvas, cam, p);
+    }
     let mut line = Paint::default();
     line.set_anti_alias(true);
     line.set_style(PaintStyle::Stroke);
@@ -112,5 +139,60 @@ pub fn draw(canvas: &Canvas, cam: &Camera, o: &Overlay) {
         let (x1, y1) = cam.to_screen(g[0], g[1]);
         let (x2, y2) = cam.to_screen(g[2], g[3]);
         canvas.draw_line((x1, y1), (x2, y2), &line);
+    }
+}
+
+/// Rounded-rect markers only: an outline per selected node, a small rounded square at the cursor and a rounded chip
+/// with the label beside it.
+fn draw_peer(canvas: &Canvas, cam: &Camera, p: &PeerMark) {
+    let c = Color::new(PEER_COLORS[p.slot % PEER_COLORS.len()]);
+    let mut line = Paint::default();
+    line.set_anti_alias(true);
+    line.set_style(PaintStyle::Stroke);
+    line.set_stroke_width(1.5);
+    line.set_color(c);
+    for r in &p.selected {
+        let r = screen(cam, *r);
+        canvas.draw_rrect(RRect::new_rect_xy(r, 2.0, 2.0), &line);
+    }
+    let Some((wx, wy)) = p.cursor else { return };
+    let (x, y) = cam.to_screen(wx, wy);
+    let mut fill = Paint::default();
+    fill.set_anti_alias(true);
+    fill.set_color(c);
+    canvas.draw_rrect(
+        RRect::new_rect_xy(Rect::from_xywh(x - 3.0, y - 3.0, 7.0, 7.0), 2.0, 2.0),
+        &fill,
+    );
+    let font = FontMgr::new()
+        .legacy_make_typeface(None, FontStyle::default())
+        .map(|t| Font::from_typeface(t, 11.0));
+    let (w, h, pad) = match &font {
+        Some(f) => (f.measure_str(&p.label, None).0, 16.0, 6.0),
+        None => (0.0, 16.0, 6.0),
+    };
+    let mark = if p.ai { 10.0 } else { 0.0 };
+    let chip = Rect::from_xywh(x + 8.0, y + 8.0, w + 2.0 * pad + mark, h);
+    canvas.draw_rrect(RRect::new_rect_xy(chip, 4.0, 4.0), &fill);
+    let mut ink = Paint::default();
+    ink.set_anti_alias(true);
+    ink.set_color(Color::WHITE);
+    if p.ai {
+        canvas.draw_rrect(
+            RRect::new_rect_xy(
+                Rect::from_xywh(chip.left + pad, chip.top + 5.0, 6.0, 6.0),
+                1.5,
+                1.5,
+            ),
+            &ink,
+        );
+    }
+    if let Some(f) = &font {
+        canvas.draw_str(
+            &p.label,
+            (chip.left + pad + mark, chip.top + 11.5),
+            f,
+            &ink,
+        );
     }
 }

@@ -34,6 +34,33 @@ pub fn set_camera(h: u64, zoom: f32, pan: (f32, f32)) -> i32 {
     })
 }
 
+/// The camera `(zoom, pan x, pan y)`.
+#[doc(hidden)]
+pub fn camera(h: u64) -> Option<(f32, f32, f32)> {
+    let mut out = None;
+    with(h, |e| {
+        out = Some((e.camera.zoom, e.camera.pan.0, e.camera.pan.1));
+        Ok(0)
+    });
+    out
+}
+
+/// The peer markers the overlay would draw: `(label, ai, cursor, selected rects)`.
+#[doc(hidden)]
+pub fn peer_marks(h: u64) -> Vec<(String, bool, Option<(f32, f32)>, usize)> {
+    let mut out = vec![];
+    with(h, |e| {
+        e.refresh();
+        out = e
+            .remote_marks()
+            .into_iter()
+            .map(|m| (m.label, m.ai, m.cursor, m.selected.len()))
+            .collect();
+        Ok(0)
+    });
+    out
+}
+
 /// World rect `[l, t, r, b]` of a node as drawn now (preview included).
 #[doc(hidden)]
 pub fn rect(h: u64, id: &str) -> Option<[f32; 4]> {
