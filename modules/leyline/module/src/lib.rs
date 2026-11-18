@@ -9,9 +9,14 @@
 //! migration, no Core crate names this module.
 
 mod address;
+mod alerts;
 mod attach;
+mod commands;
 mod direct;
+mod exec;
+mod fleet;
 pub mod gate;
+mod health;
 pub mod hostkeys;
 mod hosts;
 mod keys;
@@ -21,8 +26,11 @@ mod terminal;
 mod valid;
 
 use ainkrad_core_server::api::App;
+use ainkrad_core_server::jobs::Job;
 use ainkrad_core_server::module::Module;
+use ainkrad_core_server::push::Notification;
 use ainkrad_core_server::store::Migration;
+use ainkrad_core_server::store::events::StoredEvent;
 use axum::Router;
 use axum::routing::{get, post, put};
 use serde_json::Value;
@@ -51,9 +59,33 @@ pub static MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 4,
-        name: "0004_direct",
-        up: include_str!("../migrations/0004_direct.up.sql"),
-        down: include_str!("../migrations/0004_direct.down.sql"),
+        name: "0004_commands",
+        up: include_str!("../migrations/0004_commands.up.sql"),
+        down: include_str!("../migrations/0004_commands.down.sql"),
+    },
+    Migration {
+        version: 5,
+        name: "0005_health",
+        up: include_str!("../migrations/0005_health.up.sql"),
+        down: include_str!("../migrations/0005_health.down.sql"),
+    },
+    Migration {
+        version: 6,
+        name: "0006_alerts",
+        up: include_str!("../migrations/0006_alerts.up.sql"),
+        down: include_str!("../migrations/0006_alerts.down.sql"),
+    },
+    Migration {
+        version: 7,
+        name: "0007_fleet",
+        up: include_str!("../migrations/0007_fleet.up.sql"),
+        down: include_str!("../migrations/0007_fleet.down.sql"),
+    },
+    Migration {
+        version: 8,
+        name: "0008_direct",
+        up: include_str!("../migrations/0008_direct.up.sql"),
+        down: include_str!("../migrations/0008_direct.down.sql"),
     },
 ];
 
@@ -76,6 +108,12 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/hosts"),
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
+    ("POST", "/commands"),
+    ("PATCH", "/commands/{command}"),
+    ("DELETE", "/commands/{command}"),
+    ("POST", "/commands/{command}/run"),
+    ("POST", "/fleet/runs"),
+    ("POST", "/runs/{run}/cancel"),
     ("POST", "/hosts/{host}/host-keys/trust"),
     // Ending a lease only takes access away.
     ("POST", "/hosts/{host}/direct/revoke"),
@@ -90,6 +128,9 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/keys", "read"),
     ("GET", "/keys/{key}", "read"),
     ("GET", "/projects/{project}/hosts", "read"),
+    ("GET", "/commands", "read"),
+    ("GET", "/commands/{command}", "read"),
+    ("GET", "/runs/{run}", "admin"),
     ("GET", "/hosts/{host}/host-keys", "read"),
     // The terminal scope, as the Core's own terminal routes.
     ("POST", "/hosts/{host}/terminals", "terminal"),
@@ -118,6 +159,15 @@ pub struct Leyline;
         attach::list,
         attach::attach,
         attach::detach,
+        commands::list,
+        commands::create,
+        commands::get,
+        commands::patch,
+        commands::remove,
+        commands::run,
+        commands::get_run,
+        fleet::start,
+        fleet::cancel,
         hostkeys::list,
         hostkeys::trust_route,
         hostkeys::replace_route,
@@ -139,6 +189,18 @@ pub struct Leyline;
         attach::HostProject,
         attach::Role,
         attach::Detached,
+        commands::CommandView,
+        commands::NewCommand,
+        commands::CommandPatch,
+        commands::CommandDeleted,
+        commands::Scope,
+        commands::RunRequest,
+        commands::RunStarted,
+        commands::RunView,
+        commands::RunHost,
+        fleet::FleetRequest,
+        fleet::FleetStarted,
+        fleet::Cancelled,
         hostkeys::HostKeyView,
         hostkeys::Pick,
         terminal::NewSession,
@@ -192,6 +254,17 @@ impl Module for Leyline {
             .route("/keys", get(keys::list).post(keys::generate))
             .route("/keys/import", post(keys::import))
             .route("/keys/{key}", get(keys::get).delete(keys::remove))
+            .route("/commands", get(commands::list).post(commands::create))
+            .route(
+                "/commands/{command}",
+                get(commands::get)
+                    .patch(commands::patch)
+                    .delete(commands::remove),
+            )
+            .route("/commands/{command}/run", post(commands::run))
+            .route("/runs/{run}", get(commands::get_run))
+            .route("/runs/{run}/cancel", post(fleet::cancel))
+            .route("/fleet/runs", post(fleet::start))
             .route("/projects/{project}/hosts", get(attach::list))
             .route(
                 "/projects/{project}/hosts/{host}",
@@ -209,6 +282,9 @@ impl Module for Leyline {
             "leyline.key",
             "leyline.session",
             "leyline.hostkey",
+            "leyline.command",
+            "leyline.alert",
+            "leyline.run",
             "leyline.direct",
         ]
     }
@@ -227,6 +303,11 @@ impl Module for Leyline {
             "leyline.host.detached",
             "leyline.key.created",
             "leyline.key.deleted",
+            "leyline.command.created",
+            "leyline.command.changed",
+            "leyline.command.deleted",
+            "leyline.alert.opened",
+            "leyline.alert.resolved",
             "leyline.hostkey.seen",
             "leyline.hostkey.changed",
             "leyline.hostkey.trusted",
@@ -241,6 +322,7 @@ impl Module for Leyline {
             "leyline.run.approval",
             "leyline.run.allowed",
             "leyline.run.refused",
+            "leyline.run.cancelled",
         ]
     }
 
@@ -262,6 +344,22 @@ impl Module for Leyline {
 
     fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
         Some(NON_DESTRUCTIVE)
+    }
+
+    fn notification_kinds(&self) -> &'static [(&'static str, &'static str)] {
+        alerts::KINDS
+    }
+
+    fn classify(&self, e: &StoredEvent) -> Option<Notification> {
+        alerts::classify(e)
+    }
+
+    fn jobs(&self) -> Vec<Job> {
+        health::jobs()
+    }
+
+    fn attach(&self, app: &App) {
+        health::attach(app);
     }
 
     fn openapi(&self) -> Value {

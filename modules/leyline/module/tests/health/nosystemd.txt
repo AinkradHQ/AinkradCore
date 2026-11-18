@@ -1,0 +1,12 @@
+@uname
+Linux
+@load
+0.00 0.01 0.05 1/45 1200
+@cpus
+1
+@mem
+MemTotal:         504812 kB
+MemAvailable:     100962 kB
+@disk
+Filesystem     1024-blocks    Used Available Capacity Mounted on
+/dev/root          7511304 3000000   4126000  43% /
