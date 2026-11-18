@@ -22,6 +22,7 @@ use sqlx::Row;
 use utoipa::ToSchema;
 
 use crate::collectors::{self, GITHUB_SOURCE, JIRA_SOURCE, RUNNER_PREFIX};
+use crate::lore::LORE_SOURCE;
 use crate::commit::{close_run, commit_room};
 use crate::imports::{mark_done, run_state, stage_items, staging, start_run};
 use crate::review::{mixed, room_id};
@@ -36,13 +37,13 @@ pub const SYNC_EVERY_SECS: u64 = 3600;
 const MAX_SESSIONS: usize = 200;
 const MAX_ITEMS: usize = 500;
 /// Staging lives this long (plan section 12); an older open run no longer holds its sessions.
-const STAGING_DAYS: i64 = 30;
+pub(crate) const STAGING_DAYS: i64 = 30;
 
 /// Set while a sync runs, so the schedule and "Sync now" never collect the same sessions twice.
 pub(crate) struct Busy<'a>(&'a AtomicBool);
 
 impl<'a> Busy<'a> {
-    fn take(flag: &'a AtomicBool) -> Option<Self> {
+    pub(crate) fn take(flag: &'a AtomicBool) -> Option<Self> {
         (!flag.swap(true, Ordering::SeqCst)).then_some(Self(flag))
     }
 }
@@ -130,11 +131,17 @@ fn view(r: &sqlx::sqlite::SqliteRow) -> Result<SourceView, sqlx::Error> {
 
 /// The Core's own collectors: AI session transcripts (on), then Jira and GitHub (off until the
 /// user switches them on).
-async fn ensure_core_source(app: &App) -> Result<(), sqlx::Error> {
-    for (id, on) in [(CORE_SOURCE, 1), (JIRA_SOURCE, 0), (GITHUB_SOURCE, 0)] {
+pub(crate) async fn ensure_core_source(app: &App) -> Result<(), sqlx::Error> {
+    // The Lore collector's items are `note`s, so its row's kind is `note`.
+    for (id, kind, on) in [
+        (CORE_SOURCE, CORE_SOURCE, 1),
+        (JIRA_SOURCE, JIRA_SOURCE, 0),
+        (GITHUB_SOURCE, GITHUB_SOURCE, 0),
+        (LORE_SOURCE, "note", 1),
+    ] {
         sqlx::query("INSERT OR IGNORE INTO brain_sources (id, device, kind, enabled) VALUES (?, 'core', ?, ?)")
             .bind(id)
-            .bind(id)
+            .bind(kind)
             .bind(on)
             .execute(&app.pool)
             .await?;
@@ -144,7 +151,7 @@ async fn ensure_core_source(app: &App) -> Result<(), sqlx::Error> {
 
 /// A source the Core collects itself: its device and kind are not the caller's to set.
 fn core_owned(id: &str) -> bool {
-    [CORE_SOURCE, JIRA_SOURCE, GITHUB_SOURCE].contains(&id) || id.starts_with(RUNNER_PREFIX)
+    [CORE_SOURCE, JIRA_SOURCE, GITHUB_SOURCE, LORE_SOURCE].contains(&id) || id.starts_with(RUNNER_PREFIX)
 }
 
 #[utoipa::path(get, path = "/sources", operation_id = "brainSources", tag = "brain",
@@ -240,7 +247,7 @@ pub struct SyncRequest {
     /// A full run that is collecting and lists `core_transcript`: take the Core's AI sessions into
     /// it instead of starting an incremental run.
     pub run: Option<String>,
-    /// Sync one source of the Core's: `core_transcript` (the default), `jira` or `github`.
+    /// Sync one source of the Core's: `core_transcript` (the default), `jira`, `github` or `lore`.
     pub source: Option<String>,
 }
 
@@ -527,6 +534,15 @@ pub(crate) async fn ingest(
     } else {
         None
     };
+    result_of(app, run, outcome).await
+}
+
+/// The result of a run that took items: its counts, state and what routing did.
+pub(crate) async fn result_of(
+    app: &App,
+    run: String,
+    outcome: Option<Outcome>,
+) -> Result<SyncResult, ApiError> {
     let c = crate::imports::load_counts(app, &run).await?;
     let (state, _) = run_state(app, &run).await?;
     let o = outcome.unwrap_or_default();
@@ -748,12 +764,13 @@ pub(crate) async fn sync_now(
     let owner = Some(me.device.id.as_str());
     Ok(Json(match req.source.as_deref() {
         None | Some(CORE_SOURCE) => sync_core(&app, &b, owner, req.run.as_deref()).await?,
+        Some(LORE_SOURCE) => crate::lore::sync_lore(&app, &b, owner).await?,
         Some(s) if s == JIRA_SOURCE || s == GITHUB_SOURCE || s.starts_with(RUNNER_PREFIX) => {
             sync_connection(&app, &b, owner, s).await?
         }
         Some(_) => {
             return Err(ApiError::bad_request(
-                "source is `core_transcript`, `jira`, `github` or `runner-<id>`",
+                "source is `core_transcript`, `jira`, `github`, `lore` or `runner-<id>`",
             ));
         }
     }))
@@ -772,6 +789,7 @@ impl JobHandler for SyncJob {
                 CORE_SOURCE.to_owned(),
                 JIRA_SOURCE.to_owned(),
                 GITHUB_SOURCE.to_owned(),
+                LORE_SOURCE.to_owned(),
             ];
             let runners: Vec<String> = sqlx::query_scalar(
                 "SELECT id FROM brain_sources WHERE enabled = 1 AND id LIKE 'runner-%' ORDER BY id",

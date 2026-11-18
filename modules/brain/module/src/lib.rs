@@ -38,6 +38,7 @@ pub mod files;
 mod imports;
 mod inbox;
 mod index;
+mod lore;
 pub mod key;
 mod overview;
 pub mod overview_select;
