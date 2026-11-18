@@ -22,7 +22,7 @@
 //!   stale approvals never run anything. A fleet with any `ask` host asks once for the run.
 //! - The approval card is shown whole or not at all: a command, path or host list the card would
 //!   have to cut is refused ("too long to show for approval"), and so is one that holds a secret
-//!   written out ("contains a secret"). A `$VAR`, `${NAME}` or `$(...)` value is shown as written.
+//!   written out ("contains a secret"). A `$NAME` or `${NAME}` value is shown as written; `$(...)` is not (its text can hold the secret).
 //! - An `Authorized` carries the action and its hash: dispatch takes the command from it, never
 //!   from the caller again. A run left waiting (error, cancelled call) is marked `cancelled`.
 //! - Every call leaves a `leyline_runs` row, per-host rows and audit rows (origin = the principal).
@@ -213,7 +213,8 @@ fn refuse(why: &'static str) -> ApiError {
     ApiError::new(StatusCode::FORBIDDEN, "gate_refused", why)
 }
 
-/// One host. Any refusal (policy, session, or the person's "no") is an error.
+/// One host. A `confirm` command is refused (409 `confirm_required`) here: a caller that has the
+/// request's `confirm` uses [`authorize_confirmed`]. Any refusal (policy, session, or the person's "no") is an error.
 ///
 /// # Errors
 ///
@@ -224,7 +225,7 @@ pub async fn authorize(
     host: &str,
     action: &Action,
 ) -> Result<Authorized, ApiError> {
-    authorize_confirmed(app, who, host, action, true).await
+    authorize_confirmed(app, who, host, action, false).await
 }
 
 /// [`authorize`] for a caller that took `confirm` from its request: a pre-set command flagged
@@ -250,7 +251,8 @@ pub async fn authorize_confirmed(
     }
 }
 
-/// Several hosts, one run, at most one approval (for every `ask` host together).
+/// Several hosts, one run, at most one approval (for every `ask` host together). As with
+/// [`authorize`], a `confirm` command is refused: it is never confirmed unless a caller says so.
 ///
 /// # Errors
 ///
@@ -261,7 +263,7 @@ pub async fn authorize_many(
     hosts: &[&str],
     action: &Action,
 ) -> Result<Gated, ApiError> {
-    gate_many(app, who, hosts, action, true).await
+    gate_many(app, who, hosts, action, false).await
 }
 
 async fn gate_many(
@@ -650,7 +652,7 @@ fn op_hash(action: &Action, cmd: Option<&Cmd>, hosts: &[H]) -> String {
         .collect()
 }
 
-/// A text the card can show exactly as it is: short (a `$VAR`, `${NAME}` or `$(...)` value is shown
+/// A text the card can show exactly as it is: short (a `$NAME` or `${NAME}` value is shown
 /// as written; a secret written out is not).
 fn too_long(s: &str) -> bool {
     s.chars().count() > CARD_TEXT

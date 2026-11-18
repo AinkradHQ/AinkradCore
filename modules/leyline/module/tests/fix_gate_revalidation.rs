@@ -10,7 +10,7 @@ use std::time::Duration;
 use ainkrad_core_server::ops_catalog::{decide_approval, pending};
 use axum::http::{Method, StatusCode};
 use common::*;
-use leyline_module::gate::{Action, authorize, authorize_many, still_valid};
+use leyline_module::gate::{Action, authorize, authorize_confirmed, authorize_many, still_valid};
 use serde_json::json;
 
 #[tokio::test]
@@ -100,7 +100,9 @@ async fn a_confirm_command_from_a_session_asks_even_on_an_allowed_host() {
     let (ai, dev) = session(&fx, "as_cf").await;
     let action = Action::Preset(c["id"].as_str().unwrap().into());
     let app = fx.app.clone();
-    let h = tokio::spawn(async move { authorize(&app, &ai, "web", &action).await });
+    let h = tokio::spawn(async move {
+        authorize_confirmed(&app, &ai, "web", &action, true).await
+    });
     // It parks for a person instead of running at once.
     let req = parked(&fx, "as_cf").await;
     decide_approval(&fx.app, "as_cf", &req, false, &dev)
