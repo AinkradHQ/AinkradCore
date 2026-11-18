@@ -1,0 +1,40 @@
+# The engine host and its C ABI (V2-02, T4, B1): what the Mac app links as `DesignEngine.xcframework`
+# (`make engine`, scripts/design-engine.sh). The only crate with `unsafe`, confined to `src/ffi.rs`.
+[package]
+name = "design-ffi"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[features]
+default = []
+# The App's build: Skia on Metal. Without it the ABI is the same and `de_attach_metal` returns DE_ERR_GPU.
+metal = ["design-render/metal", "dep:metal"]
+
+[dependencies]
+design-doc = { path = "../doc" }
+design-model = { path = "../model" }
+design-render = { path = "../render" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+# V2-04: caret steps over whole grapheme clusters (emoji sequences, combining marks) and words
+unicode-segmentation = "1.13.3"
+# T6: Skia only from prebuilt binaries. `no-compile` makes skia-bindings fail instead of falling back to a source build
+# when the (pinned, verified: scripts/design-engine.sh) archive is missing.
+skia-bindings = { version = "=0.157.0", default-features = false, features = ["no-compile"] }
+
+# `de_draw_metal` reads the drawable texture's size and format; tests/metal.rs also uses it for a real device.
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = { version = "=0.33.0", optional = true }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+metal = "=0.33.0"

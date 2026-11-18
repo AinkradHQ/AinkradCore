@@ -128,6 +128,9 @@ impl Daemon {
         if let Some(ssh) = self.ssh_driver() {
             session = session.with_ssh(ssh);
         }
+        if let Some(design) = super::DesignDriver::discover() {
+            session = session.with_design(Arc::new(design));
+        }
         if let Some(run) = self.run_driver() {
             session = session.with_run(run);
         }

@@ -741,14 +741,6 @@
               "null"
             ]
           },
-          "project_id": {
-            "description": "The project it was started for (`createAgentSession` with `project_id`): its workspace is\nthat project's repos, cloned from the Core's copies. Absent for any other session.",
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
           "repicked": {
             "description": "How many accounts a launch refused after the pick before the one it holds (at most 2).",
             "format": "int64",
@@ -1238,6 +1230,10 @@
           "job.ran",
           "lore.attachment.created",
           "lore.attachment.purged",
+          "lore.import.abandoned",
+          "lore.import.committed",
+          "lore.import.created",
+          "lore.import.undone",
           "lore.note.conflict",
           "lore.note.created",
           "lore.note.moved",
@@ -1269,9 +1265,6 @@
           "project.repo_added",
           "project.repo_primary_set",
           "project.repo_removed",
-          "project.run_started",
-          "project.run_stopped",
-          "project.spec_saved",
           "project.updated",
           "provider.created",
           "provider.deleted",
@@ -1324,6 +1317,43 @@
         ],
         "type": "object"
       },
+      "Backlink": {
+        "properties": {
+          "context": {
+            "description": "The trimmed line the link is on (at most 160 characters). Note text: outside data.",
+            "type": "string"
+          },
+          "heading": {
+            "description": "The `#Heading` the link names, empty when it names none.",
+            "type": "string"
+          },
+          "note": {
+            "description": "The linking note.",
+            "type": "string"
+          },
+          "project": {
+            "description": "The linking note's project id; `null` = personal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "note",
+          "title",
+          "heading",
+          "context",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "BindChain": {
         "properties": {
           "chain": {
@@ -1365,32 +1395,6 @@
         },
         "required": [
           "deleted"
-        ],
-        "type": "object"
-      },
-      "Build": {
-        "properties": {
-          "context": {
-            "description": "Build context inside that repo; default `.`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "dockerfile": {
-            "description": "Path of the Dockerfile inside that repo; default `Dockerfile`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "repo": {
-            "description": "A repo of the project.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "repo"
         ],
         "type": "object"
       },
@@ -2350,48 +2354,6 @@
         ],
         "type": "object"
       },
-      "DraftNote": {
-        "description": "One thing in the file that the draft does not carry over.",
-        "properties": {
-          "path": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "path",
-          "reason"
-        ],
-        "type": "object"
-      },
-      "DraftRequest": {
-        "properties": {
-          "file": {
-            "description": "The file to draft from, as a path inside the repo (`docker-compose.yml`, `run.sh`,\n`Makefile` or `package.json`, in a folder or not). Default: the first of those found at\nthe repo's root, compose first.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "image": {
-            "description": "The image to run a `Makefile`, `run.sh` or `package.json` in; required for a Makefile.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "repo": {
-            "description": "The project repo to read; default the primary one.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
       "Elevation": {
         "properties": {
           "elevated_until": {
@@ -2507,15 +2469,13 @@
           "alarm.raised",
           "audit",
           "connection.health",
+          "lore.import",
           "lore.note.changed",
           "lore.note.purged",
           "lore.note.trashed",
           "notify.delivery",
           "project.archived",
           "project.created",
-          "project.run_started",
-          "project.run_stopped",
-          "project.spec_saved",
           "project.updated",
           "runner.connected",
           "runner.degraded",
@@ -2550,15 +2510,13 @@
           "alarm.raised": "admin",
           "audit": "admin",
           "connection.health": "admin",
+          "lore.import": "read",
           "lore.note.changed": "read",
           "lore.note.purged": "read",
           "lore.note.trashed": "read",
           "notify.delivery": "admin",
           "project.archived": "read",
           "project.created": "read",
-          "project.run_started": "read",
-          "project.run_stopped": "read",
-          "project.spec_saved": "read",
           "project.updated": "read",
           "runner.connected": "read",
           "runner.degraded": "read",
@@ -2621,99 +2579,6 @@
         "required": [
           "user_id",
           "kind"
-        ],
-        "type": "object"
-      },
-      "GithubOwner": {
-        "properties": {
-          "owner": {
-            "description": "The user or organisation.",
-            "type": "string"
-          },
-          "repos": {
-            "items": {
-              "$ref": "#/components/schemas/GithubRepo"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "owner",
-          "repos"
-        ],
-        "type": "object"
-      },
-      "GithubRepo": {
-        "properties": {
-          "default_branch": {
-            "type": "string"
-          },
-          "description": {
-            "type": "string"
-          },
-          "full_name": {
-            "description": "`owner/name`.",
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "private": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "name",
-          "full_name",
-          "default_branch",
-          "private",
-          "description"
-        ],
-        "type": "object"
-      },
-      "GithubRepoList": {
-        "properties": {
-          "connection_id": {
-            "description": "The connection the repos were read with.",
-            "format": "int64",
-            "type": "integer"
-          },
-          "has_more": {
-            "type": "boolean"
-          },
-          "owners": {
-            "description": "This page's repos grouped by owner; owners and repos by name.",
-            "items": {
-              "$ref": "#/components/schemas/GithubOwner"
-            },
-            "type": "array"
-          },
-          "page": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "per_page": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "total": {
-            "description": "Repos matching `q`, over all pages.",
-            "format": "int64",
-            "type": "integer"
-          },
-          "truncated": {
-            "description": "GitHub has more repos than Core reads (1000); use `q` to narrow.",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "connection_id",
-          "owners",
-          "total",
-          "page",
-          "per_page",
-          "has_more",
-          "truncated"
         ],
         "type": "object"
       },
@@ -2884,17 +2749,41 @@
         ],
         "type": "object"
       },
-      "Health": {
-        "properties": {
-          "cmd": {
-            "description": "Run inside the container, one line of 1-512 characters; exit 0 is healthy.",
-            "type": "string"
+      "Hit": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/NoteSummary"
+          },
+          {
+            "properties": {
+              "heading": {
+                "description": "The heading of the best matching section, for a hit by meaning.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "score": {
+                "description": "Higher is better; only comparable within one answer.",
+                "format": "double",
+                "type": "number"
+              },
+              "snippet": {
+                "$ref": "#/components/schemas/Snippet"
+              },
+              "via": {
+                "description": "`text`, `meaning` or `both`: which ranking found it.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "score",
+              "via",
+              "snippet"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "cmd"
-        ],
-        "type": "object"
+        ]
       },
       "HostBinary": {
         "description": "A program installed on the host, as the helper's manifest and checks say.",
@@ -3085,6 +2974,96 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "ItemSummary": {
+        "properties": {
+          "flag": {
+            "description": "`duplicate`, `changed`, `conflict`, `too_large` or `skipped`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mark": {
+            "description": "`include` or `skip`.",
+            "type": "string"
+          },
+          "match_note": {
+            "description": "The note this item would update (or, for `conflict`, keep).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "project": {
+            "description": "The project a new note goes to; `null` = personal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "result": {
+            "description": "What commit did with it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seq": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "path",
+          "title",
+          "tags",
+          "mark"
+        ],
+        "type": "object"
+      },
+      "ItemsPatch": {
+        "properties": {
+          "mark": {
+            "description": "`include` or `skip`. Items that are too large or skipped stay skipped.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "The project new notes go to; `null` = personal. Items are re-flagged against it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seqs": {
+            "description": "Up to 500 item numbers; empty = every item of the run.",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "seqs"
+        ],
         "type": "object"
       },
       "KindAuthMethod": {
@@ -3480,6 +3459,201 @@
         ],
         "type": "object"
       },
+      "LoreAiEdit": {
+        "additionalProperties": false,
+        "properties": {
+          "find": {
+            "description": "Text that occurs exactly once in the note.",
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "replace": {
+            "description": "What takes its place; may be empty. At most 60 000 characters.",
+            "maxLength": 60000,
+            "type": "string"
+          }
+        },
+        "required": [
+          "find",
+          "replace"
+        ],
+        "type": "object"
+      },
+      "LoreAiHit": {
+        "properties": {
+          "id": {
+            "description": "`ln_` and 12 base32 characters.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`note` or `daily`.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The note's title and the stretch that matched, inside the outside-text envelope.",
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "updated_at",
+          "text"
+        ],
+        "type": "object"
+      },
+      "LoreAiHits": {
+        "properties": {
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/LoreAiHit"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "hits"
+        ],
+        "type": "object"
+      },
+      "LoreAiLink": {
+        "properties": {
+          "note": {
+            "description": "The note on the other end, when it is a live note of this scope; `null` for a link that names no such\nnote (a note of another project reads the same as no note).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "The link's target title (or `#Heading`) and the line it is on, inside the outside-text envelope.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "LoreAiLinks": {
+        "properties": {
+          "backlinks": {
+            "description": "The live notes of this scope that link to this one.",
+            "items": {
+              "$ref": "#/components/schemas/LoreAiLink"
+            },
+            "type": "array"
+          },
+          "links": {
+            "description": "The `[[links]]` this note's text makes.",
+            "items": {
+              "$ref": "#/components/schemas/LoreAiLink"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "links",
+          "backlinks"
+        ],
+        "type": "object"
+      },
+      "LoreAiNote": {
+        "properties": {
+          "day": {
+            "description": "A daily note's local date.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "`note` or `daily`.",
+            "type": "string"
+          },
+          "rev": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "text": {
+            "description": "The Markdown, inside the outside-text envelope; cut at 60 000 characters.",
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "rev",
+          "updated_at",
+          "text",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "LoreAiText": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "description": "Markdown; 1 to 60 000 characters.",
+            "maxLength": 60000,
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "LoreAiTrashed": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "rev": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "LoreAiWrote": {
+        "description": "What a write answers: ids and the revision only (the AI wrote the text; it is not echoed).",
+        "properties": {
+          "changed": {
+            "description": "`false` when the text came out the same, so nothing was written.",
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "rev": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "rev",
+          "changed"
+        ],
+        "type": "object"
+      },
       "Me": {
         "description": "The calling device and what the server speaks.",
         "properties": {
@@ -3639,14 +3813,6 @@
             "description": "`{\"mode\": \"ask\" | \"accept_edits\" | \"sandboxed\", \"allow\": […]}`; default `ask`.",
             "type": [
               "object",
-              "null"
-            ]
-          },
-          "project_id": {
-            "description": "Start the session for a project (P3-02): the Core builds the workspace from the project's\nrepos (the primary one first, each under its repo name when there are several), the\nrunner clones them from the Core's copies, and the project's Brain room, if it has one,\nis claimed (the room's model policy then applies, so a session with no chain is refused\n403 `claim_refused`). Excludes `workspace` (400). 404 for no such project, 409\n`project_archived`, 409 `project_has_no_repos`, 400 when the caller names a mirror in\n`workspace`: only the Core sets one.",
-            "format": "int64",
-            "type": [
-              "integer",
               "null"
             ]
           },
@@ -3830,43 +3996,6 @@
             ]
           }
         },
-        "type": "object"
-      },
-      "NewGithubProject": {
-        "properties": {
-          "connection_id": {
-            "description": "Default: the workspace's GitHub default.",
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "name": {
-            "description": "Default: the first repo's name.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "repos": {
-            "description": "1-10 repos as `owner/name`; the first is primary.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "slug": {
-            "description": "Default: made from the name; a taken or reserved one gets `-2`, `-3`, ... An explicit slug\nthat is taken is 409 `conflict`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "repos"
-        ],
         "type": "object"
       },
       "NewGroupLease": {
@@ -4148,22 +4277,29 @@
         ],
         "type": "object"
       },
-      "NewRunSpec": {
+      "NewRun": {
         "properties": {
-          "origin": {
-            "description": "Where it came from; default `manual`.",
+          "project": {
+            "description": "The project the notes go to; absent = personal (an upload only).",
             "type": [
               "string",
               "null"
             ]
           },
-          "spec": {
-            "$ref": "#/components/schemas/RunSpec",
-            "description": "The spec; see `RunSpec`."
+          "repo": {
+            "description": "A mirror run: the project's repo id; absent = its primary repo.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "description": "`mirror` (the project's repo copy in the Core), `upload` (items or a zip sent to this run) or `apple_notes`\n(an upload run whose Markdown the Mac made from Apple Notes; own origins).",
+            "type": "string"
           }
         },
         "required": [
-          "spec"
+          "source"
         ],
         "type": "object"
       },
@@ -4750,24 +4886,6 @@
         ],
         "type": "object"
       },
-      "Port": {
-        "properties": {
-          "expose": {
-            "description": "Give it a public URL (when the project is exposed); at most one per service.",
-            "type": "boolean"
-          },
-          "port": {
-            "description": "The container port, 1-65535. It is only ever published on the runner's loopback.",
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "port"
-        ],
-        "type": "object"
-      },
       "PriceBookEntry": {
         "description": "A price: millionths of a dollar per million tokens, and when the provider's list price was read.",
         "properties": {
@@ -4934,123 +5052,6 @@
         "required": [
           "room_id",
           "name"
-        ],
-        "type": "object"
-      },
-      "ProjectRun": {
-        "properties": {
-          "error": {
-            "description": "What went wrong, for a failed run (redacted).",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "id": {
-            "type": "string"
-          },
-          "idle_stop_at": {
-            "$ref": "#/components/schemas/Timestamp",
-            "description": "When the idle stop is due, for a running run."
-          },
-          "last_activity_at": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "runner": {
-            "description": "The runner it is placed on.",
-            "type": "string"
-          },
-          "spec_version": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "started_at": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "started_by": {
-            "type": "string"
-          },
-          "state": {
-            "description": "`starting`, `running`, `stopping`, `stopped` or `failed`.",
-            "type": "string"
-          },
-          "stop_reason": {
-            "description": "Why it ended, or is ending: `user`, `idle`, `crash`, `runner_lost`, `replaced` or\n`start_failed`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "stopped_at": {
-            "$ref": "#/components/schemas/Timestamp"
-          }
-        },
-        "required": [
-          "id",
-          "spec_version",
-          "runner",
-          "state",
-          "started_by",
-          "started_at"
-        ],
-        "type": "object"
-      },
-      "ProjectSecretDeleted": {
-        "description": "What a delete answers.",
-        "properties": {
-          "deleted": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "deleted"
-        ],
-        "type": "object"
-      },
-      "ProjectSecretInfo": {
-        "description": "A project secret, never its value.",
-        "properties": {
-          "description": {
-            "type": "string"
-          },
-          "kind": {
-            "description": "`text`, `multiline`, `file` or `env_bundle`.",
-            "type": "string"
-          },
-          "last_used_at": {
-            "$ref": "#/components/schemas/Timestamp",
-            "description": "When a runner last redeemed it; none before the first redemption."
-          },
-          "name": {
-            "description": "`[a-z][a-z0-9_.-]{0,63}`; what a spec writes as `${secret:NAME}`.",
-            "type": "string"
-          },
-          "size": {
-            "description": "The value's length in bytes.",
-            "format": "int64",
-            "type": "integer"
-          },
-          "updated_at": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "use_count": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "version": {
-            "description": "1 when stored, one more per rotation.",
-            "format": "int64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "name",
-          "kind",
-          "description",
-          "version",
-          "size",
-          "updated_at",
-          "use_count"
         ],
         "type": "object"
       },
@@ -5452,188 +5453,120 @@
         ],
         "type": "object"
       },
-      "RunLogLine": {
+      "RunView": {
         "properties": {
-          "at": {
-            "description": "When the container wrote it (RFC 3339).",
-            "type": "string"
-          },
-          "seq": {
-            "description": "Grows by one per line of the run; pass the last one as `after` to continue.",
-            "format": "int64",
-            "type": "integer"
-          },
-          "service": {
-            "type": "string"
-          },
-          "text": {
-            "description": "Redacted, at most 2048 bytes.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "seq",
-          "service",
-          "at",
-          "text"
-        ],
-        "type": "object"
-      },
-      "RunLogs": {
-        "description": "A page of lines; the WebSocket sends one per poll (only when it has lines or a gap).",
-        "properties": {
-          "lines": {
-            "items": {
-              "$ref": "#/components/schemas/RunLogLine"
-            },
-            "type": "array"
-          },
-          "lost": {
-            "description": "Lines before the first one that the runner had already dropped (a flood, or a slow reader).",
-            "format": "int64",
-            "type": "integer"
-          },
-          "next": {
-            "description": "Ask again with `after` = this.",
-            "format": "int64",
-            "type": "integer"
-          },
-          "run": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "lines",
-          "next",
-          "lost"
-        ],
-        "type": "object"
-      },
-      "RunServices": {
-        "properties": {
-          "run": {
-            "description": "The live run these belong to; none (and no services) when the project is not running.",
+          "committed_at": {
             "type": [
               "string",
               "null"
             ]
           },
-          "services": {
-            "items": {
-              "$ref": "#/components/schemas/ServiceInfo"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "services"
-        ],
-        "type": "object"
-      },
-      "RunSpec": {
-        "description": "The whole spec: its services by name.",
-        "properties": {
-          "services": {
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "error": {
+            "description": "Why the run could not be read, a fixed sentence.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "flags": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/Service"
+              "format": "int64",
+              "type": "integer"
             },
-            "description": "1-16 services. A name is 1-20 of `a-z0-9-`, starting with a letter: it is the service's\nnetwork alias and part of its public host name.",
+            "description": "Items by flag (`duplicate`, `changed`, `conflict`, `too_large`, `skipped`).",
             "propertyNames": {
               "type": "string"
             },
             "type": "object"
-          }
-        },
-        "required": [
-          "services"
-        ],
-        "type": "object"
-      },
-      "RunSpecDraft": {
-        "properties": {
-          "file": {
-            "description": "The file it was drafted from, as a path inside the repo.",
+          },
+          "id": {
+            "description": "`li_` and 12 base32 characters.",
             "type": "string"
           },
-          "not_converted": {
-            "items": {
-              "$ref": "#/components/schemas/DraftNote"
-            },
-            "type": "array"
+          "ignored": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "include": {
+            "description": "Items that a commit would act on (marked include, not too large or skipped).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "items": {
+            "description": "Staged items.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "kept": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refused": {
+            "description": "Entries refused as unsafe and entries ignored as unwanted; counted, never kept.",
+            "format": "int64",
+            "type": "integer"
           },
           "repo": {
-            "description": "The repo it was read from.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "results": {
+            "additionalProperties": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "description": "Items by what commit did (`created`, `updated`, `conflict`, `unchanged`, `skipped`).",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "source": {
+            "description": "`mirror`, `upload` or `apple_notes`.",
             "type": "string"
           },
-          "version": {
-            "$ref": "#/components/schemas/RunSpecVersion",
-            "description": "The draft, saved as the project's next spec version; its `origin` names the converter."
-          }
-        },
-        "required": [
-          "version",
-          "repo",
-          "file",
-          "not_converted"
-        ],
-        "type": "object"
-      },
-      "RunSpecSummary": {
-        "description": "A version without its spec.",
-        "properties": {
-          "created_at": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "created_by": {
+          "state": {
+            "description": "`staging`, `review`, `committing`, `committed`, `undoing`, `undone` or `abandoned`.",
             "type": "string"
           },
-          "origin": {
-            "type": "string"
-          },
-          "version": {
+          "undone": {
+            "description": "Items undo put back (`undone`) and ones it left because the note changed after the import (`kept`).",
             "format": "int64",
             "type": "integer"
+          },
+          "updated_at": {
+            "type": "string"
           }
         },
         "required": [
-          "version",
-          "origin",
+          "id",
+          "source",
+          "state",
+          "items",
+          "include",
+          "refused",
+          "ignored",
+          "flags",
+          "results",
+          "undone",
+          "kept",
           "created_by",
-          "created_at"
-        ],
-        "type": "object"
-      },
-      "RunSpecVersion": {
-        "properties": {
-          "created_at": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "created_by": {
-            "description": "The device that saved it.",
-            "type": "string"
-          },
-          "origin": {
-            "description": "`manual`, `compose`, `package_json`, `makefile` or `run_sh`.",
-            "type": "string"
-          },
-          "spec": {
-            "$ref": "#/components/schemas/RunSpec"
-          },
-          "version": {
-            "description": "1 for the first save, then one more each time.",
-            "format": "int64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "version",
-          "spec",
-          "origin",
-          "created_by",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -5945,13 +5878,6 @@
             "description": "Agent sessions are offered. Refused (409 `policy_refused`, with the reason) when the\nrunner cannot run them: no process sandbox, no proven egress filter, or no agent tool installed.",
             "type": "boolean"
           },
-          "runs": {
-            "description": "The runner takes project runs. Omitted: the runner's current setting stays (off for a\nrunner that never had one). Runs are placed only on runners with it on.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
           "share_history": {
             "description": "The runner lets the Brain read its Claude Code history (`--share-history`). Omitted: the\nrunner's current setting stays; `false` turns it off.",
             "type": [
@@ -6078,6 +6004,25 @@
         "required": [
           "base_rev",
           "text"
+        ],
+        "type": "object"
+      },
+      "SearchOut": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/Hit"
+            },
+            "type": "array"
+          },
+          "semantic": {
+            "description": "`false` = the model is absent or not loaded yet, so these are text matches only.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "results",
+          "semantic"
         ],
         "type": "object"
       },
@@ -6255,129 +6200,6 @@
           "key_id",
           "created_at",
           "updated_at"
-        ],
-        "type": "object"
-      },
-      "Service": {
-        "description": "One container. Exactly one of `image` and `build`.",
-        "properties": {
-          "build": {
-            "$ref": "#/components/schemas/Build",
-            "description": "Build the image from a Dockerfile in one of the project's repos."
-          },
-          "command": {
-            "description": "Replaces the image's command; at most 64 arguments.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "depends_on": {
-            "description": "Services that must be started (and healthy, when they have a `health`) first.",
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "env": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "description": "Environment. A value is plain text or contains `${secret:NAME}` references.",
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          },
-          "health": {
-            "$ref": "#/components/schemas/Health"
-          },
-          "image": {
-            "description": "An image reference such as `postgres:17` or `ghcr.io/acme/app@sha256:...`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "ports": {
-            "description": "At most 8 ports the service listens on.",
-            "items": {
-              "$ref": "#/components/schemas/Port"
-            },
-            "type": "array"
-          },
-          "repo": {
-            "description": "Mount this project repo's checkout at `/repo/<name>`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "volumes": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "description": "Named volumes: volume name to the absolute container path it is mounted at.",
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          },
-          "workdir": {
-            "description": "Absolute path inside the container; default is the image's.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "type": "object"
-      },
-      "ServiceInfo": {
-        "properties": {
-          "cpu_percent": {
-            "description": "Percent of one CPU; none while it is not running.",
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "health": {
-            "description": "`none` (no health check), `starting`, `healthy` or `unhealthy`.",
-            "type": "string"
-          },
-          "memory_bytes": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "memory_limit_bytes": {
-            "description": "The project's memory cap as Podman reports it; 0 when unknown.",
-            "format": "int64",
-            "type": "integer"
-          },
-          "name": {
-            "type": "string"
-          },
-          "restarts": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "state": {
-            "description": "Podman's state: `running`, `exited`, ...",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "state",
-          "health",
-          "memory_bytes",
-          "memory_limit_bytes",
-          "restarts"
         ],
         "type": "object"
       },
@@ -6597,47 +6419,6 @@
           "output_per_mtok_micro",
           "cache_per_mtok_micro",
           "priced_at"
-        ],
-        "type": "object"
-      },
-      "SetProjectSecret": {
-        "description": "A value to store or replace. Deliberately no `Debug`.",
-        "properties": {
-          "description": {
-            "description": "One line, at most 200 characters.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "file_mode": {
-            "description": "Kind `file`: an octal mode such as `0600`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "file_name": {
-            "description": "Required for kind `file`: `[A-Za-z0-9._-]{1,64}`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "kind": {
-            "description": "`text` (the default for a new secret), `multiline`, `file` or `env_bundle`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "value": {
-            "description": "UTF-8 text, at most `secrets.max_bytes`; for kind `file` standard base64 (at most 1 MiB\ndecoded); written, never read back.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "value"
         ],
         "type": "object"
       },
@@ -6876,6 +6657,44 @@
             "type": "string"
           }
         ]
+      },
+      "Snippet": {
+        "properties": {
+          "matches": {
+            "description": "The matched words in `text`, in order, not overlapping; empty for a hit by meaning alone.",
+            "items": {
+              "$ref": "#/components/schemas/Span"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "A stretch of the note on one line (newlines become spaces), `…` where it was cut. Note text: outside data.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "matches"
+        ],
+        "type": "object"
+      },
+      "Span": {
+        "description": "A matched word inside a snippet: byte offsets into `Snippet.text`.",
+        "properties": {
+          "end": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
       },
       "StartConnectionFlow": {
         "description": "A sign-in to start.",
@@ -7269,14 +7088,6 @@
       "UpdateProject": {
         "description": "What changes; an omitted field is kept.",
         "properties": {
-          "cpu_limit": {
-            "description": "CPUs a run may use, 0.1 to 16.",
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
           "description": {
             "type": [
               "string",
@@ -7289,30 +7100,7 @@
               "null"
             ]
           },
-          "idle_minutes": {
-            "description": "Idle stop, 5 to 1440 minutes.",
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "mem_limit_mb": {
-            "description": "Memory a run may use, 64 to 32768 MB.",
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
           "name": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "slug": {
-            "description": "The link name (the slug); refused while the project runs or holds secrets.",
             "type": [
               "string",
               "null"
@@ -7340,6 +7128,37 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "UploadBatch": {
+        "properties": {
+          "items": {
+            "description": "At most 200 per call, and the whole call under the 1 MiB signed-body cap.",
+            "items": {
+              "$ref": "#/components/schemas/UploadItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "UploadItem": {
+        "properties": {
+          "path": {
+            "description": "The path relative to the folder or zip root, `/`-separated.",
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "text"
+        ],
         "type": "object"
       },
       "UsageByCompany": {
@@ -7593,7 +7412,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.93.0"
+    "version": "1.91.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -13665,151 +13484,6 @@
         "x-ainkrad-scope": "admin"
       }
     },
-    "/api/v1/projects/from-github": {
-      "post": {
-        "operationId": "createProjectFromGithub",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NewGithubProject"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectInfo"
-                }
-              }
-            },
-            "description": "Created with source `github` (audited and emitted as `project.created`), its repos added with GitHub's names and default branches, and the connection bound to it (scope `project`, audited `connection.bound`). 400 for a bad repo, name or slug; 404 for a repo the connection cannot see; 409 `conflict` for a taken explicit slug or a repeated repo, `no_connection` when none is set up"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-destructive": true,
-        "x-ainkrad-scope": "admin"
-      }
-    },
-    "/api/v1/projects/github/repos": {
-      "get": {
-        "operationId": "listGithubRepos",
-        "parameters": [
-          {
-            "description": "A connection id; default the project's, else the workspace default.",
-            "in": "query",
-            "name": "connection",
-            "required": false,
-            "schema": {
-              "format": "int64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "The project's id, to prefer the connection bound to it.",
-            "in": "query",
-            "name": "project",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Case-insensitive text in `owner/name`.",
-            "in": "query",
-            "name": "q",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "From 1; default 1.",
-            "in": "query",
-            "name": "page",
-            "required": false,
-            "schema": {
-              "format": "int64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "1-100; default 30.",
-            "in": "query",
-            "name": "per_page",
-            "required": false,
-            "schema": {
-              "format": "int64",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GithubRepoList"
-                }
-              }
-            },
-            "description": "The repos visible to the project's GitHub connection (else the workspace default), grouped by owner, searchable and paged. 409 `no_connection` when none is set up; GitHub's own failures are `auth_failed` or `unreachable` (502) and `rate_limited` (429), each a fixed sentence"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-scope": "admin"
-      }
-    },
     "/api/v1/projects/{id}": {
       "get": {
         "operationId": "getProject",
@@ -14106,68 +13780,6 @@
         "x-ainkrad-scope": "admin"
       }
     },
-    "/api/v1/projects/{id}/repos/{repo}/fetch": {
-      "post": {
-        "operationId": "fetchProjectRepo",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The repo's id",
-            "in": "path",
-            "name": "repo",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectInfo"
-                }
-              }
-            },
-            "description": "The Core fetched the repo's remote now (\"Fetch now\"); the project as it now is. A fetch that failed is still 200: the repo's `mirror.error` says why and `mirror.head` is the older head, kept. A fetch already running for the repo is not started again nor waited for: the state as it is comes back. 404 for no such project or repo; 409 `conflict` for an archived project; 503 `mirrors_unavailable` when this Core keeps no repo copies"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-scope": "admin"
-      }
-    },
     "/api/v1/projects/{id}/repos/{repo}/primary": {
       "post": {
         "operationId": "setProjectRepoPrimary",
@@ -14229,982 +13841,6 @@
         ],
         "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
-      }
-    },
-    "/api/v1/projects/{id}/run": {
-      "get": {
-        "operationId": "getProjectRun",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectRun"
-                }
-              }
-            },
-            "description": "The project's live run, else its newest. 404 for no such project or when it never ran"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-scope": "read"
-      }
-    },
-    "/api/v1/projects/{id}/run/activity": {
-      "post": {
-        "operationId": "touchProjectRun",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectRun"
-                }
-              }
-            },
-            "description": "A viewer is on the project's Run tab: the idle stop is pushed back. The run as it now is; 404 for no such project or when it never ran"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-scope": "read"
-      }
-    },
-    "/api/v1/projects/{id}/run/logs": {
-      "get": {
-        "operationId": "getProjectRunLogs",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Only this service's lines.",
-            "in": "query",
-            "name": "service",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Lines after this `seq`; default 0 (from the oldest the runner holds).",
-            "in": "query",
-            "name": "after",
-            "required": false,
-            "schema": {
-              "format": "int64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "At most this many (default and most 500); the WebSocket ignores it.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "int32",
-              "minimum": 0,
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RunLogs"
-                }
-              }
-            },
-            "description": "The newest log lines of the live run after `after`, oldest first, redacted; empty when the project is not running. 404 for no such project; 502 `runner_error` when the runner cannot answer"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-scope": "admin"
-      }
-    },
-    "/api/v1/projects/{id}/run/logs/ws": {
-      "get": {
-        "operationId": "streamProjectRunLogs",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Only this service's lines.",
-            "in": "query",
-            "name": "service",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Lines after this `seq`; default 0 (from the oldest the runner holds).",
-            "in": "query",
-            "name": "after",
-            "required": false,
-            "schema": {
-              "format": "int64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "At most this many (default and most 500); the WebSocket ignores it.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "int32",
-              "minimum": 0,
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "101": {
-            "description": "Switching to a WebSocket: the live tail. Each text frame is a `RunLogs` (only sent with lines or a gap), about every 1.5 s, from `after`. Closed with 1000 `the run ended` when the run is no longer live, and 4001 when the device was revoked. 404 for no such project or no live run. The upgrade is signed like any request (no browser ticket)"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-scope": "admin"
-      }
-    },
-    "/api/v1/projects/{id}/run/restart": {
-      "post": {
-        "operationId": "restartProjectRun",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectRun"
-                }
-              }
-            },
-            "description": "The live run, if any, is stopped (reason `replaced`) and a new one starts: the new run, `starting`. Errors as start and stop"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-destructive": true,
-        "x-ainkrad-scope": "admin"
-      }
-    },
-    "/api/v1/projects/{id}/run/services": {
-      "get": {
-        "operationId": "getProjectRunServices",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RunServices"
-                }
-              }
-            },
-            "description": "Health, CPU, memory and restarts of each service of the live run, sampled every few seconds on its runner; none when the project is not running. 404 for no such project; 502 `runner_error` when the runner cannot answer"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-scope": "read"
-      }
-    },
-    "/api/v1/projects/{id}/run/spec/draft": {
-      "post": {
-        "operationId": "draftProjectSpec",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/DraftRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RunSpecDraft"
-                }
-              }
-            },
-            "description": "A draft drawn from a compose file, `run.sh`, `Makefile` or `package.json` in the Core's copy of a project repo (read as text only, never run), saved as the next spec version with the converter as its origin (`compose`, `run_sh`, `makefile` or `package_json`; audited and emitted as `project.spec_saved`). 422 `could_not_draft` says why a file could not be drafted; 409 `conflict` when the Core has not fetched the repo yet or the project is archived; 404 for no such project"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-destructive": true,
-        "x-ainkrad-scope": "admin"
-      }
-    },
-    "/api/v1/projects/{id}/run/start": {
-      "post": {
-        "operationId": "startProjectRun",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectRun"
-                }
-              }
-            },
-            "description": "The run, `starting` (audited and emitted as `project.run_started`); it then becomes `running` or `failed`. 404 for no such project or no run spec; 409 `conflict` when the project is archived or already has a live run, 409 `no_runner` when no online runner can run projects"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-destructive": true,
-        "x-ainkrad-scope": "admin"
-      }
-    },
-    "/api/v1/projects/{id}/run/stop": {
-      "post": {
-        "operationId": "stopProjectRun",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectRun"
-                }
-              }
-            },
-            "description": "The run, `stopped` (audited and emitted as `project.run_stopped`). 404 for no such project or no live run; 502 `runner_error` when the runner refused: the run stays `stopping` and the Core retries"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-destructive": true,
-        "x-ainkrad-scope": "admin"
-      }
-    },
-    "/api/v1/projects/{id}/secrets": {
-      "get": {
-        "operationId": "listProjectSecrets",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ProjectSecretInfo"
-                  },
-                  "type": "array"
-                }
-              }
-            },
-            "description": "The project's secrets by name, without their values; 404 for no such project"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-scope": "admin"
-      }
-    },
-    "/api/v1/projects/{id}/secrets/{name}": {
-      "delete": {
-        "operationId": "deleteProjectSecret",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The secret's name in the project",
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Delete although a spec version uses it; default false.",
-            "in": "query",
-            "name": "force",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectSecretDeleted"
-                }
-              }
-            },
-            "description": "Deleted with its leases (audited as `secret.deleted`). 409 `conflict` while a spec version refers to it, the message naming the newest such version, unless `force=true`; 404 for no such project or secret"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-destructive": true,
-        "x-ainkrad-scope": "admin"
-      },
-      "put": {
-        "operationId": "setProjectSecret",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The secret's name in the project",
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetProjectSecret"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectSecretInfo"
-                }
-              }
-            },
-            "description": "Stored sealed as a new secret, or rotated to its next version (audited as `secret.created` / `secret.rotated`; the Core's own secret is named `<slug>.<name>`). The broker's refusals apply: 409 `secrets_disabled`, `real_secret_refused`, `limit_reached`; 400 `bad_request` or `too_large`; 404 for no such project; 409 `conflict` for an archived project; 503 `secrets_unavailable`"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-destructive": true,
-        "x-ainkrad-scope": "admin"
-      }
-    },
-    "/api/v1/projects/{id}/spec": {
-      "get": {
-        "operationId": "getProjectSpec",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RunSpecVersion"
-                }
-              }
-            },
-            "description": "The newest run spec version. 404 for no such project or when it has no spec yet"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-scope": "read"
-      },
-      "put": {
-        "operationId": "saveProjectSpec",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NewRunSpec"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RunSpecVersion"
-                }
-              }
-            },
-            "description": "Saved as the next version (audited and emitted as `project.spec_saved`). 400 `invalid_spec` names the bad field (unknown or forbidden key, more than 16 services or 8 ports, a bad image, a malformed `${secret:NAME}`, a repo the project does not have); 404 for no such project; 409 `conflict` when it is archived"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-destructive": true,
-        "x-ainkrad-scope": "admin"
-      }
-    },
-    "/api/v1/projects/{id}/spec/versions": {
-      "get": {
-        "operationId": "listProjectSpecVersions",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/RunSpecSummary"
-                  },
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Every version, newest first, without the spec. 404 for no such project"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-scope": "read"
-      }
-    },
-    "/api/v1/projects/{id}/spec/versions/{version}": {
-      "get": {
-        "operationId": "getProjectSpecVersion",
-        "parameters": [
-          {
-            "description": "The project's id",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The version number",
-            "in": "path",
-            "name": "version",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RunSpecVersion"
-                }
-              }
-            },
-            "description": "That version. 404 for no such project or version"
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/TooManyRequests"
-          },
-          "500": {
-            "$ref": "#/components/responses/InternalError"
-          }
-        },
-        "tags": [
-          "projects"
-        ],
-        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/push-token": {
@@ -17854,6 +16490,416 @@
         ]
       }
     },
+    "/modules/lore/v1/ai/notes": {
+      "post": {
+        "operationId": "loreAiCreate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoreAiText"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiWrote"
+                }
+              }
+            },
+            "description": "A new note at rev 1, in this AI session's project, or personal when it has none. It cannot be put anywhere else"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/modules/lore/v1/ai/notes/{note}": {
+      "get": {
+        "operationId": "loreAiRead",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiNote"
+                }
+              }
+            },
+            "description": "One live note of this AI session's scope, as outside data. A note of another project, a trashed one and an unknown id are the same 404"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/ai/notes/{note}/append": {
+      "post": {
+        "operationId": "loreAiAppend",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoreAiText"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiWrote"
+                }
+              }
+            },
+            "description": "The text added after the note's last line, on a new line. A version of the old text is kept before this session's first edit of the note"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/modules/lore/v1/ai/notes/{note}/edit": {
+      "post": {
+        "operationId": "loreAiEdit",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoreAiEdit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiWrote"
+                }
+              }
+            },
+            "description": "`find` replaced by `replace`. A `find` that is not in the note exactly once is a 409 and changes nothing. A version of the old text is kept before this session's first edit of the note"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/modules/lore/v1/ai/notes/{note}/links": {
+      "get": {
+        "operationId": "loreAiLinks",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiLinks"
+                }
+              }
+            },
+            "description": "The links of a note of this AI session's scope and the notes of the scope that link to it (at most 100 each), as outside data"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/ai/notes/{note}/trash": {
+      "post": {
+        "operationId": "loreAiTrash",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiTrashed"
+                }
+              }
+            },
+            "description": "The note is in the trash: nothing is deleted, a person restores it within 30 days. Needs a person's approval"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/modules/lore/v1/ai/search": {
+      "get": {
+        "operationId": "loreAiSearch",
+        "parameters": [
+          {
+            "description": "Words (prefix match) and \"quoted phrases\"; at most 300 characters",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only notes with this tag",
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many hits (default 10, most 25)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoreAiHits"
+                }
+              }
+            },
+            "description": "Live notes of this AI session's scope (its project's, or personal and daily ones), best first; every text is wrapped as outside data"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
     "/modules/lore/v1/attachments": {
       "post": {
         "operationId": "loreUploadAttachment",
@@ -17968,6 +17014,709 @@
           "lore"
         ],
         "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/export": {
+      "get": {
+        "operationId": "loreExport",
+        "parameters": [
+          {
+            "description": "Only the notes of this project id",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only this note (and its attachments)",
+            "in": "query",
+            "name": "note",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "items": {
+                    "format": "int32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "A zip of `.md` files with front matter (`id`, `project`, `tags`, `created`, `updated`) and an `attachments/` folder; the live notes only, wikilinks as written. `project` and `note` together are refused; an unknown or trashed `note` is 404; more than 50 000 notes or 1 GiB is 413"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/imports": {
+      "get": {
+        "operationId": "loreListImports",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RunView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The runs, newest first (at most 50), with their state and counts: what is staged, committing, done or undone"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "post": {
+        "operationId": "loreCreateImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "A new run. `upload` and `apple_notes`: state `staging`, send items or a zip, then `finish`. `mirror`: the repo copy's `Docs/` (or `docs/`) is read now, `.md` regular files only, and the run comes back in `review` (or `abandoned` with `error` when it could not be read). Needs an active project with a copy"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/imports/{run}": {
+      "get": {
+        "operationId": "loreGetImport",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "The run and its counts"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/imports/{run}/abandon": {
+      "post": {
+        "operationId": "loreAbandonImport",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "The run is dropped before anything was committed; its staged text goes with the 30-day cleanup"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/imports/{run}/commit": {
+      "post": {
+        "operationId": "loreCommitImport",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "The included items become notes: new ones are created, an unedited note of the same origin is updated (its old text kept as a version), an edited one is kept and the incoming text saved as a `conflict` version. Done in transactions of 200 items; calling it again on a `committing` run resumes it. Links between the new notes are resolved as each one lands. Reversible with `undo`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/imports/{run}/finish": {
+      "post": {
+        "operationId": "loreFinishImport",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "Staging is over: the items are flagged (duplicate, changed, conflict) and the run is in `review`. Calling it again on a run in review is harmless"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/imports/{run}/items": {
+      "get": {
+        "operationId": "loreListImportItems",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items with this flag",
+            "in": "query",
+            "name": "flag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items after this seq",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "At most this many (default 200, at most 500)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ItemSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Staged items by seq, without their text"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "patch": {
+        "operationId": "lorePatchImportItems",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ItemsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "The run after the review edit. Only while `review`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "post": {
+        "operationId": "loreAddImportItems",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "The run after the batch is staged. Unsafe paths and unreadable text are refused and counted, unwanted files ignored; a path sent twice replaces the earlier one. Only while `staging`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/imports/{run}/undo": {
+      "post": {
+        "operationId": "loreUndoImport",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "What the run created is trashed, what it updated gets its old text back (and old import hash), the conflict versions it kept are removed. A note edited after the import is left alone and counted in `kept`. Not possible once the run's staged text was cleaned up (30 days). Calling it again on an `undoing` run resumes it"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/imports/{run}/zip": {
+      "post": {
+        "operationId": "loreAddImportZip",
+        "parameters": [
+          {
+            "description": "Import run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/zip": {
+              "schema": {
+                "items": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              }
+            }
+          },
+          "description": "A zip of `.md` files, at most 16 MiB",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunView"
+                }
+              }
+            },
+            "description": "The run after the zip's Markdown files are staged. Symlinks, `..` or absolute names, NUL and binary files are refused and counted; over 5 000 entries, 2 000 files or 64 MiB of text is 413. Only while `staging`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/modules/lore/v1/notes": {
@@ -18206,6 +17955,62 @@
           "lore"
         ],
         "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/notes/{note}/backlinks": {
+      "get": {
+        "operationId": "loreBacklinks",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Backlink"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The live notes linking to this one, newest first, at most 500, one row per distinct link with its context line. Links to a note in the trash or deleted are not listed"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/modules/lore/v1/notes/{note}/restore": {
@@ -18484,6 +18289,105 @@
               }
             },
             "description": "One version with its text"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/modules/lore/v1/search": {
+      "get": {
+        "operationId": "loreSearch",
+        "parameters": [
+          {
+            "description": "What to find: words (prefix match) and \"quoted phrases\"; at most 300 characters",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`active` (default), `trashed` or `all`",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`note` or `daily`",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only notes of this project id",
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only notes with this tag",
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many hits (default 20, at most 50)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchOut"
+                }
+              }
+            },
+            "description": "Hits, best first, with snippets; `semantic` says whether meaning was used"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

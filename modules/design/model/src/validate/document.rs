@@ -26,7 +26,8 @@ pub fn token(t: &Token) -> R {
     Ok(())
 }
 
-fn node(id: &str, n: &Node, out: &mut Vec<Violation>) {
+/// One node's own fields (not its place in the tree). The sync layer validates just the nodes an update touched.
+pub fn node(id: &str, n: &Node, out: &mut Vec<Violation>) {
     let id = &clip(id); // an id can be any length until it is refused
     let mut push = |path: &str, msg: String| {
         if out.len() < MAX_REPORTED {
@@ -44,6 +45,9 @@ fn node(id: &str, n: &Node, out: &mut Vec<Violation>) {
     }
     if n.parent.as_deref().is_some_and(|p| !is_node_id(p)) {
         push(".parent", "bad parent id".into());
+    }
+    if n.prev.as_deref().is_some_and(|p| !is_node_id(p)) {
+        push(".prev", "bad previous parent id".into());
     }
     if let Err(e) = name_str(&n.name) {
         push(".name", e);

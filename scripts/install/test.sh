@@ -201,6 +201,11 @@ printf 'ahmed:100000:65536\nbob:165536:1000\n' >"$t/subuid"; printf 'ahmed:10000
   [ "$(AINKRAD_INSTALL_SOURCE_ONLY=1 bash -c ". '$D/install-linux.sh'; sub_next /nonexistent")" = 100000 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: sub_next picks a wrong subuid block" >&2; }
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1]))["distro"]["podman"]; s=open(sys.argv[2]).read(); sys.exit(0 if " ".join(m["apt"]) in s and " ".join(m["dnf"]) in s else 1)' "$D/tools.manifest.json" "$D/install-linux.sh" &&
   pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: install-linux.sh --with-run packages differ from tools.manifest.json distro.podman" >&2; }
+# --design (V6-01): the dry run plans Chromium's libraries and its pinned download; the helper beside the binary is installed.
+bash "$D/install-linux.sh" --binary "$t/bin/ainkrad-runner" --design --dry-run >"$t/out-design" 2>&1 &&
+  grep -q 'apt-get install -y -q --no-install-recommends unzip libfontconfig1 libfreetype6' "$t/out-design" &&
+  grep -qE 'download https://cdn.playwright.dev/builds/cft/[0-9.]+/linux(64|-arm64)/chrome-headless-shell-linux(64|-arm64).zip .*sha256 [0-9a-f]{64}' "$t/out-design" &&
+  pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: --design dry run does not plan Chromium: $(cat "$t/out-design")" >&2; }
 # bubblewrap (agent sessions, terminals) needs these; `RestrictNamespaces=yes`, ProcSubset=pid and the /proc overmounting
 # Protect* lines make it fail on a real host (H0b), so they must not come back.
 grep -qx 'RestrictNamespaces=user mnt pid ipc uts cgroup net' "$U" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: unit lacks the bwrap namespace allow-list" >&2; }

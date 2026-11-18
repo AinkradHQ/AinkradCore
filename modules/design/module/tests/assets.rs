@@ -46,7 +46,11 @@ async fn fx_with(on: bool) -> Fx {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let pool = connect(&dir.join("core.db")).await.unwrap();
-    let modules: Vec<Arc<dyn Module>> = if on { vec![Arc::new(Design)] } else { vec![] };
+    let modules: Vec<Arc<dyn Module>> = if on {
+        vec![Arc::new(Design::default())]
+    } else {
+        vec![]
+    };
     migrate::migrate_modules(&pool, &modules).await.unwrap();
     let identity = Arc::new(
         Identity::load_or_create(
@@ -331,7 +335,7 @@ async fn caps_answer_413_and_store_nothing() {
     let set = |name: &'static str, v: &'static str| {
         let pool = fx.app.pool.clone();
         async move {
-            ModuleSettings::of(&Design)
+            ModuleSettings::of(&Design::default() as &dyn Module)
                 .set(
                     &pool,
                     name,
@@ -694,7 +698,7 @@ async fn scopes_audit_and_the_contract() {
     );
     let spec: Value =
         serde_json::from_str(&ainkrad_core_server::api::v1::spec::json_for(&[Arc::new(
-            Design,
+            Design::default(),
         )]))
         .unwrap();
     let p = &spec["paths"];

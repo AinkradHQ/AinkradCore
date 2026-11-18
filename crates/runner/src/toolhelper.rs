@@ -556,6 +556,21 @@ mod tests {
         assert_eq!(p.bin, "podman");
         let installer = include_str!("../../../deploy/install-linux.sh");
         assert!(installer.contains(&p.apt.join(" ")) && installer.contains(&p.dnf.join(" ")));
+        // Chromium for design shots (V6-01): `install-linux.sh --design`, from these pins.
+        let c = &m.distro["chromium"];
+        assert!(installer.contains(&c.apt.join(" ")) && installer.contains(&c.dnf.join(" ")));
+        let raw: Value = serde_json::from_str(MANIFEST).unwrap();
+        let pin = &raw["chromium"];
+        assert!(installer.contains(&format!(
+            "CHROMIUM_VERSION={}",
+            pin["version"].as_str().unwrap()
+        )));
+        for arch in ["x64", "arm64"] {
+            let sha = pin["sha256"][arch].as_str().unwrap();
+            assert!(installer.contains(sha), "{arch}");
+            let url = pin["url"][arch].as_str().unwrap();
+            assert!(url.contains(pin["version"].as_str().unwrap()), "{url}");
+        }
         for u in [&m.node.url, &m.claude.url, &m.codex.url] {
             assert!(guard_url(&u.replace("{version}", "1").replace("{arch}", "x64")).is_ok());
         }

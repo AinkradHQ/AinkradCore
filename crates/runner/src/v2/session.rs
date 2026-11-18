@@ -142,6 +142,8 @@ pub struct Session {
     run: Option<Arc<super::RunDriver>>,
     /// Agent sessions (`--enable-agents`), if offered.
     agent: Option<Arc<AgentDriver>>,
+    /// The sandboxed design helper and Chromium (V6-01), where the host has them.
+    design: Option<Arc<super::design::DesignDriver>>,
     pub(super) login: Option<Arc<super::login::LoginDriver>>, // KAN-441 L2, set with `agent`
     /// The runner policy and tool installs, when this runner serves them.
     control: Option<Arc<super::control::Control>>,
@@ -163,6 +165,7 @@ impl Session {
             ssh: None,
             run: None,
             agent: None,
+            design: None,
             login: None,
             control: None,
             clock: Arc::new(SystemTime::now),
@@ -190,6 +193,12 @@ impl Session {
     /// Offers the `ssh` driver too.
     pub fn with_ssh(mut self, ssh: Arc<SshDriver>) -> Self {
         self.ssh = Some(ssh);
+        self
+    }
+
+    /// Offers the `design` driver too.
+    pub fn with_design(mut self, design: Arc<super::design::DesignDriver>) -> Self {
+        self.design = Some(design);
         self
     }
 
@@ -270,6 +279,9 @@ impl Session {
         if let Some(s) = shell {
             facts.tools.insert("terminal shell".to_owned(), s);
         }
+        facts
+            .tools
+            .extend(self.design.iter().flat_map(|d| d.facts()));
         let hello = RunnerHello {
             drivers: std::iter::once(self.exec.info())
                 .chain(pty_info)
@@ -277,6 +289,7 @@ impl Session {
                 .chain(self.run.as_ref().and_then(|r| r.info()))
                 .chain(self.run.as_ref().and_then(|r| r.port_info()))
                 .chain(agent_info)
+                .chain(self.design.as_ref().map(|d| d.info()))
                 .chain(
                     self.control
                         .as_ref()
@@ -542,6 +555,13 @@ impl Session {
             Command::PtyOpen(_) | Command::PtyAttach(_) | Command::PtyClose(_) => {
                 self.start_pty(stream, command, h)
             }
+            Command::DesignRender(_)
+            | Command::DesignMeasure(_)
+            | Command::DesignReview(_)
+            | Command::DesignCheck(_)
+            | Command::DesignShot(_)
+            | Command::DesignExport(_)
+            | Command::DesignFidelity(_) => self.start_design(stream, command, h),
             Command::AgentStart(_)
             | Command::AgentRead(_)
             | Command::AgentSend(_)
@@ -666,6 +686,32 @@ impl Session {
 }
 
 impl Session {
+    /// A `design.*` command: one sandboxed helper run (`design`), within the driver's capacity.
+    fn start_design(&self, stream: u64, command: Command, h: &mut Held) -> Option<Body> {
+        let Some(design) = self.design.as_ref() else {
+            return Some(Body::Error(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                "design is off on this runner (no ainkrad-design helper or no sandbox)",
+            )));
+        };
+        let slot = match design.slot() {
+            Ok(slot) => slot,
+            Err(e) => return Some(Body::Error(e)),
+        };
+        let (cancel_tx, cancel) = oneshot::channel();
+        h.cancel = Some(cancel_tx);
+        let (design, done) = (Arc::clone(design), self.done_tx.clone());
+        tokio::spawn(async move {
+            let body = design
+                .run(&command, cancel)
+                .await
+                .map_or_else(Body::Error, Body::Result);
+            drop(slot);
+            let _ = done.send((stream, body));
+        });
+        None
+    }
+
     /// An `ssh.sftp.*` command: one task; a read or write also gets the stream's inbox (credit,
     /// the Core's bytes and `eof`) and sends its frames as they are made.
     fn start_sftp(&self, stream: u64, command: Command, h: &mut Held) -> Option<Body> {

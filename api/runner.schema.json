@@ -299,13 +299,6 @@
         "harness": {
           "type": "string"
         },
-        "instructions": {
-          "description": "Instructions for the harness (P3-03): the approved instructions of the Brain room a\nsession of a project claimed. The runner hands them to the harness as a private file\nbeside the session, never inside the repo checkout.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "live": {
           "description": "One live conversation (`CAP_LIVE`): the harness stays up after an answer and the session\nis `waiting` until the next `agent.send`; it ends only on `agent.stop` or when the CLI\nexits by itself. A resume (`resume`) of a live session starts no turn: it waits for the\nnext message, which restarts the harness with its own resume. Without it the session\nends with its first answer.",
           "type": "boolean"
@@ -909,10 +902,10 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/RunStart",
+          "$ref": "#/$defs/DesignRender",
           "properties": {
             "op": {
-              "const": "run.start",
+              "const": "design.render",
               "type": "string"
             }
           },
@@ -922,10 +915,10 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/RunStop",
+          "$ref": "#/$defs/DesignMeasure",
           "properties": {
             "op": {
-              "const": "run.stop",
+              "const": "design.measure",
               "type": "string"
             }
           },
@@ -935,10 +928,10 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/RunStatusReq",
+          "$ref": "#/$defs/DesignReview",
           "properties": {
             "op": {
-              "const": "run.status",
+              "const": "design.review",
               "type": "string"
             }
           },
@@ -948,10 +941,10 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/RunObserveReq",
+          "$ref": "#/$defs/DesignCheck",
           "properties": {
             "op": {
-              "const": "run.observe",
+              "const": "design.check",
               "type": "string"
             }
           },
@@ -961,11 +954,36 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/PortOpen",
-          "description": "A TCP stream to an exposed port of a live run (P6-01); bytes are `output` frames.",
+          "$ref": "#/$defs/DesignShot",
           "properties": {
             "op": {
-              "const": "port.open",
+              "const": "design.shot",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignExport",
+          "properties": {
+            "op": {
+              "const": "design.export",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignFidelity",
+          "properties": {
+            "op": {
+              "const": "design.fidelity",
               "type": "string"
             }
           },
@@ -1244,6 +1262,550 @@
       ],
       "type": "object"
     },
+    "DesignBox": {
+      "description": "One node's absolute box, in points.",
+      "properties": {
+        "h": {
+          "format": "float",
+          "type": "number"
+        },
+        "id": {
+          "type": "string"
+        },
+        "w": {
+          "format": "float",
+          "type": "number"
+        },
+        "x": {
+          "format": "float",
+          "type": "number"
+        },
+        "y": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "type": "object"
+    },
+    "DesignBoxes": {
+      "properties": {
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/DesignBox"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "nodes"
+      ],
+      "type": "object"
+    },
+    "DesignCheck": {
+      "description": "`design.check`: is this upload a font, or an Icon Composer `.icon` zip, the helper can use?",
+      "properties": {
+        "data": {
+          "description": "Standard base64.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "`font` or `icon_composer`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "data"
+      ],
+      "type": "object"
+    },
+    "DesignChecked": {
+      "description": "The answer to `design.check`: `ok`, or a fixed sentence why not.",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "type": "object"
+    },
+    "DesignExport": {
+      "description": "`design.export` (V6-03): one screen as an inert HTML/CSS package. The answer carries the page and\nits stylesheet; the fonts and images it names are the job's own files, which the caller already\nholds, so they are not sent back.",
+      "properties": {
+        "doc": true,
+        "doc_id": {
+          "type": "string"
+        },
+        "fallback_font": {
+          "description": "The hash of one of `fonts` that `system` text falls back to (plan Q2: Linux has no SF Pro).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fonts": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "page": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "screen": {
+          "description": "A resolved id of a top-level node of the page; absent, the page's first screen. `doc.theme`\nis only the theme the page opens in: the package carries both.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "system": true,
+        "system_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "theme": {
+          "description": "`day` or `night`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "doc_id",
+        "doc",
+        "theme"
+      ],
+      "type": "object"
+    },
+    "DesignExported": {
+      "description": "The answer to `design.export`. Files of the package: `index.html`, `style.css`, and for each\nhash in `fonts` / `images` the file `fonts/<sha256>` / `assets/<sha256>` (the job's bytes).",
+      "properties": {
+        "css": {
+          "type": "string"
+        },
+        "fonts": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "html": {
+          "type": "string"
+        },
+        "images": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "metrics_differ": {
+          "default": false,
+          "description": "Some text used a font other than the library file it names (plan Q2).",
+          "type": "boolean"
+        },
+        "screen": {
+          "description": "The resolved id of the screen exported (what `design.render`'s `node` takes).",
+          "type": "string"
+        },
+        "width": {
+          "description": "The screen's size in points, as the engine lays it out: the viewport a shot of it needs.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "screen",
+        "html",
+        "css",
+        "fonts",
+        "images",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "DesignFidelity": {
+      "description": "`design.fidelity`: how far two PNGs of one screen are apart (the engine's frame, Chromium's shot\nof the export). Both are decoded only in the helper's sandbox.",
+      "properties": {
+        "a": {
+          "type": "string"
+        },
+        "b": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "a",
+        "b"
+      ],
+      "type": "object"
+    },
+    "DesignFidelityScore": {
+      "description": "The answer to `design.fidelity`: the share of pixels that differ by more than the tolerance\n(CIE76 delta E), in percent. Sizes that differ are a score of 100.",
+      "properties": {
+        "changed": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "percent": {
+          "format": "double",
+          "type": "number"
+        },
+        "total": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "percent",
+        "changed",
+        "total",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "DesignFile": {
+      "description": "A file by its library hash: `sha256` (lowercase hex) and its bytes, standard base64.",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha256",
+        "data"
+      ],
+      "type": "object"
+    },
+    "DesignFinding": {
+      "description": "A geometry finding: `rule` (`geometry.outside`, `geometry.text_overflow`), the node, a sentence.",
+      "properties": {
+        "msg": {
+          "type": "string"
+        },
+        "node": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule",
+        "node",
+        "msg"
+      ],
+      "type": "object"
+    },
+    "DesignFindings": {
+      "properties": {
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/DesignFinding"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "findings"
+      ],
+      "type": "object"
+    },
+    "DesignImage": {
+      "description": "The answer to `design.render` and `design.shot`.",
+      "properties": {
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "metrics_differ": {
+          "default": false,
+          "description": "Some text used a font other than the library file it names (plan Q2: \"metrics differ\").",
+          "type": "boolean"
+        },
+        "png": {
+          "description": "Standard base64 PNG.",
+          "type": "string"
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "png",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "DesignMeasure": {
+      "description": "`design.measure`: every laid-out node's box.",
+      "properties": {
+        "doc": true,
+        "doc_id": {
+          "type": "string"
+        },
+        "fallback_font": {
+          "description": "The hash of one of `fonts` that `system` text falls back to (plan Q2: Linux has no SF Pro).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fonts": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "page": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "system": true,
+        "system_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "theme": {
+          "description": "`day` or `night`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "doc_id",
+        "doc",
+        "theme"
+      ],
+      "type": "object"
+    },
+    "DesignRender": {
+      "description": "`design.render`: one screen or node (or the whole page) as a PNG, CPU Skia.",
+      "properties": {
+        "doc": true,
+        "doc_id": {
+          "type": "string"
+        },
+        "fallback_font": {
+          "description": "The hash of one of `fonts` that `system` text falls back to (plan Q2: Linux has no SF Pro).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fonts": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "node": {
+          "description": "A resolved node id; absent, every screen of the page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scale": {
+          "default": 1.0,
+          "description": "Pixels per point, 0.25 to 4.",
+          "format": "float",
+          "type": "number"
+        },
+        "system": true,
+        "system_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "theme": {
+          "description": "`day` or `night`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "doc_id",
+        "doc",
+        "theme"
+      ],
+      "type": "object"
+    },
+    "DesignReview": {
+      "description": "`design.review`: geometry findings (what needs real text metrics and layout).",
+      "properties": {
+        "doc": true,
+        "doc_id": {
+          "type": "string"
+        },
+        "fallback_font": {
+          "description": "The hash of one of `fonts` that `system` text falls back to (plan Q2: Linux has no SF Pro).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fonts": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "images": {
+          "items": {
+            "$ref": "#/$defs/DesignFile"
+          },
+          "type": "array"
+        },
+        "page": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "system": true,
+        "system_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "theme": {
+          "description": "`day` or `night`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "doc_id",
+        "doc",
+        "theme"
+      ],
+      "type": "object"
+    },
+    "DesignShot": {
+      "description": "`design.shot`: headless Chromium opens `entry` of `files` (an HTML export or a mockup package)\nwith no network and screenshots the viewport.",
+      "properties": {
+        "entry": {
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/DesignShotFile"
+          },
+          "type": "array"
+        },
+        "height": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scale": {
+          "default": 1.0,
+          "format": "float",
+          "type": "number"
+        },
+        "width": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "files",
+        "entry",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "DesignShotFile": {
+      "description": "One file of a `design.shot` site: a relative path (no `..`, no leading `/`, no NUL or `\\`).",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "data"
+      ],
+      "type": "object"
+    },
     "DiskReport": {
       "description": "A runner's disk use (1.15, E15.9), as measured after its last clean-up pass.",
       "properties": {
@@ -1471,6 +2033,16 @@
         {
           "const": "too_large",
           "description": "A transfer over `SFTP_MAX_BYTES`.",
+          "type": "string"
+        },
+        {
+          "const": "design_failed",
+          "description": "`design.*`: the helper (or Chromium) failed, crashed, or was stopped at a limit; `message` says\nwhich. The input is what it could not handle; the runner itself is unaffected.",
+          "type": "string"
+        },
+        {
+          "const": "design_limit",
+          "description": "`design.*`: the helper (or Chromium) ran out of wall clock. Load on the runner can cause it as\nmuch as the input, so it is no verdict on the file: try again later.",
           "type": "string"
         },
         {
@@ -2180,34 +2752,6 @@
         }
       ]
     },
-    "LogLine": {
-      "description": "One line of a service's output, redacted and cut to [`LOG_LINE_MAX`].",
-      "properties": {
-        "at": {
-          "description": "When the container wrote it (RFC 3339, from Podman).",
-          "type": "string"
-        },
-        "seq": {
-          "description": "Grows by one per line of the run, across services; the resume cursor.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "service": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "seq",
-        "service",
-        "at",
-        "text"
-      ],
-      "type": "object"
-    },
     "Login": {
       "description": "A login place on a runner host (1.20): `dir` is relative to its config root\n(`claude`, `accounts/claude-a`), or `credentials/<file>` for an account's token file.",
       "properties": {
@@ -2683,49 +3227,6 @@
       ],
       "type": "object"
     },
-    "PortClosed": {
-      "description": "Why a port stream ended, as its last frame.",
-      "properties": {
-        "reason": {
-          "description": "`eof` (the service closed it) or `run_ended` (the run stopped, failed or lost the port).",
-          "type": "string"
-        }
-      },
-      "required": [
-        "reason"
-      ],
-      "type": "object"
-    },
-    "PortOpen": {
-      "description": "Opens a stream to `port` (the container port, as written in the spec) of `service` in run `run`.",
-      "properties": {
-        "port": {
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "project": {
-          "description": "The project the run belongs to; the runner refuses a run of another project.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "run": {
-          "type": "string"
-        },
-        "service": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "project",
-        "run",
-        "service",
-        "port"
-      ],
-      "type": "object"
-    },
     "PtyAttach": {
       "description": "`pty.attach`: reach a running terminal and resume its output at `seq`.",
       "properties": {
@@ -2833,33 +3334,6 @@
       },
       "required": [
         "size"
-      ],
-      "type": "object"
-    },
-    "PublishedPort": {
-      "properties": {
-        "expose": {
-          "default": false,
-          "description": "The spec marked it `expose: true`: the only ports `port.open` serves (P6-01).",
-          "type": "boolean"
-        },
-        "host_port": {
-          "description": "Where it listens on the runner's 127.0.0.1.",
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "port": {
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "port",
-        "host_port"
       ],
       "type": "object"
     },
@@ -3286,11 +3760,10 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/RunInfo",
-          "description": "`run.start` and `run.stop` answer with the run's state; `run.status` with every run asked for.",
+          "$ref": "#/$defs/DesignImage",
           "properties": {
             "op": {
-              "const": "run.start",
+              "const": "design.render",
               "type": "string"
             }
           },
@@ -3300,10 +3773,10 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/RunInfo",
+          "$ref": "#/$defs/DesignBoxes",
           "properties": {
             "op": {
-              "const": "run.stop",
+              "const": "design.measure",
               "type": "string"
             }
           },
@@ -3313,10 +3786,10 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/RunList",
+          "$ref": "#/$defs/DesignFindings",
           "properties": {
             "op": {
-              "const": "run.status",
+              "const": "design.review",
               "type": "string"
             }
           },
@@ -3326,11 +3799,10 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/RunObserve",
-          "description": "`run.observe`: service metrics and the new log lines of one run.",
+          "$ref": "#/$defs/DesignChecked",
           "properties": {
             "op": {
-              "const": "run.observe",
+              "const": "design.check",
               "type": "string"
             }
           },
@@ -3340,11 +3812,36 @@
           "type": "object"
         },
         {
-          "$ref": "#/$defs/PortClosed",
-          "description": "The last frame of `port.open`.",
+          "$ref": "#/$defs/DesignImage",
           "properties": {
             "op": {
-              "const": "port.open",
+              "const": "design.shot",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignExported",
+          "properties": {
+            "op": {
+              "const": "design.export",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/DesignFidelityScore",
+          "properties": {
+            "op": {
+              "const": "design.fidelity",
               "type": "string"
             }
           },
@@ -3462,37 +3959,9 @@
       ],
       "type": "object"
     },
-    "RunBuild": {
-      "properties": {
-        "context": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "dockerfile": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "repo": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "repo"
-      ],
-      "type": "object"
-    },
     "RunCaps": {
       "description": "What a project run may count on (see [`RunnerFacts::run_caps`]).",
       "properties": {
-        "can_clone": {
-          "default": false,
-          "description": "Can clone a project repo from the Core's copies (agent driver on): a spec that builds\nfrom or mounts repos is placed on such a runner first (P5-05).",
-          "type": "boolean"
-        },
         "cpus": {
           "description": "Logical CPUs of the host.",
           "format": "uint32",
@@ -3514,111 +3983,6 @@
         "cpus",
         "mem_mb",
         "isolate"
-      ],
-      "type": "object"
-    },
-    "RunCheckout": {
-      "description": "A repo checkout of this run. With `from_core` the runner clones it itself, from the Core's copy\n(P3-02's clone for AI sessions, which the Core leased to this runner for the run), and `dir`\nis empty: the runner picks the directory. Without it `dir` is a checkout the runner already holds.",
-      "properties": {
-        "dir": {
-          "description": "Absolute path of the checkout on the runner host.",
-          "type": "string"
-        },
-        "from_core": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RunClone"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "repo": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "repo",
-        "dir"
-      ],
-      "type": "object"
-    },
-    "RunClone": {
-      "description": "Where a run's checkout is cloned from (P5-05).",
-      "properties": {
-        "base": {
-          "description": "The branch to check out.",
-          "type": "string"
-        },
-        "mirror": {
-          "description": "The project repo id: the Core serves its copy to this runner only while it holds a lease.",
-          "format": "int64",
-          "type": "integer"
-        },
-        "remote": {
-          "description": "The repo's remote: the checkout's `origin` (no credentials, as `repo_url_problem` checks).",
-          "type": "string"
-        }
-      },
-      "required": [
-        "mirror",
-        "remote",
-        "base"
-      ],
-      "type": "object"
-    },
-    "RunHealth": {
-      "properties": {
-        "cmd": {
-          "description": "Run in the container by its shell; exit 0 is healthy.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "cmd"
-      ],
-      "type": "object"
-    },
-    "RunInfo": {
-      "properties": {
-        "failed_service": {
-          "description": "With `failed`: the service that is not running.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "phase": {
-          "$ref": "#/$defs/RunPhase"
-        },
-        "project": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "reason": {
-          "description": "With `failed`: why, in words (redacted).",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "run": {
-          "type": "string"
-        },
-        "services": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ServiceStatus"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "run",
-        "project",
-        "phase"
       ],
       "type": "object"
     },
@@ -3692,338 +4056,6 @@
         "max_resumes",
         "resume_backoff_ms",
         "resume_backoff_max_ms"
-      ],
-      "type": "object"
-    },
-    "RunLimits2": {
-      "description": "The project's caps, applied to every container of the run.",
-      "properties": {
-        "cpus": {
-          "format": "double",
-          "type": "number"
-        },
-        "memory_mb": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "pids": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "cpus",
-        "memory_mb",
-        "pids"
-      ],
-      "type": "object"
-    },
-    "RunList": {
-      "description": "The answer to `run.status`.",
-      "properties": {
-        "runs": {
-          "items": {
-            "$ref": "#/$defs/RunInfo"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "runs"
-      ],
-      "type": "object"
-    },
-    "RunObserve": {
-      "properties": {
-        "lines": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/LogLine"
-          },
-          "type": "array"
-        },
-        "lost": {
-          "default": 0,
-          "description": "Lines between `after` and the oldest line held that the ring had already dropped.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "next": {
-          "default": 0,
-          "description": "Ask again with `after` = this.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "services": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/ServiceMetrics"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "RunObserveReq": {
-      "description": "`limit` 0 asks for the metrics only.",
-      "properties": {
-        "after": {
-          "default": 0,
-          "description": "Lines with a `seq` above this (0: from the oldest the runner still holds).",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "health": {
-          "description": "The caller is an admin route: the runner may run the services' health checks (`podman\nhealthcheck run`) for this run. Without it, health is only what Podman last recorded.",
-          "type": "boolean"
-        },
-        "limit": {
-          "description": "At most this many lines (default and most [`OBSERVE_LINES_MAX`]).",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "run": {
-          "type": "string"
-        },
-        "service": {
-          "description": "Only this service's lines.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "run"
-      ],
-      "type": "object"
-    },
-    "RunPhase": {
-      "oneOf": [
-        {
-          "enum": [
-            "starting",
-            "running",
-            "unknown"
-          ],
-          "type": "string"
-        },
-        {
-          "const": "stopped",
-          "description": "No container of the run is left.",
-          "type": "string"
-        },
-        {
-          "const": "failed",
-          "description": "A service is not running (`failed_service`).",
-          "type": "string"
-        }
-      ]
-    },
-    "RunPort": {
-      "properties": {
-        "expose": {
-          "default": false,
-          "type": "boolean"
-        },
-        "port": {
-          "description": "The container port; published on the runner's loopback only, at a port Podman picks.",
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "port"
-      ],
-      "type": "object"
-    },
-    "RunSecret": {
-      "description": "A secret the spec names, as a lease (`l_…`) the runner redeems once.",
-      "properties": {
-        "lease": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "lease"
-      ],
-      "type": "object"
-    },
-    "RunService": {
-      "description": "One container: an `image` or a `build`.",
-      "properties": {
-        "build": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RunBuild"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "command": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "depends_on": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "env": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {},
-          "description": "Plain values, or values with `${secret:NAME}` that the runner fills from `RunStart::secrets`.",
-          "type": "object"
-        },
-        "health": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RunHealth"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "image": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "ports": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/RunPort"
-          },
-          "type": "array"
-        },
-        "repo": {
-          "description": "Mount this repo's checkout at `/repo/<name>`.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "volumes": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "default": {},
-          "description": "Volume name to the container path it is mounted at; the volume is `ainkrad-p<project>-<name>`.",
-          "type": "object"
-        },
-        "workdir": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "RunSpec": {
-      "description": "A project's run spec: its services by name (P4-01's `RunSpec`, as JSON).",
-      "properties": {
-        "services": {
-          "additionalProperties": {
-            "$ref": "#/$defs/RunService"
-          },
-          "type": "object"
-        }
-      },
-      "required": [
-        "services"
-      ],
-      "type": "object"
-    },
-    "RunStart": {
-      "description": "Starts run `run` of project `project`: network, volumes, checkouts, builds, then the services\nin `depends_on` order. Answers `run.start` with the run's [`RunInfo`].",
-      "properties": {
-        "checkouts": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/RunCheckout"
-          },
-          "type": "array"
-        },
-        "limits": {
-          "$ref": "#/$defs/RunLimits2"
-        },
-        "project": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "run": {
-          "type": "string"
-        },
-        "secrets": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/RunSecret"
-          },
-          "type": "array"
-        },
-        "spec": {
-          "$ref": "#/$defs/RunSpec"
-        }
-      },
-      "required": [
-        "run",
-        "project",
-        "spec",
-        "limits"
-      ],
-      "type": "object"
-    },
-    "RunStatusReq": {
-      "description": "One run's state, or (no `run`) every run on the runner, read from container labels.",
-      "properties": {
-        "run": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "RunStop": {
-      "description": "Stops a run: `podman stop -t 10`, then its containers are removed; volumes stay.",
-      "properties": {
-        "run": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "run"
       ],
       "type": "object"
     },
@@ -4307,11 +4339,6 @@
           "description": "Agent sessions are offered.",
           "type": "boolean"
         },
-        "runs": {
-          "default": false,
-          "description": "The runner takes project runs (`run.start`). Off by default; the Core places runs only on\nrunners that have it on. An older policy without it reads as off.",
-          "type": "boolean"
-        },
         "share_history": {
           "default": false,
           "description": "The runner answers `history.read` (the Brain reads its Claude Code history): `--share-history`.\nOff by default; an older Core's policy without it reads as off.",
@@ -4357,100 +4384,6 @@
       "required": [
         "lease",
         "var"
-      ],
-      "type": "object"
-    },
-    "ServiceHealth": {
-      "description": "A service's own health check, when its spec has one.",
-      "oneOf": [
-        {
-          "enum": [
-            "starting",
-            "healthy",
-            "unhealthy"
-          ],
-          "type": "string"
-        },
-        {
-          "const": "none",
-          "description": "No health check.",
-          "type": "string"
-        }
-      ]
-    },
-    "ServiceMetrics": {
-      "properties": {
-        "cpu_percent": {
-          "description": "Percent of one CPU (it passes 100 with more than one core in use); `None` while it is not\nrunning or Podman gave no sample.",
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "health": {
-          "$ref": "#/$defs/ServiceHealth",
-          "default": "none"
-        },
-        "memory_bytes": {
-          "default": 0,
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "memory_limit_bytes": {
-          "default": 0,
-          "description": "The cap Podman reports (the project's memory limit); 0 when unknown.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "name": {
-          "type": "string"
-        },
-        "restarts": {
-          "default": 0,
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "state": {
-          "description": "Podman's state: `running`, `exited`, ...",
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "state"
-      ],
-      "type": "object"
-    },
-    "ServiceStatus": {
-      "properties": {
-        "exit_code": {
-          "format": "int32",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "ports": {
-          "items": {
-            "$ref": "#/$defs/PublishedPort"
-          },
-          "type": "array"
-        },
-        "state": {
-          "description": "Podman's state: `created`, `running`, `exited`, ...",
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "state"
       ],
       "type": "object"
     },
@@ -5480,14 +5413,6 @@
           "description": "The sha the branch was last pushed at (1.28), `None` before its first push. The runner\nleases its push on it, so a rewritten branch lands only over the head it last saw.",
           "type": [
             "string",
-            "null"
-          ]
-        },
-        "mirror": {
-          "description": "A project repo (P3-02): clone it from the Core's copy of that repo id, not from `repo`\n(which stays its remote, for the checkout's `origin`). Only the Core sets it, for a session\nof a project; the Core serves the copy to this runner only while it holds a lease for it.",
-          "format": "int64",
-          "type": [
-            "integer",
             "null"
           ]
         },

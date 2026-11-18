@@ -178,7 +178,7 @@ fn the_committed_allow_list_matches_the_real_contract() {
     let allow: Vec<Allowed> = allow_list()
         .expect("api/ai-ops.allow.json reads")
         .into_iter()
-        .filter(|a| !a.op.starts_with("brainAi"))
+        .filter(|a| !a.op.starts_with("brainAi") && !a.op.starts_with("loreAi"))
         .collect();
     let spec: Value = serde_json::from_str(&crate::api::v1::spec::json()).unwrap();
     let bad = check(&spec, &allow);
@@ -281,4 +281,24 @@ fn search_ranks_by_words_and_hides_ops_outside_the_scopes() {
         1
     );
     assert!(search(&c, &both, "thing", None).to_string().len() < 8 * 1024);
+}
+
+#[test]
+fn design_take_over_and_resume_never_reach_a_session() {
+    let on_disk = allow_list().unwrap();
+    for op in NOT_EXPOSED_OPS {
+        assert!(
+            on_disk.iter().all(|a| a.op != *op),
+            "{op} is in ai-ops.allow.json"
+        );
+    }
+    let spec = json!({"paths": {"/modules/design/v1/docs/{doc}/take-over": {
+        "post": {"operationId": "designTakeOver", "responses": {"204": {}}}}}});
+    let every = allow(&[("designTakeOver", Some(Risk::Risky))]);
+    assert!(
+        check(&spec, &every)
+            .iter()
+            .any(|b| b.contains("not exposed"))
+    );
+    assert!(build(&spec, &every).ops.is_empty());
 }

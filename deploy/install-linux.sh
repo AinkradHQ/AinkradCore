@@ -2,7 +2,7 @@
 # Installs the ainkrad-runner systemd unit (E1-12.3; protocol v2 since E1-14.5; terminals and pairing E2-15).
 # Idempotent; does not start unless --start or --pair. Works on the Core's own host and on a remote Linux host.
 #   install-linux.sh [--binary PATH] [--ptyhost PATH] [--pty] [--ca PEM]
-#                    [--agents] [--exec] [--root] [--with-run] [--pair https://<core> --code - | --invite -] [--start]
+#                    [--agents] [--exec] [--root] [--with-run] [--design] [--pair https://<core> --code - | --invite -] [--start]
 #                    [--prefix DIR] [--dry-run]
 # --pty      offer terminals (--enable-pty); needs ainkrad-ptyhost (--ptyhost, default: beside --binary). The shell
 #            runs as the unprivileged ainkrad-runner user inside the unit's sandbox. Off unless asked. Also installs zsh
@@ -29,11 +29,16 @@
 #            the runner's group) and ainkrad-run-egress.service (nftables: ainkrad-run's traffic cannot reach the cloud
 #            metadata address or private ranges), re-applied every minute by ainkrad-run-egress.timer. Needs the whole host, so it is skipped under --prefix except for the
 #            drop-in and those files. Nothing else (no sysctl, no AppArmor).
+# --design   Design (Core 0.9 V6-01): headless Chromium for design shots, pinned by version and sha256
+#            (deploy/tools.manifest.json `chromium`) into /usr/local/lib/ainkrad-chromium, plus its libraries and the
+#            helper's (libfontconfig, libfreetype; `distro.chromium`). The `ainkrad-design` helper itself is installed
+#            beside the runner whenever it is at hand (--design-helper, default: beside --binary); without bubblewrap
+#            or the helper the runner offers no design ops. Both run only in the runner's no-network sandbox.
 # --prefix installs under DIR (a throwaway root, for tests): no user creation, no systemctl, no shell profile download.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-binary="$HERE/../target/release/ainkrad-runner" ptyhost='' with_run=0 pty=0 agents=0 ca='' pair='' code='' invite='' prefix='' start=0 dry=0 exec_on=0 root=0
+binary="$HERE/../target/release/ainkrad-runner" design=0 design_helper='' ptyhost='' with_run=0 pty=0 agents=0 ca='' pair='' code='' invite='' prefix='' start=0 dry=0 exec_on=0 root=0
 run() { printf '+ %s\n' "$*"; [ "$dry" = 1 ] || "$@"; }
 WAS_ACTIVE=1
 # Demoting a root runner: its terminal hosts (ptyhosts, started as root; KillMode=process keeps them alive across a restart)
@@ -57,6 +62,39 @@ runner_restart_if_needed() {
   elif [ "$old_root" != "$root" ] || [ "$old_args" != "$args" ]; then
     run systemctl try-restart ainkrad-runner.service
   fi
+}
+# Headless Chromium for design shots (--design). Kept equal to deploy/tools.manifest.json `chromium` (a runner test checks).
+CHROMIUM_VERSION=159.0.8154.6
+CHROMIUM_SHA256_X64=77a6442fd3c8acd3bef9e1067fc26f5ef464277d22f0e8cb58dc3e4077a3e458
+CHROMIUM_SHA256_ARM64=e1262e9f4f244c441dcb54aa0e9abe4cf7b266ab02dc666fd975bd55aba9b3dc
+CHROMIUM_DIR=/usr/local/lib/ainkrad-chromium
+# Reads the globals prefix and dry; the packages and the download run only on the real host.
+design_setup() {
+  local arch dir sum url tmp
+  if [ -n "$prefix" ] && [ "$dry" = 0 ]; then echo "+ skipped under --prefix: Chromium and its libraries"; return 0; fi
+  if [ "$dry" = 1 ] || command -v apt-get >/dev/null 2>&1; then
+    run env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends unzip libfontconfig1 libfreetype6 fonts-dejavu-core libnspr4 libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 libxres1 libxkbcommon0 libgbm1 libasound2t64 libcups2t64 libpango-1.0-0 libcairo2
+  elif command -v dnf >/dev/null 2>&1; then run dnf install -y --setopt=install_weak_deps=False unzip fontconfig freetype dejavu-sans-fonts nspr nss atk at-spi2-atk at-spi2-core libX11 libxcb libXcomposite libXdamage libXext libXfixes libXrandr libXres libxkbcommon mesa-libgbm alsa-lib cups-libs pango cairo
+  else echo "--design needs apt-get or dnf for Chromium's libraries" >&2; return 1; fi
+  case $(uname -m) in
+    x86_64) arch=x64 dir=linux64 sum=$CHROMIUM_SHA256_X64 ;;
+    aarch64 | arm64) arch=arm64 dir=linux-arm64 sum=$CHROMIUM_SHA256_ARM64 ;;
+    *) echo "--design: no Chromium build for $(uname -m)" >&2; return 1 ;;
+  esac
+  url="https://cdn.playwright.dev/builds/cft/$CHROMIUM_VERSION/$dir/chrome-headless-shell-$dir.zip"
+  if [ "$dry" = 1 ]; then echo "+ download $url ($arch, sha256 $sum) into $CHROMIUM_DIR"; return 0; fi
+  if [ -x "$CHROMIUM_DIR/chrome-headless-shell" ] && [ "$(cat "$CHROMIUM_DIR/.version" 2>/dev/null)" = "$CHROMIUM_VERSION" ]; then
+    echo "Chromium $CHROMIUM_VERSION already in $CHROMIUM_DIR"; return 0; fi
+  tmp=$(mktemp -d)
+  run curl -fsSL --proto '=https' -o "$tmp/c.zip" "$url"
+  echo "$sum  $tmp/c.zip" | sha256sum -c - >/dev/null || { rm -rf "$tmp"; echo "--design: the Chromium download does not match its sha256" >&2; return 1; }
+  run unzip -q "$tmp/c.zip" -d "$tmp"
+  run rm -rf "$CHROMIUM_DIR"
+  run install -d -m 0755 "$CHROMIUM_DIR"
+  run cp -R "$tmp/chrome-headless-shell-$dir/." "$CHROMIUM_DIR/"
+  printf '%s\n' "$CHROMIUM_VERSION" >"$CHROMIUM_DIR/.version"
+  run chown -R root:root "$CHROMIUM_DIR"; run chmod -R go-w "$CHROMIUM_DIR"
+  rm -rf "$tmp"
 }
 RUN_USER=ainkrad-run RUN_HOME=/var/lib/ainkrad-run
 # First free uid/gid of a 65536 block after every range in the given subuid/subgid files (at least 100000).
@@ -125,7 +163,7 @@ run_setup() {
     podman info --format 'rootless={{.Host.Security.Rootless}} cgroups={{.Host.CgroupManager}}'
 }
 [ "${AINKRAD_INSTALL_SOURCE_ONLY:-}" != 1 ] || [ "${BASH_SOURCE[0]}" = "$0" ] || return 0
-usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 # A secret flag's value: `-` reads it from the terminal (no echo) or stdin; a literal still works, with a warning (argv shows in `ps`).
 secret_arg() {
   local v
@@ -143,6 +181,8 @@ while [ $# -gt 0 ]; do
     --agents) agents=1; shift ;;
     --root) root=1; shift ;;
     --with-run) with_run=1; shift ;;
+    --design) design=1; shift ;;
+    --design-helper) design_helper=${2:?}; shift 2 ;;
     --ca) ca=${2:?}; shift 2 ;;
     --pair) pair=${2:?}; shift 2 ;;
     --code) code=$(secret_arg --code "${2:?}"); shift 2 ;;
@@ -185,6 +225,9 @@ install_bin "$binary" "$prefix/usr/local/bin/ainkrad-runner"
 # Beside the runner, where it looks first. Installed whenever it is at hand, so enabling pty later needs no re-install.
 [ -n "$ptyhost" ] || [ ! -x "$(dirname "$binary")/ainkrad-ptyhost" ] || ptyhost=$(dirname "$binary")/ainkrad-ptyhost
 [ -z "$ptyhost" ] || install_bin "$ptyhost" "$prefix/usr/local/bin/ainkrad-ptyhost"
+# The design helper (V6-01), the same way: beside the runner, where it looks first.
+[ -n "$design_helper" ] || [ ! -x "$(dirname "$binary")/ainkrad-design" ] || design_helper=$(dirname "$binary")/ainkrad-design
+[ -z "$design_helper" ] || install_bin "$design_helper" "$prefix/usr/local/bin/ainkrad-design"
 run install -m 0644 "$HERE/systemd/ainkrad-runner.service" "$prefix/etc/systemd/system/ainkrad-runner.service"
 # The root-side tool installer the App's one-click install uses: a socket only the runner's group can reach, and the unit it starts.
 run install -m 0644 "$HERE/systemd/ainkrad-runner-tools.socket" "$prefix/etc/systemd/system/ainkrad-runner-tools.socket"
@@ -273,4 +316,5 @@ if [ -z "$prefix" ]; then
   fi
 fi
 [ "$with_run" = 0 ] || run_setup
+[ "$design" = 0 ] || design_setup
 runner_restart_if_needed

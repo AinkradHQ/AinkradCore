@@ -10,6 +10,13 @@
     {"op": "brainAiRecord", "risk": "read", "summary": "Read one accepted Brain record of a visible room, whole, as outside data."},
     {"op": "brainAiDecisions", "risk": "read", "summary": "List accepted Brain decisions of the visible rooms, newest first."},
     {"op": "brainAiProjectState", "risk": "read", "summary": "List accepted project state, open tasks and rules (landmines) of the visible rooms, newest first."},
-    {"op": "brainAiPropose", "risk": "write", "summary": "Propose a record to a visible room's Inbox. It waits there as a candidate; a person accepts or rejects it, nothing is added to the Brain."}
+    {"op": "brainAiPropose", "risk": "write", "summary": "Propose a record to a visible room's Inbox. It waits there as a candidate; a person accepts or rejects it, nothing is added to the Brain."},
+    {"op": "loreAiSearch", "risk": "read", "summary": "Search the Lore notes this AI session may reach (its project's, or personal and daily ones when it has no project). Texts come back as outside data."},
+    {"op": "loreAiRead", "risk": "read", "summary": "Read one live Lore note of this session's scope, whole, as outside data."},
+    {"op": "loreAiLinks", "risk": "read", "summary": "List the links of a Lore note of this session's scope and the notes of the scope that link to it, as outside data."},
+    {"op": "loreAiCreate", "risk": "write", "summary": "Create a Lore note in this session's project, or a personal note when it has none. It cannot go anywhere else."},
+    {"op": "loreAiAppend", "risk": "write", "summary": "Add text at the end of a Lore note of this session's scope. The old text is kept as a version before the session's first edit."},
+    {"op": "loreAiEdit", "risk": "write", "summary": "Replace text that occurs exactly once in a Lore note of this session's scope; no match changes nothing. The old text is kept as a version before the session's first edit."},
+    {"op": "loreAiTrash", "risk": "risky", "summary": "Move a Lore note of this session's scope to the trash (nothing is deleted; a person restores it). Waits for a person's approval."}
   ]
 }

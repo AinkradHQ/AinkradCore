@@ -9,6 +9,10 @@ use skia_safe::{AlphaType, ColorType, Data, Image, ImageInfo, surfaces};
 /// Longest side kept after decoding; bigger images are scaled down once (a 12 MP photo on a phone screen is waste).
 pub const MAX_SIDE: i32 = 4096;
 pub const DEFAULT_CAP: usize = 128 * 1024 * 1024;
+/// Pixels an image may claim in its header. `Image::from_encoded` only reads the header; the decode happens in Skia
+/// (C++, outside any Rust allocation cap) when the image is drawn, at full size: a 60000 x 60000 PNG is ~14 GB.
+/// Anything bigger is refused before it is drawn (64 MP x 4 bytes = 256 MB transient).
+pub const MAX_PIXELS: i64 = 64 * 1024 * 1024;
 
 struct Slot {
     img: Option<Image>,
@@ -35,7 +39,7 @@ impl Default for Assets {
 fn decode(d: &Data) -> Option<(Image, usize)> {
     let img = Image::from_encoded(d.clone())?;
     let (w, h) = (img.width(), img.height());
-    if w <= 0 || h <= 0 {
+    if w <= 0 || h <= 0 || i64::from(w) * i64::from(h) > MAX_PIXELS {
         return None;
     }
     let k = (MAX_SIDE as f32 / w.max(h) as f32).min(1.0);

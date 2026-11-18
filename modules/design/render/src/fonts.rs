@@ -5,7 +5,9 @@
 use std::collections::HashMap;
 
 use serde_json::Value;
-use skia_safe::textlayout::{FontCollection, TypefaceFontProvider};
+use skia_safe::textlayout::{
+    FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle, TypefaceFontProvider,
+};
 use skia_safe::{Data, FontMgr};
 
 const FALLBACK: &str = "design-system-fallback";
@@ -36,6 +38,9 @@ impl Fonts {
             epoch: 0,
         };
         f.fc.set_default_font_manager(FontMgr::default(), None);
+        // V2-04 font fallback: a character the named faces lack (CJK, emoji, Arabic...) is drawn from a platform face
+        // that has it instead of as a missing glyph (CoreText on the Mac, fontconfig on Linux runners)
+        f.fc.enable_font_fallback();
         f.fc.set_asset_font_manager(Some(f.prov.clone().into()));
         f
     }
@@ -93,6 +98,21 @@ impl Fonts {
             );
         }
         out
+    }
+
+    /// Characters of `text` that no face draws, fallback included (`system` text at 14 pt): 0 when font fallback
+    /// covers it. Tests, and the "metrics differ" check on runners.
+    pub fn unresolved(&self, text: &str) -> usize {
+        let mut ts = TextStyle::new();
+        ts.set_font_families(&self.families(None));
+        ts.set_font_size(14.0);
+        let mut ps = ParagraphStyle::new();
+        ps.set_text_style(&ts);
+        let mut b = ParagraphBuilder::new(&ps, &self.fc);
+        b.add_text(text);
+        let mut p = b.build();
+        p.layout(1.0e6);
+        p.unresolved_glyphs().unwrap_or(0)
     }
 
     /// Does the design's font resolve to a file the host supplied? (`system` always does.)
