@@ -55,6 +55,8 @@ pub mod session;
 mod settings;
 pub mod spec;
 mod stepup;
+/// The 403 a route that needs a step-up answers a session without one (a module's own check).
+pub use stepup::required as step_up_required;
 mod system;
 mod terminals;
 pub mod ticket;

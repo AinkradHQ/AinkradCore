@@ -1208,6 +1208,10 @@
           "leyline.host.detached",
           "leyline.key.created",
           "leyline.key.deleted",
+          "leyline.run.allowed",
+          "leyline.run.approval",
+          "leyline.run.refused",
+          "leyline.run.requested",
           "notify.token_pruned",
           "pairing.approved",
           "pairing.burned",
@@ -2941,7 +2945,7 @@
             "type": "string"
           },
           "ai_rule": {
-            "description": "`read_only` or `ask` (`allowed` arrives with the gate story, Y4-01).",
+            "description": "`read_only`, `ask` or `allowed` (what an AI session may do on it; see the gate).",
             "type": "string"
           },
           "created_at": {
@@ -3937,7 +3941,7 @@
             "type": "string"
           },
           "ai_rule": {
-            "description": "`read_only` or `ask` (the default).",
+            "description": "`read_only`, `ask` (the default) or `allowed`; `allowed` needs a step-up.",
             "type": [
               "string",
               "null"

@@ -177,10 +177,10 @@ async fn scopes_and_step_up_follow_the_modules_tables() {
         &laptop,
         Method::PATCH,
         &path,
-        Some(json!({"port": 2222})),
+        Some(json!({"tags": ["x"]})),
     )
     .await;
-    assert_eq!(s, StatusCode::OK, "a change needs no step-up: {b}");
+    assert_eq!(s, StatusCode::OK, "a plain change needs no step-up: {b}");
     let (s, b) = call(&fx, &laptop, Method::DELETE, &path, None).await;
     assert_eq!(
         (s, &b["code"]),
@@ -427,9 +427,9 @@ async fn hosts_groups_tags_and_filters() {
 #[tokio::test]
 async fn keys_runners_rules_and_jump_chains_are_checked() {
     let fx = fx().await;
-    // `allowed` needs the gate's step-up story; only read_only and ask exist here.
+    // An unknown rule is refused (`allowed` is real since Y4-01; see command_gate.rs).
     let mut h = host("a");
-    h["ai_rule"] = json!("allowed");
+    h["ai_rule"] = json!("anything");
     assert_eq!(
         call(&fx, &fx.admin, Method::POST, "/hosts", Some(h))
             .await
@@ -650,12 +650,10 @@ async fn module_off_the_core_has_no_leyline_tables_or_routes() {
 #[tokio::test]
 async fn the_migration_goes_down_and_up_again() {
     let fx = fx().await;
-    for stmt in leyline_module::MIGRATIONS[0]
-        .down
-        .split(';')
-        .filter(|s| !s.trim().is_empty())
-    {
-        sqlx::query(stmt).execute(&fx.app.pool).await.unwrap();
+    for m in leyline_module::MIGRATIONS.iter().rev() {
+        for stmt in m.down.split(';').filter(|s| !s.trim().is_empty()) {
+            sqlx::query(stmt).execute(&fx.app.pool).await.unwrap();
+        }
     }
     let left: i64 =
         sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name LIKE 'leyline_%'")
@@ -663,11 +661,11 @@ async fn the_migration_goes_down_and_up_again() {
             .await
             .unwrap();
     assert_eq!(left, 0);
-    sqlx::raw_sql(leyline_module::MIGRATIONS[0].up)
-        .execute(&fx.app.pool)
-        .await
-        .unwrap();
+    for m in leyline_module::MIGRATIONS {
+        sqlx::raw_sql(m.up).execute(&fx.app.pool).await.unwrap();
+    }
     assert_eq!(count(&fx, "leyline_hosts").await, 0);
+    assert_eq!(count(&fx, "leyline_runs").await, 0);
 }
 
 #[test]
