@@ -124,6 +124,8 @@ impl Authorized {
 /// One machine on the path: what a connection to it is made with.
 #[derive(Clone)]
 pub(crate) struct Stop {
+    /// The leyline host id (its row), as `host` is the address to dial.
+    pub(crate) id: String,
     pub(crate) host: String,
     pub(crate) port: u16,
     pub(crate) user: String,
@@ -505,6 +507,7 @@ async fn link(
         .await
         .map_err(|_| NO)?;
         stops.push(Stop {
+            id: id.to_owned(),
             host: h.try_get("address").map_err(|_| NO)?,
             port: u16::try_from(h.try_get::<i64, _>("port").map_err(|_| NO)?).map_err(|_| NO)?,
             user: h.try_get("username").map_err(|_| NO)?,

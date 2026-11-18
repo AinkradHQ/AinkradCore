@@ -86,8 +86,10 @@ pub struct SshTerminal {
 }
 
 /// How `ainkrad-runner ssh-pty` ends (its exit code, visible as the terminal's exit): the remote
-/// shell's own code, or one of these. A host-key refusal prints the fingerprint on the terminal
-/// as `host key unknown: SHA256:…` / `host key changed: SHA256:…`, before any authentication.
+/// shell's own code, or one of these. `ssh-pty` maps a remote shell's own 70 to 72 to 1, so these
+/// three can only come from `ssh-pty` itself, before a shell started. A host-key refusal
+/// (70, 71) also hands the runner the hop and the fingerprint over a private descriptor, reported
+/// as `TerminalExit::host_key`; nothing is read from the terminal's output.
 pub const SSH_PTY_EXIT_HOST_KEY_UNKNOWN: i32 = 70;
 pub const SSH_PTY_EXIT_HOST_KEY_CHANGED: i32 = 71;
 pub const SSH_PTY_EXIT_AUTH_FAILED: i32 = 72;

@@ -126,19 +126,16 @@ fn cut(s: String) -> String {
     format!("{}\n[output cut]", &s[..n])
 }
 
-/// One `ssh.exec` of `step` on the authorised host: leases, hops, dispatch, the answer.
-/// `link` is the very read `checked` compared: nothing is read again after the check.
-///
-/// A stop signal ends the wait for the answer: the runner finishes the step on its own limit
-/// (ponytail: no cancel op in the runner protocol yet; add one to kill the remote step at once).
-async fn one(
+/// The runner that connects and the `ssh.exec` for `step`, with a one-use lease per hop. `link` is
+/// the very read `checked` compared: nothing is read again after the check. Shared with the health
+/// prober (Y5-01), which dispatches it itself to tell "host down" from "runner away".
+pub(crate) async fn build(
     app: &App,
     auth: &Authorized,
     step: &str,
+    timeout: Duration,
     link: Link,
-    cancel: &Option<Cancel>,
-) -> Result<ExecResult, String> {
-    let fixed = |s: &str| s.to_owned();
+) -> Result<(String, SshExec), String> {
     let Link {
         target,
         hops,
@@ -156,10 +153,26 @@ async fn one(
         hops,
         run: step.to_owned(),
         limits: ExecLimits {
-            timeout_ms: Some(u64::try_from(STEP_TIMEOUT.as_millis()).unwrap_or(u64::MAX)),
+            timeout_ms: Some(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)),
             max_output_bytes: Some(KEPT as u64),
         },
     };
+    Ok((runner, exec))
+}
+
+/// One `ssh.exec` of `step` on the authorised host: leases, hops, dispatch, the answer.
+///
+/// A stop signal ends the wait for the answer: the runner finishes the step on its own limit
+/// (ponytail: no cancel op in the runner protocol yet; add one to kill the remote step at once).
+async fn one(
+    app: &App,
+    auth: &Authorized,
+    step: &str,
+    link: Link,
+    cancel: &Option<Cancel>,
+) -> Result<ExecResult, String> {
+    let fixed = |s: &str| s.to_owned();
+    let (runner, exec) = build(app, auth, step, STEP_TIMEOUT, link).await?;
     let sent = app
         .hub
         .dispatch_ssh_exec(&runner, exec)

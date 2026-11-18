@@ -21,8 +21,11 @@
 //! - **What the host prints is data.** Prompts, banners and instructions it sends before login are
 //!   stripped of control characters before they reach the terminal (no escape sequences before the
 //!   person has even logged in). The shell's own output is the terminal's bytes, as in any ssh.
-//! - **Ending.** The remote shell's exit code is this process's, or one of `SSH_PTY_EXIT_*` (a
-//!   host-key refusal prints the fingerprint). HUP and TERM from the terminal host's close end it at
+//! - **Ending.** The remote shell's exit code is this process's, or one of `SSH_PTY_EXIT_*`. A
+//!   remote exit status of 70 to 72 is made 1 first, so those three can only come from here (never
+//!   from a remote shell). A host-key refusal (70, 71) prints the fingerprint for the person and
+//!   writes it as JSON on descriptor 4, which only this process and the terminal host hold: that,
+//!   not the terminal's output, is what the Core trusts. HUP and TERM from the terminal host's close end it at
 //!   once, closing the channel. A host that stops answering is dropped after about two minutes
 //!   (keepalive every 30 s, three missed).
 //!
@@ -456,6 +459,20 @@ fn unpack(packed: String) -> Zeroizing<String> {
     )
 }
 
+/// The host-key refusal `run` ended on, for `pty_main` to write on descriptor 4 (one process, one
+/// terminal: a single slot).
+static REFUSAL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// A remote shell's exit status as this process's: 70 to 72 belong to this process alone.
+fn remote_code(status: u32) -> i32 {
+    let c = i32::try_from(status & 0xff).unwrap_or(SSH_PTY_EXIT_FAILED);
+    if (SSH_PTY_EXIT_HOST_KEY_UNKNOWN..=SSH_PTY_EXIT_AUTH_FAILED).contains(&c) {
+        1
+    } else {
+        c
+    }
+}
+
 /// The exit code and the line a failure prints.
 fn exit_for(e: &StreamError) -> (i32, String) {
     let (code, what) = match e.code {
@@ -511,6 +528,12 @@ pub(crate) async fn run<O: AsyncWrite + Unpin + Send>(
         Ok(c) => c,
         Err(e) => {
             let (code, line) = exit_for(&e);
+            if let (Some(k), SSH_PTY_EXIT_HOST_KEY_UNKNOWN | SSH_PTY_EXIT_HOST_KEY_CHANGED) =
+                (&e.host_key, code)
+                && let Ok(json) = serde_json::to_string(k)
+            {
+                *REFUSAL.lock().unwrap_or_else(|p| p.into_inner()) = Some(json);
+            }
             term.show(&format!("\r\n{}\r\n", clean(&line))).await;
             return code;
         }
@@ -562,7 +585,7 @@ pub(crate) async fn run<O: AsyncWrite + Unpin + Send>(
                     }
                 }
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
-                    code = Some(i32::try_from(exit_status).unwrap_or(SSH_PTY_EXIT_FAILED));
+                    code = Some(remote_code(exit_status));
                 }
                 Some(ChannelMsg::ExitSignal { .. }) => code = Some(SSH_PTY_EXIT_FAILED),
                 Some(ChannelMsg::Failure) => {
@@ -625,6 +648,8 @@ pub async fn pty_main() -> ExitCode {
     use tokio::signal::unix::{SignalKind, signal};
     // Before the keys arrive: nobody else of this user may read them from our memory.
     ainkrad_sys::no_dump();
+    // Descriptor 4: the report pipe the terminal host gave us (absent when started by hand).
+    let report = ainkrad_sys::adopt_fd(4).ok().map(std::fs::File::from);
     let params = match read_params() {
         Ok(p) => p,
         Err(why) => {
@@ -682,5 +707,11 @@ pub async fn pty_main() -> ExitCode {
     };
     let code = run(params, term, stop).await;
     drop(raw);
+    if let Some(mut f) = report
+        && let Some(json) = REFUSAL.lock().unwrap_or_else(|p| p.into_inner()).take()
+    {
+        use std::io::Write;
+        let _ = f.write_all(json.as_bytes());
+    }
     ExitCode::from(u8::try_from(code & 0xff).unwrap_or(255))
 }

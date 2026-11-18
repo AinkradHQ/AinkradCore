@@ -465,6 +465,7 @@ fn v2_terminal_frames_are_pinned() {
             terminal: "t_AAECAwQFBgcICQoL".to_owned(),
             exit_code: Some(0),
             signal: None,
+            host_key: None,
         })),
     );
     t(
@@ -492,6 +493,7 @@ fn v2_terminal_frames_are_pinned() {
                     terminal: "t_AAECAwQFBgcICQoL".to_owned(),
                     exit_code: None,
                     signal: Some("Hangup".to_owned()),
+                    host_key: None,
                 }),
                 ..info
             }],
