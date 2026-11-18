@@ -43,6 +43,8 @@ pub mod helper;
 mod prepare;
 mod ps;
 #[cfg(test)]
+mod review_tests;
+#[cfg(test)]
 mod tests;
 
 pub use prepare::inside;
@@ -52,6 +54,8 @@ pub use ps::runs_from_ps;
 const LABEL_PROJECT: &str = "ainkrad.project";
 const LABEL_RUN: &str = "ainkrad.run";
 const LABEL_SERVICE: &str = "ainkrad.service";
+/// The container ports the spec marked `expose: true`, comma-separated: what `port.open` may reach.
+const LABEL_EXPOSE: &str = "ainkrad.expose";
 /// How long a service with a health check has to turn healthy.
 const HEALTH_WAIT: Duration = Duration::from_secs(120);
 /// A whole start: below the helper unit's `RuntimeMaxSec=1800`, so the cleanup of a failed one fits.
@@ -169,6 +173,17 @@ pub fn create_args(
     for p in &s.ports {
         a.extend(["-p".to_owned(), format!("127.0.0.1::{}", p.port)]);
     }
+    let exposed: Vec<String> = s
+        .ports
+        .iter()
+        .filter(|p| p.expose)
+        .map(|p| p.port.to_string())
+        .collect();
+    // Always set, even empty: an image's own `LABEL ainkrad.expose` must never take effect.
+    a.extend([
+        "--label".to_owned(),
+        format!("{LABEL_EXPOSE}={}", exposed.join(",")),
+    ]);
     if let Some(h) = &s.health {
         a.extend([
             "--health-cmd".to_owned(),

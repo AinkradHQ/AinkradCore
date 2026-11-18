@@ -59,7 +59,10 @@ struct Held {
     received: u64,
     /// Runner frames sent and not known to be received, from `seq` `base` on.
     sent: VecDeque<Frame>,
+    /// `seq` of `sent`'s first frame (the next `seq` when it is empty).
     base: u64,
+    /// The next `seq` to number a frame with.
+    next: u64,
     /// Output bytes the Core's credit acknowledged and not yet matched to a dropped frame.
     acked: u64,
     /// While the command runs.
@@ -82,8 +85,28 @@ fn credited(f: &Frame) -> Option<u64> {
 
 impl Held {
     fn frame(&mut self, stream: u64, body: Body) -> Frame {
-        let f = Frame::new(stream, self.base + self.sent.len() as u64, body);
-        self.sent.push_back(f.clone());
+        let f = Frame::new(stream, self.next, body);
+        self.next += 1;
+        // Trailing credit frames are kept as one: a long upload with no reply must not grow `sent`.
+        // ponytail: a link drop between the two merged frames re-grants the first one's bytes; the
+        // Core then sends past its window and the stream is cut off (fails closed).
+        let n = |f: &Frame| f.payload.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
+        let mut merged = false;
+        if f.kind == FrameKind::Credit {
+            if let Some(last) = self.sent.back_mut().filter(|l| l.kind == FrameKind::Credit) {
+                let sum = n(&*last).saturating_add(n(&f));
+                *last = Frame::new(
+                    stream,
+                    f.seq,
+                    Body::Credit(ainkrad_proto::v2::Credit { bytes: sum }),
+                );
+                merged = true;
+            }
+        }
+        if !merged {
+            self.sent.push_back(f.clone());
+        }
+        self.base = self.sent.front().map_or(self.next, |f| f.seq);
         f
     }
 
@@ -105,7 +128,7 @@ impl Held {
             cut = i + 1;
         }
         self.sent.drain(..cut);
-        self.base += cut as u64;
+        self.base = self.sent.front().map_or(self.next, |f| f.seq);
         self.acked -= spent;
     }
 }
@@ -252,6 +275,7 @@ impl Session {
                 .chain(pty_info)
                 .chain(self.ssh.as_ref().and_then(|s| s.info()))
                 .chain(self.run.as_ref().and_then(|r| r.info()))
+                .chain(self.run.as_ref().and_then(|r| r.port_info()))
                 .chain(agent_info)
                 .chain(
                     self.control
@@ -298,12 +322,7 @@ impl Session {
             self.forget(id);
         }
         for (id, h) in &self.streams {
-            let skip = listed[id].saturating_sub(h.base);
-            for f in h
-                .sent
-                .iter()
-                .skip(usize::try_from(skip).unwrap_or(usize::MAX))
-            {
+            for f in h.sent.iter().filter(|f| f.seq >= listed[id]) {
                 send(&mut sink, f.clone()).await?;
             }
         }
@@ -555,6 +574,24 @@ impl Session {
                 });
                 None
             }
+            Command::PortOpen(req) => {
+                let Some(run) = self.run.as_ref().filter(|r| r.info().is_some()) else {
+                    return Some(Body::Error(StreamError::new(
+                        ErrorCode::UnsupportedCommand,
+                        "project runs are not set up on this runner (install it with --with-run)",
+                    )));
+                };
+                let (run, done) = (Arc::clone(run), self.done_tx.clone());
+                let (cancel_tx, cancel) = oneshot::channel();
+                let (inbox_tx, inbox) = mpsc::unbounded_channel();
+                h.cancel = Some(cancel_tx);
+                h.inbox = Some(inbox_tx);
+                tokio::spawn(async move {
+                    let last = run.port(req, stream, inbox, cancel, done.clone()).await;
+                    let _ = done.send((stream, last));
+                });
+                None
+            }
             Command::RunnerPolicy(_) | Command::ToolsInstall(_) | Command::ToolsStatus(_) => {
                 self.start_control(stream, command)
             }
@@ -733,6 +770,9 @@ impl Session {
         None
     }
 }
+
+#[cfg(test)]
+mod review_tests;
 
 #[cfg(test)]
 mod tests {
