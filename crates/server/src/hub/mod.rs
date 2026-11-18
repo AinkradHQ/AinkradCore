@@ -35,10 +35,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, CAP_GATEWAY, CAP_LOGIN, Close, Command, Control, Credit, DriverInfo, ErrorCode, Frame,
-    Heartbeat, HostLoad, IsolationCaps, OP_AGENT_LIMIT, OP_AGENT_READ, OP_GATEWAY_TEST,
-    OP_LOGIN_CANCEL, OP_LOGIN_CODE, OP_LOGIN_START, OP_PTY_ATTACH, OP_PTY_OPEN, RunnerHello,
-    STREAM_WINDOW, StreamError, StreamState,
+    Body, CAP_GATEWAY, CAP_LOGIN, Close, Command, Control, Credit, DriverInfo, ErrorCode,
+    FEATURE_PTY_SSH, Frame, Heartbeat, HostLoad, IsolationCaps, OP_AGENT_LIMIT, OP_AGENT_READ,
+    OP_GATEWAY_TEST, OP_LOGIN_CANCEL, OP_LOGIN_CODE, OP_LOGIN_START, OP_PTY_ATTACH, OP_PTY_OPEN,
+    RunnerHello, STREAM_WINDOW, StreamError, StreamState,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -526,6 +526,21 @@ impl Hub {
                 "the runner did not advertise that command",
             ));
         }
+        // An older runner ignores `PtyOpen.ssh` and would open a LOCAL shell: an ssh terminal goes
+        // only to a runner that lists the feature, whoever asks (Leyline Y3-01).
+        if let Command::PtyOpen(p) = &command
+            && p.ssh.is_some()
+            && !r
+                .hello
+                .drivers
+                .iter()
+                .any(|d| d.commands.iter().any(|c| c == FEATURE_PTY_SSH))
+        {
+            return Err(err(
+                ErrorCode::UnsupportedCommand,
+                "the runner cannot open ssh terminals",
+            ));
+        }
         if r.load
             .is_some_and(|l| l.avg1 > f64::from(l.cores) * self.config.max_host_load)
         {
@@ -601,6 +616,22 @@ impl Hub {
             .out
             .try_send(frame)
             .map_err(|_| err(ErrorCode::Busy, "the runner's connection is backed up"))
+    }
+
+    /// A runner that is "connected" without a socket, for tests that drive the hub from the
+    /// outside: what the Core sends it arrives on the returned channel, and `fake_reply` answers.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fake_runner(&self, device: &str, hello: RunnerHello) -> mpsc::Receiver<Frame> {
+        let (out, rx) = mpsc::channel(OUT_QUEUE);
+        let now = 0;
+        self.register(device, device, hello, out, Arc::new(Notify::new()), now);
+        rx
+    }
+
+    /// A frame from a runner made by `fake_runner`, as if it came over its socket.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fake_reply(&self, device: &str, frame: Frame) {
+        self.received(device, frame);
     }
 
     /// Every runner that connected since the Core started, by device id.

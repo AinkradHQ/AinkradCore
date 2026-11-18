@@ -2,7 +2,8 @@
 //! the API only: hosts, groups and tags, label addressing, the validation that keeps argv-injection
 //! text out (API and table), `leyline.*` events and audit; and keys (Y1-02): generated or imported,
 //! sealed in the Core's secret store, public data only in the API; and project attachments (Y1-03).
-//! SSH itself (Y2+) comes later; the command gate (`gate`, Y4-01) is here.
+//! SSH itself runs on a runner (Y2); the command gate (`gate`, Y4-01), host terminals and host-key
+//! trust (Y3-01) are here.
 //!
 //! Module off, the Core is unchanged: the tables are its own `leyline_` namespace, no Core
 //! migration, no Core crate names this module.
@@ -13,9 +14,11 @@ mod attach;
 mod commands;
 mod exec;
 pub mod gate;
+pub mod hostkeys;
 mod hosts;
 mod keys;
 mod policy;
+mod terminal;
 mod valid;
 
 use ainkrad_core_server::api::App;
@@ -43,9 +46,15 @@ pub static MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 3,
-        name: "0003_commands",
-        up: include_str!("../migrations/0003_commands.up.sql"),
-        down: include_str!("../migrations/0003_commands.down.sql"),
+        name: "0003_sessions",
+        up: include_str!("../migrations/0003_sessions.up.sql"),
+        down: include_str!("../migrations/0003_sessions.down.sql"),
+    },
+    Migration {
+        version: 4,
+        name: "0004_commands",
+        up: include_str!("../migrations/0004_commands.up.sql"),
+        down: include_str!("../migrations/0004_commands.down.sql"),
     },
 ];
 
@@ -55,6 +64,10 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     ("DELETE", "/hosts/{host}"),
     ("DELETE", "/keys/{key}"),
     ("POST", "/keys/import"),
+    // A terminal needs the step-up like the Core's own; replacing a pinned host key is a trust
+    // decision that could point a session at an impostor.
+    ("POST", "/hosts/{host}/terminals"),
+    ("POST", "/hosts/{host}/host-keys/replace"),
 ];
 // POST and PATCH need a step-up only for what widens an AI's reach or repoints a host (`allowed`,
 // address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
@@ -66,6 +79,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("PATCH", "/commands/{command}"),
     ("DELETE", "/commands/{command}"),
     ("POST", "/commands/{command}/run"),
+    ("POST", "/hosts/{host}/host-keys/trust"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
     ("POST", "/ai/hosts/{host}/exec"),
@@ -89,7 +103,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/projects/{project}/hosts", "read"),
     ("GET", "/commands", "read"),
     ("GET", "/commands/{command}", "read"),
-    ("GET", "/runs/{run}", "write"),
+    ("GET", "/runs/{run}", "admin"),
     // Code Mode (Y7-01): a session acts as its creator without `admin`, so these name scopes a
     // creator holds. They answer only a session's own calls (`ai::session_only`).
     ("GET", "/ai/runs/{run}", "agent"),
@@ -97,6 +111,9 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/ai/hosts/{host}/file", "agent"),
     ("POST", "/ai/hosts/{host}/exec", "agent"),
     ("POST", "/ai/commands/{command}/run", "agent"),
+    ("GET", "/hosts/{host}/host-keys", "read"),
+    // The terminal scope, as the Core's own terminal routes.
+    ("POST", "/hosts/{host}/terminals", "terminal"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -131,7 +148,11 @@ pub struct Leyline;
         ai::get_run,
         ai::run_command,
         ai::list_files,
-        ai::read_file
+        ai::read_file,
+        hostkeys::list,
+        hostkeys::trust_route,
+        hostkeys::replace_route,
+        terminal::open
     ),
     components(schemas(
         hosts::HostView,
@@ -159,7 +180,11 @@ pub struct Leyline;
         ai::ExecRequest,
         ai::AiRunRequest,
         ai::FileList,
-        ai::FileText
+        ai::FileText,
+        hostkeys::HostKeyView,
+        hostkeys::Pick,
+        terminal::NewSession,
+        terminal::SessionView
     ))
 )]
 struct Doc;
@@ -169,6 +194,18 @@ impl Module for Leyline {
         MODULE
     }
 
+    fn attach(&self, app: &App) {
+        // A host terminal's monitor lives in the process: rows left open by the last one are over.
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let app = app.clone();
+            rt.spawn(async move {
+                if terminal::close_orphans(&app).await.is_err() {
+                    tracing::warn!("leyline sessions left open could not be closed");
+                }
+            });
+        }
+    }
+
     fn routes(&self) -> Router<App> {
         Router::new()
             .route("/hosts", get(hosts::list).post(hosts::create))
@@ -176,6 +213,13 @@ impl Module for Leyline {
                 "/hosts/{host}",
                 get(hosts::get).patch(hosts::patch).delete(hosts::remove),
             )
+            .route("/hosts/{host}/host-keys", get(hostkeys::list))
+            .route("/hosts/{host}/host-keys/trust", post(hostkeys::trust_route))
+            .route(
+                "/hosts/{host}/host-keys/replace",
+                post(hostkeys::replace_route),
+            )
+            .route("/hosts/{host}/terminals", post(terminal::open))
             .route("/groups", get(hosts::groups))
             .route("/tags", get(hosts::tags))
             .route("/keys", get(keys::list).post(keys::generate))
@@ -207,7 +251,13 @@ impl Module for Leyline {
     }
 
     fn event_kinds(&self) -> &'static [&'static str] {
-        &["leyline.host", "leyline.key", "leyline.command"]
+        &[
+            "leyline.host",
+            "leyline.key",
+            "leyline.command",
+            "leyline.session",
+            "leyline.hostkey",
+        ]
     }
 
     /// Ids only, so a read-only device may see them.
@@ -227,6 +277,12 @@ impl Module for Leyline {
             "leyline.command.created",
             "leyline.command.changed",
             "leyline.command.deleted",
+            "leyline.hostkey.seen",
+            "leyline.hostkey.changed",
+            "leyline.hostkey.trusted",
+            "leyline.hostkey.replaced",
+            "leyline.session.opened",
+            "leyline.session.ended",
             "leyline.run.requested",
             "leyline.run.approval",
             "leyline.run.allowed",
