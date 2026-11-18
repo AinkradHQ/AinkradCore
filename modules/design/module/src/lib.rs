@@ -10,10 +10,10 @@ mod asset_links;
 mod assets;
 mod collections;
 mod docs;
-mod sync;
-mod ws;
 mod sniff;
 mod svg;
+mod sync;
+mod ws;
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::module::{Module, ModuleSetting};
