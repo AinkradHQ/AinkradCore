@@ -141,6 +141,17 @@ fn a_session_through_the_abi() {
         unsafe { de_select(a, bad.as_ptr(), bad.len()) },
         DE_ERR_INVALID
     );
+    // limits: 4097 ids, and one 129-byte id
+    let many = format!("[{}]", vec![r#""n_bbbbbbbbbbbb""#; 4097].join(","));
+    assert_eq!(
+        unsafe { de_select(a, many.as_ptr(), many.len()) },
+        DE_ERR_TOO_LARGE
+    );
+    let long = format!(r#"["{}"]"#, "n".repeat(129));
+    assert_eq!(
+        unsafe { de_select(a, long.as_ptr(), long.len()) },
+        DE_ERR_TOO_LARGE
+    );
     assert_eq!(unsafe { de_select(a, std::ptr::null(), 5) }, DE_ERR_ARG);
     assert_eq!(unsafe { de_select(a, b"{".as_ptr(), 1) }, DE_ERR_INVALID);
     assert_eq!(unsafe { de_select(0, b"[]".as_ptr(), 2) }, DE_ERR_HANDLE);

@@ -1054,6 +1054,7 @@ dependencies = [
  "design-model",
  "design-render",
  "metal",
+ "serde",
  "serde_json",
  "skia-bindings",
  "unicode-segmentation",

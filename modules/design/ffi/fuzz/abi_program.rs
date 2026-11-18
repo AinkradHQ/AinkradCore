@@ -290,9 +290,22 @@ pub fn run(data: &[u8]) {
                         IDS[i.u8() as usize % IDS.len()],
                         IDS[i.u8() as usize % IDS.len()]
                     );
-                    match i.u8() % 3 {
+                    // over the limits: 4097 ids, a 129-byte id
+                    let many = format!("[{}]", vec![r#""n_aaaaaaaaaaaa""#; 4097].join(","));
+                    let long = format!(r#"["{}"]"#, "n".repeat(129));
+                    match i.u8() % 5 {
                         0 => de_select(h, ids.as_ptr(), ids.len()),
                         1 => de_select(h, b"[]".as_ptr(), 2),
+                        2 => {
+                            let rc = de_select(h, many.as_ptr(), many.len());
+                            assert!(rc == DE_ERR_TOO_LARGE || rc == DE_ERR_HANDLE, "{rc}");
+                            rc
+                        }
+                        3 => {
+                            let rc = de_select(h, long.as_ptr(), long.len());
+                            assert!(rc == DE_ERR_TOO_LARGE || rc == DE_ERR_HANDLE, "{rc}");
+                            rc
+                        }
                         _ => de_select(h, ip, il),
                     }
                 }
