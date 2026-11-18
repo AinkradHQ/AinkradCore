@@ -1,14 +1,20 @@
-//! Who may see a room through Code Mode (plan D3, E4.1 and E4.2). A room is visible to an AI
-//! session only when (a) the session's project matches the room, or an access row names the
-//! session, its runner or its project, AND (b) the session's WHOLE fallback chain is inside the
-//! room's model policy, checked now (not only while the session is `starting`). A room that is
-//! not visible does not exist for the session: the same 404 as an unknown id.
+//! Who may see a room through Code Mode (plan D3, E4.1 and E4.2; Brain v2 B2-05).
 //!
-//! A project matches when the room's name is one of the session's project keys (its repo's
-//! folder name, its workspace name, the Citadel key of its branch), when an enabled
-//! `route_to_room` rule for this room hits the session's repo (the import rules' own words:
-//! `project` is a path component, `path` a substring), or when an access row of kind `project`
-//! names one of those keys.
+//! SECURITY MODEL. A room is visible to an AI session only when (a) the room is the session's
+//! project's room, i.e. the one row of the 1:1 link `brain_project_rooms` for the project the Core
+//! recorded on the session (`core_agent_sessions.project_id`), or an explicit rule or access row
+//! names the session, its runner or one of its project keys, AND (b) the session's WHOLE fallback
+//! chain is inside the room's model policy, checked now (not only while the session is
+//! `starting`). A room's NAME never grants access: the name is free text, two rooms can share one,
+//! and a repo folder or workspace name is chosen by whoever starts the session. A session with no
+//! project, or a project with no linked room, sees no project room. A room that is not visible does
+//! not exist for the session: the same 404 as an unknown id.
+//!
+//! The explicit paths stay: an enabled `route_to_room` rule for this room that hits the session's
+//! repo (the import rules' own words: `project` is a path component, `path` a substring), and an
+//! access row of kind `project` that names one of the session's project keys (its repo's folder
+//! name, its workspace name, the Citadel key of its branch). Both are written by the person.
+//! Needs migration 0039 (`core_agent_sessions.project_id`, Projects epic) and 0008.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -37,6 +43,8 @@ pub(crate) struct Visible {
 struct Who {
     session: String,
     runner: String,
+    /// The project the Core recorded on the session (`core_projects.id`), not a name.
+    project: Option<i64>,
     /// Project keys, lowercase.
     keys: BTreeSet<String>,
     /// Repo URLs or paths, lowercase, for `path` rules.
@@ -91,9 +99,15 @@ async fn who(app: &App, session: &str) -> Result<Option<Who>, sqlx::Error> {
         .await?
         .and_then(|v| v.chain)
         .unwrap_or_default();
+    let project: Option<i64> =
+        sqlx::query_scalar("SELECT project_id FROM core_agent_sessions WHERE id = ?")
+            .bind(&s.id)
+            .fetch_one(&app.pool)
+            .await?;
     Ok(Some(Who {
         session: s.id,
         runner: s.runner,
+        project,
         keys,
         repos,
         chain,
@@ -139,10 +153,20 @@ pub(crate) async fn visible_rooms(app: &App, session: &str) -> Result<Vec<Visibl
         .iter()
         .map(|(r, k, v)| (r.as_str(), k.as_str(), v.as_str()))
         .collect();
+    // The one room linked to the session's project; never matched by name.
+    let linked: Option<String> = match w.project {
+        Some(p) => {
+            sqlx::query_scalar("SELECT room FROM brain_project_rooms WHERE project = ?")
+                .bind(p.to_string())
+                .fetch_optional(&app.pool)
+                .await?
+        }
+        None => None,
+    };
     let mut out = vec![];
     for r in rooms {
         let (id, name): (String, String) = (r.try_get("id")?, r.try_get("name")?);
-        let by_project = w.keys.contains(&name.to_lowercase())
+        let by_project = linked.as_deref() == Some(id.as_str())
             || rules
                 .iter()
                 .any(|(k, p, room)| room == &id && rule_hits(k, p, &w))
