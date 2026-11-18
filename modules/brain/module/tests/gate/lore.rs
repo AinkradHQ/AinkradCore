@@ -130,7 +130,15 @@ async fn a_project_note_lands_in_its_room_and_a_personal_note_in_the_personal_ro
     let fx = fx_lore().await;
     let (p, room) = project(&fx, "shop", "Shop").await;
     let me = personal_room(&fx).await;
-    note(&fx, "ln_project0001", Some(p), "Ship the cart on Friday.", 1, OLD).await;
+    note(
+        &fx,
+        "ln_project0001",
+        Some(p),
+        "Ship the cart on Friday.",
+        1,
+        OLD,
+    )
+    .await;
     note(&fx, "ln_personal001", None, "Buy oat milk.", 1, OLD).await;
     let v = lore_sync(&fx).await;
     assert_eq!(v["found"], 2, "{v}");
@@ -138,7 +146,10 @@ async fn a_project_note_lands_in_its_room_and_a_personal_note_in_the_personal_ro
     assert_eq!(v["unsorted"], 0);
     assert_eq!(
         sources(&fx, &room).await,
-        vec![("Title of ln_project0001".into(), "Ship the cart on Friday.".into())]
+        vec![(
+            "Title of ln_project0001".into(),
+            "Ship the cart on Friday.".into()
+        )]
     );
     assert_eq!(sources(&fx, &me).await.len(), 1);
     // The origin names the note, and the source kind is `note`.
@@ -161,10 +172,26 @@ async fn a_note_is_taken_only_once_it_has_settled() {
     let fx = fx_lore().await;
     let (p, room) = project(&fx, "shop", "Shop").await;
     let now = fx.app.clock.now();
-    note(&fx, "ln_fresh0000001", Some(p), "Still typing this.", 1, &now).await;
+    note(
+        &fx,
+        "ln_fresh0000001",
+        Some(p),
+        "Still typing this.",
+        1,
+        &now,
+    )
+    .await;
     assert_eq!(lore_sync(&fx).await["idle"], "nothing_new");
     assert!(sources(&fx, &room).await.is_empty());
-    note(&fx, "ln_fresh0000001", Some(p), "Still typing this.", 1, OLD).await;
+    note(
+        &fx,
+        "ln_fresh0000001",
+        Some(p),
+        "Still typing this.",
+        1,
+        OLD,
+    )
+    .await;
     assert_eq!(lore_sync(&fx).await["found"], 1);
 }
 
@@ -172,14 +199,33 @@ async fn a_note_is_taken_only_once_it_has_settled() {
 async fn an_edited_note_replaces_its_source_and_a_trashed_note_leaves_the_room() {
     let fx = fx_lore().await;
     let (p, room) = project(&fx, "shop", "Shop").await;
-    note(&fx, "ln_edit00000001", Some(p), "First draft of the plan.", 1, OLD).await;
+    note(
+        &fx,
+        "ln_edit00000001",
+        Some(p),
+        "First draft of the plan.",
+        1,
+        OLD,
+    )
+    .await;
     lore_sync(&fx).await;
-    note(&fx, "ln_edit00000001", Some(p), "Second draft of the plan.", 2, "2026-11-02T08:00:00.000Z").await;
+    note(
+        &fx,
+        "ln_edit00000001",
+        Some(p),
+        "Second draft of the plan.",
+        2,
+        "2026-11-02T08:00:00.000Z",
+    )
+    .await;
     let v = lore_sync(&fx).await;
     assert_eq!(v["found"], 1, "{v}");
     assert_eq!(
         sources(&fx, &room).await,
-        vec![("Title of ln_edit00000001".into(), "Second draft of the plan.".into())],
+        vec![(
+            "Title of ln_edit00000001".into(),
+            "Second draft of the plan.".into()
+        )],
         "one source per note"
     );
     // Trashed: removed at the next sync, with an op-log row; a later sync changes nothing.
@@ -191,7 +237,11 @@ async fn an_edited_note_replaces_its_source_and_a_trashed_note_leaves_the_room()
         .fetch_all(&c)
         .await
         .unwrap();
-    assert_eq!(ops.last().map(String::as_str), Some("source.remove"), "{ops:?}");
+    assert_eq!(
+        ops.last().map(String::as_str),
+        Some("source.remove"),
+        "{ops:?}"
+    );
     let seen: i64 = sqlx::query_scalar("SELECT count(*) FROM brain_seen WHERE room = ?")
         .bind(&room)
         .fetch_one(&fx.app.pool)
@@ -206,13 +256,29 @@ async fn a_note_follows_only_its_own_project() {
     let fx = fx_lore().await;
     let (a, room_a) = project(&fx, "acme", "Acme").await;
     let (b, room_b) = project(&fx, "bolt", "Bolt").await;
-    note(&fx, "ln_acme00000001", Some(a), "Acme contract terms.", 1, OLD).await;
+    note(
+        &fx,
+        "ln_acme00000001",
+        Some(a),
+        "Acme contract terms.",
+        1,
+        OLD,
+    )
+    .await;
     note(&fx, "ln_bolt00000001", Some(b), "Bolt launch plan.", 1, OLD).await;
     lore_sync(&fx).await;
     assert_eq!(sources(&fx, &room_a).await[0].1, "Acme contract terms.");
     assert_eq!(sources(&fx, &room_b).await[0].1, "Bolt launch plan.");
     // Moved to the other project: the source leaves the first room and joins the second.
-    note(&fx, "ln_acme00000001", Some(b), "Acme contract terms.", 2, "2026-11-02T08:00:00.000Z").await;
+    note(
+        &fx,
+        "ln_acme00000001",
+        Some(b),
+        "Acme contract terms.",
+        2,
+        "2026-11-02T08:00:00.000Z",
+    )
+    .await;
     lore_sync(&fx).await;
     assert!(sources(&fx, &room_a).await.is_empty());
     assert_eq!(sources(&fx, &room_b).await.len(), 2);
@@ -222,10 +288,30 @@ async fn a_note_follows_only_its_own_project() {
 async fn a_note_with_no_room_waits_in_unsorted_for_review() {
     let fx = fx_lore().await;
     // No personal room, and a project that has no room (never linked): both wait.
-    note(&fx, "ln_nobody00001", None, "A thought with no room.", 1, OLD).await;
-    note(&fx, "ln_orphan00001", Some(999), "A note of a project with no room.", 1, OLD).await;
+    note(
+        &fx,
+        "ln_nobody00001",
+        None,
+        "A thought with no room.",
+        1,
+        OLD,
+    )
+    .await;
+    note(
+        &fx,
+        "ln_orphan00001",
+        Some(999),
+        "A note of a project with no room.",
+        1,
+        OLD,
+    )
+    .await;
     let v = lore_sync(&fx).await;
-    assert_eq!((v["unsorted"].as_i64(), v["state"].as_str()), (Some(2), Some("review")), "{v}");
+    assert_eq!(
+        (v["unsorted"].as_i64(), v["state"].as_str()),
+        (Some(2), Some("review")),
+        "{v}"
+    );
     assert_eq!(v["routed"], json!([]));
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM events WHERE kind = 'brain.inbox'")
         .fetch_one(&fx.app.pool)
@@ -250,11 +336,28 @@ async fn a_note_with_no_room_waits_in_unsorted_for_review() {
 async fn intake_cleans_a_note_like_any_other_item_and_the_switch_stops_the_source() {
     let fx = fx_lore().await;
     let (p, room) = project(&fx, "shop", "Shop").await;
-    note(&fx, "ln_secret00001", Some(p), "key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 here", 1, OLD).await;
+    note(
+        &fx,
+        "ln_secret00001",
+        Some(p),
+        "key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 here",
+        1,
+        OLD,
+    )
+    .await;
     lore_sync(&fx).await;
     let text = &sources(&fx, &room).await[0].1;
-    assert!(!text.contains("abcdefghijklmnopqrstuvwxyz0123456789"), "{text}");
-    ok(&fx, Method::PUT, "/sources/lore", Some(json!({"device": "core", "kind": "note", "enabled": false}))).await;
+    assert!(
+        !text.contains("abcdefghijklmnopqrstuvwxyz0123456789"),
+        "{text}"
+    );
+    ok(
+        &fx,
+        Method::PUT,
+        "/sources/lore",
+        Some(json!({"device": "core", "kind": "note", "enabled": false})),
+    )
+    .await;
     note(&fx, "ln_other000001", Some(p), "A newer note.", 1, OLD).await;
     assert_eq!(lore_sync(&fx).await["idle"], "disabled");
 }

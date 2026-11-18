@@ -22,9 +22,9 @@ use sqlx::Row;
 use utoipa::ToSchema;
 
 use crate::collectors::{self, GITHUB_SOURCE, JIRA_SOURCE, RUNNER_PREFIX};
-use crate::lore::LORE_SOURCE;
 use crate::commit::{close_run, commit_room};
 use crate::imports::{mark_done, run_state, stage_items, staging, start_run};
+use crate::lore::LORE_SOURCE;
 use crate::review::{mixed, room_id};
 use crate::transcripts::{self, Meta};
 use crate::{Brain, ROOM_BACKUP_READY, code, record};
@@ -151,7 +151,8 @@ pub(crate) async fn ensure_core_source(app: &App) -> Result<(), sqlx::Error> {
 
 /// A source the Core collects itself: its device and kind are not the caller's to set.
 fn core_owned(id: &str) -> bool {
-    [CORE_SOURCE, JIRA_SOURCE, GITHUB_SOURCE, LORE_SOURCE].contains(&id) || id.starts_with(RUNNER_PREFIX)
+    [CORE_SOURCE, JIRA_SOURCE, GITHUB_SOURCE, LORE_SOURCE].contains(&id)
+        || id.starts_with(RUNNER_PREFIX)
 }
 
 #[utoipa::path(get, path = "/sources", operation_id = "brainSources", tag = "brain",
@@ -281,7 +282,7 @@ pub struct SyncResult {
 }
 
 impl SyncResult {
-    fn idle(why: &str) -> Self {
+    pub(crate) fn idle(why: &str) -> Self {
         Self {
             idle: Some(why.to_owned()),
             ..Self::default()

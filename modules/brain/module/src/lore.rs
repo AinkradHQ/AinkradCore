@@ -97,9 +97,14 @@ async fn home_of(app: &App, item: &str) -> Result<Option<String>, ApiError> {
 
 /// Takes `item`'s source out of `room` (op-log and outbox row included) and forgets its hash.
 async fn remove_source(app: &App, key: &[u8; 32], room: &str, item: &str) -> Result<(), ApiError> {
-    let canon = files::open_migrated(&files::room_path(&files::root(app), room), key, false, CANON)
-        .await
-        .map_err(|e| code(500, "room_unavailable", e.to_string()))?;
+    let canon = files::open_migrated(
+        &files::room_path(&files::root(app), room),
+        key,
+        false,
+        CANON,
+    )
+    .await
+    .map_err(|e| code(500, "room_unavailable", e.to_string()))?;
     let mut tx = canon.begin().await?;
     let gone = sqlx::query("DELETE FROM sources WHERE item_id = ?")
         .bind(item)
@@ -240,7 +245,12 @@ pub(crate) async fn sync_lore(
         .map(|n| n.0.as_str())
         .collect();
     if let Some(taken) = cursor["notes"].as_object() {
-        gone.extend(taken.keys().map(String::as_str).filter(|k| !listed.contains(k)));
+        gone.extend(
+            taken
+                .keys()
+                .map(String::as_str)
+                .filter(|k| !listed.contains(k)),
+        );
     }
     let mut removed = vec![];
     for note in gone {
@@ -248,7 +258,11 @@ pub(crate) async fn sync_lore(
         if let Some(room) = home_of(app, &item).await?
             && let Err(e) = remove_source(app, &key, &room, &item).await
         {
-            tracing::warn!(code = e.code, "lore: a trashed note's source stays: {}", e.message);
+            tracing::warn!(
+                code = e.code,
+                "lore: a trashed note's source stays: {}",
+                e.message
+            );
             continue;
         }
         removed.push(item);
