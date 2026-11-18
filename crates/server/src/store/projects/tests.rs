@@ -279,3 +279,25 @@ async fn migration_round_trips_over_data() {
     assert_eq!(again, tables);
     assert_eq!(project_id_column(&fx).await, 1);
 }
+
+#[tokio::test]
+async fn a_refused_binding_leaves_no_project() {
+    use crate::store::connections::Who as CW;
+    let fx = fx().await;
+    let repos = [NewGithubRepo {
+        name: "shop".into(),
+        remote_url: "https://github.com/acme/shop.git".into(),
+        default_branch: "main".into(),
+    }];
+    let cw = CW {
+        workspace: 1,
+        by_device: "d_test",
+        actor: AuditActor::System,
+        now: NOW,
+    };
+    // No such connection: the binding is refused inside the transaction.
+    let r = create_from_github(&fx.pool, None, "Shop", &repos, W, Some((999, cw))).await;
+    assert_eq!(code(r), "not_found");
+    assert!(list(&fx.pool, false).await.unwrap().is_empty());
+    assert!(list(&fx.pool, true).await.unwrap().is_empty());
+}

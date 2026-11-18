@@ -93,6 +93,31 @@ async fn link(conn: &mut SqliteConnection, project: &str, room: &str) -> Result<
     Ok(())
 }
 
+/// A new AI session of `project` claims the project's room, if it has one (P3-02): the same
+/// claim as `brainClaimRoom` (the room's model policy against the session's whole chain). A
+/// project with no room claims nothing. `Err` is why the claim was refused; the Core then ends the
+/// session unstarted.
+pub(crate) async fn claim_for_session(
+    app: &App,
+    session: &str,
+    project: i64,
+    by: &str,
+) -> Result<(), String> {
+    let room: Option<String> =
+        sqlx::query_scalar("SELECT room FROM brain_project_rooms WHERE project = ?")
+            .bind(project.to_string())
+            .fetch_optional(&app.pool)
+            .await
+            .map_err(|e| e.to_string())?;
+    match room {
+        None => Ok(()),
+        Some(room) => crate::claim::claim(app, &room, session, by)
+            .await
+            .map(drop)
+            .map_err(|e| e.message),
+    }
+}
+
 #[utoipa::path(put, path = "/projects/{project}/room", operation_id = "brainLinkProjectRoom", tag = "brain",
     params(("project" = String, Path, description = "The Core project's id")),
     request_body = LinkRoom,

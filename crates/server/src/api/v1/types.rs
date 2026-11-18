@@ -282,9 +282,17 @@
 ///    `StreamError.host_key`; no route yet. (84 and 85 are the runner Podman facts and the projects API.)
 /// 87: the `secret.runners_changed` audit action (a secret's runner scope changed on its own, with its
 ///    leases dropped); the Leyline key runner sync (Y1-02) is its first user.
+/// 92: Project run spec (P4-01). `GET/PUT /projects/{id}/spec` (`getProjectSpec`, `saveProjectSpec`: a save is a new
+///    version, step-up), `GET /projects/{id}/spec/versions` (`listProjectSpecVersions`) and
+///    `GET /projects/{id}/spec/versions/{version}` (`getProjectSpecVersion`). 400 `invalid_spec` names the bad field.
+///    Registers the event kind and audit action `project.spec_saved`.
+/// 93: Projects from GitHub (P2-01). `GET /projects/github/repos` (`listGithubRepos`:
+///    the repos of the project's or default GitHub connection, grouped by owner, `q`, `page`, `per_page`) and
+///    `POST /projects/from-github` (`createProjectFromGithub`: creates the project, its repos and, unless the connection is the workspace default, a `project`-scope
+///    connection binding). Both `admin`; the POST is destructive. No new audit or event kinds.
 /// 94: project runs (P5-02). Runner wire protocol only (`runner.schema.json`): driver `run` with ops `run.start`
 ///    (`RunStart` -> `RunInfo`), `run.stop` (`RunStop` -> `RunInfo`) and `run.status` (`RunStatusReq` -> `RunList`);
-///    no route yet. (90-93 are taken by open PRs.)
+///    no route yet. (92 and 93 are P4-01 and P2-01.)
 pub const API_MINOR: u32 = 94;
 
 use serde::{Deserialize, Serialize};

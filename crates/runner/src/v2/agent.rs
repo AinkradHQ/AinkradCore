@@ -197,6 +197,7 @@ trait Harness: Send + Sync {
         helper: Option<&'a std::path::Path>,
     ) -> Fut<'a, Result<PathBuf, String>>;
     fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()>;
+    fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream);
     fn work_dir(&self, job: &Job) -> Option<PathBuf>;
 }
 
@@ -240,6 +241,9 @@ impl<E: Executor> Harness for E {
     }
     fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()> {
         Box::pin(Executor::cleanup_agent_workspace(self, session, generation))
+    }
+    fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream) {
+        Executor::set_mirror_upstream(self, up);
     }
     fn work_dir(&self, job: &Job) -> Option<PathBuf> {
         Executor::work_dir(self, job)
@@ -369,6 +373,12 @@ impl AgentDriver {
     /// How leases are redeemed (`secrets::http_redeem`); without it a start with secrets fails.
     pub fn with_redeem(mut self, redeem: Redeem) -> Self {
         self.redeem = Some(redeem);
+        self
+    }
+
+    /// How a project repo's copy on the Core is read (`mirror::http_upstream`).
+    pub fn with_mirror(self, up: crate::workspace::relay::Upstream) -> Self {
+        self.harness.set_mirror_upstream(up);
         self
     }
 

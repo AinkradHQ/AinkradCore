@@ -3,17 +3,17 @@
 //! clients are the runner's (it signs each request); a push is refused here, always, because the
 //! copy is read-only: the remote is where work is pushed.
 //!
-//! TODO(P3-02): any `runner` device may read any repo's copy, archived projects' included. P3-02
-//! adds a lease per (device, repo ids), granted with a session's workspace list and checked in
-//! `info_refs` and `upload_pack`; it must also require an active project.
+//! A copy is served only to a device holding a lease for that repo, while its project is active
+//! (P3-02, `crate::mirrors::servable`): the one answer to anything else is 404 `no such repo`.
 
+use axum::Extension;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
-use super::ApiError;
+use super::{ApiError, Caller};
 use crate::api::App;
 use crate::mirrors::ServeError;
 
@@ -70,10 +70,11 @@ fn repo_id(s: &str) -> Result<i64, ApiError> {
         .ok_or_else(|| ApiError::not_found("no such repo"))
 }
 
-/// What the repo's mirror must have been made for: a repo that is gone (removed, its id maybe
-/// recycled) is a 404, whatever is still on disk.
-async fn key(app: &App, repo: i64) -> Result<String, ApiError> {
-    crate::mirrors::key_of(&app.pool, repo)
+/// What the repo's mirror must have been made for. A repo that is gone (removed, its id maybe
+/// recycled), one of an archived project, and one this device holds no lease for are all the same
+/// 404, whatever is still on disk.
+async fn key(app: &App, device: &str, repo: i64) -> Result<String, ApiError> {
+    crate::mirrors::servable(app, mirrors(app)?, device, repo)
         .await?
         .ok_or_else(|| ApiError::not_found("no such repo"))
 }
@@ -81,6 +82,7 @@ async fn key(app: &App, repo: i64) -> Result<String, ApiError> {
 /// `GET /api/v1/mirrors/{repo}/info/refs?service=git-upload-pack`.
 pub async fn info_refs(
     State(app): State<App>,
+    Extension(me): Extension<Caller>,
     Path(repo): Path<String>,
     Query(q): Query<Service>,
     headers: HeaderMap,
@@ -92,7 +94,7 @@ pub async fn info_refs(
         _ => return Err(ApiError::bad_request("service must be git-upload-pack")),
     }
     let mirrors = mirrors(&app)?;
-    let key = key(&app, repo).await?;
+    let key = key(&app, &me.device.id, repo).await?;
     let body = mirrors
         .advertise(repo, &key, protocol(&headers))
         .await
@@ -113,6 +115,7 @@ pub async fn info_refs(
 /// `POST /api/v1/mirrors/{repo}/git-upload-pack`: the clone or fetch itself.
 pub async fn upload_pack(
     State(app): State<App>,
+    Extension(me): Extension<Caller>,
     Path(repo): Path<String>,
     req: Request,
 ) -> Result<Response, ApiError> {
@@ -126,7 +129,7 @@ pub async fn upload_pack(
         .await
         .map_err(|_| ApiError::bad_request("the request is too large"))?;
     let mirrors = mirrors(&app)?;
-    let key = key(&app, repo).await?;
+    let key = key(&app, &me.device.id, repo).await?;
     let out: Body = mirrors
         .upload_pack(repo, &key, protocol(&parts.headers), &bytes, gzip)
         .await
