@@ -14,7 +14,6 @@
 //! ponytail: an upload batch sent twice counts its refused/ignored entries twice; the numbers are informational.
 //! ponytail: a matched note keeps its project; a project chosen in review applies to notes this run creates.
 
-
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
 use ainkrad_core_server::store::{begin_write, projects};
