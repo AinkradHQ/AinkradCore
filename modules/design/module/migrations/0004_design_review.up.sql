@@ -34,6 +34,10 @@ CREATE TABLE design_approvals (
 );
 
 -- An approval version never changes and is never removed (the compaction only prunes `auto` ones).
+-- Limits of the two triggers below: they fire for UPDATE and DELETE statements. `INSERT OR REPLACE` removes a
+-- conflicting row without running a DELETE trigger (SQLite does so unless `recursive_triggers` is on), and the
+-- `ON DELETE CASCADE` from `design_docs` would hit the DELETE guard and abort, so a design with an approval cannot be
+-- deleted at all: designs are archived, never deleted. No code path replaces a version row; keep it that way.
 CREATE TRIGGER design_versions_frozen_update BEFORE UPDATE ON design_versions
 WHEN OLD.kind = 'approval'
 BEGIN SELECT RAISE(ABORT, 'an approval version is frozen'); END;

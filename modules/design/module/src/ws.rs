@@ -141,6 +141,7 @@ fn refusal_close(r: &Refusal) -> Message {
         Refusal::DocFull => close(1009, "document full"),
         Refusal::Resync => close(4412, "resync needed"),
         Refusal::Archived => close(4409, "design archived"),
+        Refusal::Paused => close(1008, "design taken over"),
         Refusal::Store => close(1011, "server error"),
     }
 }

@@ -217,6 +217,7 @@ impl Peers {
         self.follow = None;
     }
 
+    #[cfg(test)]
     pub(crate) fn following(&self) -> bool {
         self.follow.is_some()
     }
@@ -285,6 +286,9 @@ impl Peers {
 /// it whole. `None` when the numbers cannot make a camera.
 pub(crate) fn follow_camera(view: [f32; 4], cam: Camera) -> Option<Camera> {
     let [x, y, w, h] = view;
+    if !(w > 0.0 && h > 0.0) {
+        return None;
+    }
     let z = (cam.view.0 / w).min(cam.view.1 / h);
     if !z.is_finite() || z <= 0.0 || cam.view.0 > MAX_VIEW {
         return None;

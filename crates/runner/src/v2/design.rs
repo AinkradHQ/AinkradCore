@@ -112,7 +112,8 @@ fn find(env: &str, beside: &str, installed: &str) -> Option<PathBuf> {
 
 /// Whether Chromium at `p` may be bound read-only into the sandbox with its whole folder: the
 /// installed folder, or one holding nothing but Chromium. Never the runner's own folder, nor one
-/// that holds an `ainkrad-*` file (the runner, the helper, a key).
+/// that holds an `ainkrad-*` file (the runner, the helper, a key), a dotfile (`.ssh`, `.env`) or a folder
+/// a Chromium build does not ship.
 fn chromium_ok(p: &Path) -> bool {
     let Some(dir) = p.parent() else { return false };
     if dir == Path::new(CHROMIUM_DIR) {
@@ -125,8 +126,15 @@ fn chromium_ok(p: &Path) -> bool {
         return false;
     }
     std::fs::read_dir(dir).is_ok_and(|d| {
-        d.flatten()
-            .all(|e| !e.file_name().to_string_lossy().starts_with("ainkrad-"))
+        d.flatten().all(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            let folder = e.path().is_dir();
+            !n.starts_with("ainkrad-")
+                && !n.starts_with('.')
+                && (!folder
+                    || ["locales", "hyphen-data", "lib", "swiftshader", "MEIPreload"]
+                        .contains(&n.as_str()))
+        })
     })
 }
 
@@ -223,11 +231,13 @@ impl DesignDriver {
                     StreamError::new(ErrorCode::UnsupportedCommand, "no Chromium on this runner")
                 })?;
                 // Chromium's own output goes to stderr; stdout carries only the PNG, read inside the
-                // sandbox with a cap, so a planted FIFO or a link to /dev/zero costs only this job.
+                // sandbox with a cap, and only from a plain file: opening a planted FIFO would block until the
+                // time limit, and a link to /dev/zero would only be cut at the cap.
                 let mut args = vec![
                     "-c".to_owned(),
                     format!(
-                        "\"$@\" >&2 </dev/null || exit $?; exec head -c {} /out/shot.png",
+                        "\"$@\" >&2 </dev/null || exit $?; [ -f /out/shot.png ] && [ ! -L /out/shot.png ] || exit 1; \
+                         exec head -c {} /out/shot.png",
                         DESIGN_MAX_PNG + 1
                     ),
                     "shot".to_owned(),

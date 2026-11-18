@@ -33,10 +33,10 @@ use yrs::{Any, Doc as YDoc, Map, MapRef, Origin, Out, ReadTxn, StateVector, Tran
 
 mod decode;
 mod edit;
-mod gate;
-pub mod guard;
 #[cfg(test)]
 mod followup_tests;
+mod gate;
+pub mod guard;
 #[cfg(test)]
 mod layered_tests;
 mod layout;
@@ -284,7 +284,10 @@ impl Live {
             sum += o[n].len();
             n += 1;
         }
-        self.stuck.store(n == 0, Ordering::Relaxed);
+        // stuck as soon as any queued update is over the cap (not only when it is the oldest): it will be, once the ones
+        // ahead of it have gone, and the host must not take new edits meanwhile
+        self.stuck
+            .store(o.iter().any(|u| u.len() > cap), Ordering::Relaxed);
         if n == 0 {
             eprintln!("design-doc: the oldest unsent update is over {cap} bytes and is not sent");
             return vec![];
@@ -326,6 +329,9 @@ impl Live {
     /// peers' clocks must stay gapless), so the outbox tail is replaced by one small diff from the state before.
     pub(crate) fn step(&mut self, redo: bool, cap: usize) -> Result<bool, Error> {
         self.recover(|l| {
+            if l.outbox_stuck() {
+                return Err(Error::TooLarge);
+            }
             let sv = l.doc().transact().state_vector();
             let queued = |l: &Live| l.outbox.lock().unwrap_or_else(|e| e.into_inner()).len();
             let before = queued(l);
@@ -352,6 +358,9 @@ impl Live {
                 let mut o = l.outbox.lock().unwrap_or_else(|e| e.into_inner());
                 o.truncate(before);
                 o.push(net);
+            } else {
+                // the oversized tail stays queued and can never go out: stuck now, not at the next send
+                l.stuck.store(true, Ordering::Relaxed);
             }
             Err(Error::TooLarge)
         })

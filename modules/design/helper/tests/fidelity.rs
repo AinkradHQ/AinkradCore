@@ -78,13 +78,16 @@ fn library_text() -> Doc {
         json!({"type": "text", "text": s, "props": {"type": {"font": {"asset": asset}, "size": size, "weight": weight, "line": size * 1.4},
             "fill": common::solid("#16181f")}})
     };
+    let mut caption = t("Tracked uppercase caption", 11.0, 400, REGULAR);
+    caption["props"]["type"]["tracking"] = json!(0.08);
+    caption["props"]["type"]["transform"] = json!("uppercase");
     common::tree(common::page(vec![
         json!({"type": "frame", "props": {"w": 320, "h": 150, "fill": common::solid("#ffffff"),
         "layout": {"dir": "column", "gap": 8, "pad": [14, 14, 14, 14]}},
         "children": [
             t("Library fonts, bold", 22.0, 700, BOLD),
             t("Regular weight in the second face, set at fourteen points.", 14.0, 400, REGULAR),
-            {let mut x = t("Tracked uppercase caption", 11.0, 400, REGULAR); x["props"]["type"]["tracking"] = json!(0.08); x["props"]["type"]["transform"] = json!("uppercase"); x}]}),
+            caption]}),
     ]))
 }
 
@@ -223,12 +226,12 @@ fn export_reports_the_screen_and_its_size_and_runs_as_a_job() {
     .unwrap();
     assert_eq!((b.width, b.height), (220, 160));
     // the same through the one entry point the sandbox calls
-    let job = serde_json::to_vec(&Command::DesignExport(DesignExport {
+    let bytes = serde_json::to_vec(&Command::DesignExport(DesignExport {
         doc: d,
         screen: None,
     }))
     .unwrap();
-    let out: serde_json::Value = serde_json::from_str(&run(&job).unwrap()).unwrap();
+    let out: serde_json::Value = serde_json::from_str(&run(&bytes).unwrap()).unwrap();
     assert_eq!(out["width"], 360);
     // a screen that is not on the page, a theme that is not one
     let mut bad = job(&doc, "day");

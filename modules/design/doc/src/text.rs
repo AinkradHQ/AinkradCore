@@ -161,4 +161,30 @@ mod tests {
         assert!(l.undo());
         assert_eq!(text(&l), "", "the whole word at once");
     }
+
+    /// Epic build: yrs counts UTF-16 units here (#322), so a splice after an emoji or CJK character lands where the
+    /// caret is, and undo/redo of it restores the text exactly, on the peer too.
+    #[test]
+    fn undo_and_redo_of_a_splice_after_emoji_and_cjk_text_restore_it_on_both_sides() {
+        let mut a = live("日本😀🇪🇬 ok");
+        let mut b = Live::new();
+        b.apply_remote(&a.outbox(true)).unwrap();
+        // "日本😀🇪🇬 ok": 日 本 (1 unit each) 😀 (2) 🇪🇬 (4) space o k
+        let at = 2 + 2 + 4 + 1;
+        let mut m = a.read();
+        a.apply_typing(&mut m, &[splice(at, 2, "👩‍💻!")], false)
+            .unwrap();
+        assert_eq!(text(&a), "日本😀🇪🇬 👩‍💻!");
+        b.apply_remote(&a.outbox(true)).unwrap();
+        assert_eq!(text(&b), text(&a));
+        assert!(a.undo());
+        assert_eq!(text(&a), "日本😀🇪🇬 ok");
+        b.apply_remote(&a.outbox(true)).unwrap();
+        assert_eq!(text(&b), "日本😀🇪🇬 ok");
+        assert!(a.redo());
+        assert_eq!(text(&a), "日本😀🇪🇬 👩‍💻!");
+        b.apply_remote(&a.outbox(true)).unwrap();
+        assert_eq!(b.read(), a.read());
+        assert_eq!(a.shadow_misses() + b.shadow_misses(), 0);
+    }
 }

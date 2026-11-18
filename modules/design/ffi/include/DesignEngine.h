@@ -249,7 +249,7 @@ int32_t de_edit(uint64_t h,
                 const uint8_t *json,
                 size_t len);
 
-// 1 when something was undone, 0 when there was nothing to undo, DE_ERR_TOO_LARGE when the undo would exceed the
+// 1 when something was undone, 0 when there was nothing to undo, `DE_ERR_TOO_LARGE` when the undo would exceed the
 // update budget (nothing changed).
 int32_t de_undo(uint64_t h);
 
@@ -311,8 +311,6 @@ int32_t de_selection(uint64_t h, uint8_t *out, size_t cap, size_t *out_len);
 // The node tree for the layers panel, a JSON array `[{id, type, parent, order, name, hidden}]` in id order (the App
 // sorts siblings by `order`). `parent` is the effective parent (`null` for pages and detached roots); `hidden` is
 // `props.visible == false`. Output grows with the document, so size the buffer from `*out_len` on `DE_ERR_SMALL_BUFFER`.
-// The document can change between the size call and the fill call (a peer's edit), so loop on `DE_ERR_SMALL_BUFFER`
-// until a call returns `DE_OK`. Nodes whose id is not a valid node id are left out.
 //
 // # Safety
 // See `put`.
@@ -332,9 +330,7 @@ int32_t de_tokens(uint64_t h,
 
 // Select nodes by id: `ids_json` is a JSON array of strings (at most `DE_MAX_SELECT_IDS`, each at most
 // `DE_MAX_ID_BYTES`), replacing the selection; `[]` clears it. Ends text editing and cancels a gesture first. An id
-// that is not in the document refuses the whole call (`DE_ERR_INVALID`, selection and gesture unchanged); the same for
-// text that is not a JSON array of strings. `DE_ERR_ARG` is only a bad argument (NULL `ids_json` with `len > 0`), and
-// `DE_ERR_TOO_LARGE` is too many ids or an id over `DE_MAX_ID_BYTES`.
+// that is not in the document refuses the whole call (`DE_ERR_INVALID`, selection unchanged).
 //
 // # Safety
 // `ids_json..+len` readable.
