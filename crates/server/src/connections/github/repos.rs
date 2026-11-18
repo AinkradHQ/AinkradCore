@@ -18,8 +18,10 @@ const MAX_PAGES: u32 = 10;
 const TTL: Duration = Duration::from_secs(60);
 
 /// A connection's full repo list and whether GitHub has more than was read, with when it was read.
-/// ponytail: one entry per connection id, replaced on expiry; never pruned (a handful of rows).
-pub(super) type Cache = Arc<Mutex<HashMap<i64, (Instant, Arc<(Vec<RepoSummary>, bool)>)>>>;
+/// Keyed by connection id AND secret version: a replaced credential misses the old entry, so a
+/// token that lost access never serves its old list. A deleted connection fails at `open` first.
+/// ponytail: stale versions are never pruned (a handful of rows); prune on insert if it grows.
+pub(super) type Cache = Arc<Mutex<HashMap<(i64, i64), (Instant, Arc<(Vec<RepoSummary>, bool)>)>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoSummary {
@@ -37,10 +39,11 @@ fn text(v: &Value, max: usize) -> String {
 
 impl Github {
     /// Every repo `m` can see (up to [`MAX_PAGES`] pages) and whether GitHub has more, cached per
-    /// connection for 60 s so searching and paging do not re-read GitHub.
+    /// connection and credential version for 60 s so searching and paging do not re-read GitHub.
     pub async fn all_repos(
         &self,
         connection_id: i64,
+        version: i64,
         m: &Material,
         installation: bool,
     ) -> Result<Arc<(Vec<RepoSummary>, bool)>, Outcome> {
@@ -48,7 +51,7 @@ impl Github {
             .repo_cache
             .lock()
             .ok()
-            .and_then(|c| c.get(&connection_id).cloned())
+            .and_then(|c| c.get(&(connection_id, version)).cloned())
             .filter(|(at, _)| at.elapsed() < TTL);
         if let Some((_, v)) = hit {
             return Ok(v);
@@ -65,7 +68,7 @@ impl Github {
         }
         let v = Arc::new((all, truncated));
         if let Ok(mut c) = self.repo_cache.lock() {
-            c.insert(connection_id, (Instant::now(), v.clone()));
+            c.insert((connection_id, version), (Instant::now(), v.clone()));
         }
         Ok(v)
     }

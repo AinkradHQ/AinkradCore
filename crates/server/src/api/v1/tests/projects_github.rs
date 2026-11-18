@@ -149,7 +149,7 @@ async fn create_fills_name_slug_branch_and_binds_the_connection_to_the_project()
         .fetch_one(&cx.fx.app.pool)
         .await
         .unwrap();
-    assert_eq!(n, 3);
+    assert_eq!(n, 4);
     cx.assert_clean().await;
 }
 
@@ -169,4 +169,43 @@ async fn no_connection_and_upstream_failures_are_plain_and_clean() {
     cx.assert_clean().await;
     let r = cx.admin(Method::POST, FROM, json!({"repos": []})).await;
     assert_eq!(r.0, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_bad_explicit_slug_is_refused_before_any_github_call() {
+    let (cx, _) = setup().await;
+    let before = cx.gh.seen().len();
+    let r = cx
+        .admin(
+            Method::POST,
+            FROM,
+            json!({"repos": ["acme/api"], "slug": "Bad Slug"}),
+        )
+        .await;
+    assert_eq!(r.0, StatusCode::BAD_REQUEST, "{}", r.1);
+    assert_eq!(cx.gh.seen().len(), before, "GitHub was called");
+}
+
+#[tokio::test]
+async fn a_replaced_credential_does_not_serve_the_old_cached_list() {
+    let (cx, id) = setup().await;
+    cx.gh.push(200, &[], &four());
+    cx.ok(Method::GET, LIST, Value::Null).await;
+    let calls = cx.gh.seen().len();
+    // Same version: cached, no new call.
+    cx.ok(Method::GET, LIST, Value::Null).await;
+    assert_eq!(cx.gh.seen().len(), calls);
+    // A new credential is a new secret version: the list is read again.
+    cx.gh.push(200, &[], r#"{"login":"octocat","id":583231}"#);
+    cx.ok(
+        Method::PUT,
+        &format!("/api/v1/connections/{id}/credential"),
+        json!({"token": GH_TOKEN}),
+    )
+    .await;
+    let after_replace = cx.gh.seen().len();
+    cx.gh.push(200, &[], "[]");
+    let r = cx.ok(Method::GET, LIST, Value::Null).await;
+    assert_eq!(r["total"], 0);
+    assert!(cx.gh.seen().len() > after_replace);
 }

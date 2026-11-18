@@ -41,7 +41,7 @@ async fn pick(
     w: conns::Who<'_>,
     explicit: Option<i64>,
     project: Option<&str>,
-) -> Result<(conns::Connection, Material), ApiError> {
+) -> Result<(conns::Connection, Material, i64), ApiError> {
     let user = w.workspace;
     let id = match explicit {
         Some(id) => id,
@@ -78,8 +78,8 @@ async fn pick(
         .github()
         .renew_installation(&app.pool, sealer, w, id)
         .await;
-    let (m, _) = secret::open(&app.pool, sealer, user, id).await?;
-    Ok((c, m))
+    let (m, version) = secret::open(&app.pool, sealer, user, id).await?;
+    Ok((c, m, version))
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -143,7 +143,7 @@ pub async fn list(
 ) -> ApiResult<GithubRepoList> {
     let user = workspace(&app, &me).await?;
     let now = app.clock.now();
-    let (c, m) = pick(
+    let (c, m, version) = pick(
         &app,
         conn_who(&me, user, &now),
         q.connection,
@@ -154,7 +154,7 @@ pub async fn list(
     let listed = app
         .connections
         .github()
-        .all_repos(c.id, &m, installation)
+        .all_repos(c.id, version, &m, installation)
         .await
         .map_err(|o| upstream(&o))?;
     let truncated = listed.1;
@@ -231,9 +231,12 @@ pub async fn create(
     if let Some(n) = &b.name {
         store::name_ok(n)?;
     }
+    if let Some(why) = b.slug.as_deref().and_then(store::slug_problem) {
+        return Err(ApiError::bad_request(why));
+    }
     let user = workspace(&app, &me).await?;
     let now = app.clock.now();
-    let (c, m) = pick(&app, conn_who(&me, user, &now), b.connection_id, None).await?;
+    let (c, m, _) = pick(&app, conn_who(&me, user, &now), b.connection_id, None).await?;
     let mut repos = Vec::new();
     for full in &b.repos {
         let built = build("github.get_repo", &json!({ "repo": full }))
