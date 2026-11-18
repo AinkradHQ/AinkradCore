@@ -19,7 +19,7 @@ const DEFAULT_LIMIT: u32 = 50;
 const MAX_LIMIT: u32 = 200;
 const MAX_ROWS: u32 = 500;
 
-fn person_only(me: &Caller) -> Result<(), ApiError> {
+pub(crate) fn person_only(me: &Caller) -> Result<(), ApiError> {
     if me.session.starts_with(crate::ai::SESSION) {
         return Err(code(
             403,

@@ -52,6 +52,7 @@ pub mod overview_write;
 mod policy;
 mod project_rooms;
 pub mod propose;
+pub mod retention;
 mod review;
 pub mod rooms;
 mod rules_api;
@@ -515,6 +516,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         change_routes::list,
         change_routes::one,
         change_routes::undo_route,
+        retention::preview,
         distil::start,
         distil::list,
         overview::get,
@@ -605,6 +607,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         change_routes::ChangeRow,
         change_routes::ChangeDetail,
         change_routes::UndoResult,
+        retention::RetentionPreview,
         policy::PolicyView,
         policy::PolicyPatch,
         policy::PolicyAccount,
@@ -678,6 +681,7 @@ impl Module for Brain {
                 "/rooms/{room}/changes/{id}/undo",
                 post(change_routes::undo_route),
             )
+            .route("/rooms/{room}/retention", get(retention::preview))
             .route("/rooms/{room}/distil", post(distil::start))
             .route("/rooms/{room}/distils", get(distil::list))
             .route("/rooms/{room}/overview", get(overview::get))
@@ -762,6 +766,7 @@ impl Module for Brain {
             "brain.alias.removed",
             "brain.change.undone",
             "brain.room.purged",
+            "brain.room.compacted",
         ]
     }
 
@@ -777,6 +782,7 @@ impl Module for Brain {
             overview::job(self),
             project_rooms::job(self),
             changes::job(self),
+            retention::job(self),
         ]
     }
 
