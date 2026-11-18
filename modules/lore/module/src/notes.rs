@@ -318,38 +318,41 @@ pub(crate) async fn create(
         Some(p) => Some(project_id(&mut tx, p).await?),
         None => None,
     };
-    let id = new_id();
-    let parse = parsed(&text)?;
-    let title = parse.title.clone();
     let who = format!("person:{}", me.device.id);
+    let id = insert(&mut tx, project.as_deref(), &text, &who, "person").await?;
+    let out = view(&mut tx, &id).await?;
+    tx.commit().await?;
+    Ok(Json(out))
+}
+
+/// Inserts a note at rev 1 with its first save, index, audit row and event. The caller has checked the
+/// project and the size; `who` is the `created_by` (`person:…` or `session:…`), `origin` the event's.
+pub(crate) async fn insert(
+    conn: &mut SqliteConnection,
+    project: Option<&str>,
+    text: &str,
+    who: &str,
+    origin: &str,
+) -> Result<String, ApiError> {
+    let id = new_id();
+    let parse = parsed(text)?;
     sqlx::query(
         "INSERT INTO lore_notes (id, project, title, title_norm, text, created_by, updated_by) \
          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(&project)
-    .bind(&title)
-    .bind(lore_model::normalize_title(&title))
-    .bind(&text)
-    .bind(&who)
-    .bind(&who)
-    .execute(&mut *tx)
+    .bind(project)
+    .bind(&parse.title)
+    .bind(lore_model::normalize_title(&parse.title))
+    .bind(text)
+    .bind(who)
+    .bind(who)
+    .execute(&mut *conn)
     .await
     .map_err(store_err)?;
-    crate::save::seed(&mut tx, &id, &text, &parse).await?;
-    record(
-        &mut tx,
-        "created",
-        "changed",
-        &id,
-        1,
-        "person",
-        project.as_deref(),
-    )
-    .await?;
-    let out = view(&mut tx, &id).await?;
-    tx.commit().await?;
-    Ok(Json(out))
+    crate::save::seed(&mut *conn, &id, text, &parse).await?;
+    record(&mut *conn, "created", "changed", &id, 1, origin, project).await?;
+    Ok(id)
 }
 
 #[derive(Deserialize)]

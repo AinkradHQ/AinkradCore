@@ -106,7 +106,7 @@ pub(crate) fn match_expr(q: &str) -> Option<String> {
 }
 
 /// The words to highlight: every word of the query, lower-cased.
-fn words(q: &str) -> Vec<Vec<char>> {
+pub(crate) fn words(q: &str) -> Vec<Vec<char>> {
     let mut w: Vec<Vec<char>> = q
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
