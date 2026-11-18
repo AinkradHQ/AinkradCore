@@ -46,7 +46,7 @@ mod mirrors;
 pub mod pair;
 mod pairing;
 pub mod passkey;
-mod projects;
+pub(crate) mod projects;
 mod projects_github;
 mod runner_control;
 mod runners;

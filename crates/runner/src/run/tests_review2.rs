@@ -218,6 +218,7 @@ fn build_run(run: &str, project: u64) -> RunStart {
     r.checkouts = vec![RunCheckout {
         repo: "web".into(),
         dir: "/unused".into(),
+        from_core: None,
     }];
     r
 }

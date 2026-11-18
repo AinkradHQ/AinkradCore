@@ -151,7 +151,7 @@ pub async fn release_session(app: &App, s: &crate::store::agents::Session) {
     .fetch_one(&app.pool)
     .await;
     // On a read failure the leases stay: they expire on their own.
-    if busy == Ok(0) {
+    if matches!(busy, Ok(0)) {
         // Every repo of the project, as a run's `revoke` does: a run's repo outside this session's
         // workspace may hold a lease too.
         let Ok(mut conn) = app.pool.acquire().await else {
@@ -179,7 +179,7 @@ pub async fn release_run(app: &App, runner: &str, project: i64, repos: &[i64]) {
     .bind(project)
     .fetch_one(&app.pool)
     .await;
-    if busy == Ok(0) {
+    if matches!(busy, Ok(0)) {
         mirrors.revoke(runner, repos);
     }
 }
