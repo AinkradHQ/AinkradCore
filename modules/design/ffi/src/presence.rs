@@ -420,7 +420,7 @@ mod tests {
         v["conn"] = json!(18446744073709551615u64);
         let text = v.to_string();
         assert!(Peers::default().apply(&text, 0));
-        assert!(MAX_MESSAGE >= 2 * RELAY_INPUT);
+        const { assert!(MAX_MESSAGE >= 2 * RELAY_INPUT) };
     }
 
     #[test]

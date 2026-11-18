@@ -325,7 +325,7 @@ impl Actor {
         });
         if (st.log_updates >= self.limits.compact_updates
             || st.log_bytes >= self.limits.compact_bytes)
-            && let Err(e) = self.compact(&mut st).await
+            && let Err(e) = self.compact(st).await
         {
             tracing::error!(error = %e, doc = %self.id, "design compaction failed");
         }

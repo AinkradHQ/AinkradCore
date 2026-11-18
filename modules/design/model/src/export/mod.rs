@@ -40,8 +40,11 @@ pub struct ExportOpts<'a> {
     pub fallback_font: Option<&'a str>,
     /// Right and bottom of a path's tight bounds, which a hugging vector is as big as. The model has no path
     /// geometry; a host with Skia answers. `None`: hugging vectors are 0 x 0.
-    pub path_bounds: Option<&'a dyn Fn(&str) -> Option<(f32, f32)>>,
+    pub path_bounds: Option<&'a PathBounds<'a>>,
 }
+
+/// What answers a path's right and bottom bounds.
+pub type PathBounds<'a> = dyn Fn(&str) -> Option<(f32, f32)> + 'a;
 
 impl ExportOpts<'_> {
     pub fn new(theme: Theme) -> Self {
@@ -234,7 +237,7 @@ fn sheet(day: Vec<Decl>, night: Vec<Decl>) -> String {
 }
 
 fn collect(n: &ResolvedNode, fonts: &mut BTreeSet<String>, images: &mut BTreeSet<String>) {
-    let mut keep = |set: &mut BTreeSet<String>, v: Option<&Value>| {
+    let keep = |set: &mut BTreeSet<String>, v: Option<&Value>| {
         if let Some(a) = v.and_then(Value::as_str).filter(|a| is_sha256(a)) {
             set.insert(a.to_owned());
         }

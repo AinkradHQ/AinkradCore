@@ -59,8 +59,10 @@ pub fn fidelity(f: &DesignFidelity) -> Result<DesignFidelityScore, String> {
         });
     }
     let changed = a
-        .chunks_exact(4)
-        .zip(b.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
         .filter(|(p, q)| (0..3).any(|c| (i32::from(p[c]) - i32::from(q[c])).abs() > TOLERANCE))
         .count() as u64;
     Ok(DesignFidelityScore {

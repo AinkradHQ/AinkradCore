@@ -99,8 +99,7 @@ fn materials_are_layers_behind_the_children_and_themed() {
         .trim_start_matches("background-color:var(")
         .trim_end_matches(')');
     assert!(
-        e.css.contains(&format!(":root,[data-theme=\"day\"]{{"))
-            && e.css.contains(&format!("{v}:#ffffff4c"))
+        e.css.contains(":root,[data-theme=\"day\"]{") && e.css.contains(&format!("{v}:#ffffff4c"))
     );
     assert!(e.css.contains(&format!("{v}:#ffffff1a")));
     let well = screen(json!({"w": 9, "h": 9, "material": "well"}), vec![]);

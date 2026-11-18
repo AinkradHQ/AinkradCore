@@ -20,7 +20,7 @@ async fn app(name: &str) -> (App, std::path::PathBuf) {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let pool = connect(&dir.join("core.db")).await.unwrap();
-    let modules: Vec<Arc<dyn Module>> = vec![Arc::new(Design)];
+    let modules: Vec<Arc<dyn Module>> = vec![Arc::new(Design::default())];
     migrate::migrate_modules(&pool, &modules).await.unwrap();
     let identity = Arc::new(
         Identity::load_or_create(

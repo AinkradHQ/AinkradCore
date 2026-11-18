@@ -45,9 +45,12 @@ pub fn camera(h: u64) -> Option<(f32, f32, f32)> {
     out
 }
 
-/// The peer markers the overlay would draw: `(label, ai, cursor, selected rects)`.
+/// One peer marker the overlay would draw: `(label, ai, cursor, selected rects)`.
+pub type PeerMark = (String, bool, Option<(f32, f32)>, usize);
+
+/// The peer markers the overlay would draw.
 #[doc(hidden)]
-pub fn peer_marks(h: u64) -> Vec<(String, bool, Option<(f32, f32)>, usize)> {
+pub fn peer_marks(h: u64) -> Vec<PeerMark> {
     let mut out = vec![];
     with(h, |e| {
         e.refresh();

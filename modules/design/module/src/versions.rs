@@ -398,6 +398,7 @@ mod tests {
             parent: parent.map(Into::into),
             order: order.into(),
             clock: 0,
+            prev: None,
             name: String::new(),
             props: Map::new(),
             text: None,

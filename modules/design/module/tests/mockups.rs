@@ -44,7 +44,11 @@ async fn fx_with(on: bool) -> Fx {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let pool = connect(&dir.join("core.db")).await.unwrap();
-    let modules: Vec<Arc<dyn Module>> = if on { vec![Arc::new(Design)] } else { vec![] };
+    let modules: Vec<Arc<dyn Module>> = if on {
+        vec![Arc::new(Design::default())]
+    } else {
+        vec![]
+    };
     migrate::migrate_modules(&pool, &modules).await.unwrap();
     let identity = Arc::new(
         Identity::load_or_create(
