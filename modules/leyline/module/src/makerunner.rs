@@ -8,8 +8,10 @@
 //!   (the invite is made as the caller, who must hold what it grants).
 //! - The invite (a single-use secret, 15 minutes) is never in argv, an environment, the Core's
 //!   logs or any audit row. It goes to the host as one SFTP file, created `0600` before its first
-//!   byte (`SftpWrite::mode`), in the user's `~/.cache`; the command typed into the terminal names
-//!   only that file. The root shell reads it into the installer's environment and deletes it
+//!   byte (the mode rides the SFTP open itself, so there is no umask window), straight in the
+//!   user's home as `.ainkrad-invite-<pairing>` (no directory to create or trust, one file per
+//!   install that only its own watcher removes); the command typed into the terminal names only
+//!   that file. The root shell reads it into the installer's environment and deletes it
 //!   first. In the Core it lives in a `Zeroizing` buffer for the length of one call and rides one
 //!   SFTP frame that the hub does not keep for a resend.
 //! - The installer is not touched: the same `get.sh --runner` and its own checks run, as root,
@@ -46,11 +48,17 @@ use crate::hostkeys;
 use crate::hosts::{In, find};
 use crate::terminal::{self, NewSession, SessionView};
 
-/// Where the invite waits on the host, relative to the user's home (SFTP starts there).
-const DIR: &str = ".cache";
-const FILE: &str = ".cache/ainkrad-invite";
-/// The installer, from the same signed release channel the app's own command shows.
-const GET: &str = "https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh";
+/// The release this Core is: the installer and the runner it installs are this version's, not
+/// whatever `latest` is by then. A tag that does not exist fails the `curl -f`, it never falls back.
+const RELEASE: &str = concat!(
+    "https://github.com/AinkradHQ/AinkradCore/releases/download/v",
+    env!("CARGO_PKG_VERSION")
+);
+/// Where the invite of one install waits on the host, relative to the user's home (SFTP starts
+/// there). A pairing id is `p_` and Crockford base32: safe in a path and in the typed line.
+fn file(pairing: &str) -> String {
+    format!(".ainkrad-invite-{pairing}")
+}
 /// How often the wait looks at the pairing.
 const POLL: Duration = Duration::from_secs(3);
 /// How long past the invite's end the wait gives the Core's own expiry sweep before it acts.
@@ -80,10 +88,12 @@ fn forbidden() -> ApiError {
 }
 
 /// The one line typed in the terminal. The invite is not in it, only the file it is in.
-fn command_line() -> String {
+fn command_line(pairing: &str) -> String {
     format!(
-        "sudo sh -c 'AINKRAD_PAIR_INVITE=$(cat \"$0\"); rm -f \"$0\"; export AINKRAD_PAIR_INVITE; \
-         curl -fsSL {GET} | sh -s -- --runner' \"$HOME/{FILE}\"\n"
+        "sudo sh -c 'AINKRAD_PAIR_INVITE=$(cat \"$0\"); rm -f \"$0\"; export AINKRAD_PAIR_INVITE \
+         AINKRAD_RELEASE_URL={RELEASE}; curl -fsSL --proto =https --tlsv1.3 {RELEASE}/get.sh \
+         | sh -s -- --runner' \"$HOME/{}\"\n",
+        file(pairing)
     )
 }
 
@@ -148,7 +158,7 @@ async fn withdraw(app: &App, me: &Caller, pairing: &str) {
 /// Everything a failed or lapsed install must undo: the invite and the file.
 async fn undo(app: &App, me: &Caller, runner: &str, chain: &[String], pairing: &str) {
     withdraw(app, me, pairing).await;
-    let _ = job(app, me, runner, chain, SftpJob::Remove(FILE)).await;
+    let _ = job(app, me, runner, chain, SftpJob::Remove(&file(pairing))).await;
 }
 
 async fn run(
@@ -218,15 +228,13 @@ async fn run(
     // `<host>/<core fingerprint>.<secret>`: what `get.sh --runner` takes. Only in this buffer.
     let token = Zeroizing::new(format!("{}/{}.{secret}", app.host, app.auth.identity.fp));
     drop(Zeroizing::new(secret));
-    // The directory may exist already; a real failure shows at the put.
-    let _ = job(app, me, &runner, &chain, SftpJob::Mkdir(DIR)).await;
     let put = job(
         app,
         me,
         &runner,
         &chain,
         SftpJob::Put {
-            path: FILE,
+            path: &file(&pairing),
             mode: 0o600,
             bytes: token.as_bytes(),
         },
@@ -246,7 +254,7 @@ async fn run(
     };
     // ponytail: typed at once; the pty holds it until the remote shell reads it. A shell that
     // drops typeahead at login leaves the person to paste the line: re-send on first output.
-    if let Err(e) = type_into(app, me, &session.terminal, &command_line()).await {
+    if let Err(e) = type_into(app, me, &session.terminal, &command_line(&pairing)).await {
         undo(app, me, &runner, &chain, &pairing).await;
         return Err(e);
     }
@@ -279,8 +287,10 @@ async fn watch(
 ) {
     loop {
         tokio::time::sleep(POLL).await;
-        let Ok(Some(p)) = gov::get_pairing(&app.pool, &pairing).await else {
-            continue;
+        let p = match gov::get_pairing(&app.pool, &pairing).await {
+            Ok(Some(p)) => p,
+            Ok(None) => break, // gone: nothing left to wait for
+            Err(_) => continue,
         };
         match (p.status.as_str(), p.device_id) {
             ("approved", Some(dev)) => {
@@ -299,8 +309,16 @@ async fn watch(
     }
 }
 
-/// The audit row and event of how an install ended; `paired` also sets `runner_device`. Ids only.
+/// The audit row and event of how an install ended; `paired` also sets `runner_device`. Ids only,
+/// and for `paired` the claimer's own details (name, platform, fingerprint) so the person can see
+/// that it is the machine they meant: the invite is its own approval, so this is the only check.
 async fn record(app: &App, host: &str, what: &str, device: Option<&str>) -> Result<(), ApiError> {
+    let claimer = match device {
+        Some(d) => gov::get_device(&app.pool, d).await?.map(|d| {
+            json!({"id": d.id, "name": d.name, "platform": d.platform, "fingerprint": d.fingerprint})
+        }),
+        None => None,
+    };
     let mut tx = begin_write(&app.pool).await?;
     if let Some(d) = device {
         sqlx::query(
@@ -315,13 +333,15 @@ async fn record(app: &App, host: &str, what: &str, device: Option<&str>) -> Resu
         actor: BY,
         action: "leyline.host.changed".to_owned(),
         entity: None,
-        details: json!({"host": host, "runner_install": what, "runner_device": device}).to_string(),
+        details: json!({"host": host, "runner_install": what, "runner_device": device,
+            "claimer": claimer})
+        .to_string(),
     };
     audit::append(&mut tx, &row).await?;
     events::append(
         &mut tx,
         "leyline.host",
-        &json!({"op": "changed", "id": host, "runner_install": what}),
+        &json!({"op": "changed", "id": host, "runner_install": what, "claimer": claimer}),
     )
     .await?;
     tx.commit().await?;
@@ -336,10 +356,15 @@ mod tests {
     /// root shell (`$0`), whose home the outer shell expands.
     #[test]
     fn the_line_names_the_file_not_the_invite() {
-        let l = command_line();
+        let l = command_line("p_ABC");
         assert!(l.starts_with("sudo sh -c '"));
         assert!(l.contains("--runner"));
-        assert!(l.contains(&format!("\"$HOME/{FILE}\"")));
+        assert!(l.contains("\"$HOME/.ainkrad-invite-p_ABC\""));
+        // https only, TLS 1.3, and this release's own installer and binaries, never `latest`.
+        assert!(l.contains("--proto =https --tlsv1.3"));
+        assert!(l.contains(&format!("{RELEASE}/get.sh")));
+        assert!(l.contains(&format!("AINKRAD_RELEASE_URL={RELEASE}")));
+        assert!(!l.contains("latest"));
         assert!(!l.contains("AINKRAD_PAIR_INVITE=ainkrad"));
         assert!(l.ends_with('\n'));
         assert_eq!(l.matches('\n').count(), 1);

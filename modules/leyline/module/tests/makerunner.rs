@@ -194,7 +194,9 @@ async fn n(fx: &Fx, table: &str) -> i64 {
         .unwrap()
 }
 
-const PATH: &str = ".cache/ainkrad-invite";
+fn path(pairing: &str) -> String {
+    format!(".ainkrad-invite-{pairing}")
+}
 
 /// What the fake runner saw.
 #[derive(Default)]
@@ -386,7 +388,12 @@ async fn one_action_installs_and_the_claim_links_the_runner_without_the_invite_l
     };
     // The invite is one 0600 file in the user's cache, whole, and the one place it is.
     assert_eq!(puts.len(), 1);
-    assert_eq!(puts[0].0, PATH);
+    let p = v["pairing"].as_str().unwrap().to_owned();
+    assert_eq!(puts[0].0, path(&p), "a per-pairing file, straight in the home");
+    assert!(
+        !commands.iter().any(|c| c.contains("SshSftpMkdir")),
+        "no directory is created or trusted"
+    );
     assert_eq!(puts[0].1, Some(0o600));
     let secret = secret_of(&puts);
     assert!(secret.len() >= 20, "a real secret");
@@ -395,7 +402,8 @@ async fn one_action_installs_and_the_claim_links_the_runner_without_the_invite_l
         assert!(!c.contains(&secret), "a command carries the invite");
     }
     assert!(!typed.contains(&secret));
-    assert!(typed.contains("--runner") && typed.contains(PATH));
+    assert!(typed.contains("--runner") && typed.contains(&path(&p))
+            && typed.contains("--proto =https --tlsv1.3"));
     assert!(typed.starts_with("sudo sh -c '"), "{typed}");
     assert!(!v.to_string().contains(&secret));
     assert!(
@@ -415,7 +423,7 @@ async fn one_action_installs_and_the_claim_links_the_runner_without_the_invite_l
         .contains(&secret)
     );
     // The invite is a live single-use runner invite made by the caller.
-    let p = v["pairing"].as_str().unwrap();
+    let p = p.as_str();
     assert_eq!(
         scalar(&fx, "SELECT kind FROM core_pairings WHERE id = ?", p).await,
         "runner"
@@ -460,6 +468,14 @@ async fn one_action_installs_and_the_claim_links_the_runner_without_the_invite_l
         .await,
         fx.runner.id
     );
+    // The claimer's own details are in the audit row and the event for the person to check.
+    for sql in [
+        "SELECT coalesce(group_concat(details), '') FROM audit_events WHERE action = 'leyline.host.changed'",
+        "SELECT coalesce(group_concat(payload), '') FROM events WHERE payload LIKE '%runner_install%'",
+    ] {
+        let t = text(&fx, sql).await;
+        assert!(t.contains("\"claimer\"") && t.contains(&fx.runner.id), "{t}");
+    }
     // Already a runner: no second install, and no second invite.
     let (s, b) = make(&fx, &fx.admin, &h).await;
     assert_eq!(
@@ -484,7 +500,7 @@ async fn an_invite_nobody_claims_is_withdrawn_and_its_file_removed() {
         .await
         .unwrap();
     until("the file was removed", || {
-        seen.lock().unwrap().removes.contains(&PATH.to_owned())
+        seen.lock().unwrap().removes.contains(&path(&p))
     })
     .await;
     // Told to the app, linked to nothing, and the person may start again with a new invite.
@@ -506,11 +522,10 @@ async fn an_invite_nobody_claims_is_withdrawn_and_its_file_removed() {
     );
     let (s, b) = make(&fx, &fx.admin, &h).await;
     assert_eq!(s, StatusCode::OK, "{b}");
-    assert_eq!(
-        seen.lock().unwrap().puts.len(),
-        2,
-        "a new invite, a new file"
-    );
+    let g = seen.lock().unwrap();
+    assert_eq!(g.puts.len(), 2, "a new invite, a new file");
+    assert_ne!(g.puts[0].0, g.puts[1].0, "each install has its own file");
+    assert_eq!(g.removes, [path(&p)], "only its own file was removed");
 }
 
 #[tokio::test]
