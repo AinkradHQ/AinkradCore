@@ -30,7 +30,7 @@ use crate::{Brain, code, rand_id, record};
 
 /// The marker in `records.distil` of a candidate an AI session proposed: `ai:<session id>`.
 pub(crate) const PROPOSED: &str = "ai:";
-const SESSION: &str = "code_mode:";
+pub(crate) const SESSION: &str = "code_mode:";
 const DEFAULT_LIMIT: u32 = 10;
 const MAX_LIMIT: u32 = 25;
 const MAX_BODY: usize = 2000;

@@ -48,7 +48,7 @@ pub async fn read(fx: &Fx, s: &str, o: &str, args: Value) -> Value {
 
 /// The Brain route as the session's synthetic caller, writes included (the handler itself, without
 /// the dispatcher's idempotency and audit row).
-async fn as_session(
+pub(super) async fn as_session(
     fx: &Fx,
     s: &str,
     method: Method,

@@ -28,6 +28,8 @@ mod ai_semantic;
 mod aliases;
 mod answer;
 mod backfill;
+mod change_routes;
+pub mod changes;
 pub mod cipher;
 mod claim;
 pub mod clean;
@@ -150,6 +152,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/overview/write-all"),
     ("PATCH", "/rooms/{room}/overview/instructions"),
     ("POST", "/rooms/{room}/inbox/{id}"),
+    ("POST", "/rooms/{room}/changes/{id}/undo"),
     ("PUT", "/sources/{id}"),
     ("POST", "/ai/rooms/{room}/propose"),
     ("PUT", "/projects/{project}/room"),
@@ -500,6 +503,9 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         claim::claim_route,
         inbox::list,
         inbox::decide,
+        change_routes::list,
+        change_routes::one,
+        change_routes::undo_route,
         distil::start,
         distil::list,
         overview::get,
@@ -585,6 +591,10 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         inbox::InboxRecord,
         inbox::InboxPage,
         inbox::Decision,
+        change_routes::Change,
+        change_routes::ChangeRow,
+        change_routes::ChangeDetail,
+        change_routes::UndoResult,
         policy::PolicyView,
         policy::PolicyPatch,
         policy::PolicyAccount,
@@ -651,6 +661,9 @@ impl Module for Brain {
             .route("/rooms/{room}/claims", post(claim::claim_route))
             .route("/rooms/{room}/inbox", get(inbox::list))
             .route("/rooms/{room}/inbox/{id}", post(inbox::decide))
+            .route("/rooms/{room}/changes", get(change_routes::list))
+            .route("/rooms/{room}/changes/{id}", get(change_routes::one))
+            .route("/rooms/{room}/changes/{id}/undo", post(change_routes::undo_route))
             .route("/rooms/{room}/distil", post(distil::start))
             .route("/rooms/{room}/distils", get(distil::list))
             .route("/rooms/{room}/overview", get(overview::get))
@@ -728,6 +741,8 @@ impl Module for Brain {
             "brain.ai.refused",
             "brain.alias.set",
             "brain.alias.removed",
+            "brain.change.undone",
+            "brain.room.purged",
         ]
     }
 
@@ -742,6 +757,7 @@ impl Module for Brain {
             distil::job(self),
             overview::job(self),
             project_rooms::job(self),
+            changes::job(self),
         ]
     }
 
