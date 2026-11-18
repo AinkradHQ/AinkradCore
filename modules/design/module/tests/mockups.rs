@@ -252,7 +252,8 @@ async fn a_package_is_drafted_sealed_and_served_only_as_an_inert_attachment() {
         .collect();
     assert_eq!(
         names,
-        ["index.html", "sub/b.html"],
+        // putting `INDEX.html` replaced `index.html` (one file, the later spelling kept), and it still sorts first
+        ["INDEX.html", "sub/b.html"],
         "root index first, only html"
     );
     assert_eq!(v["sealed"], json!(true));
@@ -338,14 +339,11 @@ async fn bytes_must_match_the_type_and_only_the_fixed_types_are_taken() {
         ("f.woff2", b"wOF2....".to_vec()),
         ("g.zip", b"PK\x03\x04".to_vec()),
         ("h.exe", b"x".to_vec()),
-        (
-            "i.svg",
-            b"<svg xmlns='http://www.w3.org/2000/svg'><script>1</script></svg>x".to_vec(),
-        ),
     ] {
         let (s, v) = put(&fx, &doc, p, b).await;
         assert_eq!(s, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{p} {v}");
     }
+    // (an SVG with a script is not refused: it is stored sanitised, below)
     let (s, v) = put(
         &fx,
         &doc,
