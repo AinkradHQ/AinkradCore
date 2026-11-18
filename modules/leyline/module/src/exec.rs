@@ -20,6 +20,7 @@ use ainkrad_proto::v2::{
     Body, ErrorCode, ExecLimits, ExecResult, MAX_SSH_HOPS, Reply, SshExec, SshHop,
 };
 use sqlx::Row;
+use tokio::sync::watch;
 
 use crate::gate::{Authorized, finish, redact_text, still_valid};
 
@@ -28,9 +29,27 @@ const KEPT: usize = 64 * 1024;
 const STEP_TIMEOUT: Duration = Duration::from_secs(300);
 const LEASE_SECS: i64 = 60;
 
+/// A fleet run's stop signal (`true` = stop). A single run has none.
+pub(crate) type Cancel = watch::Receiver<bool>;
+
+/// Resolves when `cancel` says stop; never if there is none (or its sender is gone).
+pub(crate) async fn stopped(cancel: &Option<Cancel>) {
+    if let Some(c) = cancel {
+        let gone = c.clone().wait_for(|v| *v).await.is_err();
+        if !gone {
+            return;
+        }
+    }
+    std::future::pending::<()>().await;
+}
+
 /// Runs every step of the gated command, in order, and closes the host's row with the result.
-pub(crate) async fn run(app: ainkrad_core_server::api::App, auth: Authorized) {
-    let (ok, steps, last_exit, ms, log) = steps(&app, &auth).await;
+pub(crate) async fn run(
+    app: ainkrad_core_server::api::App,
+    auth: Authorized,
+    cancel: Option<Cancel>,
+) {
+    let (ok, steps, last_exit, ms, log) = steps(&app, &auth, &cancel).await;
     let done = sqlx::query(
         "UPDATE leyline_run_hosts SET step = ?, exit_code = ?, duration_ms = ?, output = ? \
          WHERE run_id = ? AND host_id = ?",
@@ -53,13 +72,17 @@ pub(crate) async fn run(app: ainkrad_core_server::api::App, auth: Authorized) {
 
 /// (all ok, steps reached, last exit code, total ms, log). The log is written after every step is
 /// known, so a process that dies mid-run leaves the row `queued` with no output, never a half story.
-async fn steps(app: &App, auth: &Authorized) -> (bool, i64, Option<i64>, i64, String) {
+async fn steps(
+    app: &App,
+    auth: &Authorized,
+    cancel: &Option<Cancel>,
+) -> (bool, i64, Option<i64>, i64, String) {
     let (mut log, mut reached, mut exit, mut ms) = (String::new(), 0_i64, None, 0_i64);
     for (i, step) in auth.steps().iter().enumerate() {
         reached = i64::try_from(i + 1).unwrap_or(i64::MAX);
         log.push_str(&format!("$ {step}\n"));
         let res = match still_valid(app, auth).await {
-            Ok(()) => one(app, auth, step).await,
+            Ok(()) => one(app, auth, step, cancel).await,
             Err(e) => Err(e.message),
         };
         match res {
@@ -101,7 +124,15 @@ fn cut(s: String) -> String {
 }
 
 /// One `ssh.exec` of `step` on the authorised host: leases, hops, dispatch, the answer.
-async fn one(app: &App, auth: &Authorized, step: &str) -> Result<ExecResult, String> {
+///
+/// A stop signal ends the wait for the answer: the runner finishes the step on its own limit
+/// (ponytail: no cancel op in the runner protocol yet; add one to kill the remote step at once).
+async fn one(
+    app: &App,
+    auth: &Authorized,
+    step: &str,
+    cancel: &Option<Cancel>,
+) -> Result<ExecResult, String> {
     let fixed = |s: &str| s.to_owned();
     let (target, hops, runner) = chain(app, auth.host_id()).await.map_err(|e| fixed(e))?;
     let (target, hops) = (hop(app, auth, &runner, target).await?, {
@@ -124,7 +155,11 @@ async fn one(app: &App, auth: &Authorized, step: &str) -> Result<ExecResult, Str
         .hub
         .dispatch_ssh_exec(&runner, exec)
         .map_err(|e| why(e.code))?;
-    match sent.outcome().await {
+    let outcome = tokio::select! {
+        o = sent.outcome() => o,
+        () = stopped(cancel) => return Err(fixed("cancelled")),
+    };
+    match outcome {
         Ok(Body::Result(Reply::SshExec(r))) => Ok(r),
         Ok(_) => Err(fixed("the runner answered something else")),
         Err(e) => Err(why(e.code)),

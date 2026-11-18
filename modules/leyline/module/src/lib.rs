@@ -11,6 +11,7 @@ mod address;
 mod attach;
 mod commands;
 mod exec;
+mod fleet;
 pub mod gate;
 mod hosts;
 mod keys;
@@ -46,6 +47,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0003_commands.up.sql"),
         down: include_str!("../migrations/0003_commands.down.sql"),
     },
+    Migration {
+        version: 4,
+        name: "0004_fleet",
+        up: include_str!("../migrations/0004_fleet.up.sql"),
+        down: include_str!("../migrations/0004_fleet.down.sql"),
+    },
 ];
 
 // A key write is a secret write: importing needs the step-up like the Core's own secret writes.
@@ -65,6 +72,8 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("PATCH", "/commands/{command}"),
     ("DELETE", "/commands/{command}"),
     ("POST", "/commands/{command}/run"),
+    ("POST", "/fleet/runs"),
+    ("POST", "/runs/{run}/cancel"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
 ];
@@ -108,7 +117,9 @@ pub struct Leyline;
         commands::patch,
         commands::remove,
         commands::run,
-        commands::get_run
+        commands::get_run,
+        fleet::start,
+        fleet::cancel
     ),
     components(schemas(
         hosts::HostView,
@@ -132,7 +143,10 @@ pub struct Leyline;
         commands::RunRequest,
         commands::RunStarted,
         commands::RunView,
-        commands::RunHost
+        commands::RunHost,
+        fleet::FleetRequest,
+        fleet::FleetStarted,
+        fleet::Cancelled
     ))
 )]
 struct Doc;
@@ -163,6 +177,8 @@ impl Module for Leyline {
             )
             .route("/commands/{command}/run", post(commands::run))
             .route("/runs/{run}", get(commands::get_run))
+            .route("/runs/{run}/cancel", post(fleet::cancel))
+            .route("/fleet/runs", post(fleet::start))
             .route("/projects/{project}/hosts", get(attach::list))
             .route(
                 "/projects/{project}/hosts/{host}",
@@ -175,7 +191,12 @@ impl Module for Leyline {
     }
 
     fn event_kinds(&self) -> &'static [&'static str] {
-        &["leyline.host", "leyline.key", "leyline.command"]
+        &[
+            "leyline.host",
+            "leyline.key",
+            "leyline.command",
+            "leyline.run",
+        ]
     }
 
     /// Ids only, so a read-only device may see them.
@@ -199,6 +220,7 @@ impl Module for Leyline {
             "leyline.run.approval",
             "leyline.run.allowed",
             "leyline.run.refused",
+            "leyline.run.cancelled",
         ]
     }
 

@@ -213,7 +213,7 @@ async fn record(conn: &mut SqliteConnection, op: &str, id: &str) -> Result<(), s
 }
 
 /// The command `ident` names (id, else its unique name).
-async fn find_cmd(conn: &mut SqliteConnection, ident: &str) -> Result<String, ApiError> {
+pub(crate) async fn find_cmd(conn: &mut SqliteConnection, ident: &str) -> Result<String, ApiError> {
     sqlx::query_scalar(
         "SELECT id FROM leyline_commands WHERE lower(id) = lower(?1) OR name = ?1 COLLATE NOCASE LIMIT 1",
     )
@@ -223,7 +223,10 @@ async fn find_cmd(conn: &mut SqliteConnection, ident: &str) -> Result<String, Ap
     .ok_or_else(|| ApiError::not_found("no such command"))
 }
 
-async fn load_view(conn: &mut SqliteConnection, id: &str) -> Result<CommandView, ApiError> {
+pub(crate) async fn load_view(
+    conn: &mut SqliteConnection,
+    id: &str,
+) -> Result<CommandView, ApiError> {
     let row = sqlx::query("SELECT * FROM leyline_commands WHERE id = ?")
         .bind(id)
         .fetch_one(conn)
@@ -433,7 +436,7 @@ pub(crate) async fn run(
     let auth =
         crate::gate::authorize(&app, &Principal::of(&me), &host, &Action::Preset(cmd.id)).await?;
     let run = auth.run_id().to_owned();
-    tokio::spawn(crate::exec::run(app.clone(), auth));
+    tokio::spawn(crate::exec::run(app.clone(), auth, None));
     Ok(Json(RunStarted {
         run,
         state: "running".to_owned(),
@@ -452,6 +455,8 @@ pub struct RunHost {
     pub duration_ms: Option<i64>,
     /// Each step's command line and output, redacted, at most 64 KB.
     pub output: Option<String>,
+    /// Why it did not run (refused, cancelled): a fixed sentence.
+    pub reason: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -480,7 +485,7 @@ pub(crate) async fn get_run(State(app): State<App>, Path(id): Path<String>) -> A
     .await?
     .ok_or_else(|| ApiError::not_found("no such run"))?;
     let rows = sqlx::query(
-        "SELECT host_id, state, step, exit_code, duration_ms, output FROM leyline_run_hosts WHERE run_id = ? ORDER BY host_id",
+        "SELECT host_id, state, step, exit_code, duration_ms, output, reason FROM leyline_run_hosts WHERE run_id = ? ORDER BY host_id",
     )
     .bind(&id)
     .fetch_all(&app.pool)
@@ -495,6 +500,7 @@ pub(crate) async fn get_run(State(app): State<App>, Path(id): Path<String>) -> A
                 exit_code: h.try_get("exit_code")?,
                 duration_ms: h.try_get("duration_ms")?,
                 output: h.try_get("output")?,
+                reason: h.try_get("reason")?,
             })
         })
         .collect::<Result<_, sqlx::Error>>()?;

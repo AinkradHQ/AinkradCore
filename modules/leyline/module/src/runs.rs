@@ -174,10 +174,11 @@ pub(super) async fn settle(
             Verdict::Ask => unreachable!("every ask is decided before settling"),
         }
     }
-    for (id, _) in &refused {
+    for (id, why) in &refused {
         sqlx::query(
-            "UPDATE leyline_run_hosts SET state = 'refused' WHERE run_id = ? AND host_id = ?",
+            "UPDATE leyline_run_hosts SET state = 'refused', reason = ? WHERE run_id = ? AND host_id = ?",
         )
+        .bind(*why)
         .bind(run)
         .bind(id)
         .execute(&mut *tx)
@@ -246,7 +247,7 @@ pub(super) async fn settle(
 pub async fn finish(app: &App, done: Authorized, ok: bool) -> Result<(), ApiError> {
     let mut tx = begin_write(&app.pool).await?;
     sqlx::query(
-        "UPDATE leyline_run_hosts SET state = ? WHERE run_id = ? AND host_id = ? AND state = 'queued'",
+        "UPDATE leyline_run_hosts SET state = ? WHERE run_id = ? AND host_id = ? AND state IN ('queued', 'running')",
     )
     .bind(if ok { "ok" } else { "failed" })
     .bind(&done.run)
