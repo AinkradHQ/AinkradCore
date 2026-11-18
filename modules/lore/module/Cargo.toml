@@ -21,7 +21,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
 utoipa = "6.0.0"
-tokio = { version = "1.54.0", features = ["rt", "time"] }
+tokio = { version = "1.54.0", features = ["rt", "time", "process", "io-util", "sync"] }
+# Reads uploaded zips (R4-01): central directory only, deflate, nothing written to disk.
+zip = { version = "9", default-features = false, features = ["deflate"] }
 tracing = "0.1"
 
 [dev-dependencies]
