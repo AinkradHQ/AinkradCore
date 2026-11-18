@@ -3,27 +3,33 @@
 //! text out (API and table), `leyline.*` events and audit; and keys (Y1-02): generated or imported,
 //! sealed in the Core's secret store, public data only in the API; and project attachments (Y1-03).
 //! SSH itself runs on a runner (Y2); the command gate (`gate`, Y4-01), host terminals and host-key
-//! trust (Y3-01), Mac-direct agent leases (`direct`, Y6-01) and making a host a runner (Y8-01)
-//! are here.
+//! trust (Y3-01), Mac-direct agent leases (`direct`, Y6-01), making a host a runner (Y8-01), and session
+//! history, recording and replay (Y3-02) are here.
 //!
 //! Module off, the Core is unchanged: the tables are its own `leyline_` namespace, no Core
 //! migration, no Core crate names this module.
 
 mod address;
+mod ai;
 mod alerts;
 mod attach;
+mod cast;
 mod commands;
 mod direct;
 mod exec;
 mod fleet;
 pub mod gate;
 mod health;
+mod history;
 pub mod hostkeys;
 mod hosts;
 mod keys;
 mod makerunner;
 mod policy;
 mod ready;
+/// Terminal recording; public so `benches/relay_tap.rs` can time the relay's tap.
+pub mod record;
+mod scrub;
 mod terminal;
 mod valid;
 
@@ -85,9 +91,15 @@ pub static MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 8,
-        name: "0008_direct",
-        up: include_str!("../migrations/0008_direct.up.sql"),
-        down: include_str!("../migrations/0008_direct.down.sql"),
+        name: "0008_recordings",
+        up: include_str!("../migrations/0008_recordings.up.sql"),
+        down: include_str!("../migrations/0008_recordings.down.sql"),
+    },
+    Migration {
+        version: 9,
+        name: "0009_direct",
+        up: include_str!("../migrations/0009_direct.up.sql"),
+        down: include_str!("../migrations/0009_direct.down.sql"),
     },
 ];
 
@@ -103,6 +115,10 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/hosts/{host}/host-keys/replace"),
     // A Mac-direct lease hands a key to a runner on the person's machine: Touch ID, like a terminal.
     ("POST", "/hosts/{host}/direct"),
+    // Recording on or off both need it: turning it off hides what happens on a host. Resuming a
+    // paused recording too; pausing does not (a person who sees one can stop it at once).
+    ("PUT", "/hosts/{host}/recording"),
+    ("POST", "/sessions/{session}/recording/resume"),
     // Installs software as root on a host and pairs it: a person at a live step-up.
     ("POST", "/hosts/{host}/runner"),
 ];
@@ -121,8 +137,19 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/hosts/{host}/host-keys/trust"),
     // Ending a lease only takes access away.
     ("POST", "/hosts/{host}/direct/revoke"),
+    ("POST", "/sessions/{session}/recording/pause"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
+    ("POST", "/ai/hosts/{host}/exec"),
+    ("POST", "/ai/commands/{command}/run"),
+];
+// The AI routes that reach a host ask a person through the gate itself (T10), never twice, and
+// may wait for that person inside the call.
+const SELF_APPROVED: &[(&str, &str)] = &[
+    ("GET", "/ai/hosts/{host}/files"),
+    ("GET", "/ai/hosts/{host}/file"),
+    ("POST", "/ai/hosts/{host}/exec"),
+    ("POST", "/ai/commands/{command}/run"),
 ];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts", "read"),
@@ -135,11 +162,24 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/commands", "read"),
     ("GET", "/commands/{command}", "read"),
     ("GET", "/runs/{run}", "admin"),
+    // Code Mode (Y7-01): a session acts as its creator without `admin`, so these name scopes a
+    // creator holds. They answer only a session's own calls (`ai::session_only`).
+    ("GET", "/ai/runs/{run}", "agent"),
+    ("GET", "/ai/hosts/{host}/files", "agent"),
+    ("GET", "/ai/hosts/{host}/file", "agent"),
+    ("POST", "/ai/hosts/{host}/exec", "agent"),
+    ("POST", "/ai/commands/{command}/run", "agent"),
     ("GET", "/hosts/{host}/host-keys", "read"),
     // The terminal scope, as the Core's own terminal routes.
     ("POST", "/hosts/{host}/terminals", "terminal"),
     ("POST", "/hosts/{host}/direct", "terminal"),
     ("POST", "/hosts/{host}/direct/revoke", "terminal"),
+    ("GET", "/hosts/{host}/sessions", "read"),
+    ("GET", "/projects/{project}/sessions", "read"),
+    // A recording is terminal content: the terminal scope, and a step-up in the handler.
+    ("GET", "/sessions/{session}/recording", "terminal"),
+    ("POST", "/sessions/{session}/recording/pause", "terminal"),
+    ("POST", "/sessions/{session}/recording/resume", "terminal"),
     ("POST", "/hosts/{host}/runner", "terminal"),
 ];
 
@@ -173,12 +213,23 @@ pub struct Leyline;
         commands::get_run,
         fleet::start,
         fleet::cancel,
+        ai::exec,
+        ai::get_run,
+        ai::run_command,
+        ai::list_files,
+        ai::read_file,
         hostkeys::list,
         hostkeys::trust_route,
         hostkeys::replace_route,
         terminal::open,
         direct::lease,
         direct::revoke_route,
+        history::host_sessions,
+        history::project_sessions,
+        history::set_recording,
+        history::replay,
+        history::pause,
+        history::resume,
         makerunner::make
     ),
     components(schemas(
@@ -207,6 +258,10 @@ pub struct Leyline;
         fleet::FleetRequest,
         fleet::FleetStarted,
         fleet::Cancelled,
+        ai::ExecRequest,
+        ai::AiRunRequest,
+        ai::FileList,
+        ai::FileText,
         hostkeys::HostKeyView,
         hostkeys::Pick,
         terminal::NewSession,
@@ -214,6 +269,10 @@ pub struct Leyline;
         direct::NewDirect,
         direct::DirectView,
         direct::DirectEnded,
+        history::SessionRow,
+        history::NewRecording,
+        history::HostRecording,
+        history::Paused,
         makerunner::Install
     ))
 )]
@@ -225,6 +284,8 @@ impl Module for Leyline {
     }
 
     fn attach(&self, app: &App) {
+        history::attach(app);
+        health::attach(app);
         // A host terminal's monitor lives in the process: rows left open by the last one are over.
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let app = app.clone();
@@ -238,6 +299,7 @@ impl Module for Leyline {
                 }
             });
         }
+        health::attach(app);
     }
 
     fn routes(&self) -> Router<App> {
@@ -256,6 +318,18 @@ impl Module for Leyline {
             .route("/hosts/{host}/terminals", post(terminal::open))
             .route("/hosts/{host}/direct", post(direct::lease))
             .route("/hosts/{host}/direct/revoke", post(direct::revoke_route))
+            .route("/hosts/{host}/sessions", get(history::host_sessions))
+            .route("/hosts/{host}/recording", put(history::set_recording))
+            .route(
+                "/projects/{project}/sessions",
+                get(history::project_sessions),
+            )
+            .route("/sessions/{session}/recording", get(history::replay))
+            .route("/sessions/{session}/recording/pause", post(history::pause))
+            .route(
+                "/sessions/{session}/recording/resume",
+                post(history::resume),
+            )
             .route("/hosts/{host}/runner", post(makerunner::make))
             .route("/groups", get(hosts::groups))
             .route("/tags", get(hosts::tags))
@@ -273,6 +347,11 @@ impl Module for Leyline {
             .route("/runs/{run}", get(commands::get_run))
             .route("/runs/{run}/cancel", post(fleet::cancel))
             .route("/fleet/runs", post(fleet::start))
+            .route("/ai/hosts/{host}/exec", post(ai::exec))
+            .route("/ai/runs/{run}", get(ai::get_run))
+            .route("/ai/hosts/{host}/files", get(ai::list_files))
+            .route("/ai/hosts/{host}/file", get(ai::read_file))
+            .route("/ai/commands/{command}/run", post(ai::run_command))
             .route("/projects/{project}/hosts", get(attach::list))
             .route(
                 "/projects/{project}/hosts/{host}",
@@ -327,6 +406,12 @@ impl Module for Leyline {
             "leyline.direct.expired",
             "leyline.direct.failed",
             "leyline.direct.dropped",
+            "leyline.recording.on",
+            "leyline.recording.off",
+            "leyline.recording.replayed",
+            "leyline.recording.paused",
+            "leyline.recording.resumed",
+            "leyline.recording.pruned",
             "leyline.run.requested",
             "leyline.run.approval",
             "leyline.run.allowed",
@@ -336,7 +421,7 @@ impl Module for Leyline {
     }
 
     fn query_names(&self) -> &'static [&'static str] {
-        &["group", "tag"]
+        &["group", "tag", "limit", "path"]
     }
 
     fn scope(&self) -> &'static str {
@@ -355,6 +440,10 @@ impl Module for Leyline {
         Some(NON_DESTRUCTIVE)
     }
 
+    fn self_approved(&self) -> &'static [(&'static str, &'static str)] {
+        SELF_APPROVED
+    }
+
     fn notification_kinds(&self) -> &'static [(&'static str, &'static str)] {
         alerts::KINDS
     }
@@ -364,11 +453,9 @@ impl Module for Leyline {
     }
 
     fn jobs(&self) -> Vec<Job> {
-        health::jobs()
-    }
-
-    fn attach(&self, app: &App) {
-        health::attach(app);
+        let mut jobs = health::jobs();
+        jobs.extend(history::jobs());
+        jobs
     }
 
     fn openapi(&self) -> Value {

@@ -5,7 +5,7 @@
 //! Security model.
 //! - The prober is the principal `system:health` (`Principal::health`, built only here). Its whole
 //!   power is `Action::Probe`, decided by the gate's one table; every probe holds an `Authorized`
-//!   from `gate::authorize_many` and is sent only through `exec::build`, the same path a pre-set
+//!   from `gate::authorize_many` and is sent only through `exec::probe`, the same path a pre-set
 //!   command takes (lease per hop, pinned keys, `gate::checked` right before dispatch). Health can
 //!   never trust or replace a host key, and runs no text but the constant `PROBE`.
 //! - A host whose key (or any jump hop's) has no TRUSTED host key is not probed at all, and a runner
@@ -227,13 +227,10 @@ async fn measure(app: &App, limits: &Limits, auth: &Authorized) -> Seen {
         .chain([&link.target])
         .map(|s| s.id.clone())
         .collect();
-    let Ok((runner, exec)) = exec::build(app, auth, PROBE, PROBE_TIMEOUT, link).await else {
+    let Ok(sent) = exec::probe(app, auth, PROBE, PROBE_TIMEOUT, link).await else {
         return Seen::Unknown;
     };
     let t = Instant::now();
-    let Ok(sent) = app.hub.dispatch_ssh_exec(&runner, exec) else {
-        return Seen::Unknown;
-    };
     let answer = sent.outcome().await;
     let ms = i64::try_from(t.elapsed().as_millis()).unwrap_or(i64::MAX);
     match answer {
@@ -250,19 +247,6 @@ async fn measure(app: &App, limits: &Limits, auth: &Authorized) -> Seen {
                 .filter(|k| hostkeys::fingerprint_ok(&k.fingerprint))
                 && let Some(id) = path.get(usize::from(k.hop))
                 && let Err(err) = hostkeys::saw(app, id, &k.fingerprint, true).await
-            {
-                tracing::error!(error = %err.message, "recording a changed host key failed");
-            }
-            Seen::Unknown
-        }
-        // Not down, not a sample: the host (or a jump hop) presented another key. The hop's own
-        // host id is alerted, and `saw` stores the fingerprint for a person to compare.
-        Err(e) if e.code == ErrorCode::HostKeyChanged => {
-            if let Some(k) = e
-                .host_key
-                .filter(|k| hostkeys::fingerprint_ok(&k.fingerprint))
-                && let Some(stop) = hops.iter().chain([&target]).nth(usize::from(k.hop))
-                && let Err(err) = hostkeys::saw(app, &stop.id, &k.fingerprint, true).await
             {
                 tracing::error!(error = %err.message, "recording a changed host key failed");
             }

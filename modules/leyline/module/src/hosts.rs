@@ -277,6 +277,19 @@ pub(crate) async fn find(conn: &mut SqliteConnection, ident: &str) -> Result<Str
     }
 }
 
+/// What a host wrote about itself (`os`, from its health probe) is outside data to an AI session:
+/// the same envelope as run output, labelled with the Core's id only.
+pub(crate) fn for_reader(me: &Caller, h: &mut HostView) {
+    if crate::ai::session_of(me).is_some()
+        && let Some(os) = h.os.take()
+    {
+        h.os = Some(ainkrad_core::untrusted::wrap(
+            &format!("os of host {}", h.id),
+            &crate::gate::redact_text(&os),
+        ));
+    }
+}
+
 async fn load(conn: &mut SqliteConnection, id: &str) -> Result<HostView, ApiError> {
     let row = sqlx::query("SELECT * FROM leyline_hosts WHERE id = ?")
         .bind(id)
@@ -303,6 +316,7 @@ pub(crate) struct ListQuery {
     responses((status = 200, description = "Hosts by group then label (at most 500)", body = Vec<HostView>)))]
 pub(crate) async fn list(
     State(app): State<App>,
+    Extension(me): Extension<Caller>,
     q: Result<Query<ListQuery>, QueryRejection>,
 ) -> ApiResult<Vec<HostView>> {
     let Query(q) = q.map_err(|_| ApiError::bad_request("the query is not valid"))?;
@@ -325,6 +339,7 @@ pub(crate) async fn list(
         h.projects = mine.into_iter().map(|(_, p)| p).collect();
         all = rest;
     }
+    out.iter_mut().for_each(|h| for_reader(&me, h));
     Ok(Json(out))
 }
 
@@ -381,10 +396,16 @@ pub(crate) async fn create(
 #[utoipa::path(get, path = "/hosts/{host}", operation_id = "leylineGetHost", tag = "leyline",
     params(("host" = String, Path, description = "Host id, else its unique label")),
     responses((status = 200, description = "The host", body = HostView)))]
-pub(crate) async fn get(State(app): State<App>, Path(host): Path<String>) -> ApiResult<HostView> {
+pub(crate) async fn get(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(host): Path<String>,
+) -> ApiResult<HostView> {
     let mut conn = app.pool.acquire().await?;
     let id = find(&mut conn, &host).await?;
-    Ok(Json(load(&mut conn, &id).await?))
+    let mut out = load(&mut conn, &id).await?;
+    for_reader(&me, &mut out);
+    Ok(Json(out))
 }
 
 #[utoipa::path(patch, path = "/hosts/{host}", operation_id = "leylinePatchHost", tag = "leyline",
