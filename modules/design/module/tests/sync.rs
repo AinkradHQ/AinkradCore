@@ -14,7 +14,7 @@ use ainkrad_core_server::auth::testing::TestDevice;
 use ainkrad_core_server::module::Module;
 use ainkrad_core_server::scheduler::{Clock, SystemClock};
 use ainkrad_core_server::store::{connect, gov, migrate};
-use design_crdt::{NodeType, Replica};
+use design_doc::{NodeType, Replica};
 use design_model::tree::forest;
 use design_module::{Design, Limits};
 use futures_util::{SinkExt, StreamExt};

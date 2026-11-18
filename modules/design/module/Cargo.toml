@@ -11,7 +11,7 @@ workspace = true
 ainkrad-core = { path = "../../../crates/core" }
 ainkrad-core-server = { path = "../../../crates/server" }
 axum = "0.8.9"
-design-crdt = { path = "../crdt" }
+design-doc = { path = "../doc" }
 design-model = { path = "../model" }
 getrandom = "0.4.3"
 quick-xml = "0.42.0"
@@ -28,5 +28,4 @@ ainkrad-core-server = { path = "../../../crates/server", features = ["test-suppo
 futures-util = "0.3.34"
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
 tokio-tungstenite = "0.29.0"
-futures-util = "0.3.34"
 tower = { version = "0.5.3", features = ["util"] }
