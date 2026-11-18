@@ -4,7 +4,9 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use ainkrad_proto::runner::Workspace;
 use ainkrad_proto::v2::{
     Command, DRIVER_RUN, DriverInfo, ErrorCode, OP_RUN_START, OP_RUN_STATUS, OP_RUN_STOP, Reply,
     RunStart, StreamError,
@@ -19,6 +21,9 @@ pub struct RunDriver {
     redeem: Redeem,
     /// Where this runner's own checkouts live; a run's `checkouts.dir` must resolve under it.
     checkouts: PathBuf,
+    /// Clones a run's repos from the Core's copies (the agent driver's mirror path); without it a
+    /// run that builds from a repo cannot start here.
+    clones: Option<Arc<super::agent::AgentDriver>>,
 }
 
 /// The unit that loads `deploy/run-egress.nft` (and re-loads it with nftables.service).
@@ -74,7 +79,71 @@ impl RunDriver {
             socket: socket.into(),
             redeem,
             checkouts: checkouts.into(),
+            clones: None,
         }
+    }
+
+    pub fn with_clones(mut self, agents: Arc<super::agent::AgentDriver>) -> Self {
+        self.clones = Some(agents);
+        self
+    }
+
+    /// Clones every checkout that names a Core copy (`from_core`) into one private dir and fills
+    /// in its `dir`; the Core serves each copy only while it holds a lease for this runner. `Some`
+    /// is the session and root to drop once the run has its bundles.
+    async fn clone_all(
+        &self,
+        req: &mut RunStart,
+    ) -> Result<Option<(String, PathBuf)>, StreamError> {
+        let bad = |e: String| StreamError::new(ErrorCode::InvalidArgs, e);
+        let trees: Vec<Workspace> = req
+            .checkouts
+            .iter()
+            .filter_map(|c| {
+                c.from_core.as_ref().map(|f| Workspace {
+                    repo: f.remote.clone(),
+                    base: f.base.clone(),
+                    branch: f.base.clone(),
+                    push: false,
+                    name: c.repo.clone(),
+                    also: Vec::new(),
+                    expected_head: None,
+                    mirror: Some(f.mirror),
+                })
+            })
+            .collect();
+        let Some((first, rest)) = trees.split_first() else {
+            return Ok(None);
+        };
+        let agents = self
+            .clones
+            .as_ref()
+            .ok_or_else(|| bad("this runner cannot clone from the Core".into()))?;
+        if let Some(why) = first
+            .problem()
+            .or_else(|| rest.iter().find_map(Workspace::problem))
+        {
+            return Err(bad(why));
+        }
+        let mut head = first.clone();
+        head.also = rest.to_vec();
+        // `as_` + the run's letters and digits: a valid session id, one per run.
+        let alnum: String = req
+            .run
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+        let session = format!("as_run{alnum}");
+        let root = agents.run_workspace(&session, &head).await.map_err(bad)?;
+        for c in req.checkouts.iter_mut().filter(|c| c.from_core.is_some()) {
+            let dir = match trees.len() {
+                1 => root.clone(),
+                _ => root.join(&c.repo),
+            };
+            c.dir = dir.to_string_lossy().into_owned();
+            c.from_core = None;
+        }
+        Ok(Some((session, root)))
     }
 
     /// Offered where the run helper is installed (`--with-run`); the Core places runs only on a
@@ -105,24 +174,13 @@ impl RunDriver {
                         format!("{EGRESS_UNIT} is not active; refusing to start a run"),
                     ));
                 }
-                let req = self.prepare(req).await?;
-                let tmp = tempdir()?;
-                let mut bundles = Vec::new();
-                for c in &req.checkouts {
-                    let dir = checkout_dir(&self.checkouts, &c.dir)
-                        .map_err(|e| StreamError::new(ErrorCode::InvalidArgs, e))?;
-                    bundles.push(bundle(&dir, &tmp.0.join(&c.repo)).await?);
+                let mut req = self.prepare(req).await?;
+                let held = self.clone_all(&mut req).await?;
+                let out = self.start_bundled(req).await;
+                if let (Some((session, root)), Some(agents)) = (held, &self.clones) {
+                    agents.drop_run_workspace(&session, &root).await;
                 }
-                let lens = bundles.iter().map(|b| b.1).collect();
-                let paths: Vec<PathBuf> = bundles.into_iter().map(|b| b.0).collect();
-                let start = Request::Start {
-                    start: req,
-                    bundles: lens,
-                };
-                let v = helper::call(&self.socket, &start, &paths)
-                    .await
-                    .map_err(internal)?;
-                Ok(Reply::RunStart(de(v)?))
+                out
             }
             Command::RunStop(req) => {
                 let v = helper::call(&self.socket, &Request::Stop { run: req.run }, &[]).await;
@@ -133,10 +191,36 @@ impl RunDriver {
                 Ok(Reply::RunStatus(de(v.map_err(internal)?)?))
             }
             _ => Err(StreamError::new(
-                ErrorCode::UnsupportedCommand,
-                "not a run op",
+                ErrorCode::InvalidArgs,
+                "not a run driver command",
             )),
         }
+    }
+
+    /// Bundles each checkout and hands the start to the run helper.
+    async fn start_bundled(&self, req: RunStart) -> Result<Reply, StreamError> {
+        let internal = |e: String| StreamError::new(ErrorCode::Internal, e);
+        fn de<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> Result<T, StreamError> {
+            serde_json::from_value(v)
+                .map_err(|e| StreamError::new(ErrorCode::Internal, e.to_string()))
+        }
+        let tmp = tempdir()?;
+        let mut bundles = Vec::new();
+        for c in &req.checkouts {
+            let dir = checkout_dir(&self.checkouts, &c.dir)
+                .map_err(|e| StreamError::new(ErrorCode::InvalidArgs, e))?;
+            bundles.push(bundle(&dir, &tmp.0.join(&c.repo)).await?);
+        }
+        let lens = bundles.iter().map(|b| b.1).collect();
+        let paths: Vec<PathBuf> = bundles.into_iter().map(|b| b.0).collect();
+        let start = Request::Start {
+            start: req,
+            bundles: lens,
+        };
+        let v = helper::call(&self.socket, &start, &paths)
+            .await
+            .map_err(internal)?;
+        Ok(Reply::RunStart(de(v)?))
     }
 
     /// Checks the request, redeems its leases and fills the env; the secrets list leaves it empty.

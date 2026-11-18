@@ -80,12 +80,27 @@ pub struct RunLimits {
     pub pids: u32,
 }
 
-/// A repo checkout the runner prepared for this run (P3-02's clone from the Core copy).
+/// A repo checkout of this run. With `from_core` the runner clones it itself, from the Core's copy
+/// (P3-02's clone for AI sessions, which the Core leased to this runner for the run), and `dir`
+/// is empty: the runner picks the directory. Without it `dir` is a checkout the runner already holds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RunCheckout {
     pub repo: String,
     /// Absolute path of the checkout on the runner host.
     pub dir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_core: Option<RunClone>,
+}
+
+/// Where a run's checkout is cloned from (P5-05).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RunClone {
+    /// The project repo id: the Core serves its copy to this runner only while it holds a lease.
+    pub mirror: i64,
+    /// The repo's remote: the checkout's `origin` (no credentials, as `repo_url_problem` checks).
+    pub remote: String,
+    /// The branch to check out.
+    pub base: String,
 }
 
 /// A secret the spec names, as a lease (`l_…`) the runner redeems once.
@@ -268,8 +283,15 @@ impl RunStart {
             return bad("checkouts", "at most 16");
         }
         for (i, c) in self.checkouts.iter().enumerate() {
-            if !valid_name(&c.repo) || !c.dir.starts_with('/') {
-                return bad("checkouts", "a repo name and an absolute dir");
+            let dir_ok = match &c.from_core {
+                Some(_) => c.dir.is_empty(),
+                None => c.dir.starts_with('/'),
+            };
+            if !valid_name(&c.repo) || !dir_ok {
+                return bad(
+                    "checkouts",
+                    "a repo name and an absolute dir (none to clone)",
+                );
             }
             if self.checkouts[..i].iter().any(|o| o.repo == c.repo) {
                 return bad("checkouts", "one checkout per repo");
@@ -452,6 +474,7 @@ mod tests {
             .map(|i| RunCheckout {
                 repo: format!("r{i}"),
                 dir: "/w".into(),
+                from_core: None,
             })
             .collect();
         assert!(s.problem().unwrap().contains("at most 16"));

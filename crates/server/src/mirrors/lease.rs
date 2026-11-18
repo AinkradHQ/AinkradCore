@@ -46,6 +46,16 @@ impl Mirrors {
         }
     }
 
+    /// Ends `device`'s lease on each of `repos` now (a project run ended: P5-05). One lease is
+    /// per (device, repo), so this also ends a session's on the same runner; that session has
+    /// cloned at launch, and a resume or restart leases again.
+    pub fn revoke(&self, device: &str, repos: &[i64]) {
+        let mut leases = self.leases.lock().expect("leases");
+        for &repo in repos {
+            leases.remove(&(device.to_owned(), repo));
+        }
+    }
+
     fn holds(&self, device: &str, repo: i64, key: &str, now: i64) -> bool {
         let leases = self.leases.lock().expect("leases");
         (leases.get(&(device.to_owned(), repo))).is_some_and(|(until, k)| *until > now && k == key)

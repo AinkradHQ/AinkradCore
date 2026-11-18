@@ -382,6 +382,28 @@ impl AgentDriver {
         self
     }
 
+    /// A project run's checkouts (P5-05): cloned from the Core's copies exactly as a session's are
+    /// (leased by the Core to this runner, through the loopback relay), under a session id of the
+    /// run's own. `Err` is why they could not be made.
+    pub async fn run_workspace(
+        &self,
+        session: &str,
+        workspace: &Workspace,
+    ) -> Result<PathBuf, String> {
+        self.harness
+            .prepare_agent_workspace(session, 0, workspace, None)
+            .await
+    }
+
+    /// Removes what `run_workspace` made: the run's helper holds its own copy by now.
+    pub async fn drop_run_workspace(&self, session: &str, root: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(root);
+        if let Some(parent) = root.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
+        self.harness.cleanup_agent_workspace(session, 0).await;
+    }
+
     pub fn with_versions(mut self, versions: BTreeMap<String, String>) -> Self {
         self.versions = versions;
         self
