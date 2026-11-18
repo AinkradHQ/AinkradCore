@@ -161,6 +161,11 @@ fn measure(chrome: &Path, doc: &Doc, theme: &str, at: usize, tag: &str) -> f64 {
     })
     .unwrap();
     assert_eq!((frame.width, frame.height), (ex.width, ex.height));
+    // AINKRAD_FIDELITY_KEEP=1 keeps the shot and the engine's frame (`frame.png`) for a look at what differs
+    let keep = std::env::var_os("AINKRAD_FIDELITY_KEEP").is_some();
+    if keep {
+        std::fs::write(dir.join("frame.png"), STANDARD.decode(&frame.png).unwrap()).unwrap();
+    }
     let s = fidelity(&DesignFidelity {
         a: frame.png,
         b: b64(&std::fs::read(&shot).unwrap()),
@@ -170,7 +175,9 @@ fn measure(chrome: &Path, doc: &Doc, theme: &str, at: usize, tag: &str) -> f64 {
         "fidelity {tag}: {:.3} % ({} of {} px)",
         s.percent, s.changed, s.total
     );
-    let _ = std::fs::remove_dir_all(&dir);
+    if !keep {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     s.percent
 }
 
@@ -186,6 +193,7 @@ fn golden_screens_export_within_one_percent() {
         return;
     };
     let mut worst: f64 = 0.0;
+    let mut over = vec![];
     let cases: Vec<(&str, Doc, usize)> = vec![
         ("layout-a", layout(), 0),
         ("layout-b", layout(), 1),
@@ -195,14 +203,15 @@ fn golden_screens_export_within_one_percent() {
     for (name, doc, at) in &cases {
         for theme in ["day", "night"] {
             let p = measure(&chrome, doc, theme, *at, &format!("{name}-{theme}"));
-            assert!(
-                p <= 1.0,
-                "{name} {theme}: {p:.3} % of pixels differ (gate 1 %)"
-            );
+            if p > 1.0 {
+                over.push(format!("{name} {theme}: {p:.3} %"));
+            }
             worst = worst.max(p);
         }
     }
     println!("worst fidelity: {worst:.3} %");
+    // every fixture is measured before the verdict, so one failure does not hide the others' numbers
+    assert!(over.is_empty(), "pixels differ over the 1 % gate: {over:?}");
 }
 
 #[test]

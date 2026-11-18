@@ -97,7 +97,7 @@ const CSP: &str = "script-src 'none'; object-src 'none'; base-uri 'none'; form-a
 
 const BASE: &str = "html,body{margin:0;padding:0;overflow:hidden}\
 body{text-rendering:geometricPrecision;font-kerning:normal}\
-.n{position:relative;flex:none;margin:0}\n";
+.n{position:relative;flex:none;margin:0}*{box-sizing:border-box}\n";
 
 struct Walk<'a> {
     day: Cx<'a>,
