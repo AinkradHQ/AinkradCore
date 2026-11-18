@@ -4,15 +4,20 @@
 //! Security model (this is a cost and DoS surface, so the whole policy is here):
 //! - Only the Core's own event log starts a trigger. No route, no AI op and no session text can ask
 //!   for one: an AI session can at most cause its own end, and that is bounded by the caps below.
-//! - Caps are counted from `brain_distils` rows of the UTC day, so a restart or a crash cannot reset
-//!   them: `brain_room_policy.daily_distils` per room and `GLOBAL_DAILY` across rooms. A trigger over
+//! - Caps are counted from `brain_distils` rows of the last 24 hours, so a restart or a crash cannot
+//!   reset them: `brain_room_policy.daily_distils` per room and `GLOBAL_DAILY` across rooms. A trigger over
 //!   a cap is dropped and audited (`brain.distil.capped`), never turned into a failed distil.
-//!   Redistil, tidy and judge runs have their own budget and are not counted.
+//!   Redistil, tidy and judge runs have their own budget and are not counted. A cap is audited at
+//!   most once per room per UTC day. A room whose distil failed is skipped for `FAIL_BACKOFF_SECS`.
 //! - One open distil per room: triggers coalesce into it. A session gets one `session_end` distil
 //!   (`of_session`), however often its end event is read.
 //! - Queueing happens in one write transaction (check, cap, insert), so two ticks or a crash in
-//!   between never leave a duplicate or a half-made row. The event cursor moves only after the
-//!   events before it were handled, so a crash replays them, and replays are harmless.
+//!   between never leave a duplicate or a half-made row; a unique index (one open distil per room)
+//!   also settles a race with a manual start. The event cursor moves only past an event that reached
+//!   `queue` (or was set aside as bad), so a temporary failure or an unsynced session replays it, and
+//!   replays are harmless.
+//! - The distil runs as the room owner's (user 1) most recent manual requester that holds `write` or
+//!   `admin`, never as a read-only device.
 //! - Brain-owned sessions (distil, judge, tidy, overview) are never a trigger, and never a source.
 //! - The first run starts at the newest event: history is not distilled by surprise.
 //!
@@ -31,7 +36,7 @@ use ainkrad_core_server::store::{begin_write, events};
 use axum::http::StatusCode;
 use serde_json::json;
 
-use crate::sync::{Busy, sync_core};
+use crate::sync::{Busy, CORE_SOURCE, sync_core};
 use crate::{Brain, MODULE, distil, policy, rand_id, record};
 
 /// How often the triggers are looked at.
@@ -45,8 +50,12 @@ const THRESHOLD_SOURCES: i64 = 40;
 const THRESHOLD_AGE_SECS: i64 = 6 * 3600;
 /// How often the rooms are scanned for the threshold.
 const SCAN_EVERY_SECS: i64 = 300;
-/// Automatic and manual distils across all rooms per UTC day.
+/// Automatic and manual distils across all rooms per rolling 24 hours.
 const GLOBAL_DAILY: i64 = 100;
+/// A room whose distil failed is left alone this long (a Q value).
+const FAIL_BACKOFF_SECS: i64 = 6 * 3600;
+/// An end event this old is set aside rather than waited on for its session to be collected.
+const STALE_END_SECS: i64 = 86_400;
 const PAGE: u32 = 200;
 const MAX_PAGES: u32 = 10;
 
@@ -80,12 +89,15 @@ async fn active_rooms(app: &App) -> Result<Vec<String>, sqlx::Error> {
         .await
 }
 
-/// The device the distil runs as (its user's fallback chain): who asked for a distil last, else the
-/// oldest active device. No device, no distil.
+/// The device the distil runs as (its user's fallback chain): the owner's (user 1) active device
+/// with a write scope that asked for a distil most recently, else the oldest such device. No device,
+/// no distil.
 async fn requester(app: &App) -> Result<Option<String>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT id FROM core_devices WHERE kind = 'device' AND status = 'active' AND revoked_at IS NULL \
-         ORDER BY (id IN (SELECT requested_by FROM brain_distils WHERE \"trigger\" = 'manual')) DESC, seq LIMIT 1",
+         AND user_id = 1 AND EXISTS (SELECT 1 FROM json_each(core_devices.scopes) WHERE value IN ('write','admin')) \
+         ORDER BY coalesce((SELECT max(created_at) FROM brain_distils \
+                            WHERE \"trigger\" = 'manual' AND requested_by = core_devices.id), '') DESC, seq LIMIT 1",
     )
     .fetch_optional(&app.pool)
     .await
@@ -111,8 +123,19 @@ async fn queue(
         return Ok(Queued::Nothing);
     };
     let day = iso_of_unix(now - now.rem_euclid(86_400));
+    let since = iso_of_unix(now - 86_400);
     let at = iso_of_unix(now);
     let mut tx = begin_write(&app.pool).await?;
+    let failed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM brain_distils WHERE room = ? AND state = 'failed' AND updated_at >= ?",
+    )
+    .bind(room)
+    .bind(iso_of_unix(now - FAIL_BACKOFF_SECS))
+    .fetch_one(&mut *tx)
+    .await?;
+    if failed > 0 {
+        return Ok(Queued::Nothing);
+    }
     let open: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM brain_distils WHERE room = ? \
          AND state IN ('queued','needs_local_model','waiting','running')",
@@ -123,9 +146,10 @@ async fn queue(
     let had: i64 = match session {
         Some(s) => {
             sqlx::query_scalar(
-                "SELECT count(*) FROM brain_distils WHERE of_session = ? AND \"trigger\" = 'session_end'",
+                "SELECT count(*) FROM brain_distils WHERE of_session = ? AND room = ? AND \"trigger\" = 'session_end'",
             )
             .bind(s)
+            .bind(room)
             .fetch_one(&mut *tx)
             .await?
         }
@@ -143,7 +167,7 @@ async fn queue(
          WHERE created_at >= ? AND \"trigger\" NOT IN ('redistil','tidy','judge')",
     )
     .bind(room)
-    .bind(&day)
+    .bind(&since)
     .fetch_one(&mut *tx)
     .await?;
     let over = if in_room >= cap {
@@ -156,14 +180,25 @@ async fn queue(
     if let Some((which, limit)) = over {
         // Only a session end says so: the threshold scan runs all day and would fill the audit log.
         if trigger == "session_end" {
-            record(
-                &mut tx,
-                "brain.distil.capped",
-                json!({"room": room, "trigger": trigger, "session": session, "cap": which, "limit": limit}),
-                None,
+            // At most one row per room per UTC day: a busy room must not fill the audit log.
+            let said: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM audit_events WHERE action = 'brain.distil.capped' \
+                 AND json_extract(details, '$.room') = ? AND json_extract(details, '$.day') = ?",
             )
+            .bind(room)
+            .bind(&day)
+            .fetch_one(&mut *tx)
             .await?;
-            tx.commit().await?;
+            if said == 0 {
+                record(
+                    &mut tx,
+                    "brain.distil.capped",
+                    json!({"room": room, "trigger": trigger, "session": session, "cap": which, "limit": limit, "day": day}),
+                    None,
+                )
+                .await?;
+                tx.commit().await?;
+            }
         }
         return Ok(Queued::Capped);
     }
@@ -174,7 +209,7 @@ async fn queue(
     } else {
         "queued"
     };
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO brain_distils (id, room, state, requested_by, sources, \"trigger\", of_session, created_at, updated_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
@@ -188,7 +223,15 @@ async fn queue(
     .bind(&at)
     .bind(&at)
     .execute(&mut *tx)
-    .await?;
+    .await;
+    match inserted {
+        Ok(_) => {}
+        // A manual start won the race (one open distil per room, by index): coalesce into it.
+        Err(e) if e.as_database_error().is_some_and(|d| d.is_unique_violation()) => {
+            return Ok(Queued::Coalesced);
+        }
+        Err(e) => return Err(e.into()),
+    }
     record(
         &mut tx,
         "brain.distil.queued",
@@ -200,8 +243,41 @@ async fn queue(
     Ok(Queued::Yes)
 }
 
-/// A session ended: queue a distil for each room its collected transcript landed in.
-async fn session_ended(app: &App, b: &Brain, session: &str, now: i64) -> Result<u32, ApiError> {
+/// Has the Core sync taken this session's whole transcript (the sync reads at most 200 sessions a
+/// time)? Also true when it never will: the source is off, or the transcript is empty.
+async fn collected(app: &App, session: &str) -> Result<bool, sqlx::Error> {
+    let on: Option<i64> = sqlx::query_scalar("SELECT enabled FROM brain_sources WHERE id = ?")
+        .bind(CORE_SOURCE)
+        .fetch_optional(&app.pool)
+        .await?;
+    let last: i64 = sqlx::query_scalar("SELECT last_seq FROM core_agent_sessions WHERE id = ?")
+        .bind(session)
+        .fetch_optional(&app.pool)
+        .await?
+        .unwrap_or(0);
+    // The source's cursor, and the cursors of runs still open, both hold `{"sessions": {id: seq}}`.
+    let have: Option<i64> = sqlx::query_scalar(
+        "SELECT max(v) FROM (\
+           SELECT json_extract(cursor, '$.sessions.\"' || ?1 || '\"') AS v FROM brain_sources WHERE id = ?2 \
+           UNION ALL \
+           SELECT json_extract(cursor, '$.sessions.\"' || ?1 || '\"') FROM brain_run_cursors WHERE source = ?2)",
+    )
+    .bind(session)
+    .bind(CORE_SOURCE)
+    .fetch_one(&app.pool)
+    .await?;
+    Ok(on != Some(1) || last <= have.unwrap_or(0))
+}
+
+/// A session ended: queue a distil for each room its collected transcript landed in. `None` when
+/// the transcript is not collected yet (the event is read again next tick).
+async fn session_ended(
+    app: &App,
+    b: &Brain,
+    session: &str,
+    now: i64,
+    stale: bool,
+) -> Result<Option<u32>, ApiError> {
     let owner: Option<Option<String>> =
         sqlx::query_scalar("SELECT owner_module FROM core_agent_sessions WHERE id = ?")
             .bind(session)
@@ -214,7 +290,10 @@ async fn session_ended(app: &App, b: &Brain, session: &str, now: i64) -> Result<
     // A Brain session (distil, judge, tidy) is never a trigger; an unknown session is nothing.
     match owner {
         Some(o) if o.as_deref() != Some(MODULE) && claimed == 0 => {}
-        _ => return Ok(0),
+        _ => return Ok(Some(0)),
+    }
+    if !stale && !collected(app, session).await? {
+        return Ok(None);
     }
     let path = format!("core://ai-session/{session}");
     let mut queued = 0;
@@ -228,7 +307,7 @@ async fn session_ended(app: &App, b: &Brain, session: &str, now: i64) -> Result<
             queued += 1;
         }
     }
-    Ok(queued)
+    Ok(Some(queued))
 }
 
 /// Reads the `agent.ended` events after the cursor. Returns how many distils were queued.
@@ -248,6 +327,7 @@ async fn ended(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError> {
     };
     // Ends younger than this wait (idle debounce): they, and everything after them, are for the next tick.
     let hold = iso_of_unix(now - IDLE_SECS);
+    let old = iso_of_unix(now - STALE_END_SECS);
     let (mut queued, mut synced) = (0, false);
     'pages: for _ in 0..MAX_PAGES {
         let batch = events::list_events(&app.pool, from, PAGE).await?;
@@ -267,10 +347,22 @@ async fn ended(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError> {
                             Ok(_) => synced = true,
                             // The brain key is missing or locked: wait, nothing is lost.
                             Err(x) if x.status == StatusCode::CONFLICT => break 'pages,
-                            Err(x) => return Err(x),
+                            // Any other failure: log it, set this event aside, go on (the next event
+                            // tries the sync again, and the threshold scan does not depend on it).
+                            Err(x) => {
+                                tracing::error!(code = %x.code, session = id, "sync_core failed; the end event is set aside");
+                                from = e.seq;
+                                save_cursor(app, from).await?;
+                                continue;
+                            }
                         }
                     }
-                    queued += session_ended(app, b, id, now).await?;
+                    // Past the cursor only once the event reached `queue`: a session the sync has
+                    // not taken yet (200 a time) is read again next tick.
+                    match session_ended(app, b, id, now, e.at < old).await? {
+                        Some(n) => queued += n,
+                        None => break 'pages,
+                    }
                 }
             }
             from = e.seq;
@@ -324,7 +416,10 @@ pub(crate) async fn step(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError
     if b.key(app).await.is_err() {
         return Ok(0);
     }
-    Ok(ended(app, b, now).await? + threshold(app, b, now).await?)
+    // The threshold scan has its own path: a failure of the event reader never sits in front of it.
+    let from_events = ended(app, b, now).await;
+    let from_scan = threshold(app, b, now).await;
+    Ok(from_events? + from_scan?)
 }
 
 struct AutoJob(Brain);

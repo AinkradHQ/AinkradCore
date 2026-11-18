@@ -123,6 +123,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0009_brain_v2.up.sql"),
         down: include_str!("../migrations/0009_brain_v2.down.sql"),
     },
+    Migration {
+        version: 10,
+        name: "brain_one_open_distil",
+        up: include_str!("../migrations/0010_brain_one_open_distil.up.sql"),
+        down: include_str!("../migrations/0010_brain_one_open_distil.down.sql"),
+    },
 ];
 
 /// Employer and client rooms commit like any other room. Ahmed, 2026-11-15: "no need to hold the import bcz of backup".

@@ -126,7 +126,7 @@ async fn the_import_threshold_counts_sources_or_age() {
 }
 
 #[tokio::test]
-async fn the_daily_room_cap_stops_the_next_distil_and_the_next_day_resets_it() {
+async fn the_room_cap_stops_the_next_distil_and_a_rolling_24_hours_later_resets_it() {
     let fx = fx().await;
     let (room, now) = quiet_room(&fx).await;
     let day = now - now.rem_euclid(86_400);
@@ -146,7 +146,8 @@ async fn the_daily_room_cap_stops_the_next_distil_and_the_next_day_resets_it() {
     }
     assert_eq!(rows(&fx, "state = 'failed'").await, 0);
     unread(&fx, &room, 1, &old).await;
-    assert_eq!(fx.brain.auto_distil_step_at(day + 2 * 86_400 + 10_000).await.unwrap(), 1);
+    // 24 hours after the last one the window has moved past all of them (rolling, not the UTC day).
+    assert_eq!(fx.brain.auto_distil_step_at(day + 2 * 86_400 + 10_000 + 1300).await.unwrap(), 1);
 }
 
 #[tokio::test]
@@ -195,4 +196,145 @@ async fn no_ai_op_can_force_a_distil() {
     let fx = fx().await;
     let (st, _) = call(&fx, &fx.admin, Method::POST, "/ai/rooms/any/distil", None).await;
     assert!(matches!(st, StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED), "{st}");
+}
+
+async fn put(fx: &Fx, id: &str, room: &str, state: &str, by: &str, at: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO brain_distils (id, room, state, requested_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(id)
+        .bind(room)
+        .bind(state)
+        .bind(by)
+        .bind(at)
+        .bind(at)
+        .execute(&fx.app.pool)
+        .await
+        .map(drop)
+}
+
+async fn cursor(fx: &Fx) -> i64 {
+    sqlx::query_scalar("SELECT seq FROM brain_session_cursor")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap()
+}
+
+async fn newest_event(fx: &Fx) -> i64 {
+    sqlx::query_scalar("SELECT max(seq) FROM events").fetch_one(&fx.app.pool).await.unwrap()
+}
+
+#[tokio::test]
+async fn the_database_allows_one_open_distil_per_room_and_a_manual_start_gets_the_open_answer() {
+    let fx = fx().await;
+    let (room, _) = quiet_room(&fx).await;
+    let at = "2020-01-01T00:00:00Z";
+    put(&fx, "dst-a", &room, "done", "x", at).await.unwrap();
+    put(&fx, "dst-b", &room, "failed", "x", at).await.unwrap();
+    put(&fx, "dst-c", &room, "queued", "x", at).await.unwrap();
+    let dup = put(&fx, "dst-d", &room, "running", "x", at).await.unwrap_err();
+    assert!(dup.as_database_error().is_some_and(|d| d.is_unique_violation()), "{dup}");
+    // The manual start finds the open one (by the check, or by the index when it lost a race).
+    unread(&fx, &room, 1, at).await;
+    let (st, v) = call(&fx, &fx.admin, Method::POST, &format!("/rooms/{room}/distil"), None).await;
+    assert_eq!(st, StatusCode::CONFLICT, "{v}");
+    assert_eq!(v["code"], "distil_open", "{v}");
+}
+
+#[tokio::test]
+async fn a_failing_sync_is_logged_and_set_aside_and_the_threshold_scan_still_runs() {
+    let fx = fx().await;
+    let (room, now) = quiet_room(&fx).await;
+    session(&fx, "as_bad", Some(ALPHA), "ended", None, &[("user", "x"), ("assistant", "y")]).await;
+    ended(&fx, "as_bad").await;
+    unread(&fx, &room, 40, &iso_of_unix(now - 60)).await;
+    sqlx::query("ALTER TABLE brain_sources RENAME TO brain_sources_away").execute(&fx.app.pool).await.unwrap();
+    let n = fx.brain.auto_distil_step_at(now + 400).await;
+    sqlx::query("ALTER TABLE brain_sources_away RENAME TO brain_sources").execute(&fx.app.pool).await.unwrap();
+    assert_eq!(n.unwrap(), 1, "the threshold queued its distil");
+    assert_eq!(rows(&fx, "\"trigger\" = 'threshold'").await, 1);
+    assert_eq!(cursor(&fx).await, newest_event(&fx).await, "the bad event was set aside");
+}
+
+#[tokio::test]
+async fn the_cursor_waits_for_a_session_the_sync_has_not_taken_yet() {
+    let fx = fx().await;
+    let (_, now) = quiet_room(&fx).await;
+    let before = cursor(&fx).await;
+    // 201 sessions: one sync takes the newest 200, so the oldest end must wait.
+    for i in 0..201 {
+        session(&fx, &format!("as_{i:03}"), None, "ended", None, &[("user", "we ship Friday"), ("assistant", "ok")]).await;
+    }
+    ended(&fx, "as_000").await;
+    let last = newest_event(&fx).await;
+    fx.brain.auto_distil_step_at(now + 90).await.unwrap();
+    assert_eq!(cursor(&fx).await, before, "not moved past an event that never reached the queue");
+    fx.brain.auto_distil_step_at(now + 200).await.unwrap();
+    assert_eq!(cursor(&fx).await, last, "moved once its session was collected");
+}
+
+#[tokio::test]
+async fn a_session_end_in_another_room_does_not_hide_this_rooms_end() {
+    let fx = fx().await;
+    let (room, now) = quiet_room(&fx).await;
+    sqlx::query("INSERT INTO brain_rooms (id, name, kind) VALUES ('rm-other', 'Other', 'general')")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    put(&fx, "dst-o", "rm-other", "done", "x", "2020-01-01T00:00:00Z").await.unwrap();
+    sqlx::query("UPDATE brain_distils SET \"trigger\" = 'session_end', of_session = 'as_one' WHERE id = 'dst-o'")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    session(&fx, "as_one", Some(ALPHA), "ended", None, &[("user", "we ship Friday"), ("assistant", "ok")]).await;
+    ended(&fx, "as_one").await;
+    assert_eq!(fx.brain.auto_distil_step_at(now + 90).await.unwrap(), 1);
+    assert_eq!(rows(&fx, &format!("room = '{room}' AND \"trigger\" = 'session_end'")).await, 1);
+}
+
+#[tokio::test]
+async fn the_distil_runs_as_the_most_recent_manual_requester_with_a_write_scope() {
+    let fx = fx().await;
+    let (room, now) = quiet_room(&fx).await;
+    let readonly = enroll(&fx.app, "reader", &["read"]).await;
+    // The read-only device asked last, but cannot be the requester; the admin asked after the laptop.
+    put(&fx, "dst-1", &room, "done", &fx.laptop.id, "2020-01-01T00:00:00Z").await.unwrap();
+    put(&fx, "dst-2", &room, "done", &fx.admin.id, "2020-02-01T00:00:00Z").await.unwrap();
+    put(&fx, "dst-3", &room, "done", &readonly.id, "2020-03-01T00:00:00Z").await.unwrap();
+    unread(&fx, &room, 1, "2020-01-01T00:00:00Z").await;
+    assert_eq!(fx.brain.auto_distil_step_at(now + 400).await.unwrap(), 1);
+    let by: String = sqlx::query_scalar("SELECT requested_by FROM brain_distils WHERE \"trigger\" = 'threshold'")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(by, fx.admin.id);
+}
+
+#[tokio::test]
+async fn a_room_whose_distil_failed_is_skipped_for_six_hours() {
+    let fx = fx().await;
+    let (room, now) = quiet_room(&fx).await;
+    put(&fx, "dst-f", &room, "failed", "x", &iso_of_unix(now - 3600)).await.unwrap();
+    unread(&fx, &room, 1, "2020-01-01T00:00:00Z").await;
+    assert_eq!(fx.brain.auto_distil_step_at(now + 400).await.unwrap(), 0);
+    assert_eq!(fx.brain.auto_distil_step_at(now + 6 * 3600 + 400).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn a_capped_room_is_audited_once_a_day() {
+    let fx = fx().await;
+    let (room, now) = quiet_room(&fx).await;
+    sqlx::query("UPDATE brain_room_policy SET daily_distils = 0 WHERE room = ?")
+        .bind(&room)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    for id in ["as_one", "as_two"] {
+        session(&fx, id, Some(ALPHA), "ended", None, &[("user", "we ship Friday"), ("assistant", "ok")]).await;
+        ended(&fx, id).await;
+    }
+    assert_eq!(fx.brain.auto_distil_step_at(now + 90).await.unwrap(), 0);
+    let audited: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action = 'brain.distil.capped'")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(audited, 1);
 }
