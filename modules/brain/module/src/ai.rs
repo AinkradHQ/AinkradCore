@@ -50,7 +50,7 @@ const DEFAULT_LIMIT: u32 = 10;
 const MAX_LIMIT: u32 = 25;
 pub(crate) const MAX_BODY: usize = 2000;
 /// How much of a cited source `brainAiEvidence` returns.
-const EVIDENCE_CHARS: usize = 2000;
+pub(crate) const EVIDENCE_CHARS: usize = 2000;
 /// A list shows this much of a record; `brain.record` has all of it.
 pub(crate) const LIST_BODY: usize = 400;
 /// Rooms one search reads.
@@ -207,6 +207,17 @@ pub struct AiHits {
     pub complete: Option<bool>,
 }
 
+/// The hash of the snippet `brainAiEvidence` returns for a source's `text` (its `EVIDENCE_CHARS`
+/// cut), kept in the `brain.ai.evidence` row so a proposal can prove the source still says what
+/// the session read (B3-04 review).
+pub(crate) fn snippet_hash(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(cut(text, EVIDENCE_CHARS).0.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 pub(crate) fn cut(s: &str, n: usize) -> (String, bool) {
     let t = s.trim();
     if t.chars().count() <= n {
@@ -248,7 +259,7 @@ pub(crate) async fn search(
         for (rank, id) in rec_fts(&app, &key, a, limit, &expr).await? {
             // The index only nominates: the text is read from `memory` now.
             let row = sqlx::query(
-                "SELECT id, type, body, tags, source_ids, created_at FROM memory WHERE id = ?",
+                "SELECT id, type, body, tags, source_ids, created_at, origin FROM memory WHERE id = ?",
             )
             .bind(&id)
             .fetch_optional(a.pool())
@@ -328,13 +339,22 @@ pub(crate) fn record_of(
     let tags: Vec<String> =
         serde_json::from_str(&r.try_get::<String, _>("tags")?).unwrap_or_default();
     let (body, truncated) = cut(&r.try_get::<String, _>("body")?, max_body);
+    // An AI session wrote it (`brainAiPropose`): said in the label, inside the envelope, on every
+    // read surface (search, record, decisions, project state), so no reader takes it for the user's.
+    let ai = r.try_get::<String, _>("origin").is_ok_and(|o| o == "ai");
     let text = if tags.is_empty() {
         body
     } else {
         format!("tags: {}\n{body}", tags.join(", "))
     };
     Ok(AiRecord {
-        text: wrap(&format!("record {id} ({kind})"), &text),
+        text: wrap(
+            &format!(
+                "record {id} ({kind}{})",
+                if ai { ", origin=ai" } else { "" }
+            ),
+            &text,
+        ),
         sources: r
             .try_get::<Option<String>, _>("source_ids")
             .ok()
@@ -492,24 +512,27 @@ pub(crate) async fn evidence(
     a.pool().close().await;
     let r = row?.ok_or_else(|| ApiError::not_found("no such evidence"))?;
     let compacted = r.try_get::<Option<String>, _>("compacted_at")?.is_some();
-    let (text, truncated) = if compacted {
-        (String::new(), false)
+    let (text, truncated, hash) = if compacted {
+        (String::new(), false, None)
     } else {
-        let (snip, cut_) = cut(&r.try_get::<String, _>("text")?, EVIDENCE_CHARS);
+        let raw: String = r.try_get("text")?;
+        let (snip, cut_) = cut(&raw, EVIDENCE_CHARS);
         (
             wrap(
                 &format!("source {source} | {}", r.try_get::<String, _>("title")?),
                 &snip,
             ),
             cut_,
+            Some(snippet_hash(&raw)),
         )
     };
-    // Ids only: who read which source, through which record.
+    // Ids and the snippet's hash only: who read which source, through which record, and what it
+    // said then (a proposal citing it must find the same text, B3-04 review).
     let mut ctl = begin_write(&app.pool).await?;
     record(
         &mut ctl,
         "brain.ai.evidence",
-        json!({"room": v.id, "record": record_id, "source": source, "session": session}),
+        json!({"room": v.id, "record": record_id, "source": source, "session": session, "hash": hash}),
         None,
     )
     .await?;

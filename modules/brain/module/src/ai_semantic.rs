@@ -58,12 +58,7 @@ impl Brain {
     pub(crate) fn queue_record_vectors(&self, records: &[(Option<String>, String)]) {
         let pairs: Vec<(String, String)> = records
             .iter()
-            .map(|(n, body)| {
-                (
-                    record_hash(n.as_deref().unwrap_or(body)),
-                    embed_text(body),
-                )
-            })
+            .map(|(n, body)| (record_hash(n.as_deref().unwrap_or(body)), embed_text(body)))
             .collect();
         if !pairs.is_empty() {
             self.queue_embed(pairs);
@@ -146,7 +141,7 @@ pub(crate) async fn rank(
         let c = &cands[i.parse::<usize>().ok()?];
         let (v, a) = &open[c.room];
         let r = sqlx::query(
-            "SELECT id, type, body, tags, source_ids, created_at FROM memory WHERE id = ?",
+            "SELECT id, type, body, tags, source_ids, created_at, origin FROM memory WHERE id = ?",
         )
         .bind(&c.id)
         .fetch_optional(a.pool())

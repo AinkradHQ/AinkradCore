@@ -768,6 +768,7 @@ impl Module for Brain {
             "brain.room.unlinked",
             "brain.ai.evidence",
             "brain.ai.proposed",
+            "brain.ai.outcome",
             "brain.ai.refused",
             "brain.alias.set",
             "brain.alias.removed",
