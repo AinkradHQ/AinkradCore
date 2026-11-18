@@ -2661,6 +2661,7 @@ dependencies = [
  "ainkrad-embed",
  "axum",
  "diffy",
+ "futures-util",
  "getrandom 0.4.3",
  "lore-model",
  "serde",

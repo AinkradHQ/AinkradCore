@@ -14,6 +14,7 @@ mod import;
 mod import_commit;
 mod import_read;
 mod import_stage;
+mod export;
 mod merge;
 mod notes;
 mod save;
@@ -126,6 +127,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/imports", "read"),
     ("GET", "/imports/{run}", "read"),
     ("GET", "/imports/{run}/items", "read"),
+    ("GET", "/export", "read"),
 ];
 
 const BODY_LIMITS: &[(&str, &str, usize)] = &[
@@ -170,7 +172,8 @@ pub struct Lore {
         import::patch_items,
         import::abandon,
         import_commit::commit,
-        import_commit::undo
+        import_commit::undo,
+        export::export
     ),
     components(schemas(
         notes::NoteSummary,
@@ -254,6 +257,7 @@ impl Module for Lore {
             .route("/imports/{run}/commit", post(import_commit::commit))
             .route("/imports/{run}/undo", post(import_commit::undo))
             .route("/imports/{run}/abandon", post(import::abandon))
+            .route("/export", get(export::export))
             .route("/today", get(notes::today))
             .layer(axum::Extension(self.clone()))
     }
@@ -298,7 +302,7 @@ impl Module for Lore {
 
     fn query_names(&self) -> &'static [&'static str] {
         &[
-            "state", "kind", "project", "day", "q", "tag", "limit", "flag", "after",
+            "state", "kind", "project", "day", "q", "tag", "limit", "note", "flag", "after",
         ]
     }
 
