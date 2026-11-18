@@ -1,19 +1,19 @@
 //! The renderer: a page's top-level nodes as cached artboards, a camera, level of detail, hit testing, and dirty-region
 //! bookkeeping. Single-threaded: it owns Skia objects, so the host keeps it on its render thread.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use design_model::{NodeType, Resolved, ResolvedNode, Theme};
-use skia_safe::{Canvas, Color, Contains, Paint, Picture, Point, Rect};
+use skia_safe::{Canvas, Color, Paint, Picture, Point, Rect};
 
 use crate::assets::Assets;
 use crate::camera::Camera;
 use crate::draw::{DrawCx, LODS, Lod, record};
 use crate::fonts::Fonts;
-use crate::hit::{Hit, hit_node};
 use crate::layout::{Laid, build};
 use crate::look::{Fill, num};
+use crate::overlay::{self, Overlay};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Config {
@@ -74,13 +74,13 @@ pub struct Stats {
     pub pictures_recorded: u64,
 }
 
-struct Board {
-    id: String,
+pub(crate) struct Board {
+    pub(crate) id: String,
     hash: u64,
     fonts_epoch: u64,
-    origin: Point,
-    laid: Laid,
-    index: HashMap<String, u32>,
+    pub(crate) origin: Point,
+    pub(crate) laid: Laid,
+    pub(crate) index: HashMap<String, u32>,
     pics: [Option<Picture>; LODS],
     last_used: u64,
 }
@@ -98,7 +98,7 @@ pub struct Renderer {
     pub camera: Camera,
     pub stats: Stats,
     theme: Theme,
-    boards: Vec<Board>,
+    pub(crate) boards: Vec<Board>,
     background: Color,
     dirty: Dirty,
     frame: u64,
@@ -107,6 +107,7 @@ pub struct Renderer {
     order: Vec<String>,
     /// asset hashes the last frames wanted and did not have (deduplicated)
     pub missing: Vec<String>,
+    overlay: Overlay,
 }
 
 fn hash_of(n: &ResolvedNode) -> u64 {
@@ -141,12 +142,14 @@ impl Renderer {
             shadows: Default::default(),
             order: vec![],
             missing: vec![],
+            overlay: Overlay::default(),
         }
     }
 
     fn build_board(&mut self, n: &ResolvedNode) -> Board {
         self.stats.layouts += 1;
         let laid = build(n, &self.fonts, self.theme);
+        self.missing_fonts(n);
         let index = laid
             .nodes
             .iter()
@@ -168,6 +171,26 @@ impl Renderer {
         }
     }
 
+    /// Library fonts the board names and the host has not supplied: they join `missing` (the host fetches them by
+    /// hash like images and hands them over with `add_font`; the text draws with the fallback until then).
+    fn missing_fonts(&mut self, n: &ResolvedNode) {
+        let mut stack = vec![n];
+        while let Some(n) = stack.pop() {
+            if let Some(a) = n
+                .props
+                .get("type")
+                .and_then(|t| t.get("font"))
+                .and_then(|f| f.get("asset"))
+                .and_then(serde_json::Value::as_str)
+                && !self.fonts.has_asset(a)
+                && !self.missing.iter().any(|m| m == a)
+            {
+                self.missing.push(a.to_string());
+            }
+            stack.extend(n.children.iter());
+        }
+    }
+
     /// Show page `page` of `r`. Only top-level nodes whose resolved content changed are laid out again; everything
     /// else keeps its layout and its recorded pictures. Returns what to redraw.
     pub fn load(&mut self, r: &Resolved, page: usize) -> Dirty {
@@ -179,20 +202,39 @@ impl Renderer {
         let all = r.theme != self.theme;
         self.theme = r.theme;
         self.background = page_background(pg, r.theme);
+        let roots: Vec<&ResolvedNode> = pg.children.iter().collect();
+        let epoch = self.fonts.epoch;
+        self.load_roots(&roots, all, |b, c| {
+            b.hash == hash_of(c) && b.fonts_epoch == epoch
+        })
+    }
+
+    /// A gesture preview (V2-03): the page's top-level nodes in order, of which only `changed` are laid out again;
+    /// every other board is kept as is, without hashing its content (a drag frame stays within budget).
+    pub fn load_patch(&mut self, roots: &[&ResolvedNode], changed: &HashSet<String>) -> Dirty {
+        let epoch = self.fonts.epoch;
+        self.load_roots(roots, false, |b, c| {
+            !changed.contains(&c.id) && b.fonts_epoch == epoch
+        })
+    }
+
+    fn load_roots(
+        &mut self,
+        roots: &[&ResolvedNode],
+        all: bool,
+        keep: impl Fn(&Board, &ResolvedNode) -> bool,
+    ) -> Dirty {
         let mut old: HashMap<String, Board> = std::mem::take(&mut self.boards)
             .into_iter()
             .map(|b| (b.id.clone(), b))
             .collect();
-        let before: Vec<String> = pg.children.iter().map(|c| c.id.clone()).collect();
+        let before: Vec<String> = roots.iter().map(|c| c.id.clone()).collect();
         let mut d = if all { Dirty::All } else { Dirty::Clean };
-        let mut order_changed = false;
         let mut boards = Vec::with_capacity(before.len());
-        for c in &pg.children {
-            let h = hash_of(c);
+        for c in roots {
             let ob = old.remove(&c.id);
             let prev = ob.as_ref().map(Board::world_bounds);
-            let reuse = ob.filter(|b| !all && b.hash == h && b.fonts_epoch == self.fonts.epoch);
-            match reuse {
+            match ob.filter(|b| !all && keep(b, c)) {
                 Some(b) => boards.push(b),
                 None => {
                     let b = self.build_board(c);
@@ -208,15 +250,10 @@ impl Renderer {
         for (_, b) in old {
             d = d.add(b.world_bounds());
         }
-        let ids: Vec<&String> = boards.iter().map(|b| &b.id).collect();
-        let prev_ids = self.order.iter().collect::<Vec<_>>();
-        if ids != prev_ids {
-            order_changed = true;
-        }
-        self.order = before;
-        if order_changed {
+        if before != self.order {
             d = Dirty::All;
         }
+        self.order = before;
         self.boards = boards;
         self.mark(d);
         d
@@ -251,34 +288,23 @@ impl Renderer {
         }
     }
 
+    /// Selection, hover, marquee and guides (V2-03). A change redraws the frame; the same overlay does not.
+    pub fn set_overlay(&mut self, o: Overlay) {
+        if o != self.overlay {
+            self.overlay = o;
+            self.dirty = Dirty::All;
+        }
+    }
+
+    pub fn overlay(&self) -> &Overlay {
+        &self.overlay
+    }
+
     pub fn set_camera(&mut self, c: Camera) {
         if c != self.camera {
             self.camera = c;
             self.dirty = Dirty::All;
         }
-    }
-
-    pub fn pan_by(&mut self, dx: f32, dy: f32) {
-        let c = Camera {
-            pan: (self.camera.pan.0 + dx, self.camera.pan.1 + dy),
-            ..self.camera
-        };
-        self.set_camera(c);
-    }
-
-    pub fn zoom_at(&mut self, factor: f32, x: f32, y: f32) {
-        let mut c = self.camera;
-        c.zoom_at(factor, x, y);
-        self.set_camera(c);
-    }
-
-    pub fn set_view(&mut self, w: f32, h: f32, scale: f32) {
-        let c = Camera {
-            view: (w, h),
-            scale,
-            ..self.camera
-        };
-        self.set_camera(c);
     }
 
     pub fn world_bounds(&self) -> Option<Rect> {
@@ -290,14 +316,6 @@ impl Renderer {
                 a.bottom.max(b.bottom),
             )
         })
-    }
-
-    pub fn fit_all(&mut self) {
-        if let Some(r) = self.world_bounds() {
-            let mut c = self.camera;
-            c.fit(r, 0.05);
-            self.set_camera(c);
-        }
     }
 
     pub fn invalidate_all(&mut self) {
@@ -361,6 +379,8 @@ impl Renderer {
         canvas.save();
         canvas.scale((cam.scale, cam.scale));
         let mut vis = cam.visible();
+        // an overlay sits over everything: a partial redraw would draw its strokes twice over kept pixels
+        let partial = partial && self.overlay.is_empty();
         if let (true, Dirty::Rect(r)) = (partial, self.dirty) {
             let (x0, y0) = cam.to_screen(r.left, r.top);
             let (x1, y1) = cam.to_screen(r.right, r.bottom);
@@ -410,6 +430,12 @@ impl Renderer {
             }
         }
         canvas.restore();
+        if !self.overlay.is_empty() {
+            canvas.save();
+            canvas.scale((cam.scale, cam.scale));
+            overlay::draw(canvas, &cam, &self.overlay);
+            canvas.restore();
+        }
         self.dirty = Dirty::Clean;
         self.trim();
     }
@@ -470,30 +496,5 @@ impl Renderer {
             self.boards[i].pics = Default::default();
             total -= freed;
         }
-    }
-
-    /// The deepest, topmost visible node under a screen point (points). Hidden nodes and anything outside a clipping
-    /// frame are not hit.
-    pub fn hit(&self, sx: f32, sy: f32) -> Option<Hit> {
-        let (x, y) = self.camera.to_world(sx, sy);
-        self.hit_world(x, y)
-    }
-
-    pub fn hit_world(&self, x: f32, y: f32) -> Option<Hit> {
-        for b in self.boards.iter().rev() {
-            let (lx, ly) = (x - b.origin.x, y - b.origin.y);
-            if !b.laid.bounds.contains(Point::new(lx, ly)) {
-                continue;
-            }
-            let mut path = vec![];
-            if hit_node(&b.laid.nodes, 0, lx, ly, &mut path).is_some() {
-                return Some(Hit {
-                    id: path.last().cloned().unwrap_or_default(),
-                    artboard: b.id.clone(),
-                    path,
-                });
-            }
-        }
-        None
     }
 }

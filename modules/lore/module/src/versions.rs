@@ -230,6 +230,7 @@ pub(crate) async fn restore(
         .await?;
     }
     let out = SaveOut {
+        missing_attachments: crate::attachments::missing(&mut tx, &v.text).await?,
         note: view(&mut tx, &note).await?,
         outcome: "restored".to_owned(),
         version: undo,
