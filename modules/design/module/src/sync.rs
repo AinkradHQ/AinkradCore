@@ -235,7 +235,10 @@ impl Actor {
             // the replica could not be rebuilt earlier: not the peer's doing
             Err(Refused::Poisoned | Refused::Busy) => return Err(Refusal::Store),
             Err(e) => {
-                self.rebuild(&mut st).await;
+                // a refusal before integration leaves the replica as it was; only a poisoned one is rebuilt
+                if st.replica.is_poisoned() {
+                    self.rebuild(&mut st).await;
+                }
                 return Err(Refusal::Violation(e));
             }
         };

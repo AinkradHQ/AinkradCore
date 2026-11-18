@@ -51,7 +51,7 @@ fn server_with_page() -> Replica {
 
 fn client_of(server: &Replica) -> Replica {
     let mut c = Replica::new();
-    c.apply_trusted(&server.state()).unwrap();
+    c.apply_remote(&server.state()).unwrap();
     c
 }
 
@@ -147,7 +147,7 @@ fn clients_converge_on_a_thousand_random_concurrent_ops() {
         for (ci, c) in clients.iter_mut().enumerate() {
             for (from, d) in &diffs {
                 if *from != ci {
-                    c.apply_trusted(d).unwrap();
+                    c.apply_remote(d).unwrap();
                 }
             }
         }
@@ -187,8 +187,8 @@ fn crossing_moves_revert_the_loser_instead_of_detaching_it() {
     r.unwrap();
     for u in [&u1, &u2] {
         let d = server.apply_remote(u).unwrap().unwrap();
-        c1.apply_trusted(&d).unwrap();
-        c2.apply_trusted(&d).unwrap();
+        c1.apply_remote(&d).unwrap();
+        c2.apply_remote(&d).unwrap();
     }
     let m = server.read().unwrap();
     assert_eq!(c1.read().unwrap(), m);
@@ -218,8 +218,8 @@ fn a_rebalance_does_not_undo_a_concurrent_move() {
     r.unwrap();
     for u in [&u1, &u2] {
         let d = server.apply_remote(u).unwrap().unwrap();
-        c1.apply_trusted(&d).unwrap();
-        c2.apply_trusted(&d).unwrap();
+        c1.apply_remote(&d).unwrap();
+        c2.apply_remote(&d).unwrap();
     }
     let m = server.read().unwrap();
     assert_eq!(c1.read().unwrap(), m);

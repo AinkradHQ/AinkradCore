@@ -20,6 +20,8 @@ pub const DE_ERR_RESET: i32 = -10;
 /// Three resets within a minute: remote updates are no longer applied. Local edits still work and still go out; free
 /// the engine and open the design again.
 pub const DE_ERR_HALTED: i32 = -11;
+/// No thread could be started for a remote update; nothing changed. Retry later.
+pub const DE_ERR_BUSY: i32 = -12;
 
 /// `de_sync_apply` targets.
 pub const DE_DOC: u32 = 0;

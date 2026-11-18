@@ -140,7 +140,9 @@ impl Rep {
             Rep::Engine(l) => l
                 .apply_remote(u)
                 .expect("the engine takes what the Core relays"),
-            Rep::Device(r) => r.apply_trusted(u).unwrap(),
+            Rep::Device(r) => {
+                r.apply_remote(u).unwrap();
+            }
         }
     }
     fn read(&self) -> Model {

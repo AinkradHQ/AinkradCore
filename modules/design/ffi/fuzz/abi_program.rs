@@ -82,6 +82,7 @@ const KNOWN: [i32; 14] = [
     DE_ERR_GPU,
     DE_ERR_RESET,
     DE_ERR_HALTED,
+    DE_ERR_BUSY,
     -100,
 ];
 

@@ -30,6 +30,7 @@ pub fn code(e: Error) -> i32 {
         Error::Malformed(_) | Error::Refused(_) => DE_ERR_INVALID,
         Error::Reset => DE_ERR_RESET,
         Error::Halted => DE_ERR_HALTED,
+        Error::Busy => DE_ERR_BUSY,
     }
 }
 

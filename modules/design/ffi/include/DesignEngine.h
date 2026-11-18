@@ -38,6 +38,9 @@
 // the engine and open the design again.
 #define DE_ERR_HALTED -11
 
+// No thread could be started for a remote update; nothing changed. Retry later.
+#define DE_ERR_BUSY -12
+
 // `de_sync_apply` targets.
 #define DE_DOC 0
 
