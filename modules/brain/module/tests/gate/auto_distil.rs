@@ -378,10 +378,14 @@ async fn the_cursor_waits_for_a_session_the_sync_has_not_taken_yet() {
         before,
         "not moved past an event that never reached the queue"
     );
+    // The cursor goes to the newest event there is when the step looks, no further (the events the
+    // step writes itself come after it).
+    let seen = newest_event(&fx).await;
+    assert!(seen >= last);
     fx.brain.auto_distil_step_at(now + 200).await.unwrap();
-    // (At least that far: the step's own events come after it.)
-    assert!(
-        cursor(&fx).await >= last,
+    assert_eq!(
+        cursor(&fx).await,
+        seen,
         "moved once its session was collected"
     );
 }

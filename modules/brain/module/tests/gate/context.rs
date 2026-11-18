@@ -331,3 +331,104 @@ async fn a_room_the_session_cannot_see_never_reaches_the_bundle_or_the_ledger() 
     assert!(!ok_ && code == "not_found", "{code}");
     assert!(loaded(&fx, &s).await.iter().all(|(r, _)| *r == alpha));
 }
+
+/// Calls of the op, rapid and many: a burst of ten, then the rate limit (429) holds.
+#[tokio::test]
+async fn context_calls_are_limited_to_a_burst_of_ten() {
+    let (fx, _alpha, s) = setup().await;
+    let mut ok_calls = 0;
+    let mut denied = 0;
+    for i in 0..30 {
+        let (ok_, _, _) = super::ai::op(&fx, &s, "brainAiContext", json!({"mode": "start"})).await;
+        if ok_ {
+            ok_calls += 1;
+            assert!(denied == 0, "call {i} passed after a refusal");
+        } else {
+            denied += 1;
+        }
+    }
+    assert!(ok_calls >= 10, "the burst of ten passes: {ok_calls}");
+    assert!(denied >= 1, "past the burst some call is refused");
+}
+
+#[tokio::test]
+async fn a_budget_of_zero_answers_empty_and_not_complete() {
+    let (fx, alpha, s) = setup().await;
+    open_room(&fx, &alpha).await;
+    let v = ctx(&fx, &s, json!({"mode": "start", "budget": 0})).await;
+    assert_eq!(v["text"], "");
+    assert_eq!(v["ids"], json!([]));
+    assert_eq!(v["complete"], false);
+}
+
+#[tokio::test]
+async fn complete_is_false_when_a_visible_room_could_not_be_read() {
+    let (fx, alpha, s) = setup().await;
+    // The room is not open: it is visible but closed, so the bundle is not the whole picture.
+    let v = ctx(&fx, &s, json!({"mode": "start"})).await;
+    assert_eq!(v["complete"], false, "{v}");
+    open_room(&fx, &alpha).await;
+    let v = ctx(&fx, &s, json!({"mode": "start"})).await;
+    assert_eq!(v["complete"], true, "{v}");
+}
+
+/// Echo citations (a session reading back what it was given) are not evidence: with them left out
+/// the record cited by two sources outranks the one cited by one plus three echoes.
+#[tokio::test]
+async fn echo_citations_do_not_count_toward_support() {
+    let (fx, alpha, s) = setup().await;
+    put_record(
+        &fx,
+        &alpha,
+        "aaa",
+        "fact",
+        "accepted",
+        "echoed fact ang=10 ",
+    )
+    .await;
+    put_record(
+        &fx,
+        &alpha,
+        "zzz",
+        "fact",
+        "accepted",
+        "evidenced fact ang=10 ",
+    )
+    .await;
+    open_room(&fx, &alpha).await;
+    let p = canon_pool(&fx, &alpha).await;
+    for (i, (record, echo)) in [
+        ("aaa", 0),
+        ("aaa", 1),
+        ("aaa", 1),
+        ("aaa", 1),
+        ("zzz", 0),
+        ("zzz", 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        sqlx::query(
+            "INSERT INTO sources (item_id, content_hash, source_kind, device, path, author_kind, author_name, title, text, started_at, run, assigned_by) \
+             VALUES (?1, ?1, 'note', 'd', '/p', 'user', 'a', 't', 'x', '2026-11-10T10:00:00Z', 'r', 'rule')",
+        )
+        .bind(format!("src-{i}"))
+        .execute(&p)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO record_sources (record, source, position, echo) VALUES (?, ?, 0, ?)",
+        )
+        .bind(record)
+        .bind(format!("src-{i}"))
+        .bind(echo)
+        .execute(&p)
+        .await
+        .unwrap();
+    }
+    p.close().await;
+    let v = ctx(&fx, &s, json!({"mode": "start"})).await;
+    let text = v["text"].as_str().unwrap();
+    let (a, z) = (text.find("[aaa").unwrap(), text.find("[zzz").unwrap());
+    assert!(z < a, "the better evidenced record comes first: {text}");
+}

@@ -462,3 +462,26 @@ async fn the_less_supported_record_gets_the_contested_mark() {
         "the older but less supported one is marked"
     );
 }
+
+#[tokio::test]
+async fn merge_drops_of_a_time_bound_kind_count_against_the_archive_cap() {
+    let (_d, p) = room().await;
+    let ids: Vec<String> = (0..52).map(|i| format!("t{i:02}")).collect();
+    for id in &ids {
+        seed(&p, id, "task", "2026-11-01T00:00:00Z", false).await;
+    }
+    let drops: Vec<String> = ids[1..13].iter().map(|i| format!("\"{i}\"")).collect();
+    let a = format!(
+        r#"{{"merge":[{{"keep":"t00","drop":[{}]}}]}}"#,
+        drops.join(",")
+    );
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let done = run(&p, &a, &refs).await.unwrap();
+    // Twelve drops asked; the cap of ten archives holds, the other two are refused.
+    assert_eq!((done.merged, done.refused), (10, 2));
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM records WHERE archived_at IS NOT NULL")
+        .fetch_one(&p)
+        .await
+        .unwrap();
+    assert_eq!(n, 10);
+}

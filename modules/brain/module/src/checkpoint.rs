@@ -150,6 +150,12 @@ fn done_with(b: &Brain, session: &str) {
     }
 }
 
+/// A session that distilled less than `EVERY_SECS` ago.
+fn too_soon(m: &HashMap<String, Ckpt>, session: &str, now: i64) -> bool {
+    m.get(session)
+        .is_some_and(|c| c.ran.is_some_and(|t| now - t < EVERY_SECS))
+}
+
 /// Takes new turns of live sessions and queues their distils; returns how many it queued.
 pub(crate) async fn step(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError> {
     let asked: Vec<String> = b
@@ -181,10 +187,7 @@ pub(crate) async fn step(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError
     // first (a request of theirs stays pending for a later tick).
     {
         let m = b.inner.ckpt.lock().unwrap_or_else(PoisonError::into_inner);
-        todo.retain(|(s, _)| {
-            !m.get(&s.id)
-                .is_some_and(|c| c.ran.is_some_and(|t| now - t < EVERY_SECS))
-        });
+        todo.retain(|(s, _)| !too_soon(&m, &s.id, now));
     }
     let mut queued = 0;
     for (s, was_asked) in todo.into_iter().take(MAX_PER_TICK) {
@@ -252,6 +255,23 @@ pub(crate) async fn step(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_that_ran_a_moment_ago_is_skipped_before_the_tick_takes_its_share() {
+        let mut m = HashMap::new();
+        m.insert(
+            "ran".to_owned(),
+            Ckpt {
+                ran: Some(1000),
+                ..Default::default()
+            },
+        );
+        m.insert("never".to_owned(), Ckpt::default());
+        assert!(too_soon(&m, "ran", 1000 + EVERY_SECS - 1));
+        assert!(!too_soon(&m, "ran", 1000 + EVERY_SECS));
+        assert!(!too_soon(&m, "never", 1000));
+        assert!(!too_soon(&m, "unknown", 1000));
+    }
 
     #[test]
     fn a_session_may_ask_once_per_ten_minutes_and_the_map_is_bounded() {

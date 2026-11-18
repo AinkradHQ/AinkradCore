@@ -740,6 +740,8 @@ mod grounds_tests {
         assert!(!turn.supports("deploy before tests pass"));
         assert!(!turn.supports("deploy after any tests pass"));
         assert!(turn.supports("Deploy only after tests pass."));
+        // Dropping "only" would ground a broader body: the order-word sets must match exactly.
+        assert!(!turn.supports("deploy after tests pass"));
         let turn = Grounds::of("ننشر فقط بعد نجاح الاختبارات");
         assert!(!turn.supports("ننشر قبل نجاح الاختبارات"));
     }

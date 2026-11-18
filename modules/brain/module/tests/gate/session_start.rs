@@ -141,3 +141,18 @@ async fn the_bundle_stays_inside_the_start_budget() {
     );
     assert!(loaded(&fx, &s).await.len() <= 10);
 }
+
+#[tokio::test]
+async fn a_creator_without_the_read_scope_gets_no_bundle() {
+    let (fx, _alpha, s) = setup().await;
+    // The op's own scope, checked at the start: the approved text still goes (it is plain), the
+    // records do not, and nothing is recorded as loaded.
+    sqlx::query("UPDATE core_devices SET scopes = '[\"admin\",\"agent\"]' WHERE id = ?")
+        .bind(&fx.admin.id)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let text = fx.brain.session_instructions(&fx.app, &s).await;
+    assert_eq!(text.as_deref(), Some(TEXT));
+    assert!(loaded(&fx, &s).await.is_empty());
+}

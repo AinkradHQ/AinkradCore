@@ -179,7 +179,8 @@ pub(crate) async fn instructions_for_session(
             Ok(pool) => {
                 let text = approved_instructions(&pool).await;
                 pool.close().await;
-                text
+                // GEMINI-style CLIs expand `@path` imports: break them in the person's text too.
+                text.map(|t| ainkrad_core::untrusted::defang(&t))
             }
             Err(_) => None,
         },
