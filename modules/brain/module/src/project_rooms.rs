@@ -136,24 +136,92 @@ pub(crate) async fn require_claim(app: &App, session: &str, project: i64) -> Res
     Ok(())
 }
 
-/// The approved instructions of the room `session` claimed (P3-03): read-only, and only what the
-/// person approved in the room's Overview (`instructions_approved_at` set, text not blank). A
-/// session with no claim, a room that will not open, or no approved text gets `None`, and then
-/// starts exactly as before. Nothing here writes to the room or touches the Overview code.
+/// How long the start bundle may take before the session starts without it.
+const BUNDLE_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// What an AI session starts with (P3-03, B8-02): the approved instructions of the room it claimed,
+/// then `brainAiContext(start)` of that room plus the me card (a session with no claim gets the
+/// me card only).
+///
+/// SECURITY MODEL
+/// - The bundle goes in the instruction text the runner writes to a private file (claude), sends as
+///   `developerInstructions` (codex) or links as `GEMINI.md` (agy). It is never a user turn.
+/// - It is the op's own output, so it is already wrapped once in the outside-data envelope (the
+///   no-echo guard cuts that envelope before distil), its record ids are already in
+///   `brain_session_loaded`, and the me-card provider gate and room policy already ran.
+///   Nothing here reads memory or writes anything itself. No credential is involved.
+/// - The approved instructions stay plain text, as before; they are left out of the bundle.
+/// - Fail open: an op error or a slow op (3 s) gives the plain instructions, or `None`.
+/// - Budget: the op's start cap, 1,500 tokens.
 pub(crate) async fn instructions_for_session(
     app: &App,
     b: &Brain,
     session: &str,
 ) -> Option<String> {
-    let room: String = sqlx::query_scalar("SELECT room FROM brain_session_rooms WHERE session = ?")
-        .bind(session)
-        .fetch_optional(&app.pool)
+    let room: Option<String> =
+        sqlx::query_scalar("SELECT room FROM brain_session_rooms WHERE session = ?")
+            .bind(session)
+            .fetch_optional(&app.pool)
+            .await
+            .ok()
+            .flatten();
+    // The approved instructions go only to a session that may see the room now (the same gate as
+    // the op), so a link made while it could, or one the policy chain no longer allows, sends none.
+    let visible = match &room {
+        Some(r) => matches!(
+            crate::access::visible_room(app, session, r).await,
+            Ok(Some(_))
+        ),
+        None => false,
+    };
+    let plain = match &room {
+        Some(room) if visible => match crate::distil::canon(app, b, room).await {
+            Ok(pool) => {
+                let text = approved_instructions(&pool).await;
+                pool.close().await;
+                // GEMINI-style CLIs expand `@path` imports: break them in the person's text too.
+                text.map(|t| ainkrad_core::untrusted::defang(&t))
+            }
+            Err(_) => None,
+        },
+        _ => None,
+    };
+    let bundle = start_bundle(app, b, session, room.as_deref()).await;
+    join(plain, bundle)
+}
+
+/// The wrapped start bundle, or `None` when there is nothing to add or the op failed.
+async fn start_bundle(app: &App, b: &Brain, session: &str, room: Option<&str>) -> Option<String> {
+    // The op's own scope, checked as `ainkrad_call` would: the creator's current `read` scope.
+    let scopes = ainkrad_core_server::ops_catalog::session_scopes(&app.pool, session)
         .await
-        .ok()??;
-    let pool = crate::distil::canon(app, b, &room).await.ok()?;
-    let text = approved_instructions(&pool).await;
-    pool.close().await;
-    text
+        .ok()?;
+    if !scopes.iter().any(|s| s == "read") {
+        return None;
+    }
+    let q = crate::context::AiContextQuery {
+        mode: "start".to_owned(),
+        room: room.map(str::to_owned),
+        prompt: None,
+        budget: None,
+    };
+    let opts = crate::context::Opts {
+        me_only: room.is_none(),
+        no_instructions: true,
+    };
+    let got = tokio::time::timeout(BUNDLE_WAIT, crate::context::build(app, b, session, q, opts))
+        .await
+        .ok()?
+        .ok()?;
+    Some(got.text).filter(|t| !t.is_empty())
+}
+
+/// Plain instructions first, the bundle after a blank line.
+fn join(plain: Option<String>, bundle: Option<String>) -> Option<String> {
+    match (plain, bundle) {
+        (Some(p), Some(b)) => Some(format!("{p}\n\n{b}")),
+        (p, b) => p.or(b),
+    }
 }
 
 /// The approved, non-blank instructions in a room's `room_overview` row.
@@ -170,7 +238,33 @@ async fn approved_instructions(pool: &sqlx::SqlitePool) -> Option<String> {
 
 #[cfg(test)]
 mod instructions_tests {
-    use super::approved_instructions;
+    use super::{approved_instructions, join};
+
+    #[test]
+    fn the_bundle_follows_the_plain_text_and_either_alone_passes() {
+        let (p, b) = (Some("Use tabs.".to_owned()), Some("<<<B>>>".to_owned()));
+        assert_eq!(
+            join(p.clone(), b.clone()).as_deref(),
+            Some("Use tabs.\n\n<<<B>>>")
+        );
+        assert_eq!(join(p.clone(), None), p);
+        assert_eq!(join(None, b.clone()), b);
+        assert_eq!(join(None, None), None);
+    }
+
+    /// The no-echo guard cuts the bundle out of a transcript that repeats the instructions, and
+    /// leaves the approved plain text (which is the person's own).
+    #[test]
+    fn the_echo_guard_strips_the_bundle() {
+        let bundle = ainkrad_core::untrusted::wrap(
+            "Brain memory | start",
+            "- [r1] Deploys go out on Friday.",
+        );
+        let text = join(Some("Use tabs.".to_owned()), Some(bundle)).unwrap();
+        let out = crate::echo::strip(&format!("Assistant: {text}"), &[]);
+        assert!(!out.contains("Friday") && !out.contains("[r1]"), "{out}");
+        assert!(out.contains("Use tabs."), "{out}");
+    }
 
     async fn room(text: Option<&str>, approved: Option<&str>) -> sqlx::SqlitePool {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -308,8 +402,9 @@ async fn make(app: &App, b: &Brain, id: i64, name: &str) -> Result<(), ApiError>
         .bind(name)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("INSERT INTO brain_room_policy (room) VALUES (?)")
+    sqlx::query("INSERT INTO brain_room_policy (room, auto_accept) VALUES (?, ?)")
         .bind(&room)
+        .bind(crate::policy::AUTO_ACCEPT_ALL)
         .execute(&mut *tx)
         .await?;
     record(

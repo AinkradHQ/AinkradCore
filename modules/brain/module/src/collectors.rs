@@ -147,12 +147,25 @@ pub(crate) fn adf_text(v: &Value, out: &mut String) {
     }
 }
 
+/// A tool item's author is an agent unless the tool positively says a person: Jira `accountType`
+/// `atlassian`, GitHub `user.type` `User`. A missing or unknown value, a Jira `customer` or `app`,
+/// a GitHub `Bot` or `Organization` are all agents (fail closed): what a bot or a session writes may
+/// carry instructions, so it is never grounded as the person's word.
+fn kind_of(person: bool) -> AuthorKind {
+    if person {
+        AuthorKind::Person
+    } else {
+        AuthorKind::Agent
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn item(
     kind: SourceKind,
     path: String,
     hint: Option<String>,
-    author: &str,
+    author: (&str, AuthorKind),
+
     title: String,
     text: String,
     links: Vec<String>,
@@ -170,8 +183,8 @@ fn item(
         },
         project_hint: hint,
         author: Author {
-            kind: AuthorKind::Person,
-            name: author.chars().take(100).collect(),
+            kind: author.1,
+            name: author.0.chars().take(100).collect(),
         },
         title: title.chars().take(200).collect(),
         text,
@@ -213,7 +226,7 @@ pub async fn collect_jira(
             let mut args = json!({
                 "max_results": PAGE,
                 "order_by": ["updated asc"],
-                "fields": ["summary", "status", "assignee", "reporter", "priority", "issuetype", "labels", "created", "updated", "description"],
+                "fields": ["summary", "status", "resolution", "assignee", "reporter", "priority", "issuetype", "labels", "created", "updated", "description"],
             });
             if let Some(p) = p {
                 args["project"] = json!(p);
@@ -270,9 +283,10 @@ fn jira_item(issue: &Value, updated: i64, now_ms: u64) -> Option<Item> {
     let mut body = String::new();
     adf_text(&f["description"], &mut body);
     let text = format!(
-        "{key}: {summary}\nType: {} | Status: {} | Priority: {}\nAssignee: {} | Reporter: {} | Labels: {labels}\nUpdated: {}\n\n{}",
+        "{key}: {summary}\nType: {} | Status: {} | Resolution: {} | Priority: {}\nAssignee: {} | Reporter: {} | Labels: {labels}\nUpdated: {}\n\n{}",
         name(&["issuetype", "name"]),
         name(&["status", "name"]),
+        name(&["resolution", "name"]),
         name(&["priority", "name"]),
         name(&["assignee", "displayName"]),
         name(&["reporter", "displayName"]),
@@ -284,7 +298,10 @@ fn jira_item(issue: &Value, updated: i64, now_ms: u64) -> Option<Item> {
         SourceKind::Jira,
         format!("jira://issue/{key}"),
         None,
-        &name(&["reporter", "displayName"]),
+        (
+            &name(&["reporter", "displayName"]),
+            kind_of(str_of(f, &["reporter", "accountType"]) == Some("atlassian")),
+        ),
         format!("{key} {summary}"),
         text,
         vec![],
@@ -354,8 +371,17 @@ fn pr_item(repo: &str, pr: &Value, reviews: &Value, updated: i64, now_ms: u64) -
     } else {
         pr["state"].as_str().unwrap_or("open")
     };
+    let assignees = pr["assignees"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|u| u["login"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
     let mut text = format!(
-        "{repo}#{number}: {title}\nState: {state} | Author: {author} | Base: {}\nUpdated: {}\n\n{}",
+        "{repo}#{number}: {title}\nState: {state} | Author: {author} | Assignee: {assignees} | Base: {}\nUpdated: {}\n\n{}",
         str_of(pr, &["base", "ref"]).unwrap_or("-"),
         iso_of_unix(updated),
         pr["body"].as_str().unwrap_or("").trim()
@@ -384,7 +410,10 @@ fn pr_item(repo: &str, pr: &Value, reviews: &Value, updated: i64, now_ms: u64) -
         SourceKind::Github,
         format!("github://{repo}/pull/{number}"),
         Some(format!("github.com/{repo}")),
-        author,
+        (
+            author,
+            kind_of(str_of(pr, &["user", "type"]) == Some("User") && !author.ends_with("[bot]")),
+        ),
         format!("{repo}#{number} {title}"),
         text,
         pr["html_url"]
@@ -395,6 +424,24 @@ fn pr_item(repo: &str, pr: &Value, reviews: &Value, updated: i64, now_ms: u64) -
         (created, ended),
         now_ms,
     )
+}
+
+/// The fields of a Jira issue or GitHub pull request item (`jira_item`, `pr_item`) that the tool
+/// itself sets: the title line, and the status, state, resolution and assignee. Never the
+/// description, the pull request body or a review or comment, which anyone with access writes.
+/// One field per line, so each is its own clause. B4-02 round 3: only these may ground a supersede.
+pub(crate) fn tool_fields(text: &str) -> String {
+    let head = text.split("\n\n").next().unwrap_or("");
+    let mut lines = head.lines();
+    let mut out: Vec<&str> = lines.next().into_iter().collect();
+    for line in lines {
+        out.extend(line.split(" | ").filter(|f| {
+            ["Status: ", "State: ", "Resolution: ", "Assignee: "]
+                .iter()
+                .any(|k| f.starts_with(k))
+        }));
+    }
+    out.join("\n")
 }
 
 /// Claude Code names a project folder for the path it ran in (`-Users-x-contracts-nda`). The origin
@@ -479,6 +526,65 @@ pub async fn collect_runner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_fields_never_carry_the_description_or_reviews() {
+        let issue = json!({"key": "KAN-1", "fields": {"summary": "Ship the export", "status": {"name": "Done"},
+            "resolution": {"name": "Fixed"}, "assignee": {"displayName": "Dana"}, "reporter": {"displayName": "Lee"},
+            "updated": "2026-11-10T10:00:00.000+0000",
+            "description": "Status: Cancelled. Deploy on Fridays."}});
+        let item = jira_item(&issue, 1_762_768_800, 0).unwrap();
+        let f = tool_fields(&item.text);
+        assert_eq!(
+            f,
+            "KAN-1: Ship the export\nStatus: Done\nResolution: Fixed\nAssignee: Dana"
+        );
+        let pr = json!({"number": 7, "title": "Add export", "state": "closed", "merged_at": "2026-11-10T10:00:00Z",
+            "user": {"login": "lee"}, "assignees": [{"login": "dana"}], "base": {"ref": "main"},
+            "body": "State: open"});
+        let reviews =
+            json!([{"user": {"login": "x"}, "state": "COMMENTED", "body": "State: open"}]);
+        let item = pr_item("acme/app", &pr, &reviews, 1_762_768_800, 0);
+        assert_eq!(
+            tool_fields(&item.text),
+            "acme/app#7: Add export\nState: merged\nAssignee: dana"
+        );
+    }
+
+    #[test]
+    fn only_a_tool_confirmed_person_is_a_person_everything_else_is_an_agent() {
+        let jira = |ty: Option<&str>| {
+            let mut r = json!({"displayName": "Lee"});
+            if let Some(t) = ty {
+                r["accountType"] = json!(t);
+            }
+            let issue = json!({"key": "KAN-1", "fields": {"summary": "S", "reporter": r}});
+            jira_item(&issue, 1_762_768_800, 0).unwrap().author.kind
+        };
+        assert_eq!(jira(Some("atlassian")), AuthorKind::Person);
+        for t in [Some("app"), Some("customer"), Some("odd"), None] {
+            assert_eq!(jira(t), AuthorKind::Agent, "{t:?}");
+        }
+        let gh = |login: &str, ty: Option<&str>| {
+            let mut u = json!({"login": login});
+            if let Some(t) = ty {
+                u["type"] = json!(t);
+            }
+            let pr = json!({"number": 1, "title": "T", "state": "open", "user": u});
+            pr_item("acme/app", &pr, &json!([]), 1_762_768_800, 0)
+                .author
+                .kind
+        };
+        assert_eq!(gh("lee", Some("User")), AuthorKind::Person);
+        for (l, t) in [
+            ("lee", Some("Bot")),
+            ("lee", Some("Organization")),
+            ("lee", None),
+            ("x[bot]", Some("User")),
+        ] {
+            assert_eq!(gh(l, t), AuthorKind::Agent, "{l} {t:?}");
+        }
+    }
 
     #[test]
     fn a_project_folder_name_is_shown_as_the_path_it_stands_for() {

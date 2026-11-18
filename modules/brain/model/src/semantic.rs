@@ -17,6 +17,17 @@ pub const DUP_THRESHOLD: f32 = 0.95;
 pub const CLUSTER_THRESHOLD: f32 = 0.88;
 pub const MERGE_THRESHOLD: f32 = 0.93;
 pub const MIN_CLUSTER: usize = 3;
+/// Q (placeholder, B1-04 tunes it): a memory hit by meaning must score within this of the best hit.
+/// An absolute floor cannot work, because e5 scores unrelated texts 0.82-0.85, so the cut is
+/// relative to the top of the list instead.
+pub const Q_MEMORY_MARGIN: f32 = 0.05;
+
+/// How many of `scores` (best first) are within `margin` of the best one.
+pub fn within_margin(scores: &[f32], margin: f32) -> usize {
+    scores.first().map_or(0, |top| {
+        scores.iter().take_while(|s| **s >= top - margin).count()
+    })
+}
 
 /// Refused (restricted path) items are never embedded. The caller also drops private ones it knows of.
 pub fn eligible(item: &Item) -> bool {
@@ -872,5 +883,13 @@ mod tests {
             closest_room(&v, Some("other"), &rooms, 0.9, 0.1).is_none(),
             "guard drops the acme room"
         );
+    }
+
+    #[test]
+    fn the_cut_is_relative_to_the_best_score_not_absolute() {
+        // Noise-level scores keep their top hit and the ones close to it, whatever the level.
+        assert_eq!(within_margin(&[0.84, 0.83, 0.80, 0.70], 0.05), 3);
+        assert_eq!(within_margin(&[0.95, 0.83, 0.82], 0.05), 1);
+        assert_eq!(within_margin(&[], 0.05), 0);
     }
 }

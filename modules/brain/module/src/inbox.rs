@@ -279,11 +279,15 @@ pub(crate) async fn decide(
     };
     sqlx::query(
         "UPDATE records SET status = ?, reviewed_at = ?, decided_by = ?, \
+         origin = CASE WHEN ? = 1 THEN 'person' ELSE origin END, \
+         edited_by_person = max(edited_by_person, ?), \
          body = coalesce(?, body), type = coalesce(?, type), tags = coalesce(?, tags) WHERE id = ?",
     )
     .bind(to)
     .bind(&now)
     .bind(&me.device.id)
+    .bind(i64::from(to == "accepted"))
+    .bind(i64::from(to == "accepted"))
     .bind(req.body.as_deref().map(|t| Redactor::new().text(t.trim())))
     .bind(&req.kind)
     .bind(req.tags.as_ref().map(|t| json!(t).to_string()))
@@ -312,6 +316,9 @@ pub(crate) async fn decide(
             .fetch_one(&mut *tx)
             .await?;
     tx.commit().await?;
+    if to == "accepted" {
+        b.queue_record_vectors(&[(None, raw.0.body.clone())]);
+    }
     let out = fill(access.pool(), &room, vec![raw])
         .await?
         .pop()

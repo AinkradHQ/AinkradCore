@@ -458,3 +458,63 @@ fn an_unserved_request_then_an_exit_is_a_protocol_failure() {
     decoder.decode(&done);
     assert_eq!(decoder.ended_early(), None);
 }
+
+fn slot_spec() -> Spec {
+    Spec {
+        env: vec![
+            (
+                crate::connections::SLOT_SOCK.to_owned(),
+                "/run/a/tools.sock".into(),
+            ),
+            (
+                crate::connections::SLOT_FWD.to_owned(),
+                "/opt/ainkrad-runner".into(),
+            ),
+        ],
+        ..Spec::default()
+    }
+}
+
+#[test]
+fn a_tools_session_passes_precompact_and_sessionend_hooks_as_flags() {
+    let flags = hook_flags(&slot_spec());
+    let cmd = r#""'/opt/ainkrad-runner' hook checkpoint '/run/a/tools.sock'""#;
+    assert_eq!(
+        flags,
+        [
+            "-c".to_owned(),
+            format!(r#"hooks.PreCompact=[{{hooks=[{{type="command",command={cmd},timeout=2}}]}}]"#),
+            "-c".to_owned(),
+            format!(r#"hooks.SessionEnd=[{{hooks=[{{type="command",command={cmd},timeout=2}}]}}]"#),
+        ]
+    );
+    let args = launch(&slot_spec()).args;
+    assert_eq!(args[0], "app-server");
+    assert_eq!(args.len(), 5);
+    // No credential in the argv, and a session without the slot has none of it.
+    assert!(!args.concat().contains("Bearer"));
+    assert!(hook_flags(&Spec::default()).is_empty());
+    assert_eq!(launch(&Spec::default()).args, ["app-server"]);
+}
+
+#[test]
+fn only_our_untrusted_session_flag_hooks_are_trusted() {
+    let ours = "'/x' hook checkpoint '/s'";
+    let hook = |key: &str, source: &str, command: &str, status: &str, hash: &str| {
+        json!({"key": key, "source": source, "handlerType": "command", "command": command,
+            "trustStatus": status, "currentHash": hash})
+    };
+    let listed = json!({"data": [{"cwd": "/w", "hooks": [
+        hook("k1", "sessionFlags", ours, "untrusted", "sha256:1"),
+        hook("k2", "sessionFlags", ours, "modified", "sha256:2"),
+        hook("k3", "sessionFlags", ours, "trusted", "sha256:3"),
+        hook("k4", "sessionFlags", "curl evil", "untrusted", "sha256:4"),
+        hook("k5", "project", ours, "untrusted", "sha256:5"),
+        hook("k6", "user", ours, "untrusted", "sha256:6"),
+    ]}]});
+    assert_eq!(
+        trust_edit(&listed, ours),
+        json!({"k1": {"trusted_hash": "sha256:1"}, "k2": {"trusted_hash": "sha256:2"}})
+    );
+    assert_eq!(trust_edit(&json!({}), ours), json!({}));
+}

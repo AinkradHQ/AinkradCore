@@ -6,7 +6,7 @@
 //! The worker runs one job at a time, so with the default of one embedding thread (the
 //! `semantic.threads` setting) the Core stays responsive on a small host.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -25,6 +25,23 @@ pub struct Service {
     embedder: Mutex<Option<Arc<dyn Embedder>>>,
     cache: Arc<Mutex<VectorCache>>,
     queue: OnceLock<mpsc::UnboundedSender<Job>>,
+    /// Content hashes queued by `queue_embed` and not yet embedded: a repeat call adds none of them again.
+    pending: Arc<Mutex<HashSet<String>>>,
+}
+
+/// The hashes `queue_embed` holds as queued; they leave the set when this is dropped.
+struct Pending {
+    set: Arc<Mutex<HashSet<String>>>,
+    hashes: Vec<String>,
+}
+
+impl Drop for Pending {
+    fn drop(&mut self) {
+        let mut p = self.set.lock().unwrap_or_else(|x| x.into_inner());
+        for h in &self.hashes {
+            p.remove(h);
+        }
+    }
 }
 
 impl Service {
@@ -41,6 +58,10 @@ impl Service {
 
     pub(crate) fn cache(&self) -> &Arc<Mutex<VectorCache>> {
         &self.cache
+    }
+
+    pub(crate) fn pending(&self) -> &Arc<Mutex<HashSet<String>>> {
+        &self.pending
     }
 
     /// Runs `job` on the one background worker, after the jobs queued before it. Needs a runtime.
@@ -121,7 +142,7 @@ impl Brain {
         let (tx, rx) = oneshot::channel();
         self.inner.sem.enqueue(async move {
             b.apply_threads(&app).await;
-            let r = tokio::task::spawn_blocking(move || e.embed(&text)).await;
+            let r = tokio::task::spawn_blocking(move || e.embed_query(&text)).await;
             let _ = tx.send(r.ok().and_then(Result::ok).and_then(|mut v| v.pop()));
         });
         let v = tokio::time::timeout(wait, rx).await.ok()?.ok()??;
@@ -133,8 +154,27 @@ impl Brain {
         let (Some(app), Some(e)) = (self.inner.app.get(), self.embedder()) else {
             return;
         };
+        // In-flight dedupe: a hash already queued (by an earlier call) is not queued twice.
+        let pending = self.inner.sem.pending().clone();
+        let items: Vec<(String, String)> = {
+            let mut p = pending.lock().unwrap_or_else(|x| x.into_inner());
+            items
+                .into_iter()
+                .filter(|i| p.insert(i.0.clone()))
+                .collect()
+        };
+        if items.is_empty() {
+            return;
+        }
         let (b, app) = (self.clone(), app.clone());
+        // A drop guard, not a line after the await: a panic, a cancelled job or a closed channel
+        // still frees the hashes.
+        let guard = Pending {
+            set: pending,
+            hashes: items.iter().map(|i| i.0.clone()).collect(),
+        };
         self.inner.sem.enqueue(async move {
+            let _guard = guard;
             let _ = b.embed_now(&app, e, &items).await;
         });
     }

@@ -364,6 +364,7 @@ pub(crate) async fn promote_cursor(
 /// New entries of every finished AI session since the cursor, as items, and the cursor after them.
 async fn collect(
     app: &App,
+    b: &Brain,
     done: &BTreeMap<String, i64>,
 ) -> Result<(Vec<Item>, BTreeMap<String, i64>), ApiError> {
     let now_ms = u64::try_from(app.clock.unix()).unwrap_or(0) * 1000;
@@ -371,6 +372,8 @@ async fn collect(
     let mut before = None;
     // A session that claimed a room is the Brain's own work, whoever created it.
     let claimed = crate::claim::claimed_sessions(app).await?;
+    // What each session was given from the Brain is cut out of its turns (no-echo guard).
+    let echo = crate::echo::loaded(app, b).await?;
     'pages: loop {
         let page = agents::list(&app.pool, before, 200).await?;
         let Some(last) = page.last() else { break };
@@ -381,6 +384,7 @@ async fn collect(
             if s.live()
                 || s.owner_module.as_deref() == Some(crate::MODULE)
                 || claimed.contains(&s.id)
+                || echo.blocked.contains(&s.id)
                 || s.last_seq <= from
             {
                 continue;
@@ -389,34 +393,97 @@ async fn collect(
                 break 'pages;
             }
             taken += 1;
-            let mut entries = vec![];
-            let mut after = from;
-            loop {
-                let got = agents::transcript(&app.pool, &s.id, after, 500).await?;
-                let Some(end) = got.last() else { break };
-                after = i64::try_from(end.seq).unwrap_or(i64::MAX);
-                entries.extend(got.into_iter().map(|e| (e.seq, e.body)));
-            }
-            let title = s
-                .title
-                .clone()
-                .or_else(|| s.prompt.as_deref().and_then(agents::title_of))
-                .unwrap_or_else(|| format!("AI session {}", s.id));
-            let meta = Meta {
-                id: &s.id,
-                harness: &s.harness,
-                title: &title,
-                project_hint: s
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| w["repo"].as_str())
-                    .map(str::to_owned),
-                started_at: &s.created_at,
-                ended_at: s.ended_at.as_deref(),
-            };
-            items.extend(transcripts::items(&meta, &entries, now_ms));
+            let (got, after) = take_session(app, s, from, now_ms, echo.of(&s.id), None).await?;
+            items.extend(got);
             next.insert(s.id.clone(), after);
         }
+    }
+    Ok((items, next))
+}
+
+/// The entries of `s` after `from` as items, and the cursor after them. `live` is for a session
+/// still running (a checkpoint, B5-02): only whole turns up to the last answer are taken, and
+/// nothing unless they hold at least that many characters of text.
+async fn take_session(
+    app: &App,
+    s: &agents::Session,
+    from: i64,
+    now_ms: u64,
+    loaded: &[String],
+    live: Option<usize>,
+) -> Result<(Vec<Item>, i64), ApiError> {
+    let mut entries = vec![];
+    let mut after = from;
+    loop {
+        let got = agents::transcript(&app.pool, &s.id, after, 500).await?;
+        let Some(end) = got.last() else { break };
+        after = i64::try_from(end.seq).unwrap_or(i64::MAX);
+        entries.extend(got.into_iter().map(|e| (e.seq, e.body)));
+    }
+    if live.is_some() {
+        // Cut after the last answer: a question still being answered is the next checkpoint's.
+        let keep = entries
+            .iter()
+            .rposition(|(_, b)| transcripts::render(b).is_some_and(|t| t.starts_with("Assistant:")))
+            .map_or(0, |i| i + 1);
+        entries.truncate(keep);
+        after = entries
+            .last()
+            .map_or(from, |(q, _)| i64::try_from(*q).unwrap_or(i64::MAX));
+    }
+    let title = s
+        .title
+        .clone()
+        .or_else(|| s.prompt.as_deref().and_then(agents::title_of))
+        .unwrap_or_else(|| format!("AI session {}", s.id));
+    let meta = Meta {
+        id: &s.id,
+        harness: &s.harness,
+        title: &title,
+        project_hint: s
+            .workspace
+            .as_ref()
+            .and_then(|w| w["repo"].as_str())
+            .map(str::to_owned),
+        started_at: &s.created_at,
+        ended_at: s.ended_at.as_deref(),
+    };
+    let items = transcripts::items(&meta, &entries, now_ms, loaded);
+    if live.is_some_and(|min| items.iter().map(|i| i.text.len()).sum::<usize>() < min) {
+        return Ok((vec![], from));
+    }
+    Ok((items, after))
+}
+
+/// A live session's new whole turns (B5-02): its items and cursor, for `sync_core_as`.
+async fn collect_live(
+    app: &App,
+    b: &Brain,
+    done: &BTreeMap<String, i64>,
+    id: &str,
+    min_chars: usize,
+) -> Result<(Vec<Item>, BTreeMap<String, i64>), ApiError> {
+    // Only this session's cursor: the run must not hold (and on commit move) the sessions of
+    // other open runs, which `done` includes.
+    let mut next = BTreeMap::new();
+    let Some(s) = agents::get(&app.pool, id).await? else {
+        return Ok((vec![], next));
+    };
+    let claimed = crate::claim::claimed_sessions(app).await?;
+    let echo = crate::echo::loaded(app, b).await?;
+    let from = done.get(id).copied().unwrap_or(0);
+    if !s.live()
+        || s.owner_module.as_deref() == Some(crate::MODULE)
+        || claimed.contains(id)
+        || echo.blocked.contains(id)
+        || s.last_seq <= from
+    {
+        return Ok((vec![], next));
+    }
+    let now_ms = u64::try_from(app.clock.unix()).unwrap_or(0) * 1000;
+    let (items, after) = take_session(app, &s, from, now_ms, echo.of(id), Some(min_chars)).await?;
+    if !items.is_empty() {
+        next.insert(id.to_owned(), after);
     }
     Ok((items, next))
 }
@@ -429,6 +496,17 @@ pub(crate) async fn sync_core(
     b: &Brain,
     owner: Option<&str>,
     into: Option<&str>,
+) -> Result<SyncResult, ApiError> {
+    sync_core_as(app, b, owner, into, None).await
+}
+
+/// `sync_core`, or with `live = (session, min chars)` a checkpoint of that one running session.
+pub(crate) async fn sync_core_as(
+    app: &App,
+    b: &Brain,
+    owner: Option<&str>,
+    into: Option<&str>,
+    live: Option<(&str, usize)>,
 ) -> Result<SyncResult, ApiError> {
     let Some(_busy) = Busy::take(&b.inner.syncing) else {
         return Ok(SyncResult::idle("running"));
@@ -455,10 +533,12 @@ pub(crate) async fn sync_core(
     for c in open {
         cursor.merge(serde_json::from_str(&c).unwrap_or_default());
     }
-    let (items, next) = if enabled {
-        collect(app, &cursor.sessions).await?
-    } else {
+    let (items, next) = if !enabled {
         (vec![], cursor.sessions.clone())
+    } else if let Some((id, min)) = live {
+        collect_live(app, b, &cursor.sessions, id, min).await?
+    } else {
+        collect(app, b, &cursor.sessions).await?
     };
     if into.is_none() && items.is_empty() {
         sqlx::query("UPDATE brain_sources SET last_run = ? WHERE id = ?")
@@ -645,6 +725,19 @@ pub(crate) struct Outcome {
     pub new_rooms: i64,
 }
 
+/// Whether a proposal may be filed into an existing room by name alone. The proposal's kind guess
+/// must match the room's kind, else it goes to review as a new room. A `personal` or `global-safe`
+/// room is never reached by a name match from import or transcript content: only Lore's personal
+/// notes (proposal id `p-lore-*`, lore.rs) route there.
+fn may_route(room_kind: Option<&str>, kind_guess: &str, proposal: &str) -> bool {
+    match room_kind {
+        None => true, // no such room: the caller skips it anyway
+        Some(k) if k != kind_guess => false,
+        Some("personal" | "global-safe") => proposal.starts_with("p-lore-"),
+        Some(_) => true,
+    }
+}
+
 /// A proposal that names a room the user already has needs no new review (plan §3.2, stage 10):
 /// it is accepted and committed into that room as `assigned_by = 'rule'`. A new room or Unsorted
 /// stays in review and raises one notice. A run with nothing left to review closes.
@@ -664,6 +757,10 @@ pub(crate) async fn route_known(app: &App, b: &Brain, run: &str) -> Result<Outco
                 .bind(room_id(&name))
                 .fetch_optional(&app.pool)
                 .await?;
+        let kind_guess: String = p.try_get("kind_guess")?;
+        if !may_route(kind.as_deref(), &kind_guess, &id) {
+            continue;
+        }
         let held = kind
             .as_deref()
             .is_some_and(|k| (k == "employer" || k == "client") && !ROOM_BACKUP_READY);
@@ -832,4 +929,22 @@ pub(crate) fn job(b: &Brain) -> Job {
         Schedule::Every(SYNC_EVERY_SECS),
         Arc::new(SyncJob(b.clone())),
     )
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::may_route;
+
+    #[test]
+    fn a_project_folder_named_like_the_personal_room_does_not_land_in_it() {
+        // An import proposal named "Me" guessed as a product: kind differs, so it goes to review.
+        assert!(!may_route(Some("personal"), "product", "p-1"));
+        // Even a guess of `personal` from import content is not enough: only Lore routes there.
+        assert!(!may_route(Some("personal"), "personal", "p-1"));
+        assert!(!may_route(Some("global-safe"), "global-safe", "p-2"));
+        assert!(may_route(Some("personal"), "personal", "p-lore-me"));
+        // Other rooms: the kind must match.
+        assert!(may_route(Some("product"), "product", "p-3"));
+        assert!(!may_route(Some("product"), "client", "p-3"));
+    }
 }

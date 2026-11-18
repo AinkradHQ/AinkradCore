@@ -35,6 +35,19 @@ pub fn slot<V: AsRef<std::ffi::OsStr>>(env: &[(String, V)]) -> Option<(String, S
     Some((get(SLOT_SOCK)?, get(SLOT_FWD)?))
 }
 
+/// `s` single-quoted for `sh`.
+pub(crate) fn quoted(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// The shell command of a harness's checkpoint hook (Brain B8-04): the runner executable's
+/// `hook checkpoint <socket>`, the same subcommand Claude's hooks run (B8-03, `v2/agent/hook.rs`),
+/// which calls `ainkrad_call {op: "brainAiCheckpoint"}` on the session's own tools socket. No
+/// credential is in it.
+pub fn checkpoint_hook(exe: &str, sock: &str) -> String {
+    format!("{} hook checkpoint {}", quoted(exe), quoted(sock))
+}
+
 /// `config` (the harness's MCP config, or none) with the connections server added; `None` for a
 /// harness this runner has no format for.
 pub fn add(harness: &str, config: Option<Value>, exe: &str, sock: &str) -> Option<Value> {
@@ -95,6 +108,18 @@ mod tests {
 
     const EXE: &str = "/opt/ainkrad/ainkrad-runner";
     const SOCK: &str = "/state/agents/as_x/tools.sock";
+
+    #[test]
+    fn the_checkpoint_hook_quotes_its_paths() {
+        assert_eq!(
+            checkpoint_hook(EXE, SOCK),
+            format!("'{EXE}' hook checkpoint '{SOCK}'")
+        );
+        assert_eq!(
+            checkpoint_hook("/o'k/r", "/s"),
+            r"'/o'\''k/r' hook checkpoint '/s'"
+        );
+    }
 
     #[test]
     fn claude_gets_a_stdio_server_beside_citadel() {
