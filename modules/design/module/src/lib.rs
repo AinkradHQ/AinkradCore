@@ -13,6 +13,8 @@ mod docs;
 mod package;
 mod sniff;
 mod svg;
+mod sync;
+mod ws;
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::module::{Module, ModuleSetting};
@@ -21,6 +23,7 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
 use serde_json::Value;
+use std::sync::Arc;
 use utoipa::OpenApi;
 
 pub use package::import_dir;
@@ -109,8 +112,27 @@ const BODY_LIMITS: &[(&str, &str, usize)] = &[
     ("PUT", "/docs/{doc}/package/files", assets::MAX_BODY),
 ];
 
-#[derive(Default, Clone, Copy)]
-pub struct Design;
+/// The live documents (`sync`) live in the module value, so each Core has its own.
+#[derive(Default, Clone)]
+pub struct Design {
+    registry: Arc<sync::Registry>,
+}
+
+impl Design {
+    /// Tighter limits than the defaults, for tests of compaction, unloading and rate caps.
+    pub fn with_limits(limits: sync::Limits) -> Self {
+        Self {
+            registry: Arc::new(sync::Registry::with_limits(limits)),
+        }
+    }
+
+    /// How many documents are loaded right now.
+    pub async fn loaded(&self) -> usize {
+        self.registry.loaded().await
+    }
+}
+
+pub use sync::Limits;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -142,7 +164,8 @@ pub struct Design;
         package::put,
         package::file,
         package::get,
-        package::seal
+        package::seal,
+        ws::sync
     ),
     components(schemas(
         docs::DocView,
@@ -171,6 +194,7 @@ impl Module for Design {
             .route("/docs", get(docs::list).post(docs::create))
             .route("/docs/{doc}", get(docs::get).patch(docs::patch))
             .route("/docs/{doc}/archive", post(docs::archive))
+            .route("/docs/{doc}/sync", get(ws::sync))
             .route(
                 "/docs/{doc}/projects/{project}",
                 put(docs::link).delete(docs::unlink),
@@ -216,6 +240,7 @@ impl Module for Design {
                 "/collections/{id}/projects/{project}",
                 put(collections::link).delete(collections::unlink),
             )
+            .layer(axum::Extension(self.registry.clone()))
     }
 
     fn migrations(&self) -> &'static [Migration] {

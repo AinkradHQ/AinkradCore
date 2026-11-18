@@ -1,0 +1,23 @@
+# V2-02 review: remote updates into the live document, in its OWN workspace (cargo-fuzz needs nightly). Seeds are real
+# updates (`UPDATE_SEEDS=1 cargo test -p design-doc --test hostile`). Run with `make fuzz-design-doc FUZZ_SECS=600`.
+[package]
+name = "design-doc-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+design-doc = { path = ".." }
+
+[workspace]
+
+[[bin]]
+name = "apply"
+path = "fuzz_targets/apply.rs"
+test = false
+doc = false
+bench = false

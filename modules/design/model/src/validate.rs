@@ -467,5 +467,5 @@ pub fn props(ty: NodeType, m: &Map<String, Value>, cx: &mut Cx) -> Vec<Violation
 
 mod document;
 mod strings;
-pub use document::{doc, token};
+pub use document::{doc, node, token};
 pub use strings::{is_format_char, name_str, text_str};
