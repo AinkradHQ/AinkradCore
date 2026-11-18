@@ -48,3 +48,8 @@ pub(crate) fn kinds(c: Class) -> &'static [&'static str] {
         Class::Zip => &["icon_composer"],
     }
 }
+
+/// True when `b` also reads as an SVG in its first 4 KiB: a polyglot a browser could sniff.
+pub(crate) fn has_svg_marker(b: &[u8]) -> bool {
+    String::from_utf8_lossy(&b[..b.len().min(4096)]).contains("<svg")
+}
