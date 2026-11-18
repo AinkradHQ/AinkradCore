@@ -27,7 +27,7 @@
 #            delegation drop-in user@.service.d/delegate.conf and waits for its runtime dir. The runner then reports `run_caps`.
 #            Also installs the run helper (ainkrad-run.socket + ainkrad-run@.service: Podman as ainkrad-run, reached only by
 #            the runner's group) and ainkrad-run-egress.service (nftables: ainkrad-run's traffic cannot reach the cloud
-#            metadata address or private ranges). Needs the whole host, so it is skipped under --prefix except for the
+#            metadata address or private ranges), re-applied every minute by ainkrad-run-egress.timer. Needs the whole host, so it is skipped under --prefix except for the
 #            drop-in and those files. Nothing else (no sysctl, no AppArmor).
 # --prefix installs under DIR (a throwaway root, for tests): no user creation, no systemctl, no shell profile download.
 set -euo pipefail
@@ -78,7 +78,7 @@ run_setup() {
   # The run helper (Podman as $RUN_USER, behind a socket only the runner's group reaches) and the egress block.
   run install -d "$prefix/etc/ainkrad-runner"
   run install -m 0644 "$HERE/run-egress.nft" "$prefix/etc/ainkrad-runner/run-egress.nft"
-  local u; for u in ainkrad-run.socket ainkrad-run@.service ainkrad-run-egress.service; do
+  local u; for u in ainkrad-run.socket ainkrad-run@.service ainkrad-run-egress.service ainkrad-run-egress-apply.service ainkrad-run-egress.timer; do
     run install -m 0644 "$HERE/systemd/$u" "$prefix/etc/systemd/system/$u"
   done
   if [ -n "$prefix" ] && [ "$dry" = 0 ]; then echo "+ skipped under --prefix: podman packages, the $RUN_USER user, linger"; return 0; fi
@@ -103,6 +103,7 @@ run_setup() {
   # After the user exists: the nftables rule names it.
   run systemctl enable --now ainkrad-run-egress.service
   run systemctl restart ainkrad-run-egress.service
+  run systemctl enable --now ainkrad-run-egress.timer
   run systemctl enable --now ainkrad-run.socket
   [ "$dry" = 1 ] && return 0
   uid=$(id -u "$RUN_USER")
