@@ -3,7 +3,7 @@
 //! claims a cloud account; its distillation waits as "Needs a local model".
 
 use ainkrad_core_server::api::App;
-use ainkrad_core_server::api::v1::{ApiError, ApiResult};
+use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
 use ainkrad_core_server::store::begin_write;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
@@ -40,6 +40,8 @@ pub(crate) struct Policy {
     pub min_sources: usize,
     pub lease_hours: i64,
     pub review_days: i64,
+    /// Compact fully distilled sources older than this many days; none = keep (the default).
+    pub retention_days: Option<u32>,
 }
 
 impl Policy {
@@ -58,7 +60,7 @@ impl Policy {
 
 pub(crate) async fn load(app: &App, room: &str) -> Result<Policy, ApiError> {
     let r = sqlx::query(
-        "SELECT r.name, r.review_days, p.allowed_providers, p.auto_accept, p.min_sources, p.lease_hours \
+        "SELECT r.name, r.review_days, p.allowed_providers, p.auto_accept, p.min_sources, p.lease_hours, p.retention_days \
          FROM brain_rooms r JOIN brain_room_policy p ON p.room = r.id WHERE r.id = ? AND r.state = 'active'",
     )
     .bind(room)
@@ -75,6 +77,9 @@ pub(crate) async fn load(app: &App, room: &str) -> Result<Policy, ApiError> {
         min_sources: usize::try_from(r.try_get::<i64, _>("min_sources")?).unwrap_or(1),
         lease_hours: r.try_get("lease_hours")?,
         review_days: r.try_get("review_days")?,
+        retention_days: r
+            .try_get::<Option<i64>, _>("retention_days")?
+            .and_then(|d| u32::try_from(d).ok()),
     })
 }
 
@@ -97,6 +102,8 @@ pub struct PolicyView {
     pub local_models: Vec<String>,
     pub lease_hours: i64,
     pub review_days: i64,
+    /// Sources older than this many days that are fully distilled lose their text and keep a citation stub. Null (the default) keeps everything.
+    pub retention_days: Option<u32>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -136,6 +143,7 @@ async fn view(app: &App, room: &str, p: &Policy) -> Result<PolicyView, sqlx::Err
         local_models: vec![],
         lease_hours: p.lease_hours,
         review_days: p.review_days,
+        retention_days: p.retention_days,
     })
 }
 
@@ -147,6 +155,8 @@ pub struct PolicyPatch {
     pub auto_accept: Option<Vec<String>>,
     /// 1 to 20: the fewest sources an auto-accepted candidate must cite.
     pub min_sources: Option<u32>,
+    /// Compaction is permanent. 1 to 3650 turns it on (step-up; a person only); 0 turns it off (keep). Check `GET /rooms/{room}/retention` first for what it would compact.
+    pub retention_days: Option<u32>,
 }
 
 #[utoipa::path(get, path = "/rooms/{room}/policy", operation_id = "brainRoomPolicy", tag = "brain",
@@ -163,6 +173,7 @@ pub(crate) async fn get(State(app): State<App>, Path(room): Path<String>) -> Api
 pub(crate) async fn patch(
     State(app): State<App>,
     Extension(_b): Extension<Brain>,
+    Extension(me): Extension<Caller>,
     Path(room): Path<String>,
     Json(req): Json<PolicyPatch>,
 ) -> ApiResult<PolicyView> {
@@ -190,20 +201,31 @@ pub(crate) async fn patch(
         }
         p.min_sources = n as usize;
     }
+    if let Some(d) = req.retention_days {
+        if d > crate::retention::MAX_DAYS {
+            return Err(ApiError::bad_request("retention_days is 0 (keep) or 1 to 3650"));
+        }
+        // Compaction cannot be undone: only a person turns it on (the route also needs a step-up).
+        if d > 0 && me.session.starts_with(crate::ai::SESSION) {
+            return Err(crate::code(403, "person_only", "an AI session cannot turn on retention"));
+        }
+        p.retention_days = (d > 0).then_some(d);
+    }
     let mut tx = begin_write(&app.pool).await?;
     sqlx::query(
-        "UPDATE brain_room_policy SET allowed_providers = ?, auto_accept = ?, min_sources = ? WHERE room = ?",
+        "UPDATE brain_room_policy SET allowed_providers = ?, auto_accept = ?, min_sources = ?, retention_days = ? WHERE room = ?",
     )
     .bind(json!(p.allowed).to_string())
     .bind(json!(p.auto_accept).to_string())
     .bind(i64::try_from(p.min_sources).unwrap_or(1))
+    .bind(p.retention_days)
     .bind(&room)
     .execute(&mut *tx)
     .await?;
     record(
         &mut tx,
         "brain.room.policy",
-        json!({"room": room, "allowed": p.allowed, "auto_accept": p.auto_accept, "min_sources": p.min_sources}),
+        json!({"room": room, "allowed": p.allowed, "auto_accept": p.auto_accept, "min_sources": p.min_sources, "retention_days": p.retention_days}),
         None,
     )
     .await?;
