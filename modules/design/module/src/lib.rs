@@ -51,6 +51,13 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0003_design_mockups.up.sql"),
         down: include_str!("../migrations/0003_design_mockups.down.sql"),
     },
+    // 0004 is taken by the open design-ops PR (#327).
+    Migration {
+        version: 5,
+        name: "0005_design_check_attempts",
+        up: include_str!("../migrations/0005_design_check_attempts.up.sql"),
+        down: include_str!("../migrations/0005_design_check_attempts.down.sql"),
+    },
 ];
 
 /// T8: 25 MB per asset, 2 GB for the library; both can only be lowered by the person (the upload

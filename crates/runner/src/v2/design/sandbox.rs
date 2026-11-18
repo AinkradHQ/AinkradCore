@@ -20,6 +20,12 @@ pub(super) const TASKS_MAX: u32 = 256;
 const OUT_BYTES: u64 = 8 << 20;
 const BWRAP: &str = "/usr/bin/bwrap";
 
+/// Seconds of CPU a job gets: half its wall clock, so a file that spins the CPU hits `RLIMIT_CPU`
+/// (a signal: `design_failed`, the file's fault) before the wall clock (`design_limit`: load).
+pub(super) fn cpu_secs(wall: Duration) -> u64 {
+    (wall.as_secs() / 2).max(1)
+}
+
 /// Sets the limits, then becomes the program: `$1` seconds of CPU, `$2` KiB of address space, 256
 /// processes (RLIMIT_NPROC counts per user namespace, so this is the sandbox's own; it holds with
 /// or without a job cgroup).
@@ -76,6 +82,13 @@ pub(super) struct Keep {
     _cgroup: Option<JobCgroup>,
 }
 
+impl Keep {
+    /// Drops it off the async thread: ending the job cgroup waits for its processes to go.
+    pub(super) async fn release(self) {
+        let _ = tokio::task::spawn_blocking(move || drop(self)).await;
+    }
+}
+
 /// The whole command for one job: bubblewrap with the seccomp filter on an inherited descriptor,
 /// then the limits script and `program`; with the runner's delegated cgroups, the child joins a
 /// fresh job cgroup (`memory.max`, `pids.max`) before it execs bubblewrap.
@@ -113,7 +126,7 @@ pub(super) fn command(
     c.args(sandbox_args(&job.dir, bind))
         .args(["--seccomp", &fd.to_string(), "--"])
         .args(["/bin/bash", "-c", LIMITS, "design"])
-        .arg(cfg.timeout.as_secs().max(1).to_string())
+        .arg(cpu_secs(cfg.timeout).to_string())
         .arg(vm.map_or("unlimited".to_owned(), |v| (v / 1024).to_string()))
         .arg(program)
         .args(args);

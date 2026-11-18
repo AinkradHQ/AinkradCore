@@ -27,3 +27,17 @@ fn only_a_verdict_on_the_file_decides_it() {
         assert_eq!(verdict(&err(later)), None, "{later:?} decided the asset");
     }
 }
+
+#[test]
+fn only_a_wall_clock_stop_counts_as_a_timeout() {
+    use super::timed_out;
+    assert!(timed_out(&err(ErrorCode::DesignLimit)));
+    for other in [
+        ErrorCode::DesignFailed,
+        ErrorCode::Busy,
+        ErrorCode::SpawnFailed,
+        ErrorCode::Lost,
+    ] {
+        assert!(!timed_out(&err(other)), "{other:?} counted");
+    }
+}

@@ -185,3 +185,46 @@ async fn a_sandbox_that_did_not_start_leaves_it_pending() {
     assert_eq!(state(&app, &a).await, "pending");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Round 3: three wall-clock stops refuse an asset; until then it stays pending, and the pick goes
+/// by the last attempt so a file that never finishes does not hold the queue.
+#[tokio::test]
+async fn three_timeouts_refuse_and_the_pick_goes_by_last_attempt() {
+    let (app, dir) = app("limits").await;
+    let a = pending(&app, 'a', "font").await;
+    let b = pending(&app, 'b', "font").await;
+    sqlx::query("UPDATE design_assets SET created_at = '2020-01-01T00:00:00Z' WHERE sha256 = ?")
+        .bind(&a)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    // Both time out on every run.
+    play(&app, runner(&app), |_| {
+        Body::Error(StreamError::new(ErrorCode::DesignLimit, "its time limit"))
+    });
+    let attempts = |sha: String| {
+        let pool = app.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT check_attempts FROM design_assets WHERE sha256 = ?",
+            )
+            .bind(sha)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(check_pending(&app).await.unwrap(), 0);
+    assert_eq!(state(&app, &a).await, "pending");
+    assert_eq!(attempts(a.clone()).await, 1);
+    assert_eq!(attempts(b.clone()).await, 1);
+    assert_eq!(check_pending(&app).await.unwrap(), 0);
+    assert_eq!(
+        check_pending(&app).await.unwrap(),
+        2,
+        "the third stop refuses both"
+    );
+    assert_eq!(state(&app, &a).await, "refused");
+    assert_eq!(state(&app, &b).await, "refused");
+    std::fs::remove_dir_all(dir).unwrap();
+}

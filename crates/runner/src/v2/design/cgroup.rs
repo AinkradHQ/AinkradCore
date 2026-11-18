@@ -37,6 +37,22 @@ pub(super) fn enabled(subtree_control: &str) -> bool {
     on.contains(&"memory") && on.contains(&"pids")
 }
 
+/// Removes the job cgroups a crashed runner left under `base`: the kernel refuses to remove one
+/// that still holds a process, so only empty ones go.
+pub(super) fn sweep(base: &Path) {
+    let Ok(dir) = std::fs::read_dir(base) else {
+        return;
+    };
+    for e in dir.flatten() {
+        if e.file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with("design-"))
+        {
+            let _ = std::fs::remove_dir(e.path());
+        }
+    }
+}
+
 impl Cgroups {
     /// The runner unit's subtree, when it is delegated and writable.
     pub fn delegated() -> Option<Self> {
@@ -66,6 +82,7 @@ impl Cgroups {
             }
             std::fs::write(&control, "+memory +pids").ok()?;
         }
+        sweep(base);
         Some(Self {
             base: base.to_path_buf(),
         })
@@ -82,6 +99,8 @@ impl Cgroups {
         let job = JobCgroup { dir };
         std::fs::write(job.dir.join("memory.max"), memory.to_string())?;
         std::fs::write(job.dir.join("pids.max"), pids.to_string())?;
+        // An OOM kill takes the whole job, not one process of it.
+        std::fs::write(job.dir.join("memory.oom.group"), "1")?;
         // Absent where swap accounting is off; then there is no swap to cap.
         let _ = std::fs::write(job.dir.join("memory.swap.max"), "0");
         Ok(job)

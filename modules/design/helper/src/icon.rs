@@ -38,10 +38,12 @@ struct Entry {
     comp: u64,
     size: u64,
     local: usize,
+    /// Bit 3: a data descriptor follows the data.
+    descriptor: bool,
 }
 
 /// The central directory, every field bounds-checked.
-fn entries(b: &[u8]) -> Result<Vec<Entry>, &'static str> {
+fn entries(b: &[u8]) -> Result<(Vec<Entry>, usize), &'static str> {
     const BAD: &str = "the zip is damaged";
     // The end record: in the last 64 KiB + 22 bytes.
     let from = b.len().saturating_sub(65_535 + 22);
@@ -89,10 +91,49 @@ fn entries(b: &[u8]) -> Result<Vec<Entry>, &'static str> {
             comp: comp.into(),
             size: size.into(),
             local,
+            descriptor: flags & 8 != 0,
         });
         i += 46 + nl + xl + cl;
     }
-    Ok(out)
+    Ok((out, cd))
+}
+
+/// The file's layout is what the central directory says and nothing else: every local header
+/// names the same file, folders hold nothing, and the entries run one after another from byte 0 to
+/// the central directory with no overlap and no bytes between (bar a data descriptor), so no data
+/// hides where the checks do not look but a decoder may.
+fn layout(b: &[u8], list: &[Entry], cd: usize) -> Result<(), &'static str> {
+    const BAD: &str = "the zip is damaged";
+    let mut order: Vec<&Entry> = list.iter().collect();
+    order.sort_by_key(|e| e.local);
+    let mut at = 0usize;
+    for e in order {
+        if e.name.ends_with('/') && (e.size != 0 || e.comp != 0) {
+            return Err("a folder entry holds data");
+        }
+        if e.local != at || u32_at(b, at) != Some(0x0403_4b50) {
+            return Err("the zip has overlapping entries or bytes between them");
+        }
+        let (nl, xl) = (
+            u16_at(b, at + 26).ok_or(BAD)?,
+            u16_at(b, at + 28).ok_or(BAD)?,
+        );
+        if b.get(at + 30..at + 30 + nl) != Some(e.name.as_bytes()) {
+            return Err("a local header names a different file than the directory");
+        }
+        at += 30 + nl + xl + e.comp as usize;
+        if e.descriptor {
+            at += if u32_at(b, at) == Some(0x0807_4b50) {
+                16
+            } else {
+                12
+            };
+        }
+    }
+    if at != cd {
+        return Err("the zip has overlapping entries or bytes between them");
+    }
+    Ok(())
 }
 
 /// One entry's bytes: located through its local header, inflated with a cap, CRC checked.
@@ -127,7 +168,8 @@ fn read(b: &[u8], e: &Entry) -> Result<Vec<u8>, &'static str> {
 }
 
 pub fn check(b: &[u8]) -> Result<(), &'static str> {
-    let list = entries(b)?;
+    let (list, cd) = entries(b)?;
+    layout(b, &list, cd)?;
     let mut total = 0u64;
     for e in &list {
         if e.size > MAX_ENTRY {

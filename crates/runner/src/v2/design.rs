@@ -12,7 +12,7 @@
 //!   files) is ever opened by the runner. Chromium's screenshot comes back on stdout, read by
 //!   `head -c` inside the sandbox and capped again outside. The runner's state, keys and HOME are
 //!   not there.
-//! - Limits: 60 s of wall clock and of CPU, 2 GiB of address space for the helper, 64 MiB per
+//! - Limits: 60 s of wall clock and 30 s of CPU (so a spinning file is `design_failed` and only load is `design_limit`), 2 GiB of address space for the helper, 64 MiB per
 //!   written file, 256 processes (`ulimit -u`), at most 2 jobs at once (`busy` past that). In the
 //!   runner unit (`Delegate=yes`), each job runs in its own child cgroup of the unit's subtree with
 //!   `memory.max` 1 GiB and `pids.max` 256 (kernel limits, `cgroup.rs`); everywhere, the runner also
@@ -46,6 +46,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 pub const DRIVER: &str = "design";
 /// Where an installed runner finds them (`deploy/install-linux.sh`).
 const HELPER: &str = "/usr/local/bin/ainkrad-design";
+const CHROMIUM_DIR: &str = "/usr/local/lib/ainkrad-chromium";
 const CHROMIUM: &str = "/usr/local/lib/ainkrad-chromium/chrome-headless-shell";
 /// Why a job that ran out of wall clock stopped (answered `design_limit`, not `design_failed`).
 const TIME_LIMIT: &str = "it ran past its time limit";
@@ -109,6 +110,26 @@ fn find(env: &str, beside: &str, installed: &str) -> Option<PathBuf> {
         .find(|p| p.is_absolute() && p.is_file())
 }
 
+/// Whether Chromium at `p` may be bound read-only into the sandbox with its whole folder: the
+/// installed folder, or one holding nothing but Chromium. Never the runner's own folder, nor one
+/// that holds an `ainkrad-*` file (the runner, the helper, a key).
+fn chromium_ok(p: &Path) -> bool {
+    let Some(dir) = p.parent() else { return false };
+    if dir == Path::new(CHROMIUM_DIR) {
+        return true;
+    }
+    let ours = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.canonicalize().ok()?.parent().map(Path::to_path_buf));
+    if ours.as_deref() == Some(dir) {
+        return false;
+    }
+    std::fs::read_dir(dir).is_ok_and(|d| {
+        d.flatten()
+            .all(|e| !e.file_name().to_string_lossy().starts_with("ainkrad-"))
+    })
+}
+
 impl DesignDriver {
     pub fn new(config: DesignConfig) -> Self {
         let slots = Arc::new(Semaphore::new(config.capacity as usize));
@@ -123,7 +144,9 @@ impl DesignDriver {
         }
         sweep(&std::env::temp_dir(), Duration::from_secs(600));
         let helper = find("AINKRAD_DESIGN_HELPER", "ainkrad-design", HELPER)?;
-        let chromium = find("AINKRAD_CHROMIUM", "chrome-headless-shell", CHROMIUM);
+        let chromium = find("AINKRAD_CHROMIUM", "chrome-headless-shell", CHROMIUM)
+            .and_then(|p| p.canonicalize().ok())
+            .filter(|p| chromium_ok(p));
         let mut config = DesignConfig::new(helper, chromium);
         config.cgroups = Cgroups::delegated().map(Arc::new);
         if !probe(&config) {
@@ -282,6 +305,7 @@ impl DesignDriver {
                 _ = &mut cancel => {
                     let _ = child.start_kill();
                     let _ = child.wait().await;
+                    keep.release().await;
                     return Err(StreamError::new(ErrorCode::Cancelled, "cancelled"));
                 }
                 _ = tick.tick() => {
@@ -297,7 +321,7 @@ impl DesignDriver {
             let _ = child.wait().await;
         }
         // Whatever of the tree outlived bubblewrap dies with the job cgroup.
-        drop(keep);
+        keep.release().await;
         let out = stdout.await.unwrap_or_default();
         let err = stderr.await.unwrap_or_default();
         outcome(stopped, out, &err)
@@ -357,3 +381,5 @@ fn internal(e: &dyn std::fmt::Display) -> StreamError {
 mod tests;
 #[cfg(all(test, target_os = "linux"))]
 mod tests_review2;
+#[cfg(all(test, target_os = "linux"))]
+mod tests_review3;
