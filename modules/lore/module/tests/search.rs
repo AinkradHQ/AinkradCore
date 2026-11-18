@@ -411,16 +411,46 @@ async fn bench_5000_notes() {
         seed ^= seed << 17;
         seed
     };
-    let syl = ["ka", "lo", "ver", "min", "tas", "ro", "qel", "dun", "ari", "sol", "pek", "zu"];
+    let syl = [
+        "ka", "lo", "ver", "min", "tas", "ro", "qel", "dun", "ari", "sol", "pek", "zu",
+    ];
     let vocab: Vec<String> = (0..3000)
-        .map(|i| (0..2 + i % 3).map(|k| syl[(i * 7 + k * 5 + i / 12) % syl.len()]).collect())
-        .chain(["مشروع", "ملاحظة", "اجتماع", "تصميم", "خطة", "برمجة", "تقرير", "فكرة"].map(str::to_owned))
+        .map(|i| {
+            (0..2 + i % 3)
+                .map(|k| syl[(i * 7 + k * 5 + i / 12) % syl.len()])
+                .collect()
+        })
+        .chain(
+            [
+                "مشروع",
+                "ملاحظة",
+                "اجتماع",
+                "تصميم",
+                "خطة",
+                "برمجة",
+                "تقرير",
+                "فكرة",
+            ]
+            .map(str::to_owned),
+        )
         .collect();
     let mid = ainkrad_embed::MODEL_ID;
-    let mut tx = ainkrad_core_server::store::begin_write(&fx.app.pool).await.unwrap();
+    let mut tx = ainkrad_core_server::store::begin_write(&fx.app.pool)
+        .await
+        .unwrap();
     for i in 0..5000 {
-        let id = format!("ln_{}", format!("{i:012}").bytes().map(|b| (b'a' + b - b'0') as char).collect::<String>());
-        let mut text = format!("# {} {}\n", vocab[(rnd() % 3008) as usize], vocab[(rnd() % 3008) as usize]);
+        let id = format!(
+            "ln_{}",
+            format!("{i:012}")
+                .bytes()
+                .map(|b| (b'a' + b - b'0') as char)
+                .collect::<String>()
+        );
+        let mut text = format!(
+            "# {} {}\n",
+            vocab[(rnd() % 3008) as usize],
+            vocab[(rnd() % 3008) as usize]
+        );
         for s in 0..4 {
             text.push_str(&format!("## {}\n", vocab[(rnd() % 3008) as usize]));
             for _ in 0..(120 + s * 10) {
@@ -429,13 +459,20 @@ async fn bench_5000_notes() {
             }
             text.push('\n');
         }
-        let title = text.lines().next().unwrap().trim_start_matches("# ").to_owned();
+        let title = text
+            .lines()
+            .next()
+            .unwrap()
+            .trim_start_matches("# ")
+            .to_owned();
         sqlx::query("INSERT INTO lore_notes (id, title, title_norm, text, created_by, updated_by) VALUES (?, ?, ?, ?, 'system', 'system')")
             .bind(&id).bind(&title).bind(title.to_lowercase()).bind(&text).execute(&mut *tx).await.unwrap();
         sqlx::query("INSERT INTO lore_fts (rowid, title, body) SELECT rowid, title, text FROM lore_notes WHERE id = ?")
             .bind(&id).execute(&mut *tx).await.unwrap();
         for seq in 0..5 {
-            let v: Vec<f32> = (0..384).map(|_| (rnd() % 2000) as f32 / 1000.0 - 1.0).collect();
+            let v: Vec<f32> = (0..384)
+                .map(|_| (rnd() % 2000) as f32 / 1000.0 - 1.0)
+                .collect();
             let blob: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
             sqlx::query("INSERT INTO lore_chunks (note, seq, heading, start, len, model, vec) VALUES (?, ?, 'h', 0, 10, ?, ?)")
                 .bind(&id).bind(seq).bind(mid).bind(blob).execute(&mut *tx).await.unwrap();
@@ -446,7 +483,11 @@ async fn bench_5000_notes() {
         .map(|i| match i % 4 {
             0 => format!("{}", &vocab[(i * 37) % 3000][..3]),
             1 => format!("{} {}", vocab[(i * 11) % 3000], vocab[(i * 13) % 3000]),
-            2 => format!("%22{}%20{}%22", vocab[(i * 5) % 3000], vocab[(i * 5 + 1) % 3000]),
+            2 => format!(
+                "%22{}%20{}%22",
+                vocab[(i * 5) % 3000],
+                vocab[(i * 5 + 1) % 3000]
+            ),
             _ => vocab[3000 + i % 8].clone(),
         })
         .collect();
@@ -465,8 +506,17 @@ async fn bench_5000_notes() {
     let p = |x: f64| ms[((ms.len() as f64 * x) as usize).min(ms.len() - 1)];
     let t = Instant::now();
     model.embed(&["car".to_owned()]).unwrap();
-    println!("query embed alone: {:.1} ms", t.elapsed().as_secs_f64() * 1000.0);
-    println!("search 5000 notes / 25000 chunks, {} queries: p50 {:.1} ms, p95 {:.1} ms, max {:.1} ms", ms.len(), p(0.5), p(0.95), p(1.0));
+    println!(
+        "query embed alone: {:.1} ms",
+        t.elapsed().as_secs_f64() * 1000.0
+    );
+    println!(
+        "search 5000 notes / 25000 chunks, {} queries: p50 {:.1} ms, p95 {:.1} ms, max {:.1} ms",
+        ms.len(),
+        p(0.5),
+        p(0.95),
+        p(1.0)
+    );
     // The background job: real embedding of 30 notes (1 thread).
     // Every note but 30 counts as embedded; the job then embeds those 30 for real.
     sqlx::query("INSERT INTO lore_embedded SELECT id, rev, ? FROM lore_notes WHERE id NOT IN (SELECT id FROM lore_notes ORDER BY id LIMIT 30)").bind(mid).execute(&fx.app.pool).await.unwrap();
