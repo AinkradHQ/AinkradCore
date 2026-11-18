@@ -9,6 +9,8 @@
 
 mod address;
 mod attach;
+mod commands;
+mod exec;
 pub mod gate;
 mod hosts;
 mod keys;
@@ -38,6 +40,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0002_runs.up.sql"),
         down: include_str!("../migrations/0002_runs.down.sql"),
     },
+    Migration {
+        version: 3,
+        name: "0003_commands",
+        up: include_str!("../migrations/0003_commands.up.sql"),
+        down: include_str!("../migrations/0003_commands.down.sql"),
+    },
 ];
 
 // A key write is a secret write: importing needs the step-up like the Core's own secret writes.
@@ -53,6 +61,10 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/hosts"),
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
+    ("POST", "/commands"),
+    ("PATCH", "/commands/{command}"),
+    ("DELETE", "/commands/{command}"),
+    ("POST", "/commands/{command}/run"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
 ];
@@ -64,6 +76,9 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/keys", "read"),
     ("GET", "/keys/{key}", "read"),
     ("GET", "/projects/{project}/hosts", "read"),
+    ("GET", "/commands", "read"),
+    ("GET", "/commands/{command}", "read"),
+    ("GET", "/runs/{run}", "read"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -86,7 +101,14 @@ pub struct Leyline;
         keys::remove,
         attach::list,
         attach::attach,
-        attach::detach
+        attach::detach,
+        commands::list,
+        commands::create,
+        commands::get,
+        commands::patch,
+        commands::remove,
+        commands::run,
+        commands::get_run
     ),
     components(schemas(
         hosts::HostView,
@@ -101,7 +123,16 @@ pub struct Leyline;
         attach::ProjectHost,
         attach::HostProject,
         attach::Role,
-        attach::Detached
+        attach::Detached,
+        commands::CommandView,
+        commands::NewCommand,
+        commands::CommandPatch,
+        commands::CommandDeleted,
+        commands::Scope,
+        commands::RunRequest,
+        commands::RunStarted,
+        commands::RunView,
+        commands::RunHost
     ))
 )]
 struct Doc;
@@ -123,6 +154,15 @@ impl Module for Leyline {
             .route("/keys", get(keys::list).post(keys::generate))
             .route("/keys/import", post(keys::import))
             .route("/keys/{key}", get(keys::get).delete(keys::remove))
+            .route("/commands", get(commands::list).post(commands::create))
+            .route(
+                "/commands/{command}",
+                get(commands::get)
+                    .patch(commands::patch)
+                    .delete(commands::remove),
+            )
+            .route("/commands/{command}/run", post(commands::run))
+            .route("/runs/{run}", get(commands::get_run))
             .route("/projects/{project}/hosts", get(attach::list))
             .route(
                 "/projects/{project}/hosts/{host}",
@@ -135,7 +175,7 @@ impl Module for Leyline {
     }
 
     fn event_kinds(&self) -> &'static [&'static str] {
-        &["leyline.host", "leyline.key"]
+        &["leyline.host", "leyline.key", "leyline.command"]
     }
 
     /// Ids only, so a read-only device may see them.
@@ -152,6 +192,9 @@ impl Module for Leyline {
             "leyline.host.detached",
             "leyline.key.created",
             "leyline.key.deleted",
+            "leyline.command.created",
+            "leyline.command.changed",
+            "leyline.command.deleted",
             "leyline.run.requested",
             "leyline.run.approval",
             "leyline.run.allowed",

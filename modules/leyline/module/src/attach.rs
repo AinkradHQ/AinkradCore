@@ -50,7 +50,10 @@ pub struct Detached {
 
 /// The project `p` names, through the Projects store; its id as text. A bad id and a missing
 /// project are the same fixed answer.
-async fn project(conn: &mut SqliteConnection, p: &str) -> Result<(String, bool), ApiError> {
+pub(crate) async fn project(
+    conn: &mut SqliteConnection,
+    p: &str,
+) -> Result<(String, bool), ApiError> {
     let none = || ApiError::not_found("no such project");
     let id = p
         .parse::<u64>()
