@@ -562,6 +562,7 @@ impl Harness for Claude {
     }
 }
 
+mod hooks;
 mod settings;
 #[cfg(test)]
 mod tests;

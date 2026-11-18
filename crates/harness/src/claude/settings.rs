@@ -11,20 +11,20 @@ use serde_json::{Value, json};
 use super::ATTRIBUTION_OFF;
 use crate::{Spec, last_env};
 
-/// The flag's value: attribution off, and for a gateway session the base URL and key the runner
-/// set, as `env` and as the key helper.
+/// The flag's value: attribution off, for a gateway session the base URL and key the runner set
+/// (as `env` and as the key helper), and for a session with the tools slot the Brain's hooks.
 pub(super) fn flag(spec: &Spec) -> String {
-    let var = |n: &str| last_env(&spec.env, n).and_then(|v| v.to_str());
-    let (Some(url), Some(key)) = (var("ANTHROPIC_BASE_URL"), var("ANTHROPIC_API_KEY")) else {
-        return ATTRIBUTION_OFF.to_owned();
-    };
-    // The helper is a shell command: the placeholder is plain, and anything else is not echoed.
-    let plain = !key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric());
     let mut v: Value = serde_json::from_str(ATTRIBUTION_OFF).expect("a constant");
-    v["env"] = json!({"ANTHROPIC_BASE_URL": url, "ANTHROPIC_API_KEY": key});
-    if plain {
-        v["apiKeyHelper"] = format!("echo {key}").into();
+    let var = |n: &str| last_env(&spec.env, n).and_then(|v| v.to_str());
+    if let (Some(url), Some(key)) = (var("ANTHROPIC_BASE_URL"), var("ANTHROPIC_API_KEY")) {
+        // The helper is a shell command: the placeholder is plain, and anything else is not echoed.
+        let plain = !key.is_empty() && key.bytes().all(|b| b.is_ascii_alphanumeric());
+        v["env"] = json!({"ANTHROPIC_BASE_URL": url, "ANTHROPIC_API_KEY": key});
+        if plain {
+            v["apiKeyHelper"] = format!("echo {key}").into();
+        }
     }
+    super::hooks::add(&mut v, spec);
     v.to_string()
 }
 
