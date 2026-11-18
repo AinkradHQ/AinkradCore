@@ -126,6 +126,9 @@
 
 #define DE_MAX_ID_BYTES 128
 
+// Ids one `de_select` takes.
+#define DE_MAX_SELECT_IDS 4096
+
 #define DE_MAX_BLOB_BYTES (25 << 20)
 
 #ifdef __cplusplus
@@ -208,14 +211,19 @@ int32_t de_presence_peers(uint64_t h, uint8_t *out, size_t cap, size_t *out_len)
 //
 // # Safety
 // `json..+len` readable.
-int32_t de_presence_remote(uint64_t h, const uint8_t *json, size_t len);
+int32_t de_presence_remote(uint64_t h,
+                           const uint8_t *json,
+                           size_t len);
 
 // This device's presence to send to the Core's socket as a text frame: `{"cursor","selection","view"}` (world
 // coordinates). `*out_len == 0`: nothing changed since the last call that took it. Taken only when it fits.
 //
 // # Safety
 // See `put`.
-int32_t de_presence_local(uint64_t h, uint8_t *out, size_t cap, size_t *out_len);
+int32_t de_presence_local(uint64_t h,
+                          uint8_t *out,
+                          size_t cap,
+                          size_t *out_len);
 
 // The peers on the canvas: `[{"peer","label","kind":"person"|"ai","following"}]`, oldest first.
 //
@@ -229,7 +237,9 @@ int32_t de_presence_list(uint64_t h, uint8_t *out, size_t cap, size_t *out_len);
 //
 // # Safety
 // `peer..+len` readable.
-int32_t de_follow(uint64_t h, const uint8_t *peer, size_t len);
+int32_t de_follow(uint64_t h,
+                  const uint8_t *peer,
+                  size_t len);
 
 // A JSON array of edit ops (`add`, `set`, `name`, `text`, `move`, `delete`); all or nothing, one undo step.
 //
@@ -297,6 +307,40 @@ int32_t de_key(uint64_t h, uint32_t key, uint32_t mods);
 // # Safety
 // See `put`.
 int32_t de_selection(uint64_t h, uint8_t *out, size_t cap, size_t *out_len);
+
+// The node tree for the layers panel, a JSON array `[{id, type, parent, order, name, hidden}]` in id order (the App
+// sorts siblings by `order`). `parent` is the effective parent (`null` for pages and detached roots); `hidden` is
+// `props.visible == false`. Output grows with the document, so size the buffer from `*out_len` on `DE_ERR_SMALL_BUFFER`.
+// The document can change between the size call and the fill call (a peer's edit), so loop on `DE_ERR_SMALL_BUFFER`
+// until a call returns `DE_OK`. Nodes whose id is not a valid node id are left out.
+//
+// # Safety
+// See `put`.
+int32_t de_tree(uint64_t h,
+                uint8_t *out,
+                size_t cap,
+                size_t *out_len);
+
+// The linked design system's tokens, a JSON array `[{name, kind}]` in name order (`[]` until the system has synced).
+//
+// # Safety
+// See `put`.
+int32_t de_tokens(uint64_t h,
+                  uint8_t *out,
+                  size_t cap,
+                  size_t *out_len);
+
+// Select nodes by id: `ids_json` is a JSON array of strings (at most `DE_MAX_SELECT_IDS`, each at most
+// `DE_MAX_ID_BYTES`), replacing the selection; `[]` clears it. Ends text editing and cancels a gesture first. An id
+// that is not in the document refuses the whole call (`DE_ERR_INVALID`, selection and gesture unchanged); the same for
+// text that is not a JSON array of strings. `DE_ERR_ARG` is only a bad argument (NULL `ids_json` with `len > 0`), and
+// `DE_ERR_TOO_LARGE` is too many ids or an id over `DE_MAX_ID_BYTES`.
+//
+// # Safety
+// `ids_json..+len` readable.
+int32_t de_select(uint64_t h,
+                  const uint8_t *ids_json,
+                  size_t len);
 
 // One node for the inspector (`{id, type, parent, order, name, props, text}`), or `null`.
 //

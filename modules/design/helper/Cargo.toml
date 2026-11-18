@@ -1,0 +1,21 @@
+# The `ainkrad-design` helper (V6-01, plan T7): the runner starts it in a sandbox with no network to render, measure and
+# review design documents on CPU Skia and to check uploaded fonts and Icon Composer zips. Linux needs libfontconfig and
+# libfreetype at run time (as `render`).
+[package]
+name = "ainkrad-design"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ainkrad-proto = { path = "../../../crates/proto" }
+base64 = "0.22.1"
+design-model = { path = "../model" }
+design-render = { path = "../render" }
+# Already in the tree (skia-bindings, reqwest): raw deflate for Icon Composer zips.
+flate2 = "1.1.11"
+serde_json = "1.0.154"
+skia-safe = { version = "=0.157.0", features = ["textlayout"] }

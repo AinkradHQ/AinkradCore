@@ -9,6 +9,7 @@ pub mod host;
 mod interact;
 mod presence;
 mod preview;
+mod query;
 mod snap;
 pub mod testing;
 mod text;

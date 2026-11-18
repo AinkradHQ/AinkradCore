@@ -138,6 +138,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ainkrad-design"
+version = "0.1.0"
+dependencies = [
+ "ainkrad-proto",
+ "base64 0.22.1",
+ "design-model",
+ "design-render",
+ "flate2",
+ "serde_json",
+ "skia-safe",
+]
+
+[[package]]
 name = "ainkrad-proto"
 version = "0.8.11"
 dependencies = [
@@ -1054,6 +1067,7 @@ dependencies = [
  "design-model",
  "design-render",
  "metal",
+ "serde",
  "serde_json",
  "skia-bindings",
  "unicode-segmentation",
@@ -1074,7 +1088,9 @@ version = "0.1.0"
 dependencies = [
  "ainkrad-core",
  "ainkrad-core-server",
+ "ainkrad-proto",
  "axum",
+ "base64 0.22.1",
  "futures-util",
  "getrandom 0.4.3",
  "libc",
@@ -1085,6 +1101,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tower",
+ "tracing",
  "utoipa",
 ]
 

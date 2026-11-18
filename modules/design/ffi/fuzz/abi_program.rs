@@ -142,7 +142,7 @@ pub fn run(data: &[u8]) {
         let (x, y) = (i.f32(), i.f32());
         // SAFETY: every (ptr, len) above is NULL or inside a live buffer, which is the ABI's contract.
         let rc = unsafe {
-            match i.u8() % 32 {
+            match i.u8() % 34 {
                 0 => de_sync_apply(h, i.u8() as u32 % 3, ip, il),
                 1 => de_sync_state_vector(h, op, cap, ol),
                 2 => de_sync_diff(h, ip, il, op, cap, ol),
@@ -278,6 +278,36 @@ pub fn run(data: &[u8]) {
                         3 => de_presence_list(h, op, cap, ol),
                         _ if i.u8() % 2 == 0 => de_follow(h, who.as_ptr(), who.len()),
                         _ => de_follow(h, ip, il),
+                    }
+                }
+                // V2-07: layers, tokens, select by id (real ids, or the raw input)
+                32 => match i.u8() % 2 {
+                    0 => de_tree(h, op, cap, ol),
+                    _ => de_tokens(h, op, cap, ol),
+                },
+                33 => {
+                    let ids = format!(
+                        r#"["{}","{}"]"#,
+                        IDS[i.u8() as usize % IDS.len()],
+                        IDS[i.u8() as usize % IDS.len()]
+                    );
+                    // over the limits: 4097 ids, a 129-byte id
+                    let many = format!("[{}]", vec![r#""n_aaaaaaaaaaaa""#; 4097].join(","));
+                    let long = format!(r#"["{}"]"#, "n".repeat(129));
+                    match i.u8() % 5 {
+                        0 => de_select(h, ids.as_ptr(), ids.len()),
+                        1 => de_select(h, b"[]".as_ptr(), 2),
+                        2 => {
+                            let rc = de_select(h, many.as_ptr(), many.len());
+                            assert!(rc == DE_ERR_TOO_LARGE || rc == DE_ERR_HANDLE, "{rc}");
+                            rc
+                        }
+                        3 => {
+                            let rc = de_select(h, long.as_ptr(), long.len());
+                            assert!(rc == DE_ERR_TOO_LARGE || rc == DE_ERR_HANDLE, "{rc}");
+                            rc
+                        }
+                        _ => de_select(h, ip, il),
                     }
                 }
                 _ => match i.u8() % 2 {
