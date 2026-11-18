@@ -1,4 +1,5 @@
-//! Local edits in the registers `read` expects. Used by client engines, the Core's typed ops (V1-04) and the tests.
+//! Local edits on a `Replica` in the registers `read` expects (from `design-crdt`). Used by the Core's typed ops
+//! (V1-04) and the tests; the App engine writes the same registers through `ops`.
 //! A move goes through the model's own `Doc::move_node` (leaf parent, cycle, order and clock checks), so the rules
 //! live in one place; the result is then written as the `move` and `order` registers.
 
@@ -37,21 +38,6 @@ fn any(v: &Value) -> Any {
                 .into(),
         ),
     }
-}
-
-fn move_value(parent: Option<&str>, clock: u64, prev: Option<&str>) -> Any {
-    let s = |p: Option<&str>| p.map_or(Any::Null, |p| Any::String(p.into()));
-    let c = Any::Number(Number::Int(clock as i64));
-    Any::Map(
-        [
-            ("p".to_string(), s(parent)),
-            ("c".to_string(), c),
-            ("f".to_string(), s(prev)),
-        ]
-        .into_iter()
-        .collect::<std::collections::HashMap<_, _>>()
-        .into(),
-    )
 }
 
 impl<'a, 'd> Editor<'a, 'd> {
@@ -100,7 +86,7 @@ impl<'a, 'd> Editor<'a, 'd> {
         m.insert(self.txn, "type", any(&ty));
         m.insert(self.txn, "order", order);
         m.insert(self.txn, "name", name);
-        m.insert(self.txn, "move", move_value(parent, *self.top, None));
+        m.insert(self.txn, "move", read::move_any(parent, *self.top, None));
         let p = m.insert(self.txn, "props", MapPrelim::default());
         for (k, v) in props.as_object().into_iter().flatten() {
             p.insert(self.txn, k.as_str(), any(v));
@@ -126,7 +112,7 @@ impl<'a, 'd> Editor<'a, 'd> {
         nm.insert(
             self.txn,
             "move",
-            move_value(n.parent.as_deref(), n.clock, n.prev.as_deref()),
+            read::move_any(n.parent.as_deref(), n.clock, n.prev.as_deref()),
         );
         nm.insert(self.txn, "order", order);
         Ok(())
@@ -195,7 +181,7 @@ impl<'a, 'd> Editor<'a, 'd> {
             nm.insert(
                 self.txn,
                 "move",
-                move_value(Some("n_pageaaaaaaaa"), clock, None),
+                read::move_any(Some("n_pageaaaaaaaa"), clock, None),
             );
         }
     }
