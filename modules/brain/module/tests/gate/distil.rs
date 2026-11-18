@@ -315,7 +315,15 @@ async fn the_inbox_accepts_edits_and_rejects_and_auto_accept_is_off_until_set() 
         .fetch_one(&p)
         .await
         .unwrap();
+    // A person's accept or edit marks the record as a person decision (the me card reads it).
+    let marked: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM records WHERE status = 'accepted' AND origin = 'person' AND edited_by_person = 1",
+    )
+    .fetch_one(&p)
+    .await
+    .unwrap();
     p.close().await;
+    assert_eq!(marked, 2);
     assert_eq!(n, 2);
     assert!(ops >= 4, "{ops}");
 

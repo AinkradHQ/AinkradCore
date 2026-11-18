@@ -18,13 +18,13 @@ use crate::ai::cut;
 
 /// The card's budget; tokens are chars / 4 (as in `eval`).
 pub const BUDGET_TOKENS: usize = 400;
-const CHARS_PER_TOKEN: usize = 4;
-const LINE_CHARS: usize = 200;
+pub(crate) const CHARS_PER_TOKEN: usize = 4;
+pub(crate) const LINE_CHARS: usize = 200;
 const DESC_CHARS: usize = 160;
 const MAX_REPOS: usize = 6;
 
 /// Tags that mark a record as disputed.
-const CONTESTED: &str = "('conflict','contested')";
+pub(crate) const CONTESTED: &str = "('conflict','contested')";
 
 /// What the card says about the room itself.
 pub struct Head {
@@ -108,7 +108,7 @@ pub async fn build(app: &App, pool: &SqlitePool, room: &str, now: &str) -> Resul
     Ok(compose(pool, &head(app, room).await?, now).await?)
 }
 
-fn one_line(s: &str, n: usize) -> String {
+pub(crate) fn one_line(s: &str, n: usize) -> String {
     cut(&s.split_whitespace().collect::<Vec<_>>().join(" "), n).0
 }
 
@@ -144,6 +144,7 @@ pub(crate) async fn compose(pool: &SqlitePool, h: &Head, now: &str) -> Result<Ca
         "SELECT id, body FROM memory \
          WHERE type IN (SELECT value FROM json_each(?1)) \
            AND (?2 = 0 OR datetime(coalesce(last_seen_at, created_at)) >= datetime(?3, '-' || ?2 || ' days')) \
+           AND contests IS NULL
            AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE value IN {CONTESTED}) \
          ORDER BY CASE WHEN ?4 THEN support ELSE 0 END DESC, coalesce(last_seen_at, created_at) DESC, id \
          LIMIT ?5"
