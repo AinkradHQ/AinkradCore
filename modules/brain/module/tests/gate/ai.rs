@@ -183,7 +183,9 @@ pub const ALPHA: &str = "https://github.com/acme/Alpha.git";
 async fn room_visibility_follows_the_project_room_link_not_the_name() {
     let fx = fx().await;
     let alpha = committed_room_named(&fx, "Alpha", &[("A", "alpha text")]).await;
-    let twin = committed_room_named(&fx, "Alpha", &[("T", "twin text")]).await;
+    let twin = committed_room_named(&fx, "AlphaTwin", &[("T", "twin text")]).await;
+    exec(&fx, "UPDATE brain_rooms SET name = 'Alpha' WHERE id = ?", &twin).await;
+    assert_ne!(twin, alpha);
     let beta = committed_room_named(&fx, "Beta", &[("B", "beta text")]).await;
     // The linked room is visible, and only it: not the same-name room, not another room.
     let linked = session_unlinked(&fx, "https://github.com/acme/Other.git", &["anthropic"]).await;
@@ -209,7 +211,9 @@ async fn exec(fx: &Fx, sql: &str, bind: &str) {
 async fn a_linked_room_is_hidden_when_archived_denied_unlinked_or_its_project_archived() {
     let fx = fx().await;
     let room = committed_room_named(&fx, "Alpha", &[("A", "alpha text")]).await;
-    let twin = committed_room_named(&fx, "Alpha", &[("T", "twin text")]).await;
+    let twin = committed_room_named(&fx, "AlphaTwin", &[("T", "twin text")]).await;
+    exec(&fx, "UPDATE brain_rooms SET name = 'Alpha' WHERE id = ?", &twin).await;
+    assert_ne!(twin, room);
     let s = session_unlinked(&fx, ALPHA, &["anthropic"]).await;
     link_session(&fx, &s, &room).await;
     // Two active rooms with the one name: only the linked one.
