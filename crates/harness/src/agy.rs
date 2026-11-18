@@ -116,6 +116,25 @@ fn link_files(spec: &Spec) -> io::Result<()> {
     Ok(())
 }
 
+/// The Brain checkpoint hook (B8-04): agy's `Stop` event (the loop ended) in the private home's
+/// `.gemini/config/hooks.json`, run as the runner's `ainkrad-hook checkpoint <socket>` on the
+/// session's own tools socket. agy has no pre-compaction or session-end event. Only a session with
+/// the tools slot gets it; otherwise a stale file is removed. Only the private home is written:
+/// the real `~/.gemini` is never read or touched. `link_files` made `.gemini/config` real.
+fn write_hooks(spec: &Spec) -> io::Result<()> {
+    let dir = spec.config_dir.join(".gemini/config");
+    let Some((sock, exe)) = crate::connections::slot(&spec.env) else {
+        return match std::fs::remove_file(dir.join("hooks.json")) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        };
+    };
+    let command = crate::connections::checkpoint_hook(&exe, &sock);
+    let hooks = json!({"ainkrad-brain": {"Stop": [
+        {"type": "command", "command": command, "timeout": 2}]}});
+    crate::safe_fs::write_replacing(&dir, "hooks.json", &hooks.to_string())
+}
+
 pub struct Agy {
     proc: Proc,
     /// Decodes stdout; separate so fixtures can drive it without a process.
@@ -293,6 +312,7 @@ impl Agy {
             ));
         }
         link_files(spec)?;
+        write_hooks(spec)?;
         let settings = spec.config_dir.join(".gemini/antigravity-cli");
         crate::safe_fs::real_dir(&spec.config_dir, Path::new(".gemini/antigravity-cli"))?;
         crate::safe_fs::write_replacing(&settings, "settings.json", settings_for(spec))?;

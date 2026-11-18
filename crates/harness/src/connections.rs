@@ -35,6 +35,15 @@ pub fn slot<V: AsRef<std::ffi::OsStr>>(env: &[(String, V)]) -> Option<(String, S
     Some((get(SLOT_SOCK)?, get(SLOT_FWD)?))
 }
 
+/// The shell command of a harness's checkpoint hook: the runner executable's `ainkrad-hook
+/// checkpoint <socket>` (Brain B8-04). It authenticates the way the MCP shim does, by being given
+/// the session's own socket; no credential is in it. Paths are single-quoted for the shell the
+/// harness runs hook commands in.
+pub fn checkpoint_hook(exe: &str, sock: &str) -> String {
+    let quote = |s: &str| format!("'{}'", s.replace('\'', r"'\''"));
+    format!("{} ainkrad-hook checkpoint {}", quote(exe), quote(sock))
+}
+
 /// `config` (the harness's MCP config, or none) with the connections server added; `None` for a
 /// harness this runner has no format for.
 pub fn add(harness: &str, config: Option<Value>, exe: &str, sock: &str) -> Option<Value> {
@@ -95,6 +104,18 @@ mod tests {
 
     const EXE: &str = "/opt/ainkrad/ainkrad-runner";
     const SOCK: &str = "/state/agents/as_x/tools.sock";
+
+    #[test]
+    fn the_checkpoint_hook_quotes_its_paths() {
+        assert_eq!(
+            checkpoint_hook(EXE, SOCK),
+            format!("'{EXE}' ainkrad-hook checkpoint '{SOCK}'")
+        );
+        assert_eq!(
+            checkpoint_hook("/o'k/r", "/s"),
+            r"'/o'\''k/r' ainkrad-hook checkpoint '/s'"
+        );
+    }
 
     #[test]
     fn claude_gets_a_stdio_server_beside_citadel() {

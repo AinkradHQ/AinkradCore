@@ -263,6 +263,10 @@ async fn main() -> ExitCode {
         ["mcp-stdio", sock] => {
             return ainkrad_runner::v2::agent::tools::sock::stdio_main(sock).await;
         }
+        // A harness's Brain checkpoint hook (B8-04): fail-open, prints nothing, always exits 0.
+        ["ainkrad-hook", "checkpoint", sock] => {
+            return ainkrad_runner::v2::agent::tools::hook::checkpoint_main(sock).await;
+        }
         // One script (spawned by the shim, inside the sandbox) and the `ainkrad` CLI.
         #[cfg(feature = "quickjs")]
         ["__script", sock] => return ainkrad_runner::v2::agent::script::child::script_main(sock),
