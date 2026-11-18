@@ -559,6 +559,7 @@ fn v2_agent_frames_are_pinned() {
         5,
         0,
         Body::Command(Command::AgentStart(AgentStart {
+            instructions: None,
             session: "as_a".to_owned(),
             harness: "claude".to_owned(),
             model: Some("haiku".to_owned()),
@@ -581,6 +582,7 @@ fn v2_agent_frames_are_pinned() {
         5,
         0,
         Body::Command(Command::AgentStart(AgentStart {
+            instructions: None,
             session: "as_a".to_owned(),
             harness: "claude".to_owned(),
             model: None,
@@ -812,6 +814,7 @@ fn v2_agent_frames_are_pinned() {
         13,
         0,
         Body::Command(Command::AgentStart(AgentStart {
+            instructions: None,
             session: "as_a".to_owned(),
             harness: "claude".to_owned(),
             model: None,
