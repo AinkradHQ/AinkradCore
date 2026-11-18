@@ -88,6 +88,10 @@ pub(super) async fn service() -> SocketAddr {
     let addr = listener.local_addr().unwrap();
     let app = axum::Router::new()
         .route("/ws", axum::routing::get(ws))
+        .route(
+            "/missing",
+            axum::routing::get(|| async { StatusCode::NOT_FOUND }),
+        )
         .fallback(echo);
     tokio::spawn(async move { axum::serve(listener, app).await });
     addr
@@ -261,6 +265,9 @@ async fn headers_are_cleaned_forwarded_and_cookies_kept_host_only() {
         .header("forwarded", "for=6.6.6.6")
         .header("x-real-ip", "6.6.6.6")
         .header("x-ainkrad-device", "d_core")
+        .header("cf-connecting-ip", "6.6.6.6")
+        .header("true-client-ip", "6.6.6.6")
+        .header("x-client-ip", "6.6.6.6")
         .header("x-app", "kept")
         .body(Body::from("hello"))
         .unwrap();
@@ -276,6 +283,10 @@ async fn headers_are_cleaned_forwarded_and_cookies_kept_host_only() {
         "forwarded",
         "x-real-ip",
         "x-ainkrad-device",
+        // Not from Cloudflare's edge: the client's own claims about its address go.
+        "cf-connecting-ip",
+        "true-client-ip",
+        "x-client-ip",
     ] {
         assert!(seen.get(gone).is_none(), "{gone}: {seen}");
     }

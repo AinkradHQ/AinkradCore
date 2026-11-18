@@ -14,38 +14,58 @@
 //! - **Expose is enforced here.** The project must be active with `expose` on (else 404), its live
 //!   run must be `running` (else a 503 "not running" page), and the port must be one that the run's
 //!   own spec version marks `expose: true`. The runner checks the port again (P6-01).
+//! - **Only through Cloudflare.** By default (`serve --projects-domain`, unless
+//!   `--projects-allow-direct`) a project SNI from a peer outside [`edge`] (Cloudflare's published
+//!   ranges, `limit::Cidr::CLOUDFLARE`, plus `--trusted-proxy`) is dropped after the handshake.
+//!   Runners and the Core host use the Core SNI and are unaffected.
+//! - **The client's address.** From an [`edge`] peer it is `CF-Connecting-IP`; from any other, the
+//!   peer itself. It is what the project gets in `X-Forwarded-For` and what the per-client cap
+//!   counts.
 //! - **What reaches the project.** The client's method, path, query, body and end-to-end headers.
 //!   Hop-by-hop headers (and any that `Connection` names) are dropped, as are a client's
-//!   `Forwarded`, `X-Forwarded-*`, `X-Real-IP` and `X-Ainkrad-*`. We set `X-Forwarded-For`,
-//!   `-Proto` and `-Host` ourselves. The router adds no credential: the Core sets no cookies, and
-//!   its keys and tokens never enter this path. A project's `Set-Cookie` loses its `Domain`, so a
+//!   `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `X-Ainkrad-*` and `Content-Length` (hyper frames
+//!   the body). `CF-*`, `True-Client-IP`, `X-Client-IP` and `Client-IP` pass only from an
+//!   [`edge`] peer. We set `X-Forwarded-For`, `-Proto` and `-Host` ourselves. The router adds no
+//!   credential: the Core sets no cookies, and its keys and tokens never enter this path. A project's `Set-Cookie` loses its `Domain`, so a
 //!   project cannot set a cookie for the Core or for another project.
 //! - **Bounds.** A rate cap per project (429). Request bodies are capped at [`MAX_BODY`] (413).
 //!   The gateway's header limits, idle cut and request deadline apply, plus [`HEAD`] to a response
-//!   head (504). The `run.port` stream cap gives 503 when the runner is full. Credit goes back to
-//!   the runner only as the public client takes the bytes.
+//!   head (504). In flight at once (a request until its response body ends, a WebSocket until it
+//!   closes): [`PER_PROJECT`] per project, well under the runner's 32 `run.port` streams, and
+//!   [`PER_CLIENT`] per client address; past either, 503 with `Retry-After`, as when the runner is
+//!   full. HTTP/2 allows 8 streams per project connection. A response gets [`BODY_LIFE`] in all
+//!   and a WebSocket [`WS_LIFE`], on top of the idle cuts. Credit goes back to the runner only as
+//!   the public client takes the bytes.
 //! - **Upgrades.** A WebSocket upgrade (HTTP/1.1) is carried end to end. Any other upgrade is
-//!   dropped as hop-by-hop, and CONNECT is refused.
-//! - **Activity.** Real traffic (a request, or bytes moving on a WebSocket) pushes the run's idle
-//!   stop back (`store::runs::touch`, P5-03). It is throttled to one write per [`TOUCH_EVERY`].
+//!   dropped as hop-by-hop, and CONNECT is refused. An open WebSocket is checked every [`TICK`]:
+//!   it closes once the project is no longer active and exposed or its run no longer running,
+//!   and when serve stops.
+//! - **Activity.** Real traffic (a request answered 2xx or 3xx, or bytes moving on a WebSocket)
+//!   pushes the run's idle stop back (`store::runs::touch`, P5-03). It is throttled to one write
+//!   per [`TOUCH_EVERY`].
+//! - **Known limit: cookies between projects.** Every project is a subdomain of one registrable
+//!   domain, so a page on one project can still set a cookie for the parent domain from
+//!   JavaScript (`document.cookie`), which other projects then receive; only `Set-Cookie` headers
+//!   are made host-only here. Closing that needs a separate registrable domain per project or the
+//!   domain on the Public Suffix List.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::v2::PortOpen;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, Version, header};
+use axum::extract::{Request, State};
+use axum::http::{HeaderValue, Method, StatusCode, Uri, Version, header};
 use axum::response::{IntoResponse, Response};
 use http_body_util::Limited;
-use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::TokioIo;
 use tokio::time::Instant;
 
 use crate::api::App;
+use crate::api::limit::Cidr;
 use crate::store::run_specs::{self, RunSpec};
 use crate::store::{projects, runs};
 
@@ -60,19 +80,20 @@ pub const BURST: f64 = 400.0;
 pub const TOUCH_EVERY: Duration = Duration::from_secs(30);
 /// A WebSocket that moves no byte for this long is closed.
 const WS_IDLE: Duration = Duration::from_secs(10 * 60);
-
-/// Headers that belong to one hop and are never forwarded either way (RFC 9110 §7.6.1).
-const HOP: [&str; 9] = [
-    "connection",
-    "keep-alive",
-    "proxy-connection",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-];
+/// A WebSocket is closed after this long, moving or not.
+pub const WS_LIFE: Duration = Duration::from_secs(60 * 60);
+/// A request's whole exchange with the project, response body included.
+pub const BODY_LIFE: Duration = Duration::from_secs(10 * 60);
+/// In flight at once per project, under the runner's 32 `run.port` streams.
+pub const PER_PROJECT: usize = 8;
+/// In flight at once per client address.
+pub const PER_CLIENT: usize = 4;
+/// How often an open WebSocket is checked (and its traffic recorded).
+const TICK: Duration = if cfg!(test) {
+    Duration::from_millis(200)
+} else {
+    TOUCH_EVERY
+};
 
 /// The project label `name` (an SNI or a `Host` without its port) names under `domain`: one label
 /// of `a-z0-9-`, not reserved, and `name` is not `core` (the Core's own host). `domain` and `core`
@@ -103,8 +124,12 @@ struct Host {
     dial: Arc<dyn Dial>,
     domain: String,
     core: String,
+    /// Peers whose `CF-Connecting-IP` and `CF-*` headers are believed ([`edge`]).
+    edge: Arc<[Cidr]>,
     // ponytail: one lock for every project; per-project locks if a single Core ever serves many.
     slots: Mutex<HashMap<i64, Slot>>,
+    by_project: Counts<i64>,
+    by_client: Counts<IpAddr>,
 }
 
 impl Host {
@@ -153,11 +178,14 @@ impl Host {
 pub fn router(app: App, dial: Arc<dyn Dial>, domain: &str) -> Router {
     let core = strip_port(&app.host).to_ascii_lowercase();
     let host = Arc::new(Host {
+        edge: edge(&app.trusted_proxies),
         app,
         dial,
         domain: domain.to_ascii_lowercase(),
         core,
         slots: Mutex::default(),
+        by_project: Counts::default(),
+        by_client: Counts::default(),
     });
     Router::new().fallback(handle).with_state(host)
 }
@@ -180,10 +208,10 @@ async fn proxy(h: Arc<Host>, mut req: Request) -> Result<Response, Response> {
         return Err(page(StatusCode::METHOD_NOT_ALLOWED, "Not allowed"));
     }
     let pool = &h.app.pool;
+    // Active and exposed only (in the query).
     let project = projects::for_host(pool, &label)
         .await
         .map_err(|_| unavailable())?
-        .filter(|p| p.state == "active" && p.expose)
         .ok_or_else(not_found)?;
     let service = label.get(project.slug.len() + 1..).map(str::to_owned);
     if !h.admit(project.id) {
@@ -211,7 +239,14 @@ async fn proxy(h: Arc<Host>, mut req: Request) -> Result<Response, Response> {
     if too_big {
         return Err(page(StatusCode::PAYLOAD_TOO_LARGE, "Request too large"));
     }
-    h.touch(project.id).await;
+    let (client, from_edge) = client_ip(&req, &h.edge);
+    let permit = Arc::new(Permit {
+        _project: hold(&h.by_project, project.id, PER_PROJECT).ok_or_else(busy)?,
+        _client: match client {
+            Some(ip) => Some(hold(&h.by_client, ip, PER_CLIENT).ok_or_else(busy)?),
+            None => None,
+        },
+    });
     let open = PortOpen {
         project: u64::try_from(project.id).unwrap_or(0),
         run: run.id.clone(),
@@ -224,16 +259,16 @@ async fn proxy(h: Arc<Host>, mut req: Request) -> Result<Response, Response> {
     })?;
     let ws = is_websocket(&req);
     let on_client = ws.then(|| hyper::upgrade::on(&mut req));
-    let client = req
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|c| c.0.ip());
-    let out = outbound(req, &host, client, ws);
+    let out = outbound(req, &host, client, from_edge, ws);
     let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(io))
         .await
         .map_err(|_| bad_gateway())?;
+    // The exchange holds its places, and ends (body cut short) after BODY_LIFE. An upgrade ends
+    // it at once: the tunnel holds the places from then on.
+    let held = Arc::clone(&permit);
     tokio::spawn(async move {
-        let _ = conn.with_upgrades().await;
+        let _ = tokio::time::timeout(BODY_LIFE, conn.with_upgrades()).await;
+        drop(held);
     });
     let mut resp = match tokio::time::timeout(HEAD, sender.send_request(out)).await {
         Ok(Ok(r)) => r,
@@ -246,12 +281,22 @@ async fn proxy(h: Arc<Host>, mut req: Request) -> Result<Response, Response> {
         }
     };
     if resp.status() != StatusCode::SWITCHING_PROTOCOLS {
+        // Only an answer the project gave as a success or a redirect counts as activity.
+        if resp.status().is_success() || resp.status().is_redirection() {
+            h.touch(project.id).await;
+        }
         return Ok(inbound(resp, false));
     }
     // A 101 nobody asked for is not passed on.
     let on_client = on_client.ok_or_else(bad_gateway)?;
     let on_project = hyper::upgrade::on(&mut resp);
-    tokio::spawn(tunnel(Arc::clone(&h), project.id, on_client, on_project));
+    let open = Open {
+        label,
+        project: project.id,
+        run: run.id,
+        _permit: permit,
+    };
+    tokio::spawn(tunnel(Arc::clone(&h), open, on_client, on_project));
     Ok(inbound(resp, true))
 }
 
@@ -282,41 +327,12 @@ fn is_websocket(req: &Request) -> bool {
         && tokens(h).iter().any(|t| t == "upgrade")
 }
 
-/// The lower-case tokens of every `Connection` header.
-fn tokens(h: &HeaderMap) -> Vec<String> {
-    h.get_all(header::CONNECTION)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
-        .map(|t| t.trim().to_ascii_lowercase())
-        .collect()
-}
-
-/// End-to-end headers only: no hop-by-hop, none `Connection` names, no proxy or Core headers.
-fn forwardable(from: &HeaderMap) -> HeaderMap {
-    let named = tokens(from);
-    let mut out = HeaderMap::new();
-    for (name, value) in from {
-        let n = name.as_str();
-        let drop = HOP.contains(&n)
-            || named.iter().any(|t| t == n)
-            || n == "host"
-            || n == "forwarded"
-            || n == "x-real-ip"
-            || n.starts_with("x-forwarded-")
-            || n.starts_with("x-ainkrad-");
-        if !drop {
-            out.append(name.clone(), value.clone());
-        }
-    }
-    out
-}
-
 /// The request as the project gets it: origin-form, HTTP/1.1, end-to-end headers plus ours.
 fn outbound(
     req: Request,
     host: &str,
     client: Option<IpAddr>,
+    from_edge: bool,
     ws: bool,
 ) -> hyper::Request<Limited<Body>> {
     let (parts, body) = req.into_parts();
@@ -327,7 +343,9 @@ fn outbound(
         .path_and_query()
         .map_or_else(|| Uri::from_static("/"), |p| Uri::from(p.clone()));
     *out.version_mut() = Version::HTTP_11;
-    let mut headers = forwardable(&parts.headers);
+    let mut headers = forwardable(&parts.headers, from_edge);
+    // hyper frames the body itself: the client's length is never passed on as is.
+    headers.remove(header::CONTENT_LENGTH);
     let mut set = |name: &'static str, value: &str| {
         if let Ok(v) = HeaderValue::from_str(value) {
             headers.insert(name, v);
@@ -353,7 +371,8 @@ fn outbound(
 /// The project's answer as the client gets it: end-to-end headers, cookies host-only.
 fn inbound(resp: hyper::Response<hyper::body::Incoming>, upgrade: bool) -> Response {
     let (parts, body) = resp.into_parts();
-    let mut headers = forwardable(&parts.headers);
+    // A response's headers name no client: nothing to strip but hop-by-hop and proxy ones.
+    let mut headers = forwardable(&parts.headers, true);
     let cookies: Vec<HeaderValue> = headers
         .get_all(header::SET_COOKIE)
         .iter()
@@ -377,51 +396,6 @@ fn inbound(resp: hyper::Response<hyper::body::Incoming>, upgrade: bool) -> Respo
     *out.status_mut() = parts.status;
     *out.headers_mut() = headers;
     out
-}
-
-/// A `Set-Cookie` value without its `Domain` attribute: the cookie stays on the project's host.
-fn host_only(cookie: &str) -> String {
-    cookie
-        .split(';')
-        .enumerate()
-        .filter(|(i, a)| {
-            *i == 0
-                || !a
-                    .trim_start()
-                    .get(..6)
-                    .is_some_and(|n| n.eq_ignore_ascii_case("domain"))
-        })
-        .map(|(_, a)| a)
-        .collect::<Vec<_>>()
-        .join(";")
-}
-
-/// A WebSocket's bytes both ways, until either side closes or nothing moves for [`WS_IDLE`]. Bytes
-/// moving push the idle stop back.
-async fn tunnel(h: Arc<Host>, project: i64, client: OnUpgrade, upstream: OnUpgrade) {
-    let (Ok(client), Ok(upstream)) = tokio::join!(client, upstream) else {
-        return;
-    };
-    let mut client = TokioIo::new(client);
-    let (mut upstream, activity) = super::idle::wrap(TokioIo::new(upstream));
-    let copy = tokio::io::copy_bidirectional(&mut client, &mut upstream);
-    tokio::pin!(copy);
-    let mut tick = tokio::time::interval(TOUCH_EVERY);
-    let mut seen = activity.deadline(Duration::ZERO);
-    loop {
-        tokio::select! {
-            _ = &mut copy => return,
-            _ = tick.tick() => {
-                let moved = activity.deadline(Duration::ZERO);
-                if moved > seen {
-                    seen = moved;
-                    h.touch(project).await;
-                } else if moved + WS_IDLE <= Instant::now() {
-                    return;
-                }
-            }
-        }
-    }
 }
 
 fn strip_port(host: &str) -> &str {
@@ -464,8 +438,17 @@ fn bad_gateway() -> Response {
     page(StatusCode::BAD_GATEWAY, "The project could not be reached")
 }
 
+mod caps;
+mod client;
 mod dial;
+mod headers;
+mod tunnel;
+use caps::{Counts, Permit, hold};
+use client::client_ip;
+pub use client::edge;
 pub use dial::{Dial, DialError, HubDial};
+use headers::{forwardable, host_only, tokens};
+use tunnel::{Open, tunnel};
 
 #[cfg(test)]
 mod tests;

@@ -124,8 +124,9 @@ pub struct Gateway {
     /// The opt-in iroh listener (`with_iroh`): off unless asked for.
     #[cfg(feature = "iroh")]
     iroh: Option<p2p::Listener>,
-    /// The Host router for project SNIs (`with_projects`).
-    projects: Option<Router>,
+    /// The Host router for project SNIs and, when set, the only peers it takes them from
+    /// (`with_projects`).
+    projects: Option<(Router, Option<Arc<[crate::api::limit::Cidr]>>)>,
     limits: Limits,
 }
 
@@ -185,12 +186,15 @@ impl Gateway {
     }
 
     /// Serves project hosts (`<label>.<domain>`) on the public listener with `cert` and
-    /// `router` (`projects::router`), split by SNI before any Core routing. Public only.
+    /// `router` (`projects::router`), split by SNI before any Core routing. Public only. With
+    /// `only_from` (`projects::edge`), a project SNI from any other peer is dropped after the
+    /// handshake: the project hosts answer only through Cloudflare. The Core's SNI is unaffected.
     pub fn with_projects(
         mut self,
         domain: &str,
         cert: tls::Cert,
         router: Router,
+        only_from: Option<Arc<[crate::api::limit::Cidr]>>,
     ) -> std::io::Result<Self> {
         let Some((certs, acme)) = &self.tls else {
             return Err(std::io::Error::other(
@@ -200,7 +204,7 @@ impl Gateway {
         if !certs.set_projects(domain, &acme.hostname, cert) {
             return Err(std::io::Error::other("project hosts are already set"));
         }
-        self.projects = Some(router);
+        self.projects = Some((router, only_from));
         Ok(self)
     }
 

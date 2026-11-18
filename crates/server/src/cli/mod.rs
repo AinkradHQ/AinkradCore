@@ -30,7 +30,7 @@ const USAGE: &str = "usage:
                  [--bind <addr:port>] [--host <name>]
                  [--hostname <dns-name> --acme-contact <email>
                  [--acme-directory <url>] [--acme-http01]]
-                 [--projects-domain <domain>]
+                 [--projects-domain <domain> [--projects-allow-direct]]
                  [--trusted-proxy <addr|cidr>[,…]]
                  [--passkeys] [--allow-origin <origin>[,…]] [--allow-plain-runner]
                  [--max-host-load <per-core>]
@@ -78,7 +78,9 @@ lets them in over plain HTTP from loopback TCP (development and tests only).
 --projects-domain (public only; off unless given) serves https://<slug>.<domain> for exposed
 projects (P6-02): a TLS connection whose SNI is one label under <domain> (not the --hostname, not a
 reserved name) gets the wildcard certificate /etc/ainkrad/projects-wildcard.{pem,key} and the Host
-router, which reaches only the project's running run and never the Core's routes.
+router, which reaches only the project's running run and never the Core's routes. Project hosts
+are taken only from Cloudflare's published ranges (and --trusted-proxy); --projects-allow-direct
+also takes them from any peer. The key file must not be readable by group or others.
 --max-host-load sets the one-minute load per CPU past which a runner's host is refused new
 commands as busy (default 4).
 --iroh (E2-19; off unless given) also serves the same API over iroh, for a Core behind NAT: QUIC with
@@ -379,6 +381,8 @@ struct Serve {
     iroh: bool,
     /// `--projects-domain`: the Host router for `<slug>.<domain>` (P6-02). Off by default.
     projects_domain: Option<String>,
+    /// `--projects-allow-direct`: project hosts from any peer, not only Cloudflare's edge.
+    projects_direct: bool,
     /// `--enable-module`: the ids of the modules to mount. None by default.
     modules: Vec<String>,
     iroh_relays: Vec<String>,
@@ -403,6 +407,7 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
         max_host_load: None,
         iroh: false,
         projects_domain: None,
+        projects_direct: false,
         modules: Vec::new(),
         iroh_relays: Vec::new(),
         iroh_bind: Vec::new(),
@@ -424,6 +429,10 @@ fn serve_flags(flags: &[&str]) -> Option<Serve> {
         }
         if *flag == "--iroh" {
             s.iroh = true;
+            continue;
+        }
+        if *flag == "--projects-allow-direct" {
+            s.projects_direct = true;
             continue;
         }
         let value = (*it.next()?).to_owned();
@@ -694,11 +703,27 @@ fn enabled(
     Ok(Arc::from(picked))
 }
 
-/// Serves the client API and runs the scheduler and the pusher until SIGTERM or Ctrl-C, then
-/// shuts down cleanly (`USAGE`).
 /// The projects' wildcard certificate (`.pem` chain, `.key`), installed by P6-03.
 const PROJECTS_CERT: &str = "/etc/ainkrad/projects-wildcard";
 
+/// Refuses a key file that group or others can read.
+fn private_key(path: &str) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(path)
+        .map_err(|e| format!("reading {path}: {e}"))?
+        .permissions()
+        .mode();
+    if mode & 0o044 != 0 {
+        return Err(format!(
+            "{path} is readable by group or others (mode {:o}): chmod 600 it",
+            mode & 0o777
+        ));
+    }
+    Ok(())
+}
+
+/// Serves the client API and runs the scheduler and the pusher until SIGTERM or Ctrl-C, then
+/// shuts down cleanly (`USAGE`).
 async fn serve(
     db: &Path,
     mut flags: Serve,
@@ -918,11 +943,14 @@ async fn serve(
             let path = format!("{PROJECTS_CERT}.{ext}");
             std::fs::read_to_string(&path).map_err(|e| format!("reading {path}: {e}"))
         };
+        private_key(&format!("{PROJECTS_CERT}.key"))?;
         let cert = gateway::tls::Cert::from_pem(&read("pem")?, &read("key")?)
             .map_err(|e| format!("the projects certificate: {e}"))?;
         let dial = Arc::new(gateway::projects::HubDial(Arc::clone(&app.hub)));
         let router = gateway::projects::router(app.clone(), dial, domain);
-        gateway = gateway.with_projects(domain, cert, router)?;
+        let only_from =
+            (!flags.projects_direct).then(|| gateway::projects::edge(&app.trusted_proxies));
+        gateway = gateway.with_projects(domain, cert, router, only_from)?;
         tracing::info!(%domain, "serving project hosts");
     }
     let (closing, pool) = (Arc::clone(&app.closing), app.pool.clone());
@@ -957,7 +985,32 @@ async fn serve(
 
 #[cfg(test)]
 mod tests {
-    use super::{enabled, serve_flags};
+    use super::{enabled, private_key, serve_flags};
+
+    #[test]
+    fn a_projects_key_readable_by_group_or_others_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let key = std::env::temp_dir().join(format!("ainkrad-key-{}.key", std::process::id()));
+        std::fs::write(&key, "x").unwrap();
+        let path = key.to_str().unwrap();
+        for (mode, ok) in [(0o600, true), (0o400, true), (0o640, false), (0o604, false)] {
+            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(mode)).unwrap();
+            assert_eq!(private_key(path).is_ok(), ok, "{mode:o}");
+        }
+        std::fs::remove_file(&key).unwrap();
+        assert!(private_key(path).is_err(), "a missing key is an error");
+    }
+
+    #[test]
+    fn project_hosts_come_only_through_the_edge_unless_allowed_direct() {
+        assert!(
+            !serve_flags(&["--projects-domain", "p.test"])
+                .unwrap()
+                .projects_direct
+        );
+        let s = serve_flags(&["--projects-domain", "p.test", "--projects-allow-direct"]).unwrap();
+        assert!(s.projects_direct);
+    }
 
     #[test]
     fn modules_are_off_unless_asked_for_and_unknown_ids_are_refused() {

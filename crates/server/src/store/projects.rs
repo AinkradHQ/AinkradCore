@@ -131,11 +131,13 @@ pub async fn get(conn: &mut SqliteConnection, id: i64) -> Result<Project, Error>
 }
 
 /// The project a public host label names (P6-02): the one whose slug is `label`, else the one
-/// with the longest slug that `label` starts with followed by `-` (`<slug>-<service>`). Archived
-/// ones too: the caller checks the state. One query, whatever the label.
+/// with the longest slug that `label` starts with followed by `-` (`<slug>-<service>`). Active,
+/// exposed ones only, filtered before the `LIMIT`: an archived or hidden `shop-api` never shadows
+/// `shop`'s `api` service. One query, whatever the label.
 pub async fn for_host(pool: &SqlitePool, label: &str) -> Result<Option<Project>, sqlx::Error> {
     sqlx::query(sqlx::AssertSqlSafe(format!(
-        "{SELECT} WHERE slug = ?1 OR substr(?1, 1, length(slug) + 1) = slug || '-' \
+        "{SELECT} WHERE state = 'active' AND expose != 0 \
+         AND (slug = ?1 OR substr(?1, 1, length(slug) + 1) = slug || '-') \
          ORDER BY length(slug) DESC LIMIT 1"
     )))
     .bind(label)

@@ -84,6 +84,7 @@ mod health;
 mod health_harness;
 mod host_router;
 mod host_router_load;
+mod host_router_review;
 mod live;
 mod me;
 mod metrics;

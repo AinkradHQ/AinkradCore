@@ -82,11 +82,15 @@ impl Gateway {
             .layer(DefaultBodyLimit::max(limits.body));
         // The Host router keeps the deadline (to a response head) and caps bodies itself.
         let projects = match (self.projects, &self.tls) {
-            (Some(router), Some((certs, _))) => {
+            (Some((router, only_from)), Some((certs, _))) => {
                 let router = router.layer(middleware::from_fn(move |req: Request, next: Next| {
                     request_deadline(deadline, req, next)
                 }));
-                Some((Arc::clone(certs), router))
+                Some(Projects {
+                    certs: Arc::clone(certs),
+                    router,
+                    only_from,
+                })
             }
             _ => None,
         };
@@ -164,13 +168,26 @@ impl Gateway {
     }
 }
 
+/// The public listener's project side (P6-02): which SNIs are project hosts, their router, and
+/// the only peers (Cloudflare's edge) they are taken from, if limited.
+#[derive(Clone)]
+struct Projects {
+    certs: Arc<tls::Certs>,
+    router: Router,
+    only_from: Option<Arc<[crate::api::limit::Cidr]>>,
+}
+
+/// HTTP/2 streams at once on one project connection: a client cannot open more port streams over
+/// one connection than the Host router's per-client cap lets through anyway.
+const PROJECT_STREAMS: u32 = 8;
+
 /// Accepts until `closing` is set; each connection is served on its own task. With `projects`,
 /// a TLS connection whose SNI is a project host is served by that router alone.
 async fn accept(
     listener: Listener,
     tls: Option<TlsAcceptor>,
     app: Router,
-    projects: Option<(Arc<tls::Certs>, Router)>,
+    projects: Option<Projects>,
     limits: &Arc<Limits>,
     graceful: &GracefulShutdown,
     mut closing: watch::Receiver<bool>,
@@ -204,11 +221,23 @@ async fn accept(
                     // P6-02: public project traffic is split off here, by SNI, before any Core
                     // routing: it gets the Host router and no TLS exporter.
                     let sni = stream.get_ref().1.server_name();
-                    if let Some((certs, router)) = projects
-                        && sni.is_some_and(|n| certs.is_project_host(n))
+                    if let Some(p) = projects
+                        && sni.is_some_and(|n| p.certs.is_project_host(n))
                     {
+                        // Only through Cloudflare: a direct peer would pick its own client IP
+                        // and skip the edge's protections.
+                        let edge = |ip: std::net::IpAddr| {
+                            p.only_from
+                                .as_ref()
+                                .is_none_or(|e| e.iter().any(|c| c.contains(ip)))
+                        };
+                        if !peer.is_some_and(|a| edge(a.ip())) {
+                            tracing::debug!(?peer, "a project host from outside the edge");
+                            return;
+                        }
                         let peer = Peer::Tcp(peer);
-                        serve_conn(stream, h2, peer, router, &limits, watcher).await;
+                        let streams = Some(PROJECT_STREAMS);
+                        serve_conn(stream, h2, peer, p.router, &limits, watcher, streams).await;
                         return;
                     }
                     // TLS 1.3 only, so one exporter for the whole connection.
@@ -226,18 +255,18 @@ async fn accept(
                         }
                     };
                     let peer = Peer::Tls(peer, exporter);
-                    serve_conn(stream, h2, peer, app, &limits, watcher).await;
+                    serve_conn(stream, h2, peer, app, &limits, watcher, None).await;
                 });
             }
             (Stream::Tcp(tcp), None) => {
                 tokio::spawn(async move {
-                    serve_conn(tcp, false, Peer::Tcp(peer), app, &limits, watcher).await
+                    serve_conn(tcp, false, Peer::Tcp(peer), app, &limits, watcher, None).await
                 });
             }
             (Stream::Unix(unix, local), _) => {
                 tokio::spawn(async move {
                     let peer = Peer::Local(local);
-                    serve_conn(unix, false, peer, app, &limits, watcher).await
+                    serve_conn(unix, false, peer, app, &limits, watcher, None).await
                 });
             }
         }
@@ -278,6 +307,7 @@ pub(super) async fn serve_conn<I>(
     app: Router,
     limits: &Limits,
     w: Watcher,
+    h2_streams: Option<u32>,
 ) where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -314,6 +344,9 @@ pub(super) async fn serve_conn<I>(
         .http2()
         .timer(TokioTimer::new())
         .max_header_list_size(u32::try_from(limits.header_bytes).unwrap_or(u32::MAX));
+    if let Some(n) = h2_streams {
+        builder.http2().max_concurrent_streams(n);
+    }
     let (io, activity) = super::idle::wrap(io);
     let conn = w.watch(builder.serve_connection_with_upgrades(TokioIo::new(io), service));
     tokio::pin!(conn);
