@@ -335,7 +335,7 @@ async fn reinforce_later(p: &SqlitePool, id: &str) {
     let later = "2026-11-12T12:00:00Z";
     let mut tx = p.begin().await.unwrap();
     let mut cs = ChangeSet::new("distil", later);
-    reinforce(&mut tx, &mut cs, id, &[], later).await.unwrap();
+    reinforce(&mut tx, &mut cs, id, &[], "run-x", later).await.unwrap();
     cs.commit(&mut tx, "Reinforced 1", serde_json::json!({}))
         .await
         .unwrap();
