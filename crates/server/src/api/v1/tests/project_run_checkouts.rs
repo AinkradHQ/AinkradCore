@@ -14,7 +14,7 @@ use crate::store::run_specs;
 
 /// A project whose one service builds from its repo `web` (a local fixture remote), a runner
 /// device, and a fake link that places runs on it.
-async fn shop() -> (Fx, Fake, TestDevice, i64, i64, std::path::PathBuf) {
+pub(super) async fn shop() -> (Fx, Fake, TestDevice, i64, i64, std::path::PathBuf) {
     let mut fx = fx().await;
     let dir = tmp("run-checkouts");
     fx.app.mirrors = Some(Arc::new(Mirrors::new(dir.join("mirrors"))));
@@ -42,7 +42,7 @@ async fn shop() -> (Fx, Fake, TestDevice, i64, i64, std::path::PathBuf) {
     (fx, link, vm, p.id, repo, dir)
 }
 
-async fn can_fetch(fx: &Fx, vm: &TestDevice, repo: i64) -> StatusCode {
+pub(super) async fn can_fetch(fx: &Fx, vm: &TestDevice, repo: i64) -> StatusCode {
     let uri = format!("/api/v1/mirrors/{repo}/info/refs?service=git-upload-pack");
     send(&fx.app, req(Method::GET, &uri, Some(vm), None))
         .await
@@ -59,10 +59,8 @@ async fn a_spec_built_from_its_repo_starts_with_the_repo_leased_and_named_for_cl
     let from = c.from_core.as_ref().expect("a clone from the Core's copy");
     assert_eq!((c.repo.as_str(), c.dir.as_str()), ("web", ""));
     assert_eq!((from.mirror, from.base.as_str()), (repo, "main"));
-    // The runner can read the copy now, and no other device can.
-    assert_eq!(can_fetch(&fx, &vm, repo).await, StatusCode::OK);
-    let other = super::secrets::runner(&fx, "other").await;
-    assert_eq!(can_fetch(&fx, &other, repo).await, StatusCode::NOT_FOUND);
+    // The run is done with the copy once `run.start` returned: the lease is gone.
+    assert_eq!(can_fetch(&fx, &vm, repo).await, StatusCode::NOT_FOUND);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -70,6 +68,7 @@ async fn a_spec_built_from_its_repo_starts_with_the_repo_leased_and_named_for_cl
 async fn the_lease_is_revoked_on_stop_and_on_a_failed_start() {
     let (fx, link, vm, p, repo, dir) = shop().await;
     start(&fx, &link, p).await.unwrap();
+    crate::mirrors::grant_now(&fx.app, &vm.id, repo).await;
     assert_eq!(can_fetch(&fx, &vm, repo).await, StatusCode::OK);
     let now = fx.app.clock.now();
     crate::runs::stop(&fx.app, &link, p, "user", w(&now))
@@ -88,6 +87,7 @@ async fn the_lease_is_revoked_on_stop_and_on_a_failed_start() {
 async fn an_archived_project_cannot_fetch_even_with_a_lease_and_cannot_start() {
     let (fx, link, vm, p, repo, dir) = shop().await;
     start(&fx, &link, p).await.unwrap();
+    crate::mirrors::grant_now(&fx.app, &vm.id, repo).await;
     assert_eq!(can_fetch(&fx, &vm, repo).await, StatusCode::OK);
     let r = send(
         &fx.app,

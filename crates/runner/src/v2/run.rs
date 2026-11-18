@@ -13,6 +13,7 @@ use ainkrad_proto::v2::{
 };
 use zeroize::Zeroizing;
 
+use super::agent::RUN_SESSION_PREFIX;
 use super::agent::secrets::{Form, Redeem};
 use crate::run::helper::{self, Request};
 
@@ -88,13 +89,25 @@ impl RunDriver {
         self
     }
 
+    /// Whether this runner can clone a start's `from_core` checkouts; checked before anything
+    /// else is spent on the start (a secret lease is redeemed only once).
+    fn can_clone(&self, req: &RunStart) -> Result<(), StreamError> {
+        match (
+            &self.clones,
+            req.checkouts.iter().any(|c| c.from_core.is_some()),
+        ) {
+            (None, true) => Err(StreamError::new(
+                ErrorCode::InvalidArgs,
+                "this runner cannot clone from the Core",
+            )),
+            _ => Ok(()),
+        }
+    }
+
     /// Clones every checkout that names a Core copy (`from_core`) into one private dir and fills
     /// in its `dir`; the Core serves each copy only while it holds a lease for this runner. `Some`
-    /// is the session and root to drop once the run has its bundles.
-    async fn clone_all(
-        &self,
-        req: &mut RunStart,
-    ) -> Result<Option<(String, PathBuf)>, StreamError> {
+    /// is a guard that deletes the clone when dropped (done, failed or cancelled).
+    async fn clone_all(&self, req: &mut RunStart) -> Result<Option<CloneGuard>, StreamError> {
         let bad = |e: String| StreamError::new(ErrorCode::InvalidArgs, e);
         let trees: Vec<Workspace> = req
             .checkouts
@@ -133,7 +146,9 @@ impl RunDriver {
             .chars()
             .filter(char::is_ascii_alphanumeric)
             .collect();
-        let session = format!("as_run{alnum}");
+        let session = format!("{RUN_SESSION_PREFIX}{alnum}");
+        // Armed before the clone: a failed or cancelled clone leaves nothing either.
+        let guard = CloneGuard(Arc::clone(agents), session.clone());
         let root = agents.run_workspace(&session, &head).await.map_err(bad)?;
         for c in req.checkouts.iter_mut().filter(|c| c.from_core.is_some()) {
             let dir = match trees.len() {
@@ -143,7 +158,7 @@ impl RunDriver {
             c.dir = dir.to_string_lossy().into_owned();
             c.from_core = None;
         }
-        Ok(Some((session, root)))
+        Ok(Some(guard))
     }
 
     /// Offered where the run helper is installed (`--with-run`); the Core places runs only on a
@@ -174,13 +189,11 @@ impl RunDriver {
                         format!("{EGRESS_UNIT} is not active; refusing to start a run"),
                     ));
                 }
+                self.can_clone(&req)?;
                 let mut req = self.prepare(req).await?;
-                let held = self.clone_all(&mut req).await?;
-                let out = self.start_bundled(req).await;
-                if let (Some((session, root)), Some(agents)) = (held, &self.clones) {
-                    agents.drop_run_workspace(&session, &root).await;
-                }
-                out
+                // Held to the end: dropped (and the clone deleted) on success, error or cancel.
+                let _held = self.clone_all(&mut req).await?;
+                self.start_bundled(req).await
             }
             Command::RunStop(req) => {
                 let v = helper::call(&self.socket, &Request::Stop { run: req.run }, &[]).await;
@@ -191,8 +204,8 @@ impl RunDriver {
                 Ok(Reply::RunStatus(de(v.map_err(internal)?)?))
             }
             _ => Err(StreamError::new(
-                ErrorCode::InvalidArgs,
-                "not a run driver command",
+                ErrorCode::UnsupportedCommand,
+                "not a run op",
             )),
         }
     }
@@ -249,6 +262,16 @@ impl RunDriver {
     }
 }
 
+/// Deletes a run's clone (the session it was made under) when dropped. Not `cleanup_session`: that
+/// saves the work under `session-wip`, which nothing ever cleans.
+struct CloneGuard(Arc<super::agent::AgentDriver>, String);
+
+impl Drop for CloneGuard {
+    fn drop(&mut self) {
+        self.0.discard_run_workspace(&self.1);
+    }
+}
+
 /// A private scratch dir, removed when dropped.
 struct Tmp(PathBuf);
 
@@ -295,6 +318,9 @@ async fn bundle(dir: &Path, to: &Path) -> Result<(PathBuf, u64), StreamError> {
     let len = std::fs::metadata(to).map_err(|e| bad(e.to_string()))?.len();
     Ok((to.to_path_buf(), len))
 }
+
+#[cfg(test)]
+mod review_tests;
 
 #[cfg(test)]
 mod tests {

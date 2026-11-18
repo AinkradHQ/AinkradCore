@@ -549,6 +549,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             agents: agents.is_some(),
             agent_capacity,
             share_history,
+            runs: policy.is_some_and(|p| p.runs),
         },
         tools: super::tools::ToolsDriver::new(super::tools::HELPER_SOCKET),
         pty: pty.clone(),

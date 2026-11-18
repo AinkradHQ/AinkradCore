@@ -816,6 +816,12 @@ pub async fn lease(
     .await
 }
 
+/// The runners secret `name` may be leased to (its own scope, else its group's).
+pub async fn effective_runners(pool: &SqlitePool, name: &str) -> Result<Vec<String>, Error> {
+    let mut conn = pool.acquire().await?;
+    Ok(find(&mut conn, name).await?.effective_runners)
+}
+
 /// [`lease`] for a reader named in the audit row (`"to": "gateway"`: the runner's auth gateway
 /// redeems it into its own memory, KAN-435).
 #[allow(clippy::too_many_arguments)]

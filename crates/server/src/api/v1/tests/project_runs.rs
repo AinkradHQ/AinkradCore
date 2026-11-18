@@ -31,11 +31,17 @@ pub(super) struct Fake {
     pub(super) seen: Mutex<Option<Presence>>,
     /// Every `run.start` it got.
     pub(super) started: Mutex<Vec<RunStart>>,
+    /// Seconds the Core says it has been up.
+    pub(super) uptime: Mutex<i64>,
+    /// Runners that cannot clone project repos (`run_caps.can_clone` off).
+    pub(super) cannot_clone: Mutex<Vec<String>>,
 }
 
 impl Fake {
     pub(super) fn new() -> Self {
         Self {
+            uptime: Mutex::new(0),
+            cannot_clone: Mutex::default(),
             runners: vec![RUNNER.to_owned()],
             start: Mutex::new(Ok(RunPhase::Running)),
             listed: Mutex::default(),
@@ -49,12 +55,12 @@ impl Fake {
         }
     }
 
-    fn stops(&self) -> Vec<String> {
+    pub(super) fn stops(&self) -> Vec<String> {
         self.stops.lock().unwrap().clone()
     }
 }
 
-fn info(run: &str, phase: RunPhase) -> RunInfo {
+pub(super) fn info(run: &str, phase: RunPhase) -> RunInfo {
     RunInfo {
         run: run.to_owned(),
         project: 1,
@@ -69,8 +75,19 @@ impl Link for Fake {
     fn runners(&self) -> Vec<String> {
         self.runners.clone()
     }
+    fn can_clone(&self, runner: &str) -> bool {
+        !self
+            .cannot_clone
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r == runner)
+    }
     fn presence(&self, _: &str) -> Option<Presence> {
         *self.seen.lock().unwrap()
+    }
+    fn uptime_secs(&self) -> i64 {
+        *self.uptime.lock().unwrap()
     }
     fn start<'a>(
         &'a self,
@@ -121,7 +138,7 @@ pub(super) fn w(now: &str) -> Who<'_> {
 }
 
 /// A project with a one-service spec; returns its id.
-async fn project(fx: &Fx, slug: &str) -> i64 {
+pub(super) async fn project(fx: &Fx, slug: &str) -> i64 {
     let now = fx.app.clock.now();
     let p = projects::create(&fx.app.pool, slug, slug, "", "manual", w(&now))
         .await
@@ -147,14 +164,14 @@ pub(super) async fn run(fx: &Fx, id: &str) -> store::Run {
     store::get(&fx.app.pool, id).await.unwrap()
 }
 
-fn code(e: Error) -> &'static str {
+pub(super) fn code(e: Error) -> &'static str {
     match e {
         Error::Refused { code, .. } => code,
         Error::Db(e) => panic!("{e}"),
     }
 }
 
-async fn audit_rows(fx: &Fx) -> Vec<(String, String)> {
+pub(super) async fn audit_rows(fx: &Fx) -> Vec<(String, String)> {
     sqlx::query_as(
         "SELECT action, origin FROM audit_events WHERE action LIKE 'project.run_%' ORDER BY seq",
     )

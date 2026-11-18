@@ -14,6 +14,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use ainkrad_core::audit::{AuditActor, AuditOrigin, OriginKind};
@@ -23,7 +24,7 @@ use ainkrad_proto::v2::{
 };
 
 use crate::api::App;
-use crate::hub::{Elevated, Hub};
+use crate::hub::{Elevated, Hub, RunHousekeeping};
 use crate::scheduler::{iso_of_unix, unix_secs};
 use crate::store::audit::origin;
 use crate::store::projects::{self, Who};
@@ -40,6 +41,31 @@ pub const SWEEP_EVERY: Duration = Duration::from_secs(30);
 /// A runner offline this long (unix seconds) has lost its runs.
 pub const RUNNER_LOST_AFTER: i64 = 10 * 60;
 const PIDS: u32 = 512;
+
+/// When this process began running orchestration (forced by `sweep_loop`), for L4.
+static BOOT: LazyLock<std::time::Instant> = LazyLock::new(std::time::Instant::now);
+/// Runs whose `drive_start` is in this process right now: `reconcile` leaves their `starting`
+/// alone, so a healthy start is not promoted (and then stopped) from under its own driver.
+static DRIVING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+
+struct Driving(String);
+
+impl Driving {
+    fn new(run: &str) -> Self {
+        DRIVING.lock().unwrap().insert(run.to_owned());
+        Self(run.to_owned())
+    }
+}
+
+impl Drop for Driving {
+    fn drop(&mut self) {
+        DRIVING.lock().unwrap().remove(&self.0);
+    }
+}
+
+fn driving(run: &str) -> bool {
+    DRIVING.lock().unwrap().contains(run)
+}
 
 pub type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -63,6 +89,13 @@ pub trait Link: Send + Sync {
     fn runners(&self) -> Vec<String>;
     /// `None` for a runner the Core has not met since it started.
     fn presence(&self, runner: &str) -> Option<Presence>;
+    /// Seconds this Core has been orchestrating (a runner never met since is only lost after
+    /// the grace has passed on the Core's own clock).
+    fn uptime_secs(&self) -> i64;
+    /// Whether the runner can clone a project repo from the Core's copies (`run_caps`).
+    fn can_clone(&self, _runner: &str) -> bool {
+        true
+    }
     fn start<'a>(
         &'a self,
         runner: &'a str,
@@ -84,14 +117,28 @@ impl HubLink {
         proof: Elevated,
         wait: Duration,
     ) -> Result<Reply, LinkError> {
+        let sent = self.0.dispatch_elevated(runner, command, proof);
+        Self::answer(sent, wait).await
+    }
+
+    async fn housekeeping(
+        &self,
+        runner: &str,
+        op: RunHousekeeping,
+        wait: Duration,
+    ) -> Result<Reply, LinkError> {
+        Self::answer(self.0.dispatch_run_housekeeping(runner, op), wait).await
+    }
+
+    async fn answer(
+        sent: Result<crate::hub::Dispatched, ainkrad_proto::v2::StreamError>,
+        wait: Duration,
+    ) -> Result<Reply, LinkError> {
         let failed = |m: String| LinkError::Failed(m);
-        let sent = self
-            .0
-            .dispatch_elevated(runner, command, proof)
-            .map_err(|e| match e.code {
-                ErrorCode::Offline => LinkError::Offline,
-                _ => failed(e.message),
-            })?;
+        let sent = sent.map_err(|e| match e.code {
+            ErrorCode::Offline => LinkError::Offline,
+            _ => failed(e.message),
+        })?;
         match tokio::time::timeout(wait, sent.outcome()).await {
             Err(_) => Err(failed("the runner did not answer in time".into())),
             Ok(Err(e)) => Err(failed(e.message)),
@@ -109,7 +156,9 @@ impl Link for HubLink {
             .facts()
             .into_iter()
             .filter(|(id, (facts, _))| {
-                facts.as_ref().is_some_and(|f| f.run_caps.is_some())
+                facts
+                    .as_ref()
+                    .is_some_and(|f| f.run_caps.is_some() && f.policy.is_some_and(|p| p.runs))
                     && states
                         .get(id)
                         .is_some_and(|s| s.online && s.drivers.iter().any(|d| d.name == DRIVER_RUN))
@@ -120,11 +169,24 @@ impl Link for HubLink {
         out
     }
 
+    fn can_clone(&self, runner: &str) -> bool {
+        self.0
+            .facts()
+            .get(runner)
+            .and_then(|(facts, _)| facts.as_ref())
+            .and_then(|f| f.run_caps.as_ref())
+            .is_some_and(|c| c.can_clone)
+    }
+
     fn presence(&self, runner: &str) -> Option<Presence> {
         self.0.runners().get(runner).map(|s| Presence {
             online: s.online,
             last_seen: s.last_seen,
         })
+    }
+
+    fn uptime_secs(&self) -> i64 {
+        i64::try_from(BOOT.elapsed().as_secs()).unwrap_or(i64::MAX)
     }
 
     fn start<'a>(
@@ -146,18 +208,10 @@ impl Link for HubLink {
 
     fn stop<'a>(&'a self, runner: &'a str, run: &'a str) -> Fut<'a, Result<RunInfo, LinkError>> {
         Box::pin(async move {
-            let cmd = Command::RunStop(RunStop {
+            let op = RunHousekeeping::Stop(RunStop {
                 run: run.to_owned(),
             });
-            match self
-                .call(
-                    runner,
-                    cmd,
-                    self.0.run_housekeeping_elevation(),
-                    STOP_TIMEOUT,
-                )
-                .await?
-            {
+            match self.housekeeping(runner, op, STOP_TIMEOUT).await? {
                 Reply::RunStop(i) => Ok(i),
                 _ => Err(LinkError::Failed("not a run.stop answer".into())),
             }
@@ -166,16 +220,8 @@ impl Link for HubLink {
 
     fn status<'a>(&'a self, runner: &'a str) -> Fut<'a, Result<RunList, LinkError>> {
         Box::pin(async move {
-            let cmd = Command::RunStatus(RunStatusReq { run: None });
-            match self
-                .call(
-                    runner,
-                    cmd,
-                    self.0.run_housekeeping_elevation(),
-                    STOP_TIMEOUT,
-                )
-                .await?
-            {
+            let op = RunHousekeeping::Status(RunStatusReq { run: None });
+            match self.housekeeping(runner, op, STOP_TIMEOUT).await? {
                 Reply::RunStatus(l) => Ok(l),
                 _ => Err(LinkError::Failed("not a run.status answer".into())),
             }
@@ -223,11 +269,20 @@ pub async fn begin_start(
     }
     let spec = run_specs::latest(&app.pool, project_id).await?;
     let load = runs::load(&app.pool).await?;
-    let Some(runner) = link
-        .runners()
-        .into_iter()
-        .min_by_key(|r| load.get(r).copied().unwrap_or(0))
-    else {
+    // Prefer a runner every referenced secret may be leased to; load breaks the tie.
+    let mut scopes = Vec::new();
+    for name in spec::secret_refs(&spec.spec) {
+        if let Ok(stored) = project_secret(&app.pool, &project, &name).await {
+            scopes.push(secrets::effective_runners(&app.pool, &stored).await?);
+        }
+    }
+    // A spec that builds from or mounts repos needs a runner that can clone them (P5-05).
+    let uses_repos = !spec::repo_refs(&spec.spec).is_empty();
+    let Some(runner) = link.runners().into_iter().min_by_key(|r| {
+        let out = scopes.iter().filter(|s| !s.contains(r)).count();
+        let cannot = uses_repos && !link.can_clone(r);
+        (cannot, out, load.get(r).copied().unwrap_or(0))
+    }) else {
         return refused(
             "no_runner",
             "no online runner can run projects (it needs Podman, rootless setup and cgroup limits)",
@@ -245,17 +300,24 @@ pub async fn begin_start(
 pub async fn drive_start(app: &App, link: &dyn Link, p: Pending, proof: Elevated) {
     let run = p.run.id.clone();
     let runner = p.run.runner.clone();
-    let outcome = try_start(app, link, &p, proof).await;
+    let _driving = Driving::new(&run);
+    let mut leases = Vec::new();
+    let outcome = try_start(app, link, &p, proof, &mut leases).await;
     let now = app.clock.now();
     match outcome {
         Ok(()) => match runs::mark_running(&app.pool, &run, &now).await {
             Ok(true) => {}
-            Ok(false) => {
-                let _ = link.stop(&runner, &run).await;
-            }
+            // Not `starting` any more: stop only when it is not `running` (a reconcile may have
+            // promoted this healthy start; stopping that one would kill it).
+            Ok(false) => match runs::get(&app.pool, &run).await {
+                Ok(r) if r.state == "running" => {}
+                _ => {
+                    let _ = link.stop(&runner, &run).await;
+                }
+            },
             Err(e) => tracing::error!(error = %e, run, "marking a run running failed"),
         },
-        Err(why) => fail_start(app, link, &p.run, &why).await,
+        Err(why) => fail_start(app, link, &p.run, &why, &leases).await,
     }
 }
 
@@ -279,7 +341,14 @@ pub async fn project_secret(
     found.ok_or_else(missing)
 }
 
-async fn try_start(app: &App, link: &dyn Link, p: &Pending, proof: Elevated) -> Result<(), String> {
+/// The lease ids made so far go into `leases` so a failed start can drop them.
+async fn try_start(
+    app: &App,
+    link: &dyn Link,
+    p: &Pending,
+    proof: Elevated,
+    leases: &mut Vec<String>,
+) -> Result<(), String> {
     let run = &p.run;
     let repos: Vec<String> = spec::repo_refs(&p.spec.spec)
         .into_iter()
@@ -287,8 +356,28 @@ async fn try_start(app: &App, link: &dyn Link, p: &Pending, proof: Elevated) -> 
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let checkouts = checkouts(app, p, &repos).await?;
-    let mut leases = Vec::new();
+    let (checkouts, repo_ids) = checkouts(app, p, &repos).await?;
+    let json = serde_json::to_value(&p.spec.spec).map_err(|e| e.to_string())?;
+    let mut req = RunStart {
+        run: run.id.clone(),
+        project: u64::try_from(p.project.id).map_err(|e| e.to_string())?,
+        spec: serde_json::from_value(json).map_err(|e| e.to_string())?,
+        limits: RunLimits {
+            cpus: p.project.cpu_limit,
+            memory_mb: u64::try_from(p.project.mem_limit_mb).unwrap_or(2048),
+            pids: PIDS,
+        },
+        checkouts,
+        secrets: Vec::new(),
+    };
+    // Before any lease: a request that is invalid anyway must not cost one (it does not look at
+    // the secrets).
+    if let Some(why) = req.problem() {
+        return Err(why);
+    }
+    if !repo_ids.is_empty() {
+        crate::mirrors::for_session(app, &run.runner, p.project.id, &repo_ids).await?;
+    }
     for name in spec::secret_refs(&p.spec.spec) {
         // Only a member of the project's own group (never a same-named secret outside it).
         let stored = project_secret(&app.pool, &p.project, &name).await?;
@@ -304,25 +393,13 @@ async fn try_start(app: &App, link: &dyn Link, p: &Pending, proof: Elevated) -> 
         )
         .await
         .map_err(|e| format!("cannot lease the secret {name}: {e}"))?;
-        leases.push(RunSecret { name, lease });
+        leases.push(lease.clone());
+        req.secrets.push(RunSecret { name, lease });
     }
-    let json = serde_json::to_value(&p.spec.spec).map_err(|e| e.to_string())?;
-    let req = RunStart {
-        run: run.id.clone(),
-        project: u64::try_from(p.project.id).map_err(|e| e.to_string())?,
-        spec: serde_json::from_value(json).map_err(|e| e.to_string())?,
-        limits: RunLimits {
-            cpus: p.project.cpu_limit,
-            memory_mb: u64::try_from(p.project.mem_limit_mb).unwrap_or(2048),
-            pids: PIDS,
-        },
-        checkouts,
-        secrets: leases,
-    };
-    if let Some(why) = req.problem() {
-        return Err(why);
-    }
-    match link.start(&run.runner, req, proof).await {
+    let started = link.start(&run.runner, req, proof).await;
+    // The runner clones inside `run.start`: the copies are not needed after it returns.
+    crate::mirrors::release_run(app, &run.runner, p.project.id, &repo_ids).await;
+    match started {
         Ok(i) if i.phase == RunPhase::Running => Ok(()),
         Ok(i) => Err(match (i.failed_service, i.reason) {
             (Some(s), Some(r)) => format!("{s}: {r}"),
@@ -335,12 +412,16 @@ async fn try_start(app: &App, link: &dyn Link, p: &Pending, proof: Elevated) -> 
     }
 }
 
-/// The checkouts of the spec's repos (by name): each is leased to the run's runner first
-/// (`mirrors::for_session`: only repos of this ACTIVE project, fetched now), and the runner clones
-/// them from the Core's copies over the mirror path when it gets `run.start` (P5-05).
-async fn checkouts(app: &App, p: &Pending, names: &[String]) -> Result<Vec<RunCheckout>, String> {
+/// The checkouts of the spec's repos (by name), and their repo ids. The caller leases those ids
+/// to the run's runner (`mirrors::for_session`: only repos of this ACTIVE project, fetched now);
+/// the runner clones from the Core's copies when it gets `run.start` (P5-05).
+async fn checkouts(
+    app: &App,
+    p: &Pending,
+    names: &[String],
+) -> Result<(Vec<RunCheckout>, Vec<i64>), String> {
     if names.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let mut conn = app.pool.acquire().await.map_err(|e| e.to_string())?;
     let all = projects::repos(&mut conn, p.project.id)
@@ -364,33 +445,44 @@ async fn checkouts(app: &App, p: &Pending, names: &[String]) -> Result<Vec<RunCh
             }),
         });
     }
-    crate::mirrors::for_session(app, &p.run.runner, p.project.id, &ids).await?;
-    Ok(out)
+    Ok((out, ids))
 }
 
-/// Ends a run's leases on its project's repo copies, on its runner.
+/// Ends a run's leases on its project's repo copies, on its runner (unless a live session of the
+/// project there needs them).
 async fn revoke(app: &App, run: &Run) {
-    let Some(mirrors) = app.mirrors.as_ref() else {
-        return;
-    };
     let Ok(mut conn) = app.pool.acquire().await else {
         return;
     };
     if let Ok(repos) = projects::repos(&mut conn, run.project_id).await {
+        drop(conn);
         let ids: Vec<i64> = repos.iter().map(|r| r.id).collect();
-        mirrors.revoke(&run.runner, &ids);
+        crate::mirrors::release_run(app, &run.runner, run.project_id, &ids).await;
     }
 }
 
-/// `runs::finish`, and the run's repo leases end with it (stop, fail, runner lost, crash).
-async fn finish(app: &App, run: &Run, end: End<'_>, who: Who<'_>) -> Result<bool, Error> {
-    revoke(app, run).await;
-    runs::finish(&app.pool, &run.id, end, who).await
+/// `runs::finish`; the run's repo leases end with it, but only when this call ended the run: a
+/// late finish of an old run must not revoke a newer run's lease (stop, fail, runner lost, crash).
+pub(crate) async fn finish(
+    app: &App,
+    run: &Run,
+    end: End<'_>,
+    who: Who<'_>,
+) -> Result<bool, Error> {
+    let done = runs::finish(&app.pool, &run.id, end, who).await?;
+    if done {
+        revoke(app, run).await;
+    }
+    Ok(done)
 }
 
 /// Stops what a failed start left on the runner, then marks the run `failed`.
-async fn fail_start(app: &App, link: &dyn Link, run: &Run, why: &str) {
+/// Its unredeemed leases are dropped, so a failed start leaves none against the runner's cap.
+async fn fail_start(app: &App, link: &dyn Link, run: &Run, why: &str, leases: &[String]) {
     let _ = tokio::time::timeout(STOP_TIMEOUT, link.stop(&run.runner, &run.id)).await;
+    for lease in leases {
+        let _ = crate::store::account_keys::revoke_unused_lease(&app.pool, lease).await;
+    }
     let now = app.clock.now();
     let end = End {
         state: "failed",
@@ -481,8 +573,12 @@ pub async fn reconcile(app: &App, link: &dyn Link, runner: &str) {
     for r in &mine {
         let seen = list.runs.iter().find(|i| i.run == r.id);
         let end = match (seen.map(|i| i.phase), r.state.as_str()) {
+            // Only a start nobody is driving (the Core restarted mid-start): a driver in this
+            // process promotes its own run when `run.start` answers.
             (Some(RunPhase::Running), "starting") => {
-                let _ = runs::mark_running(&app.pool, &r.id, &now).await;
+                if !driving(&r.id) {
+                    let _ = runs::mark_running(&app.pool, &r.id, &now).await;
+                }
                 None
             }
             (Some(RunPhase::Failed), _) => {
@@ -557,28 +653,34 @@ pub async fn sweep(app: &App, link: &dyn Link) {
             }
             "starting" if age(&r.started_at) >= START_TIMEOUT.as_secs() as i64 + 60 => {
                 // A start whose driver is gone (the Core restarted mid-start).
-                fail_start(app, link, r, "the start never finished").await;
+                fail_start(app, link, r, "the start never finished", &[]).await;
             }
             _ => {}
         }
     }
     let runners: BTreeSet<String> = live.iter().map(|r| r.runner.clone()).collect();
     for runner in runners {
-        match link.presence(&runner) {
-            Some(Presence { online: true, .. }) => reconcile(app, link, &runner).await,
-            Some(Presence { last_seen, .. }) if unix - last_seen > RUNNER_LOST_AFTER => {
-                for r in runs::live_all(&app.pool).await.unwrap_or_default() {
-                    if r.runner == runner {
-                        let end = End {
-                            state: "stopped",
-                            reason: Some("runner_lost"),
-                            error: Some("the runner has been offline too long"),
-                        };
-                        let _ = finish(app, &r, end, system(&now)).await;
-                    }
+        let lost = match link.presence(&runner) {
+            Some(Presence { online: true, .. }) => {
+                reconcile(app, link, &runner).await;
+                false
+            }
+            Some(Presence { last_seen, .. }) => unix - last_seen > RUNNER_LOST_AFTER,
+            // Never met since this Core started: lost once the Core has been up past the grace
+            // (a runner that reconnects in that time is reconciled instead).
+            None => link.uptime_secs() > RUNNER_LOST_AFTER,
+        };
+        if lost {
+            for r in runs::live_all(&app.pool).await.unwrap_or_default() {
+                if r.runner == runner {
+                    let end = End {
+                        state: "stopped",
+                        reason: Some("runner_lost"),
+                        error: Some("the runner has been offline too long"),
+                    };
+                    let _ = finish(app, &r, end, system(&now)).await;
                 }
             }
-            _ => {}
         }
     }
 }
@@ -588,6 +690,7 @@ pub async fn sweep_loop(app: App) {
     let mut closing = app.closing.subscribe();
     let mut tick = tokio::time::interval(SWEEP_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    LazyLock::force(&BOOT);
     let link = HubLink(Arc::clone(&app.hub));
     loop {
         tokio::select! {

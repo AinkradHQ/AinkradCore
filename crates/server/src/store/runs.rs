@@ -225,8 +225,50 @@ pub struct End<'a> {
     /// Replaces the stop reason when set (a run that was `stopping` for `user` but whose runner
     /// vanished ends `runner_lost`).
     pub reason: Option<&'a str>,
-    /// What went wrong, in words; redacted on the way into the audit row.
+    /// What went wrong, in words; scrubbed by `finish` ([`scrub_error`]) before it is stored.
     pub error: Option<&'a str>,
+}
+
+/// The longest error text a run keeps.
+pub const ERROR_MAX: usize = 1024;
+
+/// `error` as it may be stored, audited and emitted: secret shapes masked, the names of the
+/// project's secrets and any lease id scrubbed, cut to [`ERROR_MAX`] bytes. A runner's reason
+/// is text from a container, so none of it is trusted.
+pub async fn scrub_error(pool: &SqlitePool, project_id: i64, error: &str) -> String {
+    let names: Vec<String> = sqlx::query_scalar(
+        "SELECT s.name FROM core_secrets s JOIN core_projects p ON p.secret_group = s.group_id \
+         WHERE p.id = ?",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    let mut text = ainkrad_proto::redact::Redactor::new().text(error);
+    for stored in &names {
+        let short = stored.split_once('.').map_or(stored.as_str(), |(_, n)| n);
+        for n in [stored.as_str(), short] {
+            if n.len() >= 3 {
+                text = text.replace(n, "[secret]");
+            }
+        }
+    }
+    let text = text
+        .split(' ')
+        .map(|w| {
+            if w.starts_with("l_") && w.len() > 10 {
+                "[lease]"
+            } else {
+                w
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut cut = text.len().min(ERROR_MAX);
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    text[..cut].to_owned()
 }
 
 /// Moves a live run to its end, once: the audit row and event are written only by the call that
@@ -237,6 +279,17 @@ pub async fn finish(
     end: End<'_>,
     who: Who<'_>,
 ) -> Result<bool, Error> {
+    let error = match end.error {
+        Some(e) => {
+            let project: Option<i64> =
+                sqlx::query_scalar("SELECT project_id FROM core_project_runs WHERE id = ?")
+                    .bind(id)
+                    .fetch_optional(pool)
+                    .await?;
+            Some(scrub_error(pool, project.unwrap_or(0), e).await)
+        }
+        None => None,
+    };
     let mut tx = super::begin_write(pool).await?;
     let done = sqlx::query(
         "UPDATE core_project_runs SET state = ?, stopped_at = ?, \
@@ -246,7 +299,7 @@ pub async fn finish(
     .bind(end.state)
     .bind(who.now)
     .bind(end.reason)
-    .bind(end.error)
+    .bind(error)
     .bind(id)
     .execute(&mut *tx)
     .await?;

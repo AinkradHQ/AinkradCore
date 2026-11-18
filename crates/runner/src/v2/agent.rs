@@ -65,6 +65,8 @@ type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub const MAX_WAIT: Duration = Duration::from_secs(25);
 
 /// Entries one `agent.read` answers with at most (the rest on the next).
+/// The session id every project run's clone is made under (`as_run<run id>`, P5-05).
+pub(super) const RUN_SESSION_PREFIX: &str = "as_run";
 const READ_BATCH: usize = 256;
 const MAX_ENTRY_BYTES: usize = 256 * 1024;
 const MAX_BATCH_BYTES: usize = 1024 * 1024;
@@ -197,6 +199,7 @@ trait Harness: Send + Sync {
         helper: Option<&'a std::path::Path>,
     ) -> Fut<'a, Result<PathBuf, String>>;
     fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()>;
+    fn discard_agent_workspaces(&self, prefix: &str, keep: &[String]);
     fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream);
     fn work_dir(&self, job: &Job) -> Option<PathBuf>;
 }
@@ -241,6 +244,9 @@ impl<E: Executor> Harness for E {
     }
     fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()> {
         Box::pin(Executor::cleanup_agent_workspace(self, session, generation))
+    }
+    fn discard_agent_workspaces(&self, prefix: &str, keep: &[String]) {
+        Executor::discard_agent_workspaces(self, prefix, keep);
     }
     fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream) {
         Executor::set_mirror_upstream(self, up);
@@ -354,7 +360,10 @@ impl AgentDriver {
         secrets::sweep(&config.secrets_dir)?;
         secrets::private_dir(&config.dir)?;
         let sessions = reload(&config);
-        executor.recover_agent_workspaces(&sessions.keys().cloned().collect::<Vec<_>>());
+        let adopted: Vec<String> = sessions.keys().cloned().collect();
+        executor.recover_agent_workspaces(&adopted);
+        // A run's clone (P5-05) is deleted when its start ends; one a crash left is leftover.
+        executor.discard_agent_workspaces(RUN_SESSION_PREFIX, &adopted);
         Ok(Self {
             config,
             harness: Arc::new(executor),
@@ -395,13 +404,10 @@ impl AgentDriver {
             .await
     }
 
-    /// Removes what `run_workspace` made: the run's helper holds its own copy by now.
-    pub async fn drop_run_workspace(&self, session: &str, root: &std::path::Path) {
-        let _ = std::fs::remove_dir_all(root);
-        if let Some(parent) = root.parent() {
-            let _ = std::fs::remove_dir(parent);
-        }
-        self.harness.cleanup_agent_workspace(session, 0).await;
+    /// Deletes what `run_workspace` made (or half made), saved work included: the run's helper
+    /// holds its own copy by now, and a session's `session-wip` is never cleaned.
+    pub fn discard_run_workspace(&self, session: &str) {
+        self.harness.discard_agent_workspaces(session, &[]);
     }
 
     pub fn with_versions(mut self, versions: BTreeMap<String, String>) -> Self {
