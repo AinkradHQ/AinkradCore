@@ -9,7 +9,9 @@
 //! - Every host's steps run through `exec::run`, which calls `gate::still_valid` before each step
 //!   and sends only through `dispatch_ssh_exec`. This file sends nothing itself.
 //! - Cancel reaches no host: it ends the run (so `still_valid` refuses every later step), skips
-//!   queued hosts and stops waiting on running ones. It needs the same device scope as a run.
+//!   queued hosts and stops waiting on running ones; a run still waiting for approval is cancelled
+//!   too and its approval voided. A session cancels or reads only its own runs (`commands::owns`).
+//!   It needs the same device scope as a run.
 //! - Results are per host (`leyline_run_hosts`), output redacted and capped by `exec`; a reason is a
 //!   fixed sentence. Events and audit rows carry ids and states only.
 
@@ -23,7 +25,6 @@ use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY, Caller};
 use ainkrad_core_server::store::{audit, begin_write, events};
 use axum::Json;
 use axum::extract::{Extension, Path, State};
-use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::SqliteConnection;
@@ -31,9 +32,10 @@ use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinSet;
 use utoipa::ToSchema;
 
-use crate::commands::{find_cmd, load_view};
+use crate::attach;
+use crate::commands::{find_cmd, owns};
 use crate::exec::{self, Cancel, stopped};
-use crate::gate::{Action, Authorized, Principal, authorize_many, finish};
+use crate::gate::{Action, Authorized, Principal, cancel as cancel_waiting, finish, gate_many};
 use crate::hosts::{In, find};
 
 /// Hosts running at once; the rest of the fleet waits for a slot.
@@ -93,6 +95,12 @@ async fn targets(conn: &mut SqliteConnection, r: &FleetRequest) -> Result<Vec<St
         ));
     }
     let mut ids: Vec<String> = Vec::new();
+    // Tags are stored lowercase, and the project is resolved the way the commands' scopes are.
+    let tag = r.tag.as_ref().map(|t| t.to_ascii_lowercase());
+    let project = match &r.project {
+        Some(p) => Some(attach::project(conn, p).await?.0),
+        None => None,
+    };
     for h in &r.hosts {
         ids.push(find(conn, &h.chars().take(256).collect::<String>()).await?);
     }
@@ -103,11 +111,11 @@ async fn targets(conn: &mut SqliteConnection, r: &FleetRequest) -> Result<Vec<St
         ),
         (
             "SELECT leyline_hosts.id FROM leyline_hosts, json_each(tags) WHERE value = ?1 AND ?2 IS ?2 ORDER BY name",
-            r.tag.as_ref(),
+            tag.as_ref(),
         ),
         (
             "SELECT host_id FROM leyline_project_hosts WHERE project = ?1 AND (?2 IS NULL OR role = ?2) ORDER BY host_id",
-            r.project.as_ref(),
+            project.as_ref(),
         ),
     ];
     for (sql, value) in by {
@@ -133,6 +141,25 @@ async fn targets(conn: &mut SqliteConnection, r: &FleetRequest) -> Result<Vec<St
     Ok(ids)
 }
 
+/// What an approval card calls this fleet: the group, tag or project it was picked by, else the
+/// number of hosts named.
+fn label(r: &FleetRequest, n: usize) -> String {
+    let mut parts = Vec::new();
+    if let Some(g) = &r.group {
+        parts.push(format!("group {g}"));
+    }
+    if let Some(t) = &r.tag {
+        parts.push(format!("tag {t}"));
+    }
+    if let Some(p) = &r.project {
+        parts.push(format!("project {p}"));
+    }
+    if !r.hosts.is_empty() {
+        parts.push(format!("{} named", r.hosts.len()));
+    }
+    format!("{} ({n})", parts.join(", "))
+}
+
 #[utoipa::path(post, path = "/fleet/runs", operation_id = "leylineStartFleetRun", tag = "leyline",
     request_body = FleetRequest,
     responses((status = 200, description = "Past the gate once for the whole fleet: each allowed host runs the steps in the background (8 at a time), the others are `refused` with a reason; read the run for one result per host. 409 when the command needs `confirm`", body = FleetStarted)))]
@@ -144,18 +171,19 @@ pub(crate) async fn start(
     let (cmd, ids) = {
         let mut conn = app.pool.acquire().await?;
         let id = find_cmd(&mut conn, &req.command).await?;
-        let cmd = load_view(&mut conn, &id).await?;
-        if cmd.confirm && req.confirm != Some(true) {
-            return Err(ApiError::new(
-                StatusCode::CONFLICT,
-                "confirm_required",
-                "this command must be confirmed: send confirm true",
-            ));
-        }
-        (cmd, targets(&mut conn, &req).await?)
+        (id, targets(&mut conn, &req).await?)
     };
     let hosts: Vec<&str> = ids.iter().map(String::as_str).collect();
-    let gated = authorize_many(&app, &Principal::of(&me), &hosts, &Action::Preset(cmd.id)).await?;
+    // The gate judges `confirm` on the command it reads itself, with what the request said.
+    let gated = gate_many(
+        &app,
+        &Principal::of(&me),
+        &hosts,
+        &Action::Preset(cmd),
+        req.confirm == Some(true),
+        Some(&label(&req, ids.len())),
+    )
+    .await?;
     let (started, refused) = (gated.authorized.len(), gated.refused.len());
     if started > 0 {
         let (tx, rx) = watch::channel(false);
@@ -179,22 +207,37 @@ pub(crate) async fn cancel(
     Path(run): Path<String>,
 ) -> ApiResult<Cancelled> {
     let run: String = run.chars().take(64).collect();
-    let mut tx = begin_write(&app.pool).await?;
+    owns(&app.pool, &me, &run).await?;
     let state: Option<String> = sqlx::query_scalar("SELECT state FROM leyline_runs WHERE id = ?")
         .bind(&run)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&app.pool)
         .await?;
-    match state.as_deref() {
+    let mut tx = match state.as_deref() {
         None => return Err(ApiError::not_found("no such run")),
-        Some("running") => {}
+        Some("waiting_approval") => {
+            // Also voids the approval, so the call parked on it ends now.
+            if !cancel_waiting(&app.pool, &run).await {
+                return Err(ApiError::conflict("the run is not running"));
+            }
+            begin_write(&app.pool).await?
+        }
+        Some("running") => {
+            let mut tx = begin_write(&app.pool).await?;
+            let n = sqlx::query(
+                "UPDATE leyline_runs SET state = 'cancelled', ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+                 WHERE id = ? AND state = 'running'",
+            )
+            .bind(&run)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            if n != 1 {
+                return Err(ApiError::conflict("the run is not running"));
+            }
+            tx
+        }
         Some(_) => return Err(ApiError::conflict("the run is not running")),
-    }
-    sqlx::query(
-        "UPDATE leyline_runs SET state = 'cancelled', ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-    )
-    .bind(&run)
-    .execute(&mut *tx)
-    .await?;
+    };
     let row = NewAuditEvent {
         actor: BY,
         action: "leyline.run.cancelled".to_owned(),

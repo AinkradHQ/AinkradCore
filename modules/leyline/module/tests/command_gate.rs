@@ -529,17 +529,17 @@ async fn a_card_that_would_be_cut_is_never_parked() {
     let fx = fx().await;
     add(&fx, "long", "ask").await;
     let (ai, _) = session(&fx, "as_long").await;
-    for cmd in [
-        "x".repeat(201),
-        "echo Bearer abcdefghijklmnopqrstuvwxyz0123456789".to_owned(),
+    for (cmd, why) in [
+        ("x".repeat(201), "too long to show for approval"),
+        (
+            "echo Bearer abcdefghijklmnopqrstuvwxyz0123456789".to_owned(),
+            "the command contains a secret",
+        ),
     ] {
         let e = authorize(&fx.app, &ai, "long", &Action::Exec(cmd))
             .await
             .unwrap_err();
-        assert_eq!(
-            (e.status, e.message.as_str()),
-            (StatusCode::FORBIDDEN, "too long to show for approval")
-        );
+        assert_eq!((e.status, e.message.as_str()), (StatusCode::FORBIDDEN, why));
     }
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_code_mode_approvals")
         .fetch_one(&fx.app.pool)

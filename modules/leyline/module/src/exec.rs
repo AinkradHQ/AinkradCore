@@ -4,8 +4,9 @@
 //! - [`run`] takes the gate's `Authorized` by value and runs the steps IT carries (the ones the gate
 //!   decided and a person approved), never a fresh read of the command. No `Authorized`, no dispatch:
 //!   a runner that holds a key could otherwise use it with no Core check.
-//! - Before each step `gate::still_valid` re-checks the host (rule and whole connection), the run and an
-//!   AI session; a step that fails, times out or is refused ends the run (the later steps never run).
+//! - Before each step `gate::checked` re-checks the host (rule and whole connection, every jump hop
+//!   included), the run and the principal, and hands back the connection it compared: dispatch uses
+//!   exactly that, never a second read; a step that fails, times out or is refused ends the run (the later steps never run).
 //! - No key leaves the Core here: each hop carries a one-use lease the runner redeems itself. Pinned host
 //!   keys are sent with every hop (none trusted = the runner ends it before any login).
 //! - What is stored is redacted again, cut at 64 KB, and every error is a fixed sentence.
@@ -14,20 +15,18 @@ use std::time::Duration;
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::BY;
-use ainkrad_core_server::store::gov::LOCAL_ENROL_SAS;
 use ainkrad_core_server::store::secrets;
-use ainkrad_proto::v2::{
-    Body, ErrorCode, ExecLimits, ExecResult, MAX_SSH_HOPS, Reply, SshExec, SshHop,
-};
-use sqlx::Row;
+use ainkrad_proto::v2::{Body, ErrorCode, ExecLimits, ExecResult, Reply, SshExec, SshHop};
 use tokio::sync::watch;
 
-use crate::gate::{Authorized, finish, redact_text, still_valid};
+use crate::gate::{Authorized, Link, Stop, checked, finish, redact_text};
 
 /// The most output one host's run keeps.
 const KEPT: usize = 64 * 1024;
 const STEP_TIMEOUT: Duration = Duration::from_secs(300);
 const LEASE_SECS: i64 = 60;
+/// What the log says when a stop ended the wait for a step already sent to the host.
+const STOPPED: &str = "cancelled; the step may still finish on the host";
 
 /// A fleet run's stop signal (`true` = stop). A single run has none.
 pub(crate) type Cancel = watch::Receiver<bool>;
@@ -81,8 +80,8 @@ async fn steps(
     for (i, step) in auth.steps().iter().enumerate() {
         reached = i64::try_from(i + 1).unwrap_or(i64::MAX);
         log.push_str(&format!("$ {step}\n"));
-        let res = match still_valid(app, auth).await {
-            Ok(()) => one(app, auth, step, cancel).await,
+        let res = match checked(app, auth).await {
+            Ok(link) => one(app, auth, step, link, cancel).await,
             Err(e) => Err(e.message),
         };
         match res {
@@ -104,7 +103,11 @@ async fn steps(
             }
             Err(why) => {
                 exit = None;
-                log.push_str(&format!("[not run: {why}]\n"));
+                if why == STOPPED {
+                    log.push_str(&format!("[stopped waiting: {why}]\n"));
+                } else {
+                    log.push_str(&format!("[not run: {why}]\n"));
+                }
                 return (false, reached, exit, ms, log);
             }
         }
@@ -124,6 +127,7 @@ fn cut(s: String) -> String {
 }
 
 /// One `ssh.exec` of `step` on the authorised host: leases, hops, dispatch, the answer.
+/// `link` is the very read `checked` compared: nothing is read again after the check.
 ///
 /// A stop signal ends the wait for the answer: the runner finishes the step on its own limit
 /// (ponytail: no cancel op in the runner protocol yet; add one to kill the remote step at once).
@@ -131,10 +135,15 @@ async fn one(
     app: &App,
     auth: &Authorized,
     step: &str,
+    link: Link,
     cancel: &Option<Cancel>,
 ) -> Result<ExecResult, String> {
     let fixed = |s: &str| s.to_owned();
-    let (target, hops, runner) = chain(app, auth.host_id()).await.map_err(|e| fixed(e))?;
+    let Link {
+        target,
+        hops,
+        runner,
+    } = link;
     let (target, hops) = (hop(app, auth, &runner, target).await?, {
         let mut v = Vec::new();
         for h in hops {
@@ -157,7 +166,7 @@ async fn one(
         .map_err(|e| why(e.code))?;
     let outcome = tokio::select! {
         o = sent.outcome() => o,
-        () = stopped(cancel) => return Err(fixed("cancelled")),
+        () = stopped(cancel) => return Err(fixed(STOPPED)),
     };
     match outcome {
         Ok(Body::Result(Reply::SshExec(r))) => Ok(r),
@@ -179,75 +188,6 @@ fn why(c: ErrorCode) -> String {
         _ => "the runner could not run it",
     }
     .to_owned()
-}
-
-/// A machine on the path before its lease: host, port, user, its key's secret, its trusted keys.
-struct Stop {
-    host: String,
-    port: u16,
-    user: String,
-    secret: Option<String>,
-    pinned: Vec<String>,
-}
-
-/// The target, its jump hosts in order, and the runner that connects (the host's `via_runner`, else
-/// the Core machine's built-in one).
-async fn chain(app: &App, host: &str) -> Result<(Stop, Vec<Stop>, String), &'static str> {
-    const NO: &str = "the host cannot be read";
-    let mut conn = app.pool.acquire().await.map_err(|_| NO)?;
-    let r = sqlx::query("SELECT jump_chain, via_runner FROM leyline_hosts WHERE id = ?")
-        .bind(host)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(|_| NO)?
-        .ok_or(NO)?;
-    let jumps: Vec<String> =
-        serde_json::from_str(&r.try_get::<String, _>("jump_chain").map_err(|_| NO)?)
-            .map_err(|_| NO)?;
-    let via: Option<String> = r.try_get("via_runner").map_err(|_| NO)?;
-    if jumps.len() > MAX_SSH_HOPS {
-        return Err("too many jump hosts");
-    }
-    let runner = match via {
-        Some(r) => r,
-        None => sqlx::query_scalar(
-            "SELECT p.device_id FROM core_pairings p JOIN core_devices d ON d.id = p.device_id \
-             WHERE p.kind = 'runner' AND p.sas = ? AND d.status = 'active' AND d.revoked_at IS NULL LIMIT 1",
-        )
-        .bind(LOCAL_ENROL_SAS)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(|_| NO)?
-        .ok_or("the Core has no built-in runner")?,
-    };
-    let mut stops = Vec::new();
-    for id in jumps.iter().map(String::as_str).chain([host]) {
-        let h = sqlx::query(
-            "SELECT h.address, h.port, h.username, k.secret FROM leyline_hosts h \
-             LEFT JOIN leyline_keys k ON k.id = h.key_id WHERE h.id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&mut *conn)
-        .await
-        .map_err(|_| NO)?
-        .ok_or(NO)?;
-        let pinned: Vec<String> = sqlx::query_scalar(
-            "SELECT fingerprint FROM leyline_host_keys WHERE host_id = ? AND state = 'trusted'",
-        )
-        .bind(id)
-        .fetch_all(&mut *conn)
-        .await
-        .map_err(|_| NO)?;
-        stops.push(Stop {
-            host: h.try_get("address").map_err(|_| NO)?,
-            port: u16::try_from(h.try_get::<i64, _>("port").map_err(|_| NO)?).map_err(|_| NO)?,
-            user: h.try_get("username").map_err(|_| NO)?,
-            secret: h.try_get("secret").map_err(|_| NO)?,
-            pinned,
-        });
-    }
-    let target = stops.pop().ok_or(NO)?;
-    Ok((target, stops, runner))
 }
 
 /// The hop with a one-use lease on its key for `runner`.
