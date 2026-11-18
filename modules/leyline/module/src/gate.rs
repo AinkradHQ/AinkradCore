@@ -35,6 +35,8 @@
 //!     action: leyline_module::gate::Action::Terminal,
 //!     op_sha256: String::new(),
 //!     principal: leyline_module::gate::Principal::health(),
+//!     steps: Vec::new(),
+//!     tuple: String::new(),
 //! };
 //! ```
 
@@ -54,6 +56,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqliteConnection};
 
+use crate::commands::{Cmd, load_cmd};
 use crate::hosts::find;
 pub use crate::policy::{Action, Principal};
 use crate::policy::{Rule, Verdict, Who, verdict};
@@ -63,6 +66,11 @@ use crate::valid::new_id;
 mod runs;
 pub use runs::finish;
 use runs::{Parked, cancel, note, redacted, settle, write_run};
+
+/// `s` with secret shapes masked: what a stored text goes through.
+pub(crate) fn redact_text(s: &str) -> String {
+    redacted(s)
+}
 
 /// Most hosts one fleet call may name.
 const MAX_HOSTS: usize = 100;
@@ -81,9 +89,17 @@ pub struct Authorized {
     /// The hash the gate decided (and, if asked, the person approved) on.
     op_sha256: String,
     principal: Principal,
+    /// The pre-set command's steps as the gate decided (and a person approved) them.
+    steps: Vec<String>,
+    /// The host's rule and connection as the gate read them; `still_valid` compares it.
+    tuple: String,
 }
 
 impl Authorized {
+    /// A pre-set command's steps, as decided: dispatch runs these, never a fresh read of the store.
+    pub fn steps(&self) -> &[String] {
+        &self.steps
+    }
     pub fn action(&self) -> &Action {
         &self.action
     }
@@ -99,6 +115,40 @@ impl Authorized {
     pub fn principal(&self) -> &Principal {
         &self.principal
     }
+}
+
+/// Dispatch calls this right before each thing it sends: the gate's decision still holds. The host
+/// must still exist with the same rule and connection (address, port, user, key, jump chain,
+/// runner) it had when the gate decided (`op_sha256` was made over exactly that), the run must
+/// still be running, and an AI session must still be live. Fixed answers, nothing echoed.
+///
+/// # Errors
+///
+/// 403 `gate_refused` when anything changed, or a store failure.
+pub async fn still_valid(app: &App, a: &Authorized) -> Result<(), ApiError> {
+    let host = {
+        let mut conn = app.pool.acquire().await?;
+        host_row(&mut conn, &a.host).await?
+    };
+    match host {
+        None => return Err(refuse("the host is gone")),
+        Some(h) if h.tuple != a.tuple => return Err(refuse("the host changed")),
+        Some(_) => {}
+    }
+    let state: Option<String> = sqlx::query_scalar("SELECT state FROM leyline_runs WHERE id = ?")
+        .bind(&a.run)
+        .fetch_optional(&app.pool)
+        .await?;
+    if state.as_deref() != Some("running") {
+        return Err(refuse("the run is no longer running"));
+    }
+    if let Who::Session(s) = &a.principal.0 {
+        let live = access::load(&app.pool, s).await?.is_some_and(|x| x.live);
+        if !live || session_principal(&app.pool, s).await?.is_none() {
+            return Err(refuse("this session may no longer act"));
+        }
+    }
+    Ok(())
 }
 
 /// What a fleet call came to.
@@ -158,6 +208,18 @@ pub async fn authorize_many(
             }
         }
     }
+    // A pre-set command is read here, by the gate: its flag and steps are never an input.
+    let cmd = match action {
+        Action::Preset(id) => {
+            let mut conn = app.pool.acquire().await?;
+            Some(
+                load_cmd(&mut conn, id)
+                    .await?
+                    .ok_or_else(|| ApiError::not_found("no such command"))?,
+            )
+        }
+        _ => None,
+    };
     // An AI session must be live with a usable creator; the runner it waits on is its own.
     let session_runner = match &who.0 {
         Who::Session(s) => {
@@ -180,12 +242,17 @@ pub async fn authorize_many(
             if is_ai && session_runner.is_none() {
                 Verdict::Deny("this session may no longer act")
             } else {
-                verdict(who, h.rule, action)
+                verdict(
+                    who,
+                    h.rule,
+                    action,
+                    cmd.as_ref().is_some_and(|c| c.read_only),
+                )
             }
         })
         .collect();
     let run = new_id("lr_");
-    let hash = op_hash(action, &found);
+    let hash = op_hash(action, cmd.as_ref(), &found);
     write_run(app, who, &run, action, &found, &verdicts, &hash).await?;
     // From here a run that never settles is cancelled, not left waiting forever.
     let mut guard = Parked {
@@ -199,6 +266,7 @@ pub async fn authorize_many(
         action,
         hash,
         runner: session_runner,
+        cmd,
     };
     match park_and_settle(app, &called, &found, verdicts).await {
         Ok(g) => {
@@ -221,6 +289,8 @@ struct Call<'a> {
     hash: String,
     /// The runner an AI session waits on.
     runner: Option<String>,
+    /// The pre-set command, as read when the call began.
+    cmd: Option<Cmd>,
 }
 
 /// A host as the gate read it: its rule and the tuple a connection is made with.
@@ -288,6 +358,7 @@ async fn park_and_settle(
             found,
             &verdicts,
             &c.hash,
+            c.cmd.as_ref(),
         )
         .await?;
         // The hosts as they are after the wait: a changed or deleted one voids the approval.
@@ -305,7 +376,16 @@ async fn park_and_settle(
             .collect();
         let all_same = same.iter().all(|s| *s);
         let fresh: Vec<H> = now.into_iter().flatten().collect();
-        let fresh_hash = op_hash(c.action, &fresh);
+        // The command as it is after the wait: an edited or deleted one voids the approval.
+        let cmd_now = match c.action {
+            Action::Preset(id) => {
+                let mut conn = app.pool.acquire().await?;
+                load_cmd(&mut conn, id).await?
+            }
+            _ => None,
+        };
+        let cmd_same = cmd_now == c.cmd;
+        let fresh_hash = op_hash(c.action, cmd_now.as_ref(), &fresh);
         let by = match &outcome {
             Outcome::Approved(by) => Some(by.clone()),
             _ => None,
@@ -318,6 +398,9 @@ async fn park_and_settle(
         }
         let why = match (&outcome, spent) {
             (Outcome::Approved(_), true) => None,
+            (Outcome::Approved(_), false) if !cmd_same => {
+                Some("the command changed while it waited")
+            }
             (Outcome::Approved(_), false) if !all_same => Some("a host changed while it waited"),
             (Outcome::Approved(_), false) => Some("approval already used"),
             (Outcome::Denied, _) => Some("the person said no"),
@@ -329,6 +412,8 @@ async fn park_and_settle(
                 *v = why.map_or(Verdict::Allow, Verdict::Deny);
             } else if *v == Verdict::Allow && !same {
                 *v = Verdict::Deny("a host changed while it waited");
+            } else if *v == Verdict::Allow && !cmd_same {
+                *v = Verdict::Deny("the command changed while it waited");
             }
         }
         if why.is_none() {
@@ -346,13 +431,14 @@ async fn park_and_settle(
 
 /// Binds an approval to exactly this operation and command, and to each host's rule and whole
 /// connection tuple.
-fn op_hash(action: &Action, hosts: &[H]) -> String {
+fn op_hash(action: &Action, cmd: Option<&Cmd>, hosts: &[H]) -> String {
     let mut hs: Vec<(&str, &str)> = hosts
         .iter()
         .map(|h| (h.id.as_str(), h.tuple.as_str()))
         .collect();
     hs.sort_unstable();
-    let doc = json!({"op": action.op(), "action": format!("{action:?}"), "hosts": hs});
+    let cmd = cmd.map(|c| json!([c.id, c.name, c.read_only, c.steps]));
+    let doc = json!({"op": action.op(), "action": format!("{action:?}"), "cmd": cmd, "hosts": hs});
     Sha256::digest(doc.to_string().as_bytes())
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -372,6 +458,7 @@ async fn ask(
     hosts: &[H],
     verdicts: &[Verdict],
     hash: &str,
+    cmd: Option<&Cmd>,
 ) -> Result<Outcome, ApiError> {
     let names: Vec<&str> = hosts
         .iter()
@@ -379,9 +466,14 @@ async fn ask(
         .filter(|(_, v)| **v == Verdict::Ask)
         .map(|(h, _)| h.name.as_str())
         .collect();
-    let args = json!({"hosts": names, "detail": action.detail()});
+    // A pre-set command is shown by name with every step, whole.
+    let (detail, steps) = cmd.map_or((action.detail(), &[][..]), |c| {
+        (c.name.as_str(), &c.steps[..])
+    });
+    let args = json!({"hosts": names, "detail": detail, "steps": steps});
     // The person approves what the card shows: never a cut or redacted version of it.
-    if !shows_whole(action.detail())
+    if !shows_whole(detail)
+        || !steps.iter().all(|t| shows_whole(t))
         || !names.iter().all(|n| shows_whole(n))
         || args.to_string().len() > CARD_ALL
     {

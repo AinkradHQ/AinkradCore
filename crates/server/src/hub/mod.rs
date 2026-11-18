@@ -468,6 +468,18 @@ impl Hub {
         self.send_command(runner, command)
     }
 
+    /// `ssh.exec` for a module that holds its own gate's proof (Leyline: dispatch takes the gate's
+    /// `Authorized`, which only the gate can make). Only this one op: it carries no key (the
+    /// runner redeems leases), and a host key the Core has not pinned ends it before any login.
+    /// Anything else a module could send still needs [`Hub::dispatch_elevated`].
+    pub fn dispatch_ssh_exec(
+        self: &Arc<Self>,
+        runner: &str,
+        exec: ainkrad_proto::v2::SshExec,
+    ) -> Result<Dispatched, StreamError> {
+        self.send_command(runner, Command::SshExec(exec))
+    }
+
     fn send_command(
         self: &Arc<Self>,
         runner: &str,

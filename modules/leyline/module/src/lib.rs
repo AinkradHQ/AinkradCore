@@ -10,8 +10,11 @@
 
 mod address;
 mod attach;
+mod commands;
+mod exec;
 pub mod gate;
 pub mod hostkeys;
+mod health;
 mod hosts;
 mod keys;
 mod policy;
@@ -19,6 +22,7 @@ mod terminal;
 mod valid;
 
 use ainkrad_core_server::api::App;
+use ainkrad_core_server::jobs::Job;
 use ainkrad_core_server::module::Module;
 use ainkrad_core_server::store::Migration;
 use axum::Router;
@@ -47,6 +51,18 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0003_sessions.up.sql"),
         down: include_str!("../migrations/0003_sessions.down.sql"),
     },
+    Migration {
+        version: 4,
+        name: "0004_commands",
+        up: include_str!("../migrations/0004_commands.up.sql"),
+        down: include_str!("../migrations/0004_commands.down.sql"),
+    },
+    Migration {
+        version: 5,
+        name: "0005_health",
+        up: include_str!("../migrations/0005_health.up.sql"),
+        down: include_str!("../migrations/0005_health.down.sql"),
+    },
 ];
 
 // A key write is a secret write: importing needs the step-up like the Core's own secret writes.
@@ -67,6 +83,10 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
     ("POST", "/hosts/{host}/host-keys/trust"),
+    ("POST", "/commands"),
+    ("PATCH", "/commands/{command}"),
+    ("DELETE", "/commands/{command}"),
+    ("POST", "/commands/{command}/run"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
 ];
@@ -81,6 +101,9 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/hosts/{host}/host-keys", "read"),
     // The terminal scope, as the Core's own terminal routes.
     ("POST", "/hosts/{host}/terminals", "terminal"),
+    ("GET", "/commands", "read"),
+    ("GET", "/commands/{command}", "read"),
+    ("GET", "/runs/{run}", "read"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -107,7 +130,14 @@ pub struct Leyline;
         hostkeys::list,
         hostkeys::trust_route,
         hostkeys::replace_route,
-        terminal::open
+        terminal::open,
+        commands::list,
+        commands::create,
+        commands::get,
+        commands::patch,
+        commands::remove,
+        commands::run,
+        commands::get_run
     ),
     components(schemas(
         hosts::HostView,
@@ -126,7 +156,16 @@ pub struct Leyline;
         hostkeys::HostKeyView,
         hostkeys::Pick,
         terminal::NewSession,
-        terminal::SessionView
+        terminal::SessionView,
+        commands::CommandView,
+        commands::NewCommand,
+        commands::CommandPatch,
+        commands::CommandDeleted,
+        commands::Scope,
+        commands::RunRequest,
+        commands::RunStarted,
+        commands::RunView,
+        commands::RunHost
     ))
 )]
 struct Doc;
@@ -167,6 +206,15 @@ impl Module for Leyline {
             .route("/keys", get(keys::list).post(keys::generate))
             .route("/keys/import", post(keys::import))
             .route("/keys/{key}", get(keys::get).delete(keys::remove))
+            .route("/commands", get(commands::list).post(commands::create))
+            .route(
+                "/commands/{command}",
+                get(commands::get)
+                    .patch(commands::patch)
+                    .delete(commands::remove),
+            )
+            .route("/commands/{command}/run", post(commands::run))
+            .route("/runs/{run}", get(commands::get_run))
             .route("/projects/{project}/hosts", get(attach::list))
             .route(
                 "/projects/{project}/hosts/{host}",
@@ -184,6 +232,7 @@ impl Module for Leyline {
             "leyline.key",
             "leyline.session",
             "leyline.hostkey",
+            "leyline.command",
         ]
     }
 
@@ -207,6 +256,9 @@ impl Module for Leyline {
             "leyline.hostkey.replaced",
             "leyline.session.opened",
             "leyline.session.ended",
+            "leyline.command.created",
+            "leyline.command.changed",
+            "leyline.command.deleted",
             "leyline.run.requested",
             "leyline.run.approval",
             "leyline.run.allowed",
@@ -232,6 +284,14 @@ impl Module for Leyline {
 
     fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
         Some(NON_DESTRUCTIVE)
+    }
+
+    fn jobs(&self) -> Vec<Job> {
+        health::jobs()
+    }
+
+    fn attach(&self, app: &App) {
+        health::attach(app);
     }
 
     fn openapi(&self) -> Value {
