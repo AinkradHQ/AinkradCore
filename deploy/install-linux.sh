@@ -82,6 +82,12 @@ run_setup() {
     run install -m 0644 "$HERE/systemd/$u" "$prefix/etc/systemd/system/$u"
   done
   if [ -n "$prefix" ] && [ "$dry" = 0 ]; then echo "+ skipped under --prefix: podman packages, the $RUN_USER user, linger"; return 0; fi
+  # run-egress.nft lets ainkrad-run reach DNS only at the systemd-resolved stub (127.0.0.53). Without it, containers
+  # would have no DNS (or the rule would have to open the metadata range), so refuse rather than install a wrong block.
+  if [ "$dry" = 0 ] && ! { systemctl is-active --quiet systemd-resolved && grep -Eq '^nameserver[[:space:]]+127\.0\.0\.53([[:space:]]|$)' /etc/resolv.conf; }; then
+    echo "--with-run needs systemd-resolved running with its 127.0.0.53 stub in /etc/resolv.conf; enable it (systemctl enable --now systemd-resolved; ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf) and re-run. 169.254.169.254 is never allowed." >&2
+    return 1
+  fi
   if [ "$dry" = 1 ] || ! { command -v podman && command -v newuidmap && command -v pasta && [ -x /usr/lib/podman/aardvark-dns ]; } >/dev/null 2>&1; then
     if [ "$dry" = 1 ] || command -v apt-get >/dev/null 2>&1; then
       run env DEBIAN_FRONTEND=noninteractive apt-get update -qq

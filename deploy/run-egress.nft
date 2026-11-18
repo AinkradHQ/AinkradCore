@@ -8,7 +8,7 @@ table inet ainkrad_run_egress {
     type filter hook output priority 0; policy accept;
     # Replies on connections others opened (a published port on 127.0.0.1) stay open; nothing new passes here.
     meta skuid "ainkrad-run" ct state established,related accept
-    # DNS to the host's resolver (systemd-resolved's stub), the one local service a container may reach.
+    # DNS to the host's resolver (systemd-resolved's stub; install-linux.sh --with-run refuses to install without it), the one local service a container may reach.
     meta skuid "ainkrad-run" ip daddr 127.0.0.53 meta l4proto { tcp, udp } th dport 53 accept
     # Every other address of the host itself (loopback, its own private and public addresses).
     meta skuid "ainkrad-run" fib daddr type local reject

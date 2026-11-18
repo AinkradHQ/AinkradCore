@@ -58,8 +58,14 @@ const LABEL_SERVICE: &str = "ainkrad.service";
 const LABEL_EXPOSE: &str = "ainkrad.expose";
 /// How long a service with a health check has to turn healthy.
 const HEALTH_WAIT: Duration = Duration::from_secs(120);
-/// A whole start: below the helper unit's `RuntimeMaxSec=1800`, so the cleanup of a failed one fits.
-pub const START_BUDGET: Duration = Duration::from_secs(1500);
+/// A whole start: below the helper unit's `RuntimeMaxSec=1800` by what the work after its deadline
+/// can take ([`OVERRUN`] and [`STOP_MAX`]; the sum is tested), so the cleanup of a failed one fits.
+pub const START_BUDGET: Duration = Duration::from_secs(1200);
+/// What one step already begun can add past the deadline: a build's `set-property` plus its two
+/// slice reaps (each [`QUICK`]); later builds are refused at once (`build`).
+pub const OVERRUN: Duration = Duration::from_secs(3 * QUICK.as_secs());
+/// `stop` of a failed start: six podman calls (status, ps, stop, rm, images, rmi), each [`QUICK`].
+pub const STOP_MAX: Duration = Duration::from_secs(6 * QUICK.as_secs());
 /// Each child's own cap (within what is left of [`START_BUDGET`]).
 const QUICK: Duration = Duration::from_secs(60);
 const CLONE_MAX: Duration = Duration::from_secs(300);
@@ -89,6 +95,13 @@ pub struct Engine {
     pub runtime_dir: Option<PathBuf>,
     /// [`MAX_CHECKOUT_BYTES`], lower in tests.
     pub checkout_cap: u64,
+}
+
+/// The helper's `containers.conf` (`<root>/containers.conf`, via `CONTAINERS_CONF`): lock numbers
+/// of the shared-memory lock manager are per store, so the projects sharing this user's store
+/// would share them; file locks are not numbered.
+pub fn containers_conf() -> &'static str {
+    "[engine]\nlock_type = \"file\"\n"
 }
 
 /// The env file of one container, removed when dropped (on every path, errors included).
@@ -214,9 +227,13 @@ impl Engine {
     pub fn from_env() -> Result<Self, String> {
         let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
         let runtime = PathBuf::from(format!("/run/user/{}", ainkrad_sys::getuid()));
+        let root = PathBuf::from(home).join("runs");
+        private_dir(&root)?;
+        std::fs::write(root.join("containers.conf"), containers_conf())
+            .map_err(|e| format!("writing containers.conf: {e}"))?;
         Ok(Self {
             podman: "podman".to_owned(),
-            root: PathBuf::from(home).join("runs"),
+            root,
             env_dir: runtime.join("ainkrad-env"),
             runtime_dir: Some(runtime),
             checkout_cap: MAX_CHECKOUT_BYTES,
@@ -226,6 +243,10 @@ impl Engine {
     /// `prog`, with the user's runtime dir and bus when set.
     fn user_cmd(&self, prog: &str) -> Command {
         let mut cmd = Command::new(prog);
+        let conf = self.root.join("containers.conf");
+        if conf.is_file() {
+            cmd.env("CONTAINERS_CONF", conf);
+        }
         if let Some(r) = &self.runtime_dir {
             cmd.env("XDG_RUNTIME_DIR", r).env(
                 "DBUS_SESSION_BUS_ADDRESS",

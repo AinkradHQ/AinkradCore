@@ -28,7 +28,7 @@ StandardInput=socket
 StandardOutput=journal
 StandardError=journal
 KillMode=process
-# A start keeps within 1500 s (crates/runner/src/run.rs START_BUDGET), each child with its own timeout.
+# A start keeps within START_BUDGET (crates/runner/src/run.rs; with its overrun and cleanup it sums below 1800, tested), each child with its own timeout.
 RuntimeMaxSec=1800
 # 0022: a checkout mounted at /repo/<name> must be readable by the container's own non-root users (nginx, node).
 # Host users still cannot reach it: each run dir is 0700, and env files are written 0600 in a 0700 dir.

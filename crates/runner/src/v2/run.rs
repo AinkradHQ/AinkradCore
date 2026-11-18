@@ -377,27 +377,90 @@ fn tempdir() -> Result<Tmp, StreamError> {
     Ok(Tmp(p))
 }
 
-/// `git bundle create <to> HEAD` of a checkout: the file and its length.
+/// Refuses a `.git` that holds any symlink (a session could point one at a file outside the
+/// checkout) or `objects/info/alternates` (the same, for objects); `Err` names the first.
+pub(super) fn git_dir_clean(dir: &Path) -> Result<(), String> {
+    let git = dir.join(".git");
+    let is_dir = std::fs::symlink_metadata(&git).is_ok_and(|m| m.file_type().is_dir());
+    if !is_dir {
+        return Err(format!("{} is not a plain .git directory", git.display()));
+    }
+    let mut todo = vec![git.clone()];
+    while let Some(d) = todo.pop() {
+        for e in std::fs::read_dir(&d).map_err(|e| format!("{}: {e}", d.display()))? {
+            let e = e.map_err(|e| e.to_string())?;
+            let t = e.file_type().map_err(|e| e.to_string())?;
+            if t.is_symlink() {
+                return Err(format!("{} is a symlink", e.path().display()));
+            }
+            if t.is_dir() {
+                todo.push(e.path());
+            }
+        }
+    }
+    if git.join("objects/info/alternates").exists() {
+        return Err("the checkout borrows objects from elsewhere".to_owned());
+    }
+    Ok(())
+}
+
+/// `git` for the runner's own use on a checkout a session may have written: no system or global
+/// config, no replace refs, no fsmonitor, no hooks.
+fn safe_git() -> tokio::process::Command {
+    let mut c = tokio::process::Command::new("git");
+    c.args([
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+    ])
+    .env_clear()
+    .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+    .env("GIT_CONFIG_NOSYSTEM", "1")
+    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_NO_REPLACE_OBJECTS", "1")
+    .env("GIT_TERMINAL_PROMPT", "0");
+    c
+}
+
+/// `git bundle create <to> HEAD` of a checkout: the file and its length. The checkout's `.git` is
+/// checked for symlinks, copied (`--mirror --no-local`, no hardlinks, no templates) into a private
+/// dir beside `to`, and the bundle is made from that copy: nothing a session wrote is read by the
+/// bundling itself.
 async fn bundle(dir: &Path, to: &Path) -> Result<(PathBuf, u64), StreamError> {
     let bad = |e: String| StreamError::new(ErrorCode::InvalidArgs, e);
-    let out = tokio::process::Command::new("git")
-        .arg("-C")
+    let d = dir.to_path_buf();
+    tokio::task::spawn_blocking(move || git_dir_clean(&d))
+        .await
+        .map_err(|e| bad(e.to_string()))?
+        .map_err(|e| bad(format!("the checkout {}: {e}", dir.display())))?;
+    let mut mirror = to.as_os_str().to_owned();
+    mirror.push(".mirror");
+    let mirror = PathBuf::from(mirror);
+    let run = |mut c: tokio::process::Command, what: &'static str| async move {
+        let out = c.output().await.map_err(|e| bad(format!("git: {e}")))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(bad(format!(
+                "{what} the checkout: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )))
+        }
+    };
+    let mut clone = safe_git();
+    clone
+        .args(["clone", "--mirror", "--no-local", "--template=", "-q"])
         .arg(dir)
+        .arg(&mirror);
+    run(clone, "copying").await?;
+    let mut b = safe_git();
+    b.arg("-C")
+        .arg(&mirror)
         .args(["bundle", "create", "-q"])
         .arg(to)
-        .arg("HEAD")
-        .env_clear()
-        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-        .output()
-        .await
-        .map_err(|e| bad(format!("git: {e}")))?;
-    if !out.status.success() {
-        return Err(bad(format!(
-            "bundling the checkout {}: {}",
-            dir.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
-    }
+        .arg("HEAD");
+    run(b, "bundling").await?;
     let len = std::fs::metadata(to).map_err(|e| bad(e.to_string()))?.len();
     Ok((to.to_path_buf(), len))
 }
@@ -464,5 +527,57 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("run-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(p.join(".git/objects/info")).unwrap();
+        p
+    }
+
+    #[test]
+    fn a_git_dir_with_a_symlink_or_alternates_is_refused() {
+        let ok = scratch("git-ok");
+        assert!(git_dir_clean(&ok).is_ok());
+        let deep = scratch("git-deep");
+        std::os::unix::fs::symlink("/etc/passwd", deep.join(".git/objects/info/x")).unwrap();
+        assert!(git_dir_clean(&deep).unwrap_err().contains("symlink"));
+        let alt = scratch("git-alt");
+        std::fs::write(alt.join(".git/objects/info/alternates"), "/elsewhere\n").unwrap();
+        assert!(git_dir_clean(&alt).unwrap_err().contains("borrows"));
+        // `.git` itself a symlink, or a gitfile, is not a plain directory.
+        let link = scratch("git-link");
+        std::fs::remove_dir_all(link.join(".git")).unwrap();
+        std::os::unix::fs::symlink(&ok, link.join(".git")).unwrap();
+        assert!(git_dir_clean(&link).is_err());
+        for p in [ok, deep, alt, link] {
+            let _ = std::fs::remove_dir_all(p);
+        }
+    }
+
+    #[test]
+    fn the_bundling_git_ignores_every_config_but_the_repos_own_safe_ones() {
+        let c = safe_git();
+        let c = c.as_std();
+        let args: Vec<_> = c
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args.join(" "),
+            "-c core.fsmonitor=false -c core.hooksPath=/dev/null"
+        );
+        let env: BTreeMap<_, _> = c
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert_eq!(env["GIT_CONFIG_NOSYSTEM"].as_deref(), Some("1"));
+        assert_eq!(env["GIT_NO_REPLACE_OBJECTS"].as_deref(), Some("1"));
     }
 }
