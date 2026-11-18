@@ -1368,6 +1368,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/repos/{repo}/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["fetchProjectRepo"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/repos/{repo}/primary": {
         parameters: {
             query?: never;
@@ -1378,6 +1394,54 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["setProjectRepoPrimary"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/spec": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getProjectSpec"];
+        put: operations["saveProjectSpec"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/spec/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listProjectSpecVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/spec/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getProjectSpecVersion"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2529,6 +2593,14 @@ export interface components {
         BudgetDeleted: {
             deleted: boolean;
         };
+        Build: {
+            /** @description Build context inside that repo; default `.`. */
+            context?: string | null;
+            /** @description Path of the Dockerfile inside that repo; default `Dockerfile`. */
+            dockerfile?: string | null;
+            /** @description A repo of the project. */
+            repo: string;
+        };
         /**
          * @description An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first
          *     entry that has one to give.
@@ -3060,6 +3132,10 @@ export interface components {
             server_version?: string | null;
             supported_minors?: number[] | null;
         };
+        Health: {
+            /** @description Run inside the container, one line of 1-512 characters; exit 0 is healthy. */
+            cmd: string;
+        };
         /** @description A program installed on the host, as the helper's manifest and checks say. */
         HostBinary: {
             name: string;
@@ -3545,6 +3621,12 @@ export interface components {
             /** @description The API key; written, never read back. */
             value: string;
         };
+        NewRunSpec: {
+            /** @description Where it came from; default `manual`. */
+            origin?: string | null;
+            /** @description The spec; see `RunSpec`. */
+            spec: components["schemas"]["RunSpec"];
+        };
         /** @description A new secret. Deliberately no `Debug`. */
         NewSecret: {
             /** @description `env` (the default), `file` or `askpass`. */
@@ -3705,6 +3787,15 @@ export interface components {
             name: string;
             provider: string;
             updated_at: components["schemas"]["Timestamp"];
+        };
+        Port: {
+            /** @description Give it a public URL (when the project is exposed); at most one per service. */
+            expose?: boolean;
+            /**
+             * Format: int32
+             * @description The container port, 1-65535. It is only ever published on the runner's loopback.
+             */
+            port: number;
         };
         /** @description A price: millionths of a dollar per million tokens, and when the provider's list price was read. */
         PriceBookEntry: {
@@ -3926,6 +4017,37 @@ export interface components {
             kind?: string | null;
             runners?: string[] | null;
             value: string;
+        };
+        /** @description The whole spec: its services by name. */
+        RunSpec: {
+            /**
+             * @description 1-16 services. A name is 1-20 of `a-z0-9-`, starting with a letter: it is the service's
+             *     network alias and part of its public host name.
+             */
+            services: {
+                [key: string]: components["schemas"]["Service"];
+            };
+        };
+        /** @description A version without its spec. */
+        RunSpecSummary: {
+            created_at: components["schemas"]["Timestamp"];
+            created_by: string;
+            origin: string;
+            /** Format: int64 */
+            version: number;
+        };
+        RunSpecVersion: {
+            created_at: components["schemas"]["Timestamp"];
+            /** @description The device that saved it. */
+            created_by: string;
+            /** @description `manual`, `compose`, `package_json`, `makefile` or `run_sh`. */
+            origin: string;
+            spec: components["schemas"]["RunSpec"];
+            /**
+             * Format: int64
+             * @description 1 for the first save, then one more each time.
+             */
+            version: number;
         };
         /** @description A paired runner and its live state. */
         Runner: {
@@ -4161,6 +4283,32 @@ export interface components {
              * @description 1 when stored, one more per rotation.
              */
             version: number;
+        };
+        /** @description One container. Exactly one of `image` and `build`. */
+        Service: {
+            /** @description Build the image from a Dockerfile in one of the project's repos. */
+            build?: components["schemas"]["Build"];
+            /** @description Replaces the image's command; at most 64 arguments. */
+            command?: string[] | null;
+            /** @description Services that must be started (and healthy, when they have a `health`) first. */
+            depends_on?: string[];
+            /** @description Environment. A value is plain text or contains `${secret:NAME}` references. */
+            env?: {
+                [key: string]: string;
+            };
+            health?: components["schemas"]["Health"];
+            /** @description An image reference such as `postgres:17` or `ghcr.io/acme/app@sha256:...`. */
+            image?: string | null;
+            /** @description At most 8 ports the service listens on. */
+            ports?: components["schemas"]["Port"][];
+            /** @description Mount this project repo's checkout at `/repo/<name>`. */
+            repo?: string | null;
+            /** @description Named volumes: volume name to the absolute container path it is mounted at. */
+            volumes?: {
+                [key: string]: string;
+            };
+            /** @description Absolute path inside the container; default is the image's. */
+            workdir?: string | null;
         };
         SessionGrant: {
             /** @description Until when the session is elevated (E1-09); null when it is not. */
@@ -8156,6 +8304,38 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    fetchProjectRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The repo's id */
+                repo: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Core fetched the repo's remote now ("Fetch now"); the project as it now is. A fetch that failed is still 200: the repo's `mirror.error` says why and `mirror.head` is the older head, kept. A fetch already running for the repo is not started again nor waited for: the state as it is comes back. 404 for no such project or repo; 409 `conflict` for an archived project; 503 `mirrors_unavailable` when this Core keeps no repo copies */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     setProjectRepoPrimary: {
         parameters: {
             query?: never;
@@ -8177,6 +8357,132 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getProjectSpec: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The newest run spec version. 404 for no such project or when it has no spec yet */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSpecVersion"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    saveProjectSpec: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewRunSpec"];
+            };
+        };
+        responses: {
+            /** @description Saved as the next version (audited and emitted as `project.spec_saved`). 400 `invalid_spec` names the bad field (unknown or forbidden key, more than 16 services or 8 ports, a bad image, a malformed `${secret:NAME}`, a repo the project does not have); 404 for no such project; 409 `conflict` when it is archived */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSpecVersion"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listProjectSpecVersions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every version, newest first, without the spec. 404 for no such project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSpecSummary"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getProjectSpecVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The version number */
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description That version. 404 for no such project or version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSpecVersion"];
                 };
             };
             400: components["responses"]["BadRequest"];

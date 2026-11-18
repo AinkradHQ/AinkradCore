@@ -1,12 +1,13 @@
 //! The Lore module (R1-01): the Core's store of Markdown notes. This story is the notes store and its
 //! API only: notes create/read/list, daily note get-or-create, move to a project (checked through the
 //! Projects store), trash and restore with a 30-day sweep, `lore.*` events and audit. R1-02 adds the save
-//! path (3-way merge against the head), versions and restore, and the rename rewrite. The parser (R1-03), index and backlinks (R1-04), attachments (R1-05) and export
+//! path (3-way merge against the head), versions and restore, and the rename rewrite. The parser (R1-03), index and backlinks (R1-04) and export
 //! (R1-06) come later; their tables already exist in `0001_lore`.
 //!
 //! Module off, the Core is unchanged: the tables are its own `lore_` namespace, no Core
 //! migration, no Core crate names this module.
 
+mod attachments;
 mod merge;
 mod notes;
 mod save;
@@ -19,6 +20,7 @@ use ainkrad_core_server::jobs::{Done, Job, JobHandler, Missed, Run, Schedule};
 use ainkrad_core_server::module::Module;
 use ainkrad_core_server::store::Migration;
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
 use serde_json::Value;
 use utoipa::OpenApi;
@@ -40,6 +42,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0002_lore_save.up.sql"),
         down: include_str!("../migrations/0002_lore_save.down.sql"),
     },
+    Migration {
+        version: 3,
+        name: "0003_lore_attachments",
+        up: include_str!("../migrations/0003_lore_attachments.up.sql"),
+        down: include_str!("../migrations/0003_lore_attachments.down.sql"),
+    },
 ];
 
 // The trash is reversible (every row is kept for 30 days), so no write needs a step-up.
@@ -50,6 +58,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/notes/{note}/text"),
     ("POST", "/notes/{note}/versions"),
     ("POST", "/notes/{note}/restore"),
+    ("POST", "/attachments"),
 ];
 // `/today` may create the note, so it keeps the module-wide `admin` scope.
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
@@ -57,7 +66,10 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/notes/{note}", "read"),
     ("GET", "/notes/{note}/versions", "read"),
     ("GET", "/notes/{note}/versions/{version}", "read"),
+    ("GET", "/attachments/{sha}", "read"),
 ];
+
+const BODY_LIMITS: &[(&str, &str, usize)] = &[("POST", "/attachments", attachments::BODY_MAX)];
 
 /// The module. `app` is filled by `attach`, so the sweep job (which is handed no `App`) can work.
 #[derive(Default, Clone)]
@@ -77,7 +89,9 @@ pub struct Lore {
         versions::list,
         versions::get,
         versions::create,
-        versions::restore
+        versions::restore,
+        attachments::upload,
+        attachments::get
     ),
     components(schemas(
         notes::NoteSummary,
@@ -89,7 +103,8 @@ pub struct Lore {
         versions::VersionSummary,
         versions::VersionView,
         versions::NewVersion,
-        versions::RestoreReq
+        versions::RestoreReq,
+        attachments::AttachmentView
     ))
 )]
 struct Doc;
@@ -124,6 +139,11 @@ impl Module for Lore {
             )
             .route("/notes/{note}/versions/{version}", get(versions::get))
             .route("/notes/{note}/restore", post(versions::restore))
+            .route(
+                "/attachments",
+                post(attachments::upload).layer(DefaultBodyLimit::max(attachments::BODY_MAX)),
+            )
+            .route("/attachments/{sha}", get(attachments::get))
             .route("/today", get(notes::today))
     }
 
@@ -151,6 +171,8 @@ impl Module for Lore {
             "lore.note.relinked",
             "lore.note.version",
             "lore.note.reverted",
+            "lore.attachment.created",
+            "lore.attachment.purged",
         ]
     }
 
@@ -164,6 +186,10 @@ impl Module for Lore {
 
     fn route_scopes(&self) -> &'static [(&'static str, &'static str, &'static str)] {
         ROUTE_SCOPES
+    }
+
+    fn body_limits(&self) -> &'static [(&'static str, &'static str, usize)] {
+        BODY_LIMITS
     }
 
     fn destructive(&self) -> &'static [(&'static str, &'static str)] {

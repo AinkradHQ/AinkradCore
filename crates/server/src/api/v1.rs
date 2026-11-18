@@ -42,6 +42,7 @@ pub mod gate;
 pub mod handshake;
 mod lockouts;
 mod me;
+mod mirrors;
 pub mod pair;
 mod pairing;
 pub mod passkey;
@@ -89,6 +90,7 @@ pub const QUERY: &[&str] = &[
     "origin",
     "nobody_watching",
     "archived",
+    "service",
 ];
 
 /// A page of a list: the cursor to continue after (its meaning is per route) and how many.
@@ -404,6 +406,31 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/projects/{id}/repos/{repo}/primary",
             post(projects::set_primary),
+        )
+        .route(
+            "/api/v1/projects/{id}/spec",
+            get(projects::run_spec::latest).put(projects::run_spec::save),
+        )
+        .route(
+            "/api/v1/projects/{id}/spec/versions",
+            get(projects::run_spec::versions),
+        )
+        .route(
+            "/api/v1/projects/{id}/spec/versions/{version}",
+            get(projects::run_spec::version),
+        )
+        .route(
+            "/api/v1/projects/{id}/repos/{repo}/fetch",
+            post(projects::fetch_now),
+        )
+        .route("/api/v1/mirrors/{repo}/info/refs", get(mirrors::info_refs))
+        .route(
+            "/api/v1/mirrors/{repo}/git-upload-pack",
+            post(mirrors::upload_pack),
+        )
+        .route(
+            "/api/v1/mirrors/{repo}/git-receive-pack",
+            post(mirrors::receive_pack),
         )
         .route("/api/v1/secrets", get(secrets::list).post(secrets::create))
         .route(
