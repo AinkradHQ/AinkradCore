@@ -158,10 +158,13 @@ fn link(app: &App) -> HubLink {
     HubLink(std::sync::Arc::clone(&app.hub))
 }
 
-fn runner_error(e: LinkError) -> ApiError {
+async fn runner_error(app: &App, project: i64, e: LinkError) -> ApiError {
     let why = match e {
         LinkError::Offline => "the run's runner is offline".to_owned(),
-        LinkError::Failed(m) => m.chars().take(300).collect(),
+        LinkError::Failed(m) => {
+            let m = crate::runs::scrub(app, project, &m).await;
+            m.chars().take(300).collect()
+        }
     };
     ApiError::new(StatusCode::BAD_GATEWAY, "runner_error", why)
 }
@@ -176,7 +179,7 @@ async fn live_run(app: &App, project: i64) -> Result<Option<Run>, ApiError> {
 
 /// What masks the project's secrets in a line: the values of its current secrets and the key
 /// shapes. A secret that cannot be opened is skipped (the runner redacted its leases already).
-async fn scrubber(app: &App, project: i64) -> Redactor {
+pub(crate) async fn scrubber(app: &App, project: i64) -> Redactor {
     let mut red = Redactor::new();
     let (Some(sealer), Ok(mut conn)) = (&app.secrets, app.pool.acquire().await) else {
         return red;
@@ -247,10 +250,10 @@ pub async fn services(State(app): State<App>, Path(id): Path<String>) -> ApiResu
         // Read scope: what Podman last recorded, never a health check run on this ask.
         health: false,
     };
-    let o = link(&app)
-        .observe(&run.runner, req)
-        .await
-        .map_err(runner_error)?;
+    let o = match link(&app).observe(&run.runner, req).await {
+        Ok(o) => o,
+        Err(e) => return Err(runner_error(&app, run.project_id, e).await),
+    };
     Ok(Json(RunServices {
         run: Some(run.id),
         services: o
@@ -299,10 +302,10 @@ pub async fn logs(
     if let Some(why) = req.problem() {
         return Err(ApiError::bad_request(why));
     }
-    let o = link(&app)
-        .observe(&run.runner, req)
-        .await
-        .map_err(runner_error)?;
+    let o = match link(&app).observe(&run.runner, req).await {
+        Ok(o) => o,
+        Err(e) => return Err(runner_error(&app, run.project_id, e).await),
+    };
     Ok(Json(page(&run.id, o, &scrubber(&app, project).await)))
 }
 

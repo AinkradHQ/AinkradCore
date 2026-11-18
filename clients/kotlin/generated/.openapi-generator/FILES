@@ -90,6 +90,8 @@ src/main/kotlin/ainkrad/client/models/CoreHealth.kt
 src/main/kotlin/ainkrad/client/models/CostEvent.kt
 src/main/kotlin/ainkrad/client/models/DefaultConnection.kt
 src/main/kotlin/ainkrad/client/models/Device.kt
+src/main/kotlin/ainkrad/client/models/DraftNote.kt
+src/main/kotlin/ainkrad/client/models/DraftRequest.kt
 src/main/kotlin/ainkrad/client/models/Elevation.kt
 src/main/kotlin/ainkrad/client/models/EntryOrigin.kt
 src/main/kotlin/ainkrad/client/models/ErrorBody.kt
@@ -168,6 +170,9 @@ src/main/kotlin/ainkrad/client/models/PriceBookEntry.kt
 src/main/kotlin/ainkrad/client/models/ProjectInfo.kt
 src/main/kotlin/ainkrad/client/models/ProjectRepo.kt
 src/main/kotlin/ainkrad/client/models/ProjectRoom.kt
+src/main/kotlin/ainkrad/client/models/ProjectRun.kt
+src/main/kotlin/ainkrad/client/models/ProjectSecretDeleted.kt
+src/main/kotlin/ainkrad/client/models/ProjectSecretInfo.kt
 src/main/kotlin/ainkrad/client/models/Provider.kt
 src/main/kotlin/ainkrad/client/models/ProviderAccount.kt
 src/main/kotlin/ainkrad/client/models/PushKinds.kt
@@ -179,7 +184,11 @@ src/main/kotlin/ainkrad/client/models/ReplaceKey.kt
 src/main/kotlin/ainkrad/client/models/RestartBody.kt
 src/main/kotlin/ainkrad/client/models/Restarted.kt
 src/main/kotlin/ainkrad/client/models/RotateSecret.kt
+src/main/kotlin/ainkrad/client/models/RunLogLine.kt
+src/main/kotlin/ainkrad/client/models/RunLogs.kt
+src/main/kotlin/ainkrad/client/models/RunServices.kt
 src/main/kotlin/ainkrad/client/models/RunSpec.kt
+src/main/kotlin/ainkrad/client/models/RunSpecDraft.kt
 src/main/kotlin/ainkrad/client/models/RunSpecSummary.kt
 src/main/kotlin/ainkrad/client/models/RunSpecVersion.kt
 src/main/kotlin/ainkrad/client/models/Runner.kt
@@ -195,6 +204,7 @@ src/main/kotlin/ainkrad/client/models/SecretGroupDeleted.kt
 src/main/kotlin/ainkrad/client/models/SecretGroupInfo.kt
 src/main/kotlin/ainkrad/client/models/SecretInfo.kt
 src/main/kotlin/ainkrad/client/models/Service.kt
+src/main/kotlin/ainkrad/client/models/ServiceInfo.kt
 src/main/kotlin/ainkrad/client/models/SessionGrant.kt
 src/main/kotlin/ainkrad/client/models/SessionLimits.kt
 src/main/kotlin/ainkrad/client/models/SessionRequest.kt
@@ -204,6 +214,7 @@ src/main/kotlin/ainkrad/client/models/SetConnectionGrant.kt
 src/main/kotlin/ainkrad/client/models/SetDefaultConnection.kt
 src/main/kotlin/ainkrad/client/models/SetLimit.kt
 src/main/kotlin/ainkrad/client/models/SetPrice.kt
+src/main/kotlin/ainkrad/client/models/SetProjectSecret.kt
 src/main/kotlin/ainkrad/client/models/SetScopes.kt
 src/main/kotlin/ainkrad/client/models/SetSetting.kt
 src/main/kotlin/ainkrad/client/models/SetState.kt

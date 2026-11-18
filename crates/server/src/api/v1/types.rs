@@ -300,6 +300,9 @@
 /// 94: project runs (P5-02). Runner wire protocol only (`runner.schema.json`): driver `run` with ops `run.start`
 ///    (`RunStart` -> `RunInfo`), `run.stop` (`RunStop` -> `RunInfo`) and `run.status` (`RunStatusReq` -> `RunList`);
 ///    no route yet. (92 and 93 are P4-01 and P2-01.)
+/// 93: the Projects epic build (assigned 93 of the 0.9 epics: Lore 90, Design 91, Leyline 92, Projects 93) (one bump for every route the epic added after 94: project runs, logs and
+///    services, run secrets, the public link; and `PATCH /projects/{id}` taking `slug`, `idle_minutes`,
+///    `cpu_limit` and `mem_limit_mb`). Regenerated once, at the epic's build.
 pub const API_MINOR: u32 = 93;
 
 use serde::{Deserialize, Serialize};

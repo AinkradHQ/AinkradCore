@@ -232,6 +232,14 @@ pub struct UpdateProject {
     pub name: Option<String>,
     pub description: Option<String>,
     pub expose: Option<bool>,
+    /// The link name (the slug); refused while the project runs or holds secrets.
+    pub slug: Option<String>,
+    /// Idle stop, 5 to 1440 minutes.
+    pub idle_minutes: Option<i64>,
+    /// CPUs a run may use, 0.1 to 16.
+    pub cpu_limit: Option<f64>,
+    /// Memory a run may use, 64 to 32768 MB.
+    pub mem_limit_mb: Option<i64>,
 }
 
 #[utoipa::path(patch, path = "/api/v1/projects/{id}", operation_id = "updateProject",
@@ -247,15 +255,16 @@ pub async fn update(
     Json(b): Json<UpdateProject>,
 ) -> ApiResult<ProjectInfo> {
     let now = app.clock.now();
-    let p = store::update(
-        &app.pool,
-        num(&id, "project")?,
-        b.name.as_deref(),
-        b.description.as_deref(),
-        b.expose,
-        who(&me, &now),
-    )
-    .await?;
+    let c = store::Change {
+        name: b.name.as_deref(),
+        description: b.description.as_deref(),
+        expose: b.expose,
+        slug: b.slug.as_deref(),
+        idle_minutes: b.idle_minutes,
+        cpu_limit: b.cpu_limit,
+        mem_limit_mb: b.mem_limit_mb,
+    };
+    let p = store::change(&app.pool, num(&id, "project")?, &c, who(&me, &now)).await?;
     Ok(Json(info(&app, p).await?))
 }
 

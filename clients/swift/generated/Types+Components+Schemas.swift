@@ -833,6 +833,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/policy`.
             public var policy: Swift.String?
+            /// The project it was started for (`createAgentSession` with `project_id`): its workspace is
+            /// that project's repos, cloned from the Core's copies. Absent for any other session.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/project_id`.
+            public var projectId: Swift.Int64?
             /// How many accounts a launch refused after the pick before the one it holds (at most 2).
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/repicked`.
@@ -928,6 +933,7 @@ extension Components {
             ///   - outcome: Once over: `{"kind": "succeeded" | "failed" | "cancelled" | "token_cap" | "stalled" |
             ///   - plan: Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`).
             ///   - policy: Its permission mode now: `ask`, `accept_edits` or `sandboxed` (the create's `policy.mode`,
+            ///   - projectId: The project it was started for (`createAgentSession` with `project_id`): its workspace is
             ///   - repicked: How many accounts a launch refused after the pick before the one it holds (at most 2).
             ///   - resumes: How many times it was resumed.
             ///   - run: The run it belongs to: its first attempt's id. A failover is a new session (an attempt) of
@@ -969,6 +975,7 @@ extension Components {
                 outcome: OpenAPIRuntime.OpenAPIObjectContainer? = nil,
                 plan: Swift.Bool? = nil,
                 policy: Swift.String? = nil,
+                projectId: Swift.Int64? = nil,
                 repicked: Swift.Int64? = nil,
                 resumes: Swift.Int64? = nil,
                 run: Swift.String? = nil,
@@ -1010,6 +1017,7 @@ extension Components {
                 self.outcome = outcome
                 self.plan = plan
                 self.policy = policy
+                self.projectId = projectId
                 self.repicked = repicked
                 self.resumes = resumes
                 self.run = run
@@ -1052,6 +1060,7 @@ extension Components {
                 case outcome
                 case plan
                 case policy
+                case projectId = "project_id"
                 case repicked
                 case resumes
                 case run
@@ -2943,6 +2952,68 @@ extension Components {
                 case stepup
             }
         }
+        /// One thing in the file that the draft does not carry over.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DraftNote`.
+        public struct DraftNote: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/DraftNote/path`.
+            public var path: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DraftNote/reason`.
+            public var reason: Swift.String
+            /// Creates a new `DraftNote`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - reason:
+            public init(
+                path: Swift.String,
+                reason: Swift.String
+            ) {
+                self.path = path
+                self.reason = reason
+            }
+            public enum CodingKeys: String, CodingKey {
+                case path
+                case reason
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/DraftRequest`.
+        public struct DraftRequest: Codable, Hashable, Sendable {
+            /// The file to draft from, as a path inside the repo (`docker-compose.yml`, `run.sh`,
+            /// `Makefile` or `package.json`, in a folder or not). Default: the first of those found at
+            /// the repo's root, compose first.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DraftRequest/file`.
+            public var file: Swift.String?
+            /// The image to run a `Makefile`, `run.sh` or `package.json` in; required for a Makefile.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DraftRequest/image`.
+            public var image: Swift.String?
+            /// The project repo to read; default the primary one.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DraftRequest/repo`.
+            public var repo: Swift.String?
+            /// Creates a new `DraftRequest`.
+            ///
+            /// - Parameters:
+            ///   - file: The file to draft from, as a path inside the repo (`docker-compose.yml`, `run.sh`,
+            ///   - image: The image to run a `Makefile`, `run.sh` or `package.json` in; required for a Makefile.
+            ///   - repo: The project repo to read; default the primary one.
+            public init(
+                file: Swift.String? = nil,
+                image: Swift.String? = nil,
+                repo: Swift.String? = nil
+            ) {
+                self.file = file
+                self.image = image
+                self.repo = repo
+            }
+            public enum CodingKeys: String, CodingKey {
+                case file
+                case image
+                case repo
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/Elevation`.
         public struct Elevation: Codable, Hashable, Sendable {
             /// Until when this session may call routes marked `x-ainkrad-destructive`.
@@ -4602,6 +4673,16 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/policy`.
             public var policy: OpenAPIRuntime.OpenAPIObjectContainer?
+            /// Start the session for a project (P3-02): the Core builds the workspace from the project's
+            /// repos (the primary one first, each under its repo name when there are several), the
+            /// runner clones them from the Core's copies, and the project's Brain room, if it has one,
+            /// is claimed (the room's model policy then applies, so a session with no chain is refused
+            /// 403 `claim_refused`). Excludes `workspace` (400). 404 for no such project, 409
+            /// `project_archived`, 409 `project_has_no_repos`, 400 when the caller names a mirror in
+            /// `workspace`: only the Core sets one.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewAgentSession/project_id`.
+            public var projectId: Swift.Int64?
             /// The first message. Absent or empty: the session starts with no message, like opening the
             /// CLI: its harness is up, the state is `waiting`, and the first message comes through
             /// `sendAgentMessage`. A message gives the session its `title` (its first 60 characters).
@@ -4632,6 +4713,7 @@ extension Components {
             ///   - model: The model id as the provider names it. For a session served by the auth gateway it must be
             ///   - plan: Start in Plan mode: the harness reads and plans and edits nothing until the mode is
             ///   - policy: `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
+            ///   - projectId: Start the session for a project (P3-02): the Core builds the workspace from the project's
             ///   - prompt: The first message. Absent or empty: the session starts with no message, like opening the
             ///   - runner: The runner's device id, `d_…`.
             ///   - secrets: At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
@@ -4645,6 +4727,7 @@ extension Components {
                 model: Swift.String? = nil,
                 plan: Swift.Bool? = nil,
                 policy: OpenAPIRuntime.OpenAPIObjectContainer? = nil,
+                projectId: Swift.Int64? = nil,
                 prompt: Swift.String? = nil,
                 runner: Swift.String,
                 secrets: [Components.Schemas.AgentSecret]? = nil,
@@ -4658,6 +4741,7 @@ extension Components {
                 self.model = model
                 self.plan = plan
                 self.policy = policy
+                self.projectId = projectId
                 self.prompt = prompt
                 self.runner = runner
                 self.secrets = secrets
@@ -4672,6 +4756,7 @@ extension Components {
                 case model
                 case plan
                 case policy
+                case projectId = "project_id"
                 case prompt
                 case runner
                 case secrets
@@ -6285,6 +6370,182 @@ extension Components {
                 case roomId = "room_id"
             }
         }
+        /// - Remark: Generated from `#/components/schemas/ProjectRun`.
+        public struct ProjectRun: Codable, Hashable, Sendable {
+            /// What went wrong, for a failed run (redacted).
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectRun/error`.
+            public var error: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/ProjectRun/id`.
+            public var id: Swift.String
+            /// When the idle stop is due, for a running run.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectRun/idle_stop_at`.
+            public var idleStopAt: Components.Schemas.Timestamp?
+            /// - Remark: Generated from `#/components/schemas/ProjectRun/last_activity_at`.
+            public var lastActivityAt: Components.Schemas.Timestamp?
+            /// The runner it is placed on.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectRun/runner`.
+            public var runner: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ProjectRun/spec_version`.
+            public var specVersion: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/ProjectRun/started_at`.
+            public var startedAt: Components.Schemas.Timestamp
+            /// - Remark: Generated from `#/components/schemas/ProjectRun/started_by`.
+            public var startedBy: Swift.String
+            /// `starting`, `running`, `stopping`, `stopped` or `failed`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectRun/state`.
+            public var state: Swift.String
+            /// Why it ended, or is ending: `user`, `idle`, `crash`, `runner_lost`, `replaced` or
+            /// `start_failed`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectRun/stop_reason`.
+            public var stopReason: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/ProjectRun/stopped_at`.
+            public var stoppedAt: Components.Schemas.Timestamp?
+            /// Creates a new `ProjectRun`.
+            ///
+            /// - Parameters:
+            ///   - error: What went wrong, for a failed run (redacted).
+            ///   - id:
+            ///   - idleStopAt: When the idle stop is due, for a running run.
+            ///   - lastActivityAt:
+            ///   - runner: The runner it is placed on.
+            ///   - specVersion:
+            ///   - startedAt:
+            ///   - startedBy:
+            ///   - state: `starting`, `running`, `stopping`, `stopped` or `failed`.
+            ///   - stopReason: Why it ended, or is ending: `user`, `idle`, `crash`, `runner_lost`, `replaced` or
+            ///   - stoppedAt:
+            public init(
+                error: Swift.String? = nil,
+                id: Swift.String,
+                idleStopAt: Components.Schemas.Timestamp? = nil,
+                lastActivityAt: Components.Schemas.Timestamp? = nil,
+                runner: Swift.String,
+                specVersion: Swift.Int64,
+                startedAt: Components.Schemas.Timestamp,
+                startedBy: Swift.String,
+                state: Swift.String,
+                stopReason: Swift.String? = nil,
+                stoppedAt: Components.Schemas.Timestamp? = nil
+            ) {
+                self.error = error
+                self.id = id
+                self.idleStopAt = idleStopAt
+                self.lastActivityAt = lastActivityAt
+                self.runner = runner
+                self.specVersion = specVersion
+                self.startedAt = startedAt
+                self.startedBy = startedBy
+                self.state = state
+                self.stopReason = stopReason
+                self.stoppedAt = stoppedAt
+            }
+            public enum CodingKeys: String, CodingKey {
+                case error
+                case id
+                case idleStopAt = "idle_stop_at"
+                case lastActivityAt = "last_activity_at"
+                case runner
+                case specVersion = "spec_version"
+                case startedAt = "started_at"
+                case startedBy = "started_by"
+                case state
+                case stopReason = "stop_reason"
+                case stoppedAt = "stopped_at"
+            }
+        }
+        /// What a delete answers.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ProjectSecretDeleted`.
+        public struct ProjectSecretDeleted: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ProjectSecretDeleted/deleted`.
+            public var deleted: Swift.Bool
+            /// Creates a new `ProjectSecretDeleted`.
+            ///
+            /// - Parameters:
+            ///   - deleted:
+            public init(deleted: Swift.Bool) {
+                self.deleted = deleted
+            }
+            public enum CodingKeys: String, CodingKey {
+                case deleted
+            }
+        }
+        /// A project secret, never its value.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ProjectSecretInfo`.
+        public struct ProjectSecretInfo: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ProjectSecretInfo/description`.
+            public var description: Swift.String
+            /// `text`, `multiline`, `file` or `env_bundle`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectSecretInfo/kind`.
+            public var kind: Swift.String
+            /// When a runner last redeemed it; none before the first redemption.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectSecretInfo/last_used_at`.
+            public var lastUsedAt: Components.Schemas.Timestamp?
+            /// `[a-z][a-z0-9_.-]{0,63}`; what a spec writes as `${secret:NAME}`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectSecretInfo/name`.
+            public var name: Swift.String
+            /// The value's length in bytes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectSecretInfo/size`.
+            public var size: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/ProjectSecretInfo/updated_at`.
+            public var updatedAt: Components.Schemas.Timestamp
+            /// - Remark: Generated from `#/components/schemas/ProjectSecretInfo/use_count`.
+            public var useCount: Swift.Int64
+            /// 1 when stored, one more per rotation.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectSecretInfo/version`.
+            public var version: Swift.Int64
+            /// Creates a new `ProjectSecretInfo`.
+            ///
+            /// - Parameters:
+            ///   - description:
+            ///   - kind: `text`, `multiline`, `file` or `env_bundle`.
+            ///   - lastUsedAt: When a runner last redeemed it; none before the first redemption.
+            ///   - name: `[a-z][a-z0-9_.-]{0,63}`; what a spec writes as `${secret:NAME}`.
+            ///   - size: The value's length in bytes.
+            ///   - updatedAt:
+            ///   - useCount:
+            ///   - version: 1 when stored, one more per rotation.
+            public init(
+                description: Swift.String,
+                kind: Swift.String,
+                lastUsedAt: Components.Schemas.Timestamp? = nil,
+                name: Swift.String,
+                size: Swift.Int64,
+                updatedAt: Components.Schemas.Timestamp,
+                useCount: Swift.Int64,
+                version: Swift.Int64
+            ) {
+                self.description = description
+                self.kind = kind
+                self.lastUsedAt = lastUsedAt
+                self.name = name
+                self.size = size
+                self.updatedAt = updatedAt
+                self.useCount = useCount
+                self.version = version
+            }
+            public enum CodingKeys: String, CodingKey {
+                case description
+                case kind
+                case lastUsedAt = "last_used_at"
+                case name
+                case size
+                case updatedAt = "updated_at"
+                case useCount = "use_count"
+                case version
+            }
+        }
         /// A provider definition: a built-in, or user data validated before it is stored.
         ///
         /// - Remark: Generated from `#/components/schemas/Provider`.
@@ -6829,6 +7090,113 @@ extension Components {
                 case value
             }
         }
+        /// - Remark: Generated from `#/components/schemas/RunLogLine`.
+        public struct RunLogLine: Codable, Hashable, Sendable {
+            /// When the container wrote it (RFC 3339).
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunLogLine/at`.
+            public var at: Swift.String
+            /// Grows by one per line of the run; pass the last one as `after` to continue.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunLogLine/seq`.
+            public var seq: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/RunLogLine/service`.
+            public var service: Swift.String
+            /// Redacted, at most 2048 bytes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunLogLine/text`.
+            public var text: Swift.String
+            /// Creates a new `RunLogLine`.
+            ///
+            /// - Parameters:
+            ///   - at: When the container wrote it (RFC 3339).
+            ///   - seq: Grows by one per line of the run; pass the last one as `after` to continue.
+            ///   - service:
+            ///   - text: Redacted, at most 2048 bytes.
+            public init(
+                at: Swift.String,
+                seq: Swift.Int64,
+                service: Swift.String,
+                text: Swift.String
+            ) {
+                self.at = at
+                self.seq = seq
+                self.service = service
+                self.text = text
+            }
+            public enum CodingKeys: String, CodingKey {
+                case at
+                case seq
+                case service
+                case text
+            }
+        }
+        /// A page of lines; the WebSocket sends one per poll (only when it has lines or a gap).
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunLogs`.
+        public struct RunLogs: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunLogs/lines`.
+            public var lines: [Components.Schemas.RunLogLine]
+            /// Lines before the first one that the runner had already dropped (a flood, or a slow reader).
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunLogs/lost`.
+            public var lost: Swift.Int64
+            /// Ask again with `after` = this.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunLogs/next`.
+            public var next: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/RunLogs/run`.
+            public var run: Swift.String?
+            /// Creates a new `RunLogs`.
+            ///
+            /// - Parameters:
+            ///   - lines:
+            ///   - lost: Lines before the first one that the runner had already dropped (a flood, or a slow reader).
+            ///   - next: Ask again with `after` = this.
+            ///   - run:
+            public init(
+                lines: [Components.Schemas.RunLogLine],
+                lost: Swift.Int64,
+                next: Swift.Int64,
+                run: Swift.String? = nil
+            ) {
+                self.lines = lines
+                self.lost = lost
+                self.next = next
+                self.run = run
+            }
+            public enum CodingKeys: String, CodingKey {
+                case lines
+                case lost
+                case next
+                case run
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/RunServices`.
+        public struct RunServices: Codable, Hashable, Sendable {
+            /// The live run these belong to; none (and no services) when the project is not running.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunServices/run`.
+            public var run: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RunServices/services`.
+            public var services: [Components.Schemas.ServiceInfo]
+            /// Creates a new `RunServices`.
+            ///
+            /// - Parameters:
+            ///   - run: The live run these belong to; none (and no services) when the project is not running.
+            ///   - services:
+            public init(
+                run: Swift.String? = nil,
+                services: [Components.Schemas.ServiceInfo]
+            ) {
+                self.run = run
+                self.services = services
+            }
+            public enum CodingKeys: String, CodingKey {
+                case run
+                case services
+            }
+        }
         /// The whole spec: its services by name.
         ///
         /// - Remark: Generated from `#/components/schemas/RunSpec`.
@@ -6868,6 +7236,47 @@ extension Components {
             }
             public enum CodingKeys: String, CodingKey {
                 case services
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/RunSpecDraft`.
+        public struct RunSpecDraft: Codable, Hashable, Sendable {
+            /// The file it was drafted from, as a path inside the repo.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunSpecDraft/file`.
+            public var file: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunSpecDraft/not_converted`.
+            public var notConverted: [Components.Schemas.DraftNote]
+            /// The repo it was read from.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunSpecDraft/repo`.
+            public var repo: Swift.String
+            /// The draft, saved as the project's next spec version; its `origin` names the converter.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunSpecDraft/version`.
+            public var version: Components.Schemas.RunSpecVersion
+            /// Creates a new `RunSpecDraft`.
+            ///
+            /// - Parameters:
+            ///   - file: The file it was drafted from, as a path inside the repo.
+            ///   - notConverted:
+            ///   - repo: The repo it was read from.
+            ///   - version: The draft, saved as the project's next spec version; its `origin` names the converter.
+            public init(
+                file: Swift.String,
+                notConverted: [Components.Schemas.DraftNote],
+                repo: Swift.String,
+                version: Components.Schemas.RunSpecVersion
+            ) {
+                self.file = file
+                self.notConverted = notConverted
+                self.repo = repo
+                self.version = version
+            }
+            public enum CodingKeys: String, CodingKey {
+                case file
+                case notConverted = "not_converted"
+                case repo
+                case version
             }
         }
         /// A version without its spec.
@@ -7375,6 +7784,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/RunnerPolicyBody/agents`.
             public var agents: Swift.Bool
+            /// The runner takes project runs. Omitted: the runner's current setting stays (off for a
+            /// runner that never had one). Runs are placed only on runners with it on.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerPolicyBody/runs`.
+            public var runs: Swift.Bool?
             /// The runner lets the Brain read its Claude Code history (`--share-history`). Omitted: the
             /// runner's current setting stays; `false` turns it off.
             ///
@@ -7389,22 +7803,26 @@ extension Components {
             /// - Parameters:
             ///   - agentCapacity: How many agent sessions run at once, 1 to 8.
             ///   - agents: Agent sessions are offered. Refused (409 `policy_refused`, with the reason) when the
+            ///   - runs: The runner takes project runs. Omitted: the runner's current setting stays (off for a
             ///   - shareHistory: The runner lets the Brain read its Claude Code history (`--share-history`). Omitted: the
             ///   - terminals: Terminals are offered on the runner.
             public init(
                 agentCapacity: Swift.Int32,
                 agents: Swift.Bool,
+                runs: Swift.Bool? = nil,
                 shareHistory: Swift.Bool? = nil,
                 terminals: Swift.Bool
             ) {
                 self.agentCapacity = agentCapacity
                 self.agents = agents
+                self.runs = runs
                 self.shareHistory = shareHistory
                 self.terminals = terminals
             }
             public enum CodingKeys: String, CodingKey {
                 case agentCapacity = "agent_capacity"
                 case agents
+                case runs
                 case shareHistory = "share_history"
                 case terminals
             }
@@ -7842,6 +8260,67 @@ extension Components {
                 case workdir
             }
         }
+        /// - Remark: Generated from `#/components/schemas/ServiceInfo`.
+        public struct ServiceInfo: Codable, Hashable, Sendable {
+            /// Percent of one CPU; none while it is not running.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ServiceInfo/cpu_percent`.
+            public var cpuPercent: Swift.Double?
+            /// `none` (no health check), `starting`, `healthy` or `unhealthy`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ServiceInfo/health`.
+            public var health: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ServiceInfo/memory_bytes`.
+            public var memoryBytes: Swift.Int64
+            /// The project's memory cap as Podman reports it; 0 when unknown.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ServiceInfo/memory_limit_bytes`.
+            public var memoryLimitBytes: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/ServiceInfo/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ServiceInfo/restarts`.
+            public var restarts: Swift.Int64
+            /// Podman's state: `running`, `exited`, ...
+            ///
+            /// - Remark: Generated from `#/components/schemas/ServiceInfo/state`.
+            public var state: Swift.String
+            /// Creates a new `ServiceInfo`.
+            ///
+            /// - Parameters:
+            ///   - cpuPercent: Percent of one CPU; none while it is not running.
+            ///   - health: `none` (no health check), `starting`, `healthy` or `unhealthy`.
+            ///   - memoryBytes:
+            ///   - memoryLimitBytes: The project's memory cap as Podman reports it; 0 when unknown.
+            ///   - name:
+            ///   - restarts:
+            ///   - state: Podman's state: `running`, `exited`, ...
+            public init(
+                cpuPercent: Swift.Double? = nil,
+                health: Swift.String,
+                memoryBytes: Swift.Int64,
+                memoryLimitBytes: Swift.Int64,
+                name: Swift.String,
+                restarts: Swift.Int64,
+                state: Swift.String
+            ) {
+                self.cpuPercent = cpuPercent
+                self.health = health
+                self.memoryBytes = memoryBytes
+                self.memoryLimitBytes = memoryLimitBytes
+                self.name = name
+                self.restarts = restarts
+                self.state = state
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cpuPercent = "cpu_percent"
+                case health
+                case memoryBytes = "memory_bytes"
+                case memoryLimitBytes = "memory_limit_bytes"
+                case name
+                case restarts
+                case state
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/SessionGrant`.
         public struct SessionGrant: Codable, Hashable, Sendable {
             /// Until when the session is elevated (E1-09); null when it is not.
@@ -8163,6 +8642,60 @@ extension Components {
                 case outputPerMtokMicro = "output_per_mtok_micro"
                 case pricedAt = "priced_at"
                 case provider
+            }
+        }
+        /// A value to store or replace. Deliberately no `Debug`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/SetProjectSecret`.
+        public struct SetProjectSecret: Codable, Hashable, Sendable {
+            /// One line, at most 200 characters.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SetProjectSecret/description`.
+            public var description: Swift.String?
+            /// Kind `file`: an octal mode such as `0600`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SetProjectSecret/file_mode`.
+            public var fileMode: Swift.String?
+            /// Required for kind `file`: `[A-Za-z0-9._-]{1,64}`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SetProjectSecret/file_name`.
+            public var fileName: Swift.String?
+            /// `text` (the default for a new secret), `multiline`, `file` or `env_bundle`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SetProjectSecret/kind`.
+            public var kind: Swift.String?
+            /// UTF-8 text, at most `secrets.max_bytes`; for kind `file` standard base64 (at most 1 MiB
+            /// decoded); written, never read back.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SetProjectSecret/value`.
+            public var value: Swift.String
+            /// Creates a new `SetProjectSecret`.
+            ///
+            /// - Parameters:
+            ///   - description: One line, at most 200 characters.
+            ///   - fileMode: Kind `file`: an octal mode such as `0600`.
+            ///   - fileName: Required for kind `file`: `[A-Za-z0-9._-]{1,64}`.
+            ///   - kind: `text` (the default for a new secret), `multiline`, `file` or `env_bundle`.
+            ///   - value: UTF-8 text, at most `secrets.max_bytes`; for kind `file` standard base64 (at most 1 MiB
+            public init(
+                description: Swift.String? = nil,
+                fileMode: Swift.String? = nil,
+                fileName: Swift.String? = nil,
+                kind: Swift.String? = nil,
+                value: Swift.String
+            ) {
+                self.description = description
+                self.fileMode = fileMode
+                self.fileName = fileName
+                self.kind = kind
+                self.value = value
+            }
+            public enum CodingKeys: String, CodingKey {
+                case description
+                case fileMode = "file_mode"
+                case fileName = "file_name"
+                case kind
+                case value
             }
         }
         /// A device's new scopes.
@@ -9116,31 +9649,63 @@ extension Components {
         ///
         /// - Remark: Generated from `#/components/schemas/UpdateProject`.
         public struct UpdateProject: Codable, Hashable, Sendable {
+            /// CPUs a run may use, 0.1 to 16.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpdateProject/cpu_limit`.
+            public var cpuLimit: Swift.Double?
             /// - Remark: Generated from `#/components/schemas/UpdateProject/description`.
             public var description: Swift.String?
             /// - Remark: Generated from `#/components/schemas/UpdateProject/expose`.
             public var expose: Swift.Bool?
+            /// Idle stop, 5 to 1440 minutes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpdateProject/idle_minutes`.
+            public var idleMinutes: Swift.Int64?
+            /// Memory a run may use, 64 to 32768 MB.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpdateProject/mem_limit_mb`.
+            public var memLimitMb: Swift.Int64?
             /// - Remark: Generated from `#/components/schemas/UpdateProject/name`.
             public var name: Swift.String?
+            /// The link name (the slug); refused while the project runs or holds secrets.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpdateProject/slug`.
+            public var slug: Swift.String?
             /// Creates a new `UpdateProject`.
             ///
             /// - Parameters:
+            ///   - cpuLimit: CPUs a run may use, 0.1 to 16.
             ///   - description:
             ///   - expose:
+            ///   - idleMinutes: Idle stop, 5 to 1440 minutes.
+            ///   - memLimitMb: Memory a run may use, 64 to 32768 MB.
             ///   - name:
+            ///   - slug: The link name (the slug); refused while the project runs or holds secrets.
             public init(
+                cpuLimit: Swift.Double? = nil,
                 description: Swift.String? = nil,
                 expose: Swift.Bool? = nil,
-                name: Swift.String? = nil
+                idleMinutes: Swift.Int64? = nil,
+                memLimitMb: Swift.Int64? = nil,
+                name: Swift.String? = nil,
+                slug: Swift.String? = nil
             ) {
+                self.cpuLimit = cpuLimit
                 self.description = description
                 self.expose = expose
+                self.idleMinutes = idleMinutes
+                self.memLimitMb = memLimitMb
                 self.name = name
+                self.slug = slug
             }
             public enum CodingKeys: String, CodingKey {
+                case cpuLimit = "cpu_limit"
                 case description
                 case expose
+                case idleMinutes = "idle_minutes"
+                case memLimitMb = "mem_limit_mb"
                 case name
+                case slug
             }
         }
         /// What changes; an omitted field is kept.

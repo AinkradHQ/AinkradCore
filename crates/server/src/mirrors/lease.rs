@@ -132,17 +132,10 @@ pub async fn for_session(
 }
 
 /// Takes back the leases a session that is over held: its runner's (device, repo) leases for the
-/// repos of its workspace, unless another live session of the same project runs on that runner
+/// project's repos, unless another live session of the same project runs on that runner
 /// (it needs them). Called where a supervisor finds the session over and where a launch fails.
 pub async fn release_session(app: &App, s: &crate::store::agents::Session) {
     let (Some(mirrors), Some(project)) = (app.mirrors.as_ref(), s.project_id) else {
-        return;
-    };
-    let Some(w) = s
-        .workspace
-        .as_ref()
-        .and_then(|w| serde_json::from_value::<ainkrad_proto::runner::Workspace>(w.clone()).ok())
-    else {
         return;
     };
     // A live run of the project on that runner may still be cloning from the same copies.
@@ -158,12 +151,16 @@ pub async fn release_session(app: &App, s: &crate::store::agents::Session) {
     .fetch_one(&app.pool)
     .await;
     // On a read failure the leases stay: they expire on their own.
-    if busy == Ok(0) {
-        let repos: Vec<i64> = std::iter::once(&w)
-            .chain(&w.also)
-            .filter_map(|w| w.mirror)
-            .collect();
-        mirrors.revoke(&s.runner, &repos);
+    if matches!(busy, Ok(0)) {
+        // Every repo of the project, as a run's `revoke` does: a run's repo outside this session's
+        // workspace may hold a lease too.
+        let Ok(mut conn) = app.pool.acquire().await else {
+            return;
+        };
+        if let Ok(repos) = crate::store::projects::repos(&mut conn, project).await {
+            let ids: Vec<i64> = repos.iter().map(|r| r.id).collect();
+            mirrors.revoke(&s.runner, &ids);
+        }
     }
 }
 
@@ -182,7 +179,7 @@ pub async fn release_run(app: &App, runner: &str, project: i64, repos: &[i64]) {
     .bind(project)
     .fetch_one(&app.pool)
     .await;
-    if busy == Ok(0) {
+    if matches!(busy, Ok(0)) {
         mirrors.revoke(runner, repos);
     }
 }

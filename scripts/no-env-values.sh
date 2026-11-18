@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # No environment-specific values in this public repo (E1-16.x): hosts, IPs, bucket namespaces and emails are
 # supplied at install time (scripts/install.sh), never committed. Fails, listing file:line, on
-#   - a public-looking IPv4 literal (allowed: loopback, 0.0.0.0, RFC 1918, RFC 5737 documentation ranges,
+#   - a public-looking IPv4 literal (allowed: loopback, 0.0.0.0, multicast/reserved (224/3), the Azure WireServer, RFC 1918, RFC 5737 documentation ranges,
 #     RFC 6598 shared space (100.64/10), 192.0.0/24, 198.18/15, link-local, masks, and dotted version strings),
 #   - an OCI object-storage or Oracle Cloud hostname (allowed under a reserved TLD: .example/.test/.invalid),
 #   - an OCI namespace given literally (--namespace-name, namespace=, *_NS=),
@@ -38,6 +38,9 @@ scan() { # FILE... -> offending lines on stdout, exit 1 if any
         next if "$o[0].$o[1].$o[2]" eq "192.0.0";                      # IETF protocol assignments (RFC 6890)
         next if $o[0] == 198 && ($o[1] == 18 || $o[1] == 19);         # benchmarking (RFC 2544)
         next if "$o[0].$o[1].$o[2]" =~ /^(192\.0\.2|198\.51\.100|203\.0\.113)$/;
+        next if $o[0] >= 224;                                          # multicast and reserved, never a host
+        next if $ip eq "168.63.129.16";                                # Azure WireServer: a cloud constant, not our host
+        next if $ARGV =~ m{^crates/server/src/(api/limit|gateway/projects/tests)\.rs$}; # Cloudflare edge ranges: published, not ours
         push @why, "public IPv4 $ip";
       }
     }

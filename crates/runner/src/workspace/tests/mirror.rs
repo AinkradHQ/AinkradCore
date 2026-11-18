@@ -44,7 +44,12 @@ fn core(copy: PathBuf, seen: Arc<Mutex<Vec<String>>>) -> Upstream {
                 .await
                 .map_err(|e| e.to_string())?;
             let mut body = Vec::new();
-            if advertise {
+            // Version 2 has no service line (as the Core's own serve code).
+            let v2 = call
+                .headers
+                .iter()
+                .any(|(n, v)| n == "git-protocol" && v.contains("version=2"));
+            if advertise && !v2 {
                 body.extend_from_slice(b"001e# service=git-upload-pack\n0000");
             }
             body.extend(out);
@@ -52,7 +57,13 @@ fn core(copy: PathBuf, seen: Arc<Mutex<Vec<String>>>) -> Upstream {
             tx.send(Ok(body)).await.unwrap();
             Ok(Reply {
                 status: 200,
-                content_type: "application/x-git".into(),
+                // git treats any other type as a dumb server and fails with "is this a git repository?".
+                content_type: if advertise {
+                    "application/x-git-upload-pack-advertisement"
+                } else {
+                    "application/x-git-upload-pack-result"
+                }
+                .into(),
                 body: rx,
             })
         })
@@ -121,6 +132,8 @@ async fn a_project_checkout_is_cloned_from_the_core_copy_and_cannot_touch_it() {
 }
 
 fn script_hook(path: &Path) {
+    // The checkout is cloned with `--template=`, so `.git/hooks` does not exist yet.
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, "#!/bin/sh\ntrue\n").unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }

@@ -328,7 +328,7 @@ async fn a_session_of_a_project_needs_an_admin_device() {
 
 #[test]
 fn a_lease_outlasts_the_relays_clone_limit() {
-    assert!(crate::mirrors::LEASE_SECS > 30 * 60);
+    const { assert!(crate::mirrors::LEASE_SECS > 30 * 60) };
 }
 
 #[tokio::test]

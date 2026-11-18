@@ -30,8 +30,11 @@ pub struct RunDriver {
     /// Logs and metrics of the runs watched (P5-04), and the values to redact from them.
     observers: Arc<super::observe::Observers>,
     /// One `run.status` per run per [`STATUS_TTL`], shared by all of the run's port streams.
-    status: tokio::sync::Mutex<BTreeMap<String, (std::time::Instant, Result<RunList, String>)>>,
+    /// A lock per run (held across its fetch), so one hung `podman ps` stalls only that run.
+    status: std::sync::Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<Option<StatusEntry>>>>>,
 }
+
+type StatusEntry = (std::time::Instant, Result<RunList, String>);
 
 /// How long a run's `run.status` answers its port streams' liveness checks.
 const STATUS_TTL: std::time::Duration = std::time::Duration::from_secs(1);
@@ -200,13 +203,10 @@ impl RunDriver {
         }
         let mut head = first.clone();
         head.also = rest.to_vec();
-        // `as_` + the run's letters and digits: a valid session id, one per run.
-        let alnum: String = req
-            .run
-            .chars()
-            .filter(char::is_ascii_alphanumeric)
-            .collect();
-        let session = format!("{RUN_SESSION_PREFIX}{alnum}");
+        // `as_run` + the run id hex-encoded: a valid session id, one per run (injective, so two
+        // runs never share a clone dir; agent ids cannot start `as_run`).
+        let hex: String = req.run.bytes().map(|b| format!("{b:02x}")).collect();
+        let session = format!("{RUN_SESSION_PREFIX}{hex}");
         // Armed before the clone: a failed or cancelled clone leaves nothing either.
         let mut guard = CloneGuard(Arc::clone(agents), session.clone(), PathBuf::new());
         let root = agents.run_workspace(&session, &head).await.map_err(bad)?;
@@ -336,13 +336,25 @@ impl RunDriver {
     /// [`Self::runs`], at most once per [`STATUS_TTL`] per run: the lock is held across the fetch, so
     /// the streams of a run that ask together share one `podman ps`.
     async fn runs_cached(&self, run: &str) -> Result<RunList, String> {
-        let mut cache = self.status.lock().await;
-        if let Some((_, got)) = cache.get(run).filter(|(at, _)| at.elapsed() < STATUS_TTL) {
+        let slot = {
+            let mut map = self.status.lock().expect("status cache");
+            // Idle slots (nobody fetching, entry old) go; a held one is in use.
+            map.retain(|k, s| {
+                k == run
+                    || Arc::strong_count(s) > 1
+                    || s.try_lock().map_or(true, |e| {
+                        e.as_ref()
+                            .is_some_and(|(at, _)| at.elapsed() < STATUS_TTL * 10)
+                    })
+            });
+            Arc::clone(map.entry(run.to_owned()).or_default())
+        };
+        let mut entry = slot.lock().await;
+        if let Some((_, got)) = entry.as_ref().filter(|(at, _)| at.elapsed() < STATUS_TTL) {
             return got.clone();
         }
         let got = self.runs(run).await;
-        cache.retain(|_, (at, _)| at.elapsed() < STATUS_TTL * 10);
-        cache.insert(run.to_owned(), (std::time::Instant::now(), got.clone()));
+        *entry = Some((std::time::Instant::now(), got.clone()));
         got
     }
 

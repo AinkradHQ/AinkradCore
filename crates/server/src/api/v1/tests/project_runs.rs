@@ -290,7 +290,7 @@ async fn the_idle_stop_fires_after_idle_minutes_on_a_faked_clock() {
         (r.state.as_str(), r.stop_reason.as_deref()),
         ("stopped", Some("idle"))
     );
-    assert_eq!(link.stops(), [id.clone()]);
+    assert_eq!(link.stops(), std::slice::from_ref(&id));
     runs::sweep(&fx.app, &link).await;
     assert_eq!(link.stops().len(), 1, "stopped once");
     let rows = audit_rows(&fx).await;
@@ -337,7 +337,7 @@ async fn a_reconnecting_runner_settles_the_rows() {
     let (shop, blog, docs) = (
         project(&fx, "shop").await,
         project(&fx, "blog").await,
-        project(&fx, "docs").await,
+        project(&fx, "notes").await,
     );
     let crashed = start(&fx, &link, shop).await.unwrap();
     let vanished = start(&fx, &link, blog).await.unwrap();
@@ -414,7 +414,7 @@ async fn a_run_resolves_secrets_by_the_projects_group_only() {
     let spec = json!({"services": {"web": {"image": "node:22",
                       "env": {"TOKEN": "${secret:api_key}"}}}});
     let now = fx.app.clock.now();
-    run_specs::save(&fx.app.pool, p, &spec, "manual", w(&now))
+    run_specs::save_unchecked(&fx.app.pool, p, &spec, w(&now))
         .await
         .unwrap();
     let seed = |group: Option<i64>| {
@@ -443,22 +443,9 @@ async fn a_run_resolves_secrets_by_the_projects_group_only() {
     let mut conn = fx.app.pool.acquire().await.unwrap();
     let project = projects::get(&mut conn, p).await.unwrap();
     drop(conn);
-    // Even with a group on the project, the secret outside it is still not found.
-    sqlx::query("INSERT INTO core_secret_groups (name, created_at, updated_at) VALUES ('project-shop', ?, ?)")
-        .bind(&now)
-        .bind(&now)
-        .execute(&fx.app.pool)
-        .await
-        .unwrap();
-    let gid: i64 =
-        sqlx::query_scalar("SELECT id FROM core_secret_groups WHERE name = 'project-shop'")
-            .fetch_one(&fx.app.pool)
-            .await
-            .unwrap();
-    let grouped = projects::Project {
-        secret_group: Some(gid),
-        ..project
-    };
+    // The project has its own group since it was created; the secret outside it is still not found.
+    let gid = project.secret_group.expect("a project made with a group");
+    let grouped = project;
     let e = runs::project_secret(&fx.app.pool, &grouped, "api_key").await;
     assert!(e.is_err(), "ungrouped secret must not resolve");
     sqlx::query("UPDATE core_secrets SET group_id = ? WHERE name = 'shop.api_key'")

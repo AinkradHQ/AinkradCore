@@ -93,6 +93,10 @@ impl Daemon {
 
     /// Project runs; offered where the run helper is installed (`RunDriver::info`).
     fn run_driver(&self) -> Option<Arc<super::RunDriver>> {
+        // The runner refuses runs itself unless its policy has them on (the Core checks too).
+        if !self.control.as_ref().is_some_and(|c| c.active.runs) {
+            return None;
+        }
         let run = super::RunDriver::new(
             crate::run::helper::SOCKET,
             self.redeem()?,

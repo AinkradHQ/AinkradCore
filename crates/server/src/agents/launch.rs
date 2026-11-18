@@ -287,6 +287,17 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
     }
     // The repo copies a project session clones are leased to this runner now, at every start, and
     // before the account is committed to: a fetch that fails must not fail a session holding one.
+    if let Some(project) = s.project_id {
+        for module in app.modules.iter() {
+            if let Err(why) = module.project_launch(app, &s.id, project).await {
+                fail(app, s, &why).await;
+                return Err(Refusal::Runner(StreamError::new(
+                    ErrorCode::InvalidArgs,
+                    why,
+                )));
+            }
+        }
+    }
     if let Err(why) = project_mirrors(app, s).await {
         fail(app, s, &why).await;
         return Err(Refusal::Runner(StreamError::new(
@@ -306,6 +317,7 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
     // A session cancelled meanwhile is not started.
     if !resume && !crate::store::alloc::mark_or_release(&app.pool, &s.id).await? {
         app.agents.leases.lock().unwrap().remove(&s.id);
+        crate::mirrors::release_session(app, s).await;
         return Ok(());
     }
     let wait = app.agents.config.answer;

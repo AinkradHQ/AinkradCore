@@ -221,10 +221,10 @@ pub trait Executor: Send + Sync + 'static {
 
     fn recover_agent_workspaces(&self, _adopted: &[String]) {}
 
-    /// Deletes the workspaces of sessions whose id starts with `prefix` (not in `keep`), saved
-    /// work included: a project run's clone (P5-05).
-    fn discard_agent_workspaces(&self, prefix: &str, keep: &[String]) {
-        let _ = (prefix, keep);
+    /// Deletes the workspaces of the session `name` (of every session starting with it, when
+    /// `prefix`; not those in `keep`), saved work included: a project run's clone (P5-05).
+    fn discard_agent_workspaces(&self, name: &str, prefix: bool, keep: &[String]) {
+        let _ = (name, prefix, keep);
     }
 
     /// The absolute folder a started job's harness works in, when it runs in one.

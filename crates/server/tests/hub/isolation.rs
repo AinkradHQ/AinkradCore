@@ -108,6 +108,7 @@ async fn runner(core: &Core, name: &str, tier: u8) -> Live {
             max: Duration::from_millis(200),
             refused: Duration::from_millis(200),
         },
+        run_checkouts: std::path::PathBuf::from("/nonexistent"),
     };
     let (stop, stopped) = watch::channel(false);
     let task = tokio::spawn(async move {

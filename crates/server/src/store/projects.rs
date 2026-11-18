@@ -272,6 +272,19 @@ async fn create_in(
     get(tx, id).await
 }
 
+/// What [`change`] may set; `None` keeps the field.
+#[derive(Default)]
+pub struct Change<'a> {
+    pub name: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub expose: Option<bool>,
+    /// The link name (`<slug>.ainkrad.io`).
+    pub slug: Option<&'a str>,
+    pub idle_minutes: Option<i64>,
+    pub cpu_limit: Option<f64>,
+    pub mem_limit_mb: Option<i64>,
+}
+
 /// Changes name, description and/or public exposure (`None` keeps it). An archived project is
 /// read-only.
 pub async fn update(
@@ -282,26 +295,85 @@ pub async fn update(
     expose: Option<bool>,
     who: Who<'_>,
 ) -> Result<Project, Error> {
+    let c = Change {
+        name,
+        description,
+        expose,
+        ..Change::default()
+    };
+    change(pool, id, &c, who).await
+}
+
+/// [`update`] with the link name and the run limits too (P7-05). The link name is the slug: it
+/// is taken only while the project has no live run and no secrets (their stored names carry the
+/// slug), and must be a free, valid, unreserved one.
+pub async fn change(
+    pool: &SqlitePool,
+    id: i64,
+    c: &Change<'_>,
+    who: Who<'_>,
+) -> Result<Project, Error> {
     let mut tx = super::begin_write(pool).await?;
     let old = get(&mut tx, id).await?;
     if old.state == "archived" {
         return refused("conflict", "the project is archived");
     }
-    let name = name.unwrap_or(&old.name);
+    let name = c.name.unwrap_or(&old.name);
     line(name, 100, "a name")?;
-    let description = description.unwrap_or(&old.description);
-    let expose = expose.unwrap_or(old.expose);
+    let description = c.description.unwrap_or(&old.description);
+    let expose = c.expose.unwrap_or(old.expose);
+    let idle = c.idle_minutes.unwrap_or(old.idle_minutes);
+    let cpu = c.cpu_limit.unwrap_or(old.cpu_limit);
+    let mem = c.mem_limit_mb.unwrap_or(old.mem_limit_mb);
+    if !(5..=1440).contains(&idle) {
+        return refused("bad_request", "idle stop is 5 to 1440 minutes");
+    }
+    if !(cpu.is_finite() && (0.1..=16.0).contains(&cpu)) {
+        return refused("bad_request", "CPUs are 0.1 to 16");
+    }
+    if !(64..=32768).contains(&mem) {
+        return refused("bad_request", "memory is 64 to 32768 MB");
+    }
+    let slug = c.slug.unwrap_or(&old.slug);
+    if slug != old.slug {
+        if let Some(why) = slug_problem(slug) {
+            return refused("bad_request", why);
+        }
+        let busy: i64 = sqlx::query_scalar(
+            "SELECT (SELECT count(*) FROM core_projects WHERE slug = ?1) \
+             + (SELECT count(*) FROM core_project_runs WHERE project_id = ?2 \
+                AND state IN ('starting', 'running', 'stopping')) \
+             + (SELECT count(*) FROM core_secrets WHERE group_id = ?3)",
+        )
+        .bind(slug)
+        .bind(id)
+        .bind(old.secret_group)
+        .fetch_one(&mut *tx)
+        .await?;
+        if busy > 0 {
+            return refused(
+                "conflict",
+                "the link name is taken, or the project is running or holds secrets",
+            );
+        }
+    }
     sqlx::query(
-        "UPDATE core_projects SET name = ?, description = ?, expose = ?, updated_at = ? WHERE id = ?",
+        "UPDATE core_projects SET slug = ?, name = ?, description = ?, expose = ?, \
+         idle_minutes = ?, cpu_limit = ?, mem_limit_mb = ?, updated_at = ? WHERE id = ?",
     )
+    .bind(slug)
     .bind(name)
     .bind(description)
     .bind(expose)
+    .bind(idle)
+    .bind(cpu)
+    .bind(mem)
     .bind(who.now)
     .bind(id)
     .execute(&mut *tx)
     .await?;
-    let details = json!({"name": name, "expose": expose, "by_device": who.by_device});
+    let details = json!({"name": name, "slug": slug, "expose": expose, "idle_minutes": idle,
+        "cpu_limit": cpu, "mem_limit_mb": mem, "by_device": who.by_device});
     record(&mut tx, who.actor, "project.updated", id, details, true).await?;
     let p = get(&mut tx, id).await?;
     tx.commit().await?;

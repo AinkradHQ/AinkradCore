@@ -264,6 +264,18 @@ pub trait Module: Send + Sync + 'static {
         Box::pin(async { Ok(()) })
     }
 
+    /// Checked at every launch of a project session, before the repo copies are leased (#305
+    /// follow-up): `Err` refuses the launch with that reason. A module that ties a project to
+    /// something a session must hold (the Brain's room claim) says so here. Nothing by default.
+    fn project_launch<'a>(
+        &'a self,
+        _app: &'a App,
+        _session: &'a str,
+        _project: i64,
+    ) -> BoxFut<'a, Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// The instructions the agent session `session` starts with (P3-03), read fresh at every
     /// launch. `None` adds nothing. They go to the runner as the harness's instruction file.
     fn session_instructions<'a>(

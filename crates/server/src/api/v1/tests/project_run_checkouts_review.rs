@@ -89,6 +89,8 @@ async fn a_session_ending_keeps_the_lease_while_a_run_of_the_project_is_live() {
     // A run that is still starting (its runner is cloning).
     let now = fx.app.clock.now();
     let pending = runs::begin_start(&fx.app, &link, p, w(&now)).await.unwrap();
+    // The copy is fetched when a start or a launch leases it; this test leases it by hand.
+    crate::mirrors::refresh(&fx.app, repo).await.unwrap();
     crate::mirrors::grant_now(&fx.app, &vm.id, repo).await;
     let outcome = json!({"kind": "succeeded"});
     store::end(

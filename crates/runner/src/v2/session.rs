@@ -92,16 +92,16 @@ impl Held {
         // Core then sends past its window and the stream is cut off (fails closed).
         let n = |f: &Frame| f.payload.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0);
         let mut merged = false;
-        if f.kind == FrameKind::Credit {
-            if let Some(last) = self.sent.back_mut().filter(|l| l.kind == FrameKind::Credit) {
-                let sum = n(&*last).saturating_add(n(&f));
-                *last = Frame::new(
-                    stream,
-                    f.seq,
-                    Body::Credit(ainkrad_proto::v2::Credit { bytes: sum }),
-                );
-                merged = true;
-            }
+        if f.kind == FrameKind::Credit
+            && let Some(last) = self.sent.back_mut().filter(|l| l.kind == FrameKind::Credit)
+        {
+            let sum = n(&*last).saturating_add(n(&f));
+            *last = Frame::new(
+                stream,
+                f.seq,
+                Body::Credit(ainkrad_proto::v2::Credit { bytes: sum }),
+            );
+            merged = true;
         }
         if !merged {
             self.sent.push_back(f.clone());

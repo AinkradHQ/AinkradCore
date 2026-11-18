@@ -108,6 +108,7 @@ fn spawn_daemon_with(
             max: Duration::from_millis(200),
             refused: Duration::from_millis(200),
         },
+        run_checkouts: std::path::PathBuf::from("/nonexistent"),
     };
     let (stop, stopped) = watch::channel(false);
     tokio::spawn(async move {

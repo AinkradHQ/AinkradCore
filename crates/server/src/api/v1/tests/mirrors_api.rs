@@ -440,7 +440,7 @@ async fn a_copy_is_served_only_to_a_device_with_a_live_lease_while_its_project_i
          VALUES (?, 'api', ?, 'main', 0) RETURNING id",
     )
     .bind(id)
-    .bind(dir.join("remote").to_str().unwrap())
+    .bind(dir.join("remote-two").to_str().unwrap())
     .fetch_one(&fx.app.pool)
     .await
     .unwrap();

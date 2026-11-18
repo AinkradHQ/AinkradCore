@@ -57,7 +57,7 @@ fn code<T>(r: Result<T, Error>) -> (&'static str, String) {
 #[tokio::test]
 async fn a_new_project_gets_its_group_and_a_secret_lands_in_it() {
     let fx = fx().await;
-    let p = projects::get(&mut *fx.pool.acquire().await.unwrap(), fx.project)
+    let p = projects::get(&mut fx.pool.acquire().await.unwrap(), fx.project)
         .await
         .unwrap();
     assert!(p.secret_group.is_some());

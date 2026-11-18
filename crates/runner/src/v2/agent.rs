@@ -199,7 +199,7 @@ trait Harness: Send + Sync {
         helper: Option<&'a std::path::Path>,
     ) -> Fut<'a, Result<PathBuf, String>>;
     fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()>;
-    fn discard_agent_workspaces(&self, prefix: &str, keep: &[String]);
+    fn discard_agent_workspaces(&self, name: &str, prefix: bool, keep: &[String]);
     fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream);
     fn work_dir(&self, job: &Job) -> Option<PathBuf>;
 }
@@ -245,8 +245,8 @@ impl<E: Executor> Harness for E {
     fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()> {
         Box::pin(Executor::cleanup_agent_workspace(self, session, generation))
     }
-    fn discard_agent_workspaces(&self, prefix: &str, keep: &[String]) {
-        Executor::discard_agent_workspaces(self, prefix, keep);
+    fn discard_agent_workspaces(&self, name: &str, prefix: bool, keep: &[String]) {
+        Executor::discard_agent_workspaces(self, name, prefix, keep);
     }
     fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream) {
         Executor::set_mirror_upstream(self, up);
@@ -363,7 +363,7 @@ impl AgentDriver {
         let adopted: Vec<String> = sessions.keys().cloned().collect();
         executor.recover_agent_workspaces(&adopted);
         // A run's clone (P5-05) is deleted when its start ends; one a crash left is leftover.
-        executor.discard_agent_workspaces(RUN_SESSION_PREFIX, &adopted);
+        executor.discard_agent_workspaces(RUN_SESSION_PREFIX, true, &adopted);
         Ok(Self {
             config,
             harness: Arc::new(executor),
@@ -407,7 +407,7 @@ impl AgentDriver {
     /// Deletes what `run_workspace` made (or half made), saved work included: the run's helper
     /// holds its own copy by now, and a session's `session-wip` is never cleaned.
     pub fn discard_run_workspace(&self, session: &str) {
-        self.harness.discard_agent_workspaces(session, &[]);
+        self.harness.discard_agent_workspaces(session, false, &[]);
     }
 
     pub fn with_versions(mut self, versions: BTreeMap<String, String>) -> Self {
@@ -499,6 +499,12 @@ impl AgentDriver {
     pub fn start(self: &Arc<Self>, req: AgentStart) -> Result<AgentEvents, StreamError> {
         if !valid_session(&req.session) {
             return Err(refuse(ErrorCode::InvalidArgs, "a session id is as_…"));
+        }
+        if req.session.starts_with(RUN_SESSION_PREFIX) {
+            return Err(refuse(
+                ErrorCode::InvalidArgs,
+                "session ids starting as_run belong to project runs",
+            ));
         }
         if req.secrets.iter().any(|s| !secrets::valid_var(&s.var)) {
             return Err(refuse(

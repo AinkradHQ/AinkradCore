@@ -21,7 +21,7 @@ async fn a_secret_prefers_a_runner_in_its_scope() {
     let now = fx.app.clock.now();
     let spec = serde_json::json!({"services": {"web": {"image": "node:22",
                                   "env": {"T": "${secret:api_key}"}}}});
-    crate::store::run_specs::save(&fx.app.pool, p, &spec, "manual", w(&now))
+    crate::store::run_specs::save_unchecked(&fx.app.pool, p, &spec, w(&now))
         .await
         .unwrap();
     sqlx::query("INSERT INTO core_secret_groups (name, created_at, updated_at) VALUES ('g', ?, ?)")

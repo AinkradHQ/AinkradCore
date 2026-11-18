@@ -1,7 +1,7 @@
 //! M1 (PR 318 review): a healthy start is not killed. The runner already lists the run `running`
 //! while `run.start` has not answered, and a reconcile runs in that window.
 
-use ainkrad_proto::v2::{RunCheckout, RunInfo, RunList, RunPhase, RunStart};
+use ainkrad_proto::v2::{RunInfo, RunList, RunPhase, RunStart};
 
 use super::project_runs::{Fake, project, run, w};
 use super::*;
@@ -43,14 +43,6 @@ impl Link for Racing {
     fn status<'a>(&'a self, r: &'a str) -> Fut<'a, Result<RunList, LinkError>> {
         self.inner.status(r)
     }
-    fn checkouts<'a>(
-        &'a self,
-        r: &'a str,
-        run: &'a str,
-        repos: &'a [String],
-    ) -> Fut<'a, Result<Vec<RunCheckout>, String>> {
-        self.inner.checkouts(r, run, repos)
-    }
 }
 
 #[tokio::test]
@@ -76,7 +68,7 @@ async fn a_reconcile_during_a_start_does_not_get_the_healthy_run_stopped() {
 #[tokio::test]
 async fn a_start_nobody_is_driving_is_still_promoted_by_a_reconcile() {
     let fx = fx().await;
-    let (link, p) = (Fake::new(), project(&fx, "docs").await);
+    let (link, p) = (Fake::new(), project(&fx, "notes").await);
     let now = fx.app.clock.now();
     let pending = runs::begin_start(&fx.app, &link, p, w(&now)).await.unwrap();
     let id = pending.run.id.clone();

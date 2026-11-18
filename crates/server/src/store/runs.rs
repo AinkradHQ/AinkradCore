@@ -253,17 +253,29 @@ pub async fn scrub_error(pool: &SqlitePool, project_id: i64, error: &str) -> Str
             }
         }
     }
-    let text = text
-        .split(' ')
-        .map(|w| {
-            if w.starts_with("l_") && w.len() > 10 {
-                "[lease]"
-            } else {
-                w
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
+    // Lease ids are found whatever surrounds them (`lease=l_…,`, `"l_…"`): words are runs of
+    // letters, digits and `_`.
+    let mut scrubbed = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while !rest.is_empty() {
+        let word = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        if word == 0 {
+            let c = rest.chars().next().expect("not empty");
+            scrubbed.push(c);
+            rest = &rest[c.len_utf8()..];
+            continue;
+        }
+        let (w, tail) = rest.split_at(word);
+        scrubbed.push_str(if w.starts_with("l_") && w.len() > 10 {
+            "[lease]"
+        } else {
+            w
+        });
+        rest = tail;
+    }
+    let text = scrubbed;
     let mut cut = text.len().min(ERROR_MAX);
     while !text.is_char_boundary(cut) {
         cut -= 1;

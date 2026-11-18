@@ -194,6 +194,8 @@ async fn handle(State(h): State<Arc<Host>>, req: Request) -> Response {
     proxy(h, req).await.unwrap_or_else(|refused| refused)
 }
 
+// The Err is the finished response to send; boxing it would only move it.
+#[allow(clippy::result_large_err)]
 async fn proxy(h: Arc<Host>, mut req: Request) -> Result<Response, Response> {
     let host = req
         .headers()

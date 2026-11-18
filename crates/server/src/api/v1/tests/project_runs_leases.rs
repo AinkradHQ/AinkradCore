@@ -17,17 +17,18 @@ async fn leases(fx: &Fx) -> i64 {
 
 /// A project whose spec references `${secret:api_key}`, a secret of its group scoped to `runner`.
 async fn with_secret(fx: &Fx, runner: &str, image: &str) -> i64 {
-    let p = project(fx, "shop").await;
-    let now = fx.app.clock.now();
-    let spec = serde_json::json!({"services": {"web": {"image": image,
-                                  "env": {"T": "${secret:api_key}"}}}});
-    run_specs::save(&fx.app.pool, p, &spec, "manual", w(&now))
-        .await
-        .unwrap();
+    // The secret first: the secrets API refuses a name that starts with an existing project's slug.
     assert_eq!(
         create(fx, "shop.api_key", V1, &[runner]).await.0,
         StatusCode::OK
     );
+    let p = project(fx, "shop").await;
+    let now = fx.app.clock.now();
+    let spec = serde_json::json!({"services": {"web": {"image": image,
+                                  "env": {"T": "${secret:api_key}"}}}});
+    run_specs::save_unchecked(&fx.app.pool, p, &spec, w(&now))
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO core_secret_groups (name, created_at, updated_at) VALUES ('g', ?, ?)")
         .bind(&now)
         .bind(&now)
@@ -64,8 +65,8 @@ async fn a_request_that_is_invalid_anyway_leases_nothing() {
     let r = run(&fx, &id).await;
     assert_eq!(r.state, "failed");
     assert!(
-        r.error.unwrap().contains("spec.services.web"),
-        "the spec is refused first"
+        r.error.unwrap().contains("limits"),
+        "the request is refused first"
     );
     assert_eq!(leases(&fx).await, 0);
 }

@@ -733,6 +733,15 @@ impl Module for Brain {
         Box::pin(project_rooms::claim_for_session(app, session, project, by))
     }
 
+    fn project_launch<'a>(
+        &'a self,
+        app: &'a App,
+        session: &'a str,
+        project: i64,
+    ) -> BoxFut<'a, Result<(), String>> {
+        Box::pin(project_rooms::require_claim(app, session, project))
+    }
+
     fn session_instructions<'a>(
         &'a self,
         app: &'a App,
