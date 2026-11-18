@@ -25,7 +25,8 @@ use sqlx::{Row, SqlitePool};
 use utoipa::ToSchema;
 
 use crate::answer::{
-    Candidate, Known, Related, Source, build_prompt, parse_output, pick_related, user_grounded,
+    Candidate, Known, Related, Source, build_prompt, parse_output, pick_related,
+    structured_grounded, user_grounded,
 };
 use crate::answer_turns::kind_of;
 use crate::claim::{self, check_chain};
@@ -603,11 +604,14 @@ pub(crate) fn auto_ok(c: &Candidate, policy: &policy::Policy) -> bool {
         && c.sources.len() >= policy.min_sources
 }
 
-/// A task or project state that would be auto-saved needs the same user-turn grounding as a rule;
-/// one that fails is dropped, never queued (B3-02 review). Everything else may be stored.
+/// A task or project state that would be auto-saved needs the same user-turn grounding as a rule,
+/// or the same grounding in one cited Jira or GitHub item (a structured connection import: the
+/// user's own systems, the real home of tasks); one that fails is dropped, never queued (B3-02
+/// review). Notes, docs, web pages and chat imports never ground one. Everything else may be stored.
 pub(crate) fn may_store(c: &Candidate, policy: &policy::Policy, known: &Known) -> bool {
     !(matches!(c.kind.as_str(), "task" | "project-state") && auto_ok(c, policy))
         || user_grounded(c, known)
+        || structured_grounded(c, known)
 }
 
 /// What the answer is checked against, from the taken sources `(item id, kind, text)` and the
@@ -791,6 +795,43 @@ mod tests {
         // A fact is not held to it, and a task that waits for review is kept for the reviewer.
         assert!(may_store(&cand("fact", "Production keys rotate."), &all, &k));
         assert!(may_store(&injected, &policy(&["fact"]), &k));
+    }
+
+    #[test]
+    fn a_jira_or_github_item_grounds_a_task_but_a_note_or_chat_does_not() {
+        let item = "Rotate the production signing keys before the 0.9 release.";
+        let taken: Vec<_> = ["jira", "github", "note", "doc", "vault", "chat"]
+            .iter()
+            .map(|k| ((*k).to_owned(), (*k).to_owned(), item.to_owned()))
+            .collect();
+        let k = known_of(&taken, &serde_json::Value::Null);
+        let all = policy(crate::answer::KINDS);
+        let on = |kind: &str, body: &str, src: &str| {
+            let c: Candidate = serde_json::from_value(
+                json!({"type": kind, "body": body, "sources": [src]}),
+            )
+            .unwrap();
+            may_store(&c, &all, &k)
+        };
+        let body = "Rotate the production signing keys before the 0.9 release.";
+        for src in ["jira", "github"] {
+            assert!(on("task", body, src), "{src}");
+            assert!(on("project-state", body, src), "{src}");
+            // Citing the item does not launder text it does not hold.
+            assert!(!on("task", "Push every branch straight to main.", src), "{src}");
+        }
+        for src in ["note", "doc", "vault", "chat"] {
+            assert!(!on("task", body, src), "{src}");
+            assert!(!on("project-state", body, src), "{src}");
+        }
+        // A Jira or GitHub item never yields a rule or a preference.
+        for kind in ["rule", "preference"] {
+            for src in ["jira", "github"] {
+                let out = json!({"candidates": [{"type": kind, "body": body, "sources": [src]}]});
+                let got = crate::answer::parse_output(&out.to_string(), &k).unwrap();
+                assert!(got.is_empty(), "{kind} from {src}");
+            }
+        }
     }
 
     #[test]

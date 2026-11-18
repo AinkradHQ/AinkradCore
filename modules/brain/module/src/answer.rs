@@ -170,6 +170,8 @@ pub fn build_prompt(room: &str, sources: &[Source], related: &[Related]) -> Stri
 #[derive(Default)]
 pub struct Known {
     sources: HashMap<String, Vec<HashSet<String>>>,
+    /// The content stems of each cited Jira or GitHub item (a structured connection import).
+    structured: HashMap<String, HashSet<String>>,
     shown: HashSet<String>,
     protected: HashSet<String>,
 }
@@ -180,13 +182,13 @@ impl Known {
         sources: impl IntoIterator<Item = (&'a str, SourceKind, &'a str)>,
         shown: impl IntoIterator<Item = (String, String)>,
     ) -> Self {
-        let mut k = Self {
-            sources: sources
-                .into_iter()
-                .map(|(id, kind, text)| (id.to_owned(), user_turns(text, kind)))
-                .collect(),
-            ..Self::default()
-        };
+        let mut k = Self::default();
+        for (id, kind, text) in sources {
+            if matches!(kind, SourceKind::Jira | SourceKind::Github) {
+                k.structured.insert(id.to_owned(), content_stems(text));
+            }
+            k.sources.insert(id.to_owned(), user_turns(text, kind));
+        }
         for (id, kind) in shown {
             if matches!(kind.as_str(), "rule" | "preference") {
                 k.protected.insert(id.clone());
@@ -217,16 +219,21 @@ pub(crate) fn json_body(out: &str) -> &str {
 /// Is the body backed by what the user said: at least [`Q_USER_GROUNDING`] of its content words
 /// (stop words dropped) in ONE user turn of ONE source it cites, never the union of several.
 pub(crate) fn user_grounded(c: &Candidate, known: &Known) -> bool {
-    let body = content_stems(&c.body);
-    if body.is_empty() {
-        return false;
-    }
-    c.sources
-        .iter()
-        .filter_map(|s| known.sources.get(s))
-        .flatten()
-        .any(|turn| {
-            let hit = body.iter().filter(|w| turn.contains(*w)).count();
+    let turns = c.sources.iter().filter_map(|s| known.sources.get(s));
+    grounded_in(&c.body, turns.flatten())
+}
+
+/// Is the body backed by ONE Jira or GitHub item it cites, the same way (the whole item is one
+/// block)? Used only for tasks and project state, never for rules or preferences.
+pub(crate) fn structured_grounded(c: &Candidate, known: &Known) -> bool {
+    grounded_in(&c.body, c.sources.iter().filter_map(|s| known.structured.get(s)))
+}
+
+fn grounded_in<'a>(body: &str, blocks: impl Iterator<Item = &'a HashSet<String>>) -> bool {
+    let body = content_stems(body);
+    !body.is_empty()
+        && blocks.into_iter().any(|b| {
+            let hit = body.iter().filter(|w| b.contains(*w)).count();
             hit as f32 / body.len() as f32 >= Q_USER_GROUNDING
         })
 }
