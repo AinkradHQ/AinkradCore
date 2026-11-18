@@ -284,7 +284,9 @@
 ///    leases dropped); the Leyline key runner sync (Y1-02) is its first user.
 /// 90: Lore (Core 0.9 epic). Seven `loreAi*` operations in the Code Mode allow-list (`api/ai-ops.allow.json`), each
 ///    scoped to the session's project; Lore's own routes, events and audit actions live in `modules/lore/api`.
-pub const API_MINOR: u32 = 90;
+/// 91: Design (Core 0.9 epic). The runner wire protocol gains the `design.*` commands (`api/runner.schema.json`); the
+///    Design module's own routes live in `modules/design/api`.
+pub const API_MINOR: u32 = 91;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

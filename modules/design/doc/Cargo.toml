@@ -1,0 +1,18 @@
+# The design document (T1, T3), the single doc crate (V1-05): one `yrs` layout, one gate every remote update passes,
+# typed edit ops validated by `design-model`, undo/redo, sync bytes and awareness. Pure safe Rust, no Skia, no I/O.
+# The App's engine (`ffi`) uses `Live`; the Core's per-doc sync actor (`module`) uses `Replica`; both go through
+# `gate`. Not Miri-clean: yrs 0.28.1 itself is UB under Miri.
+[package]
+name = "design-doc"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+design-model = { path = "../model" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+yrs = { version = "=0.28.1", features = ["sync"] }
