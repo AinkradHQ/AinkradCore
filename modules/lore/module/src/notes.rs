@@ -41,59 +41,46 @@ fn some<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     Option::<T>::deserialize(d).map(Some)
 }
 
-fn bad() -> ApiError {
+pub(crate) fn bad() -> ApiError {
     ApiError::bad_request("the note is not valid")
 }
 
-fn none() -> ApiError {
+pub(crate) fn none() -> ApiError {
     ApiError::not_found("no such note")
 }
 
 /// `ln_` and 12 base32 characters (lowercase a-z, 2-7).
 fn new_id() -> String {
+    rand_id("ln_")
+}
+
+/// `prefix` and 12 base32 characters (lowercase a-z, 2-7).
+pub(crate) fn rand_id(prefix: &str) -> String {
     let mut b = [0u8; 8];
     getrandom::fill(&mut b).expect("the system random source");
     let n = u64::from_le_bytes(b);
     let s: String = (0..12)
         .map(|i| b"abcdefghijklmnopqrstuvwxyz234567"[((n >> (5 * i)) & 31) as usize] as char)
         .collect();
-    format!("ln_{s}")
+    format!("{prefix}{s}")
 }
 
-fn id_ok(s: &str) -> bool {
-    s.len() == 15
-        && s.starts_with("ln_")
-        && s[3..]
+pub(crate) fn id_ok(s: &str) -> bool {
+    id_has("ln_", s)
+}
+
+/// `prefix` and 12 base32 characters, as [`rand_id`] makes them.
+pub(crate) fn id_has(prefix: &str, s: &str) -> bool {
+    s.len() == prefix.len() + 12
+        && s.starts_with(prefix)
+        && s[prefix.len()..]
             .bytes()
             .all(|c| c.is_ascii_lowercase() || (b'2'..=b'7').contains(&c))
 }
 
-/// The title of a Markdown text: the first `# ` heading, else the first non-empty line, at most
-/// 200 characters; `Untitled` for an empty text. ponytail: R1-03's parser (front matter, code
-/// fences) replaces this; the daily note keeps its date title, which the save path must not re-derive.
-pub(crate) fn derive_title(text: &str) -> String {
-    let line = text
-        .lines()
-        .find_map(|l| l.strip_prefix("# "))
-        .or_else(|| text.lines().find(|l| !l.trim().is_empty()))
-        .unwrap_or("")
-        .trim();
-    let t: String = line.chars().filter(|c| !c.is_control()).take(200).collect();
-    let t = t.trim();
-    if t.is_empty() {
-        "Untitled".to_owned()
-    } else {
-        t.to_owned()
-    }
-}
-
-/// Lowercase, whitespace collapsed: how wikilink targets are compared (T5/T6).
-pub(crate) fn normalise(title: &str) -> String {
-    title
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+/// Parse a note's Markdown (R1-03): its title, links and tags. Too large = the one refusal.
+pub(crate) fn parsed(text: &str) -> Result<lore_model::Parsed, ApiError> {
+    lore_model::parse(text).map_err(|_| bad())
 }
 
 /// `(year, month, day)` of a real `YYYY-MM-DD` date, years 1900 to 2999.
@@ -200,7 +187,7 @@ fn summary(r: &sqlx::sqlite::SqliteRow) -> Result<NoteSummary, sqlx::Error> {
     })
 }
 
-async fn view(conn: &mut SqliteConnection, id: &str) -> Result<NoteView, ApiError> {
+pub(crate) async fn view(conn: &mut SqliteConnection, id: &str) -> Result<NoteView, ApiError> {
     let r = sqlx::query("SELECT * FROM lore_notes WHERE id = ?")
         .bind(id)
         .fetch_optional(&mut *conn)
@@ -213,7 +200,7 @@ async fn view(conn: &mut SqliteConnection, id: &str) -> Result<NoteView, ApiErro
 }
 
 /// A table refusal is the second layer answering: a fixed sentence, never the database's text.
-fn store_err(e: sqlx::Error) -> ApiError {
+pub(crate) fn store_err(e: sqlx::Error) -> ApiError {
     match &e {
         sqlx::Error::Database(d) if d.is_check_violation() || d.is_foreign_key_violation() => bad(),
         _ => e.into(),
@@ -221,7 +208,7 @@ fn store_err(e: sqlx::Error) -> ApiError {
 }
 
 /// Audit row + event, ids only. `kind` is the event (`changed` or `trashed`), `op` the audit verb.
-async fn record(
+pub(crate) async fn record(
     conn: &mut SqliteConnection,
     op: &str,
     event: &str,
@@ -329,7 +316,8 @@ pub(crate) async fn create(
         None => None,
     };
     let id = new_id();
-    let title = derive_title(&text);
+    let parse = parsed(&text)?;
+    let title = parse.title.clone();
     let who = format!("person:{}", me.device.id);
     sqlx::query(
         "INSERT INTO lore_notes (id, project, title, title_norm, text, created_by, updated_by) \
@@ -338,13 +326,14 @@ pub(crate) async fn create(
     .bind(&id)
     .bind(&project)
     .bind(&title)
-    .bind(normalise(&title))
+    .bind(lore_model::normalize_title(&title))
     .bind(&text)
     .bind(&who)
     .bind(&who)
     .execute(&mut *tx)
     .await
     .map_err(store_err)?;
+    crate::save::seed(&mut tx, &id, &text, &parse).await?;
     record(
         &mut tx,
         "created",
@@ -402,12 +391,13 @@ pub(crate) async fn today(
             .bind(&id)
             .bind(&day)
             .bind(&title)
-            .bind(normalise(&title))
+            .bind(lore_model::normalize_title(&title))
             .bind(&who)
             .bind(&who)
             .execute(&mut *tx)
             .await
             .map_err(store_err)?;
+            crate::save::seed(&mut tx, &id, "", &Default::default()).await?;
             record(&mut tx, "created", "changed", &id, 1, "person", None).await?;
             id
         }
@@ -544,21 +534,12 @@ pub async fn sweep(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
         events::append(&mut tx, "lore.note.purged", &json!({"id": id})).await?;
     }
     tx.commit().await?;
-    Ok(ids.len() as u64)
+    Ok(ids.len() as u64 + crate::attachments::sweep(pool).await?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn titles() {
-        assert_eq!(derive_title("intro\n# Real\nx"), "Real");
-        assert_eq!(derive_title("\n\n  plain line \nb"), "plain line");
-        assert_eq!(derive_title(" \n"), "Untitled");
-        assert_eq!(derive_title(&"x".repeat(500)).chars().count(), 200);
-        assert_eq!(normalise("  A   b\tC "), "a b c");
-    }
 
     #[test]
     fn days() {

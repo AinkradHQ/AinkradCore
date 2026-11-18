@@ -1066,6 +1066,33 @@
         ],
         "type": "object"
       },
+      "AttachmentView": {
+        "properties": {
+          "content_type": {
+            "description": "Decided by the Core from the bytes.",
+            "type": "string"
+          },
+          "duplicate": {
+            "description": "The same bytes were already stored; this is the existing row.",
+            "type": "boolean"
+          },
+          "sha256": {
+            "description": "sha256 of the stored bytes, lowercase hex: write it into the note as `lore-attachment:<sha256>`.",
+            "type": "string"
+          },
+          "size": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sha256",
+          "content_type",
+          "size",
+          "duplicate"
+        ],
+        "type": "object"
+      },
       "AuditEntry": {
         "description": "One audited change.",
         "properties": {
@@ -1201,11 +1228,17 @@
           "job.failed",
           "job.missed",
           "job.ran",
+          "lore.attachment.created",
+          "lore.attachment.purged",
+          "lore.note.conflict",
           "lore.note.created",
           "lore.note.moved",
           "lore.note.purged",
+          "lore.note.relinked",
           "lore.note.restored",
+          "lore.note.reverted",
           "lore.note.trashed",
+          "lore.note.version",
           "notify.token_pruned",
           "pairing.approved",
           "pairing.burned",
@@ -4033,6 +4066,18 @@
         ],
         "type": "object"
       },
+      "NewVersion": {
+        "properties": {
+          "name": {
+            "description": "1 to 100 characters, no control characters.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "NoopResult": {
         "description": "The no-op's answer.",
         "properties": {
@@ -4533,6 +4578,10 @@
             },
             "type": "array"
           },
+          "room": {
+            "$ref": "#/components/schemas/ProjectRoom",
+            "description": "The linked Brain room; null when the Brain is off or the project has none."
+          },
           "slug": {
             "description": "A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name.",
             "type": "string"
@@ -4597,6 +4646,22 @@
           "remote_url",
           "default_branch",
           "is_primary"
+        ],
+        "type": "object"
+      },
+      "ProjectRoom": {
+        "description": "The Brain room linked to a project (strictly 1:1).",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "room_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "room_id",
+          "name"
         ],
         "type": "object"
       },
@@ -4924,6 +4989,18 @@
         },
         "required": [
           "request_id"
+        ],
+        "type": "object"
+      },
+      "RestoreReq": {
+        "properties": {
+          "version": {
+            "description": "The version id to bring back.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version"
         ],
         "type": "object"
       },
@@ -5368,6 +5445,58 @@
         "required": [
           "agents_used",
           "terminals_used"
+        ],
+        "type": "object"
+      },
+      "SaveOut": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/NoteView"
+          },
+          {
+            "properties": {
+              "missing_attachments": {
+                "description": "Attachments the returned `text` names (`lore-attachment:<sha>`) that the Core does not hold (never\nuploaded, or swept): re-upload them from the local copy. Ascending, no repeats.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "outcome": {
+                "description": "`saved`, `merged` (both sides kept; `text` is the merge), `conflict` (the client's lines won, the old head is\nthe version named in `version`), `base_lost` (the base had left the ring; same keep) or `restored`.",
+                "type": "string"
+              },
+              "version": {
+                "description": "A version made by this call that holds text the head no longer has: the kept head (`conflict`,\n`base_lost`) or the undo point of a restore.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "outcome",
+              "missing_attachments"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SaveReq": {
+        "properties": {
+          "base_rev": {
+            "description": "The revision the client's text was edited from (the `rev` it last received).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "text": {
+            "description": "The whole Markdown document. At most 2 000 000 bytes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_rev",
+          "text"
         ],
         "type": "object"
       },
@@ -6494,6 +6623,62 @@
         ],
         "type": "object"
       },
+      "VersionSummary": {
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "description": "`lv_` and 12 base32 characters.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`auto`, `named` or `conflict`.",
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "description": "Who wrote the text: `person:d_…`, `session:as_…` or `system`.",
+            "type": "string"
+          },
+          "rev": {
+            "description": "The note revision this text was the head of.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "rev",
+          "origin",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "VersionView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/VersionSummary"
+          },
+          {
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "Versions": {
         "description": "What the server is and speaks.",
         "properties": {
@@ -6632,7 +6817,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.87.0"
+    "version": "1.89.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -15710,6 +15895,122 @@
         ]
       }
     },
+    "/modules/lore/v1/attachments": {
+      "post": {
+        "operationId": "loreUploadAttachment",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "items": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              }
+            }
+          },
+          "description": "The raw file, at most 10 MB: png, jpeg, gif, webp, heic or pdf",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentView"
+                }
+              }
+            },
+            "description": "The stored attachment; the same bytes twice are the same row (`duplicate`). A type outside the allow-list (SVG included, whatever the name) is 415; over 10 MB or a full store is 413"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/attachments/{sha}": {
+      "get": {
+        "operationId": "loreGetAttachment",
+        "parameters": [
+          {
+            "description": "sha256 of the attachment",
+            "in": "path",
+            "name": "sha",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "items": {
+                    "format": "int32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The stored bytes with the Core-decided content type, `nosniff`, `attachment` and a sandboxing CSP"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
     "/modules/lore/v1/notes": {
       "get": {
         "operationId": "loreListNotes",
@@ -15946,6 +16247,311 @@
           "lore"
         ],
         "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/notes/{note}/restore": {
+      "post": {
+        "operationId": "loreRestoreVersion",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveOut"
+                }
+              }
+            },
+            "description": "The head is now exactly the version's text (a normal save at rev+1, audited as `lore.note.reverted`). `version` is an auto version of the text it replaced: restoring that one undoes this. Restoring the head's own text changes nothing. A trashed note refuses"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/notes/{note}/text": {
+      "put": {
+        "operationId": "loreSaveText",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveReq"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveOut"
+                }
+              }
+            },
+            "description": "The head after the save. Edited from the head: written at rev+1. Stale: 3-way merged against the head (clean = both sides kept; conflicting = the client's lines win and the old head is kept as a `conflict` version; base gone from the ring = same). The returned `text` is what the client must show. A save that changes nothing does not move `rev`. A trashed note refuses"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/notes/{note}/versions": {
+      "get": {
+        "operationId": "loreListVersions",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/VersionSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The note's versions, newest first, without text (at most 200)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "post": {
+        "operationId": "loreNameVersion",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewVersion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionSummary"
+                }
+              }
+            },
+            "description": "A `named` version of the head text (audited as `lore.note.version`). A trashed note refuses"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/lore/v1/notes/{note}/versions/{version}": {
+      "get": {
+        "operationId": "loreGetVersion",
+        "parameters": [
+          {
+            "description": "Note id",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Version id",
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionView"
+                }
+              }
+            },
+            "description": "One version with its text"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "lore"
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/modules/lore/v1/today": {
