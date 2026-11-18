@@ -53,6 +53,8 @@ pub struct Session {
     pub usage: Tokens,
     pub resumes: i64,
     pub created_by: String,
+    /// The project it was started for (P3-02); its workspace is that project's repos.
+    pub project_id: Option<i64>,
     /// The module that created and drives it (`agents::create_for_module`); none for a client's.
     pub owner_module: Option<String>,
     /// What that module calls it (`run:12`): a pointer, never a credential.
@@ -127,7 +129,7 @@ const COLUMNS: &str = "n, id, runner, harness, model, prompt, workspace, policy,
     harness_session, outcome, last_seq, tokens_in, tokens_out, cache_read, cache_write, \
     cost_usd_micros, resumes, created_by, owner_module, owner_ref, created_at, updated_at, ended_at, \
     gateway_account_id, gw_seq, gw_epoch, gw_stop, gw_stopped_at, live, waiting_since, pending, title, folder, \
-    turn_cost_micros, turn_cost_approx";
+    turn_cost_micros, turn_cost_approx, project_id";
 
 fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
     let json = |col: &str| -> Result<Option<Value>, sqlx::Error> {
@@ -164,6 +166,7 @@ fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
         },
         resumes: r.try_get("resumes")?,
         created_by: r.try_get("created_by")?,
+        project_id: r.try_get("project_id")?,
         owner_module: r.try_get("owner_module")?,
         owner_ref: r.try_get("owner_ref")?,
         created_at: r.try_get("created_at")?,
@@ -182,6 +185,20 @@ fn of(r: &sqlx::sqlite::SqliteRow) -> Result<Session, sqlx::Error> {
         turn_cost_micros: r.try_get("turn_cost_micros")?,
         turn_cost_approx: r.try_get::<i64, _>("turn_cost_approx")? != 0,
     })
+}
+
+/// Ties session `id` to `project`, before it starts (P3-02). Only a session that is still
+/// `starting` and has no project yet takes one.
+pub async fn set_project(pool: &SqlitePool, id: &str, project: i64) -> Result<bool, sqlx::Error> {
+    let done = sqlx::query(
+        "UPDATE core_agent_sessions SET project_id = ? \
+         WHERE id = ? AND project_id IS NULL AND state = 'starting'",
+    )
+    .bind(project)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected() == 1)
 }
 
 pub async fn get(pool: &SqlitePool, id: &str) -> Result<Option<Session>, sqlx::Error> {

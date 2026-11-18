@@ -77,6 +77,7 @@ pub(crate) fn ws(repo: &str, n: i64) -> Workspace {
         name: String::new(),
         also: vec![],
         expected_head: None,
+        mirror: None,
     }
 }
 
@@ -210,6 +211,7 @@ async fn a_rewritten_branch_lands_only_over_its_expected_head() {
 
     let stale = Workspace {
         expected_head: Some("0".repeat(40)),
+        mirror: None,
         ..ws(&repo, 1)
     };
     let f = w.push(&stale, Some("CIT-1")).await.unwrap_err();
@@ -221,6 +223,7 @@ async fn a_rewritten_branch_lands_only_over_its_expected_head() {
 
     let leased = Workspace {
         expected_head: Some(first.clone()),
+        mirror: None,
         ..ws(&repo, 1)
     };
     assert_eq!(
@@ -480,3 +483,5 @@ mod read;
 mod security;
 
 mod tls;
+
+mod mirror;

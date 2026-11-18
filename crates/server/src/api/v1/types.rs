@@ -289,6 +289,10 @@
 /// 94: project runs (P5-02). Runner wire protocol only (`runner.schema.json`): driver `run` with ops `run.start`
 ///    (`RunStart` -> `RunInfo`), `run.stop` (`RunStop` -> `RunInfo`) and `run.status` (`RunStatusReq` -> `RunList`);
 ///    no route yet. (90-93 are taken by open PRs.)
+/// 91: Core-held repo mirrors (P3-01). `POST /projects/{id}/repos/{repo}/fetch` (`fetchProjectRepo`, `admin`, no step-up)
+///    fetches a repo's remote into the Core's copy now; a failed fetch is still 200 with `mirror.error` set and the older
+///    `mirror.head` kept. The copy is served to `runner` devices as git smart HTTP, upload side only
+///    (`/mirrors/{repo}/info/refs`, `/git-upload-pack`; `/git-receive-pack` is always 403 `read_only`): not in the contract.
 pub const API_MINOR: u32 = 94;
 
 use serde::{Deserialize, Serialize};
