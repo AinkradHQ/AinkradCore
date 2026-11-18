@@ -46,8 +46,15 @@ pub const NOT_EXPOSED: &[&str] = &[
 ];
 
 /// Operations a session never reaches whatever the allow-list says, by id where their route shares a
-/// name with one a session may use: taking a design doc over from the AI and handing it back is human-only.
-pub const NOT_EXPOSED_OPS: &[&str] = &["designTakeOver", "designResume"];
+/// name with one a session may use: taking a design doc over from the AI and handing it back, approving a screen and
+/// withdrawing an approval are human-only (`designSetAiPaused` is the one route behind take-over and resume).
+pub const NOT_EXPOSED_OPS: &[&str] = &[
+    "designTakeOver",
+    "designResume",
+    "designSetAiPaused",
+    "designApproveScreen",
+    "designWithdrawApproval",
+];
 
 /// Whether `path` may be an operation of a session at all.
 pub fn exposed(path: &str) -> bool {

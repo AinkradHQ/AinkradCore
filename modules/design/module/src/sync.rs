@@ -25,15 +25,17 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use design_doc::{Refused, Replica};
+use design_doc::{Live, Refused, Replica};
 use design_model::limits::MAX_DOC_BYTES;
 use sqlx::{Row, SqlitePool};
 use tokio::sync::{Mutex, broadcast};
 
+/// The `from` of an update the Core made itself (no socket has this connection id, so every socket gets it).
+pub const CORE: u64 = u64::MAX;
 pub const UPDATE_RATE: f64 = 50.0;
 pub const BYTE_RATE: f64 = 4.0 * 1024.0 * 1024.0;
 pub const PRESENCE_RATE: f64 = 20.0;
-const MAX_VERSIONS: i64 = 200;
+pub(crate) const MAX_VERSIONS: i64 = 200;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
@@ -96,8 +98,31 @@ pub enum Refusal {
     Store,
 }
 
+/// Why a Core-side edit did not happen.
+#[derive(Debug)]
+pub enum EditError {
+    /// The edit itself is not valid (a fixed sentence naming the op); nothing was written.
+    Refused(String),
+    TooLarge,
+    /// A person took over: the AI may not write until they resume.
+    Paused,
+    Archived,
+    DocFull,
+    Store,
+}
+
+// `Live` sits in `State` behind the actor's lock, held across awaits: it must be `Send` (yrs `sync` feature; no `Rc`).
+const _: fn() = || {
+    fn send<T: Send>() {}
+    send::<Live>();
+    send::<Replica>();
+};
+
 struct State {
     replica: Replica,
+    /// A `design_doc` replica kept level with `replica`, built on the first Core-side edit (`edit`): the typed ops
+    /// run on it, its update goes through `replica`'s gate like any peer's. `None` = build it again on demand.
+    live: Option<Live>,
     last_seq: i64,
     snapshot_seq: i64,
     log_updates: i64,
@@ -153,6 +178,7 @@ async fn load(pool: &SqlitePool, id: &str) -> Result<State, sqlx::Error> {
     let replica = Replica::from_stored(parts).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     Ok(State {
         replica,
+        live: None,
         last_seq: logs.last().map_or(snapshot_seq, |l| l.0),
         snapshot_seq,
         log_updates: logs.len() as i64,
@@ -221,8 +247,18 @@ impl Actor {
     /// nothing); it is only returned once the update is committed and has been sent to the other peers.
     pub async fn submit(&self, conn: u64, origin: &str, bytes: &[u8]) -> Result<i64, Refusal> {
         let mut st = self.state.lock().await;
+        self.submit_locked(&mut st, conn, origin, bytes).await
+    }
+
+    async fn submit_locked(
+        &self,
+        st: &mut State,
+        conn: u64,
+        origin: &str,
+        bytes: &[u8],
+    ) -> Result<i64, Refusal> {
         if st.replica.is_poisoned() {
-            self.rebuild(&mut st).await;
+            self.rebuild(st).await;
             if st.replica.is_poisoned() {
                 return Err(Refusal::Store);
             }
@@ -237,27 +273,34 @@ impl Actor {
             Err(e) => {
                 // a refusal before integration leaves the replica as it was; only a poisoned one is rebuilt
                 if st.replica.is_poisoned() {
-                    self.rebuild(&mut st).await;
+                    self.rebuild(st).await;
                 }
                 return Err(Refusal::Violation(e));
             }
         };
         if st.snapshot_bytes + st.log_bytes + diff.len() > MAX_DOC_BYTES {
-            self.rebuild(&mut st).await;
+            self.rebuild(st).await;
             return Err(Refusal::DocFull);
         }
         let seq = st.last_seq + 1;
         match self.persist(seq, origin, &diff).await {
             Ok(true) => {}
             Ok(false) => {
-                self.rebuild(&mut st).await;
+                self.rebuild(st).await;
                 return Err(Refusal::Archived);
             }
             Err(e) => {
                 tracing::error!(error = %e, doc = %self.id, "design update not stored");
-                self.rebuild(&mut st).await;
+                self.rebuild(st).await;
                 return Err(Refusal::Store);
             }
+        }
+        // keep the typed-ops replica level with what was stored (an edit's own update is already in it)
+        if conn != CORE
+            && let Some(l) = st.live.as_mut()
+            && l.apply_remote(&diff).is_err()
+        {
+            st.live = None;
         }
         st.last_seq = seq;
         st.log_updates += 1;
@@ -374,8 +417,91 @@ impl Actor {
             Err(e) => {
                 tracing::error!(error = %e, doc = %self.id, "design replica not rebuilt");
                 st.replica.poison();
+                st.live = None;
             }
         }
+    }
+
+    /// A Core-side edit (`designApply`, a restore): `f` edits a `design_doc` replica of the document; whatever it
+    /// wrote goes through the same gate, persist and broadcast as a peer's update (sent as `CORE`, so every socket
+    /// gets it). All or nothing: `f` is expected to refuse before it writes (`Live::apply_ops` does), and a refusal
+    /// anywhere after that drops the replica, so nothing half-done is kept. An `origin` of `session:...` is the AI's:
+    /// a design a person took over (`ai_paused`) refuses it.
+    pub async fn edit<R>(
+        &self,
+        origin: &str,
+        f: impl FnOnce(&mut Live) -> Result<R, EditError>,
+    ) -> Result<(R, i64), EditError> {
+        let mut st = self.state.lock().await;
+        let row: Option<(String, i64)> =
+            sqlx::query_as("SELECT state, ai_paused FROM design_docs WHERE id = ?")
+                .bind(&self.id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|_| EditError::Store)?;
+        match row {
+            Some((s, _)) if s != "active" => return Err(EditError::Archived),
+            Some((_, 1)) if origin.starts_with("session:") => return Err(EditError::Paused),
+            Some(_) => {}
+            None => return Err(EditError::Store),
+        }
+        if st.replica.is_poisoned() {
+            self.rebuild(&mut st).await;
+            if st.replica.is_poisoned() {
+                return Err(EditError::Store);
+            }
+        }
+        if st.live.is_none() {
+            let mut l = Live::new();
+            l.apply_remote(&st.replica.state())
+                .map_err(|_| EditError::Store)?;
+            st.live = Some(l);
+        }
+        let Some(live) = st.live.as_mut() else {
+            return Err(EditError::Store);
+        };
+        let out = match f(live) {
+            Ok(o) => o,
+            Err(e) => {
+                // a refusal wrote nothing; anything else may have left the replica half-way (a yrs reset)
+                if !matches!(e, EditError::Refused(_) | EditError::TooLarge) {
+                    st.live = None;
+                }
+                return Err(e);
+            }
+        };
+        let bytes = live.outbox(true);
+        // #331: the engine's outbox holds at most `MAX_PEER_UPDATE_BYTES` per send. An edit that does not fit whole
+        // (the oldest update is over it, or more is queued than one update takes) is refused, never half-sent.
+        if live.outbox_stuck() || !live.outbox(false).is_empty() {
+            st.live = None;
+            return Err(EditError::TooLarge);
+        }
+        if bytes.is_empty() {
+            return Ok((out, st.last_seq));
+        }
+        match self.submit_locked(&mut st, CORE, origin, &bytes).await {
+            Ok(seq) => Ok((out, seq)),
+            Err(r) => {
+                st.live = None;
+                Err(match r {
+                    Refusal::Violation(Refused::TooLarge) => EditError::TooLarge,
+                    Refusal::DocFull => EditError::DocFull,
+                    Refusal::Archived => EditError::Archived,
+                    other => {
+                        tracing::error!(?other, doc = %self.id, "design edit refused by the gate");
+                        EditError::Store
+                    }
+                })
+            }
+        }
+    }
+
+    /// The document as the model reads it, and its whole state encoding, taken together under the lock.
+    pub async fn view(&self) -> Result<(design_model::Doc, Vec<u8>), EditError> {
+        let st = self.state.lock().await;
+        let model = st.replica.read().map_err(|_| EditError::Store)?;
+        Ok((model, st.replica.state()))
     }
 
     pub fn set_presence(&self, conn: u64, json: Arc<String>) {

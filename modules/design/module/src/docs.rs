@@ -52,7 +52,7 @@ fn new_id() -> String {
 }
 
 /// 1 to 100 characters, no control character, no edge whitespace.
-fn name_ok(s: &str) -> bool {
+pub(crate) fn name_ok(s: &str) -> bool {
     (1..=100).contains(&s.chars().count()) && s == s.trim() && !s.chars().any(char::is_control)
 }
 
@@ -79,7 +79,7 @@ pub struct DocView {
     pub updated_at: String,
 }
 
-async fn view(conn: &mut SqliteConnection, id: &str) -> Result<DocView, ApiError> {
+pub(crate) async fn view(conn: &mut SqliteConnection, id: &str) -> Result<DocView, ApiError> {
     let r = sqlx::query("SELECT * FROM design_docs WHERE id = ?")
         .bind(id)
         .fetch_optional(&mut *conn)
