@@ -405,6 +405,13 @@ impl Hub {
         Elevated(())
     }
 
+    /// The capability of the project run orchestrator's own housekeeping (`runs`): `run.stop` and
+    /// `run.status` for the idle stop, reconciliation and cleanup of a failed start. It starts
+    /// nothing: a `run.start` only goes out with the elevation of the admin route that asked.
+    pub(crate) fn run_housekeeping_elevation(&self) -> Elevated {
+        Elevated(())
+    }
+
     /// The capability of the wake queue's job (`agents::wake`): the route that queued the wake
     /// passed the gate and a live step-up, and the job re-checks that the requesting device is
     /// still usable and holds `agent` before it uses this. Not a route entry point.
