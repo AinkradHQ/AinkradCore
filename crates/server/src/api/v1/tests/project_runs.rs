@@ -20,20 +20,23 @@ use crate::store::secrets::Error;
 
 const RUNNER: &str = "r1";
 
-struct Fake {
-    runners: Vec<String>,
+pub(super) struct Fake {
+    pub(super) runners: Vec<String>,
     /// The phase `run.start` answers with, or an error text.
-    start: Mutex<Result<RunPhase, String>>,
+    pub(super) start: Mutex<Result<RunPhase, String>>,
     /// What `run.status` lists; `None`: the runs it started and has not stopped, running.
-    listed: Mutex<Option<Vec<RunInfo>>>,
-    held: Mutex<Vec<String>>,
-    stops: Mutex<Vec<String>>,
-    seen: Mutex<Option<Presence>>,
+    pub(super) listed: Mutex<Option<Vec<RunInfo>>>,
+    pub(super) held: Mutex<Vec<String>>,
+    pub(super) stops: Mutex<Vec<String>>,
+    pub(super) seen: Mutex<Option<Presence>>,
+    /// Seconds the Core says it has been up.
+    pub(super) uptime: Mutex<i64>,
 }
 
 impl Fake {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
+            uptime: Mutex::new(0),
             runners: vec![RUNNER.to_owned()],
             start: Mutex::new(Ok(RunPhase::Running)),
             listed: Mutex::default(),
@@ -46,12 +49,12 @@ impl Fake {
         }
     }
 
-    fn stops(&self) -> Vec<String> {
+    pub(super) fn stops(&self) -> Vec<String> {
         self.stops.lock().unwrap().clone()
     }
 }
 
-fn info(run: &str, phase: RunPhase) -> RunInfo {
+pub(super) fn info(run: &str, phase: RunPhase) -> RunInfo {
     RunInfo {
         run: run.to_owned(),
         project: 1,
@@ -68,6 +71,9 @@ impl Link for Fake {
     }
     fn presence(&self, _: &str) -> Option<Presence> {
         *self.seen.lock().unwrap()
+    }
+    fn uptime_secs(&self) -> i64 {
+        *self.uptime.lock().unwrap()
     }
     fn start<'a>(
         &'a self,
@@ -116,7 +122,7 @@ impl Link for Fake {
     }
 }
 
-fn w(now: &str) -> Who<'_> {
+pub(super) fn w(now: &str) -> Who<'_> {
     Who {
         by_device: "d_test",
         actor: AuditActor::System,
@@ -125,7 +131,7 @@ fn w(now: &str) -> Who<'_> {
 }
 
 /// A project with a one-service spec; returns its id.
-async fn project(fx: &Fx, slug: &str) -> i64 {
+pub(super) async fn project(fx: &Fx, slug: &str) -> i64 {
     let now = fx.app.clock.now();
     let p = projects::create(&fx.app.pool, slug, slug, "", "manual", w(&now))
         .await
@@ -139,7 +145,7 @@ async fn project(fx: &Fx, slug: &str) -> i64 {
 }
 
 /// Starts the project's run and drives it to the end of its start.
-async fn start(fx: &Fx, link: &Fake, project: i64) -> Result<String, Error> {
+pub(super) async fn start(fx: &Fx, link: &Fake, project: i64) -> Result<String, Error> {
     let now = fx.app.clock.now();
     let pending = runs::begin_start(&fx.app, link, project, w(&now)).await?;
     let id = pending.run.id.clone();
@@ -147,18 +153,18 @@ async fn start(fx: &Fx, link: &Fake, project: i64) -> Result<String, Error> {
     Ok(id)
 }
 
-async fn run(fx: &Fx, id: &str) -> store::Run {
+pub(super) async fn run(fx: &Fx, id: &str) -> store::Run {
     store::get(&fx.app.pool, id).await.unwrap()
 }
 
-fn code(e: Error) -> &'static str {
+pub(super) fn code(e: Error) -> &'static str {
     match e {
         Error::Refused { code, .. } => code,
         Error::Db(e) => panic!("{e}"),
     }
 }
 
-async fn audit_rows(fx: &Fx) -> Vec<(String, String)> {
+pub(super) async fn audit_rows(fx: &Fx) -> Vec<(String, String)> {
     sqlx::query_as(
         "SELECT action, origin FROM audit_events WHERE action LIKE 'project.run_%' ORDER BY seq",
     )
