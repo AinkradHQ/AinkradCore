@@ -229,6 +229,8 @@ pub async fn create(
     let details = json!({"slug": slug, "name": name, "source": source, "by_device": who.by_device});
     record(&mut tx, who.actor, "project.created", id, details, true).await?;
     let p = get(&mut tx, id).await?;
+    super::project_secrets::ensure_group(&mut tx, &p, who).await?;
+    let p = get(&mut tx, id).await?;
     tx.commit().await?;
     Ok(p)
 }

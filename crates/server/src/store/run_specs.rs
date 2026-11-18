@@ -1,16 +1,16 @@
 //! Project run specs (Core 0.9, P4-01): the versioned store behind `core_project_run_specs`.
 //! A save is a new version (never an update), refused for an archived project, audited and
 //! emitted as `project.spec_saved` in the same transaction. The spec is validated by `spec::parse`
-//! (shape, limits, image refs, `${secret:NAME}` syntax) and against the project's own repos; the
+//! (shape, limits, image refs, `${secret:NAME}` syntax, and that each NAME is a project secret) and against the project's own repos; the
 //! stored JSON is the normalised re-serialisation, so key order is stable.
 
 use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
+use sqlx::Row;
 use sqlx::sqlite::{SqlitePool, SqliteRow};
-use sqlx::{Row, SqliteConnection};
 
-use super::projects::{self, Project, Who};
+use super::projects::{self, Who};
 use super::secrets::Error;
 
 pub mod spec;
@@ -122,17 +122,6 @@ pub async fn versions(pool: &SqlitePool, project_id: i64) -> Result<Vec<SpecSumm
         .map_err(Into::into)
 }
 
-/// P4-04 hook: every `${secret:NAME}` in a saved spec must name a member of the project's secret
-/// group (`Project::secret_group`). Until that story lands the syntax is all that is checked.
-#[allow(clippy::unused_async)]
-async fn check_secrets_exist(
-    _conn: &mut SqliteConnection,
-    _project: &Project,
-    _names: &BTreeSet<String>,
-) -> Result<(), Error> {
-    Ok(())
-}
-
 /// Validates `body` and stores it as the project's next version. 400 `invalid_spec` names the bad
 /// field; 409 `conflict` for an archived project; 404 for no such project.
 pub async fn save(
@@ -170,7 +159,7 @@ pub async fn save(
             );
         }
     }
-    check_secrets_exist(&mut tx, &project, &spec::secret_refs(&spec)).await?;
+    super::project_secrets::check_refs(&mut tx, &project, &spec::secret_refs(&spec)).await?;
     let version: i64 = sqlx::query_scalar(
         "SELECT coalesce(max(version), 0) + 1 FROM core_project_run_specs WHERE project_id = ?",
     )

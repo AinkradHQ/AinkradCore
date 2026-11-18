@@ -185,6 +185,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
         "/api/v1/projects/{id}/spec/versions/{version}",
         "read",
     ),
+    ("GET", "/api/v1/projects/{id}/secrets", "admin"),
+    ("PUT", "/api/v1/projects/{id}/secrets/{name}", "admin"),
+    ("DELETE", "/api/v1/projects/{id}/secrets/{name}", "admin"),
     ("GET", "/api/v1/secrets", "admin"),
     ("POST", "/api/v1/secrets", "admin"),
     ("PUT", "/api/v1/secrets/{id}", "admin"),
@@ -268,6 +271,9 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/repos/{repo}/primary"),
     // Run spec (P4-01): it decides what containers run on a runner.
     ("PUT", "/api/v1/projects/{id}/spec"),
+    // Project secrets (P4-04): a write stores or removes a credential a run will be given.
+    ("PUT", "/api/v1/projects/{id}/secrets/{name}"),
+    ("DELETE", "/api/v1/projects/{id}/secrets/{name}"),
     // Secrets (E2-07): every write, and a lease, the only way a value leaves the Core.
     ("POST", "/api/v1/secrets"),
     ("PUT", "/api/v1/secrets/{id}"),

@@ -39,6 +39,7 @@ async fn shop(fx: &Fx) -> i64 {
     )
     .await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    crate::store::project_secrets::fixtures::seed(&fx.app.pool, id, &["db_password"]).await;
     id
 }
 

@@ -504,7 +504,7 @@ const META: &str = "SELECT s.id, s.name, s.owner, s.runners, s.delivery, s.versi
                     g.runners AS group_runners FROM core_secrets s \
                     LEFT JOIN core_secret_groups g ON g.id = s.group_id";
 
-async fn find(conn: &mut SqliteConnection, name: &str) -> Result<Meta, Error> {
+pub(super) async fn find(conn: &mut SqliteConnection, name: &str) -> Result<Meta, Error> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!("{META} WHERE s.name = ?")))
         .bind(name)
         .fetch_optional(&mut *conn)

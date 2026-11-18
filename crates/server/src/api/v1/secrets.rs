@@ -163,13 +163,13 @@ pub struct LeasedSecret {
     pub file_mode: Option<String>,
 }
 
-fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
+pub(super) fn parse<T: DeserializeOwned>(body: &[u8]) -> Result<T, ApiError> {
     serde_json::from_slice(body)
         .map_err(|_| ApiError::bad_request("the body is not a valid request for this route"))
 }
 
 /// An octal mode, `600` or `0600`.
-fn mode(m: Option<&str>) -> Result<Option<i64>, ApiError> {
+pub(super) fn mode(m: Option<&str>) -> Result<Option<i64>, ApiError> {
     m.map(|m| {
         i64::from_str_radix(m, 8)
             .ok()
@@ -179,7 +179,7 @@ fn mode(m: Option<&str>) -> Result<Option<i64>, ApiError> {
     .transpose()
 }
 
-fn sealer(app: &App) -> Result<&SecretBox, ApiError> {
+pub(super) fn sealer(app: &App) -> Result<&SecretBox, ApiError> {
     app.secrets.as_deref().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -234,6 +234,28 @@ fn not_account(name: &str) -> Result<&str, ApiError> {
     }
 }
 
+/// Project secrets (`/projects/{id}/secrets`) are not written, moved or deleted here: the project
+/// routes check that no spec still uses one. `secret` is the existing secret, `group` the group a
+/// request asks for.
+async fn not_project(app: &App, secret: Option<&str>, group: Option<&str>) -> Result<(), ApiError> {
+    let named = group.is_some_and(|g| g.starts_with(crate::store::project_secrets::GROUP_PREFIX));
+    let member = match secret {
+        Some(n) => {
+            let mut conn = app.pool.acquire().await?;
+            crate::store::project_secrets::is_member(&mut conn, n).await?
+        }
+        None => false,
+    };
+    match named || member {
+        true => Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "project secrets are managed through the project's secrets",
+        )),
+        false => Ok(()),
+    }
+}
+
 #[utoipa::path(get, path = "/api/v1/secrets", operation_id = "listSecrets", tag = "secrets",
     responses((status = 200, description = "Every secret, by name, without its value", body = Vec<SecretInfo>)))]
 pub async fn list(State(app): State<App>) -> ApiResult<Vec<SecretInfo>> {
@@ -254,6 +276,7 @@ pub async fn create(
 ) -> ApiResult<SecretInfo> {
     let b: NewSecret = parse(&body)?;
     not_account(&b.name)?;
+    not_project(&app, None, b.group.as_deref()).await?;
     let new = NewValue {
         value: &b.value,
         runners: b.runners.as_deref(),
@@ -291,6 +314,7 @@ pub async fn rotate(
 ) -> ApiResult<SecretInfo> {
     let n = not_account(name(&n)?)?;
     let b: RotateSecret = parse(&body)?;
+    not_project(&app, Some(n), b.group.as_deref()).await?;
     let new = NewValue {
         value: &b.value,
         runners: b.runners.as_deref(),
@@ -330,7 +354,9 @@ pub async fn delete(
     Extension(me): Extension<Caller>,
     Path(n): Path<String>,
 ) -> ApiResult<SecretDeleted> {
-    store::delete(&app.pool, not_account(name(&n)?)?, &me.device.id, BY).await?;
+    let n = not_account(name(&n)?)?;
+    not_project(&app, Some(n), None).await?;
+    store::delete(&app.pool, n, &me.device.id, BY).await?;
     Ok(Json(SecretDeleted { deleted: true }))
 }
 

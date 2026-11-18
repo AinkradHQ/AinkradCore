@@ -101,6 +101,7 @@ mod passkeys;
 mod placement;
 mod pools;
 mod preauth;
+mod project_secrets_api;
 mod projects_api;
 mod providers;
 mod push;

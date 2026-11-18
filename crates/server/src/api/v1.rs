@@ -89,6 +89,7 @@ pub const QUERY: &[&str] = &[
     "origin",
     "nobody_watching",
     "archived",
+    "force",
 ];
 
 /// A page of a list: the cursor to continue after (its meaning is per route) and how many.
@@ -416,6 +417,14 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/projects/{id}/spec/versions/{version}",
             get(projects::run_spec::version),
+        )
+        .route(
+            "/api/v1/projects/{id}/secrets",
+            get(projects::secrets::list),
+        )
+        .route(
+            "/api/v1/projects/{id}/secrets/{name}",
+            put(projects::secrets::set).delete(projects::secrets::delete),
         )
         .route("/api/v1/secrets", get(secrets::list).post(secrets::create))
         .route(
