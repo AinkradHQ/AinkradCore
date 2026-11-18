@@ -79,6 +79,8 @@
     "notify.delivery",
     "project.archived",
     "project.created",
+    "project.run_started",
+    "project.run_stopped",
     "project.spec_saved",
     "project.updated",
     "runner.connected",
