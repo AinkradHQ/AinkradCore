@@ -239,6 +239,42 @@ pub async fn consume(
     .map(|r| r.rows_affected() == 1)
 }
 
+/// Voids an approved approval that cannot be spent (what it was asked for changed): it is never
+/// found or spent later.
+///
+/// # Errors
+///
+/// A store failure.
+pub async fn void(pool: &SqlitePool, id: &str, session: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE core_code_mode_approvals SET state = 'void' \
+         WHERE id = ? AND session = ? AND state = 'approved'",
+    )
+    .bind(id)
+    .bind(session)
+    .execute(pool)
+    .await
+    .map(drop)
+}
+
+/// Voids an approval that is still pending or approved but unspent, because the call that asked
+/// for it was dropped: it is never found or spent later.
+///
+/// # Errors
+///
+/// A store failure.
+pub async fn abandon(pool: &SqlitePool, id: &str, session: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE core_code_mode_approvals SET state = 'void' \
+         WHERE id = ? AND session = ? AND state IN ('pending', 'approved')",
+    )
+    .bind(id)
+    .bind(session)
+    .execute(pool)
+    .await
+    .map(drop)
+}
+
 /// A person's decision on `request` of `session`, made by `device` (who already passed the gate).
 ///
 /// # Errors

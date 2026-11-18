@@ -68,6 +68,11 @@ pub struct PtyOpen {
     /// terminals; the runner clamps it. Absent: unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollback_budget: Option<u64>,
+    /// An interactive SSH terminal (Leyline): the runner starts its own `ssh-pty` as the terminal's
+    /// program, handing it the redeemed keys over an inherited pipe. Then `program`, `args`,
+    /// `cwd`, `session`, `env` and `env_pass` must be empty (`invalid_args`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<super::SshTerminal>,
 }
 
 /// The bounds the runner clamps a terminal's scrollback cap and its disk budget to; the
@@ -153,6 +158,12 @@ pub struct TerminalExit {
     /// The signal's description, when one ended it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signal: Option<String>,
+    /// An interactive SSH terminal that never reached a shell because a hop's host key was not
+    /// trusted (exit code `SSH_PTY_EXIT_HOST_KEY_UNKNOWN` or `_CHANGED`): which hop, and the key it
+    /// presented. Reported by `ssh-pty` itself over a private descriptor, never read from the
+    /// terminal's output, which a remote shell controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_key: Option<super::HostKeyEvidence>,
 }
 
 /// A terminal's lifecycle (E2-01.1): created → running → exited → reaped.

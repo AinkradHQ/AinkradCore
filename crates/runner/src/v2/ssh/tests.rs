@@ -173,9 +173,12 @@ async fn capacity_is_the_exec_drivers() {
     assert_eq!(d.slot().unwrap_err().code, ErrorCode::Busy);
     let commands = d.info().unwrap().commands;
     assert_eq!(commands[0], OP_SSH_EXEC);
-    // ... and the sftp ops (Y2-03), all of them.
-    assert_eq!(commands.len(), 1 + 7);
-    assert!(commands[1..].iter().all(|c| c.starts_with("ssh.sftp.")));
+    // ... the sftp ops (Y2-03), all of them, the Mac-direct agent pair (Y6-01), and the feature flag of
+    // interactive terminals (Y2-02).
+    assert_eq!(commands.len(), 1 + 7 + 2 + 1);
+    assert!(commands[1..8].iter().all(|c| c.starts_with("ssh.sftp.")));
+    assert!(commands[8..10].iter().all(|c| c.starts_with("ssh.agent.")));
+    assert_eq!(commands[10], FEATURE_PTY_SSH);
 }
 
 #[tokio::test]
@@ -228,7 +231,7 @@ async fn sha1_kex_and_sha1_host_keys_are_refused() {
     assert_eq!(e.code, ErrorCode::SshFailed);
     assert_eq!(s.seen.auth.load(SeqCst), 0);
     // The client never offers SHA-1, CBC or DSA of any kind.
-    let c = super::config();
+    let c = super::config(false);
     let names: Vec<String> = c
         .preferred
         .key

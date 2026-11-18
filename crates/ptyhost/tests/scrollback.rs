@@ -41,6 +41,7 @@ fn sh(script: &str, cap: Option<u64>) -> Spec {
         ),
         size: SIZE,
         scrollback_bytes: cap,
+        fd3: None,
     }
 }
 

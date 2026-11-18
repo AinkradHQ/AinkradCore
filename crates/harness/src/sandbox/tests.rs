@@ -315,6 +315,40 @@ sys.exit(99)
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// Real `sandbox-exec` accepts the `ainkrad-ssh.*` deny (a profile it rejects would not start at all)
+/// and enforces it: a Mac-direct agent directory inside an otherwise writable tmp is unreadable and
+/// unwritable, its sibling is not (Leyline Y6-01).
+#[cfg(target_os = "macos")]
+#[tokio::test]
+#[ignore = "OWNER: run scripts/sandbox-macos-test.sh"]
+async fn sandbox_exec_accepts_and_enforces_the_mac_direct_agent_deny() {
+    let (root, mut spec) = fixture("ssh-agent-real");
+    let tmp = root.join("tmp");
+    for d in ["ainkrad-ssh.abc123", "plain"] {
+        std::fs::create_dir_all(tmp.join(d)).unwrap();
+        std::fs::write(tmp.join(d).join("ssh_config"), "Host *\n").unwrap();
+    }
+    spec.env
+        .push(("AINKRAD_SANDBOX_HIDE_TMP".into(), tmp.clone().into()));
+    let (code, err) = run(
+        &spec,
+        "/bin/bash",
+        r#"
+        t="$CANARY_ROOT/tmp"
+        test -r "$t/plain/ssh_config" &&
+        echo ok > "$t/plain/new" &&
+        test ! -r "$t/ainkrad-ssh.abc123/ssh_config" &&
+        ! echo x > "$t/ainkrad-ssh.abc123/new" &&
+        echo ok > allowed
+    "#,
+    )
+    .await;
+    assert_eq!(code, Some(0), "the agent directory deny: {err}");
+    assert!(root.join("work/allowed").exists());
+    assert!(!tmp.join("ainkrad-ssh.abc123/new").exists());
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[tokio::test]
 #[cfg_attr(
     target_os = "macos",
@@ -712,4 +746,28 @@ mod mac_slots {
         }
         let _ = std::fs::remove_dir_all(root);
     }
+}
+
+#[test]
+fn the_runners_mac_direct_agent_sockets_are_denied_by_name_last() {
+    let (root, mut spec) = fixture("ssh-agent-hide");
+    spec.env.push((
+        "AINKRAD_SANDBOX_HIDE_TMP".into(),
+        "/private/var/folders/ab/c+d/T/".into(),
+    ));
+    let text = profile(&spec, OsStr::new("/bin/true"));
+    let deny = "(deny file-read* file-write* (regex #\"^/private/var/folders/ab/c\\+d/T/ainkrad-ssh\\.\"))";
+    let other =
+        "(deny file-read* file-write* (regex #\"^/var/folders/ab/c\\+d/T/ainkrad-ssh\\.\"))";
+    assert!(text.contains(deny), "{text}");
+    assert!(text.contains(other), "the /var spelling");
+    // After every grant: nothing later can allow it again.
+    assert!(text.rfind("(allow").unwrap() < text.find(deny).unwrap());
+    // A path a regex literal cannot hold: the whole directory is denied instead.
+    spec.env
+        .push(("AINKRAD_SANDBOX_HIDE_TMP".into(), "/tmp/a\"b".into()));
+    let text = profile(&spec, OsStr::new("/bin/true"));
+    assert!(text.contains("(deny file-read* file-write* (subpath \"/tmp/a\\\"b\"))"));
+    assert!(!text.contains("ainkrad-ssh"));
+    let _ = std::fs::remove_dir_all(root);
 }

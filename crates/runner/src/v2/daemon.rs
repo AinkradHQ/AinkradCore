@@ -101,8 +101,10 @@ impl Daemon {
         if let Some(control) = &self.control {
             session = session.with_control(Arc::clone(control));
         }
-        if let Some(ssh) = self.ssh_driver() {
-            session = session.with_ssh(ssh);
+        // Mac-direct agents end when this link has been down for 5 minutes (Y6-01).
+        let ssh = self.ssh_driver();
+        if let Some(ssh) = &ssh {
+            session = session.with_ssh(Arc::clone(ssh));
         }
         if let Some(design) = super::DesignDriver::discover() {
             session = session.with_design(Arc::new(design));
@@ -114,6 +116,9 @@ impl Daemon {
                 let current = self.enrolment.lock().unwrap().clone();
                 let (ws, exporter) =
                     dial(&self.client, &self.key, &current, self.tls.clone()).await?;
+                if let Some(ssh) = &ssh {
+                    ssh.link_up();
+                }
                 let link = Link {
                     key: Arc::clone(&self.key),
                     enrolment: Arc::clone(&self.enrolment),
@@ -126,6 +131,9 @@ impl Daemon {
                 o = attempt => o,
                 _ = stop.wait_for(|s| *s) => return Ok(()),
             };
+            if let Some(ssh) = &ssh {
+                ssh.link_lost();
+            }
             if !matches!(&outcome, Err(e) if e.auth_failed()) {
                 refused = 0;
             }
