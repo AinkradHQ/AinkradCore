@@ -310,6 +310,9 @@ impl Live {
         let txn = self.doc().transact();
         let mut doc = Doc::default();
         for (id, v) in self.nodes.iter(&txn).take(MAX_NODES) {
+            if !design_model::ids::is_node_id(id) {
+                continue;
+            }
             if let Ok(n) = read::node_out(&txn, v) {
                 doc.nodes.insert(id.to_string(), n);
             }

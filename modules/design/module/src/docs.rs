@@ -360,7 +360,13 @@ async fn set_paused(app: App, doc: String, paused: bool) -> ApiResult<DocView> {
     .await?
     .rows_affected();
     if changed > 0 {
-        record(&mut tx, if paused { "taken_over" } else { "resumed" }, &doc, None).await?;
+        record(
+            &mut tx,
+            if paused { "taken_over" } else { "resumed" },
+            &doc,
+            None,
+        )
+        .await?;
     }
     let out = view(&mut tx, &doc).await?;
     tx.commit().await?;

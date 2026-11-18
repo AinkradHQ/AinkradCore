@@ -76,6 +76,8 @@ pub const DE_MAX_ENGINES: usize = 64;
 pub const DE_MAX_SYNC_BYTES: usize = 33 << 20;
 pub const DE_MAX_JSON_BYTES: usize = 1 << 20;
 pub const DE_MAX_ID_BYTES: usize = 128;
+/// Ids one `de_select` takes.
+pub const DE_MAX_SELECT_IDS: usize = 4096;
 pub const DE_MAX_BLOB_BYTES: usize = 25 << 20;
 
 // Literals for the header; kept equal to the document crate's caps.

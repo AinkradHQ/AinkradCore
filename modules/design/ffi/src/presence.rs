@@ -71,8 +71,12 @@ fn view_of(v: &Value) -> Option<[f32; 4]> {
         a[2].as_f64()?,
         a[3].as_f64()?,
     ];
-    (finite(&r, MAX_COORD as f64) && r[2] > 0.0 && r[3] > 0.0)
-        .then_some([r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32])
+    (finite(&r, MAX_COORD as f64) && r[2] > 0.0 && r[3] > 0.0).then_some([
+        r[0] as f32,
+        r[1] as f32,
+        r[2] as f32,
+        r[3] as f32,
+    ])
 }
 
 fn peer_ok(p: &str) -> bool {
@@ -128,11 +132,7 @@ impl Peers {
             }
             return true;
         }
-        let Some(peer) = v
-            .get("peer")
-            .and_then(Value::as_str)
-            .filter(|p| peer_ok(p))
-        else {
+        let Some(peer) = v.get("peer").and_then(Value::as_str).filter(|p| peer_ok(p)) else {
             return false;
         };
         let cursor = match v.get("cursor") {
@@ -376,7 +376,11 @@ mod tests {
     fn peers_come_go_expire_and_cap() {
         let mut p = Peers::default();
         assert!(p.apply(
-            &msg(1, "person:d_a", r#","cursor":[1,2],"selection":["n_aaaaaaaaaaaa"]"#),
+            &msg(
+                1,
+                "person:d_a",
+                r#","cursor":[1,2],"selection":["n_aaaaaaaaaaaa"]"#
+            ),
             0
         ));
         assert!(p.apply(&msg(2, "session:as_1", ""), 0));
@@ -402,7 +406,10 @@ mod tests {
     fn a_message_at_the_relay_limit_survives_reserialising() {
         // a relay-sized selection, as the relay re-serialises it (ids escaped, peer and conn added)
         let ids = vec![r#""n_aaaaaaaaaaaa""#; 200].join(",");
-        let sent = format!(r#"{{"label":"Ana","selection":[{ids}],"pad":"{}"}}"#, "x".repeat(RELAY_INPUT - 3500));
+        let sent = format!(
+            r#"{{"label":"Ana","selection":[{ids}],"pad":"{}"}}"#,
+            "x".repeat(RELAY_INPUT - 3500)
+        );
         assert!(sent.len() <= RELAY_INPUT);
         let mut v: Value = serde_json::from_str(&sent).unwrap();
         v["peer"] = json!("session:as_aaaaaaaaaaaaaaaaaaaa");
@@ -415,7 +422,8 @@ mod tests {
     #[test]
     fn labels_lose_format_characters() {
         let mut p = Peers::default();
-        let m = msg(1, "person:d_a", "").replace("Ana", "A\\u202Eb\\u200Bc\\u2066d\\u2069e\\uFEFFf\\u200Fg");
+        let m = msg(1, "person:d_a", "")
+            .replace("Ana", "A\\u202Eb\\u200Bc\\u2066d\\u2069e\\uFEFFf\\u200Fg");
         assert!(p.apply(&m, 0));
         assert_eq!(p.marks(0, |_| None)[0].label, "Abcdefg");
     }
@@ -443,10 +451,7 @@ mod tests {
             "[{}]",
             vec![r#""n_aaaaaaaaaaaa""#; MAX_SELECTION + 1].join(",")
         );
-        assert!(!p.apply(
-            &msg(1, "person:d_a", &format!(r#","selection":{many}"#)),
-            0
-        ));
+        assert!(!p.apply(&msg(1, "person:d_a", &format!(r#","selection":{many}"#)), 0));
         assert_eq!(p.marks(0, |_| None).len(), 0, "nothing was partly applied");
     }
 
