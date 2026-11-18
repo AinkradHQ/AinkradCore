@@ -538,7 +538,10 @@ impl Session {
             | Command::AgentAttach(_)
             | Command::AgentSubagentStop(_)
             | Command::GatewayTest(_) => self.start_agent(stream, command),
-            Command::RunStart(_) | Command::RunStop(_) | Command::RunStatus(_) => {
+            Command::RunStart(_)
+            | Command::RunStop(_)
+            | Command::RunStatus(_)
+            | Command::RunObserve(_) => {
                 let Some(run) = self.run.as_ref().filter(|r| r.info().is_some()) else {
                     return Some(Body::Error(StreamError::new(
                         ErrorCode::UnsupportedCommand,

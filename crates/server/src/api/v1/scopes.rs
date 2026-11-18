@@ -202,6 +202,10 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/run/stop", "admin"),
     ("POST", "/api/v1/projects/{id}/run/restart", "admin"),
     ("POST", "/api/v1/projects/{id}/run/activity", "read"),
+    ("GET", "/api/v1/projects/{id}/run/services", "read"),
+    // Logs are what the project's code printed (redacted, but still its own words): admin.
+    ("GET", "/api/v1/projects/{id}/run/logs", "admin"),
+    ("GET", "/api/v1/projects/{id}/run/logs/ws", "admin"),
     ("GET", "/api/v1/secrets", "admin"),
     ("POST", "/api/v1/secrets", "admin"),
     ("PUT", "/api/v1/secrets/{id}", "admin"),

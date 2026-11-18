@@ -57,6 +57,8 @@ pub struct Elevated(());
 pub enum RunHousekeeping {
     Stop(ainkrad_proto::v2::RunStop),
     Status(ainkrad_proto::v2::RunStatusReq),
+    /// Read-only: service metrics and log lines (P5-04).
+    Observe(ainkrad_proto::v2::RunObserveReq),
 }
 
 impl Elevated {
@@ -424,6 +426,7 @@ impl Hub {
         let command = match op {
             RunHousekeeping::Stop(s) => Command::RunStop(s),
             RunHousekeeping::Status(s) => Command::RunStatus(s),
+            RunHousekeeping::Observe(s) => Command::RunObserve(s),
         };
         self.send_command(runner, command)
     }

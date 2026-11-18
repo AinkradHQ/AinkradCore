@@ -40,6 +40,13 @@ pub enum Request {
     Status {
         run: Option<String>,
     },
+    /// Metrics (when asked) and the newest log lines at or after `since` (P5-04).
+    Observe {
+        run: String,
+        service: Option<String>,
+        since: Option<String>,
+        metrics: bool,
+    },
 }
 
 fn read_line(stream: &mut UnixStream) -> Option<Vec<u8>> {
@@ -106,6 +113,21 @@ fn handle(engine: &Engine, stream: &mut UnixStream, req: Request) -> Result<Valu
             .find(&run)
             .map(|r| ainkrad_proto::v2::RunList { runs: vec![r] })),
         Request::Status { run: None } => v(engine.list()),
+        Request::Observe {
+            run,
+            service,
+            since,
+            metrics,
+        } if ainkrad_proto::v2::valid_run_id(&run)
+            && service
+                .as_deref()
+                .is_none_or(ainkrad_proto::v2::valid_run_id)
+            && since
+                .as_deref()
+                .is_none_or(|s| s.len() <= 40 && !s.starts_with('-')) =>
+        {
+            v(engine.observe(&run, service.as_deref(), since.as_deref(), metrics))
+        }
         _ => Err("not a run id".to_owned()),
     }
 }

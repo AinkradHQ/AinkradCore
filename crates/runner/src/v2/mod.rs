@@ -35,6 +35,7 @@ mod facts;
 pub mod key;
 pub mod login;
 pub mod mirror;
+mod observe;
 pub mod pair;
 pub mod pty;
 mod run;

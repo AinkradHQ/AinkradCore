@@ -45,6 +45,7 @@ use std::time::{Duration, Instant};
 use ainkrad_proto::v2::{RunInfo, RunLimits, RunPhase, RunService, RunStart};
 
 pub mod helper;
+pub mod observe;
 mod prepare;
 mod ps;
 mod state;

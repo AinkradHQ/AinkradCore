@@ -87,6 +87,8 @@ pub enum Command {
     RunStop(super::RunStop),
     #[serde(rename = "run.status")]
     RunStatus(super::RunStatusReq),
+    #[serde(rename = "run.observe")]
+    RunObserve(super::RunObserveReq),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -131,6 +133,7 @@ impl Command {
             Self::RunStart(_) => super::OP_RUN_START,
             Self::RunStop(_) => super::OP_RUN_STOP,
             Self::RunStatus(_) => super::OP_RUN_STATUS,
+            Self::RunObserve(_) => super::OP_RUN_OBSERVE,
             Self::Unknown => "unknown",
         }
     }
@@ -251,6 +254,9 @@ pub enum Reply {
     RunStop(super::RunInfo),
     #[serde(rename = "run.status")]
     RunStatus(super::RunList),
+    /// `run.observe`: service metrics and the new log lines of one run.
+    #[serde(rename = "run.observe")]
+    RunObserve(super::RunObserve),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

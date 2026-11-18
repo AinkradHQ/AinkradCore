@@ -443,6 +443,18 @@ pub fn router(app: App) -> Router {
             post(projects::runs::activity),
         )
         .route(
+            "/api/v1/projects/{id}/run/services",
+            get(projects::run_logs::services),
+        )
+        .route(
+            "/api/v1/projects/{id}/run/logs",
+            get(projects::run_logs::logs),
+        )
+        .route(
+            "/api/v1/projects/{id}/run/logs/ws",
+            get(projects::run_logs::logs_ws),
+        )
+        .route(
             "/api/v1/projects/{id}/spec/versions/{version}",
             get(projects::run_spec::version),
         )

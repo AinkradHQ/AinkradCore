@@ -9,8 +9,8 @@ use std::time::{Duration, SystemTime};
 
 use ainkrad_proto::runner::Workspace;
 use ainkrad_proto::v2::{
-    Command, DRIVER_RUN, DriverInfo, ErrorCode, OP_RUN_START, OP_RUN_STATUS, OP_RUN_STOP, Reply,
-    RunStart, StreamError,
+    Command, DRIVER_RUN, DriverInfo, ErrorCode, OP_RUN_OBSERVE, OP_RUN_START, OP_RUN_STATUS,
+    OP_RUN_STOP, Reply, RunStart, StreamError,
 };
 use zeroize::Zeroizing;
 
@@ -27,6 +27,8 @@ pub struct RunDriver {
     /// Clones a run's repos from the Core's copies (the agent driver's mirror path); without it a
     /// run that builds from a repo cannot start here.
     clones: Option<Arc<super::agent::AgentDriver>>,
+    /// Logs and metrics of the runs watched (P5-04), and the values to redact from them.
+    observers: Arc<super::observe::Observers>,
 }
 
 /// The unit that loads `deploy/run-egress.nft` (and re-loads it with nftables.service).
@@ -105,8 +107,10 @@ pub(super) fn fill(
 
 impl RunDriver {
     pub fn new(socket: impl Into<PathBuf>, redeem: Redeem, checkouts: impl Into<PathBuf>) -> Self {
+        let socket: PathBuf = socket.into();
         Self {
-            socket: socket.into(),
+            observers: Arc::new(super::observe::Observers::new(socket.clone())),
+            socket,
             redeem,
             checkouts: checkouts.into(),
             clones: None,
@@ -195,7 +199,7 @@ impl RunDriver {
     pub fn info(&self) -> Option<DriverInfo> {
         self.socket.exists().then(|| DriverInfo {
             name: DRIVER_RUN.to_owned(),
-            commands: [OP_RUN_START, OP_RUN_STOP, OP_RUN_STATUS]
+            commands: [OP_RUN_START, OP_RUN_STOP, OP_RUN_STATUS, OP_RUN_OBSERVE]
                 .map(str::to_owned)
                 .into(),
             capacity: 4,
@@ -225,6 +229,7 @@ impl RunDriver {
                 self.start_bundled(req).await
             }
             Command::RunStop(req) => {
+                self.observers.forget(&req.run);
                 let v = helper::call(&self.socket, &Request::Stop { run: req.run }, &[]).await;
                 Ok(Reply::RunStop(de(v.map_err(internal)?)?))
             }
@@ -232,6 +237,7 @@ impl RunDriver {
                 let v = helper::call(&self.socket, &Request::Status { run: req.run }, &[]).await;
                 Ok(Reply::RunStatus(de(v.map_err(internal)?)?))
             }
+            Command::RunObserve(req) => Ok(Reply::RunObserve(self.observers.observe(req).await?)),
             _ => Err(StreamError::new(
                 ErrorCode::UnsupportedCommand,
                 "not a run op",
@@ -280,6 +286,8 @@ impl RunDriver {
             if leased.form != Form::Text || leased.value.contains(['\n', '\r', '\0']) {
                 return Err(invalid(format!("{} is not a one-line text secret", s.name)));
             }
+            // Before any container exists: its logs are redacted of this value from the first line.
+            self.observers.know(&req.run, &s.name, &leased.value);
             values.insert(s.name, leased.value);
         }
         for svc in req.spec.services.values_mut() {
