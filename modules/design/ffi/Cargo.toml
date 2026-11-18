@@ -25,6 +25,8 @@ design-doc = { path = "../doc" }
 design-model = { path = "../model" }
 design-render = { path = "../render" }
 serde_json = "1.0.154"
+# V2-04: caret steps over whole grapheme clusters (emoji sequences, combining marks) and words
+unicode-segmentation = "1.13.3"
 # T6: Skia only from prebuilt binaries. `no-compile` makes skia-bindings fail instead of falling back to a source build
 # when the (pinned, verified: scripts/design-engine.sh) archive is missing.
 skia-bindings = { version = "=0.157.0", default-features = false, features = ["no-compile"] }
