@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use ainkrad_core::untrusted::wrap;
 use brain_model::admit::Grounds;
 use brain_model::item::SourceKind;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::answer_turns::{escape_tags, tagged, user_turns, words};
 
@@ -37,7 +37,7 @@ pub(crate) const MAX_RELATED: usize = 30;
 const RELATED_CHARS: usize = 400;
 
 /// One proposed record, as the model wrote it and the validator accepted it.
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Candidate {
     #[serde(rename = "type")]
@@ -101,7 +101,7 @@ pub fn pick_related(all: Vec<Related>, sources: &[Source]) -> Vec<Related> {
     scored.into_iter().take(MAX_RELATED).map(|x| x.1).collect()
 }
 
-fn one_line(s: &str, max: usize) -> String {
+pub(crate) fn one_line(s: &str, max: usize) -> String {
     s.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -227,7 +227,10 @@ pub(crate) fn user_grounded(c: &Candidate, known: &Known) -> bool {
 /// Is the body backed by ONE Jira or GitHub item it cites, the same way (the whole item is one
 /// block)? Used only for tasks and project state, never for rules or preferences.
 pub(crate) fn structured_grounded(c: &Candidate, known: &Known) -> bool {
-    grounded_in(&c.body, c.sources.iter().filter_map(|s| known.structured.get(s)))
+    grounded_in(
+        &c.body,
+        c.sources.iter().filter_map(|s| known.structured.get(s)),
+    )
 }
 
 fn grounded_in<'a>(body: &str, mut blocks: impl Iterator<Item = &'a Grounds>) -> bool {
@@ -300,7 +303,10 @@ pub fn parse_output(out: &str, known: &Known) -> Result<Vec<Candidate>, String> 
             }
             if !grounded {
                 for link in [&mut c.same_as, &mut c.replaces] {
-                    if link.as_deref().is_some_and(|id| known.protected.contains(id)) {
+                    if link
+                        .as_deref()
+                        .is_some_and(|id| known.protected.contains(id))
+                    {
                         *link = None;
                     }
                 }

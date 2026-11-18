@@ -77,7 +77,7 @@ pub(crate) async fn ensure(
         let mut after = String::new();
         loop {
             let rows = sqlx::query(
-                "SELECT item_id, source_kind, started_at, title, text FROM sources WHERE item_id > ? ORDER BY item_id LIMIT ?",
+                "SELECT item_id, source_kind, started_at, title, text FROM sources WHERE compacted_at IS NULL AND item_id > ? ORDER BY item_id LIMIT ?",
             )
             .bind(&after)
             .bind(PAGE)

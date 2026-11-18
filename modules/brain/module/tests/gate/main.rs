@@ -19,6 +19,7 @@ mod merge;
 mod overview;
 mod project_rooms;
 mod query;
+mod retention;
 mod review;
 mod schema_v2;
 mod rooms;

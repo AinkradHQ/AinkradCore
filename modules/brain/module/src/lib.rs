@@ -41,19 +41,22 @@ pub mod eval;
 pub mod files;
 mod imports;
 mod inbox;
-pub mod merge;
 mod index;
+mod judge;
 pub mod key;
 mod lore;
+pub mod merge;
 mod overview;
 pub mod overview_select;
 pub mod overview_write;
 mod policy;
 mod project_rooms;
 pub mod propose;
+pub mod retention;
 mod review;
 pub mod rooms;
 mod rules_api;
+mod save;
 pub mod semantic;
 mod suggest;
 mod sync;
@@ -209,7 +212,11 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/ai/rooms", "read"),
     ("GET", "/ai/search", "read"),
     ("GET", "/ai/rooms/{room}/records/{id}", "read"),
-    ("GET", "/ai/rooms/{room}/records/{id}/sources/{source}", "read"),
+    (
+        "GET",
+        "/ai/rooms/{room}/records/{id}/sources/{source}",
+        "read",
+    ),
     ("GET", "/ai/decisions", "read"),
     ("GET", "/ai/project-state", "read"),
     ("POST", "/ai/rooms/{room}/propose", "agent"),
@@ -509,6 +516,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         change_routes::list,
         change_routes::one,
         change_routes::undo_route,
+        retention::preview,
         distil::start,
         distil::list,
         overview::get,
@@ -599,6 +607,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         change_routes::ChangeRow,
         change_routes::ChangeDetail,
         change_routes::UndoResult,
+        retention::RetentionPreview,
         policy::PolicyView,
         policy::PolicyPatch,
         policy::PolicyAccount,
@@ -669,7 +678,11 @@ impl Module for Brain {
             .route("/rooms/{room}/inbox/{id}", post(inbox::decide))
             .route("/rooms/{room}/changes", get(change_routes::list))
             .route("/rooms/{room}/changes/{id}", get(change_routes::one))
-            .route("/rooms/{room}/changes/{id}/undo", post(change_routes::undo_route))
+            .route(
+                "/rooms/{room}/changes/{id}/undo",
+                post(change_routes::undo_route),
+            )
+            .route("/rooms/{room}/retention", get(retention::preview))
             .route("/rooms/{room}/distil", post(distil::start))
             .route("/rooms/{room}/distils", get(distil::list))
             .route("/rooms/{room}/overview", get(overview::get))
@@ -754,6 +767,7 @@ impl Module for Brain {
             "brain.alias.removed",
             "brain.change.undone",
             "brain.room.purged",
+            "brain.room.compacted",
         ]
     }
 
@@ -769,6 +783,7 @@ impl Module for Brain {
             overview::job(self),
             project_rooms::job(self),
             changes::job(self),
+            retention::job(self),
         ]
     }
 
