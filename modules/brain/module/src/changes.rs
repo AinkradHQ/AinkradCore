@@ -32,6 +32,10 @@ use crate::{Brain, rand_id, record};
 pub const KINDS: &[&str] = &["distil", "checkpoint", "ai", "tidy", "purge", "archive"];
 /// Archived records are purged this many days after `archived_at` (and Undo lasts as long).
 pub const PURGE_DAYS: i64 = 30;
+/// A record a room tidy archived (not yet undone) is kept this many days longer, so a person has time
+/// to see the change in Activity and Undo it. (There is no per-change "seen" mark; a longer window
+/// instead of a `seen_at` column.)
+pub const TIDY_EXTRA_DAYS: i64 = 60;
 /// Daily, 03:17 UTC.
 const PURGE_CRON: &str = "17 3 * * *";
 
@@ -157,7 +161,11 @@ impl ChangeSet {
     }
 
     /// Records the row's image before the writer changes it (once per id; a new id has none).
-    pub async fn touch(&mut self, conn: &mut SqliteConnection, record: &str) -> Result<(), sqlx::Error> {
+    pub async fn touch(
+        &mut self,
+        conn: &mut SqliteConnection,
+        record: &str,
+    ) -> Result<(), sqlx::Error> {
         if self.seen.iter().all(|(r, _)| r != record) {
             let before = image(conn, record).await?;
             self.seen.push((record.to_owned(), before));
@@ -249,10 +257,12 @@ pub async fn undo(
             }
         }));
     }
-    let rows = sqlx::query("SELECT record, before, after FROM change_rows WHERE change = ? ORDER BY seq DESC")
-        .bind(change)
-        .fetch_all(&mut *tx)
-        .await?;
+    let rows = sqlx::query(
+        "SELECT record, before, after FROM change_rows WHERE change = ? ORDER BY seq DESC",
+    )
+    .bind(change)
+    .fetch_all(&mut *tx)
+    .await?;
     let mut out = Undone {
         restored: vec![],
         skipped: vec![],
@@ -272,8 +282,15 @@ pub async fn undo(
         }
     }
     for (record, before, after) in changed {
-        unlink_successor(&mut *tx, &record, before.as_deref(), after.as_deref(), &out.restored, now)
-            .await?;
+        unlink_successor(
+            &mut *tx,
+            &record,
+            before.as_deref(),
+            after.as_deref(),
+            &out.restored,
+            now,
+        )
+        .await?;
         out.skipped.push(record);
     }
     Ok(Some(Ok(out)))
@@ -332,11 +349,16 @@ pub async fn purge_room(
     cutoff: &str,
 ) -> Result<(usize, usize), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let ids: Vec<String> =
-        sqlx::query_scalar("SELECT id FROM records WHERE archived_at IS NOT NULL AND archived_at < ?")
-            .bind(cutoff)
-            .fetch_all(&mut *tx)
-            .await?;
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM records WHERE archived_at IS NOT NULL AND archived_at < ?1 \
+             AND (archived_at < strftime('%Y-%m-%dT%H:%M:%SZ', ?1, ?2) OR NOT EXISTS ( \
+               SELECT 1 FROM change_rows cr JOIN changes c ON c.id = cr.change \
+               WHERE cr.record = records.id AND c.kind = 'tidy' AND c.undone_at IS NULL))",
+    )
+    .bind(cutoff)
+    .bind(format!("-{TIDY_EXTRA_DAYS} days"))
+    .fetch_all(&mut *tx)
+    .await?;
     for id in &ids {
         sqlx::query("DELETE FROM change_rows WHERE record = ?")
             .bind(id)
@@ -390,8 +412,13 @@ impl Brain {
                 .await?;
         let mut total = 0;
         for room in rooms {
-            let Ok(pool) =
-                files::open_migrated(&files::room_path(&files::root(app), &room), &key, false, CANON).await
+            let Ok(pool) = files::open_migrated(
+                &files::room_path(&files::root(app), &room),
+                &key,
+                false,
+                CANON,
+            )
+            .await
             else {
                 continue;
             };

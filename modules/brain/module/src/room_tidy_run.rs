@@ -15,7 +15,9 @@ use sqlx::SqlitePool;
 
 use crate::answer::one_line;
 use crate::distil::{self, answer_of};
-use crate::room_tidy::{AGENT, EVERY_SECS, PENDING_SECS, apply, build_prompt, due, shown_in, validate, within_caps};
+use crate::room_tidy::{
+    AGENT, EVERY_SECS, PENDING_SECS, apply, build_prompt, due, shown_in, validate, within_caps,
+};
 use crate::{Brain, judge, record};
 
 async fn started_since(app: &App, room: Option<&str>, since: &str) -> Result<i64, sqlx::Error> {
@@ -37,11 +39,10 @@ async fn start(app: &App, room: &str, pool: &SqlitePool, now: i64) -> Result<boo
         sqlx::query_scalar("SELECT max(at) FROM room_audit WHERE action = 'tidy.run'")
             .fetch_one(pool)
             .await?;
-    let new: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM memory WHERE created_at > ?")
-            .bind(last.as_deref().unwrap_or(""))
-            .fetch_one(pool)
-            .await?;
+    let new: i64 = sqlx::query_scalar("SELECT count(*) FROM memory WHERE created_at > ?")
+        .bind(last.as_deref().unwrap_or(""))
+        .fetch_one(pool)
+        .await?;
     let age = last
         .as_deref()
         .and_then(ainkrad_core_server::scheduler::unix_secs)
@@ -77,6 +78,11 @@ async fn start(app: &App, room: &str, pool: &SqlitePool, now: i64) -> Result<boo
     }
     let name = crate::policy::load(app, room).await?.name;
     let prompt = build_prompt(&name, &shown);
+    // The cap counts this row, so it is written BEFORE the session exists: a crash between the two
+    // can only cost the day's slot, never let a second tidy start. (A declined launch costs it too.)
+    let mut tx = begin_write(&app.pool).await?;
+    record(&mut tx, "brain.tidy.started", json!({"room": room}), None).await?;
+    tx.commit().await?;
     let Some(session) = judge::launch_as(app, room, &by, &prompt, AGENT).await? else {
         return Ok(false);
     };
@@ -90,9 +96,6 @@ async fn start(app: &App, room: &str, pool: &SqlitePool, now: i64) -> Result<boo
             .execute(pool)
             .await?;
     }
-    let mut tx = begin_write(&app.pool).await?;
-    record(&mut tx, "brain.tidy.started", json!({"room": room, "session": session}), None).await?;
-    tx.commit().await?;
     Ok(true)
 }
 
@@ -109,7 +112,11 @@ async fn finish(
     let session = v["session"].as_str().unwrap_or_default().to_owned();
     let shown: Vec<String> = v["shown"]
         .as_array()
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_owned))
+                .collect()
+        })
         .unwrap_or_default();
     let s = store::get(&app.pool, &session).await?;
     if let Some(s) = &s {
@@ -147,12 +154,20 @@ async fn finish(
                 .bind(&session)
                 .execute(pool)
                 .await?;
-            sqlx::query("INSERT INTO room_audit (action, detail, at) VALUES ('tidy.rejected', ?, ?)")
-                .bind(json!({"session": session, "why": one_line(&why, 200)}).to_string())
-                .bind(iso_of_unix(now))
-                .execute(pool)
-                .await?;
-            record(&mut tx, "brain.tidy.rejected", json!({"room": room, "session": session}), None).await?;
+            sqlx::query(
+                "INSERT INTO room_audit (action, detail, at) VALUES ('tidy.rejected', ?, ?)",
+            )
+            .bind(json!({"session": session, "why": one_line(&why, 200)}).to_string())
+            .bind(iso_of_unix(now))
+            .execute(pool)
+            .await?;
+            record(
+                &mut tx,
+                "brain.tidy.rejected",
+                json!({"room": room, "session": session}),
+                None,
+            )
+            .await?;
         }
         Ok(a) => {
             let done = apply(pool, &a, &session, &iso_of_unix(now)).await?;
@@ -255,4 +270,3 @@ impl Brain {
         }
     }
 }
-

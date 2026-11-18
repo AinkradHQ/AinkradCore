@@ -14,11 +14,14 @@
 //!   * only `task`, `project-state` and `summary` records are archived as outdated; a `rule`,
 //!     `preference`, `decision` or `fact` is never retired by tidy (the #351 fallback), nor
 //!     superseded: tidy has no supersede;
+//!   * a merge is within one kind, and outside task/project-state/summary only identical words
+//!     merge; the kept record is chosen in code (a person's, then better supported, then older);
+//!   * at most `ARCHIVE_MAX` records are archived per tidy;
 //!   * a merge is within one kind. When the kept record is a person's it is left untouched and only
 //!     the duplicate is archived;
 //!   * a contested record, or one another record contests, is left alone.
 //! - A contradiction only gets a mark (`records.contests`), on the record a person did not write
-//!   (when both are the model's: the newer, which is the existing B4-02 convention). Tidy NEVER
+//!   (when both are the model's: the less supported, the newer on a tie). Tidy NEVER
 //!   settles a contest: not by recency, not by the model. Resolving one is for a person, or for the
 //!   strict task/state grounding of B4-02, which tidy does not reimplement.
 //! - Cost: at most `PER_ROOM_DAILY` tidy per room and `GLOBAL_DAILY` across rooms per rolling 24 h,
@@ -40,7 +43,6 @@ use crate::answer::{json_body, one_line};
 use crate::answer_turns::escape_tags;
 use crate::changes::ChangeSet;
 use crate::distil::log_op;
-use crate::merge::reinforce;
 
 /// The agent name a user may bind a fallback chain to, so tidy can use its own (cheap) model. The
 /// model id is a setting (B1-03), never code.
@@ -60,12 +62,18 @@ pub(crate) const PENDING_SECS: i64 = 6 * 3600;
 /// Most actions in one answer, and the share of the shown records one answer may remove.
 const MAX_ACTIONS: usize = 40;
 /// Kinds that can be archived as outdated: time-bound ones. Never a rule, preference, decision or fact.
+/// Most records one tidy archives as outdated per room.
+const ARCHIVE_MAX: i64 = 10;
 const ARCHIVABLE: &[&str] = &["task", "project-state", "summary"];
 
 /// SQL (over `memory`) for "a person created, edited or approved this record": never touched.
 const LOCKED: &str = "(edited_by_person = 1 OR origin = 'person' \
     OR (decided_by IS NOT NULL AND decided_by <> 'auto') \
-    OR EXISTS (SELECT 1 FROM op_log o WHERE o.ref = memory.id AND o.op = 'record.edited'))";
+    OR EXISTS (SELECT 1 FROM op_log o WHERE o.ref = memory.id \
+        AND o.op IN ('record.edited', 'record.restored')))";
+/// SQL: distinct cited sources (never raw `support`, which a repeated save can inflate).
+const SUPPORT: &str =
+    "(SELECT count(DISTINCT rs.source) FROM record_sources rs WHERE rs.record = memory.id)";
 /// SQL: no other live record contests this one.
 const UNCONTESTED_TARGET: &str =
     "NOT EXISTS (SELECT 1 FROM records c WHERE c.contests = memory.id AND c.archived_at IS NULL)";
@@ -188,7 +196,10 @@ pub(crate) fn validate(out: &str, shown: &HashSet<&str>) -> Result<Answer, Strin
     }
     let removed = a.archive.len() + a.merge.iter().map(|m| m.drop.len()).sum::<usize>();
     if removed > (shown.len() / 4).max(5) {
-        return Err(format!("{removed} removals is too many for {} records", shown.len()));
+        return Err(format!(
+            "{removed} removals is too many for {} records",
+            shown.len()
+        ));
     }
     Ok(a)
 }
@@ -207,21 +218,25 @@ pub(crate) struct Applied {
 struct Live {
     kind: String,
     created: String,
+    norm: String,
+    support: i64,
     locked: bool,
 }
 
 /// `id` as it is now, when it is current, uncontested and not contested by another.
 async fn live(conn: &mut SqliteConnection, id: &str) -> Result<Option<Live>, sqlx::Error> {
-    let r: Option<(String, String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT type, created_at, CASE WHEN {LOCKED} THEN 1 ELSE 0 END FROM memory \
+    let r: Option<(String, String, String, Option<String>, i64, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT type, created_at, body, body_norm, {SUPPORT}, CASE WHEN {LOCKED} THEN 1 ELSE 0 END FROM memory \
          WHERE id = ? AND contests IS NULL AND {UNCONTESTED_TARGET}"
     )))
     .bind(id)
     .fetch_optional(conn)
     .await?;
-    Ok(r.map(|(kind, created, l)| Live {
+    Ok(r.map(|(kind, created, body, norm, support, l)| Live {
         kind,
         created,
+        norm: norm.unwrap_or_else(|| brain_model::merge::body_norm(&body)),
+        support,
         locked: l == 1,
     }))
 }
@@ -255,7 +270,9 @@ pub(crate) async fn apply(
     let (mut archived, mut merged, mut contested, mut refused) = (0, 0, 0, 0);
     for x in &a.archive {
         match live(&mut tx, &x.id).await? {
-            Some(l) if !l.locked && ARCHIVABLE.contains(&l.kind.as_str()) => {
+            Some(l)
+                if !l.locked && ARCHIVABLE.contains(&l.kind.as_str()) && archived < ARCHIVE_MAX =>
+            {
                 archive(&mut tx, &mut cs, &x.id, now).await?;
                 archived += 1;
             }
@@ -267,24 +284,57 @@ pub(crate) async fn apply(
             refused += m.drop.len() as i64;
             continue;
         };
+        let kind = keep.kind.clone();
+        let mut group = vec![(&m.keep, keep)];
         for d in &m.drop {
             match live(&mut tx, d).await? {
-                Some(l) if !l.locked && l.kind == keep.kind => {
-                    // A person's record is never written to: only the duplicate goes.
-                    if !keep.locked {
-                        let src: Vec<String> = sqlx::query_scalar(
-                            "SELECT source FROM record_sources WHERE record = ? ORDER BY position",
-                        )
-                        .bind(d)
-                        .fetch_all(&mut *tx)
-                        .await?;
-                        reinforce(&mut tx, &mut cs, &m.keep, &src, now).await?;
-                    }
-                    archive(&mut tx, &mut cs, d, now).await?;
-                    merged += 1;
-                }
+                Some(l) if l.kind == kind => group.push((d, l)),
                 _ => refused += 1,
             }
+        }
+        // The kept record is chosen HERE, whatever the model's `keep` said: a person's first, then the
+        // better supported (distinct sources), then the older.
+        group.sort_by(|x, y| {
+            (y.1.locked, y.1.support, &x.1.created, x.0).cmp(&(
+                x.1.locked,
+                x.1.support,
+                &y.1.created,
+                y.0,
+            ))
+        });
+        let (wid, w) = group.remove(0);
+        for (d, l) in group {
+            // Outside the time-bound kinds only the same words merge (the model cannot fold two
+            // different rules or facts into one). ponytail: exact words only; the by-meaning tier of
+            // `merge::decide` needs vectors tidy does not load.
+            if l.locked || (!ARCHIVABLE.contains(&kind.as_str()) && l.norm != w.norm) {
+                refused += 1;
+                continue;
+            }
+            // A person's record is never written to: only the duplicate goes.
+            if !w.locked {
+                cs.touch(&mut tx, wid).await?;
+                sqlx::query(
+                    "UPDATE records SET support = support + 1, last_seen_at = ? WHERE id = ?",
+                )
+                .bind(now)
+                .bind(wid)
+                .execute(&mut *tx)
+                .await?;
+                // Citations move with their distil run, so the me card's run count is not inflated.
+                sqlx::query(
+                    "INSERT OR IGNORE INTO record_sources (record, source, position, run) \
+                     SELECT ?1, source, \
+                       (SELECT coalesce(max(position) + 1, 0) FROM record_sources WHERE record = ?1) + position, run \
+                     FROM record_sources WHERE record = ?2",
+                )
+                .bind(wid)
+                .bind(d)
+                .execute(&mut *tx)
+                .await?;
+            }
+            archive(&mut tx, &mut cs, d, now).await?;
+            merged += 1;
         }
     }
     for p in &a.contested {
@@ -301,7 +351,12 @@ pub(crate) async fn apply(
             }
             (true, false) => (&p.b, &p.a),
             (false, true) => (&p.a, &p.b),
-            _ if (&la.created, &p.a) >= (&lb.created, &p.b) => (&p.a, &p.b),
+            // The less supported one is marked; the newer only breaks a tie.
+            _ if la.support < lb.support
+                || (la.support == lb.support && (&la.created, &p.a) >= (&lb.created, &p.b)) =>
+            {
+                (&p.a, &p.b)
+            }
             _ => (&p.b, &p.a),
         };
         cs.touch(&mut tx, mark).await?;
@@ -328,7 +383,8 @@ pub(crate) async fn apply(
     .map(|(n, w)| format!("{n} {w}"))
     .collect();
     let summary = format!("Tidy: {}", parts.join(", "));
-    let counts = json!({"archived": archived, "merged": merged, "contested": contested, "refused": refused});
+    let counts =
+        json!({"archived": archived, "merged": merged, "contested": contested, "refused": refused});
     let change = cs.commit(&mut tx, &summary, counts).await?;
     tx.commit().await?;
     Ok(Applied {
