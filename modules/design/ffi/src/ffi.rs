@@ -324,6 +324,66 @@ pub unsafe extern "C" fn de_presence_peers(
     })
 }
 
+// ---- other peers (V2-06) ------------------------------------------------------------------------------------------
+
+/// One presence message relayed by the Core's socket, with a `label` the App added: `{"peer","conn","label"?,
+/// "cursor"?,"selection"?,"view"?}` or `{"conn","gone":true}`, at most 4 KiB. A message out of bounds is
+/// `DE_ERR_INVALID` and changes nothing. A peer silent for 30 s disappears; a peer that sends a `view` moves a
+/// camera that follows it.
+///
+/// # Safety
+/// `json..+len` readable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_presence_remote(h: u64, json: *const u8, len: usize) -> i32 {
+    with(h, |e| {
+        ok(e.presence_remote(unsafe { text(json, len, crate::presence::MAX_MESSAGE) }?))
+    })
+}
+
+/// This device's presence to send to the Core's socket as a text frame: `{"cursor","selection","view"}` (world
+/// coordinates). `*out_len == 0`: nothing changed since the last call that took it. Taken only when it fits.
+///
+/// # Safety
+/// See `put`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_presence_local(
+    h: u64,
+    out: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    with(h, |e| {
+        let r = unsafe { put(&e.presence_local(false), out, cap, out_len) }?;
+        e.presence_local(true);
+        Ok(r)
+    })
+}
+
+/// The peers on the canvas: `[{"peer","label","kind":"person"|"ai","following"}]`, oldest first.
+///
+/// # Safety
+/// See `put`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_presence_list(
+    h: u64,
+    out: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    with(h, |e| unsafe { put(&e.presence_list(), out, cap, out_len) })
+}
+
+/// Follow a peer (its `peer` id from `de_presence_list`): the camera shows what it sees until the viewer pans,
+/// zooms, fits or presses on the canvas, or the peer goes. An empty id stops following; an unknown peer is
+/// `DE_ERR_ARG`.
+///
+/// # Safety
+/// `peer..+len` readable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_follow(h: u64, peer: *const u8, len: usize) -> i32 {
+    with(h, |e| ok(e.follow(unsafe { text(peer, len, DE_MAX_ID_BYTES) }?)))
+}
+
 // ---- edits --------------------------------------------------------------------------------------------------------
 
 /// A JSON array of edit ops (`add`, `set`, `name`, `text`, `move`, `delete`); all or nothing, one undo step.

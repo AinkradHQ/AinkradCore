@@ -344,6 +344,46 @@ pub(crate) async fn patch(
     Ok(Json(out))
 }
 
+/// Set `ai_paused` and record it once (a repeat changes nothing). Take over / resume are human actions on the
+/// design: never ops, so no AI session can resume itself (T12/T13); `designApply` (V1-04) reads the flag.
+async fn set_paused(app: App, doc: String, paused: bool) -> ApiResult<DocView> {
+    let mut tx = begin_write(&app.pool).await?;
+    editable(&mut tx, &doc).await?;
+    let changed = sqlx::query(
+        "UPDATE design_docs SET ai_paused = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+         WHERE id = ? AND ai_paused != ?",
+    )
+    .bind(paused as i64)
+    .bind(&doc)
+    .bind(paused as i64)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if changed > 0 {
+        record(&mut tx, if paused { "taken_over" } else { "resumed" }, &doc, None).await?;
+    }
+    let out = view(&mut tx, &doc).await?;
+    tx.commit().await?;
+    Ok(Json(out))
+}
+
+#[utoipa::path(post, path = "/docs/{doc}/take-over", operation_id = "designTakeOver", tag = "design",
+    params(("doc" = String, Path, description = "Design id")),
+    responses((status = 200, description = "AI sessions are paused on this design: `designApply` answers `paused` until resume (audited as `design.doc.taken_over`); repeating changes nothing; an archived design is refused", body = DocView)))]
+pub(crate) async fn take_over(
+    State(app): State<App>,
+    Path(doc): Path<String>,
+) -> ApiResult<DocView> {
+    set_paused(app, doc, true).await
+}
+
+#[utoipa::path(post, path = "/docs/{doc}/resume", operation_id = "designResume", tag = "design",
+    params(("doc" = String, Path, description = "Design id")),
+    responses((status = 200, description = "AI sessions may write again (audited as `design.doc.resumed`); repeating changes nothing; an archived design is refused", body = DocView)))]
+pub(crate) async fn resume(State(app): State<App>, Path(doc): Path<String>) -> ApiResult<DocView> {
+    set_paused(app, doc, false).await
+}
+
 #[utoipa::path(post, path = "/docs/{doc}/archive", operation_id = "designArchiveDoc", tag = "design",
     params(("doc" = String, Path, description = "Design id")),
     responses((status = 200, description = "Archived, every row kept (step-up; audited as `design.doc.archived`); archiving twice changes nothing", body = DocView)))]
