@@ -3,16 +3,15 @@
 //! Local moves refuse to create a cycle. Concurrent moves can still cross (A under B on one device, B under A on
 //! another), and the merged state then holds a parent cycle. `forest` breaks every such cycle deterministically from
 //! the state alone, so every replica reads the same tree: in each cycle the node whose move has the highest
-//! `(clock, id)` (the latest move) loses its parent link and surfaces as a detached root with its subtree; the
-//! earlier moves are kept. (The plan words this "keep the move with the lower Lamport clock".)
-//!
-//! TODO(V1-03): the yrs-backed document must also store the node's previous parent with each move, so a losing
-//! move can be reverted (the node goes back where it was) instead of detaching its whole subtree as done here.
+//! `(clock, id)` (the latest move) loses that move; the earlier moves are kept. (The plan words this "keep the move
+//! with the lower Lamport clock".) Every move records the parent the node had before it (`Node::prev`), so a losing
+//! move is REVERTED: the node goes back under its previous parent, subtree and all. Only when that parent is gone,
+//! or going back would close another cycle, does the node surface as a detached root with its subtree.
 
 use std::collections::BTreeMap;
 
 use crate::ids::{is_order, rebalance};
-use crate::limits::MAX_CLOCK_JUMP;
+use crate::limits::{MAX_CLOCK_JUMP, MAX_DEPTH};
 use crate::schema::{Doc, Node};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -23,8 +22,11 @@ pub struct Forest {
     pub detached: Vec<String>,
     /// Children by `(order, id)`.
     pub children: BTreeMap<String, Vec<String>>,
-    /// Nodes whose parent link was cut to break a cycle (sorted).
+    /// Nodes whose parent link was cut to break a cycle (sorted): the loser of each cycle.
     pub broken: Vec<String>,
+    /// The cut nodes that went back under their previous parent (sorted, a subset of `broken`); the others are in
+    /// `detached`.
+    pub reverted: Vec<String>,
     /// Effective parent of every non-root node (after the cycle cuts).
     pub parent: BTreeMap<String, String>,
 }
@@ -76,8 +78,38 @@ pub fn forest(doc: &Doc) -> Forest {
         }
     }
     broken.sort();
+    // Revert each cut node to its previous parent when that is safe. Sorted order and a check against the forest as
+    // it stands make this a pure function of the state, and the check keeps the forest acyclic: the walk up from the
+    // old parent is bounded by MAX_DEPTH (deeper is cut by the resolver anyway), so this stays O(cuts * depth).
+    let mut reverted = vec![];
+    for v in &broken {
+        let Some(prev) = doc.nodes[v.as_str()]
+            .prev
+            .as_deref()
+            // only back into a container: a leaf (a hostile `prev`) never gains children
+            .filter(|p| doc.nodes.get(*p).is_some_and(|n| n.ty.is_container()))
+        else {
+            continue;
+        };
+        let mut cur = Some(prev);
+        let mut steps = 0;
+        while let Some(c) = cur {
+            if c == v || steps > MAX_DEPTH {
+                break;
+            }
+            steps += 1;
+            cur = eff[c];
+        }
+        if cur.is_none()
+            && let Some((key, _)) = doc.nodes.get_key_value(v.as_str())
+        {
+            eff.insert(key.as_str(), Some(prev));
+            reverted.push(v.clone());
+        }
+    }
     let mut f = Forest {
         broken,
+        reverted,
         ..Forest::default()
     };
     let mut order: Vec<&str> = eff.keys().copied().collect();
@@ -105,12 +137,14 @@ pub struct MoveRecord {
     pub parent: Option<String>,
     pub order: String,
     pub clock: u64,
+    /// The parent before this move (`Node::prev`).
+    pub prev: Option<String>,
 }
 
 impl MoveRecord {
     /// Last-writer-wins key: the clock, then the contents so equal clocks still agree on one winner.
-    fn key(&self) -> (u64, &Option<String>, &str) {
-        (self.clock, &self.parent, &self.order)
+    fn key(&self) -> (u64, &Option<String>, &str, &Option<String>) {
+        (self.clock, &self.parent, &self.order, &self.prev)
     }
 }
 
@@ -183,12 +217,14 @@ impl Doc {
         if clock > self.next_clock().saturating_add(MAX_CLOCK_JUMP) {
             return Err(MoveError::ClockTooHigh);
         }
+        let prev = node.parent.clone();
         self.lww(
             id,
             MoveRecord {
                 parent: parent.map(str::to_string),
                 order: order.to_string(),
                 clock,
+                prev,
             },
         );
         Ok(())
@@ -203,7 +239,7 @@ impl Doc {
     /// The clock cap makes acceptance depend on the receiver's state, so it is NOT commutative for records that
     /// exceed it: replicas that disagree on the highest clock can disagree on whether to apply one. That is
     /// deliberate (an honest peer never exceeds it), so the sync layer must treat `false` as a protocol violation and
-    /// drop the peer, never as a skipped update. TODO(V1-03): test that a refused update closes the connection.
+    /// drop the peer, never as a skipped update (`design_doc::Replica` does; the sync tests close the socket on one).
     pub fn apply_remote_move(&mut self, id: &str, rec: MoveRecord) -> bool {
         let limit = self.next_clock().saturating_add(MAX_CLOCK_JUMP);
         self.apply_bounded(id, rec, limit)
@@ -240,39 +276,34 @@ impl Doc {
                 parent: n.parent.clone(),
                 order: n.order.clone(),
                 clock: n.clock,
+                prev: n.prev.clone(),
             };
             if rec.key() > cur.key() {
                 n.parent = rec.parent;
                 n.order = rec.order;
                 n.clock = rec.clock;
+                n.prev = rec.prev;
             }
         }
     }
 
     /// Renumber the children of `parent` with evenly spaced orders, keeping their current sequence. Call it when
-    /// `ids::between` returns `None` (32-character orders exhausted by repeated inserts at one spot). One new clock
-    /// for all of them; returns how many nodes were renumbered.
+    /// `ids::between` returns `None` (32-character orders exhausted by repeated inserts at one spot). Returns how
+    /// many nodes were renumbered.
     ///
-    /// Only the orders change: the parent written back is each child's current (effective) parent. But the model keeps
-    /// parent and order in one move record, so the new clock also outranks a concurrent move of one of these
-    /// children to another parent, which is then lost (intent loss). TODO(V1-03): store order and parent as separate
-    /// LWW registers in the yrs document so a rebalance touches only the orders.
+    /// Only the orders change: no parent, clock or `prev` is written, so a concurrent move of one of these children
+    /// to another parent is not undone (in the yrs document `order` is its own register, apart from the move
+    /// register that holds the parent).
     pub fn rebalance_children(&mut self, parent: &str) -> Result<usize, MoveError> {
         if !self.nodes.contains_key(parent) {
             return Err(MoveError::UnknownParent);
         }
         let kids = forest(self).children.remove(parent).unwrap_or_default();
         let orders = rebalance(kids.len()).ok_or(MoveError::TooManySiblings)?;
-        let clock = self.next_clock();
         for (id, order) in kids.iter().zip(orders) {
-            self.lww(
-                id,
-                MoveRecord {
-                    parent: Some(parent.to_string()),
-                    order,
-                    clock,
-                },
-            );
+            if let Some(n) = self.nodes.get_mut(id) {
+                n.order = order;
+            }
         }
         Ok(kids.len())
     }

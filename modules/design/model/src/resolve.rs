@@ -147,11 +147,12 @@ pub fn resolve(
         diagnostics: vec![],
     };
     for id in &own_f.broken {
-        rx.diag(
-            "tree.cycle",
-            id,
-            "a move cycle was cut here; the node is detached",
-        );
+        let msg = if own_f.reverted.contains(id) {
+            "a move cycle was cut here; the move was reverted"
+        } else {
+            "a move cycle was cut here; the node is detached"
+        };
+        rx.diag("tree.cycle", id, msg);
     }
     let own = rx.own;
     for (ids, dst) in [

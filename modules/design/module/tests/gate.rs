@@ -46,7 +46,11 @@ async fn fx_with(on: bool) -> Fx {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let pool = connect(&dir.join("core.db")).await.unwrap();
-    let modules: Vec<Arc<dyn Module>> = if on { vec![Arc::new(Design)] } else { vec![] };
+    let modules: Vec<Arc<dyn Module>> = if on {
+        vec![Arc::new(Design::default())]
+    } else {
+        vec![]
+    };
     migrate::migrate_modules(&pool, &modules).await.unwrap();
     let identity = Arc::new(
         Identity::load_or_create(
@@ -562,7 +566,7 @@ async fn the_migration_goes_down_and_up_again() {
 fn the_contract_marks_scope_and_step_up() {
     let spec: Value =
         serde_json::from_str(&ainkrad_core_server::api::v1::spec::json_for(&[Arc::new(
-            Design,
+            Design::default(),
         )]))
         .unwrap();
     let p = &spec["paths"];
@@ -579,4 +583,56 @@ fn the_contract_marks_scope_and_step_up() {
         true
     );
     assert!(p["/modules/design/v1/docs/{doc}"]["patch"]["x-ainkrad-destructive"].is_null());
+}
+
+#[tokio::test]
+async fn take_over_and_resume_flip_ai_paused_once_each() {
+    let fx = fx().await;
+    let reader = enroll(&fx.app, "reader", &["read"]).await;
+    let d = add(&fx, doc("pause-me")).await;
+    let id = d["id"].as_str().unwrap().to_owned();
+    assert_eq!(d["ai_paused"], json!(false));
+    let (take, resume) = (
+        format!("/docs/{id}/take-over"),
+        format!("/docs/{id}/resume"),
+    );
+    // a read-only device cannot pause or resume
+    for url in [&take, &resume] {
+        let (s, b) = call(&fx, &reader, Method::POST, url, None).await;
+        assert_eq!(
+            (s, &b["code"]),
+            (StatusCode::FORBIDDEN, &json!("forbidden_scope"))
+        );
+    }
+    for _ in 0..2 {
+        let (s, v) = call(&fx, &fx.admin, Method::POST, &take, None).await;
+        assert_eq!((s, &v["ai_paused"]), (StatusCode::OK, &json!(true)));
+    }
+    let (_, v) = call(&fx, &fx.admin, Method::GET, &format!("/docs/{id}"), None).await;
+    assert_eq!(v["ai_paused"], json!(true));
+    for _ in 0..2 {
+        let (s, v) = call(&fx, &fx.admin, Method::POST, &resume, None).await;
+        assert_eq!((s, &v["ai_paused"]), (StatusCode::OK, &json!(false)));
+    }
+    for (action, want) in [("design.doc.taken_over", 1), ("design.doc.resumed", 1)] {
+        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action = ?")
+            .bind(action)
+            .fetch_one(&fx.app.pool)
+            .await
+            .unwrap();
+        assert_eq!(n, want, "{action} is recorded once");
+    }
+    // an archived design cannot be paused
+    call(
+        &fx,
+        &fx.admin,
+        Method::POST,
+        &format!("/docs/{id}/archive"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        call(&fx, &fx.admin, Method::POST, &take, None).await.0,
+        StatusCode::CONFLICT
+    );
 }
