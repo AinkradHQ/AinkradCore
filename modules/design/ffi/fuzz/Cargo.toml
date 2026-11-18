@@ -1,0 +1,23 @@
+# V2-02: the C ABI fuzz target, in its OWN workspace (cargo-fuzz needs nightly; `make build-design` never touches it).
+# Run with `make fuzz-design-ffi FUZZ_SECS=600` or `cd modules/design/ffi/fuzz && cargo +nightly fuzz run abi`.
+[package]
+name = "design-ffi-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+design-ffi = { path = ".." }
+
+[workspace]
+
+[[bin]]
+name = "abi"
+path = "fuzz_targets/abi.rs"
+test = false
+doc = false
+bench = false

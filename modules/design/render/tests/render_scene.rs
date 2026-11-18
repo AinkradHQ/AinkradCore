@@ -83,6 +83,55 @@ fn image_cache_respects_its_byte_cap() {
     assert!(a.image(&"f".repeat(64)).is_none());
 }
 
+/// A PNG whose header claims `w` x `h` (valid signature, IHDR and CRCs; no real pixel data).
+fn png_header(w: u32, h: u32) -> Vec<u8> {
+    fn crc(b: &[u8]) -> u32 {
+        let mut c = !0u32;
+        for &x in b {
+            c ^= x as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 {
+                    0xEDB8_8320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
+            }
+        }
+        !c
+    }
+    let chunk = |out: &mut Vec<u8>, ty: &[u8], data: &[u8]| {
+        out.extend((data.len() as u32).to_be_bytes());
+        let body = [ty, data].concat();
+        out.extend(&body);
+        out.extend(crc(&body).to_be_bytes());
+    };
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let ihdr = [&w.to_be_bytes()[..], &h.to_be_bytes(), &[8, 6, 0, 0, 0]].concat();
+    chunk(&mut out, b"IHDR", &ihdr);
+    chunk(
+        &mut out,
+        b"IDAT",
+        &[0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01],
+    );
+    chunk(&mut out, b"IEND", &[]);
+    out
+}
+
+#[test]
+fn a_decompression_bomb_is_refused_before_it_is_drawn() {
+    let bomb = png_header(60_000, 60_000);
+    let img =
+        skia_safe::Image::from_encoded(skia_safe::Data::new_copy(&bomb)).expect("header parses");
+    assert_eq!((img.width(), img.height()), (60_000, 60_000));
+    let mut a = Assets::default();
+    a.add(&"b".repeat(64), &bomb);
+    assert!(
+        a.image(&"b".repeat(64)).is_none(),
+        "60000 x 60000 claims ~14 GB"
+    );
+    assert_eq!(a.used(), 0);
+}
+
 #[test]
 fn picture_cap_drops_pictures_of_screens_not_in_view() {
     let s = synth::app(12, 6);
