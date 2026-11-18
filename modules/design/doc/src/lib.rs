@@ -20,6 +20,7 @@
 //! The Core additionally validates every node an update touched with the model crate, caps move clocks and the node
 //! and token budgets (`Replica::verify`); clients apply what the Core accepted, in the Core's order.
 
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use design_model::limits::{MAX_DOC_BYTES, MAX_NODES, MAX_TOKENS};
@@ -109,6 +110,8 @@ pub struct Live {
     /// When the last resets happened (ms, the presence clock), for the breaker.
     resets: Vec<u64>,
     halted: bool,
+    /// The oldest unsent update is over the cap, so nothing behind it can go out (`outbox_stuck`).
+    stuck: std::sync::atomic::AtomicBool,
 }
 
 impl Default for Live {
@@ -157,6 +160,7 @@ impl Live {
             gate,
             resets: vec![],
             halted: false,
+            stuck: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -177,6 +181,7 @@ impl Live {
         let doc = self.doc().clone();
         let u = self.gate.admit(&doc, update).map_err(|r| match r {
             Refused::TooLarge => Error::TooLarge,
+            Refused::Busy => Error::Busy,
             r => Error::Malformed(r.to_string()),
         })?;
         // the real apply on a big stack too, so nothing yrs does with remote content recurses on ours. Pending is
@@ -260,9 +265,16 @@ impl Live {
         self.outbox_under(take, MAX_PEER_UPDATE_BYTES)
     }
 
+    /// `true` while the oldest unsent update is over `MAX_PEER_UPDATE_BYTES`: `outbox` returns nothing and will not
+    /// until the document is re-opened. The host reports it as an error instead of an idle queue.
+    pub fn outbox_stuck(&self) -> bool {
+        self.stuck.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn outbox_under(&self, take: bool, cap: usize) -> Vec<u8> {
         let mut o = self.outbox.lock().unwrap_or_else(|e| e.into_inner());
         if o.is_empty() {
+            self.stuck.store(false, Ordering::Relaxed);
             return vec![];
         }
         // the oldest updates whose sizes add up to `cap`. One over the cap on its own never goes out (the relay
@@ -272,6 +284,7 @@ impl Live {
             sum += o[n].len();
             n += 1;
         }
+        self.stuck.store(n == 0, Ordering::Relaxed);
         if n == 0 {
             eprintln!("design-doc: the oldest unsent update is over {cap} bytes and is not sent");
             return vec![];
@@ -333,9 +346,13 @@ impl Live {
                 l.undo.redo_blocking();
             }
             let net = l.doc().transact().encode_state_as_update_v1(&sv);
-            let mut o = l.outbox.lock().unwrap_or_else(|e| e.into_inner());
-            o.truncate(before);
-            o.push(net);
+            // the net diff replaces the tail only when it fits; else the tail stays as written (peers need every
+            // clock) and `outbox_stuck` reports that it cannot go out in one update
+            if net.len() <= cap {
+                let mut o = l.outbox.lock().unwrap_or_else(|e| e.into_inner());
+                o.truncate(before);
+                o.push(net);
+            }
             Err(Error::TooLarge)
         })
     }

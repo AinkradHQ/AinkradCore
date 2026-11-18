@@ -43,6 +43,7 @@ fn drain(l: &Live) -> Vec<Vec<u8>> {
     for _ in 0..200 {
         let c = l.outbox(true);
         if c.is_empty() {
+            assert!(!l.outbox_stuck(), "the outbox is stuck behind an oversized update");
             return chunks;
         }
         assert!(c.len() <= MAX_PEER_UPDATE_BYTES, "{}", c.len());
@@ -67,6 +68,7 @@ fn undoing_a_big_delete_is_refused_reverted_and_does_not_loop() {
         peer.apply_remote(&c).unwrap();
     }
     assert_eq!(peer.read(), l.read());
+    assert!(l.outbox(false).is_empty());
 }
 
 #[test]

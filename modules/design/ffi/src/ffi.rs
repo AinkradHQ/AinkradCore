@@ -264,7 +264,11 @@ pub unsafe extern "C" fn de_sync_outbox(
     out_len: *mut usize,
 ) -> i32 {
     with(h, |e| {
-        let r = unsafe { put(&e.outbox(false), out, cap, out_len) }?;
+        let chunk = e.outbox(false);
+        if chunk.is_empty() && e.outbox_stuck() {
+            return Err(DE_ERR_TOO_LARGE);
+        }
+        let r = unsafe { put(&chunk, out, cap, out_len) }?;
         e.outbox(true);
         Ok(r)
     })
@@ -397,15 +401,16 @@ pub unsafe extern "C" fn de_edit(h: u64, json: *const u8, len: usize) -> i32 {
     })
 }
 
-/// 1 when something was undone, 0 when there was nothing to undo.
+/// 1 when something was undone, 0 when there was nothing to undo, `DE_ERR_TOO_LARGE` when the undo would exceed the
+/// update budget (nothing changed).
 #[unsafe(no_mangle)]
 pub extern "C" fn de_undo(h: u64) -> i32 {
-    with(h, |e| Ok(e.undo(false) as i32))
+    with(h, |e| Ok(e.undo(false)? as i32))
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn de_redo(h: u64) -> i32 {
-    with(h, |e| Ok(e.undo(true) as i32))
+    with(h, |e| Ok(e.undo(true)? as i32))
 }
 
 // ---- view + input -------------------------------------------------------------------------------------------------

@@ -239,7 +239,8 @@ int32_t de_edit(uint64_t h,
                 const uint8_t *json,
                 size_t len);
 
-// 1 when something was undone, 0 when there was nothing to undo.
+// 1 when something was undone, 0 when there was nothing to undo, DE_ERR_TOO_LARGE when the undo would exceed the
+// update budget (nothing changed).
 int32_t de_undo(uint64_t h);
 
 int32_t de_redo(uint64_t h);
