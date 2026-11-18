@@ -97,7 +97,7 @@ pub(super) async fn write_run(
     };
     let detail = cut(&redacted(action.detail()));
     let (command_id, adhoc) = match action {
-        Action::Preset { id, .. } => (Some(id.clone()), None),
+        Action::Preset(id) => (Some(id.clone()), None),
         Action::Exec(_) => (None, Some(detail.clone())),
         _ => (None, None),
     };
@@ -167,6 +167,8 @@ pub(super) async fn settle(
                 action: c.action.clone(),
                 op_sha256: hash.to_owned(),
                 principal: who.clone(),
+                steps: c.cmd.as_ref().map(|m| m.steps.clone()).unwrap_or_default(),
+                tuple: h.tuple.clone(),
             }),
             Verdict::Deny(why) => refused.push((h.id.clone(), *why)),
             Verdict::Ask => unreachable!("every ask is decided before settling"),
