@@ -69,21 +69,36 @@ pub struct Daemon {
     pub control: Option<Arc<super::control::Control>>,
     pub tls: Option<Arc<rustls::ClientConfig>>,
     pub backoff: Backoff,
+    /// The runner's checkout root (its work root): a run's checkouts must lie under it.
+    pub run_checkouts: PathBuf,
 }
 
 impl Daemon {
-    /// `ssh.exec`, redeeming key leases with this runner's own signed requests; offered where
-    /// `exec.run` is (`SshDriver::info`).
-    fn ssh_driver(&self) -> Option<Arc<super::SshDriver>> {
+    /// Redeems leases with this runner's own signed requests.
+    fn redeem(&self) -> Option<super::agent::secrets::Redeem> {
         let url = self.enrolment.lock().unwrap().url.clone();
         let client = Arc::new(Client::new(&url, self.tls.clone()).ok()?);
-        let redeem = super::agent::secrets::http_redeem(
+        Some(super::agent::secrets::http_redeem(
             client,
             Arc::clone(&self.key),
             Arc::clone(&self.enrolment),
-        );
-        let ssh = super::SshDriver::new(Arc::clone(&self.exec), redeem);
+        ))
+    }
+
+    /// `ssh.exec`; offered where `exec.run` is (`SshDriver::info`).
+    fn ssh_driver(&self) -> Option<Arc<super::SshDriver>> {
+        let ssh = super::SshDriver::new(Arc::clone(&self.exec), self.redeem()?);
         ssh.info().map(|_| Arc::new(ssh))
+    }
+
+    /// Project runs; offered where the run helper is installed (`RunDriver::info`).
+    fn run_driver(&self) -> Option<Arc<super::RunDriver>> {
+        let run = super::RunDriver::new(
+            crate::run::helper::SOCKET,
+            self.redeem()?,
+            self.run_checkouts.clone(),
+        );
+        run.info().map(|_| Arc::new(run))
     }
 
     /// Runs until `stop` turns true (`Ok`) or a configuration error (`Err`).
@@ -103,6 +118,9 @@ impl Daemon {
         }
         if let Some(ssh) = self.ssh_driver() {
             session = session.with_ssh(ssh);
+        }
+        if let Some(run) = self.run_driver() {
+            session = session.with_run(run);
         }
         let mut delay = self.backoff.min;
         let mut refused = 0;
@@ -223,6 +241,7 @@ pub async fn from_state(
         control,
         tls,
         backoff: Backoff::default(),
+        run_checkouts: super::cli::runtime_paths(&state.0)[1].clone(),
     };
     daemon.run(stop).await
 }
@@ -294,6 +313,7 @@ mod tests {
                 max: Duration::from_millis(20),
                 refused: Duration::from_millis(20),
             },
+            run_checkouts: PathBuf::from("/nonexistent"),
         }
     }
 
