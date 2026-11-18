@@ -13,6 +13,7 @@ mod alerts;
 mod attach;
 mod commands;
 mod exec;
+mod fleet;
 pub mod gate;
 mod health;
 pub mod hostkeys;
@@ -72,6 +73,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0006_alerts.up.sql"),
         down: include_str!("../migrations/0006_alerts.down.sql"),
     },
+    Migration {
+        version: 7,
+        name: "0007_fleet",
+        up: include_str!("../migrations/0007_fleet.up.sql"),
+        down: include_str!("../migrations/0007_fleet.down.sql"),
+    },
 ];
 
 // A key write is a secret write: importing needs the step-up like the Core's own secret writes.
@@ -95,6 +102,8 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("PATCH", "/commands/{command}"),
     ("DELETE", "/commands/{command}"),
     ("POST", "/commands/{command}/run"),
+    ("POST", "/fleet/runs"),
+    ("POST", "/runs/{run}/cancel"),
     ("POST", "/hosts/{host}/host-keys/trust"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
@@ -143,6 +152,8 @@ pub struct Leyline;
         commands::remove,
         commands::run,
         commands::get_run,
+        fleet::start,
+        fleet::cancel,
         hostkeys::list,
         hostkeys::trust_route,
         hostkeys::replace_route,
@@ -171,6 +182,9 @@ pub struct Leyline;
         commands::RunStarted,
         commands::RunView,
         commands::RunHost,
+        fleet::FleetRequest,
+        fleet::FleetStarted,
+        fleet::Cancelled,
         hostkeys::HostKeyView,
         hostkeys::Pick,
         terminal::NewSession,
@@ -224,6 +238,8 @@ impl Module for Leyline {
             )
             .route("/commands/{command}/run", post(commands::run))
             .route("/runs/{run}", get(commands::get_run))
+            .route("/runs/{run}/cancel", post(fleet::cancel))
+            .route("/fleet/runs", post(fleet::start))
             .route("/projects/{project}/hosts", get(attach::list))
             .route(
                 "/projects/{project}/hosts/{host}",
@@ -243,6 +259,7 @@ impl Module for Leyline {
             "leyline.hostkey",
             "leyline.command",
             "leyline.alert",
+            "leyline.run",
         ]
     }
 
@@ -275,6 +292,7 @@ impl Module for Leyline {
             "leyline.run.approval",
             "leyline.run.allowed",
             "leyline.run.refused",
+            "leyline.run.cancelled",
         ]
     }
 

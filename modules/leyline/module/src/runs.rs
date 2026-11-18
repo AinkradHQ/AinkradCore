@@ -31,8 +31,9 @@ impl Drop for Parked {
     }
 }
 
-/// Marks a run still waiting for approval cancelled (a run that has settled is left alone).
-pub(super) async fn cancel(pool: &SqlitePool, run: &str) {
+/// Marks a run still waiting for approval cancelled (a run that has settled is left alone), and
+/// voids its approval so the call parked on it ends at once. True when this call cancelled it.
+pub(crate) async fn cancel(pool: &SqlitePool, run: &str) -> bool {
     let done = async {
         let mut tx = begin_write(pool).await?;
         let n = sqlx::query(
@@ -45,17 +46,25 @@ pub(super) async fn cancel(pool: &SqlitePool, run: &str) {
         .rows_affected();
         if n == 1 {
             sqlx::query(
-                "UPDATE leyline_run_hosts SET state = 'skipped' WHERE run_id = ? AND state = 'needs_approval'",
+                "UPDATE leyline_run_hosts SET state = 'skipped' WHERE run_id = ? AND state IN ('needs_approval', 'queued')",
+            )
+            .bind(run)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "UPDATE core_code_mode_approvals SET state = 'void' \
+                 WHERE id = (SELECT approval FROM leyline_runs WHERE id = ?) AND state IN ('pending', 'approved')",
             )
             .bind(run)
             .execute(&mut *tx)
             .await?;
         }
-        tx.commit().await
+        tx.commit().await.map(|()| n == 1)
     };
-    if let Err(e) = done.await {
+    done.await.unwrap_or_else(|e| {
         tracing::error!(error = %e, "cancelling a parked leyline run failed");
-    }
+        false
+    })
 }
 
 pub(super) async fn note(
@@ -250,10 +259,11 @@ pub(super) async fn settle(
             Verdict::Ask => unreachable!("every ask is decided before settling"),
         }
     }
-    for (id, _) in &refused {
+    for (id, why) in &refused {
         sqlx::query(
-            "UPDATE leyline_run_hosts SET state = 'refused' WHERE run_id = ? AND host_id = ?",
+            "UPDATE leyline_run_hosts SET state = 'refused', reason = ? WHERE run_id = ? AND host_id = ? AND state <> 'skipped'",
         )
+        .bind(*why)
         .bind(run)
         .bind(id)
         .execute(&mut *tx)
@@ -275,7 +285,8 @@ pub(super) async fn settle(
     };
     sqlx::query(
         "UPDATE leyline_runs SET state = ?, approval = ?, \
-         ended_at = CASE WHEN ? = 'denied' THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') END WHERE id = ?",
+         ended_at = CASE WHEN ? = 'denied' THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') END \
+         WHERE id = ? AND state IN ('waiting_approval', 'running')",
     )
     .bind(state)
     .bind(approval_id)
@@ -322,7 +333,7 @@ pub(super) async fn settle(
 pub async fn finish(app: &App, done: Authorized, ok: bool) -> Result<(), ApiError> {
     let mut tx = begin_write(&app.pool).await?;
     sqlx::query(
-        "UPDATE leyline_run_hosts SET state = ? WHERE run_id = ? AND host_id = ? AND state = 'queued'",
+        "UPDATE leyline_run_hosts SET state = ? WHERE run_id = ? AND host_id = ? AND state IN ('queued', 'running')",
     )
     .bind(if ok { "ok" } else { "failed" })
     .bind(&done.run)

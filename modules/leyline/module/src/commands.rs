@@ -177,6 +177,25 @@ fn people_only(me: &Caller) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// A session reaches only the runs it started (`principal` is `session:<its id>`); a person reaches
+/// every run. Anything else answers like a run that does not exist.
+pub(crate) async fn owns(pool: &sqlx::SqlitePool, me: &Caller, run: &str) -> Result<(), ApiError> {
+    let who = Principal::of(me);
+    if !matches!(who.0, Who::Session(_)) {
+        return Ok(());
+    }
+    let owner: Option<String> =
+        sqlx::query_scalar("SELECT principal FROM leyline_runs WHERE id = ?")
+            .bind(run)
+            .fetch_optional(pool)
+            .await?;
+    if owner.as_deref() == Some(who.label().as_str()) {
+        Ok(())
+    } else {
+        Err(ApiError::not_found("no such run"))
+    }
+}
+
 fn bad() -> ApiError {
     ApiError::bad_request("the command is not valid")
 }
@@ -254,7 +273,7 @@ async fn record(conn: &mut SqliteConnection, op: &str, id: &str) -> Result<(), s
 }
 
 /// The command `ident` names (id, else its unique name).
-async fn find_cmd(conn: &mut SqliteConnection, ident: &str) -> Result<String, ApiError> {
+pub(crate) async fn find_cmd(conn: &mut SqliteConnection, ident: &str) -> Result<String, ApiError> {
     sqlx::query_scalar(
         "SELECT id FROM leyline_commands WHERE lower(id) = lower(?1) OR name = ?1 COLLATE NOCASE \
          ORDER BY lower(id) = lower(?1) DESC LIMIT 1",
@@ -265,7 +284,10 @@ async fn find_cmd(conn: &mut SqliteConnection, ident: &str) -> Result<String, Ap
     .ok_or_else(|| ApiError::not_found("no such command"))
 }
 
-async fn load_view(conn: &mut SqliteConnection, id: &str) -> Result<CommandView, ApiError> {
+pub(crate) async fn load_view(
+    conn: &mut SqliteConnection,
+    id: &str,
+) -> Result<CommandView, ApiError> {
     let row = sqlx::query("SELECT * FROM leyline_commands WHERE id = ?")
         .bind(id)
         .fetch_one(conn)
@@ -452,7 +474,7 @@ pub(crate) async fn run(
     )
     .await?;
     let run = auth.run_id().to_owned();
-    tokio::spawn(crate::exec::run(app.clone(), auth));
+    tokio::spawn(crate::exec::run(app.clone(), auth, None));
     Ok(Json(RunStarted {
         run,
         state: "running".to_owned(),
@@ -471,6 +493,8 @@ pub struct RunHost {
     pub duration_ms: Option<i64>,
     /// Each step's command line and output, redacted, at most 64 KB.
     pub output: Option<String>,
+    /// Why it did not run (refused, cancelled): a fixed sentence.
+    pub reason: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -489,8 +513,13 @@ pub struct RunView {
 #[utoipa::path(get, path = "/runs/{run}", operation_id = "leylineGetRun", tag = "leyline",
     params(("run" = String, Path, description = "The run's id")),
     responses((status = 200, description = "The run and each host's result", body = RunView)))]
-pub(crate) async fn get_run(State(app): State<App>, Path(id): Path<String>) -> ApiResult<RunView> {
+pub(crate) async fn get_run(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<RunView> {
     let id: String = id.chars().take(64).collect();
+    owns(&app.pool, &me, &id).await?;
     let r = sqlx::query(
         "SELECT id, command_id, action, principal, state, created_at, ended_at FROM leyline_runs WHERE id = ?",
     )
@@ -499,7 +528,7 @@ pub(crate) async fn get_run(State(app): State<App>, Path(id): Path<String>) -> A
     .await?
     .ok_or_else(|| ApiError::not_found("no such run"))?;
     let rows = sqlx::query(
-        "SELECT host_id, state, step, exit_code, duration_ms, output FROM leyline_run_hosts WHERE run_id = ? ORDER BY host_id",
+        "SELECT host_id, state, step, exit_code, duration_ms, output, reason FROM leyline_run_hosts WHERE run_id = ? ORDER BY host_id",
     )
     .bind(&id)
     .fetch_all(&app.pool)
@@ -514,6 +543,7 @@ pub(crate) async fn get_run(State(app): State<App>, Path(id): Path<String>) -> A
                 exit_code: h.try_get("exit_code")?,
                 duration_ms: h.try_get("duration_ms")?,
                 output: h.try_get("output")?,
+                reason: h.try_get("reason")?,
             })
         })
         .collect::<Result<_, sqlx::Error>>()?;
