@@ -3,10 +3,27 @@
 //! into a room's Inbox and nothing else. These routes answer only the Code Mode dispatcher's
 //! synthetic caller (its session is `code_mode:<id>`); a person has the room routes.
 //!
-//! Every text a third party wrote (source titles and snippets, record bodies, tags) leaves inside
-//! the fixed `ainkrad_core::untrusted` envelope, one per item, so a script sees data and the model
-//! sees the notice. A room the session cannot see is the same 404 as an unknown id. Only
-//! `accepted` records are returned: candidates and rejected ones never leave the Inbox.
+//! SECURITY MODEL (Brain v2, B2-03; read before changing anything here)
+//!
+//! 1. Two layers. Sources (`sources.text`, what was imported) are raw, third-party text. Memory
+//!    (the `memory` view: accepted, current, not archived) is the distilled layer. Every
+//!    `brainAi*` read serves MEMORY ONLY: search, record, decisions, project state. None of them
+//!    selects `sources.text`, searches `fts`, or embeds a source.
+//! 2. Raw source text leaves through exactly one door, `brainAiEvidence`, and only for a pair the
+//!    room itself vouches for: the named record is in memory AND cites the named source
+//!    (`record_sources`, or the old `source_ids` list). Anything else (an uncited source, an
+//!    archived or superseded record, an unknown id, a hidden room) is the same 404. The caller
+//!    must name the citing record; there is no "give me this source" route. The snippet is cut
+//!    to `EVIDENCE_CHARS`. `tests/gate/ai.rs` fails if any other op returns source text.
+//! 3. Every text a third party wrote (record bodies, tags, evidence snippets) leaves inside the
+//!    fixed `ainkrad_core::untrusted` envelope, one per item, so a script sees data and the model
+//!    sees the notice. Titles and ids are wrapped in the label (`wrap` flattens it).
+//! 4. Room isolation: every route resolves its room through `access::visible_room(s)` (the
+//!    project/access-list match AND the whole fallback chain inside the room's model policy,
+//!    checked on every call). A room the session cannot see is the same 404 as an unknown id.
+//!    Nothing here reads a room it did not get from that gate.
+//! 5. The index (`rec_fts`) only nominates ids. The text always comes from `memory` at read time,
+//!    so a stale index can mis-rank but never return a record that left memory.
 
 use ainkrad_core::untrusted::wrap;
 use ainkrad_core_server::api::App;
@@ -26,8 +43,8 @@ use crate::access::{Visible, visible_room, visible_rooms};
 use crate::answer::KINDS;
 use crate::distil::log_op;
 use crate::inbox::open_room;
+use crate::index::{rec_fts, words};
 use crate::policy;
-use crate::index::{fts, words};
 use crate::rooms::RoomAccess;
 use crate::{Brain, code, rand_id, record};
 
@@ -37,11 +54,14 @@ pub(crate) const SESSION: &str = "code_mode:";
 const DEFAULT_LIMIT: u32 = 10;
 const MAX_LIMIT: u32 = 25;
 const MAX_BODY: usize = 2000;
+/// How much of a cited source `brainAiEvidence` returns.
+const EVIDENCE_CHARS: usize = 2000;
 /// A list shows this much of a record; `brain.record` has all of it.
 pub(crate) const LIST_BODY: usize = 400;
 /// Candidates one session may propose into one room.
 /// ponytail: per room file, not a session-wide counter; a control-plane table if that is needed.
 const PROPOSE_CAP: i64 = 20;
+const PROPOSE_INVALID: &str = "a known type, a body of 1 to 2000 characters, at most 8 tags of 1 to 40 and 20 sources that are in this room";
 /// Rooms one search reads.
 const MAX_ROOMS: usize = 20;
 
@@ -84,15 +104,20 @@ async fn room_of(app: &App, session: &str, room: &str) -> Result<Visible, ApiErr
     Err(ApiError::not_found("no such room"))
 }
 
-/// The rooms a call reads: the named one (visible or 404), else every visible room.
-async fn scope(app: &App, session: &str, room: Option<&str>) -> Result<Vec<Visible>, ApiError> {
+/// The rooms a call reads: the named one (visible or 404), else every visible room; true when
+/// `MAX_ROOMS` cut the list.
+async fn scope(
+    app: &App,
+    session: &str,
+    room: Option<&str>,
+) -> Result<(Vec<Visible>, bool), ApiError> {
     match room {
-        Some(r) => Ok(vec![room_of(app, session, r).await?]),
-        None => Ok(visible_rooms(app, session)
-            .await?
-            .into_iter()
-            .take(MAX_ROOMS)
-            .collect()),
+        Some(r) => Ok((vec![room_of(app, session, r).await?], false)),
+        None => {
+            let all = visible_rooms(app, session).await?;
+            let cut = all.len() > MAX_ROOMS;
+            Ok((all.into_iter().take(MAX_ROOMS).collect(), cut))
+        }
     }
 }
 
@@ -168,9 +193,9 @@ pub struct AiSearchQuery {
 #[derive(Clone, Serialize, ToSchema)]
 pub struct AiHit {
     pub room: String,
-    /// `record` (an accepted record, listed first) or `source`.
+    /// Always `record`: a fact in force. Sources are read through `brainAiEvidence` only.
     pub kind: String,
-    /// The record id, or the source's item id.
+    /// The record id.
     pub id: String,
     pub started_at: String,
     /// The match, inside the outside-text envelope.
@@ -186,6 +211,9 @@ pub struct AiHits {
     /// `keyword`, `meaning` or `both`: how these hits were ranked. Always set; optional in the schema
     /// only because it joined the contract after 1.0 (a new field may not be required).
     pub ranked_by: Option<String>,
+    /// False when a cap (rooms per search, records per room for meaning) cut what was read, so a
+    /// missing hit may exist. Always set; optional in the schema for the same reason as `ranked_by`.
+    pub complete: Option<bool>,
 }
 
 /// The time before which a `project-state` or `task` last in use is stale in `room` (B4-02): the
@@ -208,7 +236,7 @@ pub(crate) fn cut(s: &str, n: usize) -> (String, bool) {
 
 #[utoipa::path(get, path = "/ai/search", operation_id = "brainAiSearch", tag = "brain",
     params(AiSearchQuery),
-    responses((status = 200, description = "Hits across the rooms this AI session may see: accepted records first, then sources best first. Every text is wrapped as outside data.", body = AiHits)))]
+    responses((status = 200, description = "Memory records (current, not archived) across the rooms this AI session may see, best first. Never raw sources: those come through brainAiEvidence for a record that cites them. Every text is wrapped as outside data.", body = AiHits)))]
 pub(crate) async fn search(
     State(app): State<App>,
     Extension(b): Extension<Brain>,
@@ -231,38 +259,36 @@ pub(crate) async fn search(
         .join(" ");
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let named = q.room.is_some();
-    let rooms = scope(&app, &session, q.room.as_deref()).await?;
+    let (rooms, rooms_cut) = scope(&app, &session, q.room.as_deref()).await?;
     let (open, closed) = open_all(&app, &b, rooms, named).await?;
     let key = b.key(&app).await?;
-    let (mut recs, mut srcs) = (vec![], vec![]);
+    let mut recs: Vec<(bool, f64, AiHit)> = vec![];
     for (v, a) in &open {
-        let cond = vec!["body LIKE ?"; ws.len()].join(" AND ");
-        let sql = format!(
-            "SELECT id, type, body, tags, source_ids, created_at, {STALE_SQL} AS stale FROM records WHERE status = 'accepted' AND {cond} \
-             ORDER BY stale, created_at DESC, id LIMIT {limit}"
-        );
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(stale_cutoff(&app, &v.id).await);
-        for w in &ws {
-            query = query.bind(format!("%{w}%"));
-        }
-        for r in query.fetch_all(a.pool()).await? {
-            recs.push((
-                r.try_get::<i64, _>("stale")? != 0,
-                r.try_get::<String, _>("created_at")?,
-                record_of(&v.id, &r, LIST_BODY)?,
-            ));
-        }
-        for (rank, h) in fts(&app, &key, a, limit, &expr).await? {
-            srcs.push((
-                rank,
-                AiHit {
-                    room: v.id.clone(),
-                    kind: "source".to_owned(),
-                    text: wrap(&format!("source {} | {}", h.item_id, h.title), &h.snippet),
-                    id: h.item_id,
-                    started_at: h.started_at,
-                },
-            ));
+        let cutoff = stale_cutoff(&app, &v.id).await;
+        for (rank, id) in rec_fts(&app, &key, a, limit, &expr).await? {
+            // The index only nominates: the text is read from `memory` now.
+            let sql = format!(
+                "SELECT id, type, body, tags, source_ids, created_at, {STALE_SQL} AS stale FROM memory WHERE id = ?"
+            );
+            let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+                .bind(&cutoff)
+                .bind(&id)
+            .fetch_optional(a.pool())
+            .await?;
+            if let Some(r) = row {
+                let rec = record_of(&v.id, &r, LIST_BODY)?;
+                recs.push((
+                    r.try_get::<i64, _>("stale")? != 0,
+                    rank,
+                    AiHit {
+                        room: v.id.clone(),
+                        kind: "record".to_owned(),
+                        started_at: rec.created_at,
+                        text: rec.text,
+                        id: rec.id,
+                    },
+                ));
+            }
         }
     }
     let meaning = if mode == "keyword" {
@@ -273,29 +299,24 @@ pub(crate) async fn search(
     for (_, a) in &open {
         a.pool().close().await;
     }
+    let capped = rooms_cut || meaning.as_ref().is_some_and(|m| m.1);
+    let meaning = meaning.map(|m| m.0);
     if let (Some(m), "meaning") = (&meaning, mode) {
         return Ok(Json(AiHits {
             hits: m.clone(),
             rooms_searched: open.len(),
             rooms_closed: closed,
             ranked_by: Some("meaning".to_owned()),
+            complete: Some(!capped),
         }));
     }
-    // Fresh before stale (B4-02), then newest first.
-    recs.sort_by(|x, y| x.0.cmp(&y.0).then(y.1.cmp(&x.1)));
-    srcs.sort_by(|x, y| x.0.total_cmp(&y.0));
-    let mut hits: Vec<AiHit> = recs
-        .into_iter()
-        .take(limit.div_ceil(2) as usize)
-        .map(|(_, at, r)| AiHit {
-            room: r.room,
-            kind: "record".to_owned(),
-            id: r.id,
-            started_at: at,
-            text: r.text,
-        })
-        .collect();
-    hits.extend(srcs.into_iter().map(|(_, h)| h));
+    // Fresh before stale (B4-02), then by rank.
+    recs.sort_by(|x, y| {
+        x.0.cmp(&y.0)
+            .then(x.1.total_cmp(&y.1))
+            .then_with(|| x.2.id.cmp(&y.2.id))
+    });
+    let mut hits: Vec<AiHit> = recs.into_iter().map(|(_, _, h)| h).collect();
     hits.truncate(limit as usize);
     let ranked_by = if meaning.is_some() { "both" } else { "keyword" };
     if let Some(m) = meaning {
@@ -306,6 +327,7 @@ pub(crate) async fn search(
         rooms_searched: open.len(),
         rooms_closed: closed,
         ranked_by: Some(ranked_by.to_owned()),
+        complete: Some(!capped),
     }))
 }
 
@@ -401,7 +423,7 @@ pub(crate) fn record_of(
 
 #[utoipa::path(get, path = "/ai/rooms/{room}/records/{id}", operation_id = "brainAiRecord", tag = "brain",
     params(("room" = String, Path, description = "Room id"), ("id" = String, Path, description = "Record id")),
-    responses((status = 200, description = "One accepted record of a room this AI session may see, whole, as outside data; a candidate or rejected one is a 404", body = AiRecord)))]
+    responses((status = 200, description = "One memory record (current, not archived) of a room this AI session may see, whole, as outside data; a candidate, rejected, superseded or archived one is a 404", body = AiRecord)))]
 pub(crate) async fn one(
     State(app): State<App>,
     Extension(b): Extension<Brain>,
@@ -411,7 +433,7 @@ pub(crate) async fn one(
     let session = session_of(&me)?;
     let v = room_of(&app, &session, &room).await?;
     let a = open_room(&app, &b, &v.id).await?;
-    let row = sqlx::query("SELECT * FROM records WHERE id = ? AND status = 'accepted'")
+    let row = sqlx::query("SELECT * FROM memory WHERE id = ?")
         .bind(&id)
         .fetch_optional(a.pool())
         .await?;
@@ -442,7 +464,7 @@ pub struct AiRecords {
     pub rooms_closed: usize,
 }
 
-/// Accepted records of `kinds`, newest first, across the rooms the call reads.
+/// Memory records of `kinds`, newest first, across the rooms the call reads.
 async fn list(
     app: &App,
     b: &Brain,
@@ -453,11 +475,11 @@ async fn list(
     let session = session_of(me)?;
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let named = q.room.is_some();
-    let rooms = scope(app, &session, q.room.as_deref()).await?;
+    let (rooms, _) = scope(app, &session, q.room.as_deref()).await?;
     let (open, closed) = open_all(app, b, rooms, named).await?;
     let marks = vec!["?"; kinds.len()].join(",");
     let sql = format!(
-        "SELECT *, {STALE_SQL} AS stale FROM records WHERE status = 'accepted' AND type IN ({marks}) \
+        "SELECT *, {STALE_SQL} AS stale FROM memory WHERE type IN ({marks}) \
          ORDER BY stale, created_at DESC, id LIMIT {limit}"
     );
     let mut all = vec![];
@@ -487,7 +509,7 @@ async fn list(
 
 #[utoipa::path(get, path = "/ai/decisions", operation_id = "brainAiDecisions", tag = "brain",
     params(ListQuery),
-    responses((status = 200, description = "Accepted decisions of the rooms this AI session may see, newest first, as outside data", body = AiRecords)))]
+    responses((status = 200, description = "Current (memory) decisions of the rooms this AI session may see, newest first, as outside data", body = AiRecords)))]
 pub(crate) async fn decisions(
     State(app): State<App>,
     Extension(b): Extension<Brain>,
@@ -499,7 +521,7 @@ pub(crate) async fn decisions(
 
 #[utoipa::path(get, path = "/ai/project-state", operation_id = "brainAiProjectState", tag = "brain",
     params(ListQuery),
-    responses((status = 200, description = "Accepted project-state records, tasks (open threads) and rules (landmines) of the rooms this AI session may see, newest first, as outside data", body = AiRecords)))]
+    responses((status = 200, description = "Current (memory) project-state records, tasks (open threads) and rules (landmines) of the rooms this AI session may see, newest first, as outside data", body = AiRecords)))]
 pub(crate) async fn project_state(
     State(app): State<App>,
     Extension(b): Extension<Brain>,
@@ -507,6 +529,83 @@ pub(crate) async fn project_state(
     Query(q): Query<ListQuery>,
 ) -> ApiResult<AiRecords> {
     list(&app, &b, &me, q, &["project-state", "task", "rule"]).await
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct AiEvidence {
+    pub room: String,
+    /// The citing record.
+    pub record: String,
+    /// The cited source's item id.
+    pub source: String,
+    /// The source's start of text, inside the outside-text envelope; empty when `compacted`.
+    pub text: String,
+    /// The snippet was cut at 2000 characters.
+    pub truncated: bool,
+    /// The source's text was removed by retention; only the citation remains.
+    pub compacted: bool,
+}
+
+#[utoipa::path(get, path = "/ai/rooms/{room}/records/{id}/sources/{source}", operation_id = "brainAiEvidence", tag = "brain",
+    params(("room" = String, Path, description = "Room id"), ("id" = String, Path, description = "The memory record that cites the source"), ("source" = String, Path, description = "Item id of the cited source")),
+    responses((status = 200, description = "The start (2000 characters) of a source that a current memory record cites, as outside data. The only op that returns raw source text. A source the record does not cite is a 404.", body = AiEvidence)))]
+pub(crate) async fn evidence(
+    State(app): State<App>,
+    Extension(b): Extension<Brain>,
+    Extension(me): Extension<Caller>,
+    Path((room, record_id, source)): Path<(String, String, String)>,
+) -> ApiResult<AiEvidence> {
+    let session = session_of(&me)?;
+    let v = room_of(&app, &session, &room).await?;
+    let a = open_room(&app, &b, &v.id).await?;
+    // One query, so "the record is in memory", "it cites this source" and "the source exists" are
+    // decided together. ponytail: the `source_ids` arm exists because writers still fill only that
+    // list; drop it once they write `record_sources` (B4).
+    let row = sqlx::query(
+        "SELECT s.title AS title, s.text AS text, s.compacted_at AS compacted_at \
+         FROM memory m JOIN sources s ON s.item_id = ?2 \
+         WHERE m.id = ?1 AND (\
+             EXISTS (SELECT 1 FROM record_sources rs WHERE rs.record = m.id AND rs.source = s.item_id) \
+             OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(m.source_ids) THEN m.source_ids ELSE '[]' END) j \
+                        WHERE j.value = s.item_id))",
+    )
+    .bind(&record_id)
+    .bind(&source)
+    .fetch_optional(a.pool())
+    .await;
+    a.pool().close().await;
+    let r = row?.ok_or_else(|| ApiError::not_found("no such evidence"))?;
+    let compacted = r.try_get::<Option<String>, _>("compacted_at")?.is_some();
+    let (text, truncated) = if compacted {
+        (String::new(), false)
+    } else {
+        let (snip, cut_) = cut(&r.try_get::<String, _>("text")?, EVIDENCE_CHARS);
+        (
+            wrap(
+                &format!("source {source} | {}", r.try_get::<String, _>("title")?),
+                &snip,
+            ),
+            cut_,
+        )
+    };
+    // Ids only: who read which source, through which record.
+    let mut ctl = begin_write(&app.pool).await?;
+    record(
+        &mut ctl,
+        "brain.ai.evidence",
+        json!({"room": v.id, "record": record_id, "source": source, "session": session}),
+        None,
+    )
+    .await?;
+    ctl.commit().await?;
+    Ok(Json(AiEvidence {
+        room: v.id,
+        record: record_id,
+        source,
+        text,
+        truncated,
+        compacted,
+    }))
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -558,9 +657,7 @@ pub(crate) async fn propose(
             .all(|t| (1..=40).contains(&t.chars().count()))
         && req.sources.len() <= 20;
     if !ok {
-        return Err(ApiError::bad_request(
-            "a known type, a body of 1 to 2000 characters, at most 8 tags of 1 to 40 and 20 sources",
-        ));
+        return Err(ApiError::bad_request(PROPOSE_INVALID));
     }
     let v = room_of(&app, &session, &room).await?;
     let a = open_room(&app, &b, &v.id).await?;
@@ -614,7 +711,11 @@ async fn land(
             .fetch_one(&mut *tx)
             .await?;
         if known == 0 {
-            return Err(ApiError::bad_request("a source is not in this room"));
+            // The same 400 as any other invalid proposal: no oracle for which ids exist.
+            // ponytail: a session may cite any source id of a room it sees; restricting it to ids
+            // it read through record.sources / evidence needs per-session tracking. The Inbox
+            // shows the cited sources to the reviewer (plan note).
+            return Err(ApiError::bad_request(PROPOSE_INVALID));
         }
     }
     let same: Option<String> =
@@ -624,7 +725,13 @@ async fn land(
             .fetch_optional(&mut *tx)
             .await?;
     if let Some(id) = same {
-        return Ok((id, None));
+        // The id only when the match is memory: a candidate, rejected or archived record is not
+        // something an AI session may learn exists.
+        let in_memory: i64 = sqlx::query_scalar("SELECT count(*) FROM memory WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&mut *tx)
+            .await?;
+        return Ok((if in_memory > 0 { id } else { String::new() }, None));
     }
     let marker = format!("{PROPOSED}{session}");
     let mine: i64 = sqlx::query_scalar("SELECT count(*) FROM records WHERE distil = ?")
