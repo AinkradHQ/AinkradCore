@@ -122,6 +122,27 @@ fn a_session_through_the_abi() {
         gets(|o, c, l| unsafe { de_selection(a, o, c, l) }),
         r#"["n_bbbbbbbbbbbb"]"#
     );
+    // V2-07: the tree, select by id, tokens
+    let tree = gets(|o, c, l| unsafe { de_tree(a, o, c, l) });
+    assert!(tree.contains(r#""id":"n_bbbbbbbbbbbb""#) && tree.contains(r#""parent":"n_aaaaaaaaaaaa""#));
+    assert_eq!(gets(|o, c, l| unsafe { de_tokens(a, o, c, l) }), "[]");
+    assert_eq!(unsafe { de_select(a, b"[]".as_ptr(), 2) }, DE_OK);
+    assert_eq!(gets(|o, c, l| unsafe { de_selection(a, o, c, l) }), "[]");
+    let one = br#"["n_bbbbbbbbbbbb","n_bbbbbbbbbbbb"]"#;
+    assert_eq!(unsafe { de_select(a, one.as_ptr(), one.len()) }, DE_OK);
+    assert_eq!(
+        gets(|o, c, l| unsafe { de_selection(a, o, c, l) }),
+        r#"["n_bbbbbbbbbbbb"]"#
+    );
+    let bad = br#"["n_zzzzzzzzzzzz"]"#;
+    assert_eq!(unsafe { de_select(a, bad.as_ptr(), bad.len()) }, DE_ERR_INVALID);
+    assert_eq!(unsafe { de_select(a, std::ptr::null(), 5) }, DE_ERR_ARG);
+    assert_eq!(unsafe { de_select(a, b"{".as_ptr(), 1) }, DE_ERR_INVALID);
+    assert_eq!(unsafe { de_select(0, b"[]".as_ptr(), 2) }, DE_ERR_HANDLE);
+    assert_eq!(
+        unsafe { de_tree(a, std::ptr::null_mut(), 0, std::ptr::null_mut()) },
+        DE_ERR_ARG
+    );
     assert_eq!(de_key(a, DE_KEY_DELETE, 0), DE_OK);
     assert_eq!(gets(|o, c, l| unsafe { de_selection(a, o, c, l) }), "[]");
     assert_eq!(

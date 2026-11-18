@@ -518,6 +518,40 @@ pub unsafe extern "C" fn de_selection(
     })
 }
 
+/// The node tree for the layers panel, a JSON array `[{id, type, parent, order, name, hidden}]` in id order (the App
+/// sorts siblings by `order`). `parent` is the effective parent (`null` for pages and detached roots); `hidden` is
+/// `props.visible == false`. Output grows with the document, so size the buffer from `*out_len` on `DE_ERR_SMALL_BUFFER`.
+///
+/// # Safety
+/// See `put`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_tree(h: u64, out: *mut u8, cap: usize, out_len: *mut usize) -> i32 {
+    with(h, |e| unsafe { put(&e.tree_json(), out, cap, out_len) })
+}
+
+/// The linked design system's tokens, a JSON array `[{name, kind}]` in name order (`[]` until the system has synced).
+///
+/// # Safety
+/// See `put`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_tokens(h: u64, out: *mut u8, cap: usize, out_len: *mut usize) -> i32 {
+    with(h, |e| unsafe { put(&e.tokens_json(), out, cap, out_len) })
+}
+
+/// Select nodes by id: `ids_json` is a JSON array of strings (at most `DE_MAX_SELECT_IDS`, each at most
+/// `DE_MAX_ID_BYTES`), replacing the selection; `[]` clears it. Ends text editing and cancels a gesture first. An id
+/// that is not in the document refuses the whole call (`DE_ERR_INVALID`, selection unchanged).
+///
+/// # Safety
+/// `ids_json..+len` readable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_select(h: u64, ids_json: *const u8, len: usize) -> i32 {
+    with(h, |e| {
+        let b = unsafe { bytes(ids_json, len, DE_MAX_JSON_BYTES) }?;
+        ok(e.select(b))
+    })
+}
+
 /// One node for the inspector (`{id, type, parent, order, name, props, text}`), or `null`.
 ///
 /// # Safety

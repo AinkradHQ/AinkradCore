@@ -44,7 +44,7 @@ pub(crate) fn finite(v: &[f32], lim: f32) -> Result<(), i32> {
 pub struct Host {
     doc_id: String,
     pub(crate) live: Live,
-    system: Live,
+    pub(crate) system: Live,
     /// The document as last read out of `live` (None = changed since), and its tree.
     pub(crate) model: Option<Doc>,
     pub(crate) tree: Option<Forest>,
@@ -117,7 +117,7 @@ impl Host {
         self.loaded = false;
     }
 
-    fn model(&mut self) -> &Doc {
+    pub(crate) fn model(&mut self) -> &Doc {
         if self.model.is_none() {
             let d = self.live.read();
             self.selection.retain(|id| d.nodes.contains_key(id));
