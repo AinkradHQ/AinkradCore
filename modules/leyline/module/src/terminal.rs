@@ -145,15 +145,15 @@ async fn revoke(app: &App, leases: &[String]) {
     }
 }
 
-/// Everything `open` needs, checked and leased. `chain` is the jump hosts then the target. Every
-/// refusal the Core can know of comes before the first lease: terminal scope, size, caps, the
-/// runner, and a key on every hop. A lease that fails part-way revokes the ones already granted.
-async fn prepare(
+/// The runner a host is reached by and the chain of hosts to it (jump hosts, then the target),
+/// after every refusal the Core can know of before any lease: the runner is online and lists
+/// `pty.ssh`, and the terminal scope, size and caps allow one more.
+pub(crate) async fn reach(
     app: &App,
     me: &Caller,
     id: &str,
     size: TerminalSize,
-) -> Result<(String, SshTerminal, Vec<String>), ApiError> {
+) -> Result<(String, Vec<String>), ApiError> {
     let (via, jumps): (Option<String>, String) = {
         let mut conn = app.pool.acquire().await?;
         sqlx::query_as("SELECT via_runner, jump_chain FROM leyline_hosts WHERE id = ?")
@@ -182,13 +182,25 @@ async fn prepare(
     check_ssh_open(app, me, &runner, size).await?;
     let mut chain: Vec<String> = serde_json::from_str(&jumps).unwrap_or_default();
     chain.push(id.to_owned());
+    Ok((runner, chain))
+}
+
+/// Each hop of `chain` leased to `runner`: a key on every hop is checked before the first lease,
+/// and a lease that fails part-way revokes the ones already granted. A lease is redeemed once, so
+/// every job on the host (a terminal, a file) asks for its own.
+pub(crate) async fn leased(
+    app: &App,
+    me: &Caller,
+    runner: &str,
+    chain: &[String],
+) -> Result<SshTerminal, ApiError> {
     let mut stops = Vec::new();
-    for h in &chain {
+    for h in chain {
         stops.push(stop(app, h).await?);
     }
     let mut hops = Vec::new();
     for s in stops {
-        match hop(app, me, &runner, s).await {
+        match hop(app, me, runner, s).await {
             Ok(h) => hops.push(h),
             Err(e) => {
                 let leased: Vec<String> = hops.iter().map(|h| h.lease.clone()).collect();
@@ -198,7 +210,28 @@ async fn prepare(
         }
     }
     let target = hops.pop().expect("the chain ends with the host");
-    Ok((runner, SshTerminal { target, hops }, chain))
+    Ok(SshTerminal { target, hops })
+}
+
+/// Drops leases that were granted for a job that did not go ahead.
+pub(crate) async fn unlease(app: &App, ssh: &SshTerminal) {
+    let all: Vec<String> = (ssh.hops.iter().chain([&ssh.target]))
+        .map(|h| h.lease.clone())
+        .collect();
+    revoke(app, &all).await;
+}
+
+/// Everything `open` needs, checked and leased. Every refusal the Core can know of comes before
+/// the first lease: terminal scope, size, caps, the runner, and a key on every hop.
+async fn prepare(
+    app: &App,
+    me: &Caller,
+    id: &str,
+    size: TerminalSize,
+) -> Result<(String, SshTerminal, Vec<String>), ApiError> {
+    let (runner, chain) = reach(app, me, id, size).await?;
+    let ssh = leased(app, me, &runner, &chain).await?;
+    Ok((runner, ssh, chain))
 }
 
 #[utoipa::path(post, path = "/hosts/{host}/terminals", operation_id = "leylineOpenTerminal", tag = "leyline",
@@ -229,7 +262,7 @@ async fn finish(app: &App, auth: Authorized, ok: bool) -> Result<(), ApiError> {
 }
 
 /// Dispatch takes the gate's proof: it cannot be written without one.
-async fn start(
+pub(crate) async fn start(
     app: &App,
     me: &Caller,
     size: TerminalSize,

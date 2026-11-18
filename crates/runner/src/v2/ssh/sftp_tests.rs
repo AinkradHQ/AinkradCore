@@ -93,6 +93,7 @@ fn write_req(s: &Server, path: &str, overwrite: bool, size: Option<u64>) -> Sftp
         path: path.into(),
         overwrite,
         size,
+        mode: None,
     }
 }
 
@@ -366,6 +367,22 @@ async fn a_write_lands_atomically_under_credit_and_replaces_only_when_asked() {
     assert_eq!(kept(&s), ["/up.bin"]);
 }
 
+/// The mode is part of the open, so the file never exists with the server's umask (Y8-01 review).
+#[tokio::test]
+async fn a_write_with_a_mode_creates_the_file_with_it_from_the_open() {
+    let (leases, s) = (Leases::default(), serve("T", true).await);
+    let d = ssh_with(&leases);
+    let mut req = write_req(&s, "/secret", false, Some(3));
+    req.mode = Some(0o600);
+    let x = start_write(&d, req);
+    x.core.send(data(b"abc")).unwrap();
+    x.core.send(Body::Control(Control::Eof)).unwrap();
+    assert_eq!(x.done.await.unwrap().unwrap().bytes, 3);
+    let modes = s.fs.lock().unwrap().open_modes.clone();
+    assert_eq!(modes.len(), 1);
+    assert_eq!(modes[0].1, Some(0o600), "{modes:?}");
+}
+
 #[tokio::test]
 async fn a_cancel_mid_transfer_leaves_no_partial_file() {
     let (leases, s) = (Leases::default(), serve("T", true).await);
@@ -577,6 +594,7 @@ async fn real_openssh_sftp_roundtrip_hostile_names_cap_and_cancel() {
             path: path.clone(),
             overwrite: false,
             size: Some(body.len() as u64),
+            mode: None,
         };
         let mut x = start_write(&d, w);
         feed(&mut x, &body, 16_384).await;
@@ -617,6 +635,7 @@ async fn real_openssh_sftp_roundtrip_hostile_names_cap_and_cancel() {
         path: format!("{base}/cancelled"),
         overwrite: false,
         size: None,
+        mode: None,
     };
     let x = start_write(&d, w);
     x.core.send(data(&pattern(40_000))).unwrap();

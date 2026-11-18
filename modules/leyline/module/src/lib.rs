@@ -3,7 +3,8 @@
 //! text out (API and table), `leyline.*` events and audit; and keys (Y1-02): generated or imported,
 //! sealed in the Core's secret store, public data only in the API; and project attachments (Y1-03).
 //! SSH itself runs on a runner (Y2); the command gate (`gate`, Y4-01), host terminals and host-key
-//! trust (Y3-01), and Mac-direct agent leases (`direct`, Y6-01) are here.
+//! trust (Y3-01), Mac-direct agent leases (`direct`, Y6-01) and making a host a runner (Y8-01)
+//! are here.
 //!
 //! Module off, the Core is unchanged: the tables are its own `leyline_` namespace, no Core
 //! migration, no Core crate names this module.
@@ -20,6 +21,7 @@ mod health;
 pub mod hostkeys;
 mod hosts;
 mod keys;
+mod makerunner;
 mod policy;
 mod ready;
 mod terminal;
@@ -101,6 +103,8 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/hosts/{host}/host-keys/replace"),
     // A Mac-direct lease hands a key to a runner on the person's machine: Touch ID, like a terminal.
     ("POST", "/hosts/{host}/direct"),
+    // Installs software as root on a host and pairs it: a person at a live step-up.
+    ("POST", "/hosts/{host}/runner"),
 ];
 // POST and PATCH need a step-up only for what widens an AI's reach or repoints a host (`allowed`,
 // address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
@@ -136,6 +140,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("POST", "/hosts/{host}/terminals", "terminal"),
     ("POST", "/hosts/{host}/direct", "terminal"),
     ("POST", "/hosts/{host}/direct/revoke", "terminal"),
+    ("POST", "/hosts/{host}/runner", "terminal"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -173,7 +178,8 @@ pub struct Leyline;
         hostkeys::replace_route,
         terminal::open,
         direct::lease,
-        direct::revoke_route
+        direct::revoke_route,
+        makerunner::make
     ),
     components(schemas(
         hosts::HostView,
@@ -207,7 +213,8 @@ pub struct Leyline;
         terminal::SessionView,
         direct::NewDirect,
         direct::DirectView,
-        direct::DirectEnded
+        direct::DirectEnded,
+        makerunner::Install
     ))
 )]
 struct Doc;
@@ -249,6 +256,7 @@ impl Module for Leyline {
             .route("/hosts/{host}/terminals", post(terminal::open))
             .route("/hosts/{host}/direct", post(direct::lease))
             .route("/hosts/{host}/direct/revoke", post(direct::revoke_route))
+            .route("/hosts/{host}/runner", post(makerunner::make))
             .route("/groups", get(hosts::groups))
             .route("/tags", get(hosts::tags))
             .route("/keys", get(keys::list).post(keys::generate))
