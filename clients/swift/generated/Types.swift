@@ -346,6 +346,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /api/v1/projects/{id}/repos/{repo}`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/delete(removeProjectRepo)`.
     func removeProjectRepo(_ input: Operations.RemoveProjectRepo.Input) async throws -> Operations.RemoveProjectRepo.Output
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/repos/{repo}/fetch`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/fetch/post(fetchProjectRepo)`.
+    func fetchProjectRepo(_ input: Operations.FetchProjectRepo.Input) async throws -> Operations.FetchProjectRepo.Output
     /// - Remark: HTTP `POST /api/v1/projects/{id}/repos/{repo}/primary`.
     /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/primary/post(setProjectRepoPrimary)`.
     func setProjectRepoPrimary(_ input: Operations.SetProjectRepoPrimary.Input) async throws -> Operations.SetProjectRepoPrimary.Output
@@ -1706,6 +1709,17 @@ extension APIProtocol {
         headers: Operations.RemoveProjectRepo.Input.Headers = .init()
     ) async throws -> Operations.RemoveProjectRepo.Output {
         try await removeProjectRepo(Operations.RemoveProjectRepo.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/projects/{id}/repos/{repo}/fetch`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/{repo}/fetch/post(fetchProjectRepo)`.
+    public func fetchProjectRepo(
+        path: Operations.FetchProjectRepo.Input.Path,
+        headers: Operations.FetchProjectRepo.Input.Headers = .init()
+    ) async throws -> Operations.FetchProjectRepo.Output {
+        try await fetchProjectRepo(Operations.FetchProjectRepo.Input(
             path: path,
             headers: headers
         ))
