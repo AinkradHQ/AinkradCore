@@ -862,9 +862,13 @@ async fn serve(
         );
         app.passkeys = Some(Arc::new(passkeys));
     }
+    app.mirrors = Some(Arc::new(ainkrad_core_server::mirrors::Mirrors::new(
+        state_dir(db).join("mirrors"),
+    )));
     tokio::spawn(ainkrad_core_server::api::v1::terminal_sweep_loop(
         app.clone(),
     ));
+    tokio::spawn(ainkrad_core_server::mirrors::sweep_loop(app.clone()));
     for m in modules.iter() {
         m.attach(&app);
     }
