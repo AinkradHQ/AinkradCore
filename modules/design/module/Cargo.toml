@@ -29,5 +29,4 @@ ainkrad-core-server = { path = "../../../crates/server", features = ["test-suppo
 futures-util = "0.3.34"
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
 tokio-tungstenite = "0.29.0"
-futures-util = "0.3.34"
 tower = { version = "0.5.3", features = ["util"] }

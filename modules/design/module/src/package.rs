@@ -500,9 +500,7 @@ fn walk(dir: &FsPath, skip: &[String]) -> Result<Vec<Found>, String> {
                 if !skip.iter().any(|s| name.starts_with(s.as_str())) {
                     rec(root, &p, skip, out)?;
                 }
-            } else if meta.is_file()
-                && ext_of(&name).is_some_and(|x| kind_of(&x).is_some())
-            {
+            } else if meta.is_file() && ext_of(&name).is_some_and(|x| kind_of(&x).is_some()) {
                 let rel = p.strip_prefix(root).map_err(|e| e.to_string())?;
                 let rel = rel
                     .components()
