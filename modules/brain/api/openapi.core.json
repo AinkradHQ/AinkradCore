@@ -6140,8 +6140,7 @@
           "allowed_providers",
           "auto_accept",
           "lease_hours",
-          "review_days",
-          "daily_distils"
+          "review_days"
         ],
         "type": "object"
       },
