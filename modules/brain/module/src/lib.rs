@@ -62,6 +62,8 @@ mod save;
 pub mod semantic;
 mod suggest;
 mod sync;
+mod room_tidy;
+mod room_tidy_run;
 mod tidy;
 pub use tidy::{TidyChange, TidySummary};
 mod transcripts;
@@ -240,6 +242,8 @@ struct Inner {
     /// Set while the automatic distil triggers run (`auto_distil`), and when they last scanned the rooms.
     auto_busy: AtomicBool,
     auto_scan: AtomicI64,
+    /// Set while a room tidy step runs (`room_tidy`).
+    tidying: AtomicBool,
     overviewing: AtomicBool,
     /// Rooms held for a backup before 0.8.5 were imported this process (`commit::release_held`).
     held_released: AtomicBool,
@@ -765,6 +769,9 @@ impl Module for Brain {
             "brain.distil.capped",
             "brain.distil.done",
             "brain.distil.rejected",
+            "brain.tidy.started",
+            "brain.tidy.done",
+            "brain.tidy.rejected",
             "brain.overview.queued",
             "brain.overview.written",
             "brain.overview.failed",
@@ -797,6 +804,7 @@ impl Module for Brain {
             project_rooms::job(self),
             changes::job(self),
             retention::job(self),
+            room_tidy_run::job(self),
         ]
     }
 

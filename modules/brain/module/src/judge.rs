@@ -240,17 +240,29 @@ pub(crate) async fn launch(
     by: &str,
     prompt: &str,
 ) -> Result<Option<String>, ApiError> {
+    launch_as(app, room, by, prompt, AGENT).await
+}
+
+/// As [`launch`], on the chain bound to `agent` (else the distil chain): the judge and room tidy
+/// (B9-01) differ only in which model the user bound.
+pub(crate) async fn launch_as(
+    app: &App,
+    room: &str,
+    by: &str,
+    prompt: &str,
+    agent: &'static str,
+) -> Result<Option<String>, ApiError> {
     let p = policy::load(app, room).await?;
     let user = ch::user_of(&app.pool, by).await?;
     let bound: Option<i64> = sqlx::query_scalar(
         "SELECT chain_id FROM core_chain_bindings WHERE agent = ? AND user_id = ?",
     )
-    .bind(AGENT)
+    .bind(agent)
     .bind(user)
     .fetch_optional(&app.pool)
     .await?;
     let agent = if bound.is_some() {
-        AGENT
+        agent
     } else {
         distil::AGENT
     };

@@ -92,7 +92,7 @@ async fn active_rooms(app: &App) -> Result<Vec<String>, sqlx::Error> {
 /// The device the distil runs as (its user's fallback chain): the owner's (user 1) active device
 /// with a write scope that asked for a distil most recently, else the oldest such device. No device,
 /// no distil.
-async fn requester(app: &App) -> Result<Option<String>, sqlx::Error> {
+pub(crate) async fn requester(app: &App) -> Result<Option<String>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT id FROM core_devices WHERE kind = 'device' AND status = 'active' AND revoked_at IS NULL \
          AND user_id = 1 AND EXISTS (SELECT 1 FROM json_each(core_devices.scopes) WHERE value IN ('write','admin')) \
