@@ -326,6 +326,11 @@ impl Renderer {
         self.boards.iter().map(|b| b.laid.nodes.len()).sum()
     }
 
+    /// Each artboard's world origin and layout, in page order (runner `design.measure` and `design.review`).
+    pub fn boards(&self) -> impl Iterator<Item = (Point, &Laid)> {
+        self.boards.iter().map(|b| (b.origin, &b.laid))
+    }
+
     /// Absolute world rectangle of a node (resolved id).
     pub fn node_rect(&self, id: &str) -> Option<Rect> {
         self.boards.iter().find_map(|b| {

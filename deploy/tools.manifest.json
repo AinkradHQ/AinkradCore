@@ -21,12 +21,24 @@
     "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.167.1.tgz",
     "integrity": "sha512-39uApTRT9bkhE8tMXTIfZxaZ27oi7hPqWoF2Coyp+iQFAD3NVHgH838IYVUfJaX85leMSP2s4JOmVw0mMSCN5Q=="
   },
+  "chromium": {
+    "version": "159.0.8154.6",
+    "url": {
+      "x64": "https://cdn.playwright.dev/builds/cft/159.0.8154.6/linux64/chrome-headless-shell-linux64.zip",
+      "arm64": "https://cdn.playwright.dev/builds/cft/159.0.8154.6/linux-arm64/chrome-headless-shell-linux-arm64.zip"
+    },
+    "sha256": {
+      "x64": "77a6442fd3c8acd3bef9e1067fc26f5ef464277d22f0e8cb58dc3e4077a3e458",
+      "arm64": "e1262e9f4f244c441dcb54aa0e9abe4cf7b266ab02dc666fd975bd55aba9b3dc"
+    }
+  },
   "distro": {
     "git": {"bin": "git", "apt": ["git"], "dnf": ["git"]},
     "python": {"bin": "python3", "apt": ["python3", "python3-venv", "python3-pip"], "dnf": ["python3", "python3-pip"]},
     "go": {"bin": "go", "apt": ["golang-go"], "dnf": ["golang"]},
     "rust": {"bin": "rustc", "apt": ["rustc", "cargo"], "dnf": ["rust", "cargo"]},
     "docker": {"bin": "docker", "apt": ["docker.io"], "dnf": ["moby-engine"]},
+    "chromium": {"bin": "chrome-headless-shell", "apt": ["unzip", "libfontconfig1", "libfreetype6", "fonts-dejavu-core", "libnspr4", "libnss3", "libatk1.0-0t64", "libatk-bridge2.0-0t64", "libatspi2.0-0t64", "libx11-6", "libxcb1", "libxcomposite1", "libxdamage1", "libxext6", "libxfixes3", "libxrandr2", "libxres1", "libxkbcommon0", "libgbm1", "libasound2t64", "libcups2t64", "libpango-1.0-0", "libcairo2"], "dnf": ["unzip", "fontconfig", "freetype", "dejavu-sans-fonts", "nspr", "nss", "atk", "at-spi2-atk", "at-spi2-core", "libX11", "libxcb", "libXcomposite", "libXdamage", "libXext", "libXfixes", "libXrandr", "libXres", "libxkbcommon", "mesa-libgbm", "alsa-lib", "cups-libs", "pango", "cairo"]},
     "podman": {"bin": "podman", "apt": ["podman", "uidmap", "passt", "aardvark-dns", "nftables"], "dnf": ["podman", "shadow-utils", "passt", "aardvark-dns", "nftables"]}
   }
 }
