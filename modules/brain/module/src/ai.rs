@@ -28,10 +28,12 @@
 use ainkrad_core::untrusted::wrap;
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
+use ainkrad_core_server::scheduler::iso_of_unix;
 use ainkrad_core_server::store::begin_write;
 use ainkrad_proto::redact::Redactor;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
+use brain_model::merge::DEMOTE_SQL;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::Row;
@@ -42,6 +44,7 @@ use crate::answer::KINDS;
 use crate::distil::log_op;
 use crate::inbox::open_room;
 use crate::index::{rec_fts, words};
+use crate::policy;
 use crate::rooms::RoomAccess;
 use crate::{Brain, code, rand_id, record};
 
@@ -197,7 +200,15 @@ pub struct AiHit {
     pub started_at: String,
     /// The match, inside the outside-text envelope.
     pub text: String,
+    /// The sort key (`DEMOTE_SQL`): fresh, stale, then contested last. Not in the contract.
+    #[serde(skip)]
+    pub(crate) demote: i64,
 }
+
+/// The kind of the record a `memory` row contests (B4-02 round 3), for its label (`record_of`);
+/// NULL when that record is archived or purged, which the label shows as "(gone)".
+pub(crate) const CONTESTS_KIND: &str =
+    "(SELECT t.type FROM records t WHERE t.id = memory.contests AND t.archived_at IS NULL) AS contests_kind";
 
 #[derive(Serialize, ToSchema)]
 pub struct AiHits {
@@ -212,6 +223,17 @@ pub struct AiHits {
     /// missing hit may exist. Always set; optional in the schema for the same reason as `ranked_by`.
     pub complete: Option<bool>,
 }
+
+/// The time before which a `project-state` or `task` last in use is stale in `room` (B4-02): the
+/// room's `review_days` ago. Stale ones rank after fresh ones in every retrieval op, and contested
+/// ones after both (`DEMOTE_SQL`).
+pub(crate) async fn stale_cutoff(app: &App, room: &str) -> String {
+    let days = policy::load(app, room).await.map_or(90, |p| p.review_days);
+    iso_of_unix(app.clock.unix() - days * 86_400)
+}
+
+/// Longest chain of replaced records `brainAiRecord` follows.
+const MAX_HISTORY: usize = 10;
 
 pub(crate) fn cut(s: &str, n: usize) -> (String, bool) {
     let t = s.trim();
@@ -249,19 +271,24 @@ pub(crate) async fn search(
     let (rooms, rooms_cut) = scope(&app, &session, q.room.as_deref()).await?;
     let (open, closed) = open_all(&app, &b, rooms, named).await?;
     let key = b.key(&app).await?;
-    let mut recs: Vec<(f64, AiHit)> = vec![];
+    let mut recs: Vec<(bool, f64, AiHit)> = vec![];
     for (v, a) in &open {
+        let cutoff = stale_cutoff(&app, &v.id).await;
         for (rank, id) in rec_fts(&app, &key, a, limit, &expr).await? {
             // The index only nominates: the text is read from `memory` now.
-            let row = sqlx::query(
-                "SELECT id, type, body, tags, source_ids, created_at FROM memory WHERE id = ?",
-            )
-            .bind(&id)
-            .fetch_optional(a.pool())
-            .await?;
+            let sql = format!(
+                "SELECT id, type, body, tags, source_ids, created_at, contests, {CONTESTS_KIND}, {DEMOTE_SQL} AS demote FROM memory WHERE id = ?"
+            );
+            let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+                .bind(&cutoff)
+                .bind(&id)
+                .fetch_optional(a.pool())
+                .await?;
             if let Some(r) = row {
                 let rec = record_of(&v.id, &r, LIST_BODY)?;
+                let demote = r.try_get::<i64, _>("demote")?;
                 recs.push((
+                    demote,
                     rank,
                     AiHit {
                         room: v.id.clone(),
@@ -269,6 +296,7 @@ pub(crate) async fn search(
                         started_at: rec.created_at,
                         text: rec.text,
                         id: rec.id,
+                        demote,
                     },
                 ));
             }
@@ -293,8 +321,13 @@ pub(crate) async fn search(
             complete: Some(!capped),
         }));
     }
-    recs.sort_by(|x, y| x.0.total_cmp(&y.0).then_with(|| x.1.id.cmp(&y.1.id)));
-    let mut hits: Vec<AiHit> = recs.into_iter().map(|(_, h)| h).collect();
+    // Fresh, then stale, then contested (B4-02), then by rank.
+    recs.sort_by(|x, y| {
+        x.0.cmp(&y.0)
+            .then(x.1.total_cmp(&y.1))
+            .then_with(|| x.2.id.cmp(&y.2.id))
+    });
+    let mut hits: Vec<AiHit> = recs.into_iter().map(|(_, _, h)| h).collect();
     hits.truncate(limit as usize);
     let ranked_by = if meaning.is_some() { "both" } else { "keyword" };
     if let Some(m) = meaning {
@@ -322,6 +355,52 @@ pub struct AiRecord {
     /// Its tags and body, inside the outside-text envelope; a list cuts a long body.
     pub text: String,
     pub truncated: bool,
+    /// Only `brainAiRecord`: what this record replaced, newest first (B4-02), so "what was true in
+    /// March" stays answerable. A replaced record is reachable only through its successor in memory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<Vec<AiPast>>,
+}
+
+/// A record a current one replaced. `text` is outside data, like every record text.
+#[derive(Serialize, ToSchema)]
+pub struct AiPast {
+    pub id: String,
+    pub valid_from: Option<String>,
+    pub valid_to: Option<String>,
+    pub text: String,
+}
+
+/// The records `id` replaced, newest first, following `supersedes` links (at most `MAX_HISTORY`).
+async fn history_of(
+    conn: &mut sqlx::SqliteConnection,
+    id: &str,
+) -> Result<Vec<AiPast>, sqlx::Error> {
+    let mut out = vec![];
+    let mut next: Option<String> =
+        sqlx::query_scalar("SELECT supersedes FROM records WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *conn)
+            .await?
+            .flatten();
+    while let Some(old) = next.take().filter(|_| out.len() < MAX_HISTORY) {
+        let Some(r) = sqlx::query(
+            "SELECT * FROM records WHERE id = ? AND status = 'accepted' AND archived_at IS NULL",
+        )
+        .bind(&old)
+        .fetch_optional(&mut *conn)
+        .await?
+        else {
+            break;
+        };
+        out.push(AiPast {
+            valid_from: r.try_get::<Option<String>, _>("valid_from").ok().flatten(),
+            valid_to: r.try_get::<Option<String>, _>("valid_to").ok().flatten(),
+            text: record_of("", &r, LIST_BODY)?.text,
+            id: old,
+        });
+        next = r.try_get::<Option<String>, _>("supersedes").ok().flatten();
+    }
+    Ok(out)
 }
 
 pub(crate) fn record_of(
@@ -334,11 +413,21 @@ pub(crate) fn record_of(
     let tags: Vec<String> =
         serde_json::from_str(&r.try_get::<String, _>("tags")?).unwrap_or_default();
     let (body, truncated) = cut(&r.try_get::<String, _>("body")?, max_body);
-    let text = if tags.is_empty() {
+    let mut text = if tags.is_empty() {
         body
     } else {
         format!("tags: {}\n{body}", tags.join(", "))
     };
+    // A contested record says so, so the session sees the conflict (B4-02 round 3).
+    let contests = r.try_get::<Option<String>, _>("contests").ok().flatten();
+    let contests_kind = r
+        .try_get::<Option<String>, _>("contests_kind")
+        .ok()
+        .flatten();
+    if let Some(c) = contests {
+        let k = contests_kind.as_deref().unwrap_or("gone");
+        text = format!("contests record {c} ({k}), unresolved\n{text}");
+    }
     Ok(AiRecord {
         text: wrap(&format!("record {id} ({kind})"), &text),
         sources: r
@@ -352,6 +441,7 @@ pub(crate) fn record_of(
         kind,
         id,
         truncated,
+        history: None,
     })
 }
 
@@ -367,13 +457,21 @@ pub(crate) async fn one(
     let session = session_of(&me)?;
     let v = room_of(&app, &session, &room).await?;
     let a = open_room(&app, &b, &v.id).await?;
-    let row = sqlx::query("SELECT * FROM memory WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(a.pool())
-        .await?;
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT *, {CONTESTS_KIND} FROM memory WHERE id = ?"
+    )))
+    .bind(&id)
+    .fetch_optional(a.pool())
+    .await?;
+    let past = match &row {
+        Some(_) => Some(history_of(&mut *a.pool().acquire().await?, &id).await?),
+        None => None,
+    };
     a.pool().close().await;
     let row = row.ok_or_else(|| ApiError::not_found("no such record"))?;
-    Ok(Json(record_of(&v.id, &row, MAX_BODY)?))
+    let mut rec = record_of(&v.id, &row, MAX_BODY)?;
+    rec.history = past.filter(|p| !p.is_empty());
+    Ok(Json(rec))
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -407,24 +505,33 @@ async fn list(
     let (open, closed) = open_all(app, b, rooms, named).await?;
     let marks = vec!["?"; kinds.len()].join(",");
     let sql = format!(
-        "SELECT * FROM memory WHERE type IN ({marks}) \
-         ORDER BY created_at DESC, id LIMIT {limit}"
+        "SELECT *, {CONTESTS_KIND}, {DEMOTE_SQL} AS demote FROM memory WHERE type IN ({marks}) \
+         ORDER BY demote, created_at DESC, id LIMIT {limit}"
     );
     let mut all = vec![];
     for (v, a) in &open {
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
+        let mut query =
+            sqlx::query(sqlx::AssertSqlSafe(sql.clone())).bind(stale_cutoff(app, &v.id).await);
         for k in kinds {
             query = query.bind(*k);
         }
         for r in query.fetch_all(a.pool()).await? {
-            all.push(record_of(&v.id, &r, LIST_BODY)?);
+            all.push((
+                r.try_get::<i64, _>("demote")?,
+                record_of(&v.id, &r, LIST_BODY)?,
+            ));
         }
         a.pool().close().await;
     }
-    all.sort_by(|x, y| y.created_at.cmp(&x.created_at).then(x.id.cmp(&y.id)));
+    // Fresh, then stale, then contested (B4-02), then newest first.
+    all.sort_by(|x, y| {
+        (x.0.cmp(&y.0))
+            .then(y.1.created_at.cmp(&x.1.created_at))
+            .then(x.1.id.cmp(&y.1.id))
+    });
     all.truncate(limit as usize);
     Ok(Json(AiRecords {
-        records: all,
+        records: all.into_iter().map(|(_, r)| r).collect(),
         rooms_closed: closed,
     }))
 }

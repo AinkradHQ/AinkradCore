@@ -119,11 +119,31 @@ async fn row(pool: &SqlitePool, now: &str) -> Result<sqlx::sqlite::SqliteRow, sq
         .await
 }
 
+/// Replaces the model's `state` and `last_activity` with the ones the item dates give (B7-01).
+async fn set_dated_facts(
+    app: &App,
+    room: &str,
+    pool: &SqlitePool,
+    o: &mut Overview,
+) -> Result<(), ApiError> {
+    let review_days: i64 = sqlx::query_scalar("SELECT review_days FROM brain_rooms WHERE id = ?")
+        .bind(room)
+        .fetch_optional(&app.pool)
+        .await?
+        .unwrap_or(90);
+    let (at, age) = crate::overview_select::newest_item(pool, &app.clock.now()).await?;
+    (o.facts.state, o.facts.last_activity) = w::dated_facts(at.as_deref(), age, review_days);
+    Ok(())
+}
+
 async fn view(app: &App, room: &str, pool: &SqlitePool) -> Result<OverviewView, ApiError> {
     let r = row(pool, &app.clock.now()).await?;
-    let overview: Option<Overview> = r
+    let mut overview: Option<Overview> = r
         .try_get::<Option<String>, _>("overview")?
         .and_then(|j| serde_json::from_str(&j).ok());
+    if let Some(o) = overview.as_mut() {
+        set_dated_facts(app, room, pool, o).await?;
+    }
     let mut source_titles = std::collections::BTreeMap::new();
     if let Some(o) = &overview {
         let rs = &o.rules;
@@ -640,7 +660,8 @@ async fn finish(
             queue_state(app, room, "failed", None, attempt).await?;
             audit(app, "brain.overview.failed", room, json!({})).await?;
         }
-        Ok(o) => {
+        Ok(mut o) => {
+            set_dated_facts(app, room, &pool, &mut o).await?;
             let by = distilled_by(app, &s).await;
             let model = match (by.provider, by.account) {
                 (Some(p), Some(a)) => Some(format!("{p}:{a}")),

@@ -19,14 +19,15 @@ use ainkrad_core_server::store::{alloc, begin_write};
 use ainkrad_proto::redact::Redactor;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
+use brain_model::merge::Grounding;
 use serde::Serialize;
 use serde_json::json;
 use sqlx::{Row, SqlitePool};
 use utoipa::ToSchema;
 
 use crate::answer::{
-    Candidate, Known, Related, Source, build_prompt, parse_output, pick_related,
-    structured_grounded, user_grounded,
+    Candidate, Known, Related, Source, build_prompt, fields_supported, parse_output, pick_related,
+    structured_grounded, user_grounded, user_supported,
 };
 use crate::answer_turns::kind_of;
 use crate::claim::{self, check_chain};
@@ -146,7 +147,7 @@ pub(crate) async fn start(
         "queued"
     };
     let mut tx = begin_write(&app.pool).await?;
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO brain_distils (id, room, state, requested_by, sources, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
@@ -157,7 +158,15 @@ pub(crate) async fn start(
     .bind(app.clock.now())
     .bind(app.clock.now())
     .execute(&mut *tx)
-    .await?;
+    .await;
+    // The unique index (one open distil per room) decides a race with an automatic trigger.
+    if let Err(e) = inserted {
+        return Err(if e.as_database_error().is_some_and(|d| d.is_unique_violation()) {
+            code(409, "distil_open", "a distillation of this room is already open")
+        } else {
+            e.into()
+        });
+    }
     record(
         &mut tx,
         "brain.distil.queued",
@@ -261,11 +270,12 @@ pub(crate) fn pick_runner(app: &App) -> Option<String> {
     all.into_iter().next()
 }
 
-/// The room's current memory, newest first, from which the prompt's related block is picked.
-async fn related_in(pool: &SqlitePool) -> Result<Vec<Related>, sqlx::Error> {
+/// The room's current memory, newest first, from which the prompt's related block is picked. A
+/// contested record is left out, so a later distil cannot `same_as`-reinforce it (B4-02 round 4).
+pub(crate) async fn related_in(pool: &SqlitePool) -> Result<Vec<Related>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT id, type, body FROM records WHERE status = 'accepted' AND valid_to IS NULL \
-         AND archived_at IS NULL ORDER BY created_at DESC LIMIT 500",
+         AND archived_at IS NULL AND contests IS NULL ORDER BY created_at DESC LIMIT 500",
     )
     .fetch_all(pool)
     .await?;
@@ -498,20 +508,7 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
         let detail = json!({"distil": d.id, "session": parked.judge_session, "answer": parked.answer, "judge": output});
         return save(app, b, d, pool, &s.id, out, dropped, &parked.by, detail).await;
     }
-    let taken: Vec<(String, String, String)> =
-        sqlx::query_as("SELECT item_id, source_kind, text FROM sources WHERE distilled = ?")
-            .bind(&d.id)
-            .fetch_all(&pool)
-            .await?;
-    let shown: serde_json::Value = sqlx::query_scalar(
-        "SELECT detail FROM room_audit WHERE action = 'distil.shown' \
-         AND json_extract(detail, '$.distil') = ? ORDER BY id DESC LIMIT 1",
-    )
-    .bind(&d.id)
-    .fetch_optional(&pool)
-    .await?
-    .and_then(|j: String| serde_json::from_str(&j).ok())
-    .unwrap_or_default();
+    let (taken, shown) = taken_shown(&pool, &d.id).await?;
     let known = known_of(&taken, &shown);
     let parsed = match output.as_deref() {
         None => Err("the AI session gave no answer".to_owned()),
@@ -600,6 +597,30 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     save(app, b, d, pool, &s.id, staged.keep, dropped, &by, detail).await
 }
 
+/// The sources a distil took `(item id, kind, text)` and its `distil.shown` audit: what the answer
+/// is checked against (`known_of`). Both stay in the room, so a distil resumed after its judge
+/// session reads the same.
+async fn taken_shown(
+    pool: &SqlitePool,
+    distil: &str,
+) -> Result<(Vec<(String, String, String)>, serde_json::Value), sqlx::Error> {
+    let taken: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT item_id, source_kind, text FROM sources WHERE distilled = ?")
+            .bind(distil)
+            .fetch_all(pool)
+            .await?;
+    let shown: serde_json::Value = sqlx::query_scalar(
+        "SELECT detail FROM room_audit WHERE action = 'distil.shown' \
+         AND json_extract(detail, '$.distil') = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(distil)
+    .fetch_optional(pool)
+    .await?
+    .and_then(|j: String| serde_json::from_str(&j).ok())
+    .unwrap_or_default();
+    Ok((taken, shown))
+}
+
 /// The last step of a distil: merge or save the candidates that got through, log the dropped ones,
 /// all as one change set (`save::store_candidates`), then the transcript's answer into the room
 /// (C-08), the placeholder in the Core and the event line.
@@ -621,6 +642,18 @@ async fn save(
         out.iter().map(|c| r.text(c.body.trim())).collect()
     };
     let prep = crate::merge::prepare(app, b, &pool, &bodies).await;
+    // What backs each candidate, for its `replaces` (B4-02): re-read here, so a distil resumed after
+    // its judge session is checked the same way. The strict test (round 3): lexical overlap cannot
+    // read meaning, so anything short of it is saved as contested, never as a supersede.
+    let (taken, shown) = taken_shown(&pool, &d.id).await?;
+    let known = known_of(&taken, &shown);
+    let grounded: Vec<Grounding> = out
+        .iter()
+        .map(|c| Grounding {
+            user_turn: user_supported(c, &known),
+            structured_item: fields_supported(c, &known),
+        })
+        .collect();
     let saved = crate::save::store_candidates(
         &pool,
         &d.id,
@@ -630,6 +663,7 @@ async fn save(
         by,
         &app.clock.now(),
         &prep,
+        &grounded,
     )
     .await?;
     // Facts that went straight into memory get their vectors now, off the request path.
@@ -657,7 +691,8 @@ async fn save(
         &mut tx,
         "brain.distil.done",
         json!({"room": d.room, "distil": d.id, "candidates": n, "auto_accepted": saved.accepted,
-               "reinforced": saved.reinforced, "dropped": saved.dropped, "change": saved.change}),
+               "reinforced": saved.reinforced, "replaced": saved.replaced, "contested": saved.contested,
+               "dropped": saved.dropped, "change": saved.change}),
         (waiting > 0).then(|| {
             (
                 "brain.inbox",
@@ -900,6 +935,58 @@ mod tests {
                 assert!(got.is_empty(), "{kind} from {src}");
             }
         }
+    }
+
+    // B4-02 round 3: what may ground a supersede.
+    #[test]
+    fn a_jira_description_or_github_review_never_grounds_a_supersede() {
+        let jira = "KAN-1: Ship the export\nType: Task | Status: Done | Resolution: Fixed | Priority: High\n\
+                    Assignee: Dana | Reporter: Lee | Labels: \nUpdated: 2026-11-10T10:00:00Z\n\n\
+                    The export now runs on Mondays.";
+        let github = "acme/app#7: Add export\nState: merged | Author: lee | Assignee: dana | Base: main\n\
+                      Updated: 2026-11-10T10:00:00Z\n\nThe export now runs on Mondays.\n\nReviews:\n\
+                      - x (COMMENTED): The export now runs on Mondays.\n";
+        let taken = [
+            ("jira".to_owned(), "jira".to_owned(), jira.to_owned()),
+            ("github".to_owned(), "github".to_owned(), github.to_owned()),
+        ];
+        let k = known_of(&taken, &serde_json::Value::Null);
+        let c = |body: &str, src: &str| -> Candidate {
+            serde_json::from_value(json!({"type": "task", "body": body, "sources": [src]})).unwrap()
+        };
+        for src in ["jira", "github"] {
+            let said = c("The export now runs on Mondays.", src);
+            // It may still be saved (admission reads the whole item) ...
+            assert!(structured_grounded(&said, &k), "{src}");
+            // ... but only a tool-set field may retire a record.
+            assert!(!fields_supported(&said, &k), "{src}");
+        }
+        assert!(fields_supported(&c("Ship the export", "jira"), &k));
+        assert!(fields_supported(&c("Add export", "github"), &k));
+        assert!(!user_supported(&c("Ship the export", "jira"), &k));
+    }
+
+    #[test]
+    fn only_a_strict_restatement_of_a_user_turn_supports_a_supersede() {
+        let taken = [(
+            "i1".to_owned(),
+            "core_transcript".to_owned(),
+            TEXT.to_owned(),
+        )];
+        let k = known_of(&taken, &serde_json::Value::Null);
+        assert!(user_supported(
+            &cand("task", "Ship the billing export before 2026-12-01."),
+            &k
+        ));
+        assert!(!user_supported(
+            &cand("task", "Ship the billing export after 2026-12-01."),
+            &k
+        ));
+        // An assistant turn never supports one.
+        assert!(!user_supported(
+            &cand("task", "Rotate every production key tonight."),
+            &k
+        ));
     }
 
     #[test]

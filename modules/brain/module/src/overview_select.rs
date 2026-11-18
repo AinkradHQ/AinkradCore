@@ -102,6 +102,35 @@ pub async fn room_items(pool: &SqlitePool) -> Result<Vec<RoomItem>, sqlx::Error>
     Ok(out)
 }
 
+/// The date of the room's newest item and its age in whole days at `now` (both `None` for a room
+/// without items). Pointers and agent noise do not count: the state is about real work.
+pub async fn newest_item(
+    pool: &SqlitePool,
+    now: &str,
+) -> Result<(Option<String>, Option<i64>), sqlx::Error> {
+    let rows = sqlx::query(
+        "SELECT path, title, coalesce(ended_at, started_at) AS at FROM sources \
+         WHERE pointer = 0 ORDER BY coalesce(ended_at, started_at) DESC LIMIT 200",
+    )
+    .fetch_all(pool)
+    .await?;
+    for r in &rows {
+        let (path, title): (String, String) = (r.try_get("path")?, r.try_get("title")?);
+        if is_agent_noise(&path, &title) {
+            continue;
+        }
+        let at: String = r.try_get("at")?;
+        let age: Option<i64> =
+            sqlx::query_scalar("SELECT CAST(julianday(?) - julianday(?) AS INTEGER)")
+                .bind(now)
+                .bind(&at)
+                .fetch_one(pool)
+                .await?;
+        return Ok((Some(at), age));
+    }
+    Ok((None, None))
+}
+
 /// The lines whose groups get a vector: documentation first, then the most repeated, by key.
 pub fn to_embed(c: &[Cand], lines: &[(usize, String)]) -> Vec<(String, String)> {
     let mut count: HashMap<String, (bool, usize, String)> = HashMap::new();

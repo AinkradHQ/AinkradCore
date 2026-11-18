@@ -70,6 +70,48 @@ pub fn decide(
     Decision::Insert
 }
 
+/// What backs a candidate, by the strict test (`admit::Grounds::supports`, B4-02 round 3): every
+/// content word in one clause of ONE user turn of a source it cites, with that clause's negation
+/// words, or in the tool-set fields (title, status, resolution, assignee) of ONE cited Jira or
+/// GitHub item, never its description or comments (`answer::user_supported` /
+/// `answer::fields_supported`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Grounding {
+    pub user_turn: bool,
+    pub structured_item: bool,
+}
+
+/// B4-02 security rule (fallback, round 4): lexical grounding cannot read word order or meaning, so
+/// a `replaces` of a `rule`, `preference`, `decision` or `fact` never supersedes: it always saves
+/// the candidate alone (if admitted), keeps the target in force, and marks the two contested. Only a
+/// `task` or `project-state` of one kind supersedes, when the candidate passes the strict test
+/// (`Grounding`) on one user-turn clause or on one cited Jira or GitHub item's tool-set fields. A contested record never steers (ranks last, labelled).
+pub fn may_supersede(candidate_kind: &str, target_kind: &str, g: Grounding) -> bool {
+    candidate_kind == target_kind
+        && matches!(candidate_kind, "task" | "project-state")
+        && (g.user_turn || g.structured_item)
+}
+
+/// B4-02: a record of this kind goes stale, and ranks down, once it was last in use before the room's
+/// review cut-off. Other kinds never go stale.
+pub fn is_stale(kind: &str, last_seen: &str, cutoff: &str) -> bool {
+    matches!(kind, "project-state" | "task") && last_seen < cutoff
+}
+
+macro_rules! stale_sql {
+    () => {
+        "(type IN ('project-state','task') AND coalesce(last_seen_at, created_at) < ?)"
+    };
+}
+
+/// The same test as `is_stale`, as an SQL expression of one `?` (the cut-off, ISO text) over the
+/// `records` / `memory` columns. A gate test keeps the two equal.
+pub const STALE_SQL: &str = stale_sql!();
+
+/// The retrieval sort key (B4-02 round 3), one `?` like `STALE_SQL`: 0 fresh, 1 stale, 2 or 3
+/// contested (`contests IS NOT NULL`), so a contested record comes after everything else.
+pub const DEMOTE_SQL: &str = concat!("((contests IS NOT NULL) * 2 + ", stale_sql!(), ")");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +207,48 @@ mod tests {
             decide("fact", "same", Some(&A), Some("a"), &known),
             Decision::Insert
         );
+    }
+
+    #[test]
+    fn a_supersede_needs_one_kind_and_strong_grounding() {
+        let none = Grounding::default();
+        let user = Grounding {
+            user_turn: true,
+            ..none
+        };
+        let item = Grounding {
+            structured_item: true,
+            ..none
+        };
+        for kind in [
+            "rule",
+            "preference",
+            "fact",
+            "decision",
+            "task",
+            "project-state",
+        ] {
+            assert!(!may_supersede(kind, kind, none), "{kind}");
+            let strict = matches!(kind, "task" | "project-state");
+            assert_eq!(may_supersede(kind, kind, user), strict, "{kind}");
+        }
+        assert!(may_supersede("task", "task", item));
+        assert!(may_supersede("project-state", "project-state", item));
+        for kind in ["rule", "preference", "fact", "decision"] {
+            assert!(!may_supersede(kind, kind, item), "{kind}");
+            assert!(!may_supersede(kind, kind, user), "{kind}");
+        }
+        assert!(!may_supersede("fact", "rule", user));
+        assert!(!may_supersede("task", "project-state", item));
+    }
+
+    #[test]
+    fn only_old_project_state_and_tasks_are_stale() {
+        let cut = "2026-08-01T00:00:00Z";
+        assert!(is_stale("project-state", "2026-07-01T00:00:00Z", cut));
+        assert!(is_stale("task", "2026-07-01T00:00:00Z", cut));
+        assert!(!is_stale("task", "2026-09-01T00:00:00Z", cut));
+        assert!(!is_stale("decision", "2026-01-01T00:00:00Z", cut));
+        assert!(!is_stale("rule", "2026-01-01T00:00:00Z", cut));
     }
 }

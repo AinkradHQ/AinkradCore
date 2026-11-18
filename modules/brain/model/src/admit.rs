@@ -152,17 +152,193 @@ const STOP: &[&str] = &[
 
 /// More stop words for the user-turn check only (the corpus bands stay), folded as `norm` folds.
 const STOP_USER: &[&str] = &[
-    "just", "like", "make", "sure", "some", "more", "very", "much", "what", "which", "there",
-    "here", "they", "them", "these", "those", "been", "being", "does", "did", "how", "who", "why",
-    "where", "while", "because", "only", "out", "get", "got", "let", "please", "علي", "الي", "الذين",
-    "كانت", "يكون", "انه", "بعد", "قبل", "عند", "حتي", "لكن", "بين", "كما", "ايضا", "هناك", "عليه",
+    "just",
+    "like",
+    "make",
+    "sure",
+    "some",
+    "more",
+    "very",
+    "much",
+    "what",
+    "which",
+    "there",
+    "here",
+    "they",
+    "them",
+    "these",
+    "those",
+    "been",
+    "being",
+    "does",
+    "did",
+    "how",
+    "who",
+    "why",
+    "where",
+    "while",
+    "because",
+    "only",
+    "out",
+    "get",
+    "got",
+    "let",
+    "please",
+    "علي",
+    "الي",
+    "الذين",
+    "كانت",
+    "يكون",
+    "انه",
+    "بعد",
+    "قبل",
+    "عند",
+    "حتي",
+    "لكن",
+    "بين",
+    "كما",
+    "ايضا",
+    "هناك",
+    "عليه",
 ];
 
-/// Distinct content stems of `s`: words of 3+ characters, stop words (English, Arabic) dropped.
+/// Order and scope words, folded as `norm` folds. In the user-turn checks they are content whatever
+/// their length or stop-list entry (B4-02 round 3): "deploy only after tests pass" must not ground
+/// "deploy before tests pass".
+const ORDER: &[&str] = &[
+    "before", "after", "only", "every", "each", "all", "any", "than", "first", "last", "قبل",
+    "بعد", "فقط", "كل", "جميع", "اي", "اول", "اخر", "الا",
+];
+
+/// Negation words, folded as `norm` folds. In the user-turn check they are content, never stop words,
+/// and their parity is a text's polarity (B4-02 review): "don't deploy without tests" must not ground
+/// "deploy without tests". `n't` is read as ` not` first (`words`).
+const NEGATIONS: &[&str] = &[
+    "not", "no", "never", "without", "nor", "cannot", "dont", "doesnt", "didnt", "isnt", "arent",
+    "wont", "cant", "shouldnt", "mustnt", "لا", "لم", "لن", "ليس", "ليست", "بدون", "ولا", "ولم",
+    "ولن",
+];
+
+fn words(s: &str) -> Vec<String> {
+    tokens(&norm(s).replace("n't", " not").replace("n\u{2019}t", " not"))
+}
+
+/// An odd number of negation words.
+fn negated(s: &str) -> bool {
+    words(s)
+        .iter()
+        .filter(|w| NEGATIONS.contains(&w.as_str()))
+        .count()
+        % 2
+        == 1
+}
+
+/// The distinct negation words of `s` (the strict check compares these sets, not their parity).
+fn negations(s: &str) -> HashSet<String> {
+    words(s)
+        .into_iter()
+        .filter(|w| NEGATIONS.contains(&w.as_str()))
+        .collect()
+}
+
+/// Distinct content stems of `s`: words of 3+ characters, every negation word and every order or
+/// scope word, stop words (English, Arabic) dropped.
 pub fn content_stems(s: &str) -> HashSet<String> {
     let stop = |t: &str| STOP.contains(&t) || STOP_USER.contains(&t);
-    let keep = |t: &String| t.chars().count() >= 3 && !stop(t);
-    tokens(s).into_iter().filter(keep).map(|t| stem(&t)).collect()
+    let keep = |t: &String| {
+        NEGATIONS.contains(&t.as_str())
+            || ORDER.contains(&t.as_str())
+            || (t.chars().count() >= 3 && !stop(t))
+    };
+    words(s)
+        .into_iter()
+        .filter(keep)
+        .map(|t| stem(&t))
+        .collect()
+}
+
+/// A clause of a block: its content stems, its polarity, its negation words.
+#[derive(Debug, Default)]
+struct Clause {
+    stems: HashSet<String>,
+    negated: bool,
+    negations: HashSet<String>,
+}
+
+/// One block a body may be grounded in (one user turn, or one cited Jira or GitHub item): its
+/// content stems, and each clause's stems with its polarity. `ground` (admission) uses the clauses
+/// of sentences; `supports` (supersede) the finer clauses.
+#[derive(Debug, Default)]
+pub struct Grounds {
+    stems: HashSet<String>,
+    clauses: Vec<Clause>,
+    /// Split on `,` and Arabic `،` too (B4-02 round 3).
+    fine: Vec<Clause>,
+}
+
+fn clauses(text: &str, at: &[char]) -> Vec<Clause> {
+    text.split(at)
+        .filter(|c| !c.trim().is_empty())
+        .map(|c| Clause {
+            stems: content_stems(c),
+            negated: negated(c),
+            negations: negations(c),
+        })
+        .collect()
+}
+
+const SENTENCE: &[char] = &['.', '!', '?', ';', '\n', '\u{061F}', '\u{061B}'];
+const CLAUSE: &[char] = &[
+    '.', '!', '?', ';', ',', '\n', '\u{061F}', '\u{061B}', '\u{060C}',
+];
+
+impl Grounds {
+    pub fn of(text: &str) -> Self {
+        let clauses = clauses(text, SENTENCE);
+        let stems = clauses
+            .iter()
+            .flat_map(|c| c.stems.iter().cloned())
+            .collect();
+        Self {
+            stems,
+            clauses,
+            fine: self::clauses(text, CLAUSE),
+        }
+    }
+
+    /// The strict test a `replaces` needs to retire a record (B4-02 round 3): EVERY content stem of
+    /// the body is in ONE clause (split on `.`, `;`, `,`, newlines, `،`, `؛`), and that clause has
+    /// exactly the body's set of negation words. Lexical overlap cannot read meaning, so this is
+    /// deliberately strict: anything less is saved as contested, never as a supersede.
+    pub fn supports(&self, body: &str) -> bool {
+        let b = content_stems(body);
+        let neg = negations(body);
+        !b.is_empty()
+            && self
+                .fine
+                .iter()
+                .any(|c| b.is_subset(&c.stems) && c.negations == neg)
+    }
+
+    /// At least [`Q_USER_GROUNDING`] of the body's content stems are here, and the clause that shares
+    /// the most with the body has the body's polarity (a tie passes when one of them has it).
+    pub fn ground(&self, body: &str) -> bool {
+        let b = content_stems(body);
+        let hit = |s: &HashSet<String>| b.iter().filter(|w| s.contains(*w)).count();
+        if b.is_empty() || (hit(&self.stems) as f32 / b.len() as f32) < Q_USER_GROUNDING {
+            return false;
+        }
+        let neg = negated(body);
+        let best = self
+            .clauses
+            .iter()
+            .map(|c| hit(&c.stems))
+            .max()
+            .unwrap_or(0);
+        self.clauses
+            .iter()
+            .any(|c| hit(&c.stems) == best && c.negated == neg)
+    }
 }
 
 const GREET: &[&str] = &[
@@ -496,5 +672,74 @@ pub fn admit(c: &Candidate, cited: &[Cited], existing: &[&str]) -> Admission {
         score,
         band,
         reasons: soft,
+    }
+}
+
+#[cfg(test)]
+mod grounds_tests {
+    use super::Grounds;
+
+    #[test]
+    fn a_dropped_negation_does_not_ground() {
+        let turn = Grounds::of("Don't deploy on Fridays without tests.");
+        assert!(!turn.ground("Deploy on Fridays without tests."));
+        assert!(turn.ground("Do not deploy on Fridays without tests."));
+        let turn = Grounds::of("Deploy on Fridays without tests.");
+        assert!(!turn.ground("Never deploy on Fridays without tests."));
+        assert!(turn.ground("Deploy on Fridays without tests."));
+    }
+
+    #[test]
+    fn a_dropped_arabic_negation_does_not_ground() {
+        let turn = Grounds::of("لا ننشر يوم الجمعة بدون اختبارات");
+        assert!(!turn.ground("ننشر يوم الجمعة بدون اختبارات"));
+        assert!(turn.ground("لا ننشر يوم الجمعة بدون اختبارات"));
+        let turn = Grounds::of("ننشر يوم الجمعة");
+        assert!(!turn.ground("لن ننشر يوم الجمعة"));
+    }
+
+    #[test]
+    fn polarity_is_read_from_the_matching_clause() {
+        let turn = Grounds::of("No, that one is wrong. Deploy the billing export on Mondays.");
+        assert!(turn.ground("Deploy the billing export on Mondays."));
+    }
+
+    // B4-02 round 3: the strict supersede test.
+    #[test]
+    fn a_negated_clause_never_supports_the_plain_body() {
+        let turn = Grounds::of("No, don't deploy on Fridays");
+        assert!(!turn.supports("deploy on Fridays"));
+        assert!(turn.supports("Don't deploy on Fridays"));
+        // Sets, not parity: "never" is not "not".
+        assert!(!turn.supports("Never deploy on Fridays"));
+        let turn = Grounds::of("لا، لا ننشر يوم الجمعة");
+        assert!(!turn.supports("ننشر يوم الجمعة"));
+    }
+
+    #[test]
+    fn a_swapped_verb_never_supports() {
+        let turn = Grounds::of("always run the full test suite before merging");
+        assert!(!turn.supports("always skip the full test suite before merging"));
+        assert!(turn.supports("Always run the full test suite before merging."));
+    }
+
+    #[test]
+    fn order_and_scope_words_are_content() {
+        let turn = Grounds::of("deploy only after tests pass");
+        assert!(!turn.supports("deploy before tests pass"));
+        assert!(!turn.supports("deploy after any tests pass"));
+        assert!(turn.supports("Deploy only after tests pass."));
+        let turn = Grounds::of("ننشر فقط بعد نجاح الاختبارات");
+        assert!(!turn.supports("ننشر قبل نجاح الاختبارات"));
+    }
+
+    #[test]
+    fn a_true_restatement_supports_from_one_clause_only() {
+        let turn = Grounds::of("No, that one is wrong. Deploy the billing export on Mondays.");
+        assert!(turn.supports("Deploy the billing export on Mondays."));
+        assert!(turn.supports("deploy billing export Mondays"));
+        // Every stem from ONE clause, never the union of two.
+        let turn = Grounds::of("Deploy the billing export, on Mondays");
+        assert!(!turn.supports("Deploy the billing export on Mondays."));
     }
 }
