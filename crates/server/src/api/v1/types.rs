@@ -300,7 +300,10 @@
 /// 94: project runs (P5-02). Runner wire protocol only (`runner.schema.json`): driver `run` with ops `run.start`
 ///    (`RunStart` -> `RunInfo`), `run.stop` (`RunStop` -> `RunInfo`) and `run.status` (`RunStatusReq` -> `RunList`);
 ///    no route yet. (92 and 93 are P4-01 and P2-01.)
-pub const API_MINOR: u32 = 93;
+/// 95: the Projects epic build (one bump for every route the epic added after 94: project runs, logs and
+///    services, run secrets, the public link; and `PATCH /projects/{id}` taking `slug`, `idle_minutes`,
+///    `cpu_limit` and `mem_limit_mb`). Regenerated once, at the epic's build.
+pub const API_MINOR: u32 = 95;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -485,6 +485,15 @@ async fn revoke(app: &App, run: &Run) {
     }
 }
 
+/// `text` as a run's error may be shown: the project's secret *values* masked (opened here), then
+/// [`runs::scrub_error`] (names, lease ids, key shapes, length).
+pub(crate) async fn scrub(app: &App, project: i64, text: &str) -> String {
+    let text = crate::api::v1::projects::run_logs::scrubber(app, project)
+        .await
+        .text(text);
+    runs::scrub_error(&app.pool, project, &text).await
+}
+
 /// `runs::finish`; the run's repo leases end with it, but only when this call ended the run: a
 /// late finish of an old run must not revoke a newer run's lease (stop, fail, runner lost, crash).
 pub(crate) async fn finish(
@@ -493,6 +502,17 @@ pub(crate) async fn finish(
     end: End<'_>,
     who: Who<'_>,
 ) -> Result<bool, Error> {
+    let scrubbed;
+    let end = match end.error {
+        Some(e) => {
+            scrubbed = scrub(app, run.project_id, e).await;
+            End {
+                error: Some(&scrubbed),
+                ..end
+            }
+        }
+        None => end,
+    };
     let done = runs::finish(&app.pool, &run.id, end, who).await?;
     if done {
         revoke(app, run).await;
@@ -548,7 +568,9 @@ async fn settle_stop(
     let gone = match tokio::time::timeout(STOP_TIMEOUT, link.stop(&run.runner, &run.id)).await {
         Ok(Ok(_)) => None,
         Ok(Err(LinkError::Offline)) => Some("runner_lost"),
-        Ok(Err(LinkError::Failed(m))) => return refused("runner_error", m),
+        Ok(Err(LinkError::Failed(m))) => {
+            return refused("runner_error", scrub(app, run.project_id, &m).await);
+        }
         Err(_) => return refused("runner_error", "the runner did not stop the run in time"),
     };
     let end = End {
@@ -605,7 +627,8 @@ pub async fn reconcile(app: &App, link: &dyn Link, runner: &str) {
                 }
                 None
             }
-            (Some(RunPhase::Failed), _) => {
+            // One-shot init services may report `failed` while the start still drives the run.
+            (Some(RunPhase::Failed), _) if !driving(&r.id) => {
                 let i = seen.expect("matched above");
                 let why = format!(
                     "{}: {}",

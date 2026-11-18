@@ -148,7 +148,12 @@ fn the_client_is_cf_connecting_ip_only_from_a_cloudflare_peer() {
     );
     assert_eq!(
         client_ip(&req("2606:4700::1", Some("2001:db8::7")), &edge),
-        (ip("2001:db8::7"), true)
+        (ip("2001:db8::"), true),
+        "IPv6 is keyed by its /64"
+    );
+    assert_eq!(
+        client_ip(&req("2001:db8:1:2:aaaa::9", None), &edge),
+        (ip("2001:db8:1:2::"), false)
     );
     assert_eq!(
         client_ip(&req("104.16.0.1", Some("nope")), &edge),

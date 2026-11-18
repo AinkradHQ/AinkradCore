@@ -118,6 +118,24 @@ pub(crate) async fn claim_for_session(
     }
 }
 
+/// A launch of a project session needs its claim when the project has a room: a session that
+/// lost its claim (or never got one) would clone the project's repos without the room's policy.
+pub(crate) async fn require_claim(app: &App, session: &str, project: i64) -> Result<(), String> {
+    let missing: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM brain_project_rooms WHERE project = ?1) \
+         AND NOT EXISTS (SELECT 1 FROM brain_session_rooms WHERE session = ?2)",
+    )
+    .bind(project.to_string())
+    .bind(session)
+    .fetch_one(&app.pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    if missing {
+        return Err("the project has a room and this session holds no claim on it".to_owned());
+    }
+    Ok(())
+}
+
 /// The approved instructions of the room `session` claimed (P3-03): read-only, and only what the
 /// person approved in the room's Overview (`instructions_approved_at` set, text not blank). A
 /// session with no claim, a room that will not open, or no approved text gets `None`, and then

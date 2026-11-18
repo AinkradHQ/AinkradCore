@@ -30,14 +30,16 @@ fn port_open_is_its_own_capped_driver() {
     assert!(cap > 0 && (cap as usize) < super::super::session::MAX_HELD);
 }
 
+fn seed(d: &RunDriver, run: &str, e: StatusEntry) {
+    let slot = Arc::new(tokio::sync::Mutex::new(Some(e)));
+    d.status.lock().unwrap().insert(run.into(), slot);
+}
+
 #[tokio::test]
 async fn a_fresh_status_is_shared_and_a_stale_one_is_refetched() {
     let d = driver();
     let fresh = RunList::default();
-    d.status
-        .lock()
-        .await
-        .insert("r1".into(), (Instant::now(), Ok(fresh.clone())));
+    seed(&d, "r1", (Instant::now(), Ok(fresh.clone())));
     assert_eq!(
         d.runs_cached("r1").await,
         Ok(fresh),
@@ -46,10 +48,7 @@ async fn a_fresh_status_is_shared_and_a_stale_one_is_refetched() {
     let old = Instant::now()
         .checked_sub(Duration::from_secs(5))
         .unwrap_or_else(Instant::now);
-    d.status
-        .lock()
-        .await
-        .insert("r2".into(), (old, Ok(RunList::default())));
+    seed(&d, "r2", (old, Ok(RunList::default())));
     // `/` is not a helper socket: the refetch fails, so the stale Ok was not served.
     assert!(d.runs_cached("r2").await.is_err());
 }

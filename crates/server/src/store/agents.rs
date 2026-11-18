@@ -359,7 +359,7 @@ pub(super) async fn create_in(
     actor: AuditActor,
     now: &str,
 ) -> Result<String, sqlx::Error> {
-    let id = crate::auth::crypto::random_id("as_");
+    let id = crate::auth::crypto::session_id();
     let origin = super::audit::origin::current();
     // The account a gateway serves is the Core's own row behind the secret's name, nothing a caller
     // or a runner says; no such row leaves it NULL and the launch refuses the session.

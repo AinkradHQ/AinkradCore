@@ -494,12 +494,18 @@ impl Executor for HarnessExecutor {
         self.workspaces.recover_sessions(adopted);
     }
 
-    fn discard_agent_workspaces(&self, prefix: &str, keep: &[String]) {
+    fn discard_agent_workspaces(&self, name: &str, prefix: bool, keep: &[String]) {
         self.agent_workspaces
             .lock()
             .expect("agent workspaces")
-            .retain(|(s, _), _| !s.starts_with(prefix) || keep.contains(s));
-        self.workspaces.discard_sessions(prefix, keep);
+            .retain(|(s, _), _| {
+                !(if prefix {
+                    s.starts_with(name)
+                } else {
+                    s == name
+                }) || keep.contains(s)
+            });
+        self.workspaces.discard_sessions(name, prefix, keep);
     }
 
     fn work_dir(&self, job: &Job) -> Option<PathBuf> {
