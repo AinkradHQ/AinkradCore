@@ -15,6 +15,7 @@
 //!   events before it were handled, so a crash replays them, and replays are harmless.
 //! - Brain-owned sessions (distil, judge, tidy, overview) are never a trigger, and never a source.
 //! - The first run starts at the newest event: history is not distilled by surprise.
+//! - Mid-session checkpoints (`checkpoint.rs`) queue through the same `queue`, so they share every cap.
 //!
 //! The clock is a parameter (`step_at`), so tests set the time.
 //! ponytail: every tick reads up to 10 pages of events; a session end scans each active room's
@@ -38,7 +39,7 @@ use crate::{Brain, MODULE, distil, policy, rand_id, record};
 const EVERY_SECS: u64 = 30;
 /// Idle debounce: a session's end is acted on this long after it happened, so a burst of ends in
 /// one room (and the sync that collects them) settles into one distil.
-const IDLE_SECS: i64 = 45;
+pub(crate) const IDLE_SECS: i64 = 45;
 /// Import threshold (a Q value): this many undistilled sources in a room ...
 const THRESHOLD_SOURCES: i64 = 40;
 /// ... or the oldest undistilled source this old.
@@ -51,7 +52,7 @@ const PAGE: u32 = 200;
 const MAX_PAGES: u32 = 10;
 
 #[derive(Debug, PartialEq, Eq)]
-enum Queued {
+pub(crate) enum Queued {
     Yes,
     /// A distil of the room is open (it takes the new sources), or this session had its distil.
     Coalesced,
@@ -93,7 +94,7 @@ async fn requester(app: &App) -> Result<Option<String>, sqlx::Error> {
 
 /// Queues one distil of `room` (`fresh` undistilled sources) unless a gate says no. One write
 /// transaction: the checks and the insert cannot be split by another tick.
-async fn queue(
+pub(crate) async fn queue(
     app: &App,
     room: &str,
     trigger: &str,
@@ -324,7 +325,9 @@ pub(crate) async fn step(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError
     if b.key(app).await.is_err() {
         return Ok(0);
     }
-    Ok(ended(app, b, now).await? + threshold(app, b, now).await?)
+    Ok(ended(app, b, now).await?
+        + threshold(app, b, now).await?
+        + crate::checkpoint::step(app, b, now).await?)
 }
 
 struct AutoJob(Brain);

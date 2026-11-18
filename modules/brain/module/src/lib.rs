@@ -31,6 +31,7 @@ mod answer_turns;
 mod auto_distil;
 mod backfill;
 mod change_routes;
+mod checkpoint;
 pub mod changes;
 pub mod cipher;
 mod claim;
@@ -38,6 +39,7 @@ pub mod clean;
 pub mod collectors;
 mod commit;
 mod distil;
+mod echo;
 pub mod eval;
 pub mod files;
 mod imports;
@@ -161,6 +163,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/rooms/{room}/changes/{id}/undo"),
     ("PUT", "/sources/{id}"),
     ("POST", "/ai/rooms/{room}/propose"),
+    ("POST", "/ai/checkpoint"),
     ("PUT", "/projects/{project}/room"),
     ("DELETE", "/projects/{project}/room"),
 ];
@@ -221,6 +224,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/ai/decisions", "read"),
     ("GET", "/ai/project-state", "read"),
     ("POST", "/ai/rooms/{room}/propose", "agent"),
+    ("POST", "/ai/checkpoint", "agent"),
 ];
 
 #[derive(Default)]
@@ -233,6 +237,8 @@ struct Inner {
     /// Set while the automatic distil triggers run (`auto_distil`), and when they last scanned the rooms.
     auto_busy: AtomicBool,
     auto_scan: AtomicI64,
+    /// Per AI session: checkpoint requests and runs (`checkpoint`). In memory: losing it on a restart only delays one.
+    ckpt: Mutex<HashMap<String, checkpoint::Ckpt>>,
     overviewing: AtomicBool,
     /// Rooms held for a backup before 0.8.5 were imported this process (`commit::release_held`).
     held_released: AtomicBool,
@@ -540,7 +546,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         ai::evidence,
         ai::decisions,
         ai::project_state,
-        ai::propose
+        ai::propose,
+        checkpoint::request
     ),
     components(schemas(
         BrainStatus,
@@ -625,7 +632,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         ai::AiRecords,
         ai::AiEvidence,
         ai::Propose,
-        ai::Proposed
+        ai::Proposed,
+        checkpoint::CheckpointAsked
     ))
 )]
 struct Doc;
@@ -715,6 +723,7 @@ impl Module for Brain {
             .route("/ai/decisions", get(ai::decisions))
             .route("/ai/project-state", get(ai::project_state))
             .route("/ai/rooms/{room}/propose", post(ai::propose))
+            .route("/ai/checkpoint", post(checkpoint::request))
             .route("/sources", get(sync::sources))
             .route("/sources/{id}", put(sync::put_source))
             .route("/sync", get(sync::status).post(sync::sync_now))
@@ -766,6 +775,7 @@ impl Module for Brain {
             "brain.room.unlinked",
             "brain.ai.evidence",
             "brain.ai.proposed",
+            "brain.ai.checkpoint_requested",
             "brain.ai.refused",
             "brain.alias.set",
             "brain.alias.removed",

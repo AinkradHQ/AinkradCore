@@ -63,7 +63,7 @@ const PROPOSE_INVALID: &str = "a known type, a body of 1 to 2000 characters, at 
 const MAX_ROOMS: usize = 20;
 
 /// The session behind a Code Mode call.
-fn session_of(me: &Caller) -> Result<String, ApiError> {
+pub(crate) fn session_of(me: &Caller) -> Result<String, ApiError> {
     me.session
         .strip_prefix(SESSION)
         .filter(|s| !s.is_empty())

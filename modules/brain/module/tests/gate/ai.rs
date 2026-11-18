@@ -793,6 +793,7 @@ async fn the_brain_operations_are_in_the_live_catalogue_with_their_risks() {
         ("brainAiDecisions", "read"),
         ("brainAiProjectState", "read"),
         ("brainAiPropose", "write"),
+        ("brainAiCheckpoint", "write"),
     ] {
         let o = c
             .ops
@@ -883,7 +884,7 @@ async fn no_ai_op_returns_source_text_except_evidence_for_a_cited_pair() {
         ("brainAiDecisions", json!({})),
         ("brainAiProjectState", json!({})),
     ];
-    let skipped = ["brainAiEvidence", "brainAiPropose"];
+    let skipped = ["brainAiEvidence", "brainAiPropose", "brainAiCheckpoint"];
     for k in &live {
         assert!(
             skipped.contains(&k.as_str()) || calls.iter().any(|(o, _)| o == k),
