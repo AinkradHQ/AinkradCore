@@ -30,6 +30,7 @@ mod answer;
 mod answer_turns;
 mod auto_distil;
 mod backfill;
+pub mod card;
 mod change_routes;
 pub mod changes;
 pub mod cipher;

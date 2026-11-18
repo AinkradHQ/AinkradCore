@@ -358,6 +358,39 @@ pub fn parse(out: &str, offered: &[Shown], check: &Check) -> Result<Overview, St
     })
 }
 
+/// An item newer than this many days makes the room `active`.
+const ACTIVE_DAYS: i64 = 30;
+
+/// `facts.state` and `facts.last_activity` from the dates of the room's items, never from the
+/// model (B7-01). `newest` is the newest item's date and `age_days` its age now, both from
+/// `overview_select::newest_item`. `active` within 30 days, `quiet` within the room's
+/// `review_days`, else `dormant`; a room with no dated item says so. The Overview is stored once but
+/// read again later, so this runs on every read and the state cannot go stale.
+pub fn dated_facts(
+    newest: Option<&str>,
+    age_days: Option<i64>,
+    review_days: i64,
+) -> (String, String) {
+    let (Some(at), Some(age)) = (newest, age_days) else {
+        return ("no dated items".to_owned(), "none yet".to_owned());
+    };
+    let age = age.max(0);
+    let state = if age <= ACTIVE_DAYS {
+        "active"
+    } else if age <= review_days.max(ACTIVE_DAYS) {
+        "quiet"
+    } else {
+        "dormant"
+    };
+    let date: String = at.chars().take(10).collect();
+    let ago = match age {
+        0 => "today".to_owned(),
+        1 => "1 day ago".to_owned(),
+        n => format!("{n} days ago"),
+    };
+    (state.to_owned(), format!("{date} ({ago})"))
+}
+
 pub(crate) fn new_batch() -> String {
     rand_id("ovb-")
 }
@@ -436,6 +469,16 @@ mod tests {
                 .iter()
                 .any(|r| r.text == "Tag every release.")
         );
+    }
+
+    #[test]
+    fn dated_facts_come_from_item_dates() {
+        let d = |a: i64| dated_facts(Some("2026-11-17T10:00:00Z"), Some(a), 90);
+        assert_eq!(d(0), ("active".into(), "2026-11-17 (today)".into()));
+        assert_eq!(d(30).0, "active");
+        assert_eq!(d(31).0, "quiet");
+        assert_eq!(d(91), ("dormant".into(), "2026-11-17 (91 days ago)".into()));
+        assert_eq!(dated_facts(None, None, 90).0, "no dated items");
     }
 
     #[test]
