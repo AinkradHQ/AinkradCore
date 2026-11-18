@@ -74,6 +74,7 @@ src/Ainkrad.Client/Model/AuditPage.cs
 src/Ainkrad.Client/Model/BindChain.cs
 src/Ainkrad.Client/Model/Binding.cs
 src/Ainkrad.Client/Model/BudgetDeleted.cs
+src/Ainkrad.Client/Model/Build.cs
 src/Ainkrad.Client/Model/Chain.cs
 src/Ainkrad.Client/Model/ChainBinding.cs
 src/Ainkrad.Client/Model/ChainEntry.cs
@@ -109,6 +110,7 @@ src/Ainkrad.Client/Model/GroupLeaseGrant.cs
 src/Ainkrad.Client/Model/Handshake.cs
 src/Ainkrad.Client/Model/HandshakeBody.cs
 src/Ainkrad.Client/Model/HandshakeProof.cs
+src/Ainkrad.Client/Model/Health.cs
 src/Ainkrad.Client/Model/HostBinary.cs
 src/Ainkrad.Client/Model/HostStatus.cs
 src/Ainkrad.Client/Model/HostUnit.cs
@@ -150,6 +152,7 @@ src/Ainkrad.Client/Model/NewPool.cs
 src/Ainkrad.Client/Model/NewProject.cs
 src/Ainkrad.Client/Model/NewProjectRepo.cs
 src/Ainkrad.Client/Model/NewProviderAccount.cs
+src/Ainkrad.Client/Model/NewRunSpec.cs
 src/Ainkrad.Client/Model/NewSecret.cs
 src/Ainkrad.Client/Model/NewSecretGroup.cs
 src/Ainkrad.Client/Model/NewTerminal.cs
@@ -164,6 +167,7 @@ src/Ainkrad.Client/Model/PasskeyRegistrationOptions.cs
 src/Ainkrad.Client/Model/PastRetention.cs
 src/Ainkrad.Client/Model/PolicyResult.cs
 src/Ainkrad.Client/Model/Pool.cs
+src/Ainkrad.Client/Model/Port.cs
 src/Ainkrad.Client/Model/PriceBookEntry.cs
 src/Ainkrad.Client/Model/ProjectInfo.cs
 src/Ainkrad.Client/Model/ProjectRepo.cs
@@ -179,6 +183,9 @@ src/Ainkrad.Client/Model/ReplaceKey.cs
 src/Ainkrad.Client/Model/RestartBody.cs
 src/Ainkrad.Client/Model/Restarted.cs
 src/Ainkrad.Client/Model/RotateSecret.cs
+src/Ainkrad.Client/Model/RunSpec.cs
+src/Ainkrad.Client/Model/RunSpecSummary.cs
+src/Ainkrad.Client/Model/RunSpecVersion.cs
 src/Ainkrad.Client/Model/Runner.cs
 src/Ainkrad.Client/Model/RunnerAccounts.cs
 src/Ainkrad.Client/Model/RunnerDriver.cs
@@ -191,6 +198,7 @@ src/Ainkrad.Client/Model/SecretDeleted.cs
 src/Ainkrad.Client/Model/SecretGroupDeleted.cs
 src/Ainkrad.Client/Model/SecretGroupInfo.cs
 src/Ainkrad.Client/Model/SecretInfo.cs
+src/Ainkrad.Client/Model/Service.cs
 src/Ainkrad.Client/Model/SessionGrant.cs
 src/Ainkrad.Client/Model/SessionLimits.cs
 src/Ainkrad.Client/Model/SessionRequest.cs

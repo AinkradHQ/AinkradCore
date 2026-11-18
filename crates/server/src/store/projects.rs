@@ -155,7 +155,7 @@ pub async fn repos(conn: &mut SqliteConnection, project_id: i64) -> Result<Vec<R
 }
 
 /// Audit row plus, for `project.created/updated/archived`, the event, in the caller's transaction.
-async fn record(
+pub(super) async fn record(
     conn: &mut SqliteConnection,
     actor: AuditActor,
     action: &str,
