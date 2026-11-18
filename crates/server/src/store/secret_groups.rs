@@ -123,12 +123,27 @@ pub async fn create(
     actor: AuditActor,
     now: &str,
 ) -> Result<Group, Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let g = create_in(&mut tx, name, description, runners, by_device, actor, now).await?;
+    tx.commit().await?;
+    Ok(g)
+}
+
+/// [`create`] inside the caller's write transaction; the caller commits.
+pub async fn create_in(
+    tx: &mut SqliteConnection,
+    name: &str,
+    description: &str,
+    runners: &[String],
+    by_device: &str,
+    actor: AuditActor,
+    now: &str,
+) -> Result<Group, Error> {
     if !valid_name(name) {
         return refused("bad_request", "a name is [a-z][a-z0-9_.-]{0,63}");
     }
     check(description)?;
-    let mut tx = super::begin_write(pool).await?;
-    super::secrets::check_runners(&mut tx, runners).await?;
+    super::secrets::check_runners(&mut *tx, runners).await?;
     let taken: i64 = sqlx::query_scalar("SELECT count(*) FROM core_secret_groups WHERE name = ?")
         .bind(name)
         .fetch_one(&mut *tx)
@@ -148,10 +163,8 @@ pub async fn create(
     .fetch_one(&mut *tx)
     .await?;
     let details = json!({"name": name, "runners": runners, "by_device": by_device});
-    audit(&mut tx, actor, "secret_group.created", id, details).await?;
-    let g = find(&mut tx, name).await?;
-    tx.commit().await?;
-    Ok(g)
+    audit(&mut *tx, actor, "secret_group.created", id, details).await?;
+    find(&mut *tx, name).await
 }
 
 /// Changes a group's description and/or runners (`None` keeps it).

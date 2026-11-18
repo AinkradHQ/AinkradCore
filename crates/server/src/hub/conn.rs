@@ -56,6 +56,10 @@ pub(super) async fn run(
         .iter()
         .any(|d| d.name == ainkrad_proto::v2::DRIVER_PTY)
         .then(|| hello.terminals.clone());
+    let runs_driver = hello
+        .drivers
+        .iter()
+        .any(|d| d.name == ainkrad_proto::v2::DRIVER_RUN);
     let (generation, streams) = hub.register(
         &device.id,
         &device.name,
@@ -70,6 +74,11 @@ pub(super) async fn run(
         tokio::spawn(async move {
             crate::api::v1::reconcile_terminals(&app, &runner, &held, now).await
         });
+    }
+    if runs_driver {
+        // Settle the Core's project runs with what the runner holds (P5-03).
+        let (app, runner) = (app.clone(), device.id.clone());
+        tokio::spawn(async move { crate::runs::reconnected(&app, &runner).await });
     }
     mark_used(&app, &device).await;
     let mut control_seq = 1;

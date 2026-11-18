@@ -289,7 +289,28 @@
 /// 92: Leyline (Core 0.9 epic). The runner wire protocol gains the ssh ops (exec, sftp, agent) and
 ///    `PtyOpen.ssh` (`SshTerminal`: the runner starts its own `ssh-pty`, keys over an inherited pipe); eight
 ///    `leyline*` operations join the Code Mode allow-list; Leyline's routes live in `modules/leyline/api`.
-pub const API_MINOR: u32 = 92;
+/// 92: Project run spec (P4-01). `GET/PUT /projects/{id}/spec` (`getProjectSpec`, `saveProjectSpec`: a save is a new
+///    version, step-up), `GET /projects/{id}/spec/versions` (`listProjectSpecVersions`) and
+///    `GET /projects/{id}/spec/versions/{version}` (`getProjectSpecVersion`). 400 `invalid_spec` names the bad field.
+///    Registers the event kind and audit action `project.spec_saved`.
+/// 94: project runs (P5-02). Runner wire protocol only (`runner.schema.json`): driver `run` with ops `run.start`
+///    (`RunStart` -> `RunInfo`), `run.stop` (`RunStop` -> `RunInfo`) and `run.status` (`RunStatusReq` -> `RunList`);
+///    no route yet. (90-93 are taken by open PRs.)
+/// 91: Core-held repo mirrors (P3-01). `POST /projects/{id}/repos/{repo}/fetch` (`fetchProjectRepo`, `admin`, no step-up)
+///    fetches a repo's remote into the Core's copy now; a failed fetch is still 200 with `mirror.error` set and the older
+///    `mirror.head` kept. The copy is served to `runner` devices as git smart HTTP, upload side only
+///    (`/mirrors/{repo}/info/refs`, `/git-upload-pack`; `/git-receive-pack` is always 403 `read_only`): not in the contract.
+/// 93: Projects from GitHub (P2-01). `GET /projects/github/repos` (`listGithubRepos`:
+///    the repos of the project's or default GitHub connection, grouped by owner, `q`, `page`, `per_page`) and
+///    `POST /projects/from-github` (`createProjectFromGithub`: creates the project, its repos and, unless the connection is the workspace default, a `project`-scope
+///    connection binding). Both `admin`; the POST is destructive. No new audit or event kinds.
+/// 94: project runs (P5-02). Runner wire protocol only (`runner.schema.json`): driver `run` with ops `run.start`
+///    (`RunStart` -> `RunInfo`), `run.stop` (`RunStop` -> `RunInfo`) and `run.status` (`RunStatusReq` -> `RunList`);
+///    no route yet. (92 and 93 are P4-01 and P2-01.)
+/// 93: the Projects epic build (assigned 93 of the 0.9 epics: Lore 90, Design 91, Leyline 92, Projects 93) (one bump for every route the epic added after 94: project runs, logs and
+///    services, run secrets, the public link; and `PATCH /projects/{id}` taking `slug`, `idle_minutes`,
+///    `cpu_limit` and `mem_limit_mb`). Regenerated once, at the epic's build.
+pub const API_MINOR: u32 = 93;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

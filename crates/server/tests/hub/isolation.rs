@@ -108,6 +108,7 @@ async fn runner(core: &Core, name: &str, tier: u8) -> Live {
             max: Duration::from_millis(200),
             refused: Duration::from_millis(200),
         },
+        run_checkouts: std::path::PathBuf::from("/nonexistent"),
     };
     let (stop, stopped) = watch::channel(false);
     let task = tokio::spawn(async move {
@@ -229,6 +230,7 @@ async fn a_forged_advertisement_is_caught_by_the_runner_itself() {
     let forged = IsolationCaps::of(Isolation::Microvm, Kvm::Usable);
     assert!(forged.meets(Isolation::Microvm));
     let mut start = AgentStart {
+        instructions: None,
         session: "as_forged".to_owned(),
         harness: "fake".to_owned(),
         model: None,

@@ -284,6 +284,11 @@ pub struct AgentStart {
     /// ends with its first answer.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub live: bool,
+    /// Instructions for the harness (P3-03): the approved instructions of the Brain room a
+    /// session of a project claimed. The runner hands them to the harness as a private file
+    /// beside the session, never inside the repo checkout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 fn is_zero(n: &u32) -> bool {

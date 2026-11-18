@@ -309,3 +309,46 @@ async fn repos_are_added_made_primary_removed_and_show_their_mirror() {
     let late = admin(&fx, Method::POST, &format!("{p}/repos"), repo("late")).await;
     assert_eq!(code(&late), (StatusCode::CONFLICT, "conflict"));
 }
+
+#[tokio::test]
+async fn the_link_name_and_run_limits_change_through_the_update_route() {
+    let fx = fx().await;
+    let id = shop(&fx).await;
+    let p = format!("/api/v1/projects/{id}");
+    let r = admin(
+        &fx,
+        Method::PATCH,
+        &p,
+        json!({"slug": "store", "idle_minutes": 45, "cpu_limit": 1.5, "mem_limit_mb": 512}),
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    assert_eq!(
+        (
+            r.1["slug"].as_str(),
+            r.1["idle_minutes"].as_i64(),
+            r.1["cpu_limit"].as_f64(),
+            r.1["mem_limit_mb"].as_i64()
+        ),
+        (Some("store"), Some(45), Some(1.5), Some(512))
+    );
+    for bad in [
+        json!({"slug": "core"}),
+        json!({"idle_minutes": 1}),
+        json!({"cpu_limit": 0.0}),
+        json!({"mem_limit_mb": 10}),
+    ] {
+        let r = admin(&fx, Method::PATCH, &p, bad.clone()).await;
+        assert_eq!(r.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let other = admin(
+        &fx,
+        Method::POST,
+        "/api/v1/projects",
+        json!({"slug": "other", "name": "Other"}),
+    )
+    .await;
+    assert_eq!(other.0, StatusCode::OK);
+    let taken = admin(&fx, Method::PATCH, &p, json!({"slug": "other"})).await;
+    assert_eq!(code(&taken), (StatusCode::CONFLICT, "conflict"));
+}

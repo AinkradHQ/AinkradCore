@@ -25,7 +25,10 @@
 #            installs podman, uidmap, passt, aardvark-dns and nftables (deploy/tools.manifest.json `distro.podman`), creates the system user
 #            ainkrad-run (not the runner's) with its own subuid/subgid block, turns on linger for it, writes the cgroup
 #            delegation drop-in user@.service.d/delegate.conf and waits for its runtime dir. The runner then reports `run_caps`.
-#            Needs the whole host, so it is skipped under --prefix except for the drop-in. Nothing else (no sysctl, no AppArmor).
+#            Also installs the run helper (ainkrad-run.socket + ainkrad-run@.service: Podman as ainkrad-run, reached only by
+#            the runner's group) and ainkrad-run-egress.service (nftables: ainkrad-run's traffic cannot reach the cloud
+#            metadata address or private ranges), re-applied every minute by ainkrad-run-egress.timer. Needs the whole host, so it is skipped under --prefix except for the
+#            drop-in and those files. Nothing else (no sysctl, no AppArmor).
 # --design   Design (Core 0.9 V6-01): headless Chromium for design shots, pinned by version and sha256
 #            (deploy/tools.manifest.json `chromium`) into /usr/local/lib/ainkrad-chromium, plus its libraries and the
 #            helper's (libfontconfig, libfreetype; `distro.chromium`). The `ainkrad-design` helper itself is installed
@@ -110,7 +113,19 @@ run_setup() {
     changed=1; run install -d "$d"; printf '+ write %s/delegate.conf\n' "$d"
     if [ "$dry" = 0 ]; then printf '%s\n' "$DELEGATE_CONF" >"$d/delegate.conf"; fi
   fi
+  # The run helper (Podman as $RUN_USER, behind a socket only the runner's group reaches) and the egress block.
+  run install -d "$prefix/etc/ainkrad-runner"
+  run install -m 0644 "$HERE/run-egress.nft" "$prefix/etc/ainkrad-runner/run-egress.nft"
+  local u; for u in ainkrad-run.socket ainkrad-run@.service ainkrad-run-egress.service ainkrad-run-egress-apply.service ainkrad-run-egress.timer; do
+    run install -m 0644 "$HERE/systemd/$u" "$prefix/etc/systemd/system/$u"
+  done
   if [ -n "$prefix" ] && [ "$dry" = 0 ]; then echo "+ skipped under --prefix: podman packages, the $RUN_USER user, linger"; return 0; fi
+  # run-egress.nft lets ainkrad-run reach DNS only at the systemd-resolved stub (127.0.0.53). Without it, containers
+  # would have no DNS (or the rule would have to open the metadata range), so refuse rather than install a wrong block.
+  if [ "$dry" = 0 ] && ! { systemctl is-active --quiet systemd-resolved && grep -Eq '^nameserver[[:space:]]+127\.0\.0\.53([[:space:]]|$)' /etc/resolv.conf; }; then
+    echo "--with-run needs systemd-resolved running with its 127.0.0.53 stub in /etc/resolv.conf; enable it (systemctl enable --now systemd-resolved; ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf) and re-run. 169.254.169.254 is never allowed." >&2
+    return 1
+  fi
   if [ "$dry" = 1 ] || ! { command -v podman && command -v newuidmap && command -v pasta && [ -x /usr/lib/podman/aardvark-dns ]; } >/dev/null 2>&1; then
     if [ "$dry" = 1 ] || command -v apt-get >/dev/null 2>&1; then
       run env DEBIAN_FRONTEND=noninteractive apt-get update -qq
@@ -129,6 +144,11 @@ run_setup() {
   fi
   run systemctl daemon-reload
   run loginctl enable-linger "$RUN_USER"
+  # After the user exists: the nftables rule names it.
+  run systemctl enable --now ainkrad-run-egress.service
+  run systemctl restart ainkrad-run-egress.service
+  run systemctl enable --now ainkrad-run-egress.timer
+  run systemctl enable --now ainkrad-run.socket
   [ "$dry" = 1 ] && return 0
   uid=$(id -u "$RUN_USER")
   # Linger starts the user manager (and /run/user/UID with its bus); a manager that was already up must restart to take a new drop-in.
@@ -143,7 +163,7 @@ run_setup() {
     podman info --format 'rootless={{.Host.Security.Rootless}} cgroups={{.Host.CgroupManager}}'
 }
 [ "${AINKRAD_INSTALL_SOURCE_ONLY:-}" != 1 ] || [ "${BASH_SOURCE[0]}" = "$0" ] || return 0
-usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 # A secret flag's value: `-` reads it from the terminal (no echo) or stdin; a literal still works, with a warning (argv shows in `ps`).
 secret_arg() {
   local v

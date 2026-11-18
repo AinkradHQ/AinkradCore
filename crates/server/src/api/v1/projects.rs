@@ -5,6 +5,11 @@
 //! read-only here; the mirror scheduler writes it (P3-01). Every remote goes through
 //! `repo_url_problem` here and again in the store, so no credential or odd scheme gets in.
 
+pub mod run_logs;
+pub mod run_spec;
+pub mod runs;
+pub mod secrets;
+
 use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
 use serde::{Deserialize, Serialize};
@@ -93,7 +98,7 @@ pub struct ProjectInfo {
     pub updated_at: Timestamp,
 }
 
-async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError> {
+pub(super) async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError> {
     let mut conn = app.pool.acquire().await?;
     let mut repos = Vec::new();
     for r in store::repos(&mut conn, p.id).await? {
@@ -150,7 +155,7 @@ fn num(s: &str, what: &str) -> Result<i64, ApiError> {
         .ok_or_else(|| ApiError::not_found(format!("no such {what}")))
 }
 
-fn who<'a>(me: &'a Caller, now: &'a str) -> Who<'a> {
+pub(super) fn who<'a>(me: &'a Caller, now: &'a str) -> Who<'a> {
     Who {
         by_device: &me.device.id,
         actor: BY,
@@ -227,6 +232,14 @@ pub struct UpdateProject {
     pub name: Option<String>,
     pub description: Option<String>,
     pub expose: Option<bool>,
+    /// The link name (the slug); refused while the project runs or holds secrets.
+    pub slug: Option<String>,
+    /// Idle stop, 5 to 1440 minutes.
+    pub idle_minutes: Option<i64>,
+    /// CPUs a run may use, 0.1 to 16.
+    pub cpu_limit: Option<f64>,
+    /// Memory a run may use, 64 to 32768 MB.
+    pub mem_limit_mb: Option<i64>,
 }
 
 #[utoipa::path(patch, path = "/api/v1/projects/{id}", operation_id = "updateProject",
@@ -242,15 +255,16 @@ pub async fn update(
     Json(b): Json<UpdateProject>,
 ) -> ApiResult<ProjectInfo> {
     let now = app.clock.now();
-    let p = store::update(
-        &app.pool,
-        num(&id, "project")?,
-        b.name.as_deref(),
-        b.description.as_deref(),
-        b.expose,
-        who(&me, &now),
-    )
-    .await?;
+    let c = store::Change {
+        name: b.name.as_deref(),
+        description: b.description.as_deref(),
+        expose: b.expose,
+        slug: b.slug.as_deref(),
+        idle_minutes: b.idle_minutes,
+        cpu_limit: b.cpu_limit,
+        mem_limit_mb: b.mem_limit_mb,
+    };
+    let p = store::change(&app.pool, num(&id, "project")?, &c, who(&me, &now)).await?;
     Ok(Json(info(&app, p).await?))
 }
 
@@ -325,7 +339,13 @@ pub async fn remove_repo(
 ) -> ApiResult<ProjectInfo> {
     let id = num(&id, "project")?;
     let now = app.clock.now();
-    store::remove_repo(&app.pool, id, num(&repo, "repo")?, who(&me, &now)).await?;
+    let repo = num(&repo, "repo")?;
+    store::remove_repo(&app.pool, id, repo, who(&me, &now)).await?;
+    // The Core's copy goes with the repo (its id can be handed out again), in a task a dropped
+    // request cannot cancel; the mirror's marker covers a cleanup that never ran.
+    if let Some(mirrors) = app.mirrors.clone() {
+        let _ = tokio::spawn(async move { mirrors.forget(repo).await }).await;
+    }
     current(&app, id).await
 }
 
@@ -345,4 +365,45 @@ pub async fn set_primary(
     let now = app.clock.now();
     store::set_primary(&app.pool, id, num(&repo, "repo")?, who(&me, &now)).await?;
     current(&app, id).await
+}
+
+#[utoipa::path(post, path = "/api/v1/projects/{id}/repos/{repo}/fetch",
+    operation_id = "fetchProjectRepo", tag = "projects",
+    params(("id" = String, Path, description = "The project's id"),
+           ("repo" = String, Path, description = "The repo's id")),
+    responses((status = 200, description = "The Core fetched the repo's remote now (\"Fetch now\"); \
+        the project as it now is. A fetch that failed is still 200: the repo's `mirror.error` says \
+        why and `mirror.head` is the older head, kept. A fetch already running for the repo is not \
+        started again nor waited for: the state as it is comes back. 404 for no such project or repo; 409 \
+        `conflict` for an archived project; 503 `mirrors_unavailable` when this Core keeps no repo \
+        copies", body = ProjectInfo)))]
+pub async fn fetch_now(
+    State(app): State<App>,
+    Path((id, repo)): Path<(String, String)>,
+) -> ApiResult<ProjectInfo> {
+    use crate::mirrors::{Refused, fetch_now as fetch};
+    let (id, repo) = (num(&id, "project")?, num(&repo, "repo")?);
+    let mut conn = app.pool.acquire().await?;
+    let found = store::repos(&mut conn, id)
+        .await?
+        .iter()
+        .any(|r| r.id == repo);
+    drop(conn);
+    if !found {
+        return Err(ApiError::not_found("no such repo"));
+    }
+    match fetch(&app, repo).await {
+        Ok(_) => current(&app, id).await,
+        Err(Refused::Off) => Err(super::mirrors::mirrors(&app).err().expect("off")),
+        Err(Refused::Archived) => Err(ApiError::conflict("the project is archived")),
+        Err(Refused::NoRepo) => Err(ApiError::not_found("no such repo")),
+        Err(Refused::Db(why)) => {
+            tracing::error!(why, "fetching a repo");
+            Err(ApiError::new(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                "could not fetch",
+            ))
+        }
+    }
 }
