@@ -969,3 +969,33 @@ async fn a_fact_without_a_stored_vector_is_never_archived() {
     assert!(!archived(&r.pool, "novec").await);
     assert!(archived(&r.pool, "junk").await);
 }
+
+#[tokio::test]
+async fn a_cancel_during_the_last_batch_archives_nothing() {
+    let fx = fx().await;
+    let r = room(&fx).await;
+    let before = dump(&r.pool).await;
+    start(&fx, &r.id, false).await;
+    let now = fx.app.clock.unix();
+    // The last batch is queued (its model call under way) when the person cancels.
+    assert_eq!(fx.brain.redistil_step_at(now).await.unwrap(), 1);
+    let v = ok(
+        &fx,
+        Method::POST,
+        &format!("/rooms/{}/redistil/cancel", r.id),
+        None,
+    )
+    .await;
+    assert_eq!(v["state"], "cancelled", "{v}");
+    // Its answer still arrives; it stages into nothing, and no step commits it.
+    sqlx::query("UPDATE brain_distils SET state = 'queued' WHERE \"trigger\" = 'redistil'")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    answer_batch(&fx, &r, 30, answer(&r, true)).await;
+    assert_eq!(fx.brain.redistil_step_at(now + 60).await.unwrap(), 0);
+    assert_eq!(state(&fx).await, "cancelled");
+    assert_eq!(dump(&r.pool).await, before);
+    assert_eq!(n(&r.pool, "SELECT count(*) FROM changes").await, 0);
+    assert!(!archived(&r.pool, "junk").await);
+}

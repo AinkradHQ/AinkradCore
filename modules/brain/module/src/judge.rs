@@ -44,6 +44,10 @@ pub(crate) struct Dropped {
     pub score: f32,
     /// `not_grounded` (code rule), `admit` (score) or `judge`.
     pub stage: String,
+    /// The source ids it cited. A re-distil counts a source cited by a candidate dropped at the
+    /// `not_grounded` or `judge` stage as unread (`distil::read_in_full`).
+    #[serde(default)]
+    pub sources: Vec<String>,
 }
 
 /// A candidate in the border band, with what admission said about it.
@@ -78,6 +82,7 @@ pub(crate) fn dropped_of(c: &Candidate, reasons: Vec<String>, score: f32, stage:
         reasons,
         score,
         stage: stage.to_owned(),
+        sources: c.sources.clone(),
     }
 }
 
@@ -136,6 +141,7 @@ pub(crate) fn stage(
                 reasons,
                 score: a.score,
                 stage: "admit".to_owned(),
+                sources: c.sources.clone(),
             }),
         }
     }

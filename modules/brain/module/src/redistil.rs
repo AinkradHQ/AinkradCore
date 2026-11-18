@@ -445,16 +445,22 @@ async fn bump(app: &App, b: &Brain, run: &RunRow, why: &str) -> Result<bool, Api
 async fn end(app: &App, b: &Brain, run: &RunRow, why: &str, force: bool) -> Result<bool, ApiError> {
     let failed = force || run.failures + 1 >= MAX_FAILURES;
     let mut tx = begin_write(&app.pool).await?;
-    sqlx::query(
+    // Only an open run: a run cancelled meanwhile stays cancelled.
+    let open = sqlx::query(
         "UPDATE brain_redistils SET failures = failures + 1, detail = ?, updated_at = ?, \
-         state = CASE WHEN ? THEN 'failed' ELSE state END WHERE id = ?",
+         state = CASE WHEN ? THEN 'failed' ELSE state END WHERE id = ? AND state IN ('running','committing')",
     )
     .bind(why)
     .bind(app.clock.now())
     .bind(failed)
     .bind(&run.id)
     .execute(&mut *tx)
-    .await?;
+    .await?
+    .rows_affected();
+    if open == 0 {
+        tx.commit().await?;
+        return Ok(false);
+    }
     if failed {
         // Its batches still waiting never launch.
         sqlx::query(
@@ -541,6 +547,15 @@ async fn cancel_in(
 /// dropped, its staging and retention marks cleared. Returns the run's id; None when the room has no
 /// open run. A run already writing its result (`committing`) is not cancelled: Undo its change set.
 pub(crate) async fn cancel(app: &App, b: &Brain, room: &str) -> Result<Option<String>, ApiError> {
+    // Never while the job looks at the run (`step`): a cancel cannot land between a batch and the
+    // commit.
+    let Some(_busy) = Busy::take(&b.inner.redistilling) else {
+        return Err(code(
+            409,
+            "redistil_working",
+            "the run is being worked on right now; try again in a moment",
+        ));
+    };
     let now = app.clock.now();
     let mut tx = begin_write(&app.pool).await?;
     let Some(run) = sqlx::query(
@@ -669,10 +684,17 @@ async fn drive(
         if pending > 0 {
             return Ok(u32::from(queue(app, run, &p, pending, now, caps).await?));
         }
-        sqlx::query("UPDATE brain_redistils SET state = 'committing', detail = '' WHERE id = ?")
-            .bind(&run.id)
-            .execute(&app.pool)
-            .await?;
+        // Only from `running`: a run cancelled since it was read is not committed.
+        let moved = sqlx::query(
+            "UPDATE brain_redistils SET state = 'committing', detail = '' WHERE id = ? AND state = 'running'",
+        )
+        .bind(&run.id)
+        .execute(&app.pool)
+        .await?
+        .rows_affected();
+        if moved == 0 {
+            return Ok(0);
+        }
     }
     commit(app, b, run, pool, &p).await?;
     Ok(1)
@@ -874,11 +896,9 @@ async fn pass(
     }
     let loaded = crate::loaded::of_room(app, &run.room).await?;
     let mut tx = pool.begin().await?;
-    let old: Vec<(String, i64, i64)> = sqlx::query_as(
-        "SELECT id, support, (SELECT count(*) FROM record_sources s WHERE s.record = memory.id) FROM memory",
-    )
-    .fetch_all(&mut *tx)
-    .await?;
+    let old: Vec<String> = sqlx::query_scalar("SELECT id FROM memory")
+        .fetch_all(&mut *tx)
+        .await?;
     let mut cs = ChangeSet::new("archive", now);
     let mut memory = Memory::load(&mut tx, &Prepared::stored_of(&preps)).await?;
     let (mut reinforced, mut dropped) = (0, 0);
@@ -911,22 +931,20 @@ async fn pass(
         read.extend(s.read.iter().cloned());
         spared.extend(saved.matched);
     }
-    // Re-reading the same sources is not new evidence: a re-derived record's support grows only by the
-    // sources it newly cites.
-    for (id, support, cited) in &old {
-        sqlx::query(
-            "UPDATE records SET support = ?1 + max(0, (SELECT count(*) FROM record_sources WHERE record = ?2) - ?3) \
-             WHERE id = ?2 AND last_seen_at = ?4",
-        )
-        .bind(support)
-        .bind(id)
-        .bind(cited)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
+    // Re-reading the same sources is not new evidence: a re-derived record's support is its distinct
+    // origins again (`merge::recount`), so a source cited twice counts once.
+    let rederived: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM records WHERE id IN (SELECT value FROM json_each(?)) AND last_seen_at = ?",
+    )
+    .bind(json!(old).to_string())
+    .bind(now)
+    .fetch_all(&mut *tx)
+    .await?;
+    for id in &rederived {
+        crate::merge::recount(&mut tx, id).await?;
     }
     let mut note = String::new();
-    let old_ids: Vec<&str> = old.iter().map(|(id, _, _)| id.as_str()).collect();
+    let old_ids: Vec<&str> = old.iter().map(String::as_str).collect();
     // Every cited source (both lists) read; at least one cited.
     let doomed: Vec<String> = sqlx::query_scalar(
         "SELECT m.id FROM memory m WHERE m.id IN (SELECT value FROM json_each(?1)) \
@@ -1002,6 +1020,20 @@ async fn pass(
         .bind(now)
         .execute(&mut *tx)
         .await?;
+        // A run cancelled while this pass ran writes nothing.
+        let state: Option<String> =
+            sqlx::query_scalar("SELECT state FROM brain_redistils WHERE id = ?")
+                .bind(&run.id)
+                .fetch_optional(&app.pool)
+                .await?;
+        if state.as_deref() != Some("committing") {
+            tx.rollback().await?;
+            return Err(code(
+                409,
+                "redistil_cancelled",
+                "the run was cancelled; nothing was written",
+            ));
+        }
         tx.commit().await?;
         let fresh: Vec<(Option<String>, String)> =
             sqlx::query_as("SELECT body_norm, body FROM memory WHERE created_at = ?")

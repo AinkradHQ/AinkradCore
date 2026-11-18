@@ -682,7 +682,7 @@ async fn save(
     // A re-distil batch is staged, not saved: the run writes every batch in one change set (B6-01).
     if let Some(run) = crate::redistil::run_of(app, &d.id).await? {
         let n = out.len();
-        let read = read_in_full(&taken, &shown, &out);
+        let read = read_in_full(&taken, &shown, &out, &dropped);
         crate::redistil::stage(&pool, &run, &d.id, &out, &dropped, by, &grounded, &read).await?;
         pool.close().await;
         ainkrad_core_server::store::agents::seal(&app.pool, session).await?;
@@ -794,18 +794,24 @@ pub(crate) fn may_store(c: &Candidate, policy: &policy::Policy, known: &Known) -
 
 /// The taken sources a re-distil may count as read (B6-01): the prompt showed the whole text (its
 /// `distil.shown` cut is the full length; no cut recorded is not read), and an admitted candidate
-/// cites it. A source whose candidates grounding, the judge or a judge that could not start dropped
-/// is not read, so one empty or hostile batch cannot archive the facts of the sources around it.
+/// cites it, and no candidate citing it was dropped by grounding (`not_grounded`) or the judge (a no,
+/// or a judge that failed or could not start): the fact that candidate re-derived may be an old one
+/// that must not be archived. A drop by admission score alone does not make a source unread. So one
+/// empty or hostile batch cannot archive the facts of the sources around it.
 pub(crate) fn read_in_full(
     taken: &[(String, String, String)],
     shown: &serde_json::Value,
     out: &[Candidate],
+    dropped: &[judge::Dropped],
 ) -> Vec<String> {
     taken
         .iter()
         .filter(|(id, _, text)| {
             shown["cut"][id.as_str()].as_u64() == Some(text.len() as u64)
                 && out.iter().any(|c| c.sources.contains(id))
+                && !dropped.iter().any(|d| {
+                    matches!(d.stage.as_str(), "not_grounded" | "judge") && d.sources.contains(id)
+                })
         })
         .map(|(id, _, _)| id.clone())
         .collect()
@@ -1086,6 +1092,38 @@ mod tests {
         assert_eq!(
             ainkrad_core_server::agents::account_policy_problem(&p),
             None
+        );
+    }
+
+    /// B6-01 re-check: source S has F2 kept and F1 (which re-derives an old record R1) dropped by the
+    /// judge, a "no" or a judge that could not start. S is unread, so R1 is never archived. A drop by
+    /// admission score alone leaves S read.
+    #[test]
+    fn a_source_with_a_judge_dropped_candidate_is_unread() {
+        let taken = [(
+            "i1".to_owned(),
+            "core_transcript".to_owned(),
+            TEXT.to_owned(),
+        )];
+        let shown = json!({"cut": {"i1": TEXT.len()}});
+        let f2 = cand("fact", "Ship the billing export before 2026-12-01.");
+        let f1 = judge::Border {
+            c: cand("fact", "The billing export ships in December."),
+            reasons: vec![],
+            score: 0.5,
+        };
+        for verdicts in [Ok(vec![false]), Err("the judge could not start".to_owned())] {
+            let (out, dropped) =
+                judge::resolve(vec![f2.clone()], vec![f1.clone()], vec![], verdicts);
+            assert_eq!(out.len(), 1);
+            assert!(read_in_full(&taken, &shown, &out, &dropped).is_empty());
+        }
+        let not_grounded = judge::dropped_of(&f1.c, vec![], 0.0, "not_grounded");
+        assert!(read_in_full(&taken, &shown, &[f2.clone()], &[not_grounded]).is_empty());
+        let by_score = judge::dropped_of(&f1.c, vec![], 0.1, "admit");
+        assert_eq!(
+            read_in_full(&taken, &shown, &[f2], &[by_score]),
+            vec!["i1".to_owned()]
         );
     }
 }
