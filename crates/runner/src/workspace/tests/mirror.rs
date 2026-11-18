@@ -52,7 +52,13 @@ fn core(copy: PathBuf, seen: Arc<Mutex<Vec<String>>>) -> Upstream {
             tx.send(Ok(body)).await.unwrap();
             Ok(Reply {
                 status: 200,
-                content_type: "application/x-git".into(),
+                // git treats any other type as a dumb server and fails with "is this a git repository?".
+                content_type: if advertise {
+                    "application/x-git-upload-pack-advertise"
+                } else {
+                    "application/x-git-upload-pack-result"
+                }
+                .into(),
                 body: rx,
             })
         })
