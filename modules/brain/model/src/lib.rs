@@ -5,6 +5,7 @@
 pub mod admit;
 pub mod group;
 pub mod item;
+pub mod merge;
 pub mod rules;
 pub mod semantic;
 pub mod signals;

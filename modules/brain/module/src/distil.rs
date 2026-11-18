@@ -20,14 +20,17 @@ use ainkrad_core_server::store::{alloc, begin_write};
 use ainkrad_proto::redact::Redactor;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
+use brain_model::merge::{Decision, body_norm};
 use serde::Serialize;
 use serde_json::json;
 use sqlx::{Row, SqlitePool};
 use utoipa::ToSchema;
 
 use crate::answer::{Candidate, Source, build_prompt, parse_output};
+use crate::changes::ChangeSet;
 use crate::claim::{self, check_chain};
 use crate::files::{self, CANON};
+use crate::merge::{Memory, Prepared, reinforce};
 use crate::policy::{self, AUTO_KINDS};
 use crate::transcripts::render;
 use crate::{Brain, code, rand_id, record};
@@ -482,7 +485,13 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     };
     let p = policy::load(app, &d.room).await?;
     let by = distilled_by(app, &s).await;
-    let (n, accepted) = store_candidates(&pool, &d.id, &out, &p, &by, &app.clock.now()).await?;
+    let bodies: Vec<String> = {
+        let r = Redactor::new();
+        out.iter().map(|c| r.text(c.body.trim())).collect()
+    };
+    let prep = crate::merge::prepare(app, b, &pool, &bodies).await;
+    let (n, accepted, reinforced) =
+        store_candidates(&pool, &d.id, &out, &p, &by, &app.clock.now(), &prep).await?;
     // Facts that went straight into memory get their vectors now, off the request path.
     if accepted > 0
         && let Ok(rows) = sqlx::query_as::<_, (Option<String>, String)>(
@@ -507,7 +516,7 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     record(
         &mut tx,
         "brain.distil.done",
-        json!({"room": d.room, "distil": d.id, "candidates": n, "auto_accepted": accepted}),
+        json!({"room": d.room, "distil": d.id, "candidates": n, "auto_accepted": accepted, "reinforced": reinforced}),
         (waiting > 0).then(|| {
             (
                 "brain.inbox",
@@ -550,7 +559,9 @@ pub(crate) async fn distilled_by(
 }
 
 /// Writes the candidates into the room as `records`, with their op-log and outbox rows, in one
-/// transaction; kinds the room auto-accepts go straight to `accepted`. Returns (stored, auto-accepted).
+/// transaction; kinds the room auto-accepts go straight to `accepted`. A candidate the memory already
+/// holds (B4-01) reinforces that record instead of adding a row. All of it is one change set.
+/// Returns (stored, auto-accepted, reinforced).
 pub(crate) async fn store_candidates(
     pool: &SqlitePool,
     distil: &str,
@@ -558,23 +569,37 @@ pub(crate) async fn store_candidates(
     policy: &policy::Policy,
     by: &DistilledBy,
     now: &str,
-) -> Result<(i64, i64), sqlx::Error> {
+    prep: &Prepared,
+) -> Result<(i64, i64, i64), sqlx::Error> {
     let redactor = Redactor::new();
-    let (mut n, mut accepted) = (0, 0);
+    let (mut n, mut accepted, mut reinforced) = (0, 0, 0);
     let mut tx = pool.begin().await?;
-    for c in out {
+    let mut cs = ChangeSet::new("distil", now);
+    let mut memory = Memory::load(&mut tx, prep).await?;
+    for (i, c) in out.iter().enumerate() {
+        let body = redactor.text(c.body.trim());
+        let norm = body_norm(&body);
+        // `same_as` arrives with the v2 prompt (B3-02); the exact and meaning tiers work without it.
+        if let Decision::Reinforce { id, .. } =
+            memory.decide(&c.kind, &norm, prep.candidate(i), None)
+        {
+            reinforce(&mut tx, &mut cs, &id, &c.sources, now).await?;
+            reinforced += 1;
+            continue;
+        }
         let id = rand_id("rec-");
+        cs.touch(&mut tx, &id).await?;
         let auto_ok = AUTO_KINDS.contains(&c.kind.as_str())
             && policy.auto_accept.contains(&c.kind)
             && c.sources.len() >= policy.min_sources;
         sqlx::query(
-            "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, reviewed_at, decided_by, distil, provider, account, tool) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO records (id, type, status, body, tags, source_ids, created_at, reviewed_at, decided_by, distil, provider, account, tool, body_norm, last_seen_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&c.kind)
         .bind(if auto_ok { "accepted" } else { "candidate" })
-        .bind(redactor.text(c.body.trim()))
+        .bind(&body)
         .bind(json!(c.tags).to_string())
         .bind(json!(c.sources).to_string())
         .bind(now)
@@ -584,8 +609,23 @@ pub(crate) async fn store_candidates(
         .bind(&by.provider)
         .bind(&by.account)
         .bind(&by.tool)
+        .bind(&norm)
+        .bind(now)
         .execute(&mut *tx)
         .await?;
+        for (pos, s) in c.sources.iter().enumerate() {
+            sqlx::query(
+                "INSERT OR IGNORE INTO record_sources (record, source, position) VALUES (?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(s)
+            .bind(pos as i64)
+            .execute(&mut *tx)
+            .await?;
+        }
+        if auto_ok {
+            memory.add(&id, &c.kind, &norm, prep.candidate(i));
+        }
         log_op(
             &mut tx,
             if auto_ok {
@@ -600,8 +640,15 @@ pub(crate) async fn store_candidates(
         n += 1;
         accepted += i64::from(auto_ok);
     }
+    let summary = format!("Saved {n} · reinforced {reinforced}");
+    cs.commit(
+        &mut tx,
+        &summary,
+        json!({"saved": n, "reinforced": reinforced}),
+    )
+    .await?;
     tx.commit().await?;
-    Ok((n, accepted))
+    Ok((n, accepted, reinforced))
 }
 
 /// An op-log row and its outbox row (BM-04 §5.4), in the caller's transaction.

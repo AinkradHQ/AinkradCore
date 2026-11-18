@@ -15,6 +15,7 @@ mod index;
 mod intake;
 mod keys;
 mod lore;
+mod merge;
 mod overview;
 mod project_rooms;
 mod query;
