@@ -166,7 +166,7 @@ pub struct CommandDeleted {
 
 /// Only a person writes commands: an AI session never creates, changes or removes one (a command
 /// is a grant on read-only hosts, and its scope and steps decide where it runs).
-fn people_only(me: &Caller) -> Result<(), ApiError> {
+pub(crate) fn people_only(me: &Caller) -> Result<(), ApiError> {
     if matches!(Principal::of(me).0, Who::Session(_)) {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,

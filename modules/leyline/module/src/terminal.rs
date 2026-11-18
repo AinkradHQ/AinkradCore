@@ -63,6 +63,8 @@ pub struct SessionView {
     pub terminal: String,
     pub runner: String,
     pub started_at: String,
+    /// The session is being recorded (a person sees this as a visible Recording indicator).
+    pub recording: bool,
 }
 
 fn refuse(code: &'static str, why: &'static str) -> ApiError {
@@ -270,7 +272,16 @@ async fn start(
             .await?;
     tx.commit().await?;
     // Before the monitor below can end the session: a tap set after the end would never be removed.
-    crate::record::begin(app, &session, id, &t.id, size).await;
+    let recording = crate::record::begin(app, &session, id, &t.id, size).await;
+    if recording {
+        let mut c = app.pool.acquire().await?;
+        events::append(
+            &mut c,
+            "leyline.session",
+            &json!({"op": "recording", "id": session, "host": id, "recording": true}),
+        )
+        .await?;
+    }
     let (a, s, terminal) = (app.clone(), session.clone(), t.id.clone());
     tokio::spawn(async move {
         // The monitor went without telling us how it ended: the runner (or the Core's hold on it)
@@ -292,6 +303,7 @@ async fn start(
         terminal: t.id,
         runner,
         started_at: started,
+        recording,
     })
 }
 

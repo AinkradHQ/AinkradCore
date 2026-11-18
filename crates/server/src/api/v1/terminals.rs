@@ -59,6 +59,9 @@ pub trait OutputTap: Send + Sync {
     /// The same bytes may arrive again (a client attaching afresh is replayed the history); the
     /// offset says where they belong.
     fn output(&self, offset: u64, b64: &str);
+    /// The end of the output this tap has seen: the highest offset a client may honestly resume
+    /// from. A client's `?after=` is clamped to it, so a lie cannot move the recording's offsets.
+    fn known(&self) -> u64;
 }
 
 /// Bytes a standard base64 string decodes to (padding counted, validity not checked).
@@ -1394,7 +1397,9 @@ async fn stream(
     // Looked up once; each frame then costs one `Option` check (no lock) when nobody listens.
     let tap = app.terminals.tap_of(&terminal);
     // Where the next output byte of this stream belongs: the attach point, moved by a snapshot.
-    let mut at = from;
+    // The client's `after` is only believed up to what the tap has seen; a snapshot (the runner's
+    // own word) moves it afterwards.
+    let mut at = tap.as_ref().map_or(from, |t| from.min(t.known()));
     touch(&app, &terminal).await;
     tokio::pin!(revoked);
     tokio::pin!(rescoped);

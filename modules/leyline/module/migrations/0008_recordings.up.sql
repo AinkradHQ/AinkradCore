@@ -8,7 +8,9 @@ CREATE TABLE leyline_recordings (
     file        TEXT NOT NULL CHECK (file NOT GLOB '*[^A-Za-z0-9._]*' AND file LIKE 'ls\_%.cast.age' ESCAPE '\'),
     started_at  INTEGER NOT NULL,
     ended_at    INTEGER,
-    bytes       INTEGER NOT NULL DEFAULT 0
+    bytes       INTEGER NOT NULL DEFAULT 0,
+    -- A person paused it (`POST /sessions/{session}/recording/pause`); output is not written.
+    paused      INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1))
 );
 CREATE INDEX leyline_recordings_started ON leyline_recordings (started_at);
 

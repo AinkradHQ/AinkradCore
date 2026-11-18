@@ -2,13 +2,16 @@
 //!
 //! Security model.
 //! - Recording is opt-in per host and off by default. Turning it on needs a live step-up (a Code
-//!   Mode caller never has one) and a loaded master key; turning it off needs neither. Both are
-//!   audited (`leyline.recording.on` / `.off`).
+//!   Mode caller never has one) and a loaded master key; turning it off needs the step-up too (the
+//!   route is destructive). Both are audited (`leyline.recording.on` / `.off`).
 //! - A recording is read only with the `terminal` scope and a live step-up, and every read is
 //!   audited (`leyline.recording.replayed`, session and device, never content). The Core decrypts
 //!   it; the client gets the plain cast over the signed, TLS API.
 //! - Retention: 30 days and 2 GB in total, oldest first, by a daily job. A recording still being
 //!   written is never removed for size; files with no row (a deleted host) are removed.
+//! - A person (never an AI session) can pause a running recording (no step-up) and resume it
+//!   (step-up); both are audited and the session's `recording` flag follows.
+//! - Replay streams the blocks with a total cap; it never holds the whole cast in memory.
 //! - Session lists name no recording content: only whether one exists and its size.
 
 use std::path::Path as FsPath;
@@ -20,6 +23,7 @@ use ainkrad_core_server::api::v1::{ApiError, ApiResult, BY, Caller, step_up_requ
 use ainkrad_core_server::jobs::{Done, Job, JobHandler, Missed, Run, Schedule};
 use ainkrad_core_server::store::{audit, begin_write, events};
 use axum::Json;
+use axum::body::{Body, Bytes};
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -28,6 +32,7 @@ use serde_json::json;
 use sqlx::SqlitePool;
 use utoipa::ToSchema;
 
+use crate::cast::Blocks;
 use crate::hosts::{In, elevated, find};
 
 /// How long a recording is kept, and how much all of them may take together.
@@ -57,6 +62,8 @@ pub struct SessionRow {
     pub exit_code: Option<i64>,
     /// A recording exists (and has not been pruned); replay it with `GET /sessions/{session}/recording`.
     pub recorded: bool,
+    /// A recording is running now (not ended, not paused): the app shows a Recording indicator.
+    pub recording: bool,
     /// The recording's size on disk.
     pub recording_bytes: Option<i64>,
 }
@@ -71,7 +78,7 @@ macro_rules! sessions_sql {
     ($tail:literal) => {
         concat!(
             "SELECT s.id, s.host_id, s.terminal, s.runner, s.principal, s.started_at, s.ended_at, \
-             s.end_reason, s.exit_code, r.bytes AS rec_bytes FROM leyline_sessions s \
+             s.end_reason, s.exit_code, r.bytes AS rec_bytes, (r.ended_at IS NULL AND r.paused = 0) AS rec_live FROM leyline_sessions s \
              LEFT JOIN leyline_recordings r ON r.session = s.id ",
             $tail
         )
@@ -94,6 +101,8 @@ fn rows(r: Vec<sqlx::sqlite::SqliteRow>) -> Result<Vec<SessionRow>, sqlx::Error>
                 end_reason: r.try_get("end_reason")?,
                 exit_code: r.try_get("exit_code")?,
                 recorded: bytes.is_some(),
+                recording: bytes.is_some()
+                    && r.try_get::<Option<i64>, _>("rec_live")?.unwrap_or(0) == 1,
                 recording_bytes: bytes,
             })
         })
@@ -160,7 +169,7 @@ pub struct HostRecording {
 
 #[utoipa::path(put, path = "/hosts/{host}/recording", operation_id = "leylineSetRecording", tag = "leyline",
     params(("host" = String, Path, description = "Host id, else its unique label")), request_body = NewRecording,
-    responses((status = 200, description = "Recording for the host's future terminals is `on` (needs a step-up and the master key: 403 step-up, 409 `secrets_unavailable`) or `off`; audited as `leyline.recording.on`/`off`. Output only, secrets redacted, kept 30 days and 2 GB in total", body = HostRecording)))]
+    responses((status = 200, description = "Recording for the host's future terminals is `on` (needs the master key: 409 `secrets_unavailable`) or `off`; both need a step-up (403 `step_up_required`); audited as `leyline.recording.on`/`off`. Output only, secrets redacted, kept 30 days and 2 GB in total", body = HostRecording)))]
 pub(crate) async fn set_recording(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -238,7 +247,7 @@ pub(crate) async fn replay(
     let path = crate::record::dir(&app)
         .map_err(|_| ApiError::not_found("no such recording"))?
         .join(&file);
-    let bytes = tokio::task::spawn_blocking(move || std::fs::read(path))
+    let file = tokio::task::spawn_blocking(move || std::fs::File::open(path))
         .await
         .map_err(|_| none())?
         .map_err(|_| none())?;
@@ -249,16 +258,22 @@ pub(crate) async fn replay(
             "the recording key is not available",
         )
     })?;
-    let cast = tokio::task::spawn_blocking(move || crate::record::open_cast(&bytes, &id))
-        .await
-        .map_err(|_| none())?
-        .map_err(|_| {
-            ApiError::new(
-                StatusCode::CONFLICT,
-                "recording_unreadable",
-                "the recording did not decrypt",
-            )
-        })?;
+    // The first block is opened before anything is sent, so a key that does not open is a 409.
+    let (mut blocks, id, first) = tokio::task::spawn_blocking(move || {
+        let mut b = Blocks::new(std::io::BufReader::new(file));
+        let first = b.next(&id);
+        (b, id, first)
+    })
+    .await
+    .map_err(|_| none())?;
+    let unreadable = |_| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "recording_unreadable",
+            "the recording did not decrypt",
+        )
+    };
+    let first = first.map_err(unreadable)?;
     let mut tx = begin_write(&app.pool).await?;
     let row = NewAuditEvent {
         actor: BY,
@@ -268,14 +283,107 @@ pub(crate) async fn replay(
     };
     audit::append(&mut tx, &row).await?;
     tx.commit().await?;
+    // Two blocks in flight at most: the reader waits for the client.
+    let (send, recv) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(2);
+    tokio::task::spawn_blocking(move || {
+        let mut next = first;
+        while let Some(b) = next {
+            if send.blocking_send(Ok(Bytes::from(b))).is_err() {
+                return;
+            }
+            next = match blocks.next(&id) {
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = send.blocking_send(Err(std::io::Error::other(e)));
+                    return;
+                }
+            };
+        }
+    });
+    let body = Body::from_stream(futures_util::stream::unfold(recv, |mut r| async {
+        r.recv().await.map(|x| (x, r))
+    }));
     Ok((
         [
             (header::CONTENT_TYPE, "application/x-asciicast"),
             (header::CACHE_CONTROL, "no-store"),
         ],
-        cast,
+        body,
     )
         .into_response())
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct Paused {
+    pub session: String,
+    /// The recording is paused (output is not written until it is resumed).
+    pub paused: bool,
+}
+
+/// Pauses or resumes the recording of a running session. A person only (an AI session never
+/// switches a recording); resuming needs the step-up (its route is destructive), pausing does not.
+async fn pause_to(app: &App, me: &Caller, session: &str, on: bool) -> ApiResult<Paused> {
+    crate::commands::people_only(me)?;
+    if !session_id(session) {
+        return Err(ApiError::not_found("no such recording"));
+    }
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT host_id FROM leyline_recordings WHERE session = ? AND ended_at IS NULL",
+    )
+    .bind(session)
+    .fetch_optional(&app.pool)
+    .await?;
+    let (host,) = row.ok_or_else(|| ApiError::not_found("no recording is running for it"))?;
+    if !crate::record::pause(session, on).await {
+        return Err(ApiError::not_found("no recording is running for it"));
+    }
+    let word = if on { "paused" } else { "resumed" };
+    let mut tx = begin_write(&app.pool).await?;
+    sqlx::query("UPDATE leyline_recordings SET paused = ? WHERE session = ?")
+        .bind(i64::from(on))
+        .bind(session)
+        .execute(&mut *tx)
+        .await?;
+    let row = NewAuditEvent {
+        actor: BY,
+        action: format!("leyline.recording.{word}"),
+        entity: None,
+        details: json!({"session": session, "host": host, "by_device": me.device.id}).to_string(),
+    };
+    audit::append(&mut tx, &row).await?;
+    events::append(
+        &mut tx,
+        "leyline.session",
+        &json!({"op": "recording", "id": session, "host": host, "recording": !on}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(Paused {
+        session: session.to_owned(),
+        paused: on,
+    }))
+}
+
+#[utoipa::path(post, path = "/sessions/{session}/recording/pause", operation_id = "leylinePauseRecording", tag = "leyline",
+    params(("session" = String, Path, description = "Session id (`ls_...`)")),
+    responses((status = 200, description = "The running recording stops writing output until resumed (a marker is written); a person only, no step-up; audited as `leyline.recording.paused`. 404 when none is running", body = Paused)))]
+pub(crate) async fn pause(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(session): Path<String>,
+) -> ApiResult<Paused> {
+    pause_to(&app, &me, &session, true).await
+}
+
+#[utoipa::path(post, path = "/sessions/{session}/recording/resume", operation_id = "leylineResumeRecording", tag = "leyline",
+    params(("session" = String, Path, description = "Session id (`ls_...`)")),
+    responses((status = 200, description = "A paused recording writes again; a person only, needs a step-up; audited as `leyline.recording.resumed`", body = Paused)))]
+pub(crate) async fn resume(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(session): Path<String>,
+) -> ApiResult<Paused> {
+    pause_to(&app, &me, &session, false).await
 }
 
 /// Removes recordings older than `keep` seconds, then the oldest until the rest fit in `cap`
@@ -308,7 +416,7 @@ pub(crate) async fn prune(
     let mut total: i64 = all.iter().map(|r| r.3).sum();
     let mut gone = Vec::new();
     for (session, file, started, bytes, live) in &all {
-        let old = now.saturating_sub(*started) > keep;
+        let old = now.saturating_sub(*started) > keep && !live;
         if old || (total > cap && !live) {
             gone.push((session.clone(), file.clone()));
             total -= bytes;
@@ -485,6 +593,15 @@ mod tests {
         add(&pool, &dir, 2, now - DAY, 100, false).await;
         let gone = prune(&pool, &dir, now, 30 * DAY, 1000).await.unwrap();
         assert_eq!(gone, 1, "the finished one went, the live one stayed");
+        assert_eq!(left(&pool).await, ["ls_0000000000000001"]);
+    }
+
+    #[tokio::test]
+    async fn a_live_recording_is_not_pruned_for_age_either() {
+        let (pool, dir) = store("liveage").await;
+        let now = 100 * DAY;
+        add(&pool, &dir, 1, now - 40 * DAY, 100, true).await;
+        assert_eq!(prune(&pool, &dir, now, 30 * DAY, 1 << 30).await.unwrap(), 0);
         assert_eq!(left(&pool).await, ["ls_0000000000000001"]);
     }
 }

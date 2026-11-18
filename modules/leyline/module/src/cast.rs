@@ -4,9 +4,10 @@
 
 use std::io::{Read, Write};
 
+use crate::scrub::Scrub;
+
 use age::x25519::{Identity, Recipient};
 use ainkrad_core_server::api::v1::TerminalSize;
-use ainkrad_proto::redact::Redactor;
 
 /// A block is written when this much cast text is waiting (the writer also flushes on a timer).
 pub const BLOCK: usize = 32 * 1024;
@@ -14,166 +15,10 @@ pub const BLOCK: usize = 32 * 1024;
 const MAX_PLAIN: usize = 64 * 1024 * 1024;
 /// The most one block may decompress to (a bomb guard when replaying).
 const MAX_BLOCK: usize = 8 * 1024 * 1024;
-/// The longest unfinished word held back, and the line tail kept for prompt detection.
-const WORD_MAX: usize = 512;
-const LINE_MAX: usize = 256;
 const STOPPED: &str = "\r\n[recording stopped: size limit]\r\n";
-
-// ---- text scrubbing ----------------------------------------------------------------------------
-
-/// Words that, before a closing `:` or `?`, make a line a prompt for a secret.
-const SECRET_WORDS: &[&str] = &[
-    "password",
-    "passwd",
-    "passphrase",
-    "passcode",
-    "pin",
-    "otp",
-    "secret",
-    "token",
-    "pw",
-];
-
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut it = s.chars().peekable();
-    while let Some(c) = it.next() {
-        if c == '\x1b' && it.peek() == Some(&'[') {
-            it.next();
-            for d in it.by_ref() {
-                if ('@'..='~').contains(&d) {
-                    break;
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-/// Whether `line` (the unfinished last line of output) is a prompt for something typed with echo
-/// off: it ends with `:` or `?` and names a secret.
-fn is_prompt(line: &str) -> bool {
-    let plain = strip_ansi(line).to_lowercase();
-    let t = plain.trim_end();
-    if !(t.ends_with(':') || t.ends_with('?')) {
-        return false;
-    }
-    t.contains("verification code")
-        || t.contains("one-time")
-        || t.split(|c: char| !c.is_alphanumeric())
-            .any(|w| SECRET_WORDS.contains(&w))
-}
-
-/// How many bytes at the end of `buf` start a UTF-8 sequence that is not finished yet.
-fn incomplete_tail(buf: &[u8]) -> usize {
-    for k in 1..=buf.len().min(3) {
-        let b = buf[buf.len() - k];
-        if b & 0xC0 == 0x80 {
-            continue; // a continuation byte: look further back for its start
-        }
-        let need = match b {
-            0xC0..=0xDF => 2,
-            0xE0..=0xEF => 3,
-            0xF0..=0xF7 => 4,
-            _ => 1,
-        };
-        return if need > k { k } else { 0 };
-    }
-    0
-}
-
-/// Output text on its way into the cast: prompts masked, secrets redacted.
-pub struct Scrub {
-    red: Redactor,
-    carry: Vec<u8>,
-    line: String,
-    masked: bool,
-    word: String,
-}
-
-impl Default for Scrub {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Scrub {
-    pub fn new() -> Self {
-        Self {
-            red: Redactor::new(),
-            carry: Vec::new(),
-            line: String::new(),
-            masked: false,
-            word: String::new(),
-        }
-    }
-
-    /// Bytes were lost between two pushes (the queue was full): a half character before the gap
-    /// cannot be finished.
-    pub fn gap(&mut self) {
-        self.carry.clear();
-    }
-
-    /// Drops what an echo-off prompt is waiting for, up to and including no more than the line
-    /// break that ends it.
-    fn mask(&mut self, text: &str) -> String {
-        let mut out = String::with_capacity(text.len());
-        for seg in text.split_inclusive(['\n', '\r']) {
-            let ends = seg.ends_with(['\n', '\r']);
-            if self.masked {
-                if ends {
-                    self.masked = false;
-                    self.line.clear();
-                    out.extend(seg.chars().last());
-                }
-                continue;
-            }
-            out.push_str(seg);
-            if ends {
-                self.line.clear();
-                continue;
-            }
-            self.line.push_str(seg);
-            if self.line.len() > LINE_MAX {
-                let mut cut = self.line.len() - LINE_MAX;
-                while !self.line.is_char_boundary(cut) {
-                    cut += 1;
-                }
-                self.line.drain(..cut);
-            }
-            self.masked = is_prompt(&self.line);
-        }
-        out
-    }
-
-    /// The scrubbed text of `bytes`, less the unfinished last word (see `release`).
-    pub fn push(&mut self, bytes: &[u8]) -> String {
-        let mut buf = std::mem::take(&mut self.carry);
-        buf.extend_from_slice(bytes);
-        self.carry = buf.split_off(buf.len() - incomplete_tail(&buf));
-        let visible = self.mask(&String::from_utf8_lossy(&buf));
-        let mut all = std::mem::take(&mut self.word);
-        all.push_str(&visible);
-        let mut cut = all
-            .char_indices()
-            .rev()
-            .find(|(_, c)| c.is_whitespace() || c.is_control())
-            .map_or(0, |(i, c)| i + c.len_utf8());
-        if all.len() - cut > WORD_MAX {
-            cut = all.len();
-        }
-        self.word = all.split_off(cut);
-        self.red.text(&all)
-    }
-
-    /// The held word, redacted: at the end of the recording, or when the output went quiet.
-    pub fn release(&mut self) -> String {
-        let w = std::mem::take(&mut self.word);
-        self.red.text(&w)
-    }
-}
+const GAP: &str = "\r\n[gap]\r\n";
+/// The most a replay returns, header and markers included.
+pub const REPLAY_MAX: usize = MAX_PLAIN + 1024 * 1024;
 
 // ---- the cast ----------------------------------------------------------------------------------
 
@@ -185,6 +30,7 @@ pub struct Cast {
     next: u64,
     plain: usize,
     capped: bool,
+    paused: bool,
 }
 
 impl Cast {
@@ -197,6 +43,7 @@ impl Cast {
             next: 0,
             plain: 0,
             capped: false,
+            paused: false,
         }
     }
 
@@ -204,21 +51,44 @@ impl Cast {
         if text.is_empty() {
             return;
         }
-        if self.plain + text.len() > MAX_PLAIN {
+        let at = (at * 1e6).round() / 1e6;
+        let Ok(line) = serde_json::to_string(&(at, "o", text)) else {
+            return;
+        };
+        // The escaped line is what is stored and what a replay returns: that is what is counted.
+        if self.plain + line.len() + 1 > MAX_PLAIN {
             if !self.capped {
                 self.capped = true;
-                let line = serde_json::to_string(&(at, "o", STOPPED)).unwrap_or_default();
-                self.out.extend_from_slice(line.as_bytes());
+                let stop = serde_json::to_string(&(at, "o", STOPPED)).unwrap_or_default();
+                self.out.extend_from_slice(stop.as_bytes());
                 self.out.push(b'\n');
             }
             return;
         }
-        self.plain += text.len();
-        let at = (at * 1e6).round() / 1e6;
-        if let Ok(line) = serde_json::to_string(&(at, "o", text)) {
-            self.out.extend_from_slice(line.as_bytes());
-            self.out.push(b'\n');
+        self.plain += line.len() + 1;
+        self.out.extend_from_slice(line.as_bytes());
+        self.out.push(b'\n');
+    }
+
+    /// Recording is paused or resumed: the held line goes, a marker says so, and while paused
+    /// output is only counted (never scrubbed or written).
+    pub fn pause(&mut self, on: bool, at: f64) {
+        if on == self.paused {
+            return;
         }
+        if on {
+            let t = self.scrub.release();
+            self.event(at, &t);
+        }
+        self.paused = on;
+        self.event(
+            at,
+            if on {
+                "\r\n[recording paused]\r\n"
+            } else {
+                "\r\n[recording resumed]\r\n"
+            },
+        );
     }
 
     /// Output bytes that belong at terminal offset `offset`, seen `at` seconds into the session.
@@ -232,12 +102,18 @@ impl Cast {
                 .unwrap_or(0)
                 .min(data.len())..]
         } else {
-            if offset > self.next {
-                self.scrub.gap();
+            if offset > self.next && !self.paused {
+                // Bytes were lost (a full queue, or a snapshot): say so, never glue lines together.
+                let held = self.scrub.gap();
+                self.event(at, &held);
+                self.event(at, GAP);
             }
             data
         };
         self.next = end;
+        if self.paused {
+            return;
+        }
         let text = self.scrub.push(data);
         self.event(at, &text);
     }
@@ -275,23 +151,53 @@ pub fn seal_block(plain: &[u8], to: &Recipient) -> std::io::Result<Vec<u8>> {
     Ok(framed)
 }
 
-/// The whole cast of a recording file. A torn last block (a crash mid-write) ends it quietly.
-pub fn open_cast(file: &[u8], with: &Identity) -> Result<Vec<u8>, String> {
-    let mut out = Vec::new();
-    let mut p = 0;
-    while let Some(head) = file.get(p..p + 4) {
-        let n = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
-        let Some(blob) = file.get(p + 4..p + 4 + n) else {
-            break;
-        };
-        let d = age::Decryptor::new(blob).map_err(|e| e.to_string())?;
+/// The blocks of a recording file, one at a time, with the total capped at `REPLAY_MAX`. A torn
+/// last block (a crash mid-write) ends it quietly.
+pub struct Blocks<R> {
+    r: R,
+    total: usize,
+}
+
+impl<R: Read> Blocks<R> {
+    pub fn new(r: R) -> Self {
+        Self { r, total: 0 }
+    }
+
+    pub fn next(&mut self, with: &Identity) -> Result<Option<Vec<u8>>, String> {
+        let mut head = [0u8; 4];
+        if self.r.read_exact(&mut head).is_err() {
+            return Ok(None);
+        }
+        let n = u32::from_be_bytes(head) as usize;
+        if n > MAX_BLOCK {
+            return Err("a block is larger than any block written".to_owned());
+        }
+        let mut blob = vec![0; n];
+        if self.r.read_exact(&mut blob).is_err() {
+            return Ok(None);
+        }
+        let d = age::Decryptor::new(&blob[..]).map_err(|e| e.to_string())?;
         let mut r = d
             .decrypt(std::iter::once(with as &dyn age::Identity))
             .map_err(|e| e.to_string())?;
         let mut z = Vec::new();
         r.read_to_end(&mut z).map_err(|e| e.to_string())?;
-        out.extend(zstd::bulk::decompress(&z, MAX_BLOCK).map_err(|e| e.to_string())?);
-        p += 4 + n;
+        let room = REPLAY_MAX.saturating_sub(self.total).min(MAX_BLOCK);
+        if room == 0 {
+            return Err("the recording is larger than a replay returns".to_owned());
+        }
+        let plain = zstd::bulk::decompress(&z, room).map_err(|e| e.to_string())?;
+        self.total += plain.len();
+        Ok(Some(plain))
+    }
+}
+
+/// The whole cast of a recording file, in memory (tests and small files; replay streams `Blocks`).
+pub fn open_cast(file: &[u8], with: &Identity) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut blocks = Blocks::new(file);
+    while let Some(b) = blocks.next(with)? {
+        out.extend(b);
     }
     Ok(out)
 }
@@ -314,29 +220,6 @@ mod tests {
                 v[2].as_str().unwrap().to_owned()
             })
             .collect()
-    }
-
-    #[test]
-    fn echo_off_prompts_are_recognised_and_ordinary_lines_are_not() {
-        for p in [
-            "Password: ",
-            "[sudo] password for ahmed: ",
-            "Enter passphrase for key '/home/a/.ssh/id_ed25519': ",
-            "\x1b[1mPassword:\x1b[0m ",
-            "Verification code: ",
-            "Enter PIN: ",
-            "MFA token? ",
-        ] {
-            assert!(is_prompt(p), "{p:?}");
-        }
-        for p in [
-            "user@host:~$ ",
-            "spinning: ",
-            "password reset done",
-            "Enter your name: ",
-        ] {
-            assert!(!is_prompt(p), "{p:?}");
-        }
     }
 
     #[test]
@@ -409,6 +292,33 @@ mod tests {
         // a torn last block (a crash) leaves the earlier ones readable
         let torn = &file[..file.len() - 10];
         assert!(open_cast(torn, &id).unwrap().starts_with(&plain));
+    }
+
+    #[test]
+    fn skipped_offsets_write_a_gap_marker_and_pause_writes_nothing() {
+        let mut c = Cast::new(SIZE, 0);
+        c.push(0, b"one\r\n", 0.1);
+        c.push(100, b"two\r\n", 0.2); // 94 bytes never arrived
+        c.pause(true, 0.3);
+        c.push(106, b"hidden-while-paused\r\n", 0.4);
+        c.pause(false, 0.5);
+        c.push(130, b"three\r\n", 0.6);
+        let all = texts(&c.take()).join("");
+        assert!(all.contains("one") && all.contains("two") && all.contains("three"));
+        assert!(all.contains("[gap]"), "{all}");
+        assert!(all.contains("[recording paused]") && all.contains("[recording resumed]"));
+        assert!(!all.contains("hidden"), "{all}");
+    }
+
+    #[test]
+    fn the_replay_total_is_capped() {
+        let id = Identity::generate();
+        let big = vec![b'a'; MAX_BLOCK];
+        let mut file = Vec::new();
+        for _ in 0..(REPLAY_MAX / MAX_BLOCK + 2) {
+            file.extend(seal_block(&big, &id.to_public()).unwrap());
+        }
+        assert!(open_cast(&file, &id).is_err());
     }
 
     #[test]

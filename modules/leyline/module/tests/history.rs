@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ainkrad_core::settings::{Key, Scope};
-use ainkrad_core_server::api::v1::BY;
+use ainkrad_core_server::api::v1::{BY, OutputTap};
 use ainkrad_core_server::api::{App, router};
 use ainkrad_core_server::auth::Identity;
 use ainkrad_core_server::auth::testing::TestDevice;
@@ -402,7 +402,8 @@ async fn turning_recording_on_needs_a_step_up_and_off_does_not() {
         scalar(&fx, "SELECT record FROM leyline_hosts WHERE id = ?", &h).await,
         "on"
     );
-    let (s, _) = call(
+    // Off needs the step-up too.
+    let (s, b) = call(
         &fx,
         &fx.laptop,
         Method::PUT,
@@ -410,7 +411,11 @@ async fn turning_recording_on_needs_a_step_up_and_off_does_not() {
         Some(json!({"record": "off"})),
     )
     .await;
-    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        (s, &b["code"]),
+        (StatusCode::FORBIDDEN, &json!("step_up_required"))
+    );
+    recording_for(&fx, &h, "off").await;
     let (s, _) = call(
         &fx,
         &fx.admin,
@@ -527,6 +532,68 @@ async fn a_recorded_session_is_redacted_output_only_encrypted_and_replayable() {
     assert!(v[0]["recording_bytes"].as_i64().unwrap() > 0);
     let (s, _) = raw(&fx, &fx.admin, "/sessions/ls_0000000000000000/recording").await;
     assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_running_recording_is_flagged_and_pausing_needs_no_step_up_but_resuming_does() {
+    let fx = fx().await;
+    let mut rx = online(&fx, true);
+    let h = host(&fx, "alpha", None).await;
+    recording_for(&fx, &h, "on").await;
+    let (session, terminal) = open_running(&fx, &mut rx, &h).await;
+    let list = format!("/hosts/{h}/sessions");
+    let (_, v) = call(&fx, &fx.admin, Method::GET, &list, None).await;
+    assert_eq!(v[0]["recording"], true);
+    let tap = fx.app.terminals.tap_of(&terminal).unwrap();
+    let path = format!("/sessions/{session}/recording");
+
+    let (s, _) = call(
+        &fx,
+        &fx.laptop,
+        Method::POST,
+        &format!("{path}/pause"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "pausing needs no step-up");
+    let (_, v) = call(&fx, &fx.admin, Method::GET, &list, None).await;
+    assert_eq!(v[0]["recording"], false);
+    tap.output(0, &B64.encode("typed-while-paused\r\n"));
+    let (s, _) = call(
+        &fx,
+        &fx.laptop,
+        Method::POST,
+        &format!("{path}/resume"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "resuming needs the step-up");
+    let (s, _) = call(
+        &fx,
+        &fx.admin,
+        Method::POST,
+        &format!("{path}/resume"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    tap.output(20, &B64.encode("after-resume\r\n"));
+    drop(tap);
+    end_terminal(&fx, &terminal);
+    until_recording_ends(&fx, &session).await;
+    let (_, cast) = raw(&fx, &fx.admin, &path).await;
+    assert!(!cast.contains("typed-while-paused"), "{cast}");
+    assert!(cast.contains("after-resume") && cast.contains("[recording paused]"));
+}
+
+#[tokio::test]
+async fn a_client_cannot_move_the_recording_offset_with_after() {
+    // The relay clamps `?after=` to the tap's `known()`: nothing seen yet, so nothing to skip to.
+    let (tap, _drain) = leyline_module::record::Tap::queue();
+    assert_eq!(tap.known(), 0);
+    tap.output(0, &B64.encode("12345"));
+    assert_eq!(tap.known(), 5);
+    assert_eq!(u64::MAX.min(tap.known()), 5);
 }
 
 #[tokio::test]

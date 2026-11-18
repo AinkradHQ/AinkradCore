@@ -24,6 +24,7 @@ mod keys;
 mod policy;
 /// Terminal recording; public so `benches/relay_tap.rs` can time the relay's tap.
 pub mod record;
+mod scrub;
 mod terminal;
 mod valid;
 
@@ -101,6 +102,10 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     // decision that could point a session at an impostor.
     ("POST", "/hosts/{host}/terminals"),
     ("POST", "/hosts/{host}/host-keys/replace"),
+    // Recording on or off both need it: turning it off hides what happens on a host. Resuming a
+    // paused recording too; pausing does not (a person who sees one can stop it at once).
+    ("PUT", "/hosts/{host}/recording"),
+    ("POST", "/sessions/{session}/recording/resume"),
 ];
 // POST and PATCH need a step-up only for what widens an AI's reach or repoints a host (`allowed`,
 // address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
@@ -115,8 +120,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/fleet/runs"),
     ("POST", "/runs/{run}/cancel"),
     ("POST", "/hosts/{host}/host-keys/trust"),
-    // Turning recording on needs a step-up (checked in the handler); turning it off does not.
-    ("PUT", "/hosts/{host}/recording"),
+    ("POST", "/sessions/{session}/recording/pause"),
     ("PUT", "/projects/{project}/hosts/{host}"),
     ("DELETE", "/projects/{project}/hosts/{host}"),
 ];
@@ -138,6 +142,8 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/projects/{project}/sessions", "read"),
     // A recording is terminal content: the terminal scope, and a step-up in the handler.
     ("GET", "/sessions/{session}/recording", "terminal"),
+    ("POST", "/sessions/{session}/recording/pause", "terminal"),
+    ("POST", "/sessions/{session}/recording/resume", "terminal"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -177,7 +183,9 @@ pub struct Leyline;
         history::host_sessions,
         history::project_sessions,
         history::set_recording,
-        history::replay
+        history::replay,
+        history::pause,
+        history::resume
     ),
     components(schemas(
         hosts::HostView,
@@ -211,7 +219,8 @@ pub struct Leyline;
         terminal::SessionView,
         history::SessionRow,
         history::NewRecording,
-        history::HostRecording
+        history::HostRecording,
+        history::Paused
     ))
 )]
 struct Doc;
@@ -223,6 +232,7 @@ impl Module for Leyline {
 
     fn attach(&self, app: &App) {
         history::attach(app);
+        health::attach(app);
         // A host terminal's monitor lives in the process: rows left open by the last one are over.
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let app = app.clone();
@@ -232,10 +242,6 @@ impl Module for Leyline {
                 }
             });
         }
-    }
-
-    fn jobs(&self) -> Vec<ainkrad_core_server::jobs::Job> {
-        history::jobs()
     }
 
     fn routes(&self) -> Router<App> {
@@ -259,6 +265,11 @@ impl Module for Leyline {
                 get(history::project_sessions),
             )
             .route("/sessions/{session}/recording", get(history::replay))
+            .route("/sessions/{session}/recording/pause", post(history::pause))
+            .route(
+                "/sessions/{session}/recording/resume",
+                post(history::resume),
+            )
             .route("/groups", get(hosts::groups))
             .route("/tags", get(hosts::tags))
             .route("/keys", get(keys::list).post(keys::generate))
@@ -326,6 +337,8 @@ impl Module for Leyline {
             "leyline.recording.on",
             "leyline.recording.off",
             "leyline.recording.replayed",
+            "leyline.recording.paused",
+            "leyline.recording.resumed",
             "leyline.recording.pruned",
             "leyline.run.requested",
             "leyline.run.approval",
@@ -364,11 +377,9 @@ impl Module for Leyline {
     }
 
     fn jobs(&self) -> Vec<Job> {
-        health::jobs()
-    }
-
-    fn attach(&self, app: &App) {
-        health::attach(app);
+        let mut jobs = health::jobs();
+        jobs.extend(history::jobs());
+        jobs
     }
 
     fn openapi(&self) -> Value {
