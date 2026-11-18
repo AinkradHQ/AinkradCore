@@ -103,6 +103,7 @@ mod placement;
 mod pools;
 mod preauth;
 mod projects_api;
+mod projects_github;
 mod providers;
 mod push;
 mod revocation;

@@ -3200,6 +3200,135 @@ extension Components {
                 case userId = "user_id"
             }
         }
+        /// - Remark: Generated from `#/components/schemas/GithubOwner`.
+        public struct GithubOwner: Codable, Hashable, Sendable {
+            /// The user or organisation.
+            ///
+            /// - Remark: Generated from `#/components/schemas/GithubOwner/owner`.
+            public var owner: Swift.String
+            /// - Remark: Generated from `#/components/schemas/GithubOwner/repos`.
+            public var repos: [Components.Schemas.GithubRepo]
+            /// Creates a new `GithubOwner`.
+            ///
+            /// - Parameters:
+            ///   - owner: The user or organisation.
+            ///   - repos:
+            public init(
+                owner: Swift.String,
+                repos: [Components.Schemas.GithubRepo]
+            ) {
+                self.owner = owner
+                self.repos = repos
+            }
+            public enum CodingKeys: String, CodingKey {
+                case owner
+                case repos
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/GithubRepo`.
+        public struct GithubRepo: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/GithubRepo/default_branch`.
+            public var defaultBranch: Swift.String
+            /// - Remark: Generated from `#/components/schemas/GithubRepo/description`.
+            public var description: Swift.String
+            /// `owner/name`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/GithubRepo/full_name`.
+            public var fullName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/GithubRepo/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/GithubRepo/private`.
+            public var _private: Swift.Bool
+            /// Creates a new `GithubRepo`.
+            ///
+            /// - Parameters:
+            ///   - defaultBranch:
+            ///   - description:
+            ///   - fullName: `owner/name`.
+            ///   - name:
+            ///   - _private:
+            public init(
+                defaultBranch: Swift.String,
+                description: Swift.String,
+                fullName: Swift.String,
+                name: Swift.String,
+                _private: Swift.Bool
+            ) {
+                self.defaultBranch = defaultBranch
+                self.description = description
+                self.fullName = fullName
+                self.name = name
+                self._private = _private
+            }
+            public enum CodingKeys: String, CodingKey {
+                case defaultBranch = "default_branch"
+                case description
+                case fullName = "full_name"
+                case name
+                case _private = "private"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/GithubRepoList`.
+        public struct GithubRepoList: Codable, Hashable, Sendable {
+            /// The connection the repos were read with.
+            ///
+            /// - Remark: Generated from `#/components/schemas/GithubRepoList/connection_id`.
+            public var connectionId: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/GithubRepoList/has_more`.
+            public var hasMore: Swift.Bool
+            /// This page's repos grouped by owner; owners and repos by name.
+            ///
+            /// - Remark: Generated from `#/components/schemas/GithubRepoList/owners`.
+            public var owners: [Components.Schemas.GithubOwner]
+            /// - Remark: Generated from `#/components/schemas/GithubRepoList/page`.
+            public var page: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/GithubRepoList/per_page`.
+            public var perPage: Swift.Int64
+            /// Repos matching `q`, over all pages.
+            ///
+            /// - Remark: Generated from `#/components/schemas/GithubRepoList/total`.
+            public var total: Swift.Int64
+            /// GitHub has more repos than Core reads (1000); use `q` to narrow.
+            ///
+            /// - Remark: Generated from `#/components/schemas/GithubRepoList/truncated`.
+            public var truncated: Swift.Bool
+            /// Creates a new `GithubRepoList`.
+            ///
+            /// - Parameters:
+            ///   - connectionId: The connection the repos were read with.
+            ///   - hasMore:
+            ///   - owners: This page's repos grouped by owner; owners and repos by name.
+            ///   - page:
+            ///   - perPage:
+            ///   - total: Repos matching `q`, over all pages.
+            ///   - truncated: GitHub has more repos than Core reads (1000); use `q` to narrow.
+            public init(
+                connectionId: Swift.Int64,
+                hasMore: Swift.Bool,
+                owners: [Components.Schemas.GithubOwner],
+                page: Swift.Int64,
+                perPage: Swift.Int64,
+                total: Swift.Int64,
+                truncated: Swift.Bool
+            ) {
+                self.connectionId = connectionId
+                self.hasMore = hasMore
+                self.owners = owners
+                self.page = page
+                self.perPage = perPage
+                self.total = total
+                self.truncated = truncated
+            }
+            public enum CodingKeys: String, CodingKey {
+                case connectionId = "connection_id"
+                case hasMore = "has_more"
+                case owners
+                case page
+                case perPage = "per_page"
+                case total
+                case truncated
+            }
+        }
         /// One lease of a group's grant: hand `lease` to the runner. No `Debug`.
         ///
         /// - Remark: Generated from `#/components/schemas/GroupLease`.
@@ -4741,6 +4870,50 @@ extension Components {
                 case installationId = "installation_id"
                 case site
                 case token
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/NewGithubProject`.
+        public struct NewGithubProject: Codable, Hashable, Sendable {
+            /// Default: the workspace's GitHub default.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewGithubProject/connection_id`.
+            public var connectionId: Swift.Int64?
+            /// Default: the first repo's name.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewGithubProject/name`.
+            public var name: Swift.String?
+            /// 1-10 repos as `owner/name`; the first is primary.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewGithubProject/repos`.
+            public var repos: [Swift.String]
+            /// Default: made from the name; a taken or reserved one gets `-2`, `-3`, ... An explicit slug
+            /// that is taken is 409 `conflict`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewGithubProject/slug`.
+            public var slug: Swift.String?
+            /// Creates a new `NewGithubProject`.
+            ///
+            /// - Parameters:
+            ///   - connectionId: Default: the workspace's GitHub default.
+            ///   - name: Default: the first repo's name.
+            ///   - repos: 1-10 repos as `owner/name`; the first is primary.
+            ///   - slug: Default: made from the name; a taken or reserved one gets `-2`, `-3`, ... An explicit slug
+            public init(
+                connectionId: Swift.Int64? = nil,
+                name: Swift.String? = nil,
+                repos: [Swift.String],
+                slug: Swift.String? = nil
+            ) {
+                self.connectionId = connectionId
+                self.name = name
+                self.repos = repos
+                self.slug = slug
+            }
+            public enum CodingKeys: String, CodingKey {
+                case connectionId = "connection_id"
+                case name
+                case repos
+                case slug
             }
         }
         /// - Remark: Generated from `#/components/schemas/NewGroupLease`.
