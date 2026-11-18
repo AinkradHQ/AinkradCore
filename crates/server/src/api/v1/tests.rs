@@ -109,6 +109,8 @@ mod project_runs_leases;
 mod project_runs_lost;
 mod project_runs_placement;
 mod project_runs_race;
+mod project_secrets_api;
+mod project_secrets_review;
 mod project_sessions;
 mod projects_api;
 mod projects_github;

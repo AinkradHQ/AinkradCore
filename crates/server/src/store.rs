@@ -36,6 +36,7 @@ pub mod modsettings;
 pub mod placement;
 pub mod pools;
 pub mod prices;
+pub mod project_secrets;
 pub mod projects;
 pub mod provider_rules;
 mod provider_url;

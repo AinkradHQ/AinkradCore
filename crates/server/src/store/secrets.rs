@@ -504,7 +504,7 @@ const META: &str = "SELECT s.id, s.name, s.owner, s.runners, s.delivery, s.versi
                     g.runners AS group_runners FROM core_secrets s \
                     LEFT JOIN core_secret_groups g ON g.id = s.group_id";
 
-async fn find(conn: &mut SqliteConnection, name: &str) -> Result<Meta, Error> {
+pub(super) async fn find(conn: &mut SqliteConnection, name: &str) -> Result<Meta, Error> {
     let row = sqlx::query(sqlx::AssertSqlSafe(format!("{META} WHERE s.name = ?")))
         .bind(name)
         .fetch_optional(&mut *conn)
@@ -1028,6 +1028,10 @@ pub async fn open_for_module(
         return refused("not_found", "no such secret");
     }
     let mut tx = super::begin_write(pool).await?;
+    // A project secret (`<slug>.<name>`) is never a module's, whatever the slug is.
+    if super::project_secrets::is_member(&mut tx, name).await? {
+        return refused("not_found", "no such secret");
+    }
     enabled(&mut tx).await?;
     let row = sqlx::query("SELECT id, version, key_id, sealed FROM core_secrets WHERE name = ?")
         .bind(name)

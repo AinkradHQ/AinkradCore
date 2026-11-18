@@ -264,6 +264,16 @@ pub trait Module: Send + Sync + 'static {
         Box::pin(async { Ok(()) })
     }
 
+    /// The instructions the agent session `session` starts with (P3-03), read fresh at every
+    /// launch. `None` adds nothing. They go to the runner as the harness's instruction file.
+    fn session_instructions<'a>(
+        &'a self,
+        _app: &'a App,
+        _session: &'a str,
+    ) -> BoxFut<'a, Option<String>> {
+        Box::pin(async { None })
+    }
+
     /// Credentials for the agent session `session` this module owns, minted fresh at every
     /// launch (start and resume). `Err` fails the launch with that reason (never a value).
     fn credentials<'a>(

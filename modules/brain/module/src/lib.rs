@@ -733,6 +733,14 @@ impl Module for Brain {
         Box::pin(project_rooms::claim_for_session(app, session, project, by))
     }
 
+    fn session_instructions<'a>(
+        &'a self,
+        app: &'a App,
+        session: &'a str,
+    ) -> BoxFut<'a, Option<String>> {
+        Box::pin(project_rooms::instructions_for_session(app, self, session))
+    }
+
     fn query_names(&self) -> &'static [&'static str] {
         &["q", "room", "mode", "status", "limit", "after"]
     }
