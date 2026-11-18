@@ -46,6 +46,7 @@ pub use pty::{PtyConfig, PtyDriver};
 pub use sandbox::ProcessSandbox;
 pub use session::Session;
 pub use ssh::SshDriver;
+pub use ssh::pty::{Launch as SshLaunch, pty_main as ssh_pty_main};
 
 /// What the runner proves itself with on one connection.
 pub struct Link {

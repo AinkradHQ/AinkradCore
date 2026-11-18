@@ -254,6 +254,7 @@ async fn an_old_runner_reads_what_this_host_sends() {
         ),
         size: ainkrad_proto::v2::Size { rows: 24, cols: 80 },
         scrollback_bytes: None,
+        fd3: None,
     };
     let (tx, rx) = tokio::sync::oneshot::channel();
     let reg = d.clone();

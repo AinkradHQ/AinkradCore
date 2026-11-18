@@ -2682,6 +2682,17 @@
         "size": {
           "$ref": "#/$defs/Size"
         },
+        "ssh": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SshTerminal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "An interactive SSH terminal (Leyline): the runner starts its own `ssh-pty` as the terminal's\nprogram, handing it the redeemed keys over an inherited pipe. Then `program`, `args`,\n`cwd`, `session`, `env` and `env_pass` must be empty (`invalid_args`)."
+        },
         "watch": {
           "description": "This stream only watches for the exit (the Core's monitor): it is not a client, so it\ndoes not protect the terminal's scrollback from the disk budget.",
           "type": "boolean"
@@ -4071,6 +4082,25 @@
         "host",
         "user",
         "lease"
+      ],
+      "type": "object"
+    },
+    "SshTerminal": {
+      "description": "The machine an interactive SSH terminal (`PtyOpen::ssh`) reaches, through `hops` (first to last):\nthe same hops, pins and key leases as `ssh.exec`, and the same rules (at most `MAX_SSH_HOPS`).\nThe runner redeems the leases and passes the keys to `ssh-pty`; a password or keyboard-interactive\nprompt is answered by the person typing in the terminal.",
+      "properties": {
+        "hops": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SshHop"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/SshHop"
+        }
+      },
+      "required": [
+        "target"
       ],
       "type": "object"
     },

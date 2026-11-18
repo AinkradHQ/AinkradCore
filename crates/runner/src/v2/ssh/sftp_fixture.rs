@@ -11,7 +11,7 @@ use russh_sftp::protocol::{
 use russh_sftp::server::Handler;
 
 #[derive(Default)]
-pub(super) struct MemFs {
+pub(in crate::v2) struct MemFs {
     pub(super) files: HashMap<String, Vec<u8>>,
     pub(super) dirs: HashSet<String>,
     /// link path to target path.
@@ -22,7 +22,7 @@ pub(super) struct MemFs {
     pub(super) paths: Vec<String>,
 }
 
-pub(super) type Fs = Arc<Mutex<MemFs>>;
+pub(in crate::v2) type Fs = Arc<Mutex<MemFs>>;
 
 impl MemFs {
     pub(super) fn with_root() -> Fs {

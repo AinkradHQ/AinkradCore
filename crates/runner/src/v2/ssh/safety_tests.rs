@@ -97,7 +97,7 @@ async fn a_timed_out_command_gets_a_kill_signal() {
 #[tokio::test]
 async fn no_inactivity_timeout_and_a_channel_without_an_exit_status_is_a_failure() {
     // russh's own would drop a command that stays silent past it, under the exec ceiling.
-    assert!(config().inactivity_timeout.is_none());
+    assert!(config(false).inactivity_timeout.is_none());
     let (leases, s) = (Leases::default(), serve("T", true).await);
     leases.key("l_1");
     let e = ssh(&leases)

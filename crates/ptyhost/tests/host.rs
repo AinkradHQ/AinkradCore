@@ -41,6 +41,7 @@ fn spec(program: &str, args: &[&str]) -> Spec {
         ),
         size: SIZE,
         scrollback_bytes: None,
+        fd3: None,
     }
 }
 
@@ -113,6 +114,57 @@ async fn echo_runs_and_its_exit_follows_its_output() {
             signal: None
         }
     );
+    ack(&dir, &id, &mut r, &mut w).await;
+}
+
+/// Y2-02: `Spec::fd3` reaches the child as an inherited pipe on descriptor 3 (read to its end),
+/// never in its argv or environment, with the PTY still its controlling terminal (a resize
+/// reaches it) and no other descriptor above 3.
+#[tokio::test]
+async fn fd3_hands_the_child_a_pipe_and_nothing_else_leaks() {
+    let dir = tmp();
+    let secret = "SEEDED-fd3-secret-5521";
+    // The markers READY and WINCH must not appear in the script's own text, which is its argv.
+    let script = "x=$(cat <&3); echo \"fd3:$x\"; p=SEEDED-fd3; q=-secret; \
+                  case \"$(cat /proc/$$/cmdline /proc/$$/environ 2>/dev/null | tr '\\0' ' ')\" in \
+                  *$p$q*) echo LEAKED;; *) echo CLEAN;; esac; \
+                  echo \"OPEN:$(ls /proc/$$/fd 2>/dev/null | tr '\\n' ' ')\"; trap 'echo WIN''CH' WINCH; echo RE''ADY; \
+                  while :; do sleep 0.05; done";
+    let mut s = sh(script);
+    s.fd3 = Some(ainkrad_ptyhost::pty::Hidden(STANDARD.encode(secret)));
+    assert!(!format!("{s:?}").contains("5521"), "Debug hides it");
+    let (id, mut r, mut w) = start(&dir, &s).await;
+    let mut out = Vec::new();
+    read_until(&mut r, &mut out, has("READY")).await;
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(text.contains(&format!("fd3:{secret}")), "{text:?}");
+    assert!(
+        text.contains("CLEAN") && !text.contains("LEAKED"),
+        "{text:?}"
+    );
+    // `ls /proc/$$/fd` is the shell's: 0 1 2, the pipe (3, still open) and `ls`'s own directory fd.
+    #[cfg(target_os = "linux")]
+    {
+        // `ls` sorts as text; 3 is the pipe, 4 the substitution's own pipe, 10 the shell's.
+        let fds = (text.lines().find_map(|l| l.strip_prefix("OPEN:")))
+            .unwrap_or_else(|| panic!("{text:?}"));
+        assert!(
+            fds.split_whitespace()
+                .all(|n| ["0", "1", "2", "3", "4", "10"].contains(&n)),
+            "leaked descriptors: {fds}"
+        );
+    }
+    w.send(&ToHost::Resize {
+        size: Size {
+            rows: 30,
+            cols: 100,
+        },
+    })
+    .await
+    .unwrap();
+    read_until(&mut r, &mut out, has("WINCH")).await;
+    w.send(&ToHost::Close { grace_ms: 200 }).await.unwrap();
+    read_until(&mut r, &mut out, |_| false).await.unwrap();
     ack(&dir, &id, &mut r, &mut w).await;
 }
 

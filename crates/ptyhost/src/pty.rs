@@ -40,7 +40,61 @@ pub struct Spec {
     /// absent: `store::CAP_DEFAULT`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scrollback_bytes: Option<u64>,
+    /// Bytes the child gets as an inherited pipe on descriptor 3 (standard base64 here): the
+    /// runner's key handoff to `ainkrad-runner ssh-pty`. Never argv, env or disk; wiped from the
+    /// host's memory once the child is started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fd3: Option<Hidden>,
 }
+
+/// A secret in a [`Spec`]: wiped when dropped, never printed.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Hidden(pub String);
+
+impl std::fmt::Debug for Hidden {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[hidden]")
+    }
+}
+
+impl Drop for Hidden {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.0);
+    }
+}
+
+/// The most bytes a serialized [`Spec`] may take (it carries the key handoff, so it is read and
+/// written through one fixed buffer, never grown).
+pub const SPEC_MAX: usize = 256 * 1024;
+
+/// A writer into a `Vec` that fails rather than grow it: growing would leave an unwiped copy of
+/// what was written (keys) behind in freed memory.
+pub struct Capped<'a>(pub &'a mut Vec<u8>);
+
+impl Write for Capped<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.0.len() + buf.len() > self.0.capacity() {
+            return Err(io::Error::other("too large"));
+        }
+        self.0.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// `spec` as the host reads it on stdin, in a buffer of `SPEC_MAX` bytes that is wiped on drop.
+pub fn spec_bytes(spec: &Spec) -> io::Result<zeroize::Zeroizing<Vec<u8>>> {
+    let mut buf = zeroize::Zeroizing::new(Vec::with_capacity(SPEC_MAX));
+    serde_json::to_writer(Capped(&mut buf), spec).map_err(io::Error::other)?;
+    Ok(buf)
+}
+
+/// The most bytes `Spec::fd3` may carry: well inside a pipe's capacity on both OSes, so filling it
+/// never blocks.
+pub const FD3_MAX: usize = 12 * 1024;
 
 /// How a child ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +147,72 @@ pub fn environment(
     );
     env.extend(set.iter().map(|(k, v)| (k.clone(), v.clone())));
     env
+}
+
+/// The pipe capacity asked for (Linux) before the key is written.
+const PIPE_WANT: usize = 64 * 1024;
+
+/// A pipe holding `bytes`, its write end closed: the child reads them, then EOF. The write end is
+/// non-blocking, so bytes that do not fit fail (`key handoff did not fit`) instead of hanging the
+/// host. `want` is the capacity asked for first (Linux; best effort).
+fn key_pipe(bytes: &[u8], want: usize) -> io::Result<std::io::PipeReader> {
+    use std::os::fd::AsFd;
+    let (reader, mut writer) = std::io::pipe()?;
+    ainkrad_sys::pipe_setup(writer.as_fd(), want)?;
+    writer.write_all(bytes).map_err(|e| {
+        if e.kind() == io::ErrorKind::WouldBlock {
+            io::Error::other("key handoff did not fit")
+        } else {
+            e
+        }
+    })?;
+    Ok(reader)
+}
+
+/// Starts `spec` on the PTY at `tty` with `secret` (base64) readable from an inherited pipe on
+/// descriptor 3. `portable-pty`'s own spawn closes every descriptor above 2, so it cannot pass one:
+/// the child is started here, the same way (own session, the PTY as controlling terminal, the
+/// spec's environment only), plus the pipe. The pipe is filled and its write end closed before the
+/// spawn, so the child reads the bytes and then EOF.
+fn spawn_with_fd3(
+    spec: &Spec,
+    secret: &Hidden,
+    tty: Option<std::path::PathBuf>,
+) -> io::Result<std::process::Child> {
+    use base64::Engine;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(secret.0.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "fd3 is not base64"))?;
+    let bytes = zeroize::Zeroizing::new(bytes);
+    if bytes.len() > FD3_MAX {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "fd3 is too large",
+        ));
+    }
+    let program = spec
+        .program
+        .as_deref()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "fd3 needs a program"))?;
+    let tty = tty.ok_or_else(|| io::Error::other("the PTY has no name"))?;
+    let open = || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOCTTY)
+            .open(&tty)
+    };
+    let reader = key_pipe(&bytes, PIPE_WANT)?;
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(&spec.args).env_clear().envs(&spec.env);
+    if let Some(dir) = spec.cwd.as_ref().or_else(|| spec.env.get("HOME")) {
+        cmd.current_dir(dir);
+    }
+    cmd.stdin(open()?).stdout(open()?).stderr(open()?);
+    ainkrad_sys::pty_child_on_exec(&mut cmd, reader.as_raw_fd());
+    cmd.spawn()
 }
 
 fn pty_size(s: Size) -> PtySize {
@@ -164,7 +284,10 @@ impl Pty {
                 }
             }
         }
-        let child = pair.slave.spawn_command(cmd).map_err(io_err)?;
+        let child: Box<dyn portable_pty::Child + Send + Sync> = match &spec.fd3 {
+            None => pair.slave.spawn_command(cmd).map_err(io_err)?,
+            Some(secret) => Box::new(spawn_with_fd3(spec, secret, pair.master.tty_name())?),
+        };
         // Our slave fd stays open until the exit is announced (see `Pty::slave`).
         let pid = child
             .process_id()
@@ -292,5 +415,26 @@ mod tests {
         assert_eq!(env["EDITOR"], "vi");
         let env = environment(&os(&[("LANG", "C.UTF-8")]), &[], &[], &BTreeMap::new());
         assert_eq!(env["LANG"], "C.UTF-8");
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod key_pipe_tests {
+    use super::*;
+
+    #[test]
+    fn a_key_that_does_not_fit_fails_instead_of_blocking() {
+        // 4096 is the smallest pipe Linux grants: 8000 bytes cannot be written without a reader.
+        let e = key_pipe(&[7u8; 8000], 4096).unwrap_err();
+        assert!(e.to_string().contains("did not fit"), "{e}");
+    }
+
+    #[test]
+    fn a_key_that_fits_is_read_back_then_eof() {
+        use std::io::Read;
+        let mut r = key_pipe(&[7u8; FD3_MAX], PIPE_WANT).unwrap();
+        let mut out = Vec::new();
+        r.read_to_end(&mut out).unwrap();
+        assert_eq!(out.len(), FD3_MAX);
     }
 }

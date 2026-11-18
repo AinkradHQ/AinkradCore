@@ -379,6 +379,7 @@ fn v2_terminal_frames_are_pinned() {
             watch: false,
             scrollback_bytes: None,
             scrollback_budget: None,
+            ssh: None,
         })),
     );
     t(

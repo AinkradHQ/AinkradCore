@@ -911,6 +911,7 @@ pub async fn create(
             watch: true,
             scrollback_bytes: u64::try_from(scrollback.0).ok(),
             scrollback_budget: u64::try_from(scrollback.1).ok(),
+            ssh: None,
         }),
         app.hub.terminal_elevation(&me),
     ) {

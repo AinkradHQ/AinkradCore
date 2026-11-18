@@ -244,6 +244,9 @@ async fn main() -> ExitCode {
                 .init();
             return ainkrad_runner::v2::cli::connect_main(rest).await;
         }
+        // An interactive SSH terminal (Leyline): the program of a terminal the runner opened; its
+        // keys arrive on descriptor 3.
+        ["ssh-pty"] => return ainkrad_runner::v2::ssh_pty_main().await,
         // The root side of one-click tool install (systemd socket activation, see `toolhelper`).
         ["tools-helper"] => return ainkrad_runner::toolhelper::main(),
         ["mcp-forward", port, sock] => {
