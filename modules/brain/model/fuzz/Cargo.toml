@@ -1,0 +1,23 @@
+# B3-01: the admission fuzz target, in its own workspace (needs nightly; the story build never touches it).
+# Run with `cargo +nightly fuzz run admit` from this folder.
+[package]
+name = "brain-model-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+brain-model = { path = ".." }
+
+[workspace]
+
+[[bin]]
+name = "admit"
+path = "fuzz_targets/admit.rs"
+test = false
+doc = false
+bench = false
