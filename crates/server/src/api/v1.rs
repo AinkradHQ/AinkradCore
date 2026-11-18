@@ -91,6 +91,7 @@ pub const QUERY: &[&str] = &[
     "origin",
     "nobody_watching",
     "archived",
+    "force",
     // GET /projects/github/repos (P2-01)
     "connection",
     "project",
@@ -444,6 +445,14 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/projects/{id}/spec/versions/{version}",
             get(projects::run_spec::version),
+        )
+        .route(
+            "/api/v1/projects/{id}/secrets",
+            get(projects::secrets::list),
+        )
+        .route(
+            "/api/v1/projects/{id}/secrets/{name}",
+            put(projects::secrets::set).delete(projects::secrets::delete),
         )
         .route(
             "/api/v1/projects/{id}/repos/{repo}/fetch",

@@ -49,6 +49,9 @@ async fn fx() -> Fx {
     )
     .await
     .unwrap();
+    // The names `good()` refers to are secrets of the project.
+    crate::store::project_secrets::fixtures::seed(&pool, p.id, &["db_password", "database_url"])
+        .await;
     Fx {
         pool,
         dir,
@@ -337,6 +340,7 @@ async fn secret_references_are_syntax_checked_and_listed() {
         assert!(msg.contains("services.db.env.K"), "{bad}: {msg}");
     }
     // Plain values and a bare `$` are fine; several references in one value are all found.
+    crate::store::project_secrets::fixtures::seed(&fx.pool, fx.project, &["a.b-c_1", "z"]).await;
     for ok in ["plain", "cost $5", "${secret:a.b-c_1}:${secret:z}"] {
         let body = with(|v| v["services"]["db"]["env"]["K"] = json!(ok));
         save_manual(&fx, &body).await.unwrap();
@@ -350,6 +354,20 @@ async fn secret_references_are_syntax_checked_and_listed() {
         secret_refs(&spec).into_iter().collect::<Vec<_>>(),
         ["database_url", "db_password"]
     );
+}
+
+#[tokio::test]
+async fn a_reference_must_name_a_secret_of_the_project() {
+    let fx = fx().await;
+    let body = with(|v| v["services"]["db"]["env"]["K"] = json!("${secret:nope}"));
+    let msg = problem(save_manual(&fx, &body).await);
+    assert!(msg.contains("${secret:nope}"), "{msg}");
+    // Another project's secret of the same name does not count.
+    let other = projects::create(&fx.pool, "blog", "Blog", "", "manual", W)
+        .await
+        .unwrap();
+    crate::store::project_secrets::fixtures::seed(&fx.pool, other.id, &["nope"]).await;
+    assert!(problem(save_manual(&fx, &body).await).contains("${secret:nope}"));
 }
 
 #[test]

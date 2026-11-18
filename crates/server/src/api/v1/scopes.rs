@@ -189,6 +189,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
         "/api/v1/projects/{id}/spec/versions/{version}",
         "read",
     ),
+    ("GET", "/api/v1/projects/{id}/secrets", "admin"),
+    ("PUT", "/api/v1/projects/{id}/secrets/{name}", "admin"),
+    ("DELETE", "/api/v1/projects/{id}/secrets/{name}", "admin"),
     ("POST", "/api/v1/projects/{id}/repos/{repo}/fetch", "admin"),
     // The Core's repo copies, to runners: upload side only; receive-pack answers 403 `read_only`.
     ("GET", "/api/v1/mirrors/{repo}/info/refs", "runner"),
@@ -287,6 +290,9 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/run/start"),
     ("POST", "/api/v1/projects/{id}/run/stop"),
     ("POST", "/api/v1/projects/{id}/run/restart"),
+    // Project secrets (P4-04): a write stores or removes a credential a run will be given.
+    ("PUT", "/api/v1/projects/{id}/secrets/{name}"),
+    ("DELETE", "/api/v1/projects/{id}/secrets/{name}"),
     // Secrets (E2-07): every write, and a lease, the only way a value leaves the Core.
     ("POST", "/api/v1/secrets"),
     ("PUT", "/api/v1/secrets/{id}"),

@@ -104,6 +104,8 @@ mod pools;
 mod preauth;
 mod project_run_checkouts;
 mod project_runs;
+mod project_secrets_api;
+mod project_secrets_review;
 mod project_sessions;
 mod projects_api;
 mod projects_github;
