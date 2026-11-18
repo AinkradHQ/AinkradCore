@@ -115,6 +115,7 @@ fn job() -> Job {
 
 fn start_request() -> AgentStart {
     AgentStart {
+        instructions: None,
         session: "as_egress".to_owned(),
         harness: "codex".to_owned(),
         model: None,

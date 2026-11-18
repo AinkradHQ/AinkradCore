@@ -97,6 +97,9 @@ src/main/kotlin/ainkrad/client/models/Event.kt
 src/main/kotlin/ainkrad/client/models/EventActor.kt
 src/main/kotlin/ainkrad/client/models/EventActorSystem.kt
 src/main/kotlin/ainkrad/client/models/EventActorUser.kt
+src/main/kotlin/ainkrad/client/models/GithubOwner.kt
+src/main/kotlin/ainkrad/client/models/GithubRepo.kt
+src/main/kotlin/ainkrad/client/models/GithubRepoList.kt
 src/main/kotlin/ainkrad/client/models/GroupLease.kt
 src/main/kotlin/ainkrad/client/models/GroupLeaseGrant.kt
 src/main/kotlin/ainkrad/client/models/Handshake.kt
@@ -135,6 +138,7 @@ src/main/kotlin/ainkrad/client/models/NewChain.kt
 src/main/kotlin/ainkrad/client/models/NewChainEntry.kt
 src/main/kotlin/ainkrad/client/models/NewConnection.kt
 src/main/kotlin/ainkrad/client/models/NewConnectionCredential.kt
+src/main/kotlin/ainkrad/client/models/NewGithubProject.kt
 src/main/kotlin/ainkrad/client/models/NewGroupLease.kt
 src/main/kotlin/ainkrad/client/models/NewInviteBody.kt
 src/main/kotlin/ainkrad/client/models/NewLease.kt

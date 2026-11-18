@@ -98,7 +98,7 @@ mod lease;
 mod serve;
 #[cfg(test)]
 pub(crate) use lease::grant_now;
-pub use lease::{LEASE_SECS, for_session, servable};
+pub use lease::{LEASE_SECS, for_session, release_session, servable};
 
 /// Why a mirror cannot be served.
 #[derive(Debug, PartialEq, Eq)]

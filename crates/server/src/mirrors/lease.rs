@@ -6,7 +6,7 @@
 //!   device (`for_session`), never asked for by the runner, never carried by it: the Core only
 //!   remembers it, so a runner cannot forge, extend or pass one on. One lease per runner per
 //!   repo; a second session of the project on the same runner renews it.
-//! - It is short (`LEASE_SECS`) and lives in memory: a Core restart drops every lease, and the
+//! - It is short (`LEASE_SECS`), ends with its session (`release_session`) and lives in memory: a Core restart drops every lease, and the
 //!   launch that follows (a restart or resume re-launches the session) grants it again. A
 //!   lease is no standing right: a runner is trusted compute, but a project's code is read only
 //!   by a runner that was given one of its sessions.
@@ -23,8 +23,10 @@ use super::{Mirrors, Refused, Target, key_of_target, refresh, target};
 use crate::api::App;
 use crate::store::projects as store;
 
-/// How long a lease lasts. A clone takes seconds; the rest is for a slow runner or a retry.
-pub const LEASE_SECS: i64 = 15 * 60;
+/// How long a lease lasts. It must outlast the runner relay's 30-minute clone limit
+/// (`runner::workspace::relay`), or a slow clone loses its lease mid-way; ending the session
+/// revokes it sooner (`release_session`).
+pub const LEASE_SECS: i64 = 45 * 60;
 
 /// The most leases held at once (device x repo); expired ones are dropped first.
 const MAX_LEASES: usize = 4096;
@@ -32,18 +34,28 @@ const MAX_LEASES: usize = 4096;
 impl Mirrors {
     /// Leases repo `repo` (its mirror `key`: project and remote) to `device` until
     /// `now + LEASE_SECS`, renewing one it holds. A lease names the key, so a repo id that is
-    /// recycled for another project or remote inherits nothing.
-    pub fn grant(&self, device: &str, repo: i64, key: &str, now: i64) {
+    /// recycled for another project or remote inherits nothing. `Err` when the table is full of
+    /// live leases: the launch must fail with that reason, never go on without its copy.
+    pub fn grant(&self, device: &str, repo: i64, key: &str, now: i64) -> Result<(), String> {
         let mut leases = self.leases.lock().expect("leases");
         if leases.len() >= MAX_LEASES {
             leases.retain(|_, (until, _)| *until > now);
         }
-        if leases.len() < MAX_LEASES || leases.contains_key(&(device.to_owned(), repo)) {
-            leases.insert(
-                (device.to_owned(), repo),
-                (now + LEASE_SECS, key.to_owned()),
-            );
+        if leases.len() >= MAX_LEASES && !leases.contains_key(&(device.to_owned(), repo)) {
+            return Err("too many repo copies are leased at once: try again shortly".to_owned());
         }
+        leases.insert(
+            (device.to_owned(), repo),
+            (now + LEASE_SECS, key.to_owned()),
+        );
+        Ok(())
+    }
+
+    fn revoke(&self, device: &str, repo: i64) {
+        self.leases
+            .lock()
+            .expect("leases")
+            .remove(&(device.to_owned(), repo));
     }
 
     /// Ends `device`'s lease on each of `repos` now (a project run ended: P5-05). One lease is
@@ -121,9 +133,40 @@ pub async fn for_session(
     }
     let now = app.clock.unix();
     for (&repo, key) in repos.iter().zip(&keys) {
-        mirrors.grant(device, repo, key, now);
+        mirrors.grant(device, repo, key, now)?;
     }
     Ok(())
+}
+
+/// Takes back the leases a session that is over held: its runner's (device, repo) leases for the
+/// repos of its workspace, unless another live session of the same project runs on that runner
+/// (it needs them). Called where a supervisor finds the session over and where a launch fails.
+pub async fn release_session(app: &App, s: &crate::store::agents::Session) {
+    let (Some(mirrors), Some(project)) = (app.mirrors.as_ref(), s.project_id) else {
+        return;
+    };
+    let Some(w) = s
+        .workspace
+        .as_ref()
+        .and_then(|w| serde_json::from_value::<ainkrad_proto::runner::Workspace>(w.clone()).ok())
+    else {
+        return;
+    };
+    let busy: Result<i64, _> = sqlx::query_scalar(
+        "SELECT count(*) FROM core_agent_sessions WHERE runner = ? AND project_id = ? \
+         AND id != ? AND state NOT IN ('ended', 'lost')",
+    )
+    .bind(&s.runner)
+    .bind(project)
+    .bind(&s.id)
+    .fetch_one(&app.pool)
+    .await;
+    // On a read failure the leases stay: they expire on their own.
+    if busy == Ok(0) {
+        for repo in std::iter::once(&w).chain(&w.also).filter_map(|w| w.mirror) {
+            mirrors.revoke(&s.runner, repo);
+        }
+    }
 }
 
 /// Leases `repo` to `device` as a launch would, without the fetch (tests).
@@ -131,5 +174,7 @@ pub async fn for_session(
 pub(crate) async fn grant_now(app: &App, device: &str, repo: i64) {
     let t = target(&app.pool, repo).await.unwrap().expect("a repo");
     let mirrors = app.mirrors.as_ref().expect("mirrors");
-    mirrors.grant(device, repo, &key_of_target(&t), app.clock.unix());
+    mirrors
+        .grant(device, repo, &key_of_target(&t), app.clock.unix())
+        .expect("a lease");
 }

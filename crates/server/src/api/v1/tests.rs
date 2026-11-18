@@ -106,6 +106,7 @@ mod project_run_checkouts;
 mod project_runs;
 mod project_sessions;
 mod projects_api;
+mod projects_github;
 mod providers;
 mod push;
 mod revocation;

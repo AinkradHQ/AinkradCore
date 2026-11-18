@@ -635,7 +635,7 @@ impl AgentDriver {
             token_caps: None,
             policy: req.policy.clone(),
             issue_key: None,
-            instructions: None,
+            instructions: req.instructions.clone(),
             account: None,
             fallbacks: vec![],
             limits: None,

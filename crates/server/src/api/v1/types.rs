@@ -293,6 +293,11 @@
 ///    fetches a repo's remote into the Core's copy now; a failed fetch is still 200 with `mirror.error` set and the older
 ///    `mirror.head` kept. The copy is served to `runner` devices as git smart HTTP, upload side only
 ///    (`/mirrors/{repo}/info/refs`, `/git-upload-pack`; `/git-receive-pack` is always 403 `read_only`): not in the contract.
+/// 93: Projects from GitHub (P2-01). `GET /projects/github/repos` (`listGithubRepos`:
+///    the repos of the project's or default GitHub connection, grouped by owner, `q`, `page`, `per_page`) and
+///    `POST /projects/from-github` (`createProjectFromGithub`: creates the project, its repos and, unless the connection is the workspace default, a `project`-scope
+///    connection binding). Both `admin`; the POST is destructive. No new audit or event kinds.
+/// (P5-05 adds `RunCheckout.from_core` / `RunClone` to the runner protocol: part of the next bump.)
 pub const API_MINOR: u32 = 94;
 
 use serde::{Deserialize, Serialize};
