@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::BY;
-use ainkrad_core_server::store::secrets;
 use ainkrad_core_server::hub::Dispatched;
+use ainkrad_core_server::store::secrets;
 use ainkrad_proto::v2::{
     Body, Command, ErrorCode, ExecLimits, ExecResult, Reply, SshExec, SshHop, SshRoute,
 };
@@ -138,12 +138,7 @@ pub(crate) async fn sftp(
 
 /// One `ssh.exec` of `step` on the authorised host: leases, hops, dispatch, the answer.
 /// `link` is the very read `checked` compared: nothing is read again after the check.
-async fn one(
-    app: &App,
-    auth: &Authorized,
-    step: &str,
-    link: Link,
-) -> Result<ExecResult, String> {
+async fn one(app: &App, auth: &Authorized, step: &str, link: Link) -> Result<ExecResult, String> {
     let fixed = |s: &str| s.to_owned();
     let (target, hops, runner) = leased(app, auth, link).await?;
     let exec = SshExec {

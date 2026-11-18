@@ -23,8 +23,7 @@ use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
 use ainkrad_core_server::ops_catalog::SESSION_PREFIX;
 use ainkrad_proto::v2::{
-    Body, Close, Command, Reply, SFTP_MAX_PATH, SftpEntries, SftpKind, SftpList, SftpRead,
-    SftpStat,
+    Body, Close, Command, Reply, SFTP_MAX_PATH, SftpEntries, SftpKind, SftpList, SftpRead, SftpStat,
 };
 use axum::Json;
 use axum::extract::rejection::QueryRejection;
@@ -89,7 +88,10 @@ fn own_run(me: &Caller, run: &mut RunView) -> Result<(), ApiError> {
     }
     for h in &mut run.hosts {
         if let Some(o) = h.output.take() {
-            h.output = Some(wrap(&format!("output of run {} on {}", run.id, h.host_id), &o));
+            h.output = Some(wrap(
+                &format!("output of run {} on {}", run.id, h.host_id),
+                &o,
+            ));
         }
     }
     Ok(())

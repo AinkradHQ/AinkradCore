@@ -175,7 +175,13 @@ async fn session(fx: &Fx, id: &str) -> (String, String) {
 }
 
 /// One `ainkrad.call`: (ok, everything the session gets back as text, code, message).
-async fn op(app: &App, runner: &str, s: &str, op: &str, args: Value) -> (bool, String, String, String) {
+async fn op(
+    app: &App,
+    runner: &str,
+    s: &str,
+    op: &str,
+    args: Value,
+) -> (bool, String, String, String) {
     let call = ToolCall {
         tc_seq: 1,
         id: "c1".to_owned(),
@@ -207,7 +213,10 @@ fn templates() -> Vec<(&'static str, Value)> {
             "leylineExec",
             json!({"host": "ro", "body": {"command": "uptime"}}),
         ),
-        ("leylineExec", json!({"host": "ok", "body": {"command": "uptime"}})),
+        (
+            "leylineExec",
+            json!({"host": "ok", "body": {"command": "uptime"}}),
+        ),
         ("leylineListFiles", json!({"host": "ro", "path": "/etc"})),
         (
             "leylineReadFile",
@@ -244,9 +253,7 @@ fn variants(args: &Value, x: &str) -> Vec<Value> {
 }
 
 fn leaks(text: &str) -> bool {
-    text.contains(SECRET_LINE)
-        || text.contains(fixtures::ED.trim())
-        || text.contains("PRIVATE KEY")
+    text.contains(SECRET_LINE) || text.contains(fixtures::ED.trim()) || text.contains("PRIVATE KEY")
 }
 
 #[tokio::test]
@@ -303,7 +310,10 @@ async fn the_seeded_key_secret_never_comes_back_from_any_op_in_any_argument() {
     .await
     .unwrap();
     for t in stored.into_iter().flatten() {
-        assert!(!t.contains("PRIVATE KEY") && !t.contains(&fixtures::ED[40..100]), "{t}");
+        assert!(
+            !t.contains("PRIVATE KEY") && !t.contains(&fixtures::ED[40..100]),
+            "{t}"
+        );
     }
 }
 
@@ -370,7 +380,11 @@ async fn an_ask_host_parks_exactly_one_cm_approval_and_a_no_runs_nothing() {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!(parked.len(), 1, "the gate asks once; the dispatcher does not ask again");
+    assert_eq!(
+        parked.len(),
+        1,
+        "the gate asks once; the dispatcher does not ask again"
+    );
     let req = parked[0].id.clone();
     assert!(req.starts_with(APPROVAL_PREFIX), "{req}");
     decide_approval(&fx.app, &s, &req, false, &runner)
@@ -428,9 +442,11 @@ async fn not_exposed_is_unchanged_and_only_the_t11_ops_are_in_the_catalogue() {
     // Keys, trust, direct, host and command writes are never ops.
     for id in leyline {
         assert!(
-            !["Key", "Trust", "Direct", "Create", "Patch", "Delete", "Attach", "Detach"]
-                .iter()
-                .any(|w| id.contains(w)),
+            ![
+                "Key", "Trust", "Direct", "Create", "Patch", "Delete", "Attach", "Detach"
+            ]
+            .iter()
+            .any(|w| id.contains(w)),
             "{id}"
         );
     }
@@ -452,7 +468,10 @@ async fn the_ai_routes_answer_only_sessions_and_a_session_reads_only_its_own_run
         Some(json!({"command": "uptime"})),
     )
     .await;
-    assert_eq!((st, &v["code"]), (StatusCode::FORBIDDEN, &json!("forbidden_scope")));
+    assert_eq!(
+        (st, &v["code"]),
+        (StatusCode::FORBIDDEN, &json!("forbidden_scope"))
+    );
     let creator = enroll(&fx.app, "both", &["read", "agent", "admin"]).await;
     let (st, v) = call(
         &fx,
@@ -462,7 +481,10 @@ async fn the_ai_routes_answer_only_sessions_and_a_session_reads_only_its_own_run
         Some(json!({"command": "uptime"})),
     )
     .await;
-    assert_eq!((st, &v["code"]), (StatusCode::FORBIDDEN, &json!("session_only")));
+    assert_eq!(
+        (st, &v["code"]),
+        (StatusCode::FORBIDDEN, &json!("session_only"))
+    );
     let (st, v) = call(
         &fx,
         &creator,
@@ -471,7 +493,10 @@ async fn the_ai_routes_answer_only_sessions_and_a_session_reads_only_its_own_run
         None,
     )
     .await;
-    assert_eq!((st, &v["code"]), (StatusCode::FORBIDDEN, &json!("session_only")));
+    assert_eq!(
+        (st, &v["code"]),
+        (StatusCode::FORBIDDEN, &json!("session_only"))
+    );
     // A person's run is not the session's to read.
     let (st, started) = call(
         &fx,
@@ -527,7 +552,8 @@ fn only_the_gated_dispatcher_sends_sftp() {
         for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
             let p = e.path();
             if p.is_dir() {
-                if !["target", ".git", "node_modules"].contains(&&*e.file_name().to_string_lossy()) {
+                if !["target", ".git", "node_modules"].contains(&&*e.file_name().to_string_lossy())
+                {
                     walk(&p, out);
                 }
             } else if p.extension().is_some_and(|x| x == "rs") {
@@ -559,6 +585,9 @@ fn only_the_gated_dispatcher_sends_sftp() {
     callers.sort();
     assert_eq!(
         callers,
-        ["crates/server/src/hub/mod.rs", "modules/leyline/module/src/exec.rs"]
+        [
+            "crates/server/src/hub/mod.rs",
+            "modules/leyline/module/src/exec.rs"
+        ]
     );
 }
