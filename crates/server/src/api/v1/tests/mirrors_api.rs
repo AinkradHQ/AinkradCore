@@ -460,12 +460,14 @@ async fn a_copy_is_served_only_to_a_device_with_a_live_lease_while_its_project_i
 
     // It runs out.
     let mirrors = fx.app.mirrors.as_ref().unwrap();
-    mirrors.grant(
-        &vm.id,
-        repo,
-        &crate::mirrors::key(id, &dir.join("remote").to_string_lossy()),
-        fx.app.clock.unix() - crate::mirrors::LEASE_SECS - 1,
-    );
+    mirrors
+        .grant(
+            &vm.id,
+            repo,
+            &crate::mirrors::key(id, &dir.join("remote").to_string_lossy()),
+            fx.app.clock.unix() - crate::mirrors::LEASE_SECS - 1,
+        )
+        .unwrap();
     assert_eq!(
         read(&vm).await,
         (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND)

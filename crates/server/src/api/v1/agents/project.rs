@@ -73,7 +73,14 @@ pub(super) async fn attach(
     s: &Session,
     project: i64,
 ) -> Result<(), ApiError> {
-    store::set_project(&app.pool, &s.id, project).await?;
+    // A session that is not `starting` any more (or already has a project) cannot take one: it is
+    // ended unstarted, never left without the project its workspace was built for.
+    if !store::set_project(&app.pool, &s.id, project).await? {
+        let now = app.clock.now();
+        let why = "the session could not be tied to its project";
+        store::set_state(&app.pool, &s.id, "ended", why, false, &now).await?;
+        return Err(ApiError::new(StatusCode::CONFLICT, "session_started", why));
+    }
     for module in app.modules.iter() {
         if let Err(why) = module
             .project_session(app, &s.id, project, &me.device.id)

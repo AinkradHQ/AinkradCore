@@ -500,6 +500,7 @@ async fn fail(app: &App, s: &Session, why: &str) {
     if let Err(e) = store::end(&app.pool, &s.id, "ended", &outcome, &app.clock.now()).await {
         tracing::error!(session = s.id, error = %e, "ending a session failed");
     }
+    crate::mirrors::release_session(app, s).await;
     // The Core's own end never moves a run: settled here, so no restart finds it unsettled.
     if let Err(e) = crate::store::failover::settle(&app.pool, &s.id).await {
         tracing::error!(session = s.id, error = %e, "settling a failover failed");
@@ -851,6 +852,8 @@ async fn run(app: &App, id: &str) {
             Ok(Some(s)) => {
                 // Over: nothing left to stop, but an upstream `auth_failed` it reported is checked.
                 gateway::after(app, &s).await;
+                // Its repo copies are not served to the runner any more.
+                crate::mirrors::release_session(app, &s).await;
                 // An attempt that is over may move its run to the next account (once).
                 failover::after_end(app, &s).await;
                 return;

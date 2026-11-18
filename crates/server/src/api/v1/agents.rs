@@ -360,8 +360,20 @@ pub async fn create(
     let draws_account = b.chain.is_some() || b.agent.is_some();
     let policy =
         agents::with_account_floor(policy, draws_account || agents::holds_account(&secrets));
+    let admin = me.device.scopes.iter().any(|scope| scope == "admin");
     // A project's session: the Core builds the workspace; a client may not name a mirror itself.
+    // Its launch fetches the project's repos with the project's connection (the owner's token),
+    // which `POST /projects/{id}/repos/{repo}/fetch` does under `admin`: so this needs `admin`
+    // too, and the Brain's room claim (`brainClaimRoom`, `admin`) is then the caller's own right.
+    // This route is DESTRUCTIVE, so the gate has already required a step-up for either.
     let built = match b.project_id {
+        Some(_) if !admin => {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "forbidden_scope",
+                "a session of a project needs an admin device",
+            ));
+        }
         Some(_) if b.workspace.is_some() => {
             return Err(ApiError::bad_request(
                 "project_id and workspace exclude each other",
@@ -384,7 +396,6 @@ pub async fn create(
         secrets: &secrets,
         created_by: &me.device.id,
     };
-    let admin = me.device.scopes.iter().any(|scope| scope == "admin");
     let access = access::checked(&app, admin, b.connection_access.as_deref())?;
     let s = if b.chain.is_some() || b.agent.is_some() {
         create_named(&app, &me, &new, admin, b.chain, b.agent.as_deref()).await?
