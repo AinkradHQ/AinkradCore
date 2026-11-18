@@ -158,6 +158,12 @@ pub struct TerminalExit {
     /// The signal's description, when one ended it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signal: Option<String>,
+    /// An interactive SSH terminal that never reached a shell because a hop's host key was not
+    /// trusted (exit code `SSH_PTY_EXIT_HOST_KEY_UNKNOWN` or `_CHANGED`): which hop, and the key it
+    /// presented. Reported by `ssh-pty` itself over a private descriptor, never read from the
+    /// terminal's output, which a remote shell controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_key: Option<super::HostKeyEvidence>,
 }
 
 /// A terminal's lifecycle (E2-01.1): created → running → exited → reaped.

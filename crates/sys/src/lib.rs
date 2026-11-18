@@ -107,17 +107,22 @@ pub fn close_fds_on_exec(cmd: &mut std::process::Command) {
 }
 
 /// Makes the PTY slave on stdin the child's controlling terminal and hands it `fd` as descriptor 3
-/// (the key handoff of `ssh-pty`: a pipe the parent filled and closed).
+/// (the key handoff of `ssh-pty`: a pipe the parent filled and closed) and, when given, `report` as
+/// descriptor 4 (the write end of a pipe the parent reads after the child ended).
 ///
 /// Invariant this relies on: every descriptor the terminal host holds is close-on-exec (Rust's
 /// standard library opens everything that way, and the host opens nothing by hand), so exec drops
-/// whatever is above 3 on every OS. On Linux, `close_range` additionally marks 4 and up
-/// close-on-exec before the exec, against a descriptor that was not. An old kernel (ENOSYS, EINVAL)
-/// or a seccomp filter (EPERM) is tolerated because of that invariant; any other error fails the
-/// spawn instead of leaving the descriptors open (`pre_exec` may not log: it runs between fork and
-/// exec, where nothing may allocate).
+/// whatever is above 4 on every OS. On Linux, `close_range` additionally marks everything above the
+/// handed descriptors close-on-exec before the exec, against a descriptor that was not. An old
+/// kernel (ENOSYS, EINVAL) or a seccomp filter (EPERM) is tolerated because of that invariant; any
+/// other error fails the spawn instead of leaving the descriptors open (`pre_exec` may not log: it
+/// runs between fork and exec, where nothing may allocate).
 #[allow(unsafe_code)]
-pub fn pty_child_on_exec(cmd: &mut std::process::Command, fd: std::os::fd::RawFd) {
+pub fn pty_child_on_exec(
+    cmd: &mut std::process::Command,
+    fd: std::os::fd::RawFd,
+    report: Option<std::os::fd::RawFd>,
+) {
     use std::os::unix::process::CommandExt;
     // SAFETY: `pre_exec` is unsafe because its closure runs between fork and exec. This one only
     // makes integer-argument syscalls (setsid, ioctl, fcntl, dup2, close_range): it allocates
@@ -131,22 +136,29 @@ pub fn pty_child_on_exec(cmd: &mut std::process::Command, fd: std::os::fd::RawFd
             if libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
                 return Err(io::Error::last_os_error());
             }
-            if fd == 3 {
-                // Already in place; `dup2` onto itself would keep close-on-exec set.
-                if libc::fcntl(3, libc::F_SETFD, 0) == -1 {
-                    return Err(io::Error::last_os_error());
-                }
-            } else if libc::dup2(fd, 3) == -1 {
+            // Both sources are first moved out of 3 and 4 (close-on-exec copies at 10 or above), so
+            // neither `dup2` below can land on the other's source.
+            let key = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 10);
+            if key == -1 || libc::dup2(key, 3) == -1 {
                 return Err(io::Error::last_os_error());
             }
+            if let Some(report) = report {
+                let rep = libc::fcntl(report, libc::F_DUPFD_CLOEXEC, 10);
+                if rep == -1 || libc::dup2(rep, 4) == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
             #[cfg(target_os = "linux")]
-            if libc::syscall(libc::SYS_close_range, 4u32, u32::MAX, 4u32) == -1 {
-                let e = io::Error::last_os_error();
-                if !matches!(
-                    e.raw_os_error(),
-                    Some(libc::ENOSYS | libc::EINVAL | libc::EPERM)
-                ) {
-                    return Err(e);
+            {
+                let first: u32 = if report.is_some() { 5 } else { 4 };
+                if libc::syscall(libc::SYS_close_range, first, u32::MAX, 4u32) == -1 {
+                    let e = io::Error::last_os_error();
+                    if !matches!(
+                        e.raw_os_error(),
+                        Some(libc::ENOSYS | libc::EINVAL | libc::EPERM)
+                    ) {
+                        return Err(e);
+                    }
                 }
             }
             Ok(())

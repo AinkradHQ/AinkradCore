@@ -111,7 +111,8 @@ async fn echo_runs_and_its_exit_follows_its_output() {
         exit,
         Exit {
             code: Some(0),
-            signal: None
+            signal: None,
+            host_key: None
         }
     );
     ack(&dir, &id, &mut r, &mut w).await;
