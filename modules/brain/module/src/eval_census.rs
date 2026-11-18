@@ -58,6 +58,11 @@ pub struct RoomCensus {
     /// Reject reasons, counted once per record per reason.
     pub reject_reasons: BTreeMap<String, usize>,
     pub sources_by_kind: BTreeMap<String, SourceShare>,
+    /// Every record by status (accepted, candidate, ...), archived or not: how much is memory at all.
+    pub records_by_status: BTreeMap<String, usize>,
+    /// Sources a distil has read, and not (all kinds).
+    pub sources_distilled: usize,
+    pub sources_undistilled: usize,
     /// Records with a stored vector / without: near-duplicates only count the first.
     pub with_vector: usize,
     pub without_vector: usize,
@@ -114,6 +119,18 @@ async fn census_room(
             .bind(review_days)
             .fetch_one(pool)
             .await?;
+    let st: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT status || CASE WHEN archived_at IS NULL THEN '' ELSE '+archived' END, count(*) FROM records GROUP BY 1",
+    )
+    .fetch_all(pool)
+    .await?;
+    c.records_by_status = st.into_iter().map(|(k, n)| (k, n as usize)).collect();
+    let (d, u): (i64, i64) = sqlx::query_as(
+        "SELECT coalesce(sum(distilled IS NOT NULL), 0), coalesce(sum(distilled IS NULL), 0) FROM sources",
+    )
+    .fetch_one(pool)
+    .await?;
+    (c.sources_distilled, c.sources_undistilled) = (d as usize, u as usize);
     let records = sqlx::query(
         "SELECT id, type, body, coalesce(body_norm, lower(trim(body))) AS norm, \
                 coalesce(last_seen_at, created_at) AS seen \

@@ -91,17 +91,17 @@ async fn the_bundle_follows_the_approved_text_inside_one_envelope_and_the_ids_ar
 }
 
 #[tokio::test]
-async fn a_core_error_gives_the_plain_instructions() {
+async fn a_session_that_can_no_longer_see_the_room_gets_nothing() {
     let (fx, _alpha, s) = setup().await;
-    // The op refuses a session that is over (the room is no longer visible to it); the approved
-    // text is still there.
+    // A session that is over no longer sees the room: the op refuses it, and the approved text is
+    // withheld too (it goes only to a session the room is visible to, #370 review).
     sqlx::query("UPDATE core_agent_sessions SET state = 'ended' WHERE id = ?")
         .bind(&s)
         .execute(&fx.app.pool)
         .await
         .unwrap();
     let text = fx.brain.session_instructions(&fx.app, &s).await;
-    assert_eq!(text.as_deref(), Some(TEXT));
+    assert_eq!(text, None);
     assert!(loaded(&fx, &s).await.is_empty());
 }
 

@@ -91,6 +91,13 @@ async fn room(fx: &Fx) -> Room {
 async fn room_with(fx: &Fx, docs: &[(&str, &str)]) -> Room {
     let id = committed_room(fx, docs).await;
     ok(fx, Method::POST, &format!("/rooms/{id}/open"), None).await;
+    // The fixture room starts with auto-accept off (`common::committed_room`); a room's real default
+    // saves every kind, which is what a re-distil's new facts rely on.
+    sqlx::query("UPDATE brain_room_policy SET auto_accept = '[\"decision\",\"fact\",\"preference\",\"project-state\",\"rule\",\"summary\",\"task\"]' WHERE room = ?")
+        .bind(&id)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
     let pool = canon_pool(fx, &id).await;
     sqlx::query("UPDATE sources SET distilled = 'old'")
         .execute(&pool)
