@@ -12,7 +12,7 @@
 //! (`answer::user_grounded`); the prompt is not the only guard.
 use std::collections::HashSet;
 
-use brain_model::admit::content_stems;
+use brain_model::admit::Grounds;
 use brain_model::item::SourceKind;
 
 const ZWSP: char = '\u{200B}';
@@ -144,12 +144,12 @@ pub(crate) fn tagged(text: &str, at: &str, kind: SourceKind) -> String {
         .join("\n")
 }
 
-/// The content stems of each user turn, one set per turn (none for a non-transcript kind).
-pub(crate) fn user_turns(text: &str, kind: SourceKind) -> Vec<HashSet<String>> {
+/// Each user turn as one grounding block (none for a non-transcript kind).
+pub(crate) fn user_turns(text: &str, kind: SourceKind) -> Vec<Grounds> {
     split(text, kind)
         .iter()
         .filter(|(a, _)| *a == Author::User)
-        .map(|(_, t)| content_stems(t))
+        .map(|(_, t)| Grounds::of(t))
         .collect()
 }
 
