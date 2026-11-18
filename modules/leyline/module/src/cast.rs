@@ -70,15 +70,17 @@ impl Cast {
         self.out.push(b'\n');
     }
 
-    /// Recording is paused or resumed: the held line goes, a marker says so, and while paused
+    /// Recording is paused or resumed: the held line is dropped, a marker says so, and while paused
     /// output is only counted (never scrubbed or written).
     pub fn pause(&mut self, on: bool, at: f64) {
         if on == self.paused {
             return;
         }
         if on {
-            let t = self.scrub.release();
-            self.event(at, &t);
+            // What follows the held line is never recorded, so it cannot be scrubbed: drop it.
+            if !self.scrub.release().is_empty() {
+                self.event(at, "[redacted:paused]");
+            }
         }
         self.paused = on;
         self.event(
@@ -261,6 +263,19 @@ mod tests {
             let all = texts(&c.take()).join("");
             assert!(!all.contains(tail), "{head}: {all}");
         }
+    }
+
+    #[test]
+    fn a_pause_drops_the_held_line_and_what_follows_it() {
+        let mut c = Cast::new(SIZE, 0);
+        c.push(0, b"export API_TOKEN=abc", 0.1);
+        c.pause(true, 0.2);
+        c.push(20, b"def123\n", 0.3);
+        c.pause(false, 0.4);
+        c.finish(0.5);
+        let all = texts(&c.take()).join("");
+        assert!(!all.contains("abc") && !all.contains("def123"), "{all}");
+        assert!(all.contains("[redacted:paused]"), "{all}");
     }
 
     #[test]
