@@ -76,11 +76,23 @@ pub(crate) async fn commit(
     if state != "review" {
         return Err(ApiError::conflict("the run is not in review"));
     }
-    let key = b.key(&app).await?;
     let st = crate::imports::staging(&app, &b, &run, false).await?;
     if let Some(k) = &keep {
         decide(&app, &b, &st, &run, k).await?;
     }
+    Ok(Json(commit_accepted(&app, &b, &run, st, false).await?))
+}
+
+/// Imports every accepted room of the run (`st` is its staging file, closed here) and closes the
+/// run when nothing accepted is left. The person's commit and the auto-import (E9-5) both end here.
+pub(crate) async fn commit_accepted(
+    app: &App,
+    b: &Brain,
+    run: &str,
+    st: SqlitePool,
+    hold_unsorted: bool,
+) -> Result<CommitResult, ApiError> {
+    let key = b.key(app).await?;
     let accepted =
         sqlx::query("SELECT * FROM proposals WHERE state IN ('accepted','held') ORDER BY id")
             .fetch_all(&st)
@@ -113,22 +125,31 @@ pub(crate) async fn commit(
             result.held.push(id);
             continue;
         }
-        if let Some(made) = commit_room(&app, &key, &st, &run, r, "user").await? {
-            crate::vectors::note_committed(&app, &b, &st, &made.room, &made.proposal).await;
+        if let Some(made) = commit_room(app, &key, &st, run, r, "user").await? {
+            crate::vectors::note_committed(app, b, &st, &made.room, &made.proposal).await;
             result.rooms.push(made);
         }
     }
-    refused(&app, &st, &run, &mut result).await?;
+    refused(app, &st, run, &mut result).await?;
     let open: i64 =
         sqlx::query_scalar("SELECT count(*) FROM proposals WHERE state IN ('accepted','held')")
             .fetch_one(&st)
             .await?;
+    // The auto-import keeps a run open while Unsorted still holds items, so they keep being re-sorted.
+    let waiting: i64 = if hold_unsorted {
+        sqlx::query_scalar("SELECT count(*) FROM items WHERE proposal = ?")
+            .bind(UNSORTED)
+            .fetch_one(&st)
+            .await?
+    } else {
+        0
+    };
     st.close().await;
-    if open == 0 {
-        close_run(&app, &run, result.rooms.len()).await?;
+    if open == 0 && waiting == 0 {
+        close_run(app, run, result.rooms.len()).await?;
         result.state = "committed".to_owned();
     }
-    Ok(Json(result))
+    Ok(result)
 }
 
 /// `keep` accepted, every other open room refused, in one staging transaction. Checked before any

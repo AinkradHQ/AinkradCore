@@ -56,7 +56,8 @@ impl Policy {
 
     pub fn allows(&self, provider: &str) -> bool {
         self.allowed.iter().any(|a| match a.as_str() {
-            CLOUD => APPROVED_CLOUD.contains(&provider),
+            // D-27: any account may serve any room; only `local` is a class of its own.
+            CLOUD => !provider.starts_with("local") || APPROVED_CLOUD.contains(&provider),
             LOCAL => provider.starts_with("local"),
             other => other == provider,
         })

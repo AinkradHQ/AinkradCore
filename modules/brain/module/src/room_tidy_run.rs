@@ -55,10 +55,11 @@ async fn start(app: &App, room: &str, pool: &SqlitePool, now: i64) -> Result<boo
     if !within_caps(in_room, in_all) {
         return Ok(false);
     }
-    // The idle gate: not while a distil of the room is open, its records are still landing.
+    // The idle gate: not while a distil of the room is moving, its records are still landing. One
+    // that only waits (no AI account, no runner) lands nothing and must not hold the tidy back.
     let open: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM brain_distils WHERE room = ? \
-         AND state IN ('queued','needs_local_model','waiting','running')",
+         AND state IN ('queued','running')",
     )
     .bind(room)
     .fetch_one(&app.pool)

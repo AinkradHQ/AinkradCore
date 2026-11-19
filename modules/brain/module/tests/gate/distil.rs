@@ -138,8 +138,8 @@ async fn a_cloud_room_waits_with_the_reason_when_it_cannot_start() {
         v["detail"].as_str().unwrap().contains("no fallback chain"),
         "{v}"
     );
-    // A chain with an entry outside the policy names it.
-    bind_distil_chain(&fx, make_chain(&fx, &["anthropic", "openai"]).await).await;
+    // A chain with an entry outside the policy names it (D-27: only a local model is outside a cloud room).
+    bind_distil_chain(&fx, make_chain(&fx, &["anthropic", "local-llm"]).await).await;
     fx.brain.distil_step().await.unwrap();
     let l = ok(&fx, Method::GET, &format!("/rooms/{room}/distils"), None).await;
     assert_eq!(l[0]["state"], "waiting");

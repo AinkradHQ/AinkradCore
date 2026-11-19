@@ -37,15 +37,22 @@ async fn a_cloud_room_claims_a_chain_of_approved_providers() {
 async fn one_entry_outside_the_policy_refuses_the_whole_claim_and_names_it() {
     let fx = fx().await;
     let room = committed_room(&fx, &[("A", "alpha text")]).await;
-    // The first entry is fine; the fallback behind it is not.
+    // The first entry is fine; the fallback behind it is not (D-27: any account serves a cloud
+    // room, only a local model is outside it).
     let s = chain_session(&fx, &["anthropic", "openai"]).await;
+    let (st, v) = claim(&fx, &room, &s).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let s = chain_session(&fx, &["anthropic", "local-llm"]).await;
     let (st, v) = claim(&fx, &room, &s).await;
     assert_eq!(
         (st, v["code"].as_str()),
         (StatusCode::FORBIDDEN, Some("claim_refused"))
     );
     let why = v["message"].as_str().unwrap();
-    assert!(why.contains("entry 2") && why.contains("openai"), "{why}");
+    assert!(
+        why.contains("entry 2") && why.contains("local-llm"),
+        "{why}"
+    );
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM brain_session_rooms")
         .fetch_one(&fx.app.pool)
         .await
