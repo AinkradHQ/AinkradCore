@@ -125,6 +125,7 @@ mod projects_api;
 mod projects_github;
 mod providers;
 mod push;
+mod retire_limits;
 mod revocation;
 mod run_spec_api;
 mod run_spec_draft_api;

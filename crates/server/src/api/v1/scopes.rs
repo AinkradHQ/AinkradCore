@@ -164,12 +164,6 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("DELETE", "/api/v1/connection-defaults/{kind}", "admin"),
     ("GET", "/api/v1/connection-apps/{kind}", "admin"),
     ("PUT", "/api/v1/connection-apps/{kind}", "admin"),
-    ("PUT", "/api/v1/accounts/{id}/limits", "admin"),
-    (
-        "DELETE",
-        "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
-        "admin",
-    ),
     ("GET", "/api/v1/costs", "admin"),
     ("GET", "/api/v1/prices", "read"),
     ("GET", "/api/v1/budgets", "read"),
@@ -370,11 +364,6 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/connection-apps/{kind}"),
     // The cost ledger (KAN-449): a price decides what every later turn costs, a limit what an account may spend.
     ("PUT", "/api/v1/prices"),
-    ("PUT", "/api/v1/accounts/{id}/limits"),
-    (
-        "DELETE",
-        "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
-    ),
     // Budgets (KAN-448): a limit decides what may be spent, and a raise lifts one.
     ("PUT", "/api/v1/budgets"),
     ("DELETE", "/api/v1/budgets/{id}"),

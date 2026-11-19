@@ -293,6 +293,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0048_e7_provider_limits.up.sql"),
         down: include_str!("../../../migrations/0048_e7_provider_limits.down.sql"),
     },
+    Migration {
+        version: 49,
+        name: "e7_retire_account_limits",
+        up: include_str!("../../../migrations/0049_e7_retire_account_limits.up.sql"),
+        down: include_str!("../../../migrations/0049_e7_retire_account_limits.down.sql"),
+    },
 ];
 
 #[cfg(test)]
