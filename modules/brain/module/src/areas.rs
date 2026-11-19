@@ -128,6 +128,8 @@ pub struct AreaQuery {
     pub kind: Option<String>,
     /// At most this many records (default 50, most 200), best supported first.
     pub limit: Option<u32>,
+    /// Only this room's records (a room id), so one room's list is not cut by the other rooms'.
+    pub room: Option<String>,
 }
 
 struct RoomRef {
@@ -235,6 +237,9 @@ pub(crate) async fn records(
     let (rooms, locked_rooms) = open_rooms(&app, &b).await?;
     let mut all: Vec<AreaRecord> = vec![];
     for (room, access) in &rooms {
+        if q.room.as_deref().is_some_and(|r| r != room.id) {
+            continue;
+        }
         let types: Vec<&str> = types_for(area, &room.kind)
             .iter()
             .copied()
