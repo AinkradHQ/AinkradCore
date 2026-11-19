@@ -19,6 +19,9 @@ const RSA_ENCRYPTION: &str = "1.2.840.113549.1.1.1";
 
 /// Keys below this are refused (NIST SP 800-57: 2048 bits is the floor for new keys).
 pub(crate) const MIN_BITS: usize = 2048;
+/// Keys above this are refused: bigger ones only cost CPU in every signature, and a 16 KiB request
+/// cannot hold much more anyway.
+pub(crate) const MAX_BITS: usize = 8192;
 
 /// The bit length of a big-endian unsigned integer.
 pub(crate) fn bits(be: &[u8]) -> usize {
@@ -39,13 +42,18 @@ pub(crate) enum Pem {
     Other,
 }
 
+/// Encryption is read from the BEGIN line and the RFC 1421 headers right under it (`Proc-Type:`),
+/// never from the body: base64 can spell "ENCRYPTED" by chance.
 pub(crate) fn kind(text: &str) -> Pem {
-    let t = text.trim_start();
-    if t.contains("ENCRYPTED") {
+    let mut lines = text.trim_start().lines();
+    let begin = lines.next().unwrap_or_default().trim_end();
+    let headers_say_encrypted = lines
+        .map(str::trim)
+        .take_while(|l| l.contains(':'))
+        .any(|l| l.starts_with("Proc-Type:") && l.contains("ENCRYPTED"));
+    if begin == "-----BEGIN ENCRYPTED PRIVATE KEY-----" || headers_say_encrypted {
         Pem::Encrypted
-    } else if t.starts_with("-----BEGIN RSA PRIVATE KEY-----")
-        || t.starts_with("-----BEGIN PRIVATE KEY-----")
-    {
+    } else if begin == "-----BEGIN RSA PRIVATE KEY-----" || begin == "-----BEGIN PRIVATE KEY-----" {
         Pem::Plain
     } else {
         Pem::Other
@@ -131,9 +139,18 @@ mod tests {
             Pem::Encrypted
         ));
         assert!(matches!(
-            kind("-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n"),
+            kind(
+                "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,00\n\nAAAA\n"
+            ),
             Pem::Encrypted
         ));
+        // A body that spells ENCRYPTED in base64, or a stray mention, is still a plain key.
+        for plain in [
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIEAAENCRYPTEDAAAA\n-----END RSA PRIVATE KEY-----\n",
+            "-----BEGIN PRIVATE KEY-----\nAAAA\nENCRYPTED\n-----END PRIVATE KEY-----\n",
+        ] {
+            assert!(matches!(kind(plain), Pem::Plain), "{plain}");
+        }
         assert!(matches!(
             kind("-----BEGIN EC PRIVATE KEY-----\nx"),
             Pem::Other

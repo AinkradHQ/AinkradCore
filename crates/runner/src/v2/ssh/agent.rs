@@ -46,7 +46,7 @@ use ainkrad_proto::v2::{
 };
 use russh::keys::signature::{Signer, Verifier};
 use russh::keys::ssh_key::Signature;
-use russh::keys::{HashAlg, PrivateKey, PublicKey};
+use russh::keys::{Algorithm, HashAlg, PrivateKey, PublicKey};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Semaphore, watch};
@@ -75,7 +75,8 @@ const USERAUTH_REQUEST: u8 = 50;
 /// Where "now" comes from (the wall clock: a sleep does not stop it); a test moves it.
 pub(super) type Clock = Arc<dyn Fn() -> SystemTime + Send + Sync>;
 
-/// The signature algorithms a key may be used with: Ed25519 and ECDSA, which have no hash flags.
+/// The signature algorithms of a key that has no hash flags: Ed25519 and ECDSA. An RSA key signs as
+/// `rsa-sha2-256` (flags 2) or `rsa-sha2-512` (flags 4) only, chosen in `sign`; never SHA-1 `ssh-rsa`.
 const ALGOS: &[&[u8]] = &[
     b"ssh-ed25519",
     b"ecdsa-sha2-nistp256",
@@ -200,8 +201,7 @@ impl Live {
     fn sign(&self, conn: &Conn, r: &mut Rd) -> Option<Vec<u8>> {
         let bind = conn.bind.as_ref().filter(|_| !conn.poisoned)?;
         let (blob, data, flags) = (r.string()?, r.string()?, r.u32()?);
-        // Ed25519 and ECDSA only: there are no hash flags to honour.
-        if flags != 0 || !r.0.is_empty() {
+        if !r.0.is_empty() {
             return None;
         }
         let keys = self.keys.lock().unwrap();
@@ -209,8 +209,26 @@ impl Live {
         let key = keys
             .iter()
             .find(|k| k.blob == blob && k.pins.contains(&bind.fp))?;
-        userauth_ok(data, key, bind)?;
-        let sig: Signature = Signer::try_sign(&key.key, data).ok()?;
+        // The algorithm the signature will carry, and the hash for RSA. RSA only with an explicit SHA-2
+        // flag (2 or 4): flags 0 would mean SHA-1 `ssh-rsa`, which is refused. The others take no flags.
+        let (algo, hash): (&[u8], Option<HashAlg>) = match (key.key.algorithm(), flags) {
+            (Algorithm::Rsa { .. }, 2) => (&b"rsa-sha2-256"[..], Some(HashAlg::Sha256)),
+            (Algorithm::Rsa { .. }, 4) => (&b"rsa-sha2-512"[..], Some(HashAlg::Sha512)),
+            (Algorithm::Rsa { .. }, _) => return None,
+            (a, 0) => (
+                ALGOS
+                    .iter()
+                    .copied()
+                    .find(|n| *n == a.as_str().as_bytes())?,
+                None,
+            ),
+            _ => return None,
+        };
+        userauth_ok(data, key, bind, algo)?;
+        let sig: Signature = match (key.key.key_data().rsa(), hash) {
+            (Some(pair), Some(_)) => Signer::try_sign(&(pair, hash), data).ok()?,
+            _ => Signer::try_sign(&key.key, data).ok()?,
+        };
         let wire = Vec::<u8>::try_from(sig).ok()?;
         self.sigs.fetch_add(1, SeqCst);
         let mut o = vec![SIGN_RESPONSE];
@@ -222,7 +240,7 @@ impl Live {
 /// The data of a sign request, read to its last byte: `string session id, byte 50, string user,
 /// string "ssh-connection", string method, bool TRUE, string algorithm, string key blob` and, for
 /// the host-bound method, `string host key`. Every field must be the one this key and bind allow.
-fn userauth_ok(data: &[u8], key: &Held, bind: &Bind) -> Option<()> {
+fn userauth_ok(data: &[u8], key: &Held, bind: &Bind, algorithm: &[u8]) -> Option<()> {
     let mut d = Rd(data);
     let sid = d.string()?;
     let (kind, user, service, method) = (d.u8()?, d.string()?, d.string()?, d.string()?);
@@ -233,7 +251,7 @@ fn userauth_ok(data: &[u8], key: &Held, bind: &Bind) -> Option<()> {
     };
     let (has_sig, algo, blob) = (d.u8()?, d.string()?, d.string()?);
     let host_ok = !hostbound || d.string()? == bind.host.as_slice();
-    let algo_ok = ALGOS.contains(&algo) && algo == key.key.algorithm().as_str().as_bytes();
+    let algo_ok = algo == algorithm;
     (sid == bind.sid.as_slice()
         && kind == USERAUTH_REQUEST
         && user == key.user.as_bytes()

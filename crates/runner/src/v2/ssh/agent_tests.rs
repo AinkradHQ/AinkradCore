@@ -667,3 +667,59 @@ async fn a_drop_clears_the_keys_from_memory() {
     d.agent_drop(&SshAgentDrop { id: "ld_1".into() });
     assert!(live.keys.lock().unwrap().is_empty());
 }
+
+/// A sign request for `data` with the agent flags chosen (`sign_msg` always sends 0).
+fn sign_flags(user: &PrivateKey, data: &[u8], flags: u32) -> Vec<u8> {
+    let mut m = sign_msg(user, data);
+    let n = m.len();
+    m[n - 4..].copy_from_slice(&flags.to_be_bytes());
+    m
+}
+
+/// RSA through the agent (E0-9): flags 2 and 4 sign with SHA-256 and SHA-512 and the signature
+/// verifies; flags 0 (SHA-1 `ssh-rsa`), a mismatched algorithm name and any other flag are refused.
+#[tokio::test]
+async fn an_rsa_key_signs_with_sha2_flags_only_and_never_with_sha1() {
+    let leases = Leases::default();
+    leases.add("l_1", RSA_KEY);
+    let key = PrivateKey::from_openssh(RSA_KEY).unwrap();
+    let d = ssh(&leases);
+    let host = new_key();
+    let sock = d
+        .agent_load(&req("ld_1", 3600, vec![("l_1", vec![fp(&host)])]))
+        .await
+        .unwrap()
+        .socket;
+    let mut s = connect(&sock).await;
+    bound(&mut s, &host, b"sid").await;
+    let data = |algo: &[u8]| userauth_with(b"sid", &key, b"me", b"publickey", 1, algo, None);
+    for (flags, algo, hash) in [
+        (4, &b"rsa-sha2-512"[..], HashAlg::Sha512),
+        (2, &b"rsa-sha2-256"[..], HashAlg::Sha256),
+    ] {
+        let d = data(algo);
+        let answer = ask(&mut s, &sign_flags(&key, &d, flags)).await;
+        assert_eq!(answer[0], SIGN_RESPONSE, "flags {flags}");
+        // `answer` is `byte 14, string signature`; the signature names its own algorithm.
+        let wire = Rd(&answer[1..]).string().unwrap().to_vec();
+        let sig = Signature::try_from(wire.as_slice()).unwrap();
+        assert_eq!(sig.algorithm(), Algorithm::Rsa { hash: Some(hash) });
+        Verifier::<Signature>::verify(key.public_key(), &d, &sig).unwrap();
+    }
+    // SHA-1: flags 0, with either name; the wrong name for the flag; any other flag.
+    for (why, flags, algo) in [
+        ("flags 0, ssh-rsa", 0, &b"ssh-rsa"[..]),
+        ("flags 0, rsa-sha2-512", 0, &b"rsa-sha2-512"[..]),
+        ("flags 4, rsa-sha2-256", 4, &b"rsa-sha2-256"[..]),
+        ("flags 2, rsa-sha2-512", 2, &b"rsa-sha2-512"[..]),
+        ("flags 4, ssh-rsa", 4, &b"ssh-rsa"[..]),
+        ("flags 6", 6, &b"rsa-sha2-512"[..]),
+    ] {
+        let d = data(algo);
+        assert_eq!(
+            ask(&mut s, &sign_flags(&key, &d, flags)).await,
+            [FAILURE],
+            "{why}"
+        );
+    }
+}
