@@ -285,6 +285,7 @@ async fn a_subscription_row_is_unpriced_for_the_sessions_own_account_and_moves_t
     let m = m().await;
     let id = &m.session.id;
     let bud = |kind: &'static str, tokens, usd| NewBudget {
+        message_cap: None,
         kind,
         subject: "",
         company: None,

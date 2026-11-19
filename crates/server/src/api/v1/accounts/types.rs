@@ -38,6 +38,11 @@ pub struct ProviderAccount {
     pub month_spend_usd_micros: Option<i64>,
     /// The account's monthly dollar budget cap, when one is set; absent when it has none.
     pub month_limit_usd_micros: Option<i64>,
+    /// The row's usage meter: how much of its plan or budget is used and whether it can take work
+    /// now. Only the reads say it, and only to an `admin` device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub usage: Option<AccountMeter>,
 }
 
 /// An account's health counters, as the scheduler keeps them.
@@ -163,6 +168,7 @@ impl From<acc::Account> for ProviderAccount {
             health: None,
             month_spend_usd_micros: None,
             month_limit_usd_micros: None,
+            usage: None,
         }
     }
 }

@@ -148,6 +148,7 @@ async fn a_pick_on_a_session_that_has_stopped_takes_no_hold_and_no_account() {
     let entry = w.keys("main", &[a.id]).await;
     let subject = entry.pool.to_string();
     let b = NewBudget {
+        message_cap: None,
         kind: "pool",
         subject: &subject,
         company: None,
@@ -295,6 +296,7 @@ async fn a_cancel_between_the_grant_and_the_start_mark_leaves_no_hold() {
     let entry = w.keys("main", &[a.id]).await;
     let subject = entry.pool.to_string();
     let b = NewBudget {
+        message_cap: None,
         kind: "pool",
         subject: &subject,
         company: None,

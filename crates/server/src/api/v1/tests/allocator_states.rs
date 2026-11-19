@@ -243,6 +243,7 @@ fn budget<'a>(
     usd: Option<i64>,
 ) -> NewBudget<'a> {
     NewBudget {
+        message_cap: None,
         kind,
         subject,
         company: None,
