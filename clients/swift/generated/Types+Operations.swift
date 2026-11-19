@@ -32545,7 +32545,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Added (audited as `project.repo_added`); the project as it now is. 400 for a bad name, remote or branch; 404 for no such project; 409 `conflict` for an archived project or a repeated name or remote
+            /// Added (audited as `project.repo_added`); the project as it now is. 400 for a bad name, remote or branch; 404 for no such project; 409 `conflict` for an archived project or a repeated name or remote. An ssh remote is 400: the Core holds no key. The Core starts copying the repo at once (`mirror.state`)
             ///
             /// - Remark: Generated from `#/paths//api/v1/projects/{id}/repos/post(addProjectRepo)/responses/200`.
             ///

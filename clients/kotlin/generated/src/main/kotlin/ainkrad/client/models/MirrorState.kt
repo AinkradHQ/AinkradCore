@@ -26,6 +26,9 @@ import kotlinx.serialization.Contextual
  * @param error Why the last fetch failed; the older head is kept.
  * @param fetchedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param head The commit the last fetch ended at.
+ * @param reason Why the last fetch failed: `needs_github`, `not_found_or_private`, `auth_failed`, `timeout`, `ssh_not_supported` or `other`. `error` is the same in one plain sentence.
+ * @param startedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param state `fetching`, `ready` or `failed`.
  */
 @Serializable
 
@@ -41,7 +44,19 @@ data class MirrorState (
 
     /* The commit the last fetch ended at. */
     @SerialName(value = "head")
-    val head: kotlin.String? = null
+    val head: kotlin.String? = null,
+
+    /* Why the last fetch failed: `needs_github`, `not_found_or_private`, `auth_failed`, `timeout`, `ssh_not_supported` or `other`. `error` is the same in one plain sentence. */
+    @SerialName(value = "reason")
+    val reason: kotlin.String? = null,
+
+    /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
+    @Contextual @SerialName(value = "started_at")
+    val startedAt: java.time.OffsetDateTime? = null,
+
+    /* `fetching`, `ready` or `failed`. */
+    @SerialName(value = "state")
+    val state: kotlin.String? = null
 
 ) {
 

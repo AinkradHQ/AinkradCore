@@ -4507,25 +4507,50 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/MirrorState/head`.
             public var head: Swift.String?
+            /// Why the last fetch failed: `needs_github`, `not_found_or_private`, `auth_failed`,
+            /// `timeout`, `ssh_not_supported` or `other`. `error` is the same in one plain sentence.
+            ///
+            /// - Remark: Generated from `#/components/schemas/MirrorState/reason`.
+            public var reason: Swift.String?
+            /// When the running fetch began (state `fetching`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/MirrorState/started_at`.
+            public var startedAt: Components.Schemas.Timestamp?
+            /// `fetching`, `ready` or `failed`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/MirrorState/state`.
+            public var state: Swift.String?
             /// Creates a new `MirrorState`.
             ///
             /// - Parameters:
             ///   - error: Why the last fetch failed; the older head is kept.
             ///   - fetchedAt:
             ///   - head: The commit the last fetch ended at.
+            ///   - reason: Why the last fetch failed: `needs_github`, `not_found_or_private`, `auth_failed`,
+            ///   - startedAt: When the running fetch began (state `fetching`).
+            ///   - state: `fetching`, `ready` or `failed`.
             public init(
                 error: Swift.String? = nil,
                 fetchedAt: Components.Schemas.Timestamp? = nil,
-                head: Swift.String? = nil
+                head: Swift.String? = nil,
+                reason: Swift.String? = nil,
+                startedAt: Components.Schemas.Timestamp? = nil,
+                state: Swift.String? = nil
             ) {
                 self.error = error
                 self.fetchedAt = fetchedAt
                 self.head = head
+                self.reason = reason
+                self.startedAt = startedAt
+                self.state = state
             }
             public enum CodingKeys: String, CodingKey {
                 case error
                 case fetchedAt = "fetched_at"
                 case head
+                case reason
+                case startedAt = "started_at"
+                case state
             }
         }
         /// - Remark: Generated from `#/components/schemas/ModelPrice`.
