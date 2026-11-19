@@ -421,6 +421,58 @@ async fn an_encrypted_rsa_key_takes_its_passphrase_and_an_old_format_one_is_refu
     );
 }
 
+/// A PKCS#1 PEM whose modulus has `bytes` bytes of 0xff (so `bytes * 8` bits) and dummy everything
+/// else: the Core only parses an RSA key, it does not check the numbers.
+fn rsa_pem_with_modulus(bytes: usize) -> String {
+    fn der(tag: u8, body: &[u8]) -> Vec<u8> {
+        let n = body.len();
+        let mut o = vec![tag];
+        match n {
+            0..=127 => o.push(n as u8),
+            128..=255 => o.extend([0x81, n as u8]),
+            _ => o.extend([0x82, (n >> 8) as u8, n as u8]),
+        }
+        o.extend(body);
+        o
+    }
+    fn int(be: &[u8]) -> Vec<u8> {
+        let mut v = if be[0] & 0x80 != 0 { vec![0] } else { vec![] };
+        v.extend(be);
+        der(2, &v)
+    }
+    let mut body = int(&[0]);
+    body.extend(int(&vec![0xff; bytes]));
+    body.extend(int(&[1, 0, 1]));
+    for _ in 0..6 {
+        body.extend(int(&[3]));
+    }
+    let b64 = STANDARD.encode(der(0x30, &body));
+    let lines: Vec<&str> = b64
+        .as_bytes()
+        .chunks(64)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect();
+    format!(
+        "-----BEGIN RSA PRIVATE KEY-----\n{}\n-----END RSA PRIVATE KEY-----\n",
+        lines.join("\n")
+    )
+}
+
+#[tokio::test]
+async fn an_rsa_key_over_8192_bits_is_refused_and_8192_is_not() {
+    let fx = fx().await;
+    let (s, v) = import(&fx, "huge", &rsa_pem_with_modulus(1025), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        v["message"],
+        "This key is too large (8200 bits). Use a key of 8192 bits or fewer."
+    );
+    // The bound itself is allowed (a 1024-byte modulus is exactly 8192 bits).
+    let ok = import_ok(&fx, "edge", &rsa_pem_with_modulus(1024), None).await;
+    assert_eq!(ok["bits"], 8192);
+    assert_eq!(count(&fx, "leyline_keys").await, 1);
+}
+
 #[tokio::test]
 async fn damaged_and_foreign_pem_keys_are_not_valid_and_leave_nothing_behind() {
     let fx = fx().await;
