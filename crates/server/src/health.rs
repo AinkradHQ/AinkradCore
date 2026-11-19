@@ -30,6 +30,7 @@ use sqlx::SqlitePool;
 use crate::store::{self, audit, events, settings};
 
 pub mod history;
+pub mod hoststats;
 pub mod metrics;
 
 /// A condition must hold, or stop holding, this long before it is a transition.
@@ -48,6 +49,8 @@ pub const HOST_CACHE_SECS: u64 = 5;
 pub struct HostSnapshot {
     pub rss_bytes: Option<u64>,
     pub open_fds: Option<u64>,
+    /// The host's `(used, total)` memory in bytes (Linux only).
+    pub ram: Option<(u64, u64)>,
     pub readings: Readings,
 }
 
@@ -281,6 +284,7 @@ impl Health {
         let snap = std::sync::Arc::new(HostSnapshot {
             rss_bytes,
             open_fds,
+            ram: hoststats::memory(),
             readings,
         });
         *cache = Some((Instant::now(), std::sync::Arc::clone(&snap)));
@@ -308,8 +312,18 @@ impl Health {
         let readings = Readings::gather(db).await;
         let (rss, _) = metrics::process().await;
         let used = readings.disk_free_pct().map(|f| 100 - f);
-        self.history
-            .record(now, history::cpu_secs().await, rss, used);
+        let (free, total) = (readings.disk_free_bytes, readings.disk_total_bytes);
+        self.history.record(
+            now,
+            history::Reading {
+                cpu_secs: history::cpu_secs().await,
+                memory_bytes: rss,
+                disk_used_pct: used,
+                host_jiffies: hoststats::cpu_jiffies(),
+                ram: hoststats::memory(),
+                disk: free.zip(total).map(|(f, t)| (t.saturating_sub(f), t)),
+            },
+        );
         self.tick_with(pool, now, &readings).await
     }
 

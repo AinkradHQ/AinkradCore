@@ -156,7 +156,7 @@ impl IntoResponse for Fail {
 }
 
 /// A helper failure as an API answer.
-fn fail(f: Failure) -> Fail {
+pub(super) fn fail(f: Failure) -> Fail {
     let e = |s, c, m: &str| ApiError::new(s, c, m).into_response();
     let unavailable = || {
         e(
@@ -210,7 +210,7 @@ fn fail(f: Failure) -> Fail {
 
 /// A short, fixed word for an outcome in the audit log (`accepted`, a helper code, or the kind of
 /// failure); never text from the helper.
-fn outcome(f: &Failure) -> String {
+pub(super) fn outcome(f: &Failure) -> String {
     match f {
         Failure::Absent => "absent".into(),
         Failure::Unavailable => "unavailable".into(),
@@ -224,11 +224,11 @@ fn outcome(f: &Failure) -> String {
     }
 }
 
-fn internal(e: sqlx::Error) -> Fail {
+pub(super) fn internal(e: sqlx::Error) -> Fail {
     ApiError::from(e).into_response().into()
 }
 
-async fn audit(
+pub(super) async fn audit(
     app: &App,
     me: &Caller,
     action: &str,
@@ -275,7 +275,7 @@ pub async fn host(
 
 /// Audits a helper refusal once per caller, action and outcome in a window (a flood of the same
 /// one is counted in memory, not in the permanent log).
-async fn refused(app: &App, me: &Caller, action: &str, f: &Failure) {
+pub(super) async fn refused(app: &App, me: &Caller, action: &str, f: &Failure) {
     let word = outcome(f);
     let key = format!("{HELPER_REFUSED}:{}:{action}:{word}", me.device.id);
     if !app.auth.refusals.note(&key, app.clock.unix()) {

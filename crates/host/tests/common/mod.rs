@@ -169,6 +169,7 @@ impl Fx {
         let ctx = Ctx {
             state_dir: dir.path().join("state"),
             bin_dir: dir.path().join("bin"),
+            backups_dir: dir.path().join("backups"),
             ainkrad_uid: Some(me),
             owner_uid: me,
             exec: Box::new(Shared(fake.clone())),

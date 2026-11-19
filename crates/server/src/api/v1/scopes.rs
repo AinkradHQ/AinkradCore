@@ -70,6 +70,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/core/storage", "admin"),
     ("POST", "/api/v1/core/update/check", "admin"),
     ("POST", "/api/v1/system/restart", "admin"),
+    // A backup now and the backup schedule (E2-6): `admin`; a start is no danger, it is the unit the timer starts.
+    ("POST", "/api/v1/system/backup", "admin"),
+    ("GET", "/api/v1/system/backups", "admin"),
     ("GET", "/api/v1/system/logs/core", "admin"),
     ("GET", "/api/v1/system/logs/helper", "admin"),
     ("GET", "/api/v1/system/logs/runner", "admin"),
@@ -222,7 +225,6 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("DELETE", "/api/v1/secrets/{id}", "admin"),
     ("POST", "/api/v1/secrets/{id}/leases", "admin"),
     // Showing a value or exporting all of them (D-4): `admin`, destructive (a live step-up).
-    ("POST", "/api/v1/secrets/{id}/reveal", "admin"),
     ("POST", "/api/v1/secrets/export", "admin"),
     ("POST", "/api/v1/secret-leases/redeem", "runner"),
     ("GET", "/api/v1/secret-groups", "admin"),
@@ -319,7 +321,6 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/secrets/{id}"),
     ("POST", "/api/v1/secrets/{id}/leases"),
     // A shown or exported value leaves the Core to a screen or a file (D-4).
-    ("POST", "/api/v1/secrets/{id}/reveal"),
     ("POST", "/api/v1/secrets/export"),
     ("POST", "/api/v1/secret-groups"),
     ("PUT", "/api/v1/secret-groups/{id}"),

@@ -311,3 +311,50 @@ fn the_helper_log_pages_over_actions_log_and_its_rotation() {
         "bad_request"
     );
 }
+
+#[test]
+fn backup_now_starts_the_backup_unit_once_with_one_fixed_argv() {
+    let fx = Fx::new();
+    assert_eq!(fx.code("backup_now", "{}"), "not_installed");
+    assert!(
+        !fx.state().join("limits.json").exists(),
+        "a refusal costs no budget"
+    );
+    fx.fake.load("ainkrad-backup.service");
+    let v = fx.call("backup_now", "{}");
+    assert_eq!(v["result"]["accepted"], true, "{v}");
+    assert!(
+        fx.fake.argv().contains(
+            &[
+                "--no-block",
+                "--no-ask-password",
+                "start",
+                "ainkrad-backup.service"
+            ]
+            .map(String::from)
+            .to_vec()
+        )
+    );
+    assert_eq!(fx.fake.restarts(), 0, "a start is not a restart");
+    // 60 s minimum between two, and it is logged like every root action.
+    let v = fx.call("backup_now", "{}");
+    assert_eq!(v["code"], "rate_limited");
+    assert!(fx.log().contains(" accepted backup_now "), "{}", fx.log());
+}
+
+#[test]
+fn backup_info_lists_the_age_files_newest_first_and_a_read_is_not_logged() {
+    let fx = Fx::new();
+    fx.fake.load("ainkrad-backup.service");
+    let dir = fx.dir.path().join("backups");
+    mkdir(&dir, 0o700);
+    std::fs::write(dir.join("core-1.age"), b"abc").unwrap();
+    std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+    let v = fx.call("backup_info", "{}");
+    assert_eq!(v["ok"], true, "{v}");
+    let r = &v["result"];
+    assert_eq!(r["installed"], true);
+    assert_eq!(r["history"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(r["history"][0]["bytes"], 3);
+    assert!(!fx.log().contains("backup_info"), "{}", fx.log());
+}

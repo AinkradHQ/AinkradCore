@@ -54,7 +54,7 @@ mod runner_control;
 mod runners;
 pub mod scopes;
 mod secret_groups;
-mod secret_reveal;
+mod secret_export;
 mod secrets;
 pub mod session;
 mod settings;
@@ -63,6 +63,7 @@ mod stepup;
 /// The 403 a route that needs a step-up answers a session without one (a module's own check).
 pub use stepup::required as step_up_required;
 mod system;
+mod system_backup;
 mod terminals;
 pub mod ticket;
 mod trace;
@@ -253,6 +254,8 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/core/storage", get(coreprefs::storage))
         .route("/api/v1/core/update/check", post(coreprefs::check_update))
         .route("/api/v1/system/restart", post(system::restart))
+        .route("/api/v1/system/backup", post(system_backup::start))
+        .route("/api/v1/system/backups", get(system_backup::backups))
         .route("/api/v1/system/logs/core", get(system::logs_core))
         .route("/api/v1/system/logs/helper", get(system::logs_helper))
         .route("/api/v1/system/logs/runner", get(system::logs_runner))
@@ -508,8 +511,7 @@ pub fn router(app: App) -> Router {
             put(secrets::rotate).delete(secrets::delete),
         )
         .route("/api/v1/secrets/{id}/leases", post(secrets::lease))
-        .route("/api/v1/secrets/{id}/reveal", post(secret_reveal::reveal))
-        .route("/api/v1/secrets/export", post(secret_reveal::export))
+        .route("/api/v1/secrets/export", post(secret_export::export))
         .route("/api/v1/secret-leases/redeem", post(secrets::redeem))
         .route(
             "/api/v1/secret-groups",

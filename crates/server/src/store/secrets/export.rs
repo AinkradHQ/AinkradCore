@@ -1,9 +1,8 @@
-//! Showing and exporting a value to its owner (E2-6, D-4): the only way a value leaves the Core
-//! other than a lease to a runner. The routes need an admin device with a live step-up and are
-//! rate limited; here the broker must be on, the value is opened inside the write transaction
-//! that audits it (`secret.revealed`, `secret.exported`: the name or the count, never a value),
-//! and every plaintext lives in a `Zeroizing` buffer. Provider-account keys (`acct.*`) are the
-//! Accounts screen's and are never shown or exported.
+//! Exporting every value to its owner (E2-6, D-4): a danger route (a fresh step-up) that
+//! is rate limited. The broker must be on, each value is opened inside the write transaction that
+//! audits the export (`secret.exported`: the count, never a value), and every plaintext lives in a
+//! `Zeroizing` buffer. Never exported: provider-account keys (`acct.*`, the Accounts screen's),
+//! a module's own secrets (`brain.*`, `leyline.*`) and file secrets.
 
 use ainkrad_core::audit::{AuditActor, NewAuditEvent};
 use serde_json::json;
@@ -11,17 +10,8 @@ use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use zeroize::Zeroizing;
 
-use super::{ACCOUNT_PREFIX, Error, audit, enabled, label, refused};
+use super::{Error, enabled, label, refused};
 use crate::ops::secretbox::SecretBox;
-
-/// One secret's value, for its owner. No `Debug`.
-pub struct Revealed {
-    pub name: String,
-    pub version: i64,
-    pub kind: String,
-    pub file_name: Option<String>,
-    pub value: Zeroizing<String>,
-}
 
 /// One secret of an export. No `Debug`.
 pub struct Exported {
@@ -62,48 +52,7 @@ fn open(
     }
 }
 
-/// Opens secret `name` for the device `by_device` and audits it as `secret.revealed`.
-pub async fn reveal(
-    pool: &SqlitePool,
-    sealer: &SecretBox,
-    name: &str,
-    by_device: &str,
-    actor: AuditActor,
-) -> Result<Revealed, Error> {
-    if name.starts_with(ACCOUNT_PREFIX) {
-        return refused(
-            "bad_request",
-            "provider-account keys are managed through the accounts API",
-        );
-    }
-    let mut tx = crate::store::begin_write(pool).await?;
-    enabled(&mut tx).await?;
-    let row = sqlx::query(
-        "SELECT id, version, key_id, sealed, kind, file_name FROM core_secrets WHERE name = ?",
-    )
-    .bind(name)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let Some(row) = row else {
-        return refused("not_found", "no such secret");
-    };
-    let (id, version): (i64, i64) = (row.try_get("id")?, row.try_get("version")?);
-    let key_id: String = row.try_get("key_id")?;
-    let sealed: Vec<u8> = row.try_get("sealed")?;
-    let value = open(sealer, name, version, &key_id, &sealed)?;
-    let details = json!({"name": name, "version": version, "by_device": by_device});
-    audit(&mut tx, actor, "secret.revealed", id, details).await?;
-    tx.commit().await?;
-    Ok(Revealed {
-        name: name.to_owned(),
-        version,
-        kind: row.try_get("kind")?,
-        file_name: row.try_get("file_name")?,
-        value,
-    })
-}
-
-/// Opens every secret the Secrets screen lists (all but provider-account keys), by name, and
+/// Opens every secret the export may hold (see the module doc), by name, and
 /// audits the export once as `secret.exported` with the count.
 pub async fn export_all(
     pool: &SqlitePool,
@@ -116,7 +65,8 @@ pub async fn export_all(
     let rows = sqlx::query(
         "SELECT s.name, s.version, s.key_id, s.sealed, s.kind, s.file_name, g.name AS group_name \
          FROM core_secrets s LEFT JOIN core_secret_groups g ON g.id = s.group_id \
-         WHERE s.name NOT LIKE 'acct.%' ORDER BY s.name",
+         WHERE s.name NOT LIKE 'acct.%' AND s.name NOT LIKE 'brain.%' \
+         AND s.name NOT LIKE 'leyline.%' AND s.kind <> 'file' ORDER BY s.name",
     )
     .fetch_all(&mut *tx)
     .await?;
