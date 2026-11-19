@@ -301,3 +301,33 @@ async fn a_refused_binding_leaves_no_project() {
     assert!(list(&fx.pool, false).await.unwrap().is_empty());
     assert!(list(&fx.pool, true).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_mirror_has_an_explicit_state_and_every_change_is_an_event() {
+    let fx = fx().await;
+    let p = mk(&fx, "shop").await.unwrap();
+    let r = add(&fx, p.id, "web", false).await.unwrap();
+    let none = (None, None);
+    set_mirror_state(&fx.pool, r.id, ("fetching", Some(NOW)), none, none)
+        .await
+        .unwrap();
+    let m = mirror(&fx.pool, r.id).await.unwrap().unwrap();
+    assert_eq!(
+        (m.state.as_str(), m.started_at.as_deref()),
+        ("fetching", Some(NOW))
+    );
+    let why = (Some("private"), Some("needs_github"));
+    set_mirror_state(&fx.pool, r.id, ("failed", None), none, why)
+        .await
+        .unwrap();
+    let m = mirror(&fx.pool, r.id).await.unwrap().unwrap();
+    assert_eq!(m.state, "failed");
+    assert_eq!(m.reason.as_deref(), Some("needs_github"));
+    assert_eq!(m.started_at, None);
+    let events: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM events WHERE kind = 'project.mirror_changed'")
+            .fetch_one(&fx.pool)
+            .await
+            .unwrap();
+    assert_eq!(events, 2);
+}

@@ -195,12 +195,16 @@ pub(crate) async fn discover(
             .bind(json!(p.warnings).to_string())
             .execute(&mut *stx)
             .await?;
-        for item_id in &p.item_ids {
-            sqlx::query("UPDATE items SET proposal = ? WHERE item_id = ?")
-                .bind(&id)
-                .bind(item_id)
-                .execute(&mut *stx)
-                .await?;
+        // One UPDATE per 500 items, not one per item (7,000 items took over 20 s).
+        for ids in p.item_ids.chunks(500) {
+            let marks = vec!["?"; ids.len()].join(",");
+            // Only `?` marks are formatted in: every value is bound.
+            let sql = format!("UPDATE items SET proposal = ? WHERE item_id IN ({marks})");
+            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(&id);
+            for item_id in ids {
+                q = q.bind(item_id);
+            }
+            q.execute(&mut *stx).await?;
         }
     }
     stx.commit().await?;

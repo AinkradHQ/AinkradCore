@@ -61,6 +61,12 @@ pub struct Mirror {
     pub head: Option<String>,
     pub fetched_at: Option<String>,
     pub error: Option<String>,
+    /// `fetching`, `ready` or `failed`.
+    pub state: String,
+    /// Why a failed fetch failed (`mirrors::Reason::code`).
+    pub reason: Option<String>,
+    /// When the running fetch began.
+    pub started_at: Option<String>,
 }
 
 fn refused<T>(code: &'static str, message: &str) -> Result<T, Error> {
@@ -404,7 +410,7 @@ mod github;
 mod repos;
 pub use github::{NewGithubRepo, create_from_github};
 use repos::add_repo_in;
-pub use repos::{add_repo, mirror, remove_repo, set_mirror, set_primary};
+pub use repos::{add_repo, mirror, remove_repo, set_mirror, set_mirror_state, set_primary};
 
 #[cfg(test)]
 mod tests;

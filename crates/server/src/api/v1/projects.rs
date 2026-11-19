@@ -29,6 +29,16 @@ pub struct MirrorState {
     pub fetched_at: Option<Timestamp>,
     /// Why the last fetch failed; the older head is kept.
     pub error: Option<String>,
+    /// `fetching`, `ready` or `failed`.
+    #[schema(required = false)]
+    pub state: Option<String>,
+    /// Why the last fetch failed: `needs_github`, `not_found_or_private`, `auth_failed`,
+    /// `timeout`, `ssh_not_supported` or `other`. `error` is the same in one plain sentence.
+    #[schema(required = false)]
+    pub reason: Option<String>,
+    /// When the running fetch began (state `fetching`).
+    #[schema(required = false)]
+    pub started_at: Option<Timestamp>,
 }
 
 impl From<Mirror> for MirrorState {
@@ -37,6 +47,9 @@ impl From<Mirror> for MirrorState {
             head: m.head,
             fetched_at: opt_ts(m.fetched_at.as_deref()),
             error: m.error,
+            state: Some(m.state),
+            reason: m.reason,
+            started_at: opt_ts(m.started_at.as_deref()),
         }
     }
 }
@@ -299,7 +312,8 @@ pub struct NewProjectRepo {
     request_body = NewProjectRepo,
     responses((status = 200, description = "Added (audited as `project.repo_added`); the project \
         as it now is. 400 for a bad name, remote or branch; 404 for no such project; 409 \
-        `conflict` for an archived project or a repeated name or remote", body = ProjectInfo)))]
+        `conflict` for an archived project or a repeated name or remote. An ssh remote is 400: the \
+        Core holds no key. The Core starts copying the repo at once (`mirror.state`)", body = ProjectInfo)))]
 pub async fn add_repo(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -310,8 +324,11 @@ pub async fn add_repo(
     if let Some(why) = repo_url_problem(&b.remote_url) {
         return Err(ApiError::bad_request(why));
     }
+    if let Some(why) = crate::mirrors::ssh_problem(&b.remote_url) {
+        return Err(ApiError::bad_request(why));
+    }
     let now = app.clock.now();
-    store::add_repo(
+    let r = store::add_repo(
         &app.pool,
         id,
         &b.name,
@@ -321,6 +338,8 @@ pub async fn add_repo(
         who(&me, &now),
     )
     .await?;
+    // The copy starts now; `mirror.state` says `fetching` until it ends.
+    crate::mirrors::start(&app, r.id).await;
     current(&app, id).await
 }
 

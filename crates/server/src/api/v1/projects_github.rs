@@ -279,5 +279,11 @@ pub async fn create(
         bind,
     )
     .await?;
+    let mut conn = app.pool.acquire().await?;
+    let made = store::repos(&mut conn, p.id).await?;
+    drop(conn);
+    for r in made {
+        crate::mirrors::start(&app, r.id).await;
+    }
     Ok(Json(info(&app, p).await?))
 }

@@ -238,6 +238,13 @@ async fn repos_are_added_made_primary_removed_and_show_their_mirror() {
             "{url:?}"
         );
     }
+    // An ssh remote is refused with its plain reason: the Core holds no key.
+    let mut ssh = repo("ssh");
+    ssh["remote_url"] = json!("git@github.com:acme/ssh.git");
+    ssh["default_branch"] = json!("main");
+    let r = admin(&fx, Method::POST, &format!("{p}/repos"), ssh).await;
+    assert_eq!(r.0, StatusCode::BAD_REQUEST);
+    assert!(r.1["message"].as_str().unwrap().contains("SSH"));
     let mut body = repo("../x");
     body["default_branch"] = json!("main");
     assert_eq!(

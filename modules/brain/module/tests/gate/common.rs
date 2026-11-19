@@ -174,15 +174,23 @@ pub async fn send(fx: &Fx, run: &str, items: Vec<Value>) -> Value {
     .await
 }
 
-/// Closes the collector, so discovery runs.
+/// Closes the collector, so discovery runs (in the background: waits for it to end).
 pub async fn finish(fx: &Fx, run: &str) -> Value {
-    ok(
+    let mut v = ok(
         fx,
         Method::POST,
         &format!("/imports/{run}/collected"),
         Some(json!({"source": "claude_code"})),
     )
-    .await
+    .await;
+    for _ in 0..600 {
+        if v["state"] != "discovering" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        v = ok(fx, Method::GET, &format!("/imports/{run}"), None).await;
+    }
+    v
 }
 
 pub async fn proposals(fx: &Fx, run: &str) -> Vec<Value> {
