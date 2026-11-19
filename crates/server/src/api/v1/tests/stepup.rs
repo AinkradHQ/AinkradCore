@@ -378,12 +378,21 @@ async fn the_unlock_needs_its_token_and_a_session_signature_of_its_own() {
     let c = challenge(&fx, &mac).await;
     let mut body = mac.stepup_body(&c);
     body["purpose"] = json!("session");
-    assert_eq!(code(&post(&fx, &mac, "/api/v1/auth/step-up", body).await), forbidden("step_up_failed"));
+    assert_eq!(
+        code(&post(&fx, &mac, "/api/v1/auth/step-up", body).await),
+        forbidden("step_up_failed")
+    );
     // A real unlock: the answer carries the token.
     let (s, b) = unlock(&fx, &mac).await;
     assert_eq!(s, StatusCode::OK, "{b}");
-    assert!(b["unlock_token"].as_str().is_some_and(|t| t.len() >= 40), "{b}");
-    assert_eq!(post(&fx, &mac, "/api/v1/terminals", open.clone()).await.0, StatusCode::NOT_FOUND);
+    assert!(
+        b["unlock_token"].as_str().is_some_and(|t| t.len() >= 40),
+        "{b}"
+    );
+    assert_eq!(
+        post(&fx, &mac, "/api/v1/terminals", open.clone()).await.0,
+        StatusCode::NOT_FOUND
+    );
     // The same device without the token (a stolen routine key) or with a wrong one: refused, and
     // a beat does not work either.
     let good = mac.unlock_token.lock().unwrap().clone();
@@ -404,7 +413,10 @@ async fn the_unlock_needs_its_token_and_a_session_signature_of_its_own() {
         .fetch_one(&fx.app.pool).await.unwrap();
     assert_eq!(audited, 1);
     mac.set_unlock_token(good);
-    assert_eq!(post(&fx, &mac, "/api/v1/terminals", open).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        post(&fx, &mac, "/api/v1/terminals", open).await.0,
+        StatusCode::NOT_FOUND
+    );
 }
 
 /// Review H1: `auth.*` settings are danger whatever the path spells; the handler decides from the key.
@@ -414,7 +426,11 @@ async fn a_percent_encoded_security_setting_still_needs_a_step_up() {
     let mac = plain(&fx, "mac", &ALL, true).await;
     for key in ["auth.step_up_secs", "%61uth.step_up_secs"] {
         let uri = format!("/api/v1/settings/server/{key}");
-        let r = send(&fx.app, req(Method::PUT, &uri, Some(&mac), Some(json!({"value": 900})))).await;
+        let r = send(
+            &fx.app,
+            req(Method::PUT, &uri, Some(&mac), Some(json!({"value": 900}))),
+        )
+        .await;
         assert_eq!(code(&r), forbidden("step_up_required"), "{key}");
         let r = send(&fx.app, req(Method::DELETE, &uri, Some(&mac), None)).await;
         assert_eq!(code(&r), forbidden("step_up_required"), "{key}");
@@ -422,7 +438,11 @@ async fn a_percent_encoded_security_setting_still_needs_a_step_up() {
     // Elevated, it goes through.
     step_up(&fx, &mac).await;
     let uri = "/api/v1/settings/server/%61uth.step_up_secs";
-    let r = send(&fx.app, req(Method::PUT, uri, Some(&mac), Some(json!({"value": 120})))).await;
+    let r = send(
+        &fx.app,
+        req(Method::PUT, uri, Some(&mac), Some(json!({"value": 120}))),
+    )
+    .await;
     assert_eq!(r.0, StatusCode::OK, "{:?}", r.1);
 }
 
@@ -473,7 +493,9 @@ async fn terminals_need_their_scope_and_the_app_unlock_not_a_step_up() {
     for _ in 0..50 {
         fx.clock.advance(80);
         assert_eq!(
-            post(&fx, &mac, "/api/v1/auth/unlock/beat", json!({})).await.0,
+            post(&fx, &mac, "/api/v1/auth/unlock/beat", json!({}))
+                .await
+                .0,
             StatusCode::OK
         );
     }
@@ -490,7 +512,10 @@ async fn the_unlock_survives_a_renewed_session_and_ends_on_end_lapse_or_restart(
     let mac = plain(&fx, "mac", &["read", "terminal"], true).await;
     let (s, b) = unlock(&fx, &mac).await;
     assert_eq!(s, StatusCode::OK, "{b}");
-    assert!(b["unlocked_until"].is_string() && b["elevated_until"].is_null(), "{b}");
+    assert!(
+        b["unlocked_until"].is_string() && b["elevated_until"].is_null(),
+        "{b}"
+    );
     // A session renewed every 15 minutes is still unlocked: the unlock is the device's.
     let s = fx.app.auth.issue_session(&mac.id, fx.clock.unix());
     mac.set_session(Some(s.id));
@@ -500,7 +525,12 @@ async fn the_unlock_survives_a_renewed_session_and_ends_on_end_lapse_or_restart(
     );
     // The client ends it (the Mac locked, slept, or the app quit): refused at once, and a beat
     // cannot bring it back.
-    assert_eq!(post(&fx, &mac, "/api/v1/auth/unlock/end", json!({})).await.0, StatusCode::OK);
+    assert_eq!(
+        post(&fx, &mac, "/api/v1/auth/unlock/end", json!({}))
+            .await
+            .0,
+        StatusCode::OK
+    );
     assert_eq!(
         code(&post(&fx, &mac, "/api/v1/terminals", open.clone()).await),
         forbidden("unlock_required")

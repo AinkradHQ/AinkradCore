@@ -49,7 +49,8 @@ pub fn message_v2(
     challenge: &str,
     purpose: &str,
 ) -> Vec<u8> {
-    format!("AINKRAD-STEPUP-V2\n{core_fp}\n{device}\n{session}\n{challenge}\n{purpose}").into_bytes()
+    format!("AINKRAD-STEPUP-V2\n{core_fp}\n{device}\n{session}\n{challenge}\n{purpose}")
+        .into_bytes()
 }
 
 /// What a step-up proof came to.

@@ -942,10 +942,11 @@ pub async fn reveal(
     }
     let mut tx = super::begin_write(pool).await?;
     enabled(&mut tx).await?;
-    let row = sqlx::query("SELECT id, version, key_id, sealed, kind FROM core_secrets WHERE name = ?")
-        .bind(name)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let row =
+        sqlx::query("SELECT id, version, key_id, sealed, kind FROM core_secrets WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&mut *tx)
+            .await?;
     let Some(row) = row else {
         return refused("not_found", "no such secret");
     };

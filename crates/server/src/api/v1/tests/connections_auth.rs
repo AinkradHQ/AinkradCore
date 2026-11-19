@@ -175,7 +175,12 @@ async fn a_non_admin_is_refused_everywhere_and_an_admin_write_needs_no_step_up()
     cx.assert_clean().await;
     // A write is a plain write: the admin scope alone is enough, no step-up.
     let r = cx
-        .call(&plain, Method::PATCH, &format!("{URI}/{id}"), json!({"label": "x"}))
+        .call(
+            &plain,
+            Method::PATCH,
+            &format!("{URI}/{id}"),
+            json!({"label": "x"}),
+        )
         .await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
 }

@@ -1012,9 +1012,23 @@ async fn a_secret_can_be_revealed_to_an_elevated_admin_and_is_audited() {
     .unwrap();
     assert_eq!(by, fx.dev.id);
     assert!(!trail(&fx).await.contains(V1), "the value is never audited");
-    let gone = call(&fx, &fx.dev, Method::POST, "/api/v1/secrets/nope/reveal", json!({})).await;
+    let gone = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/secrets/nope/reveal",
+        json!({}),
+    )
+    .await;
     assert_eq!(gone.0, StatusCode::NOT_FOUND);
-    let acct = call(&fx, &fx.dev, Method::POST, "/api/v1/secrets/acct.x/reveal", json!({})).await;
+    let acct = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/secrets/acct.x/reveal",
+        json!({}),
+    )
+    .await;
     assert_eq!(acct.0, StatusCode::BAD_REQUEST);
 }
 
@@ -1029,7 +1043,10 @@ async fn reveal_needs_a_fresh_step_up_and_is_throttled() {
     assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
     // Three in a burst, then the device is throttled (review M6).
     for _ in 0..3 {
-        assert_eq!(call(&fx, &fx.dev, Method::POST, uri, json!({})).await.0, StatusCode::OK);
+        assert_eq!(
+            call(&fx, &fx.dev, Method::POST, uri, json!({})).await.0,
+            StatusCode::OK
+        );
     }
     let r = call(&fx, &fx.dev, Method::POST, uri, json!({})).await;
     assert_eq!(code(&r), (StatusCode::TOO_MANY_REQUESTS, "rate_limited"));
@@ -1041,22 +1058,60 @@ async fn reveal_needs_a_fresh_step_up_and_is_throttled() {
 async fn module_secrets_and_non_text_values_stay_out_of_the_general_routes() {
     let (fx, vm) = broker().await;
     for (m, uri, body) in [
-        (Method::PUT, "/api/v1/secrets/brain.key", json!({"value": V2})),
-        (Method::DELETE, "/api/v1/secrets/leyline.master", Value::Null),
-        (Method::POST, "/api/v1/secrets/brain.key/leases", json!({"runner": vm.id})),
-        (Method::POST, "/api/v1/secrets/leyline.master/reveal", json!({})),
+        (
+            Method::PUT,
+            "/api/v1/secrets/brain.key",
+            json!({"value": V2}),
+        ),
+        (
+            Method::DELETE,
+            "/api/v1/secrets/leyline.master",
+            Value::Null,
+        ),
+        (
+            Method::POST,
+            "/api/v1/secrets/brain.key/leases",
+            json!({"runner": vm.id}),
+        ),
+        (
+            Method::POST,
+            "/api/v1/secrets/leyline.master/reveal",
+            json!({}),
+        ),
     ] {
         let r = call(&fx, &fx.dev, m.clone(), uri, body).await;
-        assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"), "{m} {uri}");
+        assert_eq!(
+            code(&r),
+            (StatusCode::BAD_REQUEST, "bad_request"),
+            "{m} {uri}"
+        );
     }
-    let made = post_secret(&fx, json!({"name": "notes.multi", "value": "a\nb", "kind": "multiline"})).await;
+    let made = post_secret(
+        &fx,
+        json!({"name": "notes.multi", "value": "a\nb", "kind": "multiline"}),
+    )
+    .await;
     assert_eq!(made.0, StatusCode::OK, "{}", made.1);
-    let r = call(&fx, &fx.dev, Method::POST, "/api/v1/secrets/notes.multi/reveal", json!({})).await;
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/secrets/notes.multi/reveal",
+        json!({}),
+    )
+    .await;
     assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"));
     // Putting a secret in a group asks a fresh step-up even for a device that unlocked.
     create(&fx, "git.token", V1, &[vm.id.as_str()]).await;
     let plain = super::stepup::plain(&fx, "plain", &ALL, true).await;
-    let r = call(&fx, &plain, Method::PUT, "/api/v1/secrets/git.token", json!({"value": V2, "group": "g"})).await;
+    let r = call(
+        &fx,
+        &plain,
+        Method::PUT,
+        "/api/v1/secrets/git.token",
+        json!({"value": V2, "group": "g"}),
+    )
+    .await;
     assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
 }
 
@@ -1070,13 +1125,41 @@ async fn reserved_names_cannot_be_created_and_widening_runners_needs_the_unlock(
         assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"), "{name}");
     }
     create(&fx, "git.token", V1, &[]).await;
-    call(&fx, &fx.dev, Method::POST, "/api/v1/secret-groups", json!({"name": "g", "runners": []})).await;
+    call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/secret-groups",
+        json!({"name": "g", "runners": []}),
+    )
+    .await;
     let plain = super::stepup::plain(&fx, "plain", &ALL, true).await;
-    let r = call(&fx, &plain, Method::PUT, "/api/v1/secrets/git.token", json!({"value": V2, "runners": [vm.id]})).await;
+    let r = call(
+        &fx,
+        &plain,
+        Method::PUT,
+        "/api/v1/secrets/git.token",
+        json!({"value": V2, "runners": [vm.id]}),
+    )
+    .await;
     assert_eq!(code(&r), (StatusCode::FORBIDDEN, "unlock_required"));
-    let r = call(&fx, &plain, Method::PUT, "/api/v1/secret-groups/g", json!({"runners": [vm.id]})).await;
+    let r = call(
+        &fx,
+        &plain,
+        Method::PUT,
+        "/api/v1/secret-groups/g",
+        json!({"runners": [vm.id]}),
+    )
+    .await;
     assert_eq!(code(&r), (StatusCode::FORBIDDEN, "unlock_required"));
     // The unlocked device may.
-    let r = call(&fx, &fx.dev, Method::PUT, "/api/v1/secrets/git.token", json!({"value": V2, "runners": [vm.id]})).await;
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::PUT,
+        "/api/v1/secrets/git.token",
+        json!({"value": V2, "runners": [vm.id]}),
+    )
+    .await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
 }

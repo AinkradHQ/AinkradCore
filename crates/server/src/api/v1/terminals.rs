@@ -1403,7 +1403,11 @@ async fn stream(
     let lapse = async {
         loop {
             tokio::time::sleep(Duration::from_secs(2)).await;
-            if app.auth.unlocked_until(&by_device, app.clock.unix()).is_none() {
+            if app
+                .auth
+                .unlocked_until(&by_device, app.clock.unix())
+                .is_none()
+            {
                 break;
             }
         }

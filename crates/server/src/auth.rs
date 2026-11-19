@@ -465,22 +465,35 @@ mod tests {
     #[test]
     fn an_unlock_holds_on_beats_ends_on_lock_and_lapses_without_one() {
         let a = auth();
-        assert!(!a.beat("d_a", Some("x"), 100), "a beat never opens an unlock");
+        assert!(
+            !a.beat("d_a", Some("x"), 100),
+            "a beat never opens an unlock"
+        );
         assert_eq!(a.unlocked_until("d_a", 100), None);
         let tok = a.unlock("d_a", 100);
         assert!(a.unlock_ok("d_a", Some(&tok), 100));
-        assert!(!a.unlock_ok("d_a", Some("guess"), 100), "the token is the proof");
+        assert!(
+            !a.unlock_ok("d_a", Some("guess"), 100),
+            "the token is the proof"
+        );
         assert!(!a.unlock_ok("d_a", None, 100));
         assert!(!a.beat("d_a", Some("guess"), 120), "a beat needs the token");
         assert!(!a.beat("d_a", None, 120));
         assert_eq!(a.unlocked_until("d_a", 100), Some(100 + UNLOCK_BEAT_SECS));
-        assert!(a.beat("d_a", Some(&tok), 150), "no time cap: beats keep it open");
+        assert!(
+            a.beat("d_a", Some(&tok), 150),
+            "no time cap: beats keep it open"
+        );
         assert!(a.beat("d_a", Some(&tok), 150 + UNLOCK_BEAT_SECS - 1));
         assert_eq!(a.unlocked_until("d_b", 150), None, "per device");
         a.lock("d_a");
         assert!(!a.beat("d_a", Some(&tok), 400), "ended");
         let tok = a.unlock("d_a", 500);
-        assert_eq!(a.unlocked_until("d_a", 500 + UNLOCK_BEAT_SECS), None, "lapsed");
+        assert_eq!(
+            a.unlocked_until("d_a", 500 + UNLOCK_BEAT_SECS),
+            None,
+            "lapsed"
+        );
         assert!(!a.beat("d_a", Some(&tok), 500 + UNLOCK_BEAT_SECS));
         a.unlock("d_a", 900);
         a.revoked("d_a");

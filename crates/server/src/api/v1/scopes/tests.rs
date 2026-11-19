@@ -36,74 +36,346 @@ fn templates_match_whole_segments_only() {
 #[test]
 fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
     const PLAIN: &[(&str, &str, &str)] = &[
-        ("PUT", "/api/v1/settings/{scope}/{key}", "a setting that is not `auth.*` (those are danger by key, in the handler)"),
-        ("DELETE", "/api/v1/settings/{scope}/{key}", "a setting that is not `auth.*` (those are danger by key, in the handler)"),
-        ("POST", "/api/v1/runners/{id}/noop", "fixed or caller-owned effect, not a grant (see 0.9 notes)"),
-        ("POST", "/api/v1/accounts/logins", "fixed or caller-owned effect, not a grant (see 0.9 notes)"),
-        ("POST", "/api/v1/accounts/logins/{id}/code", "fixed or caller-owned effect, not a grant (see 0.9 notes)"),
-        ("DELETE", "/api/v1/accounts/logins/{id}", "fixed or caller-owned effect, not a grant (see 0.9 notes)"),
-        ("POST", "/api/v1/accounts", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/accounts/{id}/secret", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/accounts/{id}/state", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/accounts/{id}/cap", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/accounts/{id}/session-limits", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/accounts/{id}/test", "fixed or caller-owned effect, not a grant (see 0.9 notes)"),
-        ("POST", "/api/v1/accounts/{id}/check", "fixed or caller-owned effect, not a grant (see 0.9 notes)"),
-        ("DELETE", "/api/v1/accounts/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/accounts/providers", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/accounts/providers/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/accounts/providers/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/pools", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/pools/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/pools/{id}/members/{account}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/pools/{id}/members/{account}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/pools/{id}/default", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/bindings", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/bindings/{agent}/{provider}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/chains", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/chains/bindings/{agent}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/chains/bindings/{agent}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/chains/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/chains/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/chains/{id}/default", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/connections", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/connections/start", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/connections/flows/{id}", "fixed or caller-owned effect, not a grant (see 0.9 notes)"),
-        ("POST", "/api/v1/connections/flows/{id}/callback", "fixed or caller-owned effect, not a grant (see 0.9 notes)"),
-        ("POST", "/api/v1/connections/flows/{id}/choose", "fixed or caller-owned effect, not a grant (see 0.9 notes)"),
-        ("PATCH", "/api/v1/connections/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/connections/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/connections/{id}/credential", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/connections/{id}/test", "fixed or caller-owned effect, not a grant (see 0.9 notes)"),
-        ("PUT", "/api/v1/connections/{id}/grants", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/connections/{id}/grants/{grantee_kind}/{grantee}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/connection-defaults/{kind}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/connection-defaults/{kind}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/connection-apps/{kind}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/accounts/{id}/limits", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/accounts/{id}/limits/{unit}/{window_secs}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/budgets", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/budgets/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/budgets/{id}/raise", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/prices", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/projects", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/projects/from-github", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PATCH", "/api/v1/projects/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/projects/{id}/archive", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/projects/{id}/repos", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/projects/{id}/repos/{repo}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/projects/{id}/repos/{repo}/primary", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/projects/{id}/secrets/{name}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/projects/{id}/secrets/{name}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/projects/{id}/repos/{repo}/fetch", "fixed or caller-owned effect, not a grant (see 0.9 notes)"),
-        ("POST", "/api/v1/secrets", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/secrets/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/secrets/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("POST", "/api/v1/secret-groups", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("PUT", "/api/v1/secret-groups/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/secret-groups/{id}", "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock"),
-        ("DELETE", "/api/v1/terminals/{id}/local", "fixed or caller-owned effect, not a grant (see 0.9 notes)"),
-        ("PATCH", "/api/v1/agent-sessions/{id}", "fixed or caller-owned effect, not a grant (see 0.9 notes)"),
+        (
+            "PUT",
+            "/api/v1/settings/{scope}/{key}",
+            "a setting that is not `auth.*` (those are danger by key, in the handler)",
+        ),
+        (
+            "DELETE",
+            "/api/v1/settings/{scope}/{key}",
+            "a setting that is not `auth.*` (those are danger by key, in the handler)",
+        ),
+        (
+            "POST",
+            "/api/v1/runners/{id}/noop",
+            "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
+        (
+            "POST",
+            "/api/v1/accounts/logins",
+            "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
+        (
+            "POST",
+            "/api/v1/accounts/logins/{id}/code",
+            "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
+        (
+            "DELETE",
+            "/api/v1/accounts/logins/{id}",
+            "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
+        (
+            "POST",
+            "/api/v1/accounts",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/accounts/{id}/secret",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/accounts/{id}/state",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/accounts/{id}/cap",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/accounts/{id}/session-limits",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/accounts/{id}/test",
+            "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
+        (
+            "POST",
+            "/api/v1/accounts/{id}/check",
+            "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
+        (
+            "DELETE",
+            "/api/v1/accounts/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/accounts/providers",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/accounts/providers/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/accounts/providers/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/pools",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/pools/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/pools/{id}/members/{account}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/pools/{id}/members/{account}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/pools/{id}/default",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/bindings",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/bindings/{agent}/{provider}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/chains",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/chains/bindings/{agent}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/chains/bindings/{agent}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/chains/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/chains/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/chains/{id}/default",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/connections",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/connections/start",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/connections/flows/{id}",
+            "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
+        (
+            "POST",
+            "/api/v1/connections/flows/{id}/callback",
+            "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
+        (
+            "POST",
+            "/api/v1/connections/flows/{id}/choose",
+            "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
+        (
+            "PATCH",
+            "/api/v1/connections/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/connections/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/connections/{id}/credential",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/connections/{id}/test",
+            "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
+        (
+            "PUT",
+            "/api/v1/connections/{id}/grants",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/connections/{id}/grants/{grantee_kind}/{grantee}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/connection-defaults/{kind}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/connection-defaults/{kind}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/connection-apps/{kind}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/accounts/{id}/limits",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/budgets",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/budgets/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/budgets/{id}/raise",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/prices",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/projects",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/projects/from-github",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PATCH",
+            "/api/v1/projects/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/projects/{id}/archive",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/projects/{id}/repos",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/projects/{id}/repos/{repo}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/projects/{id}/repos/{repo}/primary",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/projects/{id}/secrets/{name}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/projects/{id}/secrets/{name}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/projects/{id}/repos/{repo}/fetch",
+            "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
+        (
+            "POST",
+            "/api/v1/secrets",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/secrets/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/secrets/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/secret-groups",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/secret-groups/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/secret-groups/{id}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/terminals/{id}/local",
+            "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
+        (
+            "PATCH",
+            "/api/v1/agent-sessions/{id}",
+            "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
     ];
     let in_plain = |m: &str, t: &str| PLAIN.iter().any(|(pm, pt, _)| *pm == m && *pt == t);
     for (m, t, scope) in ROUTES {
@@ -119,7 +391,10 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
         assert_eq!(tiers, 1, "{m} {t} ({scope}) must be in exactly one tier");
     }
     for (m, t, why) in PLAIN {
-        assert!(declared(m, t).is_some(), "{m} {t} is plain but not in ROUTES");
+        assert!(
+            declared(m, t).is_some(),
+            "{m} {t} is plain but not in ROUTES"
+        );
         assert!(!why.is_empty());
     }
 }
