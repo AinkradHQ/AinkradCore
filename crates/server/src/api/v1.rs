@@ -386,6 +386,10 @@ pub fn router(app: App) -> Router {
             get(connections::activity),
         )
         .route(
+            "/api/v1/connections/{id}/resources",
+            get(connections::resources::list),
+        )
+        .route(
             "/api/v1/connections/{id}/grants",
             get(connections::grants_api::list_grants).put(connections::grants_api::set_grant),
         )
