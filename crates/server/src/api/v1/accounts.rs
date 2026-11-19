@@ -277,24 +277,6 @@ pub async fn create(
     Ok(Json(d))
 }
 
-#[utoipa::path(get, path = "/api/v1/accounts/{id}/models", operation_id = "listAccountModels",
-    tag = "accounts", params(("id" = String, Path, description = "The account's id")),
-    responses((status = 200, description = "The model ids the provider listed for the account \
-        when its key was added or checked (a preset's list is read through a runner's gateway). \
-        Empty until one was read; ids only, no price. 404 for no such account", body = AccountModels)))]
-pub async fn list_models(
-    State(app): State<App>,
-    Path(id): Path<String>,
-) -> ApiResult<AccountModels> {
-    let id = num(&id, "account")?;
-    acc::get(&app.pool, id).await.map_err(err)?;
-    let (models, at) = crate::store::account_models::get(&app.pool, id).await?;
-    Ok(Json(AccountModels {
-        models,
-        fetched_at: opt_ts(at.as_deref()),
-    }))
-}
-
 #[utoipa::path(put, path = "/api/v1/accounts/{id}/secret", operation_id = "replaceAccountSecret",
     tag = "accounts", params(("id" = String, Path, description = "The account's id")),
     request_body = ReplaceKey,
@@ -530,10 +512,12 @@ pub async fn delete(
 
 mod logins;
 mod meter;
+mod models;
 mod pools;
 mod types;
 
 pub use logins::*;
 pub use meter::AccountMeter;
+pub use models::*;
 pub use pools::*;
 pub use types::*;

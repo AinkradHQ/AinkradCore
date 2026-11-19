@@ -133,6 +133,14 @@ pub async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refusal> {
     {
         book.push(prices::default_price(provider, m));
     }
+    // A model the person switched off for this account is neither granted nor named.
+    let off = crate::store::account_models::denied(&app.pool, id).await?;
+    if let Some(m) = s.model.as_ref().filter(|m| off.contains(*m)) {
+        return Err(refuse(format!(
+            "the model {m} is switched off for this account"
+        )));
+    }
+    book.retain(|p| !off.contains(&p.model));
     let prices = prices::model_prices(&book);
     let models: Vec<String> = book.iter().map(|p| p.model.clone()).collect();
     if models.is_empty() {

@@ -314,6 +314,10 @@ pub fn router(app: App) -> Router {
             put(accounts::set_session_limits),
         )
         .route("/api/v1/accounts/{id}/models", get(accounts::list_models))
+        .route(
+            "/api/v1/accounts/{id}/models/{model}",
+            put(accounts::set_model_allowed),
+        )
         .route("/api/v1/accounts/{id}/test", post(accounts::test_account))
         .route("/api/v1/accounts/{id}/check", post(accounts::check_account))
         .route(

@@ -91,6 +91,7 @@ mod me;
 mod metrics;
 mod mirrors_api;
 mod mode;
+mod model_allow;
 mod modules;
 mod neg_alloc;
 mod neg_chains;

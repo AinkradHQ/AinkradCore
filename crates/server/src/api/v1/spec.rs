@@ -113,6 +113,7 @@ use super::{
         accounts::set_cap,
         accounts::set_session_limits,
         accounts::list_models,
+        accounts::set_model_allowed,
         accounts::test_account,
         accounts::check_account,
         accounts::start_login,
