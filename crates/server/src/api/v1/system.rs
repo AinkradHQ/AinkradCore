@@ -513,7 +513,7 @@ log_route!(
 
 pub const UPDATE_REQUESTED: &str = "host.update_requested";
 /// Where `scripts/release/update.sh` (root) writes its progress; the Core only ever reads it.
-pub const UPDATE_STATUS: &str = "/var/lib/ainkrad/update/status.json";
+pub const UPDATE_STATUS: &str = "/var/lib/ainkrad-update/status.json";
 
 #[derive(Debug, Serialize, ToSchema, PartialEq, Eq)]
 pub struct UpdateEvent {

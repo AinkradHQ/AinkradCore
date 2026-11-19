@@ -51,7 +51,7 @@ jobs:
   publish:
     needs: [check, build]
     runs-on: ubuntu-24.04
-    environment: release   # tags core-v* only; holds MINISIGN_SECRET_KEY and RELEASE_UPLOAD_TOKEN
+    environment: release   # tags core-v* only; holds MINISIGN_SECRET_KEY and RELEASE_UPLOAD_TOKEN_CORE
     permissions:
       contents: write
     steps:
@@ -65,7 +65,7 @@ jobs:
       - name: Sign, verify with the pinned key, upload, publish the manifest
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
-          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
+          RELEASE_UPLOAD_TOKEN_CORE: ${{ secrets.RELEASE_UPLOAD_TOKEN_CORE }}
           VERSION: ${{ needs.check.outputs.version }}
         run: |
           set -euo pipefail
