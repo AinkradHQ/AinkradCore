@@ -114,6 +114,9 @@ pub(super) async fn bind(
              the gateway) first",
         );
     }
+    if preset && let Some(why) = preset_shape_problem(&Redactor::new(), key) {
+        return refused(why);
+    }
     let host = host_of(&url);
     // The account's own provider is judged against the host its key was bound to, not the
     // definition's current one.
@@ -138,6 +141,22 @@ pub(super) async fn bind(
         )),
         None => Ok(()),
     }
+}
+
+/// Why a pasted `key` cannot be a preset provider's key, if it cannot: a preset has no shape of its
+/// own to read, so the value is judged as what it looks like. It is one line, no PEM block, no JWT, and
+/// whatever credential shape the redactor reads in it is a provider's own kind of key (`single_key`);
+/// a git, AWS, Citadel or bearer token pasted by mistake (or on purpose) is refused, not sent to
+/// the preset's host.
+pub(super) fn preset_shape_problem(redactor: &Redactor, key: &str) -> Option<&'static str> {
+    let key = key.trim();
+    let jwt = key.starts_with("eyJ") && key.matches('.').count() == 2;
+    let odd = key.contains(['\n', '\r']) || key.contains("-----BEGIN") || jwt;
+    let other = redactor.text(key) != key && !single_key(redactor, key);
+    (odd || other).then_some(
+        "a preset provider's key is one single-line key: a pasted multi-line value, PEM, JWT or \
+         another kind of credential is refused",
+    )
 }
 
 /// The longest value the shape check scans for a key glued behind another (it is quadratic).
@@ -193,5 +212,24 @@ mod tests {
             assert!(!single_key(&r, &format!("{bad}{body}")), "{bad}");
         }
         assert!(!single_key(&r, "throwaway-no-shape"));
+    }
+
+    #[test]
+    fn a_preset_key_is_one_line_and_no_other_credential() {
+        let r = Redactor::new();
+        let body = "A0".repeat(20);
+        for ok in ["throwaway-preset-value-1", &format!("sk-or-v1-{body}")] {
+            assert_eq!(preset_shape_problem(&r, ok), None, "{ok}");
+        }
+        for bad in [
+            format!("throwaway-a\nthrowaway-b"),
+            "-----BEGIN PRIVATE KEY-----".to_owned(),
+            "eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl".to_owned(),
+            format!("ghp_{body}"),
+            format!("AKIA{body}"),
+            format!("cit_run_{body}"),
+        ] {
+            assert!(preset_shape_problem(&r, &bad).is_some(), "{bad}");
+        }
     }
 }

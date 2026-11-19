@@ -23,7 +23,14 @@ pub async fn sweep(app: &App, all: bool) {
 
 /// Asks each owed runner to wipe its home; the row goes only once the runner says it is done.
 async fn send_wipes(app: &App) {
-    let owed = match accounts::pending_wipes(&app.pool).await {
+    let online: Vec<String> = app
+        .hub
+        .runners()
+        .into_iter()
+        .filter(|(_, r)| r.online)
+        .map(|(id, _)| id)
+        .collect();
+    let owed = match accounts::pending_wipes(&app.pool, &online).await {
         Ok(o) => o,
         Err(e) => return tracing::warn!(error = %e, "listing the owed runner wipes"),
     };

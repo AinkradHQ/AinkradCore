@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS core_limit_retired;
 -- The table comes back empty: what moved into budgets stays there.
 CREATE TABLE core_account_limits (
     id           INTEGER PRIMARY KEY,

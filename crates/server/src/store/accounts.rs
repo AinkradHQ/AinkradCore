@@ -30,11 +30,13 @@ use crate::ops::secretbox::SecretBox;
 
 mod create;
 mod remove;
+mod retired_limits;
 pub use create::{bound_marker, create, create_bound, create_by, create_placed};
 pub use remove::{
     PendingWipe, UNDO_SECS, note_keyring_left, owe_wipe, pending_wipes, restore, soft_delete,
-    wipe_done, wipe_due, wipe_tried,
+    wipe_done, wipe_due, wipe_one, wipe_tried,
 };
+pub use retired_limits::audit_retired as audit_retired_limits;
 
 /// The cap a new API-key account starts with.
 pub const DEFAULT_CAP: i64 = 4;
@@ -409,7 +411,36 @@ pub async fn delete(
     by_device: &str,
     actor: AuditActor,
 ) -> Result<(), Error> {
+    delete_gated(pool, id, by_device, actor, None)
+        .await
+        .map(drop)
+}
+
+/// [`delete`], but with `due` (`all`, the cutoff) it first re-checks, inside the delete's own
+/// transaction, that the account is still removed and its window is over (or `all`): a restore that
+/// raced the sweep's list wins, and `false` says nothing was wiped.
+pub(super) async fn delete_gated(
+    pool: &SqlitePool,
+    id: i64,
+    by_device: &str,
+    actor: AuditActor,
+    due: Option<(bool, &str)>,
+) -> Result<bool, Error> {
     let mut tx = super::begin_write(pool).await?;
+    if let Some((all, cutoff)) = due {
+        let still: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM core_accounts WHERE id = ?1 AND deleted_at IS NOT NULL \
+             AND (?2 OR julianday(deleted_at) <= julianday(?3))",
+        )
+        .bind(id)
+        .bind(all)
+        .bind(cutoff)
+        .fetch_one(&mut *tx)
+        .await?;
+        if still == 0 {
+            return Ok(false);
+        }
+    }
     let a = find_in(&mut tx, id, true).await?;
     // The seats the cascade takes with the row, so the audit trail says which pools lost it.
     let pools: Vec<i64> = sqlx::query_scalar(
@@ -448,7 +479,7 @@ pub async fn delete(
     )
     .await?;
     tx.commit().await?;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
