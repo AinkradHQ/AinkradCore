@@ -21,8 +21,9 @@ use super::secrets::Error;
 pub const MAX_PRICE: i64 = 1_000_000_000;
 
 /// The provider list prices this release ships, as `(provider, model, input, output, cache read)`
-/// in micro-dollars per million tokens. A price someone set (`set`) always wins over these. Read
-/// 2026-11-11; OpenAI and Gemini have none until a list is recorded.
+/// in micro-dollars per million tokens. A price someone set (`set`) always wins over these.
+/// Anthropic read 2026-11-11; OpenAI and Gemini 2026-11-19 (standard tier, text, up to 200k
+/// context): re-read them when a provider changes its list ([`shipped_at`]).
 pub const SHIPPED: &[(&str, &str, i64, i64, i64)] = &[
     (
         "anthropic",
@@ -39,8 +40,60 @@ pub const SHIPPED: &[(&str, &str, i64, i64, i64)] = &[
         100_000,
     ),
     ("anthropic", "claude-haiku-5-5", 100_000, 500_000, 10_000),
+    ("openai", "gpt-5", 1_250_000, 10_000_000, 125_000),
+    ("openai", "gpt-5-codex", 1_250_000, 10_000_000, 125_000),
+    ("openai", "gpt-5-mini", 250_000, 2_000_000, 25_000),
+    ("openai", "gpt-5-nano", 50_000, 400_000, 5_000),
+    ("openai", "gpt-4.1", 2_000_000, 8_000_000, 500_000),
+    ("openai", "gpt-4.1-mini", 400_000, 1_600_000, 100_000),
+    (
+        "google",
+        "gemini-3-pro-preview",
+        2_000_000,
+        12_000_000,
+        200_000,
+    ),
+    (
+        "google",
+        "gemini-3-flash-preview",
+        500_000,
+        3_000_000,
+        50_000,
+    ),
+    ("google", "gemini-2.5-pro", 1_250_000, 10_000_000, 125_000),
+    ("google", "gemini-2.5-flash", 300_000, 2_500_000, 30_000),
+    ("google", "gemini-2.5-flash-lite", 100_000, 400_000, 10_000),
 ];
-const SHIPPED_AT: &str = "2026-11-11T00:00:00Z";
+
+/// When a shipped provider's list was read.
+fn shipped_at(provider: &str) -> &'static str {
+    match provider {
+        "anthropic" => "2026-11-11T00:00:00Z",
+        _ => "2026-11-19T00:00:00Z",
+    }
+}
+
+/// The price of a model of a built-in provider that the book and [`SHIPPED`] do not know, so a
+/// user's own model id never hard-fails. Deliberately above every shipped rate (a ceiling stays
+/// safe), and flagged: its `priced_at` is the epoch, which no real price has. It lives in the
+/// session's grant book only (so its cost events carry it as their rates' `priced_at`); the Core's
+/// price book never holds it.
+const DEFAULT_RATES: [i64; 3] = [5_000_000, 25_000_000, 500_000];
+const DEFAULT_PRICED_AT: &str = "1970-01-01T00:00:00Z";
+
+/// The flagged default price of `model`, for the grant's book.
+pub fn default_price(provider: &str, model: &str) -> Price {
+    Price {
+        provider: provider.to_owned(),
+        model: model.to_owned(),
+        version: 0,
+        input_per_mtok_micro: DEFAULT_RATES[0],
+        output_per_mtok_micro: DEFAULT_RATES[1],
+        cache_per_mtok_micro: DEFAULT_RATES[2],
+        priced_at: DEFAULT_PRICED_AT.to_owned(),
+        created_at: String::new(),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Price {
@@ -231,7 +284,7 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<Price>, sqlx::Error> {
                 input_per_mtok_micro: i,
                 output_per_mtok_micro: o,
                 cache_per_mtok_micro: c,
-                priced_at: SHIPPED_AT.to_owned(),
+                priced_at: shipped_at(provider).to_owned(),
                 created_at: String::new(),
             });
         }
@@ -283,7 +336,7 @@ pub async fn rates_in(
             input,
             output,
             cache,
-            priced_at: SHIPPED_AT.to_owned(),
+            priced_at: shipped_at(provider).to_owned(),
         }));
     }
     // A user definition's own list, read as of its newest version; a built-in has none.
@@ -299,4 +352,25 @@ pub async fn rates_in(
         cache: m.input_per_mtok_micro,
         priced_at: at,
     }))
+}
+
+#[cfg(test)]
+mod shipped_tests {
+    use super::*;
+
+    #[test]
+    fn every_built_in_provider_ships_prices_and_an_unknown_model_gets_a_flagged_default() {
+        for p in ["anthropic", "openai", "google"] {
+            assert!(SHIPPED.iter().any(|s| s.0 == p), "{p}");
+        }
+        assert!(SHIPPED.iter().all(|s| s.2 > 0 && s.3 >= s.2 && s.4 <= s.2));
+        let d = default_price("google", "gemini-next");
+        assert_eq!(d.priced_at, "1970-01-01T00:00:00Z");
+        // Above every shipped rate, so a ceiling built on it is safe.
+        assert!(
+            SHIPPED
+                .iter()
+                .all(|s| s.2 <= d.input_per_mtok_micro && s.3 <= d.output_per_mtok_micro)
+        );
+    }
 }

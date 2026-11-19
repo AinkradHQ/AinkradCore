@@ -279,9 +279,11 @@ impl std::fmt::Debug for GatewayTest {
 
 /// Key classes by shape, most specific first, each with the one provider and host it belongs to.
 /// The OpenAI bare `sk-` catch-all is not here: it is the last resort in [`key_host_problem`].
-const KEY_CLASSES: [(&str, &str, &str); 5] = [
+const KEY_CLASSES: [(&str, &str, &str); 6] = [
     ("sk-ant-", "anthropic", "api.anthropic.com"),
     ("AIza", "google", "generativelanguage.googleapis.com"),
+    // Google's newer API keys (`AQ.` then a body with one more dot), Gemini and Vertex express.
+    ("AQ.", "google", "generativelanguage.googleapis.com"),
     ("sk-proj-", "openai", "api.openai.com"),
     ("sk-svcacct-", "openai", "api.openai.com"),
     ("sk-admin-", "openai", "api.openai.com"),

@@ -245,3 +245,14 @@ fn a_test_result_is_a_status_class_and_nothing_else() {
             == UpstreamStatus::Unknown
     );
 }
+
+#[test]
+fn a_google_aq_key_is_googles_and_goes_to_googles_host_only() {
+    const AQ: &str = "AQ.Ab8RN6TESTTESTTESTTESTTESTTESTTESTTESTTEST";
+    let host = "generativelanguage.googleapis.com";
+    assert_eq!(key_host_problem(AQ, "google", host, &[]), None);
+    assert!(key_host_problem(AQ, "openai", host, &[]).is_some());
+    assert!(key_host_problem(AQ, "google", "api.openai.com", &[]).is_some());
+    // A user definition may not shadow the shape.
+    assert!(key_prefix_problem("AQ.Ab8RN6").is_some());
+}

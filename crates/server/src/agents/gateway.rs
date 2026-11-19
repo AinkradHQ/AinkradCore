@@ -122,7 +122,18 @@ pub(super) async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refu
     let route = route::of(&def, &account.base_url)?;
     let upstream = upstream_of(&account.base_url, route.wire)?;
     // The allowlist is the price book: a model with no price is refused, so dollar ceilings mean something.
-    let book = prices::book_of(prices::list(&app.pool).await?, provider, &def);
+    let mut book = prices::book_of(prices::list(&app.pool).await?, provider, &def);
+    // Except a built-in provider's model the user named: it runs at the flagged default price
+    // (a user definition's model with no price is still refused: its host is the user's).
+    if let Some(m) = s
+        .model
+        .as_deref()
+        .filter(|m| def.builtin && prices::valid_model(m))
+    {
+        if !book.iter().any(|p| p.model == m) {
+            book.push(prices::default_price(provider, m));
+        }
+    }
     let prices = prices::model_prices(&book);
     let models: Vec<String> = book.iter().map(|p| p.model.clone()).collect();
     if models.is_empty() {
