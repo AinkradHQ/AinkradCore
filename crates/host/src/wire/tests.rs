@@ -14,6 +14,7 @@ fn the_four_class_a_actions_round_trip() {
         ("status", "{}", Action::Status),
         ("restart_core", "{}", Action::RestartCore),
         ("restart_runner", "{}", Action::RestartRunner),
+        ("update", "{}", Action::Update),
     ] {
         let r = parse(req(a, p).as_bytes()).unwrap();
         assert_eq!((r.id.as_str(), r.action), (ID, want));
@@ -196,5 +197,13 @@ fn the_parser_survives_random_and_mutated_input() {
             }
         }
         let _ = parse(&buf);
+    }
+}
+
+#[test]
+fn update_takes_no_parameters() {
+    // No version, URL or path: the updater reads the signed manifest itself.
+    for p in [r#"{"version":"9"}"#, r#"{"url":"https://x"}"#, r#"{"path":"/x"}"#] {
+        assert_eq!(code(&req("update", p)), Code::BadRequest, "{p}");
     }
 }

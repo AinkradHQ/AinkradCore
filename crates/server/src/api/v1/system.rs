@@ -508,3 +508,180 @@ log_route!(
     "backup",
     "Needs `admin` and a step-up: these logs can hold values no redactor can recognise."
 );
+
+// ---- E12-3: Core self-update ---------------------------------------------------------------------------------------
+
+pub const UPDATE_REQUESTED: &str = "host.update_requested";
+/// Where `scripts/release/update.sh` (root) writes its progress; the Core only ever reads it.
+pub const UPDATE_STATUS: &str = "/var/lib/ainkrad/update/status.json";
+
+#[derive(Debug, Serialize, ToSchema, PartialEq, Eq)]
+pub struct UpdateEvent {
+    /// Unix seconds.
+    pub at: i64,
+    /// `snapshot`, `install`, `health` or `done`.
+    pub step: String,
+    /// A fixed sentence from the updater.
+    pub text: String,
+}
+
+#[derive(Debug, Serialize, ToSchema, PartialEq, Eq)]
+pub struct UpdateStatus {
+    /// What runs now (this process's version).
+    pub current: String,
+    /// `idle`, `snapshot`, `install`, `health`, `done`, `rolled_back` or `failed`.
+    pub state: String,
+    /// A newer version the updater found, when there is one.
+    pub available: Option<String>,
+    /// The version being installed, or the last one tried.
+    pub to: Option<String>,
+    /// 0 to 1 while an update runs.
+    pub progress: f64,
+    /// A short code (`health_failed`, `install_failed`, `bad_signature`, ...) when the last run did not finish.
+    pub error: Option<String>,
+    /// Unix seconds of the last write.
+    pub updated_at: Option<i64>,
+    pub events: Vec<UpdateEvent>,
+}
+
+/// The updater's status file as an API answer. A missing or unreadable file is "idle": the updater has not run.
+/// Every string is cut and stripped of control characters: the file is root's, but it is still text from outside.
+pub fn parse_update_status(raw: Option<&[u8]>, current: &str) -> UpdateStatus {
+    let v: Value = raw
+        .and_then(|b| serde_json::from_slice(b).ok())
+        .unwrap_or(Value::Null);
+    let s = |k: &str| v[k].as_str().map(|x| plain(x, 64));
+    UpdateStatus {
+        current: current.to_owned(),
+        state: s("state")
+            .filter(|x| {
+                [
+                    "idle",
+                    "snapshot",
+                    "install",
+                    "health",
+                    "done",
+                    "rolled_back",
+                    "failed",
+                ]
+                .contains(&x.as_str())
+            })
+            .unwrap_or_else(|| "idle".into()),
+        available: s("available"),
+        to: s("to"),
+        progress: v["progress"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0),
+        error: s("error"),
+        updated_at: v["updated_at"].as_i64(),
+        events: v["events"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .take(16)
+                    .map(|e| UpdateEvent {
+                        at: e["at"].as_i64().unwrap_or(0),
+                        step: plain(e["step"].as_str().unwrap_or(""), 16),
+                        text: plain(e["text"].as_str().unwrap_or(""), 80),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+#[utoipa::path(get, path = "/api/v1/system/update", operation_id = "getCoreUpdate",
+    tag = "system",
+    responses((status = 200, description = "Where the Core's self-update stands: what runs, whether a newer \
+        signed version is available, and the steps of the last run (snapshot, install, health, done or \
+        rolled back). Read from the updater's status file. Needs `admin`", body = UpdateStatus)))]
+pub async fn update_status() -> Json<UpdateStatus> {
+    let raw = tokio::fs::read(UPDATE_STATUS).await.ok();
+    Json(parse_update_status(
+        raw.as_deref().filter(|b| b.len() <= 64 * 1024),
+        env!("CARGO_PKG_VERSION"),
+    ))
+}
+
+#[utoipa::path(post, path = "/api/v1/system/update", operation_id = "startCoreUpdate",
+    tag = "system",
+    responses((status = 202, description = "The update was started (audited first as `host.update_requested`). \
+        Progress is `GET /system/update`; Core restarts for a few seconds. The updater takes its own \
+        snapshot, installs only what the pinned release key signed, health-checks and rolls back by itself. \
+        Needs `admin` and a fresh step-up. 429 `Retry-After` (at most one per 5 minutes); 503 \
+        `host_helper_unavailable` (no helper on this host); 504 `host_helper_timeout`", body = Restarted)))]
+pub async fn update_now(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+) -> Result<(StatusCode, Json<Restarted>), Fail> {
+    let now = u64::try_from(app.clock.unix()).unwrap_or(0);
+    if let Some(f) = app.host_helper.blocked("update", now) {
+        refused(&app, &me, "update", &f).await;
+        return Err(fail(f));
+    }
+    let id = request_id();
+    let row = audit(
+        &app,
+        &me,
+        UPDATE_REQUESTED,
+        json!({"request_id": id, "by_device": me.device.id}),
+    )
+    .await
+    .map_err(internal)?;
+    let actor = Actor {
+        device: me.device.id.clone(),
+        audit_seq: u64::try_from(row.seq.0).unwrap_or(0),
+    };
+    let result = app.host_helper.call(&id, "update", json!({}), &actor).await;
+    let code = match &result {
+        Ok(_) => "accepted".to_owned(),
+        Err(f) => outcome(f),
+    };
+    // Hold a repeat back: the helper's own minimum between two updates is 5 minutes.
+    let hold = match &result {
+        Ok(_) => {
+            let why = Failure::Refused {
+                code: "rate_limited".into(),
+                retry_after: Some(300),
+            };
+            Some((300, why))
+        }
+        Err(f @ Failure::Refused { code, retry_after }) if code == "rate_limited" => {
+            Some((retry_after.unwrap_or(300).clamp(1, 3600), f.clone()))
+        }
+        Err(f) => Some((10, f.clone())),
+    };
+    if let Some((secs, why)) = hold {
+        app.host_helper.block("update", now, secs, why);
+    }
+    let details = json!({"request_id": id, "action": "update", "code": code});
+    if let Err(e) = audit(&app, &me, ACTION_RESULT, details).await {
+        tracing::error!(error = %e, request_id = id, "auditing a host action result failed");
+    }
+    match result {
+        Ok(_) => Ok((StatusCode::ACCEPTED, Json(Restarted { request_id: id }))),
+        Err(f) => Err(fail(f)),
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_file_is_idle_and_a_done_run_is_read() {
+        let s = parse_update_status(None, "0.10.0");
+        assert_eq!((s.state.as_str(), s.current.as_str()), ("idle", "0.10.0"));
+        let raw = br#"{"state":"rolled_back","to":"0.10.1","available":null,"progress":1,"error":"health_failed",
+            "updated_at":5,"events":[{"at":3,"step":"health","text":"Health check"}]}"#;
+        let s = parse_update_status(Some(raw), "0.10.0");
+        assert_eq!(s.state, "rolled_back");
+        assert_eq!(s.error.as_deref(), Some("health_failed"));
+        assert_eq!(s.events.len(), 1);
+    }
+
+    #[test]
+    fn an_unknown_state_or_a_control_character_never_gets_through() {
+        let s = parse_update_status(Some(br#"{"state":"pwned","error":"a\u001b[31mb"}"#), "1");
+        assert_eq!(s.state, "idle");
+        assert_eq!(s.error.as_deref(), Some("a?[31mb"));
+    }
+}

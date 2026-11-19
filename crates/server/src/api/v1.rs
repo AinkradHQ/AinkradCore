@@ -242,6 +242,10 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/system/host", get(system::host))
         .route("/api/v1/core/health", get(corehealth::get))
         .route("/api/v1/system/restart", post(system::restart))
+        .route(
+            "/api/v1/system/update",
+            get(system::update_status).post(system::update_now),
+        )
         .route("/api/v1/system/logs/core", get(system::logs_core))
         .route("/api/v1/system/logs/helper", get(system::logs_helper))
         .route("/api/v1/system/logs/runner", get(system::logs_runner))

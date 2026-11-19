@@ -75,6 +75,8 @@ use super::{
         system::host,
         corehealth::get,
         system::restart,
+        system::update_status,
+        system::update_now,
         system::logs_core,
         system::logs_helper,
         system::logs_runner,

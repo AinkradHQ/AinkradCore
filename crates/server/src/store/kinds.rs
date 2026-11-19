@@ -168,6 +168,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "host.helper_refused",
     "host.logs_read",
     "host.restart_requested",
+    "host.update_requested",
     "identity.rotation.announced",
     "identity.rotation.started",
     "identity.rotation.switched",

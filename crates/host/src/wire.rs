@@ -65,10 +65,12 @@ pub const REGISTRY: &[(&str, Class)] = &[
     ("logs", Class::A),
     ("restart_core", Class::A),
     ("restart_runner", Class::A),
+    // E12-3: starts the fixed unit `ainkrad-update@now.service`. No version, URL or path is a parameter: the updater
+    // reads the signed manifest itself and installs only what the pinned release key signed.
+    ("update", Class::A),
     ("runner_policy", Class::B),
     ("install_tool", Class::B),
-    ("update", Class::B),
-    ("restore", Class::B),
+        ("restore", Class::B),
     ("uninstall", Class::B),
     ("host_config", Class::B),
     ("add_owner", Class::B),
@@ -109,6 +111,7 @@ pub enum Action {
     Logs(Logs),
     RestartCore,
     RestartRunner,
+    Update,
 }
 
 impl Action {
@@ -118,12 +121,16 @@ impl Action {
             Action::Logs(_) => "logs",
             Action::RestartCore => "restart_core",
             Action::RestartRunner => "restart_runner",
+            Action::Update => "update",
         }
     }
 
     /// Mutating actions take the lock, the limits, the dedupe and the log; reads do none of it.
     pub fn mutating(&self) -> bool {
-        matches!(self, Action::RestartCore | Action::RestartRunner)
+        matches!(
+            self,
+            Action::RestartCore | Action::RestartRunner | Action::Update
+        )
     }
 }
 
@@ -264,6 +271,7 @@ pub fn parse(line: &[u8]) -> Result<Request, Refusal> {
         "status" if no_params => Action::Status,
         "restart_core" if no_params => Action::RestartCore,
         "restart_runner" if no_params => Action::RestartRunner,
+        "update" if no_params => Action::Update,
         "logs" => {
             let Ok(p) = serde_json::from_value::<LogsParams>(params) else {
                 return Err(refusal);
