@@ -23,6 +23,7 @@ use sqlx::SqliteConnection;
 use utoipa::{OpenApi, ToSchema};
 
 mod access;
+mod activity;
 mod ai;
 mod ai_propose;
 mod ai_semantic;
@@ -236,6 +237,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/rooms/{room}/inbox", "read"),
     ("GET", "/rooms/{room}/overview", "read"),
     ("GET", "/overview/progress", "read"),
+    ("GET", "/activity", "read"),
     ("GET", "/rooms/{room}/access", "read"),
     // Code Mode (E4): a session acts as its creator without `admin`, so these name the scopes a
     // creator holds. They answer only a session's own calls (`ai::session_of`).
@@ -591,6 +593,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         overview::write,
         overview::write_all,
         overview::progress_route,
+        activity::get,
         overview::instructions,
         policy::get,
         card::get,
@@ -611,6 +614,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
     ),
     components(schemas(
         BrainStatus,
+        activity::BrainActivity,
+        activity::Need,
         imports::StartRun,
         imports::RunId,
         imports::Batch,
@@ -780,6 +785,7 @@ impl Module for Brain {
             )
             .route("/overview/write-all", post(overview::write_all))
             .route("/overview/progress", get(overview::progress_route))
+            .route("/activity", get(activity::get))
             .route(
                 "/rooms/{room}/policy",
                 get(policy::get).patch(policy::patch),
