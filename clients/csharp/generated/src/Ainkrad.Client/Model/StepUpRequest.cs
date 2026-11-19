@@ -42,8 +42,9 @@ namespace Ainkrad.Client.Model
         /// </summary>
         /// <param name="assertion">A passkey device&#39;s proof: the WebAuthn &#x60;PublicKeyCredential&#x60; answering the challenge&#39;s &#x60;options&#x60;, with user verification..</param>
         /// <param name="challenge">The challenge from &#x60;POST /api/v1/auth/step-up/challenge&#x60; for this session. (required).</param>
+        /// <param name="purpose">What the proof opens. &#x60;action&#x60; (the default) elevates the session for the danger routes for &#x60;auth.step_up_secs&#x60;; &#x60;session&#x60; opens the app unlock instead (E1-1), held while the app sends &#x60;POST /api/v1/auth/unlock/beat&#x60; and ended by &#x60;POST /api/v1/auth/unlock/end&#x60;..</param>
         /// <param name="stepupSig">The step-up key&#39;s ES256 signature (raw r||s, base64url) over the UTF-8 string &#x60;AINKRAD-STEPUP-V1&#x60; LF &#x60;&lt;core_fp&gt;&#x60; LF &#x60;&lt;device_id&gt;&#x60; LF &#x60;&lt;session_id&gt;&#x60; LF &#x60;&lt;challenge&gt;&#x60;, no trailing newline. The device&#39;s OS releases that key only after user verification. Required for a native device; a passkey device sends &#x60;assertion&#x60; instead..</param>
-        public StepUpRequest(Object assertion = default, string challenge = default, string stepupSig = default)
+        public StepUpRequest(Object assertion = default, string challenge = default, StepUpPurpose purpose = default, string stepupSig = default)
         {
             // to ensure "challenge" is required (not null)
             if (challenge == null)
@@ -52,6 +53,7 @@ namespace Ainkrad.Client.Model
             }
             this.Challenge = challenge;
             this.Assertion = assertion;
+            this.Purpose = purpose;
             this.StepupSig = stepupSig;
         }
 
@@ -70,6 +72,13 @@ namespace Ainkrad.Client.Model
         public string Challenge { get; set; }
 
         /// <summary>
+        /// What the proof opens. &#x60;action&#x60; (the default) elevates the session for the danger routes for &#x60;auth.step_up_secs&#x60;; &#x60;session&#x60; opens the app unlock instead (E1-1), held while the app sends &#x60;POST /api/v1/auth/unlock/beat&#x60; and ended by &#x60;POST /api/v1/auth/unlock/end&#x60;.
+        /// </summary>
+        /// <value>What the proof opens. &#x60;action&#x60; (the default) elevates the session for the danger routes for &#x60;auth.step_up_secs&#x60;; &#x60;session&#x60; opens the app unlock instead (E1-1), held while the app sends &#x60;POST /api/v1/auth/unlock/beat&#x60; and ended by &#x60;POST /api/v1/auth/unlock/end&#x60;.</value>
+        [DataMember(Name = "purpose", EmitDefaultValue = false)]
+        public StepUpPurpose Purpose { get; set; }
+
+        /// <summary>
         /// The step-up key&#39;s ES256 signature (raw r||s, base64url) over the UTF-8 string &#x60;AINKRAD-STEPUP-V1&#x60; LF &#x60;&lt;core_fp&gt;&#x60; LF &#x60;&lt;device_id&gt;&#x60; LF &#x60;&lt;session_id&gt;&#x60; LF &#x60;&lt;challenge&gt;&#x60;, no trailing newline. The device&#39;s OS releases that key only after user verification. Required for a native device; a passkey device sends &#x60;assertion&#x60; instead.
         /// </summary>
         /// <value>The step-up key&#39;s ES256 signature (raw r||s, base64url) over the UTF-8 string &#x60;AINKRAD-STEPUP-V1&#x60; LF &#x60;&lt;core_fp&gt;&#x60; LF &#x60;&lt;device_id&gt;&#x60; LF &#x60;&lt;session_id&gt;&#x60; LF &#x60;&lt;challenge&gt;&#x60;, no trailing newline. The device&#39;s OS releases that key only after user verification. Required for a native device; a passkey device sends &#x60;assertion&#x60; instead.</value>
@@ -86,6 +95,7 @@ namespace Ainkrad.Client.Model
             sb.Append("class StepUpRequest {\n");
             sb.Append("  Assertion: ").Append(Assertion).Append("\n");
             sb.Append("  Challenge: ").Append(Challenge).Append("\n");
+            sb.Append("  Purpose: ").Append(Purpose).Append("\n");
             sb.Append("  StepupSig: ").Append(StepupSig).Append("\n");
             sb.Append("}\n");
             return sb.ToString();

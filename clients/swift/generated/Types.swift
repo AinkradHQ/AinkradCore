@@ -131,6 +131,12 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/auth/step-up/challenge`.
     /// - Remark: Generated from `#/paths//api/v1/auth/step-up/challenge/post(createStepUpChallenge)`.
     func createStepUpChallenge(_ input: Operations.CreateStepUpChallenge.Input) async throws -> Operations.CreateStepUpChallenge.Output
+    /// - Remark: HTTP `POST /api/v1/auth/unlock/beat`.
+    /// - Remark: Generated from `#/paths//api/v1/auth/unlock/beat/post(beatUnlock)`.
+    func beatUnlock(_ input: Operations.BeatUnlock.Input) async throws -> Operations.BeatUnlock.Output
+    /// - Remark: HTTP `POST /api/v1/auth/unlock/end`.
+    /// - Remark: Generated from `#/paths//api/v1/auth/unlock/end/post(endUnlock)`.
+    func endUnlock(_ input: Operations.EndUnlock.Input) async throws -> Operations.EndUnlock.Output
     /// - Remark: HTTP `GET /api/v1/bindings`.
     /// - Remark: Generated from `#/paths//api/v1/bindings/get(listBindings)`.
     @available(*, deprecated)
@@ -469,6 +475,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/secrets/{id}/leases`.
     /// - Remark: Generated from `#/paths//api/v1/secrets/{id}/leases/post(leaseSecret)`.
     func leaseSecret(_ input: Operations.LeaseSecret.Input) async throws -> Operations.LeaseSecret.Output
+    /// - Remark: HTTP `POST /api/v1/secrets/{id}/reveal`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/{id}/reveal/post(revealSecret)`.
+    func revealSecret(_ input: Operations.RevealSecret.Input) async throws -> Operations.RevealSecret.Output
     /// - Remark: HTTP `GET /api/v1/settings`.
     /// - Remark: Generated from `#/paths//api/v1/settings/get(listServerSettings)`.
     func listServerSettings(_ input: Operations.ListServerSettings.Input) async throws -> Operations.ListServerSettings.Output
@@ -1025,6 +1034,16 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//api/v1/auth/step-up/challenge/post(createStepUpChallenge)`.
     public func createStepUpChallenge(headers: Operations.CreateStepUpChallenge.Input.Headers = .init()) async throws -> Operations.CreateStepUpChallenge.Output {
         try await createStepUpChallenge(Operations.CreateStepUpChallenge.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /api/v1/auth/unlock/beat`.
+    /// - Remark: Generated from `#/paths//api/v1/auth/unlock/beat/post(beatUnlock)`.
+    public func beatUnlock(headers: Operations.BeatUnlock.Input.Headers = .init()) async throws -> Operations.BeatUnlock.Output {
+        try await beatUnlock(Operations.BeatUnlock.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /api/v1/auth/unlock/end`.
+    /// - Remark: Generated from `#/paths//api/v1/auth/unlock/end/post(endUnlock)`.
+    public func endUnlock(headers: Operations.EndUnlock.Input.Headers = .init()) async throws -> Operations.EndUnlock.Output {
+        try await endUnlock(Operations.EndUnlock.Input(headers: headers))
     }
     /// - Remark: HTTP `GET /api/v1/bindings`.
     /// - Remark: Generated from `#/paths//api/v1/bindings/get(listBindings)`.
@@ -2198,6 +2217,17 @@ extension APIProtocol {
             path: path,
             headers: headers,
             body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/secrets/{id}/reveal`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/{id}/reveal/post(revealSecret)`.
+    public func revealSecret(
+        path: Operations.RevealSecret.Input.Path,
+        headers: Operations.RevealSecret.Input.Headers = .init()
+    ) async throws -> Operations.RevealSecret.Output {
+        try await revealSecret(Operations.RevealSecret.Input(
+            path: path,
+            headers: headers
         ))
     }
     /// - Remark: HTTP `GET /api/v1/settings`.

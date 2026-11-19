@@ -183,6 +183,7 @@ src/main/kotlin/ainkrad/client/models/Rename.kt
 src/main/kotlin/ainkrad/client/models/ReplaceKey.kt
 src/main/kotlin/ainkrad/client/models/RestartBody.kt
 src/main/kotlin/ainkrad/client/models/Restarted.kt
+src/main/kotlin/ainkrad/client/models/RevealedSecret.kt
 src/main/kotlin/ainkrad/client/models/RotateSecret.kt
 src/main/kotlin/ainkrad/client/models/RunLogLine.kt
 src/main/kotlin/ainkrad/client/models/RunLogs.kt
@@ -224,6 +225,7 @@ src/main/kotlin/ainkrad/client/models/SettingChange.kt
 src/main/kotlin/ainkrad/client/models/SettingScope.kt
 src/main/kotlin/ainkrad/client/models/SettingUnit.kt
 src/main/kotlin/ainkrad/client/models/StartConnectionFlow.kt
+src/main/kotlin/ainkrad/client/models/StepUpPurpose.kt
 src/main/kotlin/ainkrad/client/models/StepUpRequest.kt
 src/main/kotlin/ainkrad/client/models/SubjectBudget.kt
 src/main/kotlin/ainkrad/client/models/Terminal.kt

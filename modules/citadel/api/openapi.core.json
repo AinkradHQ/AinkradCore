@@ -2167,6 +2167,7 @@
           "auth.lockout",
           "auth.lockout_cleared",
           "auth.step_up",
+          "auth.unlock",
           "budget.created",
           "budget.deleted",
           "budget.exhausted",
@@ -2502,6 +2503,7 @@
           "secret.leased",
           "secret.master_rotated",
           "secret.redeemed",
+          "secret.revealed",
           "secret.rotated",
           "secret.runners_changed",
           "secret.used",
@@ -4640,6 +4642,17 @@
           "elevated_until": {
             "$ref": "#/components/schemas/Timestamp",
             "description": "Until when this session may call routes marked `x-ainkrad-destructive`."
+          },
+          "unlock_token": {
+            "description": "Only in the answer to `purpose: session` (review M1): a secret to keep in memory and send as\n`Ainkrad-Unlock` on the heartbeat and on every request that needs the unlock. Never stored.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unlocked_until": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "For an app unlock (`purpose: session`, and the heartbeat): until when it holds if no\nfurther beat arrives. Null otherwise."
           }
         },
         "type": "object"
@@ -10751,6 +10764,18 @@
         ],
         "type": "object"
       },
+      "RevealedSecret": {
+        "description": "A secret's value, shown to the person who asked. No `Debug`.",
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
       "RoleBody": {
         "description": "A role to store; `PUT` replaces all of it.",
         "properties": {
@@ -12826,6 +12851,20 @@
         ],
         "type": "object"
       },
+      "StepUpPurpose": {
+        "anyOf": [
+          {
+            "enum": [
+              "action",
+              "session"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
       "StepUpRequest": {
         "additionalProperties": false,
         "properties": {
@@ -12839,6 +12878,10 @@
           "challenge": {
             "description": "The challenge from `POST /api/v1/auth/step-up/challenge` for this session.",
             "type": "string"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/StepUpPurpose",
+            "description": "What the proof opens. `action` (the default) elevates the session for the danger routes\nfor `auth.step_up_secs`; `session` opens the app unlock instead (E1-1), held while the\napp sends `POST /api/v1/auth/unlock/beat` and ended by `POST /api/v1/auth/unlock/end`."
           },
           "stepup_sig": {
             "description": "The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string\n`AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`,\nno trailing newline. The device's OS releases that key only after user verification.\nRequired for a native device; a passkey device sends `assertion` instead.",
@@ -14548,7 +14591,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -14601,7 +14643,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -14864,7 +14905,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -14918,7 +14958,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       },
       "put": {
@@ -14980,7 +15019,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -15079,7 +15117,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       },
       "get": {
@@ -15194,7 +15231,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -15311,7 +15347,6 @@
         "tags": [
           "costs"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -15384,7 +15419,6 @@
         "tags": [
           "costs"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -15448,7 +15482,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -15512,7 +15545,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -15576,7 +15608,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -15759,7 +15790,6 @@
         "tags": [
           "agents"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "agent"
       }
     },
@@ -15999,7 +16029,6 @@
         "tags": [
           "agents"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "approve"
       }
     },
@@ -16063,7 +16092,6 @@
         "tags": [
           "agents"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "agent"
       }
     },
@@ -16117,7 +16145,6 @@
         "tags": [
           "agents"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "agent"
       }
     },
@@ -16171,7 +16198,6 @@
         "tags": [
           "agents"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "agent"
       }
     },
@@ -16225,7 +16251,6 @@
         "tags": [
           "agents"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "agent"
       }
     },
@@ -16289,7 +16314,6 @@
         "tags": [
           "agents"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "agent"
       }
     },
@@ -16353,7 +16377,6 @@
         "tags": [
           "agents"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "agent"
       }
     },
@@ -16407,7 +16430,6 @@
         "tags": [
           "agents"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "agent"
       }
     },
@@ -16470,7 +16492,6 @@
         "tags": [
           "agents"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "agent"
       }
     },
@@ -16606,7 +16627,6 @@
         "tags": [
           "agents"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "agent"
       }
     },
@@ -16912,6 +16932,90 @@
         "x-ainkrad-scope": "read"
       }
     },
+    "/api/v1/auth/unlock/beat": {
+      "post": {
+        "operationId": "beatUnlock",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Elevation"
+                }
+              }
+            },
+            "description": "The app unlock is kept alive; `unlocked_until` is when it lapses without another beat. 403 `unlock_required` when there is none (never opened, ended, lapsed, or lost to a Core restart): sign again with `stepUp` and `purpose: session`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "devices"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/auth/unlock/end": {
+      "post": {
+        "operationId": "endUnlock",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Elevation"
+                }
+              }
+            },
+            "description": "The app unlock is ended (the Mac locked or slept, or the app quit); idempotent"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "devices"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
     "/api/v1/bindings": {
       "get": {
         "deprecated": true,
@@ -17007,7 +17111,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin",
         "x-ainkrad-sunset": "Thu, 06 May 2027 00:00:00 GMT"
       }
@@ -17072,7 +17175,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin",
         "x-ainkrad-sunset": "Thu, 06 May 2027 00:00:00 GMT"
       }
@@ -17198,7 +17300,6 @@
         "tags": [
           "budgets"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -17252,7 +17353,6 @@
         "tags": [
           "budgets"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -17316,7 +17416,6 @@
         "tags": [
           "budgets"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -17412,7 +17511,6 @@
         "tags": [
           "chains"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -17511,7 +17609,6 @@
         "tags": [
           "chains"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       },
       "put": {
@@ -17573,7 +17670,6 @@
         "tags": [
           "chains"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -17627,7 +17723,6 @@
         "tags": [
           "chains"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       },
       "get": {
@@ -17740,7 +17835,6 @@
         "tags": [
           "chains"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -17794,7 +17888,6 @@
         "tags": [
           "chains"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -17909,7 +18002,6 @@
         "tags": [
           "connections"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -18008,7 +18100,6 @@
         "tags": [
           "connections"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       },
       "put": {
@@ -18070,7 +18161,6 @@
         "tags": [
           "connections"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -18222,7 +18312,6 @@
         "tags": [
           "connections"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -18505,7 +18594,6 @@
         "tags": [
           "connections"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -18559,7 +18647,6 @@
         "tags": [
           "connections"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       },
       "get": {
@@ -18672,7 +18759,6 @@
         "tags": [
           "connections"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -18812,7 +18898,6 @@
         "tags": [
           "connections"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -18930,7 +19015,6 @@
         "tags": [
           "connections"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -19002,7 +19086,6 @@
         "tags": [
           "connections"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20085,7 +20168,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20139,7 +20221,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20193,7 +20274,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20256,7 +20336,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       },
       "put": {
@@ -20317,7 +20396,6 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20413,7 +20491,6 @@
         "tags": [
           "costs"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20520,7 +20597,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20573,7 +20649,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20780,7 +20855,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20834,7 +20908,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20898,7 +20971,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -20961,7 +21033,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -21086,7 +21157,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -21405,7 +21475,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -21522,7 +21591,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -21576,7 +21644,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -21630,7 +21697,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -21758,7 +21824,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       },
       "put": {
@@ -21829,7 +21894,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -21944,7 +22008,6 @@
         "tags": [
           "projects"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -22461,7 +22524,6 @@
         "tags": [
           "runners"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -22525,7 +22587,6 @@
         "tags": [
           "runners"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -22683,7 +22744,6 @@
         "tags": [
           "secrets"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -22737,7 +22797,6 @@
         "tags": [
           "secrets"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       },
       "put": {
@@ -22799,7 +22858,6 @@
         "tags": [
           "secrets"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -23011,7 +23069,6 @@
         "tags": [
           "secrets"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -23065,7 +23122,6 @@
         "tags": [
           "secrets"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       },
       "put": {
@@ -23127,7 +23183,6 @@
         "tags": [
           "secrets"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -23165,6 +23220,60 @@
               }
             },
             "description": "A lease for one runner in the secret's scope, one redemption, `ttl_secs` at most (audited as `secret.leased`). 409 `secrets_disabled` or `limit_reached`; 400 when the runner is not in scope"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "secrets"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/secrets/{id}/reveal": {
+      "post": {
+        "operationId": "revealSecret",
+        "parameters": [
+          {
+            "description": "The secret's name",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevealedSecret"
+                }
+              }
+            },
+            "description": "The plain value, for the app's Reveal (a fresh step-up, audited as `secret.revealed`). 404 no such secret, 409 `secrets_disabled` or `secrets_unavailable`, 400 for a provider account's key"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -23355,7 +23464,6 @@
         "tags": [
           "settings"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       },
       "get": {
@@ -23486,7 +23594,6 @@
         "tags": [
           "settings"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -23996,7 +24103,6 @@
         "tags": [
           "terminals"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "terminal"
       }
     },
@@ -24049,7 +24155,6 @@
         "tags": [
           "terminals"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "terminal"
       },
       "get": {
@@ -24195,7 +24300,6 @@
         "tags": [
           "terminals"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "terminal"
       }
     },
@@ -24251,7 +24355,6 @@
         "tags": [
           "terminals"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "terminal"
       }
     },
@@ -24307,7 +24410,6 @@
         "tags": [
           "terminals"
         ],
-        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "terminal"
       }
     },

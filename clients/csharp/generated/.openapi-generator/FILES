@@ -191,6 +191,7 @@ src/Ainkrad.Client/Model/Rename.cs
 src/Ainkrad.Client/Model/ReplaceKey.cs
 src/Ainkrad.Client/Model/RestartBody.cs
 src/Ainkrad.Client/Model/Restarted.cs
+src/Ainkrad.Client/Model/RevealedSecret.cs
 src/Ainkrad.Client/Model/RotateSecret.cs
 src/Ainkrad.Client/Model/RunLogLine.cs
 src/Ainkrad.Client/Model/RunLogs.cs
@@ -232,6 +233,7 @@ src/Ainkrad.Client/Model/SettingChange.cs
 src/Ainkrad.Client/Model/SettingScope.cs
 src/Ainkrad.Client/Model/SettingUnit.cs
 src/Ainkrad.Client/Model/StartConnectionFlow.cs
+src/Ainkrad.Client/Model/StepUpPurpose.cs
 src/Ainkrad.Client/Model/StepUpRequest.cs
 src/Ainkrad.Client/Model/SubjectBudget.cs
 src/Ainkrad.Client/Model/Terminal.cs

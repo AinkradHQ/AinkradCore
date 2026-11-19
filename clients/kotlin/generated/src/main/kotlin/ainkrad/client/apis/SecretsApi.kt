@@ -24,6 +24,7 @@ import ainkrad.client.models.NewLease
 import ainkrad.client.models.NewSecret
 import ainkrad.client.models.NewSecretGroup
 import ainkrad.client.models.RedeemLease
+import ainkrad.client.models.RevealedSecret
 import ainkrad.client.models.RotateSecret
 import ainkrad.client.models.SecretDeleted
 import ainkrad.client.models.SecretGroupDeleted
@@ -342,6 +343,40 @@ import io.ktor.http.ParametersBuilder
             )
 
             return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/secrets/{id}/reveal
+        * 
+        * 
+         * @param id The secret&#39;s name 
+         * @return RevealedSecret
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun revealSecret(id: kotlin.String): HttpResponse<RevealedSecret> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/secrets/{id}/reveal".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames
