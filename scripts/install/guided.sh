@@ -291,16 +291,19 @@ guided_invite() {
 # Both are best effort: the link on the terminal and the paste screen stay as they were.
 guided_announce() {
   [ "$DRY" = 0 ] || return 0
+  # The code is single use and, whatever happens below, must not stay in this installer's environment.
+  local rv=${AINKRAD_RENDEZVOUS:-}
+  unset AINKRAD_RENDEZVOUS
   local f=/etc/avahi/services/ainkrad-core.service
   if [ "${AINKRAD_MDNS:-no}" = yes ] && [ -d /etc/avahi/services ]; then
     if runuser -u ainkrad -- "$BIN/ainkrad-core-server" mdns-service "$CORE_HOME/core.db" "$A_HOSTNAME" >"$f.new" 2>/dev/null; then
       chmod 644 "$f.new" && mv "$f.new" "$f"
     else rm -f "$f.new"; fi
   fi
-  [ -n "${AINKRAD_RENDEZVOUS:-}" ] && [ -n "$INVITE" ] || return 0
+  [ -n "$rv" ] && [ -n "$INVITE" ] || return 0
   local fp=${INVITE#*fp=} rc=0
   fp=${fp%%&*}
-  printf '%s\n' "$INVITE" | "$BIN/ainkrad-core-server" rendezvous-post "${AINKRAD_SIGNIN_URL:-https://signin.ainkrad.io}" >/dev/null 2>&1 || rc=$?
+  printf '%s\n' "$INVITE" | AINKRAD_RENDEZVOUS="$rv" "$BIN/ainkrad-core-server" rendezvous-post "${AINKRAD_SIGNIN_URL:-https://signin.ainkrad.io}" >/dev/null 2>&1 || rc=$?
   case $rc in
     0)
       say "     The link was sent to the app that is waiting for it, sealed so only that app can read it."
@@ -311,8 +314,6 @@ guided_announce() {
       say "     The app may be showing another Core. Close that setup, start again, and paste the link above instead." ;;
     *) say "     Could not reach the waiting app. Paste the link above into it instead." ;;
   esac
-  # The code is single use and has done its job: it must not stay in this installer's environment.
-  unset AINKRAD_RENDEZVOUS
 }
 
 # The link, the secret alone and a QR: to the terminal only.
