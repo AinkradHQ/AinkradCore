@@ -262,3 +262,46 @@ async fn a_price_and_a_limit_need_admin_and_no_step_up() {
         .unwrap();
     assert_eq!(audited, ["account.limit_set", "account.limit_cleared"]);
 }
+
+#[tokio::test]
+async fn the_series_sums_the_ledger_per_day_and_provider_for_an_admin_only() {
+    let (fx, vm, s) = setup().await;
+    let phone = fx.enroll("phone", &["read"]).await;
+    let a = make(&fx, &s, "main", V1, std::slice::from_ref(&vm.id)).await;
+    for (i, (provider, tokens)) in [("anthropic", 400_000), ("anthropic", 600_000), ("openai", 5)]
+        .into_iter()
+        .enumerate()
+    {
+        let key = format!("series{i}");
+        let c = NewCost {
+            session: "s1",
+            epoch: i as i64,
+            account_id: Some(a.id),
+            legacy_account_id: None,
+            provider,
+            harness: "claude",
+            model: "claude-x",
+            input_tokens: tokens,
+            output_tokens: 0,
+            cache_tokens: 0,
+            reported_usd_micros: None,
+            approximate: true,
+            subjects: &[],
+            idempotency_key: &key,
+            occurred_at: NOW,
+        };
+        costs::record(&fx.app.pool, &c, NOW).await.unwrap();
+    }
+    let uri = "/api/v1/costs/series?days=14";
+    let (st, b) = call(&fx, &phone, Method::GET, uri, Value::Null).await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "{b}");
+    let (st, b) = call(&fx, &fx.dev, Method::GET, uri, Value::Null).await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+    let rows = b.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{b}");
+    assert_eq!(
+        (rows[0]["provider"].as_str(), rows[0]["total_tokens"].as_i64()),
+        (Some("anthropic"), Some(1_000_000))
+    );
+    assert_eq!(rows[1]["provider"], "openai");
+}

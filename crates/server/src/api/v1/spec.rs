@@ -145,6 +145,7 @@ use super::{
         chains::bind,
         chains::unbind,
         costs::list,
+        costs::series,
         costs::list_prices,
         costs::set_price,
         costs::accounts_usage,

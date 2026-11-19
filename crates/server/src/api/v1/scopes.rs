@@ -165,6 +165,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
         "admin",
     ),
     ("GET", "/api/v1/costs", "admin"),
+    ("GET", "/api/v1/costs/series", "admin"),
     ("GET", "/api/v1/prices", "read"),
     ("GET", "/api/v1/budgets", "read"),
     ("PUT", "/api/v1/budgets", "admin"),

@@ -88,6 +88,47 @@ pub async fn list(State(app): State<App>, Query(q): Query<CostQuery>) -> ApiResu
     Ok(Json(all.into_iter().map(Into::into).collect()))
 }
 
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct SeriesQuery {
+    /// Days back, today included (default 14, most 90).
+    pub days: Option<i64>,
+}
+
+/// One provider's day on the ledger.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DayUsage {
+    /// The UTC day, `YYYY-MM-DD`.
+    pub day: String,
+    pub provider: String,
+    /// Input, output and cache tokens.
+    pub total_tokens: i64,
+    /// Millionths of a dollar (corrections included; unpriced events count 0).
+    pub cost_usd_micros: i64,
+}
+
+#[utoipa::path(get, path = "/api/v1/costs/series", operation_id = "costSeries", tag = "costs",
+    params(SeriesQuery),
+    responses((status = 200, description = "Daily spend and tokens per provider, summed from the ledger, \
+        oldest day first (needs `admin`). A day or provider with no events has no row", body = Vec<DayUsage>)))]
+pub async fn series(
+    State(app): State<App>,
+    Query(q): Query<SeriesQuery>,
+) -> ApiResult<Vec<DayUsage>> {
+    let days = q.days.unwrap_or(14).clamp(1, 90);
+    let rows = costs::series(&app.pool, &app.clock.now(), days).await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| DayUsage {
+                day: r.day,
+                provider: r.provider,
+                total_tokens: r.total_tokens,
+                cost_usd_micros: r.cost_usd_micros,
+            })
+            .collect(),
+    ))
+}
+
 /// A price: millionths of a dollar per million tokens, and when the provider's list price was read.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PriceBookEntry {
