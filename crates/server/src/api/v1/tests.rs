@@ -32,6 +32,7 @@ mod accounts_store;
 mod agents;
 mod allocator;
 mod allocator_life;
+mod allocator_model;
 mod allocator_props;
 mod allocator_rows;
 mod allocator_states;
