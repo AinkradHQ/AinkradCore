@@ -1,15 +1,17 @@
 //! Fallback chains (KAN-437 family, S5; design `2026-11-06-core-account-scheduler` §4.1, §4.2, §4.5;
 //! `2026-11-02-ai-provider-accounts` "Decision update 2026-11-06"). A chain is an ORDERED list of
-//! 1 to 4 entries, each a pool and a model, across providers and account types. The entry's
+//! 1 to 16 entries, each a pool and a model, across providers and account types. The entry's
 //! harness is its pool provider's own, read at [`load`] (a stored copy could go stale). Pools still
 //! choose accounts (the allocator); a chain only says which pool is tried next.
 //!
-//! - **Validation on write** ([`create`], [`update`]): 1 to 4 entries; no pool twice; each pool
+//! - **Validation on write** ([`create`], [`update`]): 1 to 16 entries; no pool twice; each pool
 //!   exists and is the chain's user's (another user's is `not_found`, as a missing one); the pool's harness is `claude`, `codex` or `agy` (never
 //!   `opencode`: it has no account binding); a named harness is the pool's own; a model is a valid
 //!   id, and an API-key pool's model has a price (the gateway refuses an unpriced one anyway; this
-//!   says why sooner); at most one subscription pool per chain (Ahmed, 2026-11-06, decision 1).
-//!   A subscription is alone in its pool (`pools::add_member`), so that is one subscription account.
+//!   says why sooner). A chain may hold several subscriptions (E7-1, D-18: the AI order lists every
+//!   account the user has, subscriptions included). A subscription is alone in its pool.
+//! - **The AI order** ([`order`]): the user-facing list of accounts. It is the default chain, written
+//!   through hidden single-account pools; the old pool and chain routes are deprecated.
 //! - **Deletion.** A chain a live session walks is not deleted (`conflict`). A pool a chain names is
 //!   not deleted (`pools::delete`, `conflict` naming the chain). An account deleted from under a
 //!   chain only empties its seat in the pool; the entry stays, and the allocator skips an empty pool.
@@ -29,11 +31,12 @@ use super::secrets::Error;
 use super::{account_keys, costs, pools, prices, providers};
 
 pub const MAX_CHAINS: i64 = 64;
-pub const MAX_ENTRIES: usize = 4;
+pub const MAX_ENTRIES: usize = 16;
 /// Per user, as are the bindings below.
 const MAX_BINDINGS: i64 = 1024;
 
 mod assign;
+pub mod order;
 mod view;
 pub use assign::*;
 pub use view::*;
@@ -56,6 +59,8 @@ pub struct Chain {
     pub user_id: i64,
     pub name: String,
     pub is_default: bool,
+    /// Held by the AI order ([`order`]): not shown in the chain list.
+    pub hidden: bool,
     pub entries: Vec<ChainEntry>,
     pub created_at: String,
     pub updated_at: String,
@@ -144,10 +149,9 @@ pub(super) async fn check_entries(
     specs: &[EntrySpec<'_>],
 ) -> Result<Vec<ChainEntry>, Error> {
     if !(1..=MAX_ENTRIES).contains(&specs.len()) {
-        return refused("bad_request", "a chain has 1 to 4 entries");
+        return refused("bad_request", "a chain has 1 to 16 entries");
     }
     let mut out: Vec<ChainEntry> = Vec::with_capacity(specs.len());
-    let mut subscriptions = 0;
     for s in specs {
         if out.iter().any(|e| e.pool == s.pool) {
             return refused("bad_request", "a pool is in a chain once");
@@ -169,7 +173,6 @@ pub(super) async fn check_entries(
             return refused("bad_request", "an entry's harness is its pool's own");
         }
         let subscription = account_keys::is_subscription(&def);
-        subscriptions += i32::from(subscription);
         if let Some(m) = s.model {
             if !prices::valid_model(m) {
                 return refused("bad_request", "a model id is 1 to 80 of [A-Za-z0-9._:/-]");
@@ -188,9 +191,6 @@ pub(super) async fn check_entries(
             harness: def.harness,
             model: s.model.map(str::to_owned),
         });
-    }
-    if subscriptions > 1 {
-        return refused("bad_request", "a chain holds at most one subscription");
     }
     Ok(out)
 }
@@ -221,14 +221,15 @@ pub(super) async fn write_entries(
     Ok(())
 }
 
-async fn find(conn: &mut SqliteConnection, id: i64) -> Result<Chain, Error> {
-    let row: Option<(i64, String, i64, String, String)> = sqlx::query_as(
-        "SELECT user_id, name, is_default, created_at, updated_at FROM core_chains WHERE id = ?",
+pub(super) async fn find(conn: &mut SqliteConnection, id: i64) -> Result<Chain, Error> {
+    let row: Option<(i64, String, i64, i64, String, String)> = sqlx::query_as(
+        "SELECT user_id, name, is_default, hidden, created_at, updated_at FROM core_chains \
+         WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&mut *conn)
     .await?;
-    let Some((user_id, name, is_default, created_at, updated_at)) = row else {
+    let Some((user_id, name, is_default, hidden, created_at, updated_at)) = row else {
         return refused("not_found", "no such chain");
     };
     Ok(Chain {
@@ -236,6 +237,7 @@ async fn find(conn: &mut SqliteConnection, id: i64) -> Result<Chain, Error> {
         user_id,
         name,
         is_default: is_default == 1,
+        hidden: hidden == 1,
         entries: load(conn, id).await?,
         created_at,
         updated_at,

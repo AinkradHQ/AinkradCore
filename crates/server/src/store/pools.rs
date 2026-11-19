@@ -26,6 +26,8 @@ pub struct Pool {
     pub name: String,
     pub provider: String,
     pub is_default: bool,
+    /// Held by the AI order (`chains::order`): one account, not shown in the pool list.
+    pub hidden: bool,
     /// Account ids, in fallback order.
     pub members: Vec<i64>,
     pub created_at: String,
@@ -89,13 +91,14 @@ fn head(r: &SqliteRow) -> Result<Pool, sqlx::Error> {
         name: r.try_get("name")?,
         provider: r.try_get("provider")?,
         is_default: r.try_get::<i64, _>("is_default")? == 1,
+        hidden: r.try_get::<i64, _>("hidden")? == 1,
         members: Vec::new(),
         created_at: r.try_get("created_at")?,
         updated_at: r.try_get("updated_at")?,
     })
 }
 
-const COLUMNS: &str = "id, name, provider, is_default, created_at, updated_at";
+const COLUMNS: &str = "id, name, provider, is_default, hidden, created_at, updated_at";
 
 async fn find(conn: &mut SqliteConnection, id: i64) -> Result<Pool, Error> {
     let sql = format!("SELECT {COLUMNS} FROM core_pools WHERE id = ?");

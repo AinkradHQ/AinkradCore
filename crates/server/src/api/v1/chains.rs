@@ -49,7 +49,7 @@ impl From<ch::ChainEntry> for ChainEntry {
     }
 }
 
-/// An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first
+/// An ordered fallback chain of 1 to 16 pools. Deprecated with the pool routes: the AI order (`/api/v1/ai-order`) replaces it. A new session draws an account from the first
 /// entry that has one to give.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Chain {
@@ -86,8 +86,7 @@ pub struct NewChainEntry {
     pub model: Option<String>,
 }
 
-/// A chain to write: `[a-z][a-z0-9._-]{0,63}` and 1 to 4 entries, at most one of them a
-/// subscription. For an edit this replaces the name and the whole list.
+/// A chain to write: `[a-z][a-z0-9._-]{0,63}` and 1 to 16 entries. For an edit this replaces the name and the whole list.
 #[derive(Deserialize, ToSchema)]
 pub struct NewChain {
     pub name: String,
@@ -158,7 +157,7 @@ pub async fn list(
     let all = ch::list(&app.pool).await?;
     Ok(Json(
         all.into_iter()
-            .filter(|c| c.user_id == user)
+            .filter(|c| c.user_id == user && !c.hidden)
             .map(Into::into)
             .collect(),
     ))
@@ -179,9 +178,8 @@ pub async fn get(
 #[utoipa::path(post, path = "/api/v1/chains", operation_id = "createChain", tag = "chains",
     request_body = NewChain,
     responses((status = 200, description = "Stored for the caller's user (audited as \
-        `chain.created`). 400 for a bad name, 1 to 4 entries, a pool twice, another user's pool, \
-        a pool that is not a `claude`, `codex` or `agy` one, an unpriced API-key model, or two \
-        subscriptions; 404 for no such pool; 409 `conflict` (the name is taken) or \
+        `chain.created`). 400 for a bad name, 1 to 16 entries, a pool twice, another user's pool, \
+        a pool that is not a `claude`, `codex` or `agy` one, or an unpriced API-key model; 404 for no such pool; 409 `conflict` (the name is taken) or \
         `limit_reached`", body = Chain)))]
 pub async fn create(
     State(app): State<App>,
