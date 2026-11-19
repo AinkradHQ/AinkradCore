@@ -28,6 +28,12 @@ pub struct CoreHealth {
     pub last_backup_at: Option<Timestamp>,
     /// That backup's size in bytes.
     pub last_backup_bytes: Option<u64>,
+    /// E12-5: the oldest app this Core works with. An app below it tells the person to update the app.
+    #[schema(required = false)]
+    pub min_app: Option<String>,
+    /// E12-5: the oldest runner this Core works with (`GET /runners` marks older ones `update_required`).
+    #[schema(required = false)]
+    pub min_runner: Option<String>,
 }
 
 #[utoipa::path(get, path = "/api/v1/core/health", operation_id = "getCoreHealth",
@@ -45,5 +51,7 @@ pub async fn get(State(app): State<App>) -> ApiResult<CoreHealth> {
         cert_days_left: r.cert_days_left(now),
         last_backup_at: r.backup_at.map(at),
         last_backup_bytes: r.backup_bytes,
+        min_app: Some(crate::runner_update::MIN_APP.to_owned()),
+        min_runner: Some(crate::runner_update::MIN_RUNNER.to_owned()),
     }))
 }
