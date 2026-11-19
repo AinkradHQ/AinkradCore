@@ -32,6 +32,16 @@ pub fn message(core_fp: &str, device: &str, session: &str, challenge: &str) -> V
         .into_bytes()
 }
 
+/// What the step-up key signs for a **session** proof (the app unlock): V2 and the purpose.
+/// The CLI never makes one (a routine key must not unlock); the library offers it so a test
+/// fixture can unlock a device for real.
+pub fn message_v2(core_fp: &str, device: &str, session: &str, challenge: &str, purpose: &str) -> Vec<u8> {
+    ["AINKRAD-STEPUP-V2", core_fp, device, session, challenge, purpose]
+        .join("
+")
+        .into_bytes()
+}
+
 const VERSION: u32 = 1;
 const KDF: &str = "pbkdf2-hmac-sha256";
 /// OWASP's 2023 figure for PBKDF2-HMAC-SHA256; a file asking for fewer is refused.

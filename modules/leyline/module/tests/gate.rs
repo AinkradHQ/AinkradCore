@@ -881,3 +881,19 @@ async fn the_unlock_routes_are_refused_without_the_unlock() {
         assert_ne!(v["code"], json!("unlock_required"), "{m} {path}: the unlocked admin passes the gate");
     }
 }
+
+/// A Leyline command run needs the app unlock, so Code Mode treats it as risky (an approval each
+/// time): the classification the dispatcher reads.
+#[test]
+fn leyline_command_runs_and_shells_are_unlock_routes_for_code_mode() {
+    use ainkrad_core_server::api::v1::scopes::needs_unlock;
+    let modules: Vec<Arc<dyn Module>> = vec![Arc::new(Leyline)];
+    for (m, p) in [
+        (Method::POST, "/modules/leyline/v1/commands/c_x/run"),
+        (Method::POST, "/modules/leyline/v1/fleet/runs"),
+        (Method::POST, "/modules/leyline/v1/hosts/h_x/terminals"),
+    ] {
+        assert!(needs_unlock(&m, p, &modules), "{m} {p}");
+    }
+    assert!(!needs_unlock(&Method::GET, "/modules/leyline/v1/hosts", &modules));
+}
