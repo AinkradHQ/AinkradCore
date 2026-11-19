@@ -370,7 +370,7 @@ pub(crate) async fn archive(
         .await?
         .rows_affected();
     if n == 1 {
-        crate::distil::log_op(&mut tx, "record.archived", &id, &now).await?;
+        crate::distil::log_op(&mut *tx, "record.archived", &id, &now).await?;
     }
     tx.commit().await?;
     access.pool().close().await;
