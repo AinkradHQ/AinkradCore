@@ -205,6 +205,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/run/activity", "read"),
     // Run configurations and environments (Core 0.10, E11-3): values never leave except `value`.
     ("GET", "/api/v1/projects/{id}/runs", "read"),
+    ("GET", "/api/v1/projects/{id}/code", "read"),
+    ("GET", "/api/v1/projects/{id}/usage", "read"),
+    ("GET", "/api/v1/projects/{id}/changes", "read"),
     ("GET", "/api/v1/projects/{id}/run-configs", "read"),
     ("POST", "/api/v1/projects/{id}/run-configs", "admin"),
     ("GET", "/api/v1/projects/{id}/run-configs/{config}", "read"),

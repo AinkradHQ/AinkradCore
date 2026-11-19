@@ -446,6 +446,12 @@ pub fn router(app: App) -> Router {
             post(projects::runs::restart),
         )
         .route("/api/v1/projects/{id}/runs", get(projects::runs::history))
+        .route("/api/v1/projects/{id}/code", get(projects::insight::code))
+        .route("/api/v1/projects/{id}/usage", get(projects::insight::usage))
+        .route(
+            "/api/v1/projects/{id}/changes",
+            get(projects::insight::changes),
+        )
         .route(
             "/api/v1/projects/{id}/run-configs",
             get(projects::run_configs::list).post(projects::run_configs::create),
