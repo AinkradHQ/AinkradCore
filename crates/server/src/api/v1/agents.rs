@@ -34,12 +34,40 @@ use sched::{AgentWaiting, create_named, listed, page, shown};
 use types::*;
 // Schemas only the spec lists (no route returns them whole).
 pub(super) use types::{AgentEdit, AgentEditChange};
+pub(in crate::api::v1) mod files;
+pub(in crate::api::v1) mod rules;
 
 const MAX_MESSAGE: usize = 16 * 1024;
 
 /// The harnesses that can stop one sub-agent on its own (Claude Code's `stop_task`). Codex's
 /// app-server and OpenCode have no such request, and agy has no sub-agents.
 pub(super) const SUBAGENT_STOP_HARNESSES: &[&str] = &["claude"];
+
+/// The harnesses that take an effort level: Claude's `--effort`, Codex's `model_reasoning_effort`.
+/// OpenCode and agy have no such setting the runner can pass.
+pub(super) const EFFORT_HARNESSES: &[&str] = &["claude", "codex"];
+
+/// A level, checked against what the harness can take and the runner offers; the 400 or 409.
+fn effort_ok(app: &App, runner: &str, harness: &str, level: &str) -> Result<(), ApiError> {
+    if !ainkrad_proto::v2::EFFORTS.contains(&level) {
+        return Err(ApiError::bad_request("effort is low, medium, high or max"));
+    }
+    if !harness.is_empty() && !EFFORT_HARNESSES.contains(&harness) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "effort_unsupported",
+            format!("the {harness} harness has no effort setting"),
+        ));
+    }
+    if !agents::offers(app, runner, ainkrad_proto::v2::CAP_EFFORT) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "unsupported_command",
+            "the runner is too old for an effort level",
+        ));
+    }
+    Ok(())
+}
 
 /// The one harness with a plan mode (Claude Code's `--permission-mode plan`).
 const PLAN_HARNESS: &str = "claude";
@@ -153,6 +181,12 @@ pub struct AgentSession {
     /// Whether one sub-agent of it (a running `Task`/`Agent` tool call) can be stopped on its own
     /// with `stopAgentSubagent`: its harness can (Claude Code) and its runner relays it.
     pub can_stop_subagents: Option<bool>,
+    /// Its effort level now (`low`, `medium`, `high`, `max`), from the create or the latest
+    /// `setAgentSessionMode`; absent: the harness's own default.
+    pub effort: Option<String>,
+    /// Whether its effort can be set (`effort` on `createAgentSession` or `setAgentSessionMode`):
+    /// its harness takes one (Claude, Codex) and its runner relays it.
+    pub can_set_effort: Option<bool>,
 }
 
 impl From<Session> for AgentSession {
@@ -177,6 +211,8 @@ impl From<Session> for AgentSession {
             turn_cost_approximate: Some(turn_cost.is_some() && s.turn_cost_approx),
             turn_cost_usd_micros: turn_cost,
             can_stop_subagents: Some(false),
+            effort: s.policy["effort"].as_str().map(str::to_owned),
+            can_set_effort: Some(false),
             workspace: s.workspace,
             id: s.id,
             runner: s.runner,
@@ -253,27 +289,38 @@ pub(in crate::api::v1) async fn terminal_folder(
         ));
     }
     let s = shown(app, me, id).await?.0;
-    let conflict =
-        |code: &'static str, why: &str| Err(ApiError::new(StatusCode::CONFLICT, code, why));
     if s.runner != runner {
-        return conflict(
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
             "session_runner_mismatch",
             "the session runs on another runner",
-        );
+        ));
     }
-    if s.workspace.is_some() && matches!(s.state.as_str(), "ended" | "lost") {
-        return conflict(
+    session_folder(s.workspace.is_some(), &s.state, s.folder.as_deref())
+}
+
+/// The folder session `s` works in, on its runner: what its runner reported, never a path from a
+/// client. 409 `session_folder_gone` for an ended session whose worktree was moved away,
+/// `session_folder_unknown` before its runner has reported one. Shared by terminals and the
+/// session's files.
+pub(in crate::api::v1) fn session_folder(
+    has_workspace: bool,
+    state: &str,
+    folder: Option<&str>,
+) -> Result<String, ApiError> {
+    let conflict = |code: &'static str, why: &str| ApiError::new(StatusCode::CONFLICT, code, why);
+    if has_workspace && matches!(state, "ended" | "lost") {
+        return Err(conflict(
             "session_folder_gone",
             "the session's worktree was moved away when it ended",
-        );
+        ));
     }
-    match s.folder {
-        Some(folder) => Ok(folder),
-        None => conflict(
+    folder.map(str::to_owned).ok_or_else(|| {
+        conflict(
             "session_folder_unknown",
             "the session's runner has not reported its folder yet",
-        ),
-    }
+        )
+    })
 }
 
 /// A session a module drives answers to that module's own routes (its audit, its approvals, its
@@ -351,6 +398,12 @@ pub async fn create(
         && let Some(m) = policy.as_object_mut()
     {
         m.insert("plan".into(), true.into());
+    }
+    if let Some(level) = b.effort.as_deref() {
+        effort_ok(&app, &b.runner, &b.harness, level)?;
+        if let Some(m) = policy.as_object_mut() {
+            m.insert("effort".into(), level.into());
+        }
     }
     if policy["plan"] == true {
         if b.harness != PLAN_HARNESS {
@@ -771,8 +824,8 @@ pub async fn mode(
     let was = s.policy["mode"].as_str().unwrap_or("ask").to_owned();
     let was_plan = s.policy["plan"] == true;
     let mode = match b.policy.as_deref() {
-        None if b.plan.is_none() => {
-            return Err(ApiError::bad_request("send policy, plan or both"));
+        None if b.plan.is_none() && b.effort.is_none() => {
+            return Err(ApiError::bad_request("send policy, plan, effort or more"));
         }
         None => was.clone(),
         Some(m) => m
@@ -792,10 +845,16 @@ pub async fn mode(
             "sandboxed is chosen at start: it decides where the session runs",
         ));
     }
+    if let Some(level) = b.effort.as_deref() {
+        effort_ok(&app, &s.runner, &s.harness, level)?;
+    }
     let mut policy = match &s.policy {
         Value::Object(m) => m.clone(),
         _ => serde_json::Map::new(),
     };
+    if let Some(level) = b.effort.as_deref() {
+        policy.insert("effort".into(), level.into());
+    }
     policy.insert("mode".into(), mode.clone().into());
     // Absent when off: an older runner refuses a policy field it does not know.
     match plan {
@@ -825,8 +884,8 @@ pub async fn mode(
         _ => {}
     }
     store::set_policy(&app.pool, &s.id, &policy).await?;
-    let details = json!({"from": {"policy": was, "plan": was_plan},
-                         "to": {"policy": mode, "plan": plan}});
+    let details = json!({"from": {"policy": was, "plan": was_plan, "effort": s.policy["effort"]},
+                         "to": {"policy": mode, "plan": plan, "effort": policy["effort"]}});
     let action = "agent.mode_changed";
     store::action(&app.pool, &s, BY, action, None, details, &me.device.id).await?;
     shown(&app, &me, &id).await
@@ -929,6 +988,11 @@ pub async fn decide(
         .await?;
         return shown(&app, &me, &id).await;
     }
+    // "Always for this project": the rule is checked before anything is decided, stored after.
+    let always = match b.approved && b.always == Some(true) {
+        true => Some(rules::derived(&app, &s, &request).await?),
+        false => None,
+    };
     let cmd = Command::AgentDecide(AgentDecide {
         session: s.id.clone(),
         request: request.clone(),
@@ -936,7 +1000,14 @@ pub async fn decide(
         reply: b.reply,
     });
     tell(&app, &s, cmd, &me).await?;
-    let details = json!({"request": request, "approved": b.approved});
+    let mut details = json!({"request": request, "approved": b.approved});
+    if let Some((project, tool, pattern)) = always {
+        let now = app.clock.now();
+        let by = &me.device.id;
+        let rule = crate::store::approval_rules::add(&app.pool, project, &tool, &pattern, by, &now)
+            .await?;
+        details["always_rule"] = json!(rule.id);
+    }
     let kind = Some("agent.approval_decided");
     store::action(
         &app.pool,

@@ -377,6 +377,7 @@ impl HarnessExecutor {
             sandboxed: job.policy.mode == PermissionMode::Sandboxed && self.sandboxed,
             accept_edits: job.policy.mode == PermissionMode::AcceptEdits,
             plan: job.policy.plan,
+            effort: job.policy.effort.clone(),
             instructions: files.instructions.clone(),
             mcp_config: files.mcp_config.clone(),
             backend: self.backend.clone(),

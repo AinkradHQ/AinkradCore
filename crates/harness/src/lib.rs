@@ -106,6 +106,9 @@ pub struct Spec {
     /// Plan mode: the harness reads and plans and edits nothing (Claude's `--permission-mode
     /// plan`). Only Claude has one; the Core refuses it for any other harness.
     pub plan: bool,
+    /// How hard the harness thinks (`low`, `medium`, `high`, `max`): Claude's `--effort`, Codex's
+    /// `model_reasoning_effort`. `None`: the harness's own default. The other harnesses ignore it.
+    pub effort: Option<String>,
     /// Where the process is started (E8a-06); `None` is the local backend: bubblewrap, Seatbelt
     /// or nothing, as the spec's `AINKRAD_SANDBOX*` variables say.
     pub backend: Option<std::sync::Arc<dyn exec::ExecBackend>>,
@@ -157,6 +160,11 @@ pub enum HarnessEvent {
     },
     TurnEnded {
         outcome: TurnOutcome,
+    },
+    /// The model's reasoning, where the harness shows it (Claude's `thinking` blocks). Only a
+    /// harness that emits reasoning sends it; the runner cuts it to `MAX_THINKING_BYTES`.
+    Thinking {
+        text: String,
     },
     /// The process is gone; the stream ends after this.
     Exited {

@@ -27,6 +27,11 @@ pub struct Policy {
     /// harness that has one takes it; an older runner refuses the field.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plan: bool,
+    /// How hard the harness thinks: `low`, `medium`, `high` or `max` (Claude's `--effort`, Codex's
+    /// `model_reasoning_effort`). Absent: the harness's own default. Only a runner that lists
+    /// `CAP_EFFORT` takes it; an older runner refuses the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     /// The weakest isolation the session may run in (E8a-08). Absent: any runner. A runner that
     /// cannot offer it is never given the session, and refuses it if it is (E8a-09).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -78,7 +83,11 @@ impl Policy {
             v.filter(|v| !r.contains(v))
                 .map(|_| format!("{name} is {} to {}", r.start(), r.end()))
         };
-        bounded("vcpus", self.vcpus, &VCPUS)
+        self.effort
+            .as_deref()
+            .filter(|e| !crate::v2::EFFORTS.contains(e))
+            .map(|_| "effort is low, medium, high or max".to_owned())
+            .or_else(|| bounded("vcpus", self.vcpus, &VCPUS))
             .or_else(|| bounded("memory_mb", self.memory_mb, &MEMORY_MB))
             .or_else(|| bounded("disk_mb", self.disk_mb, &DISK_MB))
             .or_else(|| bounded("wall_secs", self.wall_secs, &WALL_SECS))

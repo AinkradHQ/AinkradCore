@@ -577,6 +577,7 @@ impl HarnessExecutor {
     fn tuned(&self, spec: &Spec, policy: &Policy) -> Spec {
         Spec {
             plan: policy.plan,
+            effort: policy.effort.clone(),
             accept_edits: policy.mode == PermissionMode::AcceptEdits,
             sandboxed: policy.mode == PermissionMode::Sandboxed && self.sandboxed,
             ..spec.clone()
@@ -596,14 +597,27 @@ impl HarnessExecutor {
         resumable: bool,
     ) {
         let tuned = self.tuned(spec, &inbox.policy(&job.policy));
-        let mode = |s: &Spec| (s.plan, s.accept_edits, s.sandboxed);
+        let mode = |s: &Spec| (s.plan, s.accept_edits, s.sandboxed, s.effort.clone());
         if mode(&tuned) == mode(spec) {
             return;
         }
+        // Effort is a start flag no harness switches live: a process that can resume stops, and
+        // the next turn starts it again with the new level.
+        let effort = tuned.effort != spec.effort;
         *spec = tuned;
         let Some(h) = harness.as_mut() else {
             return;
         };
+        if effort && resumable {
+            tracing::info!(
+                run = job.run,
+                "the effort changed; the harness restarts with it"
+            );
+            if let Some(h) = harness.take() {
+                h.stop().await;
+            }
+            return;
+        }
         match h.set_mode(spec).await {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::Unsupported && resumable => {

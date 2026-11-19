@@ -518,3 +518,25 @@ fn only_our_untrusted_session_flag_hooks_are_trusted() {
     );
     assert_eq!(trust_edit(&json!({}), ours), json!({}));
 }
+
+/// E14: the API's effort reaches the thread as `model_reasoning_effort`, `max` as Codex's `xhigh`.
+#[test]
+fn effort_is_the_threads_reasoning_effort() {
+    let with = |e: Option<&str>| {
+        let spec = Spec {
+            effort: e.map(str::to_owned),
+            ..Spec::default()
+        };
+        thread_params(&spec, None).unwrap()
+    };
+    assert_eq!(
+        with(Some("high"))["config"]["model_reasoning_effort"],
+        "high"
+    );
+    assert_eq!(
+        with(Some("max"))["config"]["model_reasoning_effort"],
+        "xhigh"
+    );
+    assert!(with(Some("turbo"))["config"].is_null());
+    assert!(with(None)["config"].is_null());
+}

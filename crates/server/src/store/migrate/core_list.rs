@@ -257,4 +257,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0042_mirror_state.up.sql"),
         down: include_str!("../../../migrations/0042_mirror_state.down.sql"),
     },
+    Migration {
+        version: 43,
+        name: "approval_rules",
+        up: include_str!("../../../migrations/0043_approval_rules.up.sql"),
+        down: include_str!("../../../migrations/0043_approval_rules.down.sql"),
+    },
 ];

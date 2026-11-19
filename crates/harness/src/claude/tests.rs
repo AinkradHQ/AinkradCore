@@ -222,6 +222,7 @@ async fn the_prompt_goes_by_stdin_and_the_config_stays_isolated() {
         sandboxed: false,
         accept_edits: false,
         plan: false,
+        effort: None,
         backend: None,
     };
     let prompt = "PROMPT-CANARY fix the flaky test";
@@ -615,4 +616,46 @@ fn a_turn_of_100k_distinct_messages_holds_bounded_state() {
         "sum is exact"
     );
     assert!(d.messages.len() <= 4096, "held {} ids", d.messages.len());
+}
+
+/// E14: Claude's `thinking` blocks are their own events, in order with the text; a redacted
+/// (empty) block says nothing.
+#[test]
+fn thinking_blocks_become_thinking_events() {
+    let mut decoder = Decoder::default();
+    let message = json!({"type": "assistant", "message": {"content": [
+        {"type": "thinking", "thinking": "weigh the options", "signature": "x"},
+        {"type": "thinking", "thinking": ""},
+        {"type": "text", "text": "done"},
+    ]}});
+    let events = decoder.decode(&message);
+    assert_eq!(
+        events[0],
+        HarnessEvent::Thinking {
+            text: "weigh the options".to_owned()
+        }
+    );
+    assert_eq!(
+        events[1],
+        HarnessEvent::AssistantText {
+            text: "done".to_owned()
+        }
+    );
+}
+
+/// E14: `--effort` is passed for the four API levels only.
+#[test]
+fn effort_reaches_the_cli_for_known_levels_only() {
+    let with = |e: &str| {
+        let spec = Spec {
+            effort: Some(e.to_owned()),
+            ..Spec::default()
+        };
+        args(&spec, None)
+    };
+    let argv = with("max");
+    let at = argv.iter().position(|a| a == "--effort").unwrap();
+    assert_eq!(argv[at + 1], "max");
+    assert!(!with("turbo").contains(&"--effort".to_owned()));
+    assert!(!args(&Spec::default(), None).contains(&"--effort".to_owned()));
 }

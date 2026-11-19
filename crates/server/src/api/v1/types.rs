@@ -314,6 +314,18 @@
 ///    routes, audit actions and events live in `modules/brain/api`; the Code Mode allow-list gains the `brainAi*` v2
 ///    operations (`api/ai-ops.allow.json`) and the runner wire protocol the Brain hook commands (`api/runner.schema.json`).
 ///    Regenerated once, at the epic's build.
+/// 95+ (pending, E14 AI session experience; the coordinator assigns the minor at the epic merge, `API_MINOR` NOT bumped here):
+///    `GET /agent-sessions/{id}/files?dir=` (`listAgentSessionFiles` -> `AgentFolderListing {dir, entries: [AgentFolderEntry
+///    {name, dir, size?}], truncated}`, runner op `agent.files`); `POST /agent-sessions/{id}/files/revert` (`revertAgentFile`,
+///    body `AgentFileRevert {path}` -> `AgentSession`, runner op `agent.revert`, 409 `revert_conflict` / `revert_impossible`,
+///    audit `agent.file_reverted`); `POST /agent-sessions/{id}/files/write` (`writeAgentFile`, body `AgentFileWrite {path,
+///    content}`, runner op `agent.write`, 413 `file_too_large`, audit `agent.file_written`); `effort` (`low|medium|high|max`)
+///    on `AgentSession`, `NewAgentSession` and `AgentModeChange`, with `AgentSession.can_set_effort` (400 `effort_unsupported`;
+///    runner `Policy.effort`, capability `effort`); `AgentDecision.always` (400 `rule_not_allowed`, audit `agent.approval_auto`,
+///    `approval_decided.note` in the transcript), `GET /projects/{id}/approval-rules` (`listApprovalRules`) and
+///    `DELETE /projects/{id}/approval-rules/{rule}` (`deleteApprovalRule`) returning `ApprovalRule {id, tool, pattern,
+///    created_at}` (migration 43, audit `agent.approval_rule_added` / `agent.approval_rule_removed`); transcript entry
+///    `{"type": "thinking", "text"}` (Claude only, at most 16 KiB). Run `make contract` and `make clients` at the epic's build.
 pub const API_MINOR: u32 = 94;
 
 use serde::{Deserialize, Serialize};
