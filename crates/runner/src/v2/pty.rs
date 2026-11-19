@@ -70,7 +70,13 @@ pub struct PtyConfig {
     /// terminal for a session (`PtyOpen::session`) starts only in the folder recorded there.
     /// `None`: such a terminal is refused.
     pub sessions: Option<PathBuf>,
+    /// Where the private-root sandboxes keep each user's persistent home (`<state>/sandbox`).
+    /// `None`: a `PtyOpen::sandbox` other than `real` is refused.
+    pub sandbox_dir: Option<PathBuf>,
 }
+
+/// The `slots` key a runner that honours `PtyOpen::sandbox` advertises (D-17).
+pub const SANDBOX_FEATURE: &str = "sandbox";
 
 /// Where the runner installers put the Ainkrad shell profile.
 pub const SHELL_DIR: &str = "/usr/local/share/ainkrad/shell";
@@ -96,6 +102,7 @@ impl PtyConfig {
             net: super::termbox::Net::Host,
             shell_dir: PathBuf::from(SHELL_DIR),
             sessions: None,
+            sandbox_dir: None,
         }
     }
 }
@@ -326,6 +333,12 @@ impl PtyDriver {
                 .map(str::to_owned)
                 .to_vec(),
             capacity: self.config.capacity,
+            // Tells the Core this runner honours `PtyOpen::sandbox` (an older one would ignore
+            // the field and start a host-view shell, so the Core sends it only when this is here).
+            slots: std::collections::BTreeMap::from([(
+                SANDBOX_FEATURE.to_owned(),
+                self.config.capacity,
+            )]),
             ..DriverInfo::default()
         })
     }
@@ -421,6 +434,19 @@ impl PtyDriver {
         if req.program.as_deref() == Some("") {
             return Err(invalid("program is empty"));
         }
+        // D-17: where the shell lives. Absent (an older Core): the runner-wide host view.
+        let mode = req
+            .sandbox
+            .as_deref()
+            .map(ainkrad_proto::v2::SandboxMode::parse)
+            .transpose()
+            .map_err(|m| invalid(&m))?;
+        let private = matches!(&mode, Some(m) if *m != ainkrad_proto::v2::SandboxMode::Real);
+        if private && (ssh.is_some() || req.ssh.is_some() || req.session.is_some()) {
+            return Err(invalid(
+                "a private-root terminal names its folder in `sandbox`, and is not an ssh terminal",
+            ));
+        }
         // A session's folder lies in the state the sandbox hides: it is let in only for a
         // terminal the Core opened for that session, in the folder this runner recorded for it.
         let reveal = match &req.session {
@@ -475,7 +501,10 @@ impl PtyDriver {
             // Only the sandbox can change a shell's network: never start one on the host's.
             return Err(invalid("a terminal network needs the terminal sandbox"));
         }
-        if self.config.hide.is_some() || self.config.user.is_some() {
+        if private {
+            self.private_shell(mode.as_ref().expect("private"), req, &mut spec)
+                .map_err(|m| invalid(&m))?;
+        } else if self.config.hide.is_some() || self.config.user.is_some() {
             // The shell the host would start by default is named here, so the wrapper can run it.
             let program = spec
                 .program
@@ -569,6 +598,81 @@ impl PtyDriver {
             return Err(err(ErrorCode::SpawnFailed, m));
         }
         Ok(id)
+    }
+
+    /// Starts `spec` in a private root (D-17, `termbox::wrap_private`): the user's persistent home,
+    /// plus the session's or project's folder when `mode` names one. Fails closed.
+    fn private_shell(
+        &self,
+        mode: &ainkrad_proto::v2::SandboxMode,
+        req: &PtyOpen,
+        spec: &mut Spec,
+    ) -> Result<(), String> {
+        use super::termbox as tb;
+        use ainkrad_proto::v2::SandboxMode as M;
+        let base = self
+            .config
+            .sandbox_dir
+            .as_deref()
+            .ok_or("this runner has no sandbox directory")?;
+        if self.config.user.is_some() {
+            return Err("a private-root terminal cannot run under --terminal-user".to_owned());
+        }
+        let user = req
+            .sandbox_user
+            .as_deref()
+            .ok_or("sandbox_user is required for a private-root terminal")?;
+        let home = tb::sandbox_home(base, user)?;
+        let base = base.canonicalize().map_err(|e| e.to_string())?;
+        let folder = match mode {
+            M::Home => {
+                if req.cwd.is_some() {
+                    return Err("a home terminal takes no cwd".to_owned());
+                }
+                None
+            }
+            M::Session(id) => Some(self.session_folder(id, req.cwd.as_deref())?),
+            M::Project(_) => {
+                let cwd = req
+                    .cwd
+                    .as_deref()
+                    .ok_or("a project terminal needs its cwd")?;
+                Some(PathBuf::from(cwd))
+            }
+            M::Real => unreachable!("not private"),
+        };
+        let folder = match folder {
+            Some(f) => {
+                let mut hidden: Vec<PathBuf> = self
+                    .config
+                    .hide
+                    .iter()
+                    .flatten()
+                    .filter_map(|h| h.canonicalize().ok())
+                    .collect();
+                hidden.push(base.clone());
+                Some(tb::check_folder(&f, &base, &hidden)?)
+            }
+            None => None,
+        };
+        let program = spec
+            .program
+            .take()
+            .or_else(|| spec.env.get("SHELL").cloned())
+            .unwrap_or_else(|| "/bin/sh".to_owned());
+        let program = tb::resolve(&program, spec.env.get("PATH").map(String::as_str));
+        let b = tb::wrap_private(
+            &home,
+            folder.as_deref(),
+            &program,
+            &spec.args,
+            &self.config.net,
+        )?;
+        spec.env.extend(b.env);
+        spec.program = Some(b.launcher);
+        spec.args = b.args;
+        spec.cwd = Some(b.cwd);
+        Ok(())
     }
 
     /// The folder this runner recorded for `session`, when it is `cwd`; otherwise why not.
