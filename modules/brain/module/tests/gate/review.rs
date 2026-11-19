@@ -650,3 +650,45 @@ async fn rooms_held_for_a_backup_are_imported_and_undecided_rooms_stay() {
     // Run again: nothing is held any more.
     assert_eq!(fx.brain.release_held().await.unwrap(), 0);
 }
+
+#[tokio::test]
+async fn collected_answers_at_once_and_a_large_run_is_discovered_in_the_background() {
+    let fx = fx().await;
+    let run = start(&fx).await;
+    // More items of one project than one UPDATE chunk (500) holds.
+    for part in 0..3u32 {
+        let batch: Vec<_> = (0..450u32)
+            .map(|i| {
+                let n = part * 450 + i;
+                item(
+                    n,
+                    "/h/Projects/Alpha/app",
+                    &format!("t{n}"),
+                    &format!("text {n}"),
+                )
+            })
+            .collect();
+        send(&fx, &run, batch).await;
+    }
+    let first = ok(
+        &fx,
+        Method::POST,
+        &format!("/imports/{run}/collected"),
+        Some(json!({"source": "claude_code"})),
+    )
+    .await;
+    // The reply does not wait for discovery.
+    assert!(["discovering", "review"].contains(&first["state"].as_str().unwrap()));
+    let mut state = first["state"].as_str().unwrap().to_owned();
+    for _ in 0..600 {
+        if state != "discovering" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let v = ok(&fx, Method::GET, &format!("/imports/{run}"), None).await;
+        state = v["state"].as_str().unwrap().to_owned();
+    }
+    assert_eq!(state, "review");
+    let p = proposals(&fx, &run).await;
+    assert_eq!(by_name(&p, "Alpha")["item_count"], 1350);
+}

@@ -629,6 +629,9 @@ pub async fn fetch_now(app: &App, repo: i64) -> Result<store::Mirror, Refused> {
                 head: None,
                 fetched_at: None,
                 error: None,
+                state: "fetching".into(),
+                reason: None,
+                started_at: None,
             }))
         }
     }
@@ -665,40 +668,181 @@ async fn fetch(
         }
         None => None,
     };
-    let outcome = mirrors.sync(&t, token.as_ref().map(|t| t.as_str())).await;
     let before = store::mirror(&app.pool, repo).await.map_err(db)?;
+    let keep = |m: &Option<store::Mirror>| {
+        (
+            m.as_ref().and_then(|m| m.head.clone()),
+            m.as_ref().and_then(|m| m.fetched_at.clone()),
+        )
+    };
+    // Said before the wait (the person sees it at once); `start` may have said it already.
+    if before.as_ref().is_none_or(|m| m.state != "fetching") {
+        let (h, f) = keep(&before);
+        let state = ("fetching", Some(now.as_str()));
+        let (h, f) = (h.as_deref(), f.as_deref());
+        store::set_mirror_state(&app.pool, repo, state, (h, f), (None, None))
+            .await
+            .map_err(db)?;
+    }
+    let has_token = token.is_some();
+    let outcome = mirrors.sync(&t, token.as_ref().map(|t| t.as_str())).await;
     // The older head is only kept while the copy it names is still there.
     let kept = mirrors
         .ready(repo, &t.key())
         .is_ok()
         .then_some(before)
         .flatten();
-    let (head, at, error) = match &outcome {
-        Ok(head) => (Some(head.clone()), Some(now), None),
-        Err(why) => (
-            kept.as_ref().and_then(|m| m.head.clone()),
-            kept.and_then(|m| m.fetched_at),
-            Some(why.clone()),
-        ),
-    };
     match &outcome {
         Ok(h) => tracing::info!(repo, head = %h, "mirror fetched"),
         Err(why) => tracing::warn!(repo, why, "mirror fetch failed"),
     }
     // The repo may have been removed meanwhile: its row is gone with it, nothing to record.
-    store::set_mirror(
-        &app.pool,
-        repo,
-        head.as_deref(),
-        at.as_deref(),
-        error.as_deref(),
-    )
-    .await
-    .map_err(db)?;
+    let saved = match &outcome {
+        Ok(head) => {
+            let at = Some(now.as_str());
+            let state = ("ready", None);
+            store::set_mirror_state(&app.pool, repo, state, (Some(head), at), (None, None)).await
+        }
+        Err(why) => {
+            let reason = classify(why, &t.remote, has_token);
+            let words = reason.sentence(why);
+            let (h, f) = keep(&kept);
+            let kept = (h.as_deref(), f.as_deref());
+            let code = Some(reason.code());
+            store::set_mirror_state(
+                &app.pool,
+                repo,
+                ("failed", None),
+                kept,
+                (Some(&words), code),
+            )
+            .await
+        }
+    };
+    saved.map_err(db)?;
     store::mirror(&app.pool, repo)
         .await
         .map_err(db)?
         .ok_or(Refused::NoRepo)
+}
+
+/// Why a fetch failed; `code` goes to the API, `sentence` to the person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reason {
+    /// Private (or missing) on GitHub and no connection covers it.
+    NeedsGithub,
+    NotFoundOrPrivate,
+    AuthFailed,
+    Timeout,
+    SshNotSupported,
+    /// Anything else; git's own words are kept.
+    Other,
+}
+
+impl Reason {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::NeedsGithub => "needs_github",
+            Self::NotFoundOrPrivate => "not_found_or_private",
+            Self::AuthFailed => "auth_failed",
+            Self::Timeout => "timeout",
+            Self::SshNotSupported => "ssh_not_supported",
+            Self::Other => "other",
+        }
+    }
+
+    /// One plain sentence; `git` (already scrubbed) only for `Other`.
+    pub fn sentence(self, git: &str) -> String {
+        match self {
+            Self::NeedsGithub => "This repo is private. Connect GitHub to copy it.".into(),
+            Self::NotFoundOrPrivate => "The remote says this repo does not exist, or you cannot see it. Check the address and your access.".into(),
+            Self::AuthFailed => "The remote refused the sign-in. Reconnect the account and try again.".into(),
+            Self::Timeout => "The remote did not answer in time. Try again in a moment.".into(),
+            Self::SshNotSupported => "SSH addresses are not supported yet. Use the https address of the repo.".into(),
+            Self::Other => git.to_owned(),
+        }
+    }
+}
+
+/// An ssh remote: `ssh://…` or scp-style `user@host:path`.
+fn is_ssh(remote: &str) -> bool {
+    let l = remote.to_ascii_lowercase();
+    l.starts_with("ssh://") || (!l.contains("://") && !l.starts_with('/') && l.contains(':'))
+}
+
+/// Why an ssh remote is refused when a repo is added (the Core holds no key for it).
+pub fn ssh_problem(remote: &str) -> Option<String> {
+    is_ssh(remote).then(|| Reason::SshNotSupported.sentence(""))
+}
+
+/// Sorts a failed fetch's words (`git`: git's scrubbed stderr, or `git timed out`) into a
+/// [`Reason`]. `has_token`: a connection covered the repo. ponytail: substring matching on git's
+/// English; git has no exit codes for these, upgrade if it ever gets machine-readable errors.
+pub fn classify(git: &str, remote: &str, has_token: bool) -> Reason {
+    let g = git.to_ascii_lowercase();
+    let github = github_repo(remote).is_some();
+    let private = |covered: Reason| match github && !has_token {
+        true => Reason::NeedsGithub,
+        false => covered,
+    };
+    if g.contains("timed out") {
+        Reason::Timeout
+    } else if is_ssh(remote) {
+        Reason::SshNotSupported
+    } else if [
+        "could not read username",
+        "terminal prompts disabled",
+        "authentication failed",
+        "invalid username",
+        "bad credentials",
+        "permission denied",
+        "access denied",
+        "error: 401",
+        "error: 403",
+    ]
+    .iter()
+    .any(|k| g.contains(k))
+    {
+        private(Reason::AuthFailed)
+    } else if [
+        "not found",
+        "error: 404",
+        "does not appear to be a git repository",
+        "could not read from remote",
+    ]
+    .iter()
+    .any(|k| g.contains(k))
+    {
+        private(Reason::NotFoundOrPrivate)
+    } else {
+        Reason::Other
+    }
+}
+
+/// Marks a repo `fetching` and fetches it in the background: a new repo is copied at once, not
+/// when the next sweep comes. Failure is a recorded state, so nothing is returned.
+pub async fn start(app: &App, repo: i64) {
+    if app.mirrors.is_none() {
+        return;
+    }
+    let before = store::mirror(&app.pool, repo).await.ok().flatten();
+    let now = app.clock.now();
+    let (h, f) = (
+        before.as_ref().and_then(|m| m.head.as_deref()),
+        before.as_ref().and_then(|m| m.fetched_at.as_deref()),
+    );
+    let _ = store::set_mirror_state(
+        &app.pool,
+        repo,
+        ("fetching", Some(&now)),
+        (h, f),
+        (None, None),
+    )
+    .await;
+    let app = app.clone();
+    tokio::spawn(async move {
+        let _ = refresh(&app, repo).await;
+    });
 }
 
 /// Every active project's repos, one after the other (the Core machine is small).

@@ -2472,6 +2472,7 @@
           "notify.delivery",
           "project.archived",
           "project.created",
+          "project.mirror_changed",
           "project.run_started",
           "project.run_stopped",
           "project.spec_saved",
@@ -2512,6 +2513,7 @@
           "notify.delivery": "admin",
           "project.archived": "read",
           "project.created": "read",
+          "project.mirror_changed": "read",
           "project.run_started": "read",
           "project.run_stopped": "read",
           "project.spec_saved": "read",
@@ -3467,6 +3469,24 @@
           },
           "head": {
             "description": "The commit the last fetch ended at.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why the last fetch failed: `needs_github`, `not_found_or_private`, `auth_failed`,\n`timeout`, `ssh_not_supported` or `other`. `error` is the same in one plain sentence.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the running fetch began (state `fetching`)."
+          },
+          "state": {
+            "description": "`fetching`, `ready` or `failed`.",
             "type": [
               "string",
               "null"
@@ -13715,7 +13735,7 @@
                 }
               }
             },
-            "description": "Added (audited as `project.repo_added`); the project as it now is. 400 for a bad name, remote or branch; 404 for no such project; 409 `conflict` for an archived project or a repeated name or remote"
+            "description": "Added (audited as `project.repo_added`); the project as it now is. 400 for a bad name, remote or branch; 404 for no such project; 409 `conflict` for an archived project or a repeated name or remote. An ssh remote is 400: the Core holds no key. The Core starts copying the repo at once (`mirror.state`)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

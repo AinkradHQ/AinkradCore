@@ -52,6 +52,7 @@ pub const PLATFORM_EVENT_KINDS: &[&str] = &[
     "notify.delivery",
     "project.archived",
     "project.created",
+    "project.mirror_changed",
     "project.run_started",
     "project.run_stopped",
     "project.spec_saved",
