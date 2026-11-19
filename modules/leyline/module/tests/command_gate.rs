@@ -79,7 +79,7 @@ async fn fx() -> Fx {
     let admin = enroll(&app, "admin", &["admin", "read"]).await;
     let session = admin.session.lock().unwrap().clone().unwrap();
     app.auth.elevate(&session, &admin.id, clock.unix() + 3600);
-    app.auth.unlock(&admin.id, clock.unix() + 3600);
+    admin.unlock(&app.auth, clock.unix() + 3600);
     let weak = enroll(&app, "weak", &["admin", "read"]).await; // never stepped up
     Fx {
         app,

@@ -228,7 +228,7 @@ async fn enroll(app: &App, clock: &Arc<FixedClock>, name: &str, scopes: &[&str])
     let s = app.auth.issue_session(&dev.id, clock.unix());
     app.auth
         .elevate(&s.id, &dev.id, clock.unix() + 10 * 365 * 86_400);
-    app.auth.unlock(&dev.id, clock.unix() + 10 * 365 * 86_400);
+    dev.unlock(&app.auth, clock.unix() + 10 * 365 * 86_400);
     dev.set_session(Some(s.id));
     dev
 }

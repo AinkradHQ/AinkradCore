@@ -11,7 +11,7 @@ async fn term(fx: &Fx) -> ainkrad_core_server::auth::testing::TestDevice {
     let d = enroll(&fx.app, "term", &["admin", "read", "terminal"]).await;
     let s = d.session.lock().unwrap().clone().unwrap();
     fx.app.auth.elevate(&s, &d.id, fx.app.clock.unix() + 3600);
-    fx.app.auth.unlock(&d.id, fx.app.clock.unix() + 3600);
+    d.unlock(&fx.app.auth, fx.app.clock.unix() + 3600);
     d
 }
 

@@ -134,3 +134,19 @@ async fn a_room_file_from_a_newer_version_is_refused_and_stays_closed() {
             .unwrap();
     assert_eq!(refused, 1);
 }
+
+/// Review: an unlock that lapsed (no heartbeat for 90 s) or whose token is wrong opens nothing.
+#[tokio::test]
+async fn a_lapsed_or_tokenless_unlock_does_not_open_a_room() {
+    let fx = fx().await;
+    let room = one_room(&fx).await;
+    let uri = format!("/rooms/{room}/open");
+    let now = fx.app.clock.unix();
+    fx.admin.unlock(&fx.app.auth, now - 1000);
+    let (s, v) = call(&fx, &fx.admin, Method::POST, &uri, None).await;
+    assert_eq!((s, &v["code"]), (StatusCode::FORBIDDEN, &json!("unlock_required")), "lapsed");
+    fx.admin.unlock(&fx.app.auth, now);
+    fx.admin.set_unlock_token(Some("not-the-token".to_owned()));
+    let (s, v) = call(&fx, &fx.admin, Method::POST, &uri, None).await;
+    assert_eq!((s, &v["code"]), (StatusCode::FORBIDDEN, &json!("unlock_required")), "wrong token");
+}

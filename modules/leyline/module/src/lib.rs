@@ -113,6 +113,14 @@ const NEEDS_UNLOCK: &[(&str, &str)] = &[
     ("POST", "/hosts/{host}/terminals"),
     ("PUT", "/hosts/{host}/files/content"),
     ("POST", "/hosts/{host}/runner"),
+    // Review H3: saved commands and fleet runs run code on hosts, and a command's text is what runs.
+    ("POST", "/commands"),
+    ("PATCH", "/commands/{command}"),
+    ("POST", "/commands/{command}/run"),
+    ("POST", "/fleet/runs"),
+    // Review M3: reading a host's files is a read of the host.
+    ("GET", "/hosts/{host}/files"),
+    ("GET", "/hosts/{host}/files/content"),
 ];
 // POST and PATCH need a step-up only for what widens an AI's reach or repoints a host (`allowed`,
 // address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
@@ -126,11 +134,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/hosts"),
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
-    ("POST", "/commands"),
-    ("PATCH", "/commands/{command}"),
     ("DELETE", "/commands/{command}"),
-    ("POST", "/commands/{command}/run"),
-    ("POST", "/fleet/runs"),
     ("POST", "/runs/{run}/cancel"),
     ("POST", "/hosts/{host}/host-keys/trust"),
     // Ending a lease only takes access away.

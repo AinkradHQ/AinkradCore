@@ -113,7 +113,7 @@ async fn fx() -> Fx {
     let admin = enroll(&app, "admin", "device", &["admin", "read"]).await;
     let session = admin.session.lock().unwrap().clone().unwrap();
     app.auth.elevate(&session, &admin.id, clock.unix() + 3600);
-    app.auth.unlock(&admin.id, clock.unix() + 3600);
+    admin.unlock(&app.auth, clock.unix() + 3600);
     let runner = enroll(&app, "runner-1", "runner", &["runner"]).await;
     // Captured on this thread (a `#[tokio::test]` runs on one): any log line the Core writes.
     let logs = Arc::new(Mutex::new(Vec::new()));
