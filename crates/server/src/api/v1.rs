@@ -447,6 +447,10 @@ pub fn router(app: App) -> Router {
             post(projects::runs::restart),
         )
         .route("/api/v1/projects/{id}/runs", get(projects::runs::history))
+        .route(
+            "/api/v1/projects/{id}/runs/{run}/stop",
+            post(projects::runs::stop_run),
+        )
         .route("/api/v1/projects/{id}/code", get(projects::insight::code))
         .route("/api/v1/projects/{id}/usage", get(projects::insight::usage))
         .route(

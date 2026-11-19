@@ -32,7 +32,9 @@ pub struct RunConfig {
     /// mounts a repo).
     pub service: Option<String>,
     pub port: Option<i64>,
-    /// Wanted: come back after a crash. Stored; the Core does not restart a run by itself yet.
+    /// Come back after a crash: the Core restarts it after 2 s, 4 s, ... up to 60 s, at most 5
+    /// times in 10 minutes, then gives up (event `project.run_gave_up`). A run a person stopped
+    /// does not restart.
     pub restart: bool,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -204,7 +206,8 @@ pub async fn duplicate(
 pub struct RunConfigStart {
     /// The environment to run in; default the project's first.
     pub environment: Option<String>,
-    /// Stop the project's live run first (a project has one live run); default false.
+    /// Stop this configuration's live run first (other configurations keep running); default
+    /// false.
     pub replace: Option<bool>,
 }
 
@@ -217,7 +220,7 @@ pub struct RunConfigStart {
         the configuration and environment laid over the spec: its command, folder and port, and \
         the environment's variables (a Secret link is leased to the runner as `${secret:NAME}`, \
         never sent as a value). The configuration's runner is used when it is online. 409 \
-        `conflict` while a run is live unless `replace`; 409 `no_runner`; 400/409 \
+        `conflict` while this configuration has a live run unless `replace`; 409 `no_runner`; 400/409 \
         `invalid_spec` when the result is not a valid spec or links a Secret the project no \
         longer has; 404 for no such configuration or environment", body = ProjectRun)))]
 pub async fn run(

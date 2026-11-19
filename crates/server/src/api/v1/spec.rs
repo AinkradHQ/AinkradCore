@@ -172,6 +172,7 @@ use super::{
         projects::runs::restart,
         projects::runs::activity,
         projects::runs::history,
+        projects::runs::stop_run,
         projects::insight::code,
         projects::insight::usage,
         projects::insight::changes,

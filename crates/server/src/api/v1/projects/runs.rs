@@ -102,8 +102,9 @@ pub async fn start_with(
     replace: bool,
 ) -> Result<ProjectRun, ApiError> {
     if replace {
+        // Only that configuration's live run: the others keep running.
         let now = app.clock.now();
-        runs::replace(app, &*link(app), id, who(me, &now))
+        runs::replace_config(app, &*link(app), id, opts.config, who(me, &now))
             .await
             .map_err(err)?;
     }
@@ -175,6 +176,32 @@ pub async fn stop(
         &app,
         &*link(&app),
         num(&id, "project")?,
+        "user",
+        who(&me, &now),
+    )
+    .await
+    .map_err(err)?;
+    Ok(Json(shown(&app, r).await?))
+}
+
+#[utoipa::path(post, path = "/api/v1/projects/{id}/runs/{run}/stop",
+    operation_id = "stopProjectRunById", tag = "projects",
+    params(("id" = String, Path, description = "The project's id"),
+           ("run" = String, Path, description = "The run's id")),
+    responses((status = 200, description = "That run, `stopped` (as `stopProjectRun`, for one of \
+        several live runs). 404 for no such project or when the run is not a live run of it; 502 \
+        `runner_error` as `stopProjectRun`", body = ProjectRun)))]
+pub async fn stop_run(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path((id, run)): Path<(String, String)>,
+) -> ApiResult<ProjectRun> {
+    let now = app.clock.now();
+    let r = runs::stop_run(
+        &app,
+        &*link(&app),
+        num(&id, "project")?,
+        &run,
         "user",
         who(&me, &now),
     )
