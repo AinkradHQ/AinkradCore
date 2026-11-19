@@ -166,8 +166,17 @@ pub(super) async fn check_entries(
             return refused("not_found", format!("no pool {}", s.pool));
         };
         let def = providers::get_in(conn, &provider).await?;
-        if !costs::HARNESSES.contains(&def.harness.as_str()) || def.harness == "opencode" {
-            return refused("bad_request", "a chain runs claude, codex or agy pools");
+        // OpenCode runs in a chain only as a runner-bound sign-in (E7-5): its API-key pools are not
+        // served by the gateway.
+        let bound_opencode = def.harness == "opencode"
+            && ainkrad_proto::v2::bound_harness(&provider) == Some("opencode");
+        if !costs::HARNESSES.contains(&def.harness.as_str())
+            || (def.harness == "opencode" && !bound_opencode)
+        {
+            return refused(
+                "bad_request",
+                "a chain runs claude, codex or agy pools, or an OpenCode sign-in",
+            );
         }
         if s.harness.is_some_and(|h| h != def.harness) {
             return refused("bad_request", "an entry's harness is its pool's own");

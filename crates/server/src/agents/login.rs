@@ -21,8 +21,9 @@ use std::time::Duration;
 
 use ainkrad_core::settings::{Key, Scope};
 use ainkrad_proto::v2::{
-    AGENT_DRIVER, Body, CAP_LOGIN, CAP_LOGIN_BOUND, Command, LoginCancel, LoginCode, LoginStart,
-    LoginWait, OP_LOGIN_START, Reply, bound_harness,
+    AGENT_DRIVER, Body, CAP_LOGIN, CAP_LOGIN_BOUND, Command, LOGIN_INPUT_MAX, LoginCancel,
+    LoginCode, LoginInput, LoginScreen, LoginScreenReq, LoginStart, LoginWait, OP_LOGIN_START,
+    Reply, bound_harness,
 };
 use zeroize::Zeroizing;
 
@@ -43,10 +44,32 @@ const URL_HOSTS: [&str; 3] = ["claude.ai", "claude.com", "anthropic.com"];
 /// A runner-bound Codex sign-in's page is on OpenAI's own hosts.
 const CODEX_HOSTS: [&str; 3] = ["openai.com", "chatgpt.com", "chat.com"];
 
+/// An OpenCode login may go to any of the vendors it signs in to; the page is still https on a
+/// host of one of these (the app never opens a stray one).
+const OPENCODE_HOSTS: [&str; 10] = [
+    "opencode.ai",
+    "github.com",
+    "openai.com",
+    "chatgpt.com",
+    "x.ai",
+    "anthropic.com",
+    "claude.ai",
+    "google.com",
+    "openrouter.ai",
+    "microsoft.com",
+];
+
+/// Whether `provider`'s sign-in is a guided terminal: the CLI asks questions the user answers
+/// through `login.input`, reading `login.screen` (OpenCode, Antigravity).
+fn guided(provider: &str) -> bool {
+    bound_harness(provider).is_some_and(|h| h != "codex")
+}
+
 /// The hosts a provider's sign-in page may be on.
 fn hosts_of(provider: &str) -> &'static [&'static str] {
     match provider {
         "codex-sub" => &CODEX_HOSTS,
+        "opencode-sub" => &OPENCODE_HOSTS,
         _ => &URL_HOSTS,
     }
 }
@@ -209,11 +232,12 @@ async fn run_start(app: App, l: Login, harness: String, bound: bool) {
     match asked {
         Ok(Body::Result(Reply::LoginUrl(u)))
             if u.login_id == l.id
-                && url_ok_for(&u.url, hosts_of(&l.provider))
+                && (url_ok_for(&u.url, hosts_of(&l.provider))
+                    || (u.url.is_empty() && guided(&l.provider)))
                 && u.code.as_deref().is_none_or(device_code_ok) =>
         {
             let change = Change {
-                url: Some(&u.url),
+                url: Some(&u.url).filter(|u| !u.is_empty()),
                 code: u.code.as_deref(),
                 ..Change::default()
             };
@@ -399,6 +423,94 @@ async fn run_code(app: App, l: Login, code: Zeroizing<String>) {
         (Some(token), None) => store(&app, &l, token).await,
         (_, Some(why)) => fail(&app, &l, &why).await,
         (None, None) => fail(&app, &l, "the runner returned no token").await,
+    }
+}
+
+/// One line the user typed into a guided sign-in (a pasted code, a menu choice). Sent to the runner
+/// at once and dropped: never stored, never logged. Only from `open_url`, only by the device that
+/// began it.
+pub async fn input(
+    app: &App,
+    caller: &Caller,
+    id: &str,
+    text: Zeroizing<String>,
+) -> Result<Login, Error> {
+    let l = get(app, caller, id).await?;
+    if !guided(&l.provider) {
+        return refused("bad_request", "this sign-in takes no typed line");
+    }
+    if l.state != "open_url" {
+        return refused(
+            "login_state",
+            format!(
+                "the sign-in is {}: a line is taken while it waits for you",
+                l.state
+            ),
+        );
+    }
+    if text.len() > LOGIN_INPUT_MAX || text.chars().any(char::is_control) {
+        return refused("bad_request", "a line is up to 512 printable characters");
+    }
+    let cmd = Command::LoginInput(LoginInput {
+        login_id: l.id.clone(),
+        text: text.to_string(),
+    });
+    drop(text);
+    match ask_runner(app, &l, cmd).await? {
+        Reply::LoginResult(r) if r.login_id == l.id && r.error.is_none() => Ok(l),
+        Reply::LoginResult(r) => refused(
+            "runner_failed",
+            r.error
+                .unwrap_or_else(|| "the runner refused the line".to_owned()),
+        ),
+        _ => refused("runner_failed", "the runner answered something else"),
+    }
+}
+
+/// What a guided sign-in shows now: the runner's redacted screen, redacted again here.
+pub async fn screen(app: &App, caller: &Caller, id: &str) -> Result<LoginScreen, Error> {
+    let l = get(app, caller, id).await?;
+    if !guided(&l.provider) {
+        return refused("bad_request", "this sign-in has no screen");
+    }
+    if l.state != "open_url" {
+        return refused("login_state", format!("the sign-in is {}", l.state));
+    }
+    let cmd = Command::LoginScreen(LoginScreenReq {
+        login_id: l.id.clone(),
+    });
+    match ask_runner(app, &l, cmd).await? {
+        Reply::LoginScreen(mut s) if s.login_id == l.id => {
+            let red = ainkrad_proto::redact::Redactor::new();
+            s.lines = s
+                .lines
+                .iter()
+                .take(40)
+                .map(|x| red.text(x).chars().take(300).collect())
+                .collect();
+            // A page the runner shows must be one the app may open.
+            s.url = s.url.filter(|u| url_ok_for(u, hosts_of(&l.provider)));
+            s.code = s.code.filter(|c| device_code_ok(c));
+            Ok(s)
+        }
+        _ => refused("runner_failed", "the runner answered something else"),
+    }
+}
+
+/// One command to the login's runner and its answer, within a short wait.
+async fn ask_runner(app: &App, l: &Login, cmd: Command) -> Result<Reply, Error> {
+    let sent = app
+        .hub
+        .dispatch_login(&l.runner, cmd)
+        .map_err(|e| Error::Refused {
+            code: "runner_failed",
+            message: e.message,
+        })?;
+    match tokio::time::timeout(Duration::from_secs(15), sent.outcome()).await {
+        Ok(Ok(Body::Result(r))) => Ok(r),
+        Ok(Ok(_)) => refused("runner_failed", "the runner answered something else"),
+        Ok(Err(e)) => refused("runner_failed", e.message),
+        Err(_) => refused("runner_failed", "the runner did not answer in time"),
     }
 }
 

@@ -20,16 +20,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    BOUND_HOME_DIR, ErrorCode, LoginResult, LoginStart, LoginUrl, LoginWait, StreamError,
-    bound_key_ok,
+    BOUND_HOME_DIR, ErrorCode, LOGIN_INPUT_MAX, LoginInput, LoginResult, LoginScreen,
+    LoginScreenReq, LoginStart, LoginUrl, LoginWait, StreamError, bound_key_ok,
 };
 use ainkrad_ptyhost::pty::{self, Pty, Spec};
+use std::io::Write;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use zeroize::Zeroizing;
 
 use super::parse::{self, Screen};
-use super::run::Guard;
+use super::run::{Guard, type_code};
 use super::{
     LoginDriver, MAX_OUTPUT, Msg, QUIET, SIZE, TICK, child_env, err, make_stubs, private_dir,
     result, runner_env,
@@ -133,6 +134,21 @@ pub(super) fn find_page(lines: &[String]) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Harnesses whose sign-in is a guided terminal: the CLI asks questions (a provider to choose, a
+/// code to paste) that the user answers through `login.input`, reading `login.screen`. Codex's
+/// device flow needs no answer: the page and the code are enough.
+fn guided(harness: &str) -> bool {
+    harness != "codex"
+}
+
+/// A typed line: printable, one line, bounded. Never a control character (a second line of input).
+fn input_ok(text: &str) -> bool {
+    text.len() <= LOGIN_INPUT_MAX && !text.chars().any(char::is_control)
+}
+
+/// How many of the last lines a screen answer carries.
+const SCREEN_LINES: usize = 30;
+
 enum End {
     Done,
     Fail(String),
@@ -224,6 +240,39 @@ impl LoginDriver {
         };
         let (rtx, rrx) = oneshot::channel();
         tx.send(Msg::Wait(rtx))
+            .map_err(|_| err(ErrorCode::Internal, "the sign-in ended"))?;
+        rrx.await
+            .map_err(|_| err(ErrorCode::Internal, "the sign-in ended"))
+    }
+
+    /// `login.input`: one typed line, with Enter, into the sign-in's terminal.
+    pub async fn input(&self, req: LoginInput) -> Result<LoginResult, StreamError> {
+        let text = Zeroizing::new(req.text);
+        if !input_ok(&text) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "that is not one line of printable text",
+            ));
+        }
+        let tx = self.active.lock().unwrap().get(&req.login_id).cloned();
+        let Some(tx) = tx else {
+            return Err(err(ErrorCode::InvalidArgs, "no such sign-in is running"));
+        };
+        let (rtx, rrx) = oneshot::channel();
+        tx.send(Msg::Input(text, rtx))
+            .map_err(|_| err(ErrorCode::Internal, "the sign-in ended"))?;
+        rrx.await
+            .map_err(|_| err(ErrorCode::Internal, "the sign-in ended"))
+    }
+
+    /// `login.screen`: what the CLI shows now, redacted.
+    pub async fn screen(&self, req: LoginScreenReq) -> Result<LoginScreen, StreamError> {
+        let tx = self.active.lock().unwrap().get(&req.login_id).cloned();
+        let Some(tx) = tx else {
+            return Err(err(ErrorCode::InvalidArgs, "no such sign-in is running"));
+        };
+        let (rtx, rrx) = oneshot::channel();
+        tx.send(Msg::Screen(rtx))
             .map_err(|_| err(ErrorCode::Internal, "the sign-in ended"))?;
         rrx.await
             .map_err(|_| err(ErrorCode::Internal, "the sign-in ended"))
@@ -341,7 +390,7 @@ impl LoginDriver {
         let Ok(spawned) = Pty::spawn(&spec) else {
             return End::Fail(format!("{harness} could not be started"));
         };
-        let (mut pty, mut reader, _writer, mut exit) =
+        let (mut pty, mut reader, mut writer, mut exit) =
             (spawned.pty, spawned.reader, spawned.writer, spawned.exit);
         let (out_tx, mut out) = mpsc::channel::<Zeroizing<Vec<u8>>>(64);
         std::thread::spawn(move || {
@@ -358,7 +407,16 @@ impl LoginDriver {
         });
         let end = self
             .watch_bound(
-                harness, id, rx, &mut out, &mut pty, &mut exit, url_tx, waiters, acks,
+                harness,
+                id,
+                rx,
+                &mut out,
+                &mut writer,
+                &mut pty,
+                &mut exit,
+                url_tx,
+                waiters,
+                acks,
             )
             .await;
         pty::hang_up(pty.pid, self.cfg.grace, exit.clone()).await;
@@ -376,12 +434,14 @@ impl LoginDriver {
         id: &str,
         rx: &mut mpsc::UnboundedReceiver<Msg>,
         out: &mut mpsc::Receiver<Zeroizing<Vec<u8>>>,
+        writer: &mut Box<dyn Write + Send>,
         pty: &mut Pty,
         exit: &mut tokio::sync::watch::Receiver<Option<pty::Exit>>,
         url_tx: &mut Option<oneshot::Sender<Result<LoginUrl, StreamError>>>,
         waiters: &mut Vec<oneshot::Sender<LoginResult>>,
         acks: &mut Vec<oneshot::Sender<()>>,
     ) -> End {
+        let guided = guided(harness);
         let mut screen = Screen::new(usize::from(SIZE.cols));
         let (start, mut bytes) = (Instant::now(), 0usize);
         let deadline = start + self.cfg.timeout;
@@ -408,7 +468,7 @@ impl LoginDriver {
                     if Instant::now() >= deadline {
                         return End::Fail("the sign-in timed out".to_owned());
                     }
-                    if url_tx.is_some() && Instant::now() >= url_deadline {
+                    if url_tx.is_some() && !guided && Instant::now() >= url_deadline {
                         return End::Fail(format!("{harness} showed no sign-in page in time"));
                     }
                 }
@@ -421,6 +481,20 @@ impl LoginDriver {
                     Msg::Code(_, tx) => {
                         let _ = tx.send(result(id, Some("this sign-in takes no code")));
                     }
+                    Msg::Input(text, tx) => {
+                        // Typed as the claude sign-in types its code: the text, then Enter as a
+                        // write of its own. It is never kept, logged or echoed back.
+                        let sent = type_code(writer, &text, self.cfg.enter_delay).await;
+                        let _ = tx.send(match sent {
+                            Ok(()) => result(id, None),
+                            Err(_) => result(id, Some("the line could not be typed")),
+                        });
+                        screen.flush();
+                    }
+                    Msg::Screen(tx) => {
+                        screen.flush();
+                        let _ = tx.send(snapshot(id, &screen));
+                    }
                 },
                 _ = exit.changed(), if !exited => {
                     exited = true;
@@ -430,6 +504,21 @@ impl LoginDriver {
                 _ = async { tokio::time::sleep_until(drain.unwrap()).await }, if drain.is_some() => {
                     return self.ended_bound(harness, &mut screen, exit).await;
                 }
+            }
+            // A guided sign-in is handed over once its output has been quiet for a moment, with the
+            // page if it printed one: the user reads the screen and answers.
+            if guided
+                && url_tx.is_some()
+                && last_out.elapsed() >= Duration::from_secs(2)
+                && start != last_out
+                && let Some(tx) = url_tx.take()
+            {
+                let done = screen.done();
+                let _ = tx.send(Ok(LoginUrl {
+                    login_id: id.to_owned(),
+                    url: find_page(done).unwrap_or_default(),
+                    code: find_device_code(done),
+                }));
             }
             // The page and the code, sent once: the page is there, and so is the code, or the
             // output has been quiet for a moment (a harness with no device code).
@@ -473,6 +562,28 @@ impl LoginDriver {
             .map(|l| format!(" (it last said: {l})"))
             .unwrap_or_default();
         End::Fail(format!("{harness} {how} before the sign-in finished{last}"))
+    }
+}
+
+/// The screen as `login.screen` answers it: the last lines, each through the redactor and cut.
+fn snapshot(id: &str, screen: &Screen) -> LoginScreen {
+    let done = screen.done();
+    let mut lines: Vec<String> = done
+        .iter()
+        .rev()
+        .take(SCREEN_LINES)
+        .map(|l| parse::redact(l, &[]).chars().take(300).collect::<String>())
+        .collect();
+    lines.reverse();
+    let tail = screen.tail();
+    if !tail.trim().is_empty() {
+        lines.push(parse::redact(&tail, &[]).chars().take(300).collect());
+    }
+    LoginScreen {
+        login_id: id.to_owned(),
+        lines,
+        url: find_page(done),
+        code: find_device_code(done),
     }
 }
 

@@ -31,6 +31,26 @@ pub struct LoginCode {
     pub code: Zeroizing<String>,
 }
 
+/// One line the user typed into a guided sign-in. No `Debug`: it may be a pasted code.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LoginInputBody {
+    /// Up to 512 printable characters, sent to the runner with Enter and dropped.
+    #[schema(value_type = String)]
+    pub text: Zeroizing<String>,
+}
+
+/// What a guided sign-in shows now. Text only, redacted; nothing here is a credential.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct LoginScreenView {
+    /// The last lines the sign-in's CLI printed.
+    pub lines: Vec<String>,
+    /// The sign-in page, once it printed one (https on the provider's own hosts).
+    pub url: Option<String>,
+    /// The device code, once it printed one.
+    pub code: Option<String>,
+}
+
 /// Where a sign-in has got to. Never a token or a code.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AccountLogin {
@@ -140,4 +160,40 @@ pub async fn cancel_login(
     Ok(Json(
         login::cancel(&app, &me, &id).await.map_err(err)?.into(),
     ))
+}
+
+#[utoipa::path(post, path = "/api/v1/accounts/logins/{id}/input",
+    operation_id = "sendAccountLoginInput", tag = "accounts",
+    params(("id" = String, Path, description = "The sign-in's id")), request_body = LoginInputBody,
+    responses((status = 200, description = "One line went to the guided sign-in's terminal on its \
+        runner (once, never stored or logged). Only for a provider whose sign-in is guided \
+        (`opencode-sub`); 409 `login_state` unless the sign-in is `open_url`; 400 for a line that is \
+        not printable text; 409 `runner_failed`. No step-up beyond the one that started it", body = AccountLogin)))]
+pub async fn send_login_input(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> ApiResult<AccountLogin> {
+    let b: LoginInputBody = parse(&body)?;
+    let l = login::input(&app, &me, &id, b.text).await.map_err(err)?;
+    Ok(Json(l.into()))
+}
+
+#[utoipa::path(get, path = "/api/v1/accounts/logins/{id}/screen",
+    operation_id = "getAccountLoginScreen", tag = "accounts",
+    params(("id" = String, Path, description = "The sign-in's id")),
+    responses((status = 200, description = "The redacted screen of a guided sign-in, read from its \
+        runner now. Only the device that started it; 409 `login_state` unless `open_url`", body = LoginScreenView)))]
+pub async fn get_login_screen(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<LoginScreenView> {
+    let s = login::screen(&app, &me, &id).await.map_err(err)?;
+    Ok(Json(LoginScreenView {
+        lines: s.lines,
+        url: s.url,
+        code: s.code,
+    }))
 }

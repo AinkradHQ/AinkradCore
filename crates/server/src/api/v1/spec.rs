@@ -119,6 +119,8 @@ use super::{
         accounts::start_login,
         accounts::get_login,
         accounts::send_login_code,
+        accounts::send_login_input,
+        accounts::get_login_screen,
         accounts::cancel_login,
         accounts::list_providers,
         accounts::create_provider,

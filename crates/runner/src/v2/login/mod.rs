@@ -263,6 +263,8 @@ pub fn dispatch(
             Command::LoginCode(req) => login.code(req).await.map(Reply::LoginResult),
             Command::LoginCancel(req) => login.cancel(req).await.map(Reply::LoginResult),
             Command::LoginWait(req) => login.wait(req).await.map(Reply::LoginResult),
+            Command::LoginInput(req) => login.input(req).await.map(Reply::LoginResult),
+            Command::LoginScreen(req) => login.screen(req).await.map(Reply::LoginScreen),
             _ => return,
         };
         let body = match answer {
@@ -278,6 +280,10 @@ enum Msg {
     Code(Zeroizing<String>, oneshot::Sender<LoginResult>),
     /// Runner-bound sign-in: answer when it ends.
     Wait(oneshot::Sender<LoginResult>),
+    /// Guided sign-in: one typed line, acknowledged once it was written.
+    Input(Zeroizing<String>, oneshot::Sender<LoginResult>),
+    /// Guided sign-in: the redacted screen now.
+    Screen(oneshot::Sender<ainkrad_proto::v2::LoginScreen>),
     Cancel(oneshot::Sender<()>),
 }
 

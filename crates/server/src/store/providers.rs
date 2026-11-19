@@ -188,6 +188,18 @@ pub fn built_in() -> Vec<Definition> {
     );
     codex.delivery = vec!["env".to_owned()];
     codex.login_methods = vec!["device_code".to_owned()];
+    // An OpenCode login (E7-5): the user's own provider login inside OpenCode, done through a guided
+    // terminal on one runner. Runner-bound, like Codex; usage is not parsed (it spans vendors).
+    let mut opencode = builtin(
+        "opencode-sub",
+        "OpenCode login",
+        "opencode",
+        "OPENCODE_AUTH",
+        "https://opencode.ai",
+        "none",
+    );
+    opencode.delivery = vec!["env".to_owned()];
+    opencode.login_methods = vec!["runner_login".to_owned()];
     vec![
         builtin(
             "anthropic",
@@ -215,6 +227,7 @@ pub fn built_in() -> Vec<Definition> {
         ),
         sub,
         codex,
+        opencode,
     ]
 }
 

@@ -198,7 +198,11 @@ fn offers(listed: &str, op: &str) -> bool {
         || (listed.starts_with(ainkrad_proto::v2::CAP_LOGIN_BOUND)
             && matches!(
                 op,
-                OP_LOGIN_START | OP_LOGIN_CANCEL | ainkrad_proto::v2::OP_LOGIN_WAIT
+                OP_LOGIN_START
+                    | OP_LOGIN_CANCEL
+                    | ainkrad_proto::v2::OP_LOGIN_WAIT
+                    | ainkrad_proto::v2::OP_LOGIN_INPUT
+                    | ainkrad_proto::v2::OP_LOGIN_SCREEN
             ))
         || (listed == CAP_LOGIN && op == ainkrad_proto::v2::OP_LOGIN_WAIT)
 }
