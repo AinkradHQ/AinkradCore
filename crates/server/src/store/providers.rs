@@ -31,7 +31,9 @@ use super::secrets::Error;
 pub const DELIVERY: [&str; 2] = ["env", "gateway"];
 /// How an account is signed in: a pasted key, or the browser plus a pasted approval code
 /// (`browser_code`, a subscription: a one-shot sign-in on a runner, KAN-441). Device codes are not built.
-pub const LOGIN: [&str; 2] = ["paste", "browser_code"];
+pub const LOGIN: [&str; 4] = ["paste", "browser_code", "device_code", "runner_login"];
+/// The sign-ins that run a vendor CLI on a runner: only a built-in has one.
+pub const RUNNER_LOGINS: [&str; 3] = ["browser_code", "device_code", "runner_login"];
 /// The usage decoders a definition may name.
 pub const USAGE_PARSERS: [&str; 4] = ["anthropic", "openai", "google", "none"];
 const MAX_USER_DEFS: i64 = 32;
@@ -174,6 +176,18 @@ pub fn built_in() -> Vec<Definition> {
     );
     sub.delivery = vec!["env".to_owned()];
     sub.login_methods = vec!["browser_code".to_owned()];
+    // A ChatGPT/Codex sign-in (E7-4): a device code on the runner that keeps the login. Runner-bound:
+    // no token reaches the Core, the harness runs in the account's home on that runner.
+    let mut codex = builtin(
+        "codex-sub",
+        "ChatGPT / Codex subscription",
+        "codex",
+        "OPENAI_API_KEY",
+        "https://api.openai.com/v1",
+        "openai",
+    );
+    codex.delivery = vec!["env".to_owned()];
+    codex.login_methods = vec!["device_code".to_owned()];
     vec![
         builtin(
             "anthropic",
@@ -200,6 +214,7 @@ pub fn built_in() -> Vec<Definition> {
             "google",
         ),
         sub,
+        codex,
     ]
 }
 
@@ -267,8 +282,11 @@ pub fn problem(d: &Definition) -> Option<String> {
         ));
     }
     // A sign-in through the browser runs a vendor CLI on a runner: only a built-in has one.
-    if d.login_methods.iter().any(|m| m == "browser_code") {
-        return Some("browser_code is a built-in's sign-in, not a definition's".to_owned());
+    if d.login_methods
+        .iter()
+        .any(|m| RUNNER_LOGINS.contains(&m.as_str()))
+    {
+        return Some("a sign-in on a runner is a built-in's, not a definition's".to_owned());
     }
     if d.models.len() > MAX_MODELS {
         return Some(format!("at most {MAX_MODELS} models"));

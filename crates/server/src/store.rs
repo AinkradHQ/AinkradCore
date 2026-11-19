@@ -21,6 +21,7 @@ pub mod alloc;
 pub mod attachments;
 pub mod audit;
 mod backup;
+pub mod bound;
 pub mod budgets;
 pub mod chains;
 pub mod connections;

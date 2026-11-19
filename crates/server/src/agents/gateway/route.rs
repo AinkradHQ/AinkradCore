@@ -91,6 +91,12 @@ pub(in crate::agents) fn secrets_problem(
     harness: &str,
     secrets: &[crate::store::agents::SessionSecret],
 ) -> Option<&'static str> {
+    // A runner-bound account (E7-4): its own harness, alone, no gateway.
+    if let Some(why) =
+        ainkrad_proto::v2::bound_problem(harness, false, secrets.iter().map(|s| s.name.as_str()))
+    {
+        return Some(why);
+    }
     if let Some(why) = ainkrad_proto::v2::subscription_problem(
         harness,
         false,
@@ -164,7 +170,7 @@ mod tests {
     fn a_built_in_carries_no_key_shape_and_a_user_definition_its_prefix_and_frozen_host() {
         for d in built_in() {
             // A subscription's token is a leased env variable (§5): the gateway never serves it.
-            if d.id == "claude-sub" {
+            if crate::store::account_keys::is_subscription(&d) {
                 assert!(of(&d, &d.base_url).is_err());
                 continue;
             }

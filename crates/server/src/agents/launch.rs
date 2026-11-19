@@ -6,7 +6,11 @@ use super::*;
 async fn leases(app: &App, s: &Session) -> Result<Leased, Refusal> {
     let mut expires = i64::MAX;
     let mut out = Vec::with_capacity(s.secrets.len());
-    for secret in s.secrets.iter().filter(|x| !gateway_bound(x)) {
+    for secret in s
+        .secrets
+        .iter()
+        .filter(|x| !gateway_bound(x) && !bound::is_bound(x))
+    {
         // A subscription's token is leased as env after its account is read live (L5).
         let (lease, until) = if subscription::is_subscription(secret) {
             subscription::lease(app, s, secret).await?
@@ -40,6 +44,7 @@ async fn leases(app: &App, s: &Session) -> Result<Leased, Refusal> {
         until: expires,
         secrets: out,
         gateway,
+        home: bound::home(app, s).await?,
     })
 }
 
@@ -90,6 +95,7 @@ fn start_command(
     secrets: Vec<SecretGrant>,
     gateway: Option<Box<ainkrad_proto::v2::GatewayGrant>>,
     instructions: Option<String>,
+    home: Option<String>,
     resume: bool,
 ) -> Result<Command, Refusal> {
     let bad = || {
@@ -126,6 +132,7 @@ fn start_command(
         },
         live: s.conversation,
         instructions,
+        home,
     }))
 }
 
@@ -187,7 +194,7 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
         let why = "the runner is not connected";
         return Err(Refusal::Runner(StreamError::new(ErrorCode::Offline, why)));
     }
-    if let Err(e) = start_command(s, Vec::new(), None, None, resume) {
+    if let Err(e) = start_command(s, Vec::new(), None, None, None, resume) {
         fail(app, s, &describe(&e)).await;
         return Err(e);
     }
@@ -330,6 +337,7 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
             secrets.clone(),
             leased.gateway.clone(),
             instructions,
+            leased.home.clone(),
             resume,
         )?,
         wait,

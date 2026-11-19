@@ -115,6 +115,7 @@ async fn the_built_ins_are_fixed_and_a_user_definition_is_stored_audited_and_ver
             "openai",
             "google",
             "claude-sub",
+            "codex-sub",
             "openrouter",
             "aimlapi",
             "groq",

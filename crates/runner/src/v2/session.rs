@@ -625,6 +625,7 @@ impl Session {
             Command::LoginStart(_)
             | Command::LoginCode(_)
             | Command::LoginCancel(_)
+            | Command::LoginWait(_)
             | Command::Unknown => {
                 super::login::dispatch(self.login.as_ref(), stream, command, &self.done_tx)
             }

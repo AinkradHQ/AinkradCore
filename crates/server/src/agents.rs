@@ -26,6 +26,7 @@
 
 mod allocate;
 pub mod attach;
+mod bound;
 mod ending;
 mod failover;
 pub mod gateway;
@@ -108,6 +109,8 @@ struct Leased {
     secrets: Vec<SecretGrant>,
     /// The key of an API-key account, for the runner's gateway (KAN-435); never an env secret.
     gateway: Option<Box<ainkrad_proto::v2::GatewayGrant>>,
+    /// A runner-bound account's home on the runner (`AgentStart::home`); nothing is leased for it.
+    home: Option<String>,
 }
 
 /// How long a module credential's lease lasts: the runner redeems it at the start of the session.

@@ -29,7 +29,7 @@ use super::secrets::{self, Error, NewValue};
 use crate::ops::secretbox::SecretBox;
 
 mod create;
-pub use create::{create, create_by, create_placed};
+pub use create::{bound_marker, create, create_bound, create_by, create_placed};
 
 /// The cap a new API-key account starts with.
 pub const DEFAULT_CAP: i64 = 4;
@@ -37,7 +37,7 @@ pub const DEFAULT_CAP: i64 = 4;
 pub const MAX_CAP: i64 = 64;
 /// The built-in providers (pools are of these only). An account may also name a stored user
 /// definition (`account_keys::holds_keys_problem`).
-pub const PROVIDERS: [&str; 4] = ["anthropic", "openai", "google", "claude-sub"];
+pub const PROVIDERS: [&str; 5] = ["anthropic", "openai", "google", "claude-sub", "codex-sub"];
 /// The states an account is in.
 pub const STATES: [&str; 5] = ["active", "cooling", "limited", "unhealthy", "disabled"];
 
@@ -76,6 +76,7 @@ pub struct Account {
 }
 
 /// An account to store. Deliberately no `Debug`: `value` is the key.
+#[derive(Clone, Copy)]
 pub struct NewAccount<'a> {
     pub provider: &'a str,
     pub label: &'a str,
@@ -352,6 +353,14 @@ pub async fn set_cap(
     check_cap(cap)?;
     let mut tx = super::begin_write(pool).await?;
     let old = find(&mut tx, id).await?;
+    // A runner-bound login's rotating auth.json is never refreshed by two sessions at once: its
+    // cap is one session at a time, and that is the lock (the allocator holds the rest back).
+    if cap != 1 && super::bound::of(&mut tx, id).await?.is_some() {
+        return refused(
+            "bad_request",
+            "a runner-bound account runs one session at a time: its cap stays 1",
+        );
+    }
     sqlx::query("UPDATE core_accounts SET cap = ?, updated_at = ? WHERE id = ?")
         .bind(cap)
         .bind(now)

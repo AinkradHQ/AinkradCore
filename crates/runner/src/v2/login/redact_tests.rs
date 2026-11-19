@@ -61,7 +61,8 @@ async fn the_token_and_the_code_are_in_no_log_error_or_debug() {
         "{:?}",
         LoginUrl {
             login_id: "l".into(),
-            url: URL.into()
+            url: URL.into(),
+            code: None,
         }
     ));
     shown.push(String::from_utf8_lossy(&sink.0.lock().unwrap()).into_owned());

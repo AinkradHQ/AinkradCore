@@ -242,6 +242,33 @@ pub fn redact(text: &str, secrets: &[&str]) -> String {
         rest = &tail[n..];
     }
     res.push_str(rest);
+    // Other vendors' key and token shapes (OpenAI `sk-…`, a JWT `eyJ…`): a bound sign-in's CLI may
+    // echo one, and none may leave the runner.
+    for prefix in ["sk-", "eyJ"] {
+        let mut out = String::with_capacity(res.len());
+        let (mut rest, mut prev) = (res.as_str(), b' ');
+        while let Some(i) = rest.find(prefix) {
+            let before = if i == 0 { prev } else { rest.as_bytes()[i - 1] };
+            let word = !before.is_ascii_alphanumeric();
+            let tail = &rest[i + prefix.len()..];
+            if !word {
+                out.push_str(&rest[..i + prefix.len()]);
+                prev = b'x';
+                rest = tail;
+                continue;
+            }
+            out.push_str(&rest[..i]);
+            out.push_str("[redacted]");
+            let n = tail
+                .bytes()
+                .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+                .count();
+            prev = b' ';
+            rest = &tail[n..];
+        }
+        out.push_str(rest);
+        res = out;
+    }
     res
 }
 

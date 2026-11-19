@@ -130,6 +130,7 @@ async fn provider_definitions_are_validated_and_built_ins_are_fixed() {
             "openai",
             "google",
             "claude-sub",
+            "codex-sub",
             "openrouter",
             "aimlapi",
             "groq",
