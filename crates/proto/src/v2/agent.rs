@@ -70,6 +70,7 @@ pub const RUN_TOKEN_VAR: &str = "CITADEL_RUN_TOKEN";
 pub fn loader_var(var: &str) -> bool {
     var.starts_with("LD_")
         || var.starts_with("DYLD_")
+        || var.starts_with("GIT_CONFIG_")
         || matches!(
             var,
             "GCONV_PATH"
@@ -87,6 +88,12 @@ pub fn loader_var(var: &str) -> bool {
                 | "PERL5OPT"
                 | "RUBYLIB"
                 | "RUBYOPT"
+                | "PERLLIB"
+                | "JAVA_TOOL_OPTIONS"
+                | "_JAVA_OPTIONS"
+                | "GIT_EXEC_PATH"
+                | "PYTHONHOME"
+                | "ZDOTDIR"
         )
 }
 

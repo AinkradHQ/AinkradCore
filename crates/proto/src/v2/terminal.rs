@@ -582,6 +582,19 @@ mod sandbox_tests {
         ] {
             assert!(!crate::v2::valid_terminal_env(bad), "{bad}");
         }
+        for bad in [
+            "PERLLIB",
+            "JAVA_TOOL_OPTIONS",
+            "_JAVA_OPTIONS",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_VALUE_0",
+            "GIT_EXEC_PATH",
+            "PYTHONHOME",
+            "ZDOTDIR",
+        ] {
+            assert!(!crate::v2::valid_terminal_env(bad), "{bad}");
+        }
         assert!(!crate::v2::valid_terminal_env(&"A".repeat(65)));
         // The secret-name rule keeps refusing the same loader names.
         assert!(!crate::v2::valid_secret_var("GCONV_PATH") && !crate::v2::valid_secret_var("LD_X"));

@@ -694,6 +694,16 @@ async fn touch(app: &App, id: &str) {
         .await;
 }
 
+/// Running terminals with no recorded mode: opened before sandboxes existed.
+pub(crate) async fn unsandboxed(pool: &sqlx::SqlitePool) -> Vec<(String, String)> {
+    sqlx::query_as::<_, (String, String)>(
+        "SELECT id,runner FROM core_terminals WHERE status='running' AND sandbox IS NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+}
+
 /// Closes every running terminal nobody has been attached to for `terminal.idle_secs`
 /// (0 turns it off). A runner that is offline is tried again at the next pass.
 pub async fn sweep(app: &App) {
@@ -710,18 +720,6 @@ pub async fn sweep(app: &App) {
     {
         for (id, runner) in rows {
             hang_up(app, &id, &runner, "revoked").await;
-        }
-    }
-    // A shell opened before sandboxes (no mode recorded) is a host-view shell this Core no longer
-    // opens: closed, so none outlives the upgrade.
-    if let Ok(rows) = sqlx::query_as::<_, (String, String)>(
-        "SELECT id,runner FROM core_terminals WHERE status='running' AND sandbox IS NULL",
-    )
-    .fetch_all(&app.pool)
-    .await
-    {
-        for (id, runner) in rows {
-            hang_up(app, &id, &runner, "sandbox_upgrade").await;
         }
     }
     let Ok(idle) =
@@ -854,6 +852,12 @@ async fn ack_exited(app: &App) {
 
 /// `sweep` every `SWEEP_EVERY` until the Core stops.
 pub async fn sweep_loop(app: App) {
+    // Once, at start: a shell opened before sandboxes (no mode recorded) is a host-view shell this
+    // Core no longer opens, so none outlives the upgrade. Not every sweep: every terminal opened
+    // since records its mode (an SSH terminal records `ssh`).
+    for (id, runner) in unsandboxed(&app.pool).await {
+        hang_up(&app, &id, &runner, "sandbox_upgrade").await;
+    }
     let mut closing = app.closing.subscribe();
     let mut tick = tokio::time::interval(SWEEP_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1080,7 +1084,7 @@ async fn open(
                 scrollback_bytes: u64::try_from(scrollback.0).ok(),
                 scrollback_budget: u64::try_from(scrollback.1).ok(),
                 ssh: spec.ssh,
-                sandbox: spec.sandbox.clone(),
+                sandbox: spec.sandbox.clone().filter(|s| s != "ssh"),
                 sandbox_user: spec.sandbox_user,
             }),
             app.hub.terminal_elevation(me),
@@ -1178,7 +1182,8 @@ pub async fn open_ssh(
         session: None,
         env: BTreeMap::new(),
         ssh: Some(ssh),
-        sandbox: None,
+        // Recorded, not sent: the runner's `pty.open` for an SSH terminal carries no mode.
+        sandbox: Some("ssh".to_owned()),
         sandbox_user: None,
     };
     open(app, me, runner, size, spec, Some(tx))
@@ -1329,7 +1334,7 @@ pub async fn tail(
     // A real shell on the person's own Mac is never read through the Core without an attach, and
     // one opened before sandboxes (no mode recorded) counts as real.
     if t.status != TerminalStatus::Running
-        || !matches!(t.sandbox.as_deref(), Some(s) if s != "real")
+        || !matches!(t.sandbox.as_deref(), Some(s) if s != "real" && s != "ssh")
     {
         return Ok(Json(TerminalTailView { lines: Vec::new() }));
     }
