@@ -124,7 +124,12 @@ async fn a_stop_wipes_every_removed_account_inside_its_window_and_a_bound_login_
         .await
         .unwrap();
     assert_eq!(acc::wipe_due(p, NOW, true).await.unwrap(), 1);
-    let owed = acc::pending_wipes(p).await.unwrap();
+    let online = vec!["rn_1".to_owned()];
+    assert!(
+        acc::pending_wipes(p, &[]).await.unwrap().is_empty(),
+        "an away runner is skipped"
+    );
+    let owed = acc::pending_wipes(p, &online).await.unwrap();
     assert_eq!(
         owed.iter()
             .map(|w| (w.runner.as_str(), w.home.as_str()))
@@ -133,7 +138,43 @@ async fn a_stop_wipes_every_removed_account_inside_its_window_and_a_bound_login_
     );
     // The runner is offline: the row stays and counts the try; once it confirms, the row goes.
     acc::wipe_tried(p, owed[0].id).await.unwrap();
-    assert_eq!(acc::pending_wipes(p).await.unwrap().len(), 1);
+    assert_eq!(acc::pending_wipes(p, &online).await.unwrap().len(), 1);
     acc::wipe_done(p, owed[0].id).await.unwrap();
-    assert!(acc::pending_wipes(p).await.unwrap().is_empty());
+    assert!(acc::pending_wipes(p, &online).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_restore_that_raced_the_sweep_wins_and_the_queue_asks_the_least_tried_first() {
+    let (fx, _vm, s) = setup().await;
+    let p = &fx.app.pool;
+    let a = make(&fx, &s, "claude-main", V1, &[]).await;
+    acc::soft_delete(p, a.id, &fx.dev.id, BY, NOW)
+        .await
+        .unwrap();
+    // The sweep listed the account as due, then the user restored it inside the window's last tick:
+    // the delete re-checks under its own transaction and wipes nothing.
+    acc::restore(p, a.id, &fx.dev.id, BY, &later(9))
+        .await
+        .unwrap();
+    let cutoff = later(100);
+    assert!(!acc::wipe_one(p, a.id, &cutoff, false).await.unwrap());
+    assert!(!acc::wipe_one(p, a.id, &cutoff, true).await.unwrap());
+    assert_eq!(count(&fx, "SELECT count(*) FROM core_accounts").await, 1);
+    // The owed wipes: fewest tries first, then the oldest.
+    for (home, tries, at) in [
+        ("lg_old", 3, "2026-10-22T09:00:00.000Z"),
+        ("lg_new", 0, NOW),
+        ("lg_mid", 0, "2026-10-22T09:30:00.000Z"),
+    ] {
+        sqlx::query("INSERT INTO core_account_wipes (runner, home, created_at, tries) VALUES ('rn_1', ?, ?, ?)")
+            .bind(home)
+            .bind(at)
+            .bind(tries)
+            .execute(p)
+            .await
+            .unwrap();
+    }
+    let owed = acc::pending_wipes(p, &["rn_1".to_owned()]).await.unwrap();
+    let order: Vec<&str> = owed.iter().map(|w| w.home.as_str()).collect();
+    assert_eq!(order, ["lg_mid", "lg_new", "lg_old"]);
 }

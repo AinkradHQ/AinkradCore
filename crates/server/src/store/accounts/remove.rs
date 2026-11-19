@@ -146,7 +146,8 @@ pub async fn restore(
 
 /// Wipes every removed account whose Undo window has ended at `now`, or every removed account with
 /// `all` (the Core is stopping). The real wipe is [`super::delete`], so the key, the row, the seats and
-/// the budgets go and `account.wiped` is audited. How many were wiped.
+/// the budgets go and `account.wiped` is audited. A failure is logged against the account and the
+/// sweep goes on with the rest (it is asked again on the next pass). How many were wiped.
 pub async fn wipe_due(pool: &SqlitePool, now: &str, all: bool) -> Result<usize, Error> {
     let cutoff = iso_of_unix(unix_secs(now).unwrap_or_default() - UNDO_SECS);
     let ids: Vec<i64> = sqlx::query_scalar(
@@ -157,10 +158,21 @@ pub async fn wipe_due(pool: &SqlitePool, now: &str, all: bool) -> Result<usize, 
     .bind(&cutoff)
     .fetch_all(pool)
     .await?;
-    for id in &ids {
-        super::delete(pool, *id, "core", AuditActor::System).await?;
+    let mut wiped = 0;
+    for id in ids {
+        match wipe_one(pool, id, &cutoff, all).await {
+            Ok(true) => wiped += 1,
+            Ok(false) => {}
+            Err(e) => tracing::warn!(account = id, error = %e, "wiping a removed account"),
+        }
     }
-    Ok(ids.len())
+    Ok(wiped)
+}
+
+/// Wipes account `id` if it is still removed and its window is over at `cutoff` (or `all`). `false`
+/// when it is not: a restore that raced the sweep wins.
+pub async fn wipe_one(pool: &SqlitePool, id: i64, cutoff: &str, all: bool) -> Result<bool, Error> {
+    super::delete_gated(pool, id, "core", AuditActor::System, Some((all, cutoff))).await
 }
 
 /// A login still to be wiped on its runner: which runner, and which home key under it.
@@ -171,12 +183,20 @@ pub struct PendingWipe {
     pub home: String,
 }
 
-/// The wipes the runners still owe, oldest first.
-pub async fn pending_wipes(pool: &SqlitePool) -> Result<Vec<PendingWipe>, sqlx::Error> {
-    let rows: Vec<(i64, String, String)> =
-        sqlx::query_as("SELECT id, runner, home FROM core_account_wipes ORDER BY id LIMIT 50")
-            .fetch_all(pool)
-            .await?;
+/// The wipes the runners still owe: only those of a runner in `online`, the least tried first, then
+/// the oldest. A runner that is away is not asked (and not counted as a try), and its rows cannot
+/// crowd the connected ones out of the page.
+pub async fn pending_wipes(
+    pool: &SqlitePool,
+    online: &[String],
+) -> Result<Vec<PendingWipe>, sqlx::Error> {
+    let rows: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, runner, home FROM core_account_wipes \
+         WHERE runner IN (SELECT value FROM json_each(?)) ORDER BY tries, created_at, id LIMIT 50",
+    )
+    .bind(serde_json::to_string(online).unwrap_or_else(|_| "[]".to_owned()))
+    .fetch_all(pool)
+    .await?;
     Ok(rows
         .into_iter()
         .map(|(id, runner, home)| PendingWipe { id, runner, home })

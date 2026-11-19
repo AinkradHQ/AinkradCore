@@ -112,3 +112,15 @@ fn every_destructive_route_is_a_declared_route() {
         );
     }
 }
+
+#[test]
+fn no_route_is_listed_twice() {
+    for (i, r) in ROUTES.iter().enumerate() {
+        assert!(
+            !ROUTES[..i].iter().any(|o| (o.0, o.1) == (r.0, r.1)),
+            "{} {} is listed twice",
+            r.0,
+            r.1
+        );
+    }
+}
