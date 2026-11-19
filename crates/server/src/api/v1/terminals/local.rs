@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(r.lapse(100, |_| false), vec![]);
         // A device whose unlock ended loses its lease at once, whatever time is left.
         assert_eq!(r.lease("t_a", "d_1", 500, 50), Some(true));
-        assert_eq!(r.lease("t_a", "d_2", 500, 50), Some(true));
+        assert_eq!(r.lease("t_a", "d_2", 500, 50), Some(false), "a renewal");
         assert_eq!(
             r.lapse(60, |d| d == "d_1"),
             vec![("t_a".to_owned(), "d_1".to_owned())]

@@ -492,6 +492,9 @@ async fn terminals_need_their_scope_and_the_app_unlock_not_a_step_up() {
     // No time cap (D-5): over an hour on, with a beat inside every 90 s, it still holds.
     for _ in 0..50 {
         fx.clock.advance(80);
+        // The session is renewed as the app does; only the unlock is under test here.
+        let s = fx.app.auth.issue_session(&mac.id, fx.clock.unix());
+        mac.set_session(Some(s.id));
         assert_eq!(
             post(&fx, &mac, "/api/v1/auth/unlock/beat", json!({}))
                 .await

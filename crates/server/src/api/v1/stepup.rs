@@ -263,6 +263,8 @@ pub async fn beat(
         .get(crate::auth::signed::UNLOCK)
         .and_then(|v| v.to_str().ok());
     if !app.auth.beat(&me.device.id, token, now) {
+        // Counted with the gate's refusals: a stolen key guessing at the token shows here too.
+        app.auth.refusals.note("unlock_required", now);
         return unlock_required().into_response();
     }
     unlocked(&app, &me.device.id, now, None)

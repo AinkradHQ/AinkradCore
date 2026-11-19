@@ -16,6 +16,7 @@ async fn naming_a_secret_requires_admin_even_with_agent_step_up() {
     let fx = fx().await;
     let agent = super::stepup::plain(&fx, "agent-only", &["agent", "read"], true).await;
     assert_eq!(super::stepup::step_up(&fx, &agent).await.0, StatusCode::OK);
+    assert_eq!(super::stepup::unlock(&fx, &agent).await.0, StatusCode::OK);
     let r = call(
         &fx,
         &agent,
@@ -578,6 +579,7 @@ async fn an_admin_may_kill_a_module_session_and_nobody_else() {
     let uri = format!("/api/v1/agent-sessions/{}/kill", owned.id);
     let agent = super::stepup::plain(&fx, "agent-only", &["agent", "read"], true).await;
     assert_eq!(super::stepup::step_up(&fx, &agent).await.0, StatusCode::OK);
+    assert_eq!(super::stepup::unlock(&fx, &agent).await.0, StatusCode::OK);
     let r = call(&fx, &agent, Method::POST, &uri, Value::Null).await;
     assert_eq!(
         (r.0, r.1["code"].as_str()),

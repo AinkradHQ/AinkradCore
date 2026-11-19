@@ -48,7 +48,7 @@ async fn every_change_needs_admin_and_no_step_up_and_a_phone_reads_and_filters_b
             "{m} {uri}"
         );
     }
-    // An admin device needs no step-up: its scope is enough, so the route answers (here 404).
+    // An admin device needs no step-up: its scope is enough, so the route answers (here: no such budget).
     let (st, r) = call(
         &fx,
         &plain,
@@ -57,10 +57,7 @@ async fn every_change_needs_admin_and_no_step_up_and_a_phone_reads_and_filters_b
         Value::Null,
     )
     .await;
-    assert_eq!(
-        (st, r["code"].as_str()),
-        (StatusCode::NOT_FOUND, Some("not_found"))
-    );
+    assert_eq!((st, r["deleted"].as_bool()), (StatusCode::OK, Some(false)));
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_budgets")
         .fetch_one(&fx.app.pool)
         .await
