@@ -293,8 +293,11 @@ fn mac_prelude(spec: &Spec) -> String {
 fn managed_dir(file: &Path) -> Option<PathBuf> {
     let bin = file.parent()?;
     let tools = bin.parent()?;
-    (bin.file_name()? == "bin" && tools.file_name()? == "ai-tools")
-        .then(|| tools.join(file.file_name()?))
+    if bin.file_name()? == "bin" && tools.file_name()? == "ai-tools" {
+        Some(tools.join(file.file_name()?))
+    } else {
+        None
+    }
 }
 
 fn program_dirs(program: &OsStr, spec: &Spec) -> Vec<PathBuf> {
