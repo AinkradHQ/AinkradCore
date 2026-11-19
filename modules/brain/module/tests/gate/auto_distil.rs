@@ -143,65 +143,32 @@ async fn a_brain_owned_session_is_never_a_trigger() {
 }
 
 #[tokio::test]
-async fn the_import_threshold_counts_sources_or_age() {
+async fn the_dreaming_sweep_distils_any_unread_source_batch_after_batch() {
     let fx = fx().await;
     let (room, now) = quiet_room(&fx).await;
-    let young = iso_of_unix(now - 60);
-    unread(&fx, &room, 39, &young).await;
-    assert_eq!(fx.brain.auto_distil_step_at(now + 400).await.unwrap(), 0);
-    unread(&fx, &room, 1, "2999-01-01T00:00:00Z").await;
-    assert_eq!(fx.brain.auto_distil_step_at(now + 800).await.unwrap(), 1);
+    // Nothing unread, nothing queued.
+    assert_eq!(fx.brain.auto_distil_step_at(now + 100).await.unwrap(), 0);
+    // One young source is enough (E9-1: no count or age threshold any more).
+    unread(&fx, &room, 1, &iso_of_unix(now - 60)).await;
+    assert_eq!(fx.brain.auto_distil_step_at(now + 200).await.unwrap(), 1);
+    // An import of 70 sources goes 30 at a time: the next batch is queued a minute after the last.
+    close_all(&fx, &room).await;
+    mark_read(&fx, &room).await;
+    unread(&fx, &room, 70, &iso_of_unix(now - 60)).await;
+    assert_eq!(fx.brain.auto_distil_step_at(now + 300).await.unwrap(), 1);
     assert_eq!(
         rows(&fx, "\"trigger\" = 'threshold' AND sources = 30").await,
         1
     );
-    // Few sources, but the oldest is a day old.
     close_all(&fx, &room).await;
-    mark_read(&fx, &room).await;
-    unread(&fx, &room, 1, &iso_of_unix(now - 86_400)).await;
-    assert_eq!(fx.brain.auto_distil_step_at(now + 1200).await.unwrap(), 1);
+    assert_eq!(fx.brain.auto_distil_step_at(now + 400).await.unwrap(), 1);
 }
 
 #[tokio::test]
-async fn the_room_cap_stops_the_next_distil_and_a_rolling_24_hours_later_resets_it() {
+async fn the_dreaming_sweep_is_never_stopped_by_the_room_or_global_cap() {
     let fx = fx().await;
     let (room, now) = quiet_room(&fx).await;
-    let day = now - now.rem_euclid(86_400);
-    sqlx::query("UPDATE brain_room_policy SET daily_distils = 2 WHERE room = ?")
-        .bind(&room)
-        .execute(&fx.app.pool)
-        .await
-        .unwrap();
-    let old = iso_of_unix(day - 86_400);
-    mark_read(&fx, &room).await;
-    for k in 1..=3 {
-        unread(&fx, &room, 1, &format!("{old}{k}")).await;
-        let n = fx
-            .brain
-            .auto_distil_step_at(day + 86_400 + 10_000 + k * 400)
-            .await
-            .unwrap();
-        assert_eq!(n, u32::from(k <= 2), "round {k}");
-        close_all(&fx, &room).await;
-        mark_read(&fx, &room).await;
-    }
-    assert_eq!(rows(&fx, "state = 'failed'").await, 0);
-    unread(&fx, &room, 1, &old).await;
-    // 24 hours after the last one the window has moved past all of them (rolling, not the UTC day).
-    assert_eq!(
-        fx.brain
-            .auto_distil_step_at(day + 2 * 86_400 + 10_000 + 1300)
-            .await
-            .unwrap(),
-        1
-    );
-}
-
-#[tokio::test]
-async fn the_global_cap_bounds_all_rooms_together() {
-    let fx = fx().await;
-    let (room, now) = quiet_room(&fx).await;
-    sqlx::query("UPDATE brain_room_policy SET daily_distils = 1000 WHERE room = ?")
+    sqlx::query("UPDATE brain_room_policy SET daily_distils = 1 WHERE room = ?")
         .bind(&room)
         .execute(&fx.app.pool)
         .await
@@ -218,8 +185,8 @@ async fn the_global_cap_bounds_all_rooms_together() {
             .unwrap();
     }
     unread(&fx, &room, 1, "2020-01-01T00:00:00Z").await;
-    assert_eq!(fx.brain.auto_distil_step_at(now + 400).await.unwrap(), 0);
-    assert_eq!(rows(&fx, "state != 'done'").await, 0);
+    assert_eq!(fx.brain.auto_distil_step_at(now + 400).await.unwrap(), 1);
+    assert_eq!(rows(&fx, "state = 'queued'").await, 1);
 }
 
 #[tokio::test]
