@@ -258,9 +258,59 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         down: include_str!("../../../migrations/0042_mirror_state.down.sql"),
     },
     Migration {
+        version: 43,
+        name: "e7_ai_order",
+        up: include_str!("../../../migrations/0043_e7_ai_order.up.sql"),
+        down: include_str!("../../../migrations/0043_e7_ai_order.down.sql"),
+    },
+    Migration {
         version: 44,
         name: "e7_codex_sub",
         up: include_str!("../../../migrations/0044_e7_codex_sub.up.sql"),
         down: include_str!("../../../migrations/0044_e7_codex_sub.down.sql"),
     },
+    Migration {
+        version: 45,
+        name: "e7_presets",
+        up: include_str!("../../../migrations/0045_e7_presets.up.sql"),
+        down: include_str!("../../../migrations/0045_e7_presets.down.sql"),
+    },
+    Migration {
+        version: 46,
+        name: "e7_limits",
+        up: include_str!("../../../migrations/0046_e7_limits.up.sql"),
+        down: include_str!("../../../migrations/0046_e7_limits.down.sql"),
+    },
+    Migration {
+        version: 47,
+        name: "e7_model_allow",
+        up: include_str!("../../../migrations/0047_e7_model_allow.up.sql"),
+        down: include_str!("../../../migrations/0047_e7_model_allow.down.sql"),
+    },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::CORE_MIGRATIONS;
+
+    /// Every `migrations/NNNN_name.up.sql` file is registered, in order, under its own number and name.
+    #[test]
+    fn every_migration_file_is_registered() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
+        let mut files: Vec<(i64, String)> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| {
+                let n = e.unwrap().file_name().into_string().unwrap();
+                let stem = n.strip_suffix(".up.sql")?;
+                let (v, name) = stem.split_once('_')?;
+                Some((v.parse().ok()?, name.to_owned()))
+            })
+            .collect();
+        files.sort();
+        let listed: Vec<(i64, String)> = CORE_MIGRATIONS
+            .iter()
+            .map(|m| (m.version as i64, m.name.to_owned()))
+            .collect();
+        assert_eq!(listed, files);
+    }
+}
