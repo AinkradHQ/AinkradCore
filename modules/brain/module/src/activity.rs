@@ -151,8 +151,14 @@ mod tests {
 
     #[test]
     fn a_waiting_distil_names_what_it_needs() {
-        assert_eq!(need_of("waiting", "the session has no fallback chain: x"), Some("ai_account"));
-        assert_eq!(need_of("waiting", "no runner with a sandbox is online"), Some("runner"));
+        assert_eq!(
+            need_of("waiting", "the session has no fallback chain: x"),
+            Some("ai_account")
+        );
+        assert_eq!(
+            need_of("waiting", "no runner with a sandbox is online"),
+            Some("runner")
+        );
         assert_eq!(need_of("needs_local_model", ""), Some("local_model"));
         assert_eq!(need_of("running", ""), None);
     }

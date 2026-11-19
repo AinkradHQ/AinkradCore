@@ -49,7 +49,10 @@ async fn one_entry_outside_the_policy_refuses_the_whole_claim_and_names_it() {
         (StatusCode::FORBIDDEN, Some("claim_refused"))
     );
     let why = v["message"].as_str().unwrap();
-    assert!(why.contains("entry 2") && why.contains("local-llm"), "{why}");
+    assert!(
+        why.contains("entry 2") && why.contains("local-llm"),
+        "{why}"
+    );
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM brain_session_rooms")
         .fetch_one(&fx.app.pool)
         .await

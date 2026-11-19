@@ -7,8 +7,9 @@
 //! - Unsorted, a room that mixes two employers and a merged room are never accepted by this step:
 //!   they stay `proposed`, exactly as when a person leaves them out.
 //! - The step waits while the local model's suggestions are `pending`.
-//! - Undo archives the rooms the run made (the files and sources stay, nothing is deleted), so the
-//!   dreaming sweep stops reading them. Only an auto-accepted run can be undone this way.
+//! - Undo puts the sort back to one pile: the rooms the run made are archived (their files and sources
+//!   stay, nothing is deleted) and the run's staged items return to Unsorted in a run open for review
+//!   again, which this step then leaves to the person. Only an auto-accepted run can be undone.
 
 use std::sync::Arc;
 
@@ -67,7 +68,9 @@ pub(crate) async fn step(app: &App, b: &Brain) -> Result<usize, ApiError> {
         return Ok(0);
     }
     let runs: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM brain_import_runs WHERE state = 'review' ORDER BY id",
+        "SELECT id FROM brain_import_runs WHERE state = 'review' \
+         AND id NOT IN (SELECT json_extract(details, '$.run') FROM audit_events WHERE action = 'brain.import.auto_undone') \
+         ORDER BY id",
     )
     .fetch_all(&app.pool)
     .await?;
@@ -84,9 +87,10 @@ pub(crate) async fn step(app: &App, b: &Brain) -> Result<usize, ApiError> {
             continue;
         }
         let moved = resort_unsorted(app, b, &run, &st).await?;
-        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM proposals WHERE state = 'proposed' ORDER BY id")
-            .fetch_all(&st)
-            .await?;
+        let ids: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM proposals WHERE state = 'proposed' ORDER BY id")
+                .fetch_all(&st)
+                .await?;
         for id in ids.iter().filter(|i| i.as_str() != UNSORTED) {
             if !mixed(&st, id).await? {
                 sqlx::query("UPDATE proposals SET state = 'accepted' WHERE id = ?")
@@ -161,14 +165,17 @@ pub(crate) async fn list(State(app): State<App>) -> ApiResult<Vec<AutoImport>> {
 pub struct Undone {
     /// Rooms archived.
     pub rooms: i64,
+    /// Items back in Unsorted, waiting in the run's review.
+    #[schema(required = false)]
+    pub items: i64,
 }
 
 #[utoipa::path(post, path = "/auto-imports/{run}/undo", operation_id = "brainAutoImportUndo", tag = "brain",
     params(("run" = String, Path, description = "Run id")),
-    responses((status = 200, description = "Archives the rooms the Core accepted for this run by itself; nothing is deleted. `not_auto` (409) for a run the Core did not accept", body = Undone)))]
+    responses((status = 200, description = "Puts the sort back to one pile: the rooms the Core made for this run are archived (nothing is deleted) and the run's staged items return to Unsorted in a run that is open for review again. The Core does not accept this run by itself again. `not_auto` (409) for a run the Core did not accept", body = Undone)))]
 pub(crate) async fn undo(
     State(app): State<App>,
-    Extension(_b): Extension<Brain>,
+    Extension(b): Extension<Brain>,
     Path(run): Path<String>,
 ) -> ApiResult<Undone> {
     let rooms: Vec<String> = sqlx::query_scalar(
@@ -179,26 +186,82 @@ pub(crate) async fn undo(
     .fetch_all(&app.pool)
     .await?;
     if rooms.is_empty() {
-        return Err(code(409, "not_auto", "the Core did not accept this run by itself"));
+        return Err(code(
+            409,
+            "not_auto",
+            "the Core did not accept this run by itself",
+        ));
     }
+    let again: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE action = 'brain.import.auto_undone' AND json_extract(details, '$.run') = ?",
+    )
+    .bind(&run)
+    .fetch_one(&app.pool)
+    .await?;
+    if again > 0 {
+        return Err(code(
+            409,
+            "already_undone",
+            "this import was already put back",
+        ));
+    }
+    // The staged items go first: if the staging file is gone nothing else changes.
+    let st = crate::imports::staging(&app, &b, &run, false).await?;
+    let mut stx = st.begin().await?;
+    sqlx::query("DELETE FROM proposals WHERE id != ?")
+        .bind(UNSORTED)
+        .execute(&mut *stx)
+        .await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO proposals (id, name, kind_guess, kind) VALUES (?, 'Unsorted', 'general', 'general')",
+    )
+    .bind(UNSORTED)
+    .execute(&mut *stx)
+    .await?;
+    sqlx::query("UPDATE proposals SET state = 'proposed' WHERE id = ?")
+        .bind(UNSORTED)
+        .execute(&mut *stx)
+        .await?;
+    let items = sqlx::query("UPDATE items SET proposal = ? WHERE mark IS NULL OR mark != 'refused'")
+        .bind(UNSORTED)
+        .execute(&mut *stx)
+        .await?
+        .rows_affected() as i64;
+    stx.commit().await?;
+    st.close().await;
     let mut tx = begin_write(&app.pool).await?;
     let mut n = 0;
     for room in &rooms {
-        n += sqlx::query("UPDATE brain_rooms SET state = 'archived' WHERE id = ? AND state = 'active'")
+        n += sqlx::query(
+            "UPDATE brain_rooms SET state = 'archived' WHERE id = ? AND state = 'active'",
+        )
+        .bind(room)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected() as i64;
+        // The sources stay in the archived room's file. Their hashes are released so the items,
+        // back in review, can be sorted into rooms again (a refused hash is not "stored").
+        sqlx::query("UPDATE brain_seen SET room = 'refused' WHERE run = ? AND room = ?")
+            .bind(&run)
             .bind(room)
             .execute(&mut *tx)
-            .await?
-            .rows_affected() as i64;
+            .await?;
     }
+    sqlx::query(
+        "UPDATE brain_import_runs SET state = 'review', stage = 'review', committed_at = NULL WHERE id = ?",
+    )
+    .bind(&run)
+    .execute(&mut *tx)
+    .await?;
     record(
         &mut tx,
         "brain.import.auto_undone",
-        serde_json::json!({"run": run, "rooms": rooms}),
+        serde_json::json!({"run": run, "rooms": rooms, "items": items}),
         None,
     )
     .await?;
     tx.commit().await?;
-    Ok(Json(Undone { rooms: n }))
+    Ok(Json(Undone { rooms: n, items }))
 }
 
 struct AutoImportJob(Brain);

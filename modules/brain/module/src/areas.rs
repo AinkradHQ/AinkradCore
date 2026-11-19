@@ -141,9 +141,10 @@ async fn open_rooms(
     app: &App,
     b: &Brain,
 ) -> Result<(Vec<(RoomRef, crate::rooms::RoomAccess)>, i64), ApiError> {
-    let rows = sqlx::query("SELECT id, name, kind FROM brain_rooms WHERE state = 'active' ORDER BY id")
-        .fetch_all(&app.pool)
-        .await?;
+    let rows =
+        sqlx::query("SELECT id, name, kind FROM brain_rooms WHERE state = 'active' ORDER BY id")
+            .fetch_all(&app.pool)
+            .await?;
     let (mut open, mut locked) = (vec![], 0);
     for r in rows {
         let room = RoomRef {
