@@ -253,6 +253,8 @@ pub(in crate::api::v1) async fn terminal_folder(
         ));
     }
     let s = shown(app, me, id).await?.0;
+    // A session holding secrets answers only to its creator or an admin: its folder is no exception.
+    owns_secrets(&s, me)?;
     let conflict =
         |code: &'static str, why: &str| Err(ApiError::new(StatusCode::CONFLICT, code, why));
     if s.runner != runner {

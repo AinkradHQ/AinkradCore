@@ -99,6 +99,25 @@ pub struct Rooms {
     warned: Mutex<HashMap<String, i64>>,
     /// Hosts a runner holds that the Core has no live record of (`flag_orphans`).
     orphans: Mutex<HashMap<String, Orphan>>,
+    /// When each terminal's screen tail was last read (`tail_due`).
+    tails: Mutex<HashMap<String, Instant>>,
+}
+
+impl Rooms {
+    /// Whether `terminal`'s screen may be read now: once a second at most, so a client polling a
+    /// whole list cannot turn the runner into a busy loop. The map is pruned as it is used.
+    fn tail_due(&self, terminal: &str) -> bool {
+        let now = Instant::now();
+        let mut t = self.tails.lock().unwrap();
+        t.retain(|_, at| now.duration_since(*at) < Duration::from_secs(30));
+        match t.get(terminal) {
+            Some(at) if now.duration_since(*at) < Duration::from_secs(1) => false,
+            _ => {
+                t.insert(terminal.to_owned(), now);
+                true
+            }
+        }
+    }
 }
 
 /// A host with no Core record: when it was first seen, and when it was warned about.
@@ -693,6 +712,18 @@ pub async fn sweep(app: &App) {
             hang_up(app, &id, &runner, "revoked").await;
         }
     }
+    // A shell opened before sandboxes (no mode recorded) is a host-view shell this Core no longer
+    // opens: closed, so none outlives the upgrade.
+    if let Ok(rows) = sqlx::query_as::<_, (String, String)>(
+        "SELECT id,runner FROM core_terminals WHERE status='running' AND sandbox IS NULL",
+    )
+    .fetch_all(&app.pool)
+    .await
+    {
+        for (id, runner) in rows {
+            hang_up(app, &id, &runner, "sandbox_upgrade").await;
+        }
+    }
     let Ok(idle) =
         crate::store::settings::value(&app.pool, Key::TerminalIdleSecs, Scope::Server).await
     else {
@@ -892,6 +923,18 @@ pub async fn create(
 ) -> Response {
     if !(1..=1000).contains(&req.size.rows) || !(1..=1000).contains(&req.size.cols) {
         return ApiError::bad_request("terminal size is out of range").into_response();
+    }
+    if let Some(bad) = req
+        .env
+        .iter()
+        .flatten()
+        .map(|(k, _)| k)
+        .find(|k| !ainkrad_proto::v2::valid_terminal_env(k))
+    {
+        return ApiError::bad_request(format!(
+            "{bad:?} cannot be set: loader, runner and reserved variables are refused"
+        ))
+        .into_response();
     }
     let plan = match sandbox::plan(
         &app,
@@ -1283,8 +1326,19 @@ pub async fn tail(
     Query(q): Query<TailQuery>,
 ) -> ApiResult<TerminalTailView> {
     let t = owned_row(&app, &id, &me.device.id).await?;
-    if t.status != TerminalStatus::Running {
+    // A real shell on the person's own Mac is never read through the Core without an attach, and
+    // one opened before sandboxes (no mode recorded) counts as real.
+    if t.status != TerminalStatus::Running
+        || !matches!(t.sandbox.as_deref(), Some(s) if s != "real")
+    {
         return Ok(Json(TerminalTailView { lines: Vec::new() }));
+    }
+    if !app.terminals.tail_due(&id) {
+        return Err(ApiError::new(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "a terminal's screen is read at most once a second",
+        ));
     }
     let lines = q.lines.unwrap_or(5).clamp(1, 20);
     let d = app
@@ -1569,6 +1623,15 @@ mod tests {
     }
 
     /// M5: a client's credit is never forwarded, and oversized or invalid frames are dropped.
+    /// L4: a terminal's screen is read once a second at most; another terminal is not held back.
+    #[test]
+    fn the_screen_tail_is_rate_limited_per_terminal() {
+        let r = Rooms::default();
+        assert!(r.tail_due("t_a"));
+        assert!(!r.tail_due("t_a"));
+        assert!(r.tail_due("t_b"));
+    }
+
     #[test]
     fn client_frames_are_filtered() {
         assert!(client_frame(&typed("ls\n")));

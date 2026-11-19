@@ -73,6 +73,14 @@ pub struct PtyConfig {
     /// Where the private-root sandboxes keep each user's persistent home (`<state>/sandbox`).
     /// `None`: a `PtyOpen::sandbox` other than `real` is refused.
     pub sandbox_dir: Option<PathBuf>,
+    /// The network a private-root shell gets (M1): on Linux the runner's egress proxy
+    /// (`Net::Filtered`: its own network namespace, loopback, link-local and private ranges
+    /// refused by the proxy's policy) unless the runner is set to `none`; on macOS the host
+    /// network with `localhost` and unix sockets denied by the profile.
+    pub private_net: super::termbox::Net,
+    /// Whether this runner may open a host-view (`real`, or no `sandbox` at all) shell: only the
+    /// runner started with `--bundled`, a flag only the Mac app's LaunchAgent sets (M4).
+    pub allow_real: bool,
 }
 
 /// The `slots` key a runner that honours `PtyOpen::sandbox` advertises (D-17).
@@ -103,6 +111,8 @@ impl PtyConfig {
             shell_dir: PathBuf::from(SHELL_DIR),
             sessions: None,
             sandbox_dir: None,
+            private_net: super::termbox::Net::Host,
+            allow_real: true,
         }
     }
 }
@@ -447,6 +457,20 @@ impl PtyDriver {
             .transpose()
             .map_err(|m| invalid(&m))?;
         let private = matches!(&mode, Some(m) if *m != ainkrad_proto::v2::SandboxMode::Real);
+        if let Some(bad) = req
+            .env
+            .keys()
+            .find(|k| !ainkrad_proto::v2::valid_terminal_env(k))
+        {
+            return Err(invalid(&format!(
+                "{bad:?} cannot be set: loader, runner and reserved variables are refused"
+            )));
+        }
+        if !private && ssh.is_none() && req.ssh.is_none() && !self.config.allow_real {
+            return Err(invalid(
+                "this runner opens sandboxed terminals only: a real shell is for the runner bundled with this Mac's app",
+            ));
+        }
         if private && (ssh.is_some() || req.ssh.is_some() || req.session.is_some()) {
             return Err(invalid(
                 "a private-root terminal names its folder in `sandbox`, and is not an ssh terminal",
@@ -547,6 +571,13 @@ impl PtyDriver {
                 None => Ok((program.to_owned(), args.to_vec())),
             };
             let (mut launcher, mut args) = wrap(&program, &spec.args, &cwd)?;
+            if self.config.hide.is_some() {
+                // The launcher (bwrap, sandbox-exec) starts with a clean environment; the shell's
+                // variables reach it only through the launcher's own options, so a client's
+                // `LD_PRELOAD` cannot load into the launcher outside the sandbox.
+                super::termbox::inject_env(&mut args, &spec.env);
+                spec.env = super::termbox::launcher_env();
+            }
             if let Some(user) = &self.config.user {
                 if !super::termbox::valid_user(user) || !launcher.starts_with('/') {
                     return Err(invalid(
@@ -670,17 +701,22 @@ impl PtyDriver {
             }
             M::Real => unreachable!("not private"),
         };
+        // What the folder may not hold: the runner's hidden paths, its sandbox homes, and the
+        // places a launcher lives (a project folder must not carry a path the runner starts from).
+        let mut hide: Vec<PathBuf> = self
+            .config
+            .hide
+            .iter()
+            .flatten()
+            .chain(&self.config.readonly)
+            .filter_map(|h| h.canonicalize().ok())
+            .collect();
+        hide.push(base.clone());
         let folder = match folder {
             Some(f) => {
-                let mut hidden: Vec<PathBuf> = self
-                    .config
-                    .hide
-                    .iter()
-                    .flatten()
-                    .filter_map(|h| h.canonicalize().ok())
-                    .collect();
-                hidden.push(base.clone());
-                Some(tb::check_folder(&f, &base, &hidden)?)
+                let f = tb::check_folder(&f, &base, &hide)?;
+                let was = tb::identity(&f)?;
+                Some((f, was))
             }
             None => None,
         };
@@ -690,15 +726,26 @@ impl PtyDriver {
             .or_else(|| spec.env.get("SHELL").cloned())
             .unwrap_or_else(|| "/bin/sh".to_owned());
         let program = tb::resolve(&program, spec.env.get("PATH").map(String::as_str));
-        let b = tb::wrap_private(
-            &home,
-            folder.as_deref(),
-            &program,
-            &spec.args,
-            &self.config.net,
-            id,
-        )?;
-        spec.env.extend(b.env);
+        // The shell's whole environment goes in as variables of the sandbox, never into the
+        // launcher's own environment.
+        let shell_env = std::mem::take(&mut spec.env);
+        let net = self.config.private_net.clone();
+        let b = tb::wrap_private(&tb::PrivateSpec {
+            base: &base,
+            user,
+            home: &home,
+            folder: folder.as_ref().map(|f| f.0.as_path()),
+            program: &program,
+            args: &spec.args,
+            net: &net,
+            terminal: id,
+            env: &shell_env,
+            hide: &hide,
+        })?;
+        if let Some((f, was)) = &folder {
+            tb::recheck_folder(f, *was)?;
+        }
+        spec.env = b.env.into_iter().collect();
         spec.program = Some(b.launcher);
         spec.args = b.args;
         spec.cwd = Some(b.cwd);

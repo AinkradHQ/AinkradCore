@@ -6,14 +6,16 @@
 //!
 //! **How the Core proves "this Mac's bundled runner, from this Mac's app".** Every request is
 //! signed by a paired device key (Secure Enclave on a Mac), so `me.device` is the app. The runner
-//! is the bundled one when the invite it redeemed was minted by that same app device with
-//! `bundled: true` (`core_pairings.bundled`, set only for a macOS app device and a `runner`
-//! invite). The app mints that invite for the runner inside its own bundle and passes it to that
-//! process over stdin; it is never displayed, so a runner on another machine (even one this same
-//! Mac paired through the Add-runner wizard, which mints an ordinary invite) cannot hold one. On
-//! top of that, the runner's hello must say macOS and the caller must be a macOS `device` with the
-//! `terminal` scope. A Core-local runner (no creator), Linux, and a runner another device or the
-//! wizard paired all fail. The mode is never a default: the app must ask for `real`.
+//! is the bundled one when that same app device attested it (`attestBundledRunner`, which sets
+//! `core_pairings.bundled`): the app reads the runner's own enrolment file on its local disk, which
+//! only a runner on this Mac has, and says so under a step-up. The Core accepts the attestation
+//! only from a macOS `device` that created the invite that enrolled the runner. A runner on another
+//! machine (even one this same Mac paired through the Add-runner wizard) has no such file here, so
+//! the app never attests it. On top of that, the runner's hello must say macOS and the caller must
+//! be a macOS `device` with the `terminal` scope; the runner itself refuses `real` unless it was
+//! started with `--bundled`, a flag only the app's LaunchAgent sets. A Core-local runner (no
+//! creator), Linux, and a runner another device or the wizard paired all fail. The mode is never
+//! a default: the app must ask for `real`.
 
 use super::*;
 use ainkrad_proto::v2::{SandboxMode, valid_sandbox_user};
@@ -71,14 +73,21 @@ async fn real(app: &App, me: &Caller, runner: &str) -> Result<(), ApiError> {
 }
 
 /// The newest live session of project `id` on `runner`: the folder a project terminal mounts.
-async fn project_session(app: &App, runner: &str, id: i64) -> Result<String, ApiError> {
+async fn project_session(
+    app: &App,
+    me: &Caller,
+    runner: &str,
+    id: i64,
+) -> Result<String, ApiError> {
+    // Only the caller's own sessions: another device's worktree is not theirs to open a shell in.
     sqlx::query_scalar(
-        "SELECT id FROM core_agent_sessions WHERE project_id = ? AND runner = ? \
+        "SELECT id FROM core_agent_sessions WHERE project_id = ? AND runner = ? AND created_by = ? \
          AND state IN ('starting', 'running', 'interrupted') AND folder IS NOT NULL \
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(id)
     .bind(runner)
+    .bind(&me.device.id)
     .fetch_optional(&app.pool)
     .await?
     .ok_or_else(|| {
@@ -142,7 +151,7 @@ pub(super) async fn plan(
                 .await
                 .map_err(|_| ApiError::not_found("no such project"))?;
             drop(c);
-            let sid = project_session(app, runner, p).await?;
+            let sid = project_session(app, me, runner, p).await?;
             return Ok(Plan {
                 sandbox: Some("real".into()),
                 user: None,
@@ -194,7 +203,7 @@ pub(super) async fn plan(
             crate::store::projects::get(&mut c, n)
                 .await
                 .map_err(|_| ApiError::not_found("no such project"))?;
-            Some(project_session(app, runner, n).await?)
+            Some(project_session(app, me, runner, n).await?)
         }
         SandboxMode::Real => unreachable!("handled above"),
     };

@@ -897,6 +897,32 @@ mod pty {
             .await
             .unwrap_err();
         assert!(e.message.contains("no sandbox directory"), "{}", e.message);
+        // C2: a loader variable never reaches a shell, sandboxed or not.
+        for k in [
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+            "GCONV_PATH",
+            "HOME",
+            "AINKRAD_X",
+        ] {
+            let mut r = with("home", Some("u"), None);
+            r.env.insert(k.to_owned(), "/x".to_owned());
+            let e = driver.open(&r).await.unwrap_err();
+            assert!(e.message.contains("cannot be set"), "{k}: {}", e.message);
+        }
+        // M4: only the bundled runner opens a host-view shell; a sandbox open is not that.
+        let plain = PtyDriver::new(PtyConfig {
+            allow_real: false,
+            ..cfg(None)
+        });
+        for req in [open_req("true"), with("real", None, None)] {
+            let e = plain.open(&req).await.unwrap_err();
+            assert!(
+                e.message.contains("sandboxed terminals only"),
+                "{}",
+                e.message
+            );
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 

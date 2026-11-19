@@ -64,6 +64,44 @@ const RESERVED_VARS: &[&str] = &["PATH", "HOME", "SHELL", "USER", "LOGNAME", "TM
 /// The variable a module's run token is delivered under; a client session may not name it.
 pub const RUN_TOKEN_VAR: &str = "CITADEL_RUN_TOKEN";
 
+/// Variables that change how a program is found, loaded or localised, which no client may set
+/// in a process the runner starts: the loader's (`LD_*`, `DYLD_*`), the C library's data paths
+/// (`GCONV_PATH`, `LOCPATH`, `NLSPATH`), the resolver's, and the interpreters' start-up hooks.
+pub fn loader_var(var: &str) -> bool {
+    var.starts_with("LD_")
+        || var.starts_with("DYLD_")
+        || matches!(
+            var,
+            "GCONV_PATH"
+                | "LOCPATH"
+                | "NLSPATH"
+                | "HOSTALIASES"
+                | "RES_OPTIONS"
+                | "MALLOC_CONF"
+                | "BASH_ENV"
+                | "ENV"
+                | "NODE_OPTIONS"
+                | "PYTHONPATH"
+                | "PYTHONSTARTUP"
+                | "PERL5LIB"
+                | "PERL5OPT"
+                | "RUBYLIB"
+                | "RUBYOPT"
+        )
+}
+
+/// A variable a terminal's client (`NewTerminal.env`) may set: `[A-Za-z_][A-Za-z0-9_]{0,63}`, not
+/// a [`loader_var`], not one the runner sets itself, not `AINKRAD_*`.
+pub fn valid_terminal_env(var: &str) -> bool {
+    let b = var.as_bytes();
+    (1..=64).contains(&b.len())
+        && (b[0].is_ascii_alphabetic() || b[0] == b'_')
+        && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_')
+        && !loader_var(var)
+        && !RESERVED_VARS.contains(&var)
+        && !var.starts_with("AINKRAD_")
+}
+
 /// A variable a secret may be delivered under: `[A-Z_][A-Z0-9_]{0,63}`, not one the runner
 /// sets itself, not a loader's (`LD_*`, `DYLD_*`).
 pub fn valid_secret_var(var: &str) -> bool {
@@ -74,9 +112,7 @@ pub fn valid_secret_var(var: &str) -> bool {
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == b'_')
         && !RESERVED_VARS.contains(&var)
         && !var.starts_with("AINKRAD_")
-        && !matches!(var, "BASH_ENV" | "ENV" | "NODE_OPTIONS" | "PYTHONPATH")
-        && !var.starts_with("LD_")
-        && !var.starts_with("DYLD_")
+        && !loader_var(var)
 }
 
 /// A file secret's name on the runner: `[A-Za-z0-9._-]{1,64}`, never `.` or `..` (it becomes a

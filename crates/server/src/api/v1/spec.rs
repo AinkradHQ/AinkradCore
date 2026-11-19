@@ -67,6 +67,7 @@ use super::{
         passkey::claim_route,
         pairing::create,
         pairing::create_invite,
+        pairing::attest_bundled,
         pairing::get,
         pairing::approve,
         pairing::reject,
