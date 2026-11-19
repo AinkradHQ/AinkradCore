@@ -223,6 +223,9 @@ pub async fn advertise(
     info.commands
         .push(ainkrad_proto::v2::CAP_BOUND_HOME.to_owned());
     if let Some(l) = login {
+        // The runner can delete a removed account's home (`login.wipe`).
+        info.commands
+            .push(ainkrad_proto::v2::CAP_LOGIN_WIPE.to_owned());
         if !l.cfg.program.as_os_str().is_empty() {
             match l.supported().await {
                 Ok(_) => info.commands.push(CAP_LOGIN.to_owned()),
@@ -266,6 +269,7 @@ pub fn dispatch(
             Command::LoginWait(req) => login.wait(req).await.map(Reply::LoginResult),
             Command::LoginInput(req) => login.input(req).await.map(Reply::LoginResult),
             Command::LoginScreen(req) => login.screen(req).await.map(Reply::LoginScreen),
+            Command::LoginWipe(req) => login.wipe(req).await.map(Reply::LoginResult),
             _ => return,
         };
         let body = match answer {

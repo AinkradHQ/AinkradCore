@@ -108,6 +108,7 @@ use super::{
         accounts::create,
         accounts::get,
         accounts::delete,
+        accounts::restore,
         accounts::replace_secret,
         accounts::set_state,
         accounts::set_cap,

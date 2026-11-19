@@ -108,6 +108,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/accounts/{id}/test", "admin"),
     ("POST", "/api/v1/accounts/{id}/check", "admin"),
     ("DELETE", "/api/v1/accounts/{id}", "admin"),
+    ("POST", "/api/v1/accounts/{id}/restore", "admin"),
     ("POST", "/api/v1/accounts/providers", "admin"),
     ("PUT", "/api/v1/accounts/providers/{id}", "admin"),
     ("DELETE", "/api/v1/accounts/providers/{id}", "admin"),
@@ -325,6 +326,7 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     // It raises what one session may spend (a test is not here: one fixed free request).
     ("PUT", "/api/v1/accounts/{id}/session-limits"),
     ("DELETE", "/api/v1/accounts/{id}"),
+    ("POST", "/api/v1/accounts/{id}/restore"),
     ("POST", "/api/v1/accounts/providers"),
     ("PUT", "/api/v1/accounts/providers/{id}"),
     ("DELETE", "/api/v1/accounts/providers/{id}"),

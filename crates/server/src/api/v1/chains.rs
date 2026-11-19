@@ -242,7 +242,10 @@ pub async fn delete(
     let user = user(&app, &me).await?;
     let id = owned(&app, user, num(&id)?).await?.id;
     ch::delete(&app.pool, id, &me.device.id, BY).await?;
-    Ok(Json(AccountsDeleted { deleted: true }))
+    Ok(Json(AccountsDeleted {
+        deleted: true,
+        undo_until: None,
+    }))
 }
 
 #[utoipa::path(put, path = "/api/v1/chains/{id}/default", operation_id = "setDefaultChain",
@@ -312,5 +315,8 @@ pub async fn unbind(
 ) -> ApiResult<AccountsDeleted> {
     let user = user(&app, &me).await?;
     ch::unbind(&app.pool, user, &agent, &me.device.id, BY).await?;
-    Ok(Json(AccountsDeleted { deleted: true }))
+    Ok(Json(AccountsDeleted {
+        deleted: true,
+        undo_until: None,
+    }))
 }
