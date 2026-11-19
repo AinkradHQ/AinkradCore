@@ -3631,6 +3631,15 @@ export interface components {
             fetched_at?: components["schemas"]["Timestamp"];
             /** @description The commit the last fetch ended at. */
             head?: string | null;
+            /**
+             * @description Why the last fetch failed: `needs_github`, `not_found_or_private`, `auth_failed`,
+             *     `timeout`, `ssh_not_supported` or `other`. `error` is the same in one plain sentence.
+             */
+            reason?: string | null;
+            /** @description When the running fetch began (state `fetching`). */
+            started_at?: components["schemas"]["Timestamp"];
+            /** @description `fetching`, `ready` or `failed`. */
+            state?: string | null;
         };
         ModelPrice: {
             id: string;
@@ -8764,7 +8773,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Added (audited as `project.repo_added`); the project as it now is. 400 for a bad name, remote or branch; 404 for no such project; 409 `conflict` for an archived project or a repeated name or remote */
+            /** @description Added (audited as `project.repo_added`); the project as it now is. 400 for a bad name, remote or branch; 404 for no such project; 409 `conflict` for an archived project or a repeated name or remote. An ssh remote is 400: the Core holds no key. The Core starts copying the repo at once (`mirror.state`) */
             200: {
                 headers: {
                     [name: string]: unknown;
