@@ -39,7 +39,7 @@ demo_main() {
   UI_Q_N=0
   ui_note "The Core is served over HTTPS with a free Let's Encrypt certificate, so it needs a public DNS name that points at this machine."
   demo_typed HOSTNAME "Public DNS name of this Core" "$A_HOSTNAME"
-  demo_job "Looking up this machine's public address (a request to api.ipify.org)" 1
+  demo_job "Looking up this machine's public address (a request to signin.ainkrad.io)" 1
   demo_job "Checking that $A_HOSTNAME points at 203.0.113.7" 1
   ui_ok "$A_HOSTNAME points at 203.0.113.7: this machine. Good."
   demo_typed ACME_CONTACT "Email for the Let's Encrypt account (expiry notices only)" "you@example.com"
