@@ -38,6 +38,9 @@ pub(super) async fn holds(conn: &mut SqliteConnection, name: &str) -> Result<boo
     let Some(provider) = account_provider(name).filter(|p| !builtin(p)) else {
         return Ok(false);
     };
+    if super::providers::presets().iter().any(|p| p.id == provider) {
+        return Ok(true);
+    }
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_provider_defs WHERE id = ?")
         .bind(provider)
         .fetch_one(conn)
@@ -101,7 +104,11 @@ pub(super) async fn bind(
         };
     };
     let shapes = key_shapes(conn).await?;
-    if user && !shapes.iter().any(|(id, _, _)| id == provider) {
+    // A preset (and no user definition of that id) is bound to the account and its frozen host.
+    let preset = user
+        && !shapes.iter().any(|(id, _, _)| id == provider)
+        && super::providers::presets().iter().any(|p| p.id == provider);
+    if user && !preset && !shapes.iter().any(|(id, _, _)| id == provider) {
         return refused(
             "this provider declares no key_prefix, so it holds no key: set one (and deliver through \
              the gateway) first",
@@ -110,7 +117,7 @@ pub(super) async fn bind(
     let host = host_of(&url);
     // The account's own provider is judged against the host its key was bound to, not the
     // definition's current one.
-    let list: Vec<UserKeyHost> = shapes
+    let mut list: Vec<UserKeyHost> = shapes
         .iter()
         .map(|(id, prefix, h)| UserKeyHost {
             provider: id,
@@ -118,6 +125,13 @@ pub(super) async fn bind(
             host: if id == provider { host } else { h },
         })
         .collect();
+    if preset {
+        list.push(UserKeyHost {
+            provider,
+            prefix: "",
+            host,
+        });
+    }
     match key_host_problem(key, provider, host, &list) {
         Some(why) => refused(format!(
             "{why}: a key is stored only for the provider and host its shape names"

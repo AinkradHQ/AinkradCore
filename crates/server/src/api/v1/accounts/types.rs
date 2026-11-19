@@ -38,6 +38,11 @@ pub struct ProviderAccount {
     pub month_spend_usd_micros: Option<i64>,
     /// The account's monthly dollar budget cap, when one is set; absent when it has none.
     pub month_limit_usd_micros: Option<i64>,
+    /// The row's usage meter: how much of its plan or budget is used and whether it can take work
+    /// now. Only the reads say it, and only to an `admin` device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub usage: Option<AccountMeter>,
 }
 
 /// An account's health counters, as the scheduler keeps them.
@@ -163,6 +168,7 @@ impl From<acc::Account> for ProviderAccount {
             health: None,
             month_spend_usd_micros: None,
             month_limit_usd_micros: None,
+            usage: None,
         }
     }
 }
@@ -268,6 +274,22 @@ pub struct AccountTested {
     pub latency_ms: u64,
     /// The runner device that made the request (empty when `result` is `inconclusive`).
     pub runner: String,
+    /// A preset: how many model ids the provider listed (E7-3); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub models: Option<u32>,
+}
+
+/// What `GET /accounts/{id}/models` answers: the model ids the provider listed for the account.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AccountModels {
+    /// Exactly as the provider names them; empty until a list was read (a preset's add or check
+    /// through a runner). No price: an unpriced model runs at the flagged default price.
+    pub models: Vec<String>,
+    /// When the list was read; absent when none was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub fetched_at: Option<Timestamp>,
 }
 
 /// What `POST /accounts/{id}/check` answers.
@@ -281,6 +303,10 @@ pub struct AccountChecked {
     pub latency_ms: Option<u64>,
     /// The runner device that made the check; absent when none was asked.
     pub runner: Option<String>,
+    /// A preset: how many model ids the provider listed (E7-3); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub models: Option<u32>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -336,6 +362,11 @@ pub struct Provider {
     /// Read-only: built-ins cannot be edited.
     #[serde(default)]
     pub builtin: bool,
+    /// A preset provider (OpenRouter, Groq, ...): shipped in code, read-only, the user only
+    /// pastes a key. Its keys are bound to the account and its frozen host, not to a prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub preset: Option<bool>,
     #[serde(default)]
     pub version: i64,
 }
@@ -365,6 +396,7 @@ impl From<Definition> for Provider {
                 .collect(),
             priced_at: d.priced_at,
             builtin: d.builtin,
+            preset: Some(d.preset).filter(|p| *p),
             version: d.version,
         }
     }
@@ -395,6 +427,7 @@ impl From<Provider> for Definition {
                 .collect(),
             priced_at: p.priced_at,
             builtin: false,
+            preset: false,
             version: 0,
         }
     }

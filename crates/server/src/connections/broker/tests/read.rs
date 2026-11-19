@@ -52,3 +52,43 @@ async fn a_module_reads_with_the_owners_grant_and_never_writes() {
     );
     assert!(!uses.iter().any(|u| u.to_string().contains("Broken build")));
 }
+
+#[tokio::test]
+async fn an_admin_picking_reads_a_connection_before_any_grant_and_still_never_writes() {
+    let f = fx().await;
+    let c = f.github("main", GH_TOKEN).await;
+    let args = json!({"repo": "acme/app", "number": 7});
+    // No grant exists, and the read door refuses; the picker's door does not look at grants.
+    f.gh.push(200, &[], ISSUE);
+    let v =
+        f.b.pick(&f.env(), 1, "d_test", c.id, "github.get_issue", &args)
+            .await
+            .unwrap();
+    assert_eq!(v["title"], "Broken build");
+    // A write is never run, whatever the door.
+    let w = json!({"repo": "acme/app", "number": 7, "body": {"body": "hi"}});
+    let e =
+        f.b.pick(&f.env(), 1, "d_test", c.id, "github.comment_issue", &w)
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "not_a_read");
+    // Another kind's connection, another workspace's, or none at all is refused.
+    let e =
+        f.b.pick(
+            &f.env(),
+            1,
+            "d_test",
+            c.id,
+            "jira.list_projects",
+            &json!({}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "wrong_kind");
+    let e =
+        f.b.pick(&f.env(), 2, "d_test", c.id, "github.get_issue", &args)
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "not_found");
+    assert_eq!(f.gh.seen().len(), 1);
+}

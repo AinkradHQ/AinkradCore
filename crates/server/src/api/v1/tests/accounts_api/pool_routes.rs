@@ -125,7 +125,20 @@ async fn provider_definitions_are_validated_and_built_ins_are_fixed() {
         .collect();
     assert_eq!(
         ids,
-        ["anthropic", "openai", "google", "claude-sub", "codex-sub"]
+        [
+            "anthropic",
+            "openai",
+            "google",
+            "claude-sub",
+            "codex-sub",
+            "openrouter",
+            "aimlapi",
+            "groq",
+            "deepseek",
+            "mistral",
+            "xai",
+            "apinex"
+        ]
     );
     let def = json!({"id": "router", "name": "Router", "harness": "codex", "auth_var": "OPENAI_API_KEY",
         "base_url": "https://router.example.com/v1", "usage_parser": "openai", "delivery": ["env"],

@@ -34,10 +34,28 @@ async fn a_cloud_room_claims_a_chain_of_approved_providers() {
 }
 
 #[tokio::test]
+async fn a_cloud_room_claims_a_chain_of_any_accounts() {
+    // E7-7, D-27: no provider list. An OpenAI or Google key claims a room like an Anthropic one.
+    let fx = fx().await;
+    let room = committed_room(&fx, &[("A", "alpha text")]).await;
+    let s = chain_session(&fx, &["openai", "google", "anthropic"]).await;
+    let (st, v) = claim(&fx, &room, &s).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["entries"], 3);
+}
+
+#[tokio::test]
 async fn one_entry_outside_the_policy_refuses_the_whole_claim_and_names_it() {
     let fx = fx().await;
     let room = committed_room(&fx, &[("A", "alpha text")]).await;
-    // The first entry is fine; the fallback behind it is not.
+    ok(
+        &fx,
+        Method::PATCH,
+        &format!("/rooms/{room}/policy"),
+        Some(json!({"model": "local_only"})),
+    )
+    .await;
+    // A local-only room takes no cloud entry: the first one is named.
     let s = chain_session(&fx, &["anthropic", "openai"]).await;
     let (st, v) = claim(&fx, &room, &s).await;
     assert_eq!(
@@ -45,7 +63,10 @@ async fn one_entry_outside_the_policy_refuses_the_whole_claim_and_names_it() {
         (StatusCode::FORBIDDEN, Some("claim_refused"))
     );
     let why = v["message"].as_str().unwrap();
-    assert!(why.contains("entry 2") && why.contains("openai"), "{why}");
+    assert!(
+        why.contains("entry 1") && why.contains("anthropic"),
+        "{why}"
+    );
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM brain_session_rooms")
         .fetch_one(&fx.app.pool)
         .await

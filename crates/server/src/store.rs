@@ -14,6 +14,7 @@ use sqlx::{AssertSqlSafe, Transaction};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 pub mod account_keys;
+pub mod account_models;
 pub mod accounts;
 pub mod agents;
 pub mod alloc;

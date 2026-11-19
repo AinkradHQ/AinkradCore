@@ -6,14 +6,17 @@ fn check(b: &NewBudget<'_>) -> Result<Option<String>, Error> {
     if !KINDS.contains(&b.kind) || !PERIODS.contains(&b.period) || !valid_id(b.subject) {
         return refused(
             "bad_request",
-            "a budget names a kind, a subject of 1 to 64 of [A-Za-z0-9._:-] and a period of day, week, month or total",
+            "a budget names a kind, a subject of 1 to 64 of [A-Za-z0-9._:-] and a period of hour5, day, week, month or total",
         );
     }
-    if b.token_cap == 0 && b.usd_cap_micros.is_none() {
+    if b.token_cap == 0 && b.usd_cap_micros.is_none() && b.message_cap.is_none() {
         return refused(
             "bad_request",
-            "a budget with no token cap needs a dollar cap",
+            "a budget with no token cap needs a dollar or a message cap",
         );
+    }
+    if b.message_cap.is_some_and(|m| m < 1) {
+        return refused("bad_request", "a message cap is 1 message or more");
     }
     if b.token_cap < 0
         || b.usd_cap_micros.is_some_and(|c| c < 0)
@@ -70,8 +73,8 @@ pub async fn set(
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM core_budgets")
         .fetch_one(&mut *tx)
         .await?;
-    let existed: Option<(i64, i64, Option<i64>)> = sqlx::query_as(
-        "SELECT id, token_cap, usd_cap_micros FROM core_budgets \
+    let existed: Option<(i64, i64, Option<i64>, Option<i64>)> = sqlx::query_as(
+        "SELECT id, token_cap, usd_cap_micros, message_cap FROM core_budgets \
          WHERE subject_kind = ? AND subject_id = ? AND period = ?",
     )
     .bind(b.kind)
@@ -85,11 +88,11 @@ pub async fn set(
     let warn = b.warn_at_percent.unwrap_or(DEFAULT_WARN);
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO core_budgets (subject_kind, subject_id, company, period, token_cap, \
-         usd_cap_micros, warn_at_percent, hard_stop, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         usd_cap_micros, message_cap, warn_at_percent, hard_stop, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT (subject_kind, subject_id, period) DO UPDATE SET company = excluded.company, \
          token_cap = excluded.token_cap, usd_cap_micros = excluded.usd_cap_micros, \
-         warn_at_percent = excluded.warn_at_percent, hard_stop = excluded.hard_stop, \
+         message_cap = excluded.message_cap, warn_at_percent = excluded.warn_at_percent, hard_stop = excluded.hard_stop, \
          updated_at = excluded.updated_at RETURNING id",
     )
     .bind(b.kind)
@@ -98,6 +101,7 @@ pub async fn set(
     .bind(b.period)
     .bind(b.token_cap)
     .bind(b.usd_cap_micros)
+    .bind(b.message_cap)
     .bind(warn)
     .bind(b.hard_stop)
     .bind(now)
@@ -106,8 +110,13 @@ pub async fn set(
     .await?;
     guard::recompute_in(&mut tx, Some(id)).await?;
     // A cap that grew re-arms the exhaustion alert, so the next time it runs out is heard.
-    if existed.is_some_and(|(_, tokens, usd)| {
+    if existed.is_some_and(|(_, tokens, usd, messages)| {
         b.token_cap > tokens
+            || match (messages, b.message_cap) {
+                (Some(_), None) => true,
+                (Some(old), Some(new)) => new > old,
+                _ => false,
+            }
             || match (usd, b.usd_cap_micros) {
                 (Some(_), None) => true,
                 (Some(old), Some(new)) => new > old,
@@ -121,7 +130,8 @@ pub async fn set(
     }
     let details = json!({"kind": b.kind, "subject": b.subject, "company": company,
                          "period": b.period, "token_cap": b.token_cap,
-                         "usd_cap_micros": b.usd_cap_micros, "warn_at_percent": warn,
+                         "usd_cap_micros": b.usd_cap_micros, "message_cap": b.message_cap,
+                         "warn_at_percent": warn,
                          "hard_stop": b.hard_stop, "by_device": by_device});
     let action = if existed.is_some() {
         "budget.set"
@@ -153,8 +163,8 @@ pub async fn remove(
     let mut tx = super::super::begin_write(pool).await?;
     let gone = sqlx::query(concat!(
         "DELETE FROM core_budgets WHERE id = ? RETURNING ",
-        "id, subject_kind, subject_id, company, period, token_cap, usd_cap_micros, warn_at_percent, \
-         hard_stop, created_at, updated_at"
+        "id, subject_kind, subject_id, company, period, token_cap, usd_cap_micros, message_cap, \
+         warn_at_percent, hard_stop, created_at, updated_at"
     ))
     .bind(id)
     .fetch_optional(&mut *tx)
@@ -216,7 +226,7 @@ async fn delete_in(
         let r = sqlx::query(concat!(
             "DELETE FROM core_budgets WHERE id = ? RETURNING ",
             "id, subject_kind, subject_id, company, period, token_cap, usd_cap_micros, \
-             warn_at_percent, hard_stop, created_at, updated_at"
+             message_cap, warn_at_percent, hard_stop, created_at, updated_at"
         ))
         .bind(id)
         .fetch_one(&mut *conn)

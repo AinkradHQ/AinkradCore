@@ -26,7 +26,7 @@ use crate::store::projects::{self as store, NewGithubRepo};
 
 const MAX_REPOS: usize = 10;
 
-fn upstream(o: &Outcome) -> ApiError {
+pub(super) fn upstream(o: &Outcome) -> ApiError {
     let status = match o.code() {
         "rate_limited" => StatusCode::TOO_MANY_REQUESTS,
         "not_found" => StatusCode::NOT_FOUND,
@@ -36,7 +36,7 @@ fn upstream(o: &Outcome) -> ApiError {
 }
 
 /// The GitHub connection to use, and its token.
-async fn pick(
+pub(super) async fn pick(
     app: &App,
     w: conns::Who<'_>,
     explicit: Option<i64>,

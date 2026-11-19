@@ -7,6 +7,7 @@ use sqlx::{Row, SqliteConnection};
 use ainkrad_core::audit::AuditActor;
 
 use super::{Binding, ChainEntry, MAX_BINDINGS, Request, audit, find, load, refused};
+use crate::store::account_keys;
 use crate::store::agents::{NewSession, Session, SessionSecret};
 use crate::store::pools;
 use crate::store::secrets::{ACCOUNT_PREFIX, Error};
@@ -235,6 +236,31 @@ pub async fn create_session(
     actor: AuditActor,
     now: &str,
 ) -> Result<Session, Error> {
+    create_session_ordered(pool, new, owner, owner_ref, req, false, actor, now).await
+}
+
+/// Moves the entries of subscription providers (a plan's seat costs no money) ahead of the API-key
+/// ones, each group keeping its order (stable). Whether anything moved.
+pub fn subscription_first(entries: &mut [ChainEntry]) -> bool {
+    let before: Vec<i64> = entries.iter().map(|e| e.pool).collect();
+    entries.sort_by_key(|e| !account_keys::subscription_provider(&e.provider));
+    before != entries.iter().map(|e| e.pool).collect::<Vec<_>>()
+}
+
+/// [`create_session`], and with `subscription_first` the session's chain snapshot walks the
+/// subscription accounts first and then the API-key accounts in the chain's (the AI order's)
+/// order, as the Brain's sessions do (E7-7, D-27). The chain itself is not changed.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_session_ordered(
+    pool: &SqlitePool,
+    new: &NewSession<'_>,
+    owner: Option<&str>,
+    owner_ref: Option<&str>,
+    req: Request<'_>,
+    subscription_first: bool,
+    actor: AuditActor,
+    now: &str,
+) -> Result<Session, Error> {
     if req.agent.is_some_and(|a| !pools::valid_agent(a)) {
         return refused("bad_request", "an agent id is 1 to 64 of [A-Za-z0-9._:-]");
     }
@@ -252,7 +278,13 @@ pub async fn create_session(
         return refused("bad_request", "a session with no chain names its harness");
     }
     let first = match chain {
-        Some(id) => load(&mut tx, id).await?.into_iter().next(),
+        Some(id) => {
+            let mut entries = load(&mut tx, id).await?;
+            if subscription_first {
+                self::subscription_first(&mut entries);
+            }
+            entries.into_iter().next()
+        }
         None => None,
     };
     let id = match &first {
@@ -267,7 +299,17 @@ pub async fn create_session(
         None => crate::store::agents::create_in(&mut tx, new, owner, owner_ref, actor, now).await?,
     };
     match chain {
-        Some(c) => drop(assign_in(&mut tx, &id, c, req.agent).await?),
+        Some(c) => {
+            let mut entries = assign_in(&mut tx, &id, c, req.agent).await?;
+            if subscription_first && self::subscription_first(&mut entries) {
+                let snapshot = serde_json::to_string(&entries).expect("entries serialize");
+                sqlx::query("UPDATE core_agent_sessions SET chain = ? WHERE id = ?")
+                    .bind(snapshot)
+                    .bind(&id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
         None => {
             sqlx::query("UPDATE core_agent_sessions SET agent = ? WHERE id = ?")
                 .bind(req.agent)
@@ -280,4 +322,34 @@ pub async fn create_session(
     Ok(crate::store::agents::get(pool, &id)
         .await?
         .expect("just stored"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ChainEntry, subscription_first};
+
+    fn entry(pool: i64, provider: &str) -> ChainEntry {
+        ChainEntry {
+            pool,
+            provider: provider.to_owned(),
+            harness: "claude".to_owned(),
+            model: None,
+        }
+    }
+
+    #[test]
+    fn subscriptions_go_first_and_each_group_keeps_its_order() {
+        let mut e = vec![
+            entry(1, "anthropic"),
+            entry(2, "claude-sub"),
+            entry(3, "openai"),
+            entry(4, "claude-sub"),
+        ];
+        assert!(subscription_first(&mut e));
+        assert_eq!(e.iter().map(|x| x.pool).collect::<Vec<_>>(), [2, 4, 1, 3]);
+        // Already in that order: nothing moved.
+        assert!(!subscription_first(&mut e));
+        let mut none = vec![entry(1, "openai"), entry(2, "groq")];
+        assert!(!subscription_first(&mut none));
+    }
 }

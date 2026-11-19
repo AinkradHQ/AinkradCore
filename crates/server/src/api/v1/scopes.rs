@@ -95,6 +95,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/accounts/logins/{id}/code", "admin"),
     ("DELETE", "/api/v1/accounts/logins/{id}", "admin"),
     ("GET", "/api/v1/accounts/{id}", "read"),
+    ("GET", "/api/v1/accounts/{id}/models", "read"),
     ("GET", "/api/v1/accounts/providers", "read"),
     ("POST", "/api/v1/accounts", "admin"),
     ("PUT", "/api/v1/accounts/{id}/secret", "admin"),
@@ -146,6 +147,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PUT", "/api/v1/connections/{id}/credential", "admin"),
     ("POST", "/api/v1/connections/{id}/test", "admin"),
     ("GET", "/api/v1/connections/{id}/activity", "admin"),
+    ("GET", "/api/v1/connections/{id}/resources", "admin"),
+    ("GET", "/api/v1/connections/{id}/resources", "admin"),
     ("GET", "/api/v1/connections/{id}/grants", "admin"),
     ("PUT", "/api/v1/connections/{id}/grants", "admin"),
     (

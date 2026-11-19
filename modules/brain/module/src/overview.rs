@@ -565,7 +565,7 @@ async fn launch(app: &App, b: &Brain, room: &str, attempt: i64, by: &str) -> Res
         chain: None,
         agent: Some(AGENT),
     };
-    let s = ch::create_session(&app.pool, &new, None, None, req, BY, &now)
+    let s = ch::create_session_ordered(&app.pool, &new, None, None, req, true, BY, &now)
         .await
         .map_err(ApiError::from)?;
     agents::authorize_module_session(app, &s.id);
