@@ -203,8 +203,10 @@ dns_probe() { # NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when there is one, e
       getent ahostsv6 "$1" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9a-fA-F:]+$' | sort -u | sed 's/^/AAAA /' || true
     fi; } >"$2"
 }
-pub_probe() { # OUTFILE: this machine's public IPv4 from a third party (api.ipify.org); never fails
-  { curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true; } >"$1"
+pub_probe() { # OUTFILE: this machine's public IPv4 from Ainkrad's outside check (signin.ainkrad.io, the call the port probe makes), no third party; empty when it cannot run
+  _po=$(mktemp) || { : >"$1"; return 0; }
+  if pc_probe_call 443 "$_po" 2>/dev/null; then sed -n 's/.*"ip" *: *"\([0-9.]*\)".*/\1/p' "$_po" | head -n1 >"$1"; else : >"$1"; fi
+  rm -f "$_po"
 }
 # ui_check_dns NAME: A record against this machine's public address, then the AAAA record. A name that does not point at this
 # machine STOPS the install here (the red card), before anything of the Core is set up; a dry run only warns.
@@ -215,8 +217,13 @@ ui_check_dns() {
   local name=$1 pub a aaaa x here f bad6=''
   ui_logopen || { ui_warn "cannot create a log directory, so the DNS check is skipped"; return 0; }
   f=$UI_LOGDIR/dns
-  UI_QUIET=1 ui_run "Looking up this machine's public address (a request to api.ipify.org)" pub_probe "$f.pub" || true
+  UI_QUIET=1 ui_run "Looking up this machine's public address (a request to signin.ainkrad.io)" pub_probe "$f.pub" || true
   pub=$(clean_ip "$(cat "$f.pub" 2>/dev/null || true)")
+  if [ -z "$pub" ] && ( : </dev/tty ) 2>/dev/null; then # the outside check could not run: ask
+    printf "Could not look up this machine's public address. Type it, or press Return to skip the comparison: " >/dev/tty 2>/dev/null || true
+    read -r pub </dev/tty 2>/dev/null || pub=''
+    pub=$(clean_ip "$pub")
+  fi
   UI_QUIET=1 ui_run "Checking that $name points at ${pub:-this machine}" dns_probe "$name" "$f.dns" || true
   a=$(sed -n 's/^A //p' "$f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'); aaaa=$(sed -n 's/^AAAA //p' "$f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
   if [ -z "$a" ]; then

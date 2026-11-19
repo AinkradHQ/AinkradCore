@@ -192,15 +192,22 @@ pc_dns_probe() { # pc_dns_probe NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when
       getent ahostsv6 "$1" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9a-fA-F:]+$' | sort -u | sed 's/^/AAAA /' || true
     fi; } >"$2"
 }
-pc_pub_probe() { # pc_pub_probe OUTFILE: this machine's public IPv4 from a third party (api.ipify.org); never fails
-  { curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true; } >"$1"
+pc_pub_probe() { # pc_pub_probe OUTFILE: this machine's public IPv4 from Ainkrad's outside check (signin.ainkrad.io, the call the port probe makes), no third party; empty when it cannot run
+  _po=$(mktemp) || { : >"$1"; return 0; }
+  if pc_probe_call 443 "$_po" 2>/dev/null; then sed -n 's/.*"ip" *: *"\([0-9.]*\)".*/\1/p' "$_po" | head -n1 >"$1"; else : >"$1"; fi
+  rm -f "$_po"
 }
 pc_dns() { # pc_dns NAME: the A record is this machine's public address and any AAAA record is on it; else the red card (blocking)
   ui_logopen || { ui_warn "cannot create a log directory, so the DNS check is skipped"; return 0; }
   _f=$UI_LOGDIR/dns
-  UI_QUIET=1 ui_run "Looking up this machine's public address (a request to api.ipify.org)" pc_pub_probe "$_f.pub" || true
+  UI_QUIET=1 ui_run "Looking up this machine's public address (a request to signin.ainkrad.io)" pc_pub_probe "$_f.pub" || true
   _pub=$(tr -cd '0-9.' <"$_f.pub" 2>/dev/null | head -c 15)
   printf '%s' "$_pub" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || _pub=''
+  if [ -z "$_pub" ] && ( : </dev/tty ) 2>/dev/null; then # the outside check could not run: ask
+    printf "Could not look up this machine's public address. Type it, or press Return to skip the comparison: " >/dev/tty 2>/dev/null || true
+    read -r _pub </dev/tty 2>/dev/null || _pub=''
+    printf '%s' "$_pub" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || _pub=''
+  fi
   UI_QUIET=1 ui_run "Checking that $1 points at ${_pub:-this machine}" pc_dns_probe "$1" "$_f.dns" || true
   _a=$(sed -n 's/^A //p' "$_f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
   _aaaa=$(sed -n 's/^AAAA //p' "$_f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
