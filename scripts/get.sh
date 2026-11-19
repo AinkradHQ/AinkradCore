@@ -660,11 +660,17 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
       AINKRAD_MDNS=no
       case $_vend in *oracle* | *microsoft* | *amazon* | *google* | *digitalocean* | *hetzner*) ;; *)
         case $_ip in 10.* | 192.168.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].*)
-          _pub=$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || true)
-          if [ -z "$_pub" ] || [ "$_pub" = "$_ip" ]; then AINKRAD_MDNS=yes
-          elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
-            printf 'Advertise this Core on your local network so the Mac app can find it (mDNS)? Only say y on a home or office machine, not a cloud server. [y/N] ' >/dev/tty
-            read -r _a </dev/tty || _a=''
+          # The public address comes from Ainkrad's own outside check (the one the port probe already uses), never a third party.
+          _pub=''
+          if [ -z "${AINKRAD_SKIP_PROBE:-}" ] && _o=$(mktemp); then
+            if pc_probe_call 443 "$_o" 2>/dev/null; then _pub=$(sed -n 's/.*"ip" *: *"\([^"]*\)".*/\1/p' "$_o" | head -n1); fi
+            rm -f "$_o"
+          fi
+          if [ -n "$_pub" ] && [ "$_pub" = "$_ip" ]; then AINKRAD_MDNS=yes
+          elif ( : </dev/tty ) 2>/dev/null; then
+            # Unsure (NAT, or the check could not run): ask.
+            printf 'Advertise this Core on your local network so the Mac app can find it (mDNS)? Only say y on a home or office machine, not a cloud server. [y/N] ' >/dev/tty 2>/dev/null || true
+            read -r _a </dev/tty 2>/dev/null || _a=''
             case $_a in [yY]*) AINKRAD_MDNS=yes ;; esac
           fi ;;
         esac ;;
