@@ -341,6 +341,25 @@ fn terminal_network(args: &[&str]) -> Option<&'static str> {
     it.next().is_none().then_some(value)
 }
 
+/// Whether launchd started this runner for the app's bundled agent (`XPC_SERVICE_NAME` is the job label).
+fn started_by_app() -> bool {
+    std::env::var("XPC_SERVICE_NAME").is_ok_and(|l| l.starts_with("com.ainkrad.core.runner"))
+}
+
+/// The plain-words reason the runner is up without AI tools, for the app to show: `<state>/last-error`,
+/// removed once agents start. Best effort; a runner that cannot write it still runs.
+fn write_last_error(state: &std::path::Path, why: Option<&str>) {
+    let file = state.join("last-error");
+    let _ = match why {
+        Some(why) => std::fs::create_dir_all(state).and_then(|()| std::fs::write(&file, why)),
+        None => std::fs::remove_file(&file).or_else(|e| {
+            (e.kind() == std::io::ErrorKind::NotFound)
+                .then_some(())
+                .ok_or(e)
+        }),
+    };
+}
+
 fn agents_enabled(args: &[&str]) -> bool {
     args.contains(&"--enable-agents")
 }
@@ -412,7 +431,9 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     let agent_capacity = policy.map_or(2, |p| p.agent_capacity);
     let share_history = policy.map_or(share_history, |p| p.share_history);
     // Agents a policy asked for must not keep the runner from starting when they cannot run.
-    let agents_may_fail = agents_enabled && !agents_flag;
+    // Started by the app's own LaunchAgent (launchd names the job), the runner must stay up and
+    // connect without AI tools: the person installs one later, and the app says what is missing.
+    let agents_may_fail = agents_enabled && (!agents_flag || started_by_app());
     let exec = Arc::new(super::ExecDriver::new(
         super::ExecConfig {
             run_enabled,
@@ -529,10 +550,14 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     }) {
         None => None,
         Some(a) => match a.await {
-            Ok(a) => Some(a),
+            Ok(a) => {
+                write_last_error(&state.0, None);
+                Some(a)
+            }
             Err(e) if agents_may_fail => {
-                eprintln!("ainkrad-runner: agents (from the policy) are off: {e}");
-                tracing::warn!("agents (from the policy) are off: {e}");
+                eprintln!("ainkrad-runner: agents are off: {e}");
+                tracing::warn!("agents are off: {e}");
+                write_last_error(&state.0, Some(&e));
                 None
             }
             Err(e) => {
@@ -714,6 +739,14 @@ async fn agents(
         .map(PathBuf::from)
         .unwrap_or_default();
     executor.check_roots(&home)?;
+    // launchd gives a bundled runner a bare PATH and cannot name the home folder, so a tool the
+    // person installed under ~/.local/bin (where Claude Code's installer puts it) is found here.
+    for name in ["claude", "codex", "opencode", "agy"] {
+        let bin = home.join(".local/bin").join(name);
+        if bin.is_file() {
+            executor.bins.entry(name.to_owned()).or_insert(bin);
+        }
+    }
     let mut config = super::agent::AgentConfig::new(state.join("agents"), secrets.clone());
     config.capacity = capacity;
     if share_history {
@@ -729,7 +762,7 @@ async fn agents(
         }
     }
     if config.slots.is_empty() {
-        return Err("no harness is installed in a version the compat matrix takes".to_owned());
+        return Err("no AI tool installed: Ainkrad found no Claude Code, Codex, OpenCode or Antigravity it can drive".to_owned());
     }
     super::agent::AgentDriver::new(config, executor)
         .map(|d| {
@@ -796,6 +829,21 @@ mod tests {
             terminal_sandbox(&["--terminal-sandbox=on", "--terminal-sandbox=off"]),
             None
         );
+    }
+
+    #[test]
+    fn the_last_error_is_written_for_the_app_and_removed_when_agents_start() {
+        let dir = std::env::temp_dir().join(format!("ainkrad-last-error-{}", std::process::id()));
+        let file = dir.join("last-error");
+        super::write_last_error(&dir, Some("no AI tool installed"));
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "no AI tool installed"
+        );
+        super::write_last_error(&dir, None);
+        assert!(!file.exists());
+        super::write_last_error(&dir, None); // nothing to remove is fine
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
