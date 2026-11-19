@@ -282,7 +282,7 @@ impl std::fmt::Debug for GatewayTest {
 const KEY_CLASSES: [(&str, &str, &str); 6] = [
     ("sk-ant-", "anthropic", "api.anthropic.com"),
     ("AIza", "google", "generativelanguage.googleapis.com"),
-    // Google's newer API keys (`AQ.` then a body with one more dot), Gemini and Vertex express.
+    // Google's newer API keys (`AQ.` then a body with one more dot), for the Gemini API host only.
     ("AQ.", "google", "generativelanguage.googleapis.com"),
     ("sk-proj-", "openai", "api.openai.com"),
     ("sk-svcacct-", "openai", "api.openai.com"),
