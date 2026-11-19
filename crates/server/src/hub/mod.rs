@@ -257,6 +257,42 @@ impl Runner {
     }
 }
 
+/// The AI tools a runner may report an install of.
+const REPORTED_TOOLS: [&str; 4] = ["claude", "codex", "opencode", "agy"];
+
+/// Control characters, and the bidi marks and isolates that reorder text on screen.
+fn plain(s: &str, max: usize) -> String {
+    s.chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .take(max)
+        .collect()
+}
+
+/// A runner's report as the Core keeps it: a known tool only, text cut and cleaned, secrets masked, percent at most 100.
+pub(crate) fn sanitize_report(
+    mut rep: ainkrad_proto::v2::RunnerReport,
+) -> ainkrad_proto::v2::RunnerReport {
+    let redactor = ainkrad_proto::redact::Redactor::new();
+    let words = |s: &str, max: usize| plain(&redactor.text(&plain(s, max)), max);
+    rep.install = rep.install.and_then(|mut i| {
+        REPORTED_TOOLS.contains(&i.tool.as_str()).then(|| {
+            i.percent = i.percent.min(100);
+            i.step = words(&i.step, 200);
+            i.reason = i.reason.map(|r| words(&r, 600));
+            i
+        })
+    });
+    rep.home = rep.home.map(|h| plain(&h, 512)).filter(|h| !h.is_empty());
+    rep.last_error = rep
+        .last_error
+        .map(|e| words(&e, 500))
+        .filter(|e| !e.is_empty());
+    rep
+}
+
 /// A runner as the hub sees it (`Hub::runners`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunnerState {
@@ -974,6 +1010,16 @@ impl Hub {
         if let Some(isolation) = heartbeat.isolation {
             r.hello.isolation = Some(isolation);
         }
+        // Its install, home and last error: what the runner says now replaces the earlier word. A runner is
+        // not trusted with display text: it is cut, stripped of control and bidi characters and redacted first.
+        if let Some(rep) = heartbeat.report.map(sanitize_report) {
+            let facts = r.hello.facts.get_or_insert_with(Default::default);
+            facts.tool_install = rep.install;
+            facts.last_error = rep.last_error;
+            if rep.home.is_some() {
+                facts.home = rep.home;
+            }
+        }
     }
 
     /// A frame from the runner on a command stream. A frame seen before is dropped.
@@ -1106,5 +1152,59 @@ mod tests {
         assert_eq!(b64_len("aGk="), Some(2));
         assert_eq!(b64_len("aA=="), Some(1));
         assert_eq!(b64_len("aGk"), None);
+    }
+}
+
+#[cfg(test)]
+mod report_tests {
+    use super::*;
+    use ainkrad_proto::v2::{RunnerReport, ToolInstallReport, ToolOpState};
+
+    fn report(tool: &str, reason: &str) -> RunnerReport {
+        RunnerReport {
+            install: Some(ToolInstallReport {
+                tool: tool.to_owned(),
+                state: ToolOpState::Failed,
+                percent: 250,
+                step: "s".repeat(500),
+                reason: Some(reason.to_owned()),
+            }),
+            home: Some(format!("/home/\u{202e}x{}", "h".repeat(900))),
+            last_error: Some(format!("bad\u{7}{}", "e".repeat(900))),
+        }
+    }
+
+    #[test]
+    fn a_runners_report_is_cut_cleaned_and_limited_to_known_tools() {
+        let r = sanitize_report(report("claude", "ok\u{1b}[31m \u{2066}reason"));
+        let i = r.install.unwrap();
+        assert_eq!(i.percent, 100);
+        assert_eq!(i.step.chars().count(), 200);
+        let why = i.reason.unwrap();
+        assert!(
+            !why.chars().any(|c| c.is_control() || c == '\u{2066}'),
+            "{why:?}"
+        );
+        assert!(r.home.unwrap().chars().count() <= 512);
+        let e = r.last_error.unwrap();
+        assert!(e.chars().count() <= 500 && !e.contains('\u{7}'));
+        // An install of anything but the four tools is dropped; the rest of the report stays.
+        let r = sanitize_report(report("rm -rf", "x"));
+        assert!(r.install.is_none() && r.home.is_some());
+    }
+
+    #[test]
+    fn a_secret_in_a_reason_is_masked() {
+        let r = sanitize_report(report(
+            "codex",
+            "failed with key sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef",
+        ));
+        assert!(
+            !r.install
+                .unwrap()
+                .reason
+                .unwrap()
+                .contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        );
     }
 }

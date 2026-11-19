@@ -387,6 +387,7 @@ impl Session {
                                     cores: l.cores,
                                 }),
                                 isolation: self.agent.as_ref().map(|a| a.isolation()),
+                                report: super::aitools::report(),
                             }),
                         ),
                     )
@@ -532,10 +533,18 @@ impl Session {
                     Ok(slot) => slot,
                     Err(e) => return Some(Body::Error(e)),
                 };
+                if super::aitools::restart_pending() {
+                    return Some(Body::Error(StreamError::new(
+                        ErrorCode::Busy,
+                        "this runner is about to restart to finish an update; try again in a moment",
+                    )));
+                }
+                let working = super::aitools::working();
                 let (cancel_tx, cancel_rx) = oneshot::channel();
                 h.cancel = Some(cancel_tx);
                 let (ssh, done) = (Arc::clone(ssh), self.done_tx.clone());
                 tokio::spawn(async move {
+                    let _working = working;
                     let body = match ssh.run(&req, cancel_rx).await {
                         Ok(result) => Body::Result(Reply::SshExec(result)),
                         Err(e) => Body::Error(e),

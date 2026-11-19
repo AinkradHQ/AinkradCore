@@ -430,6 +430,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         }
     };
     let state = state_dir(flag(args, "--state"));
+    super::aitools::set_prefix(state.0.join("ai-tools"));
     // The policy a Core set from the App overrides the flags for these three (see `control`).
     let policy = super::control::load(&state.0);
     let (pty_enabled, agents_enabled) =
@@ -614,6 +615,14 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         restart: Arc::clone(&restart),
         stop,
     });
+    // Offered AI sessions mean the AI tools should be there and current (D-22): the runner is
+    // already connected, so it installs what is missing in the background and restarts once.
+    if agents_enabled {
+        let c = Arc::clone(&control);
+        tokio::spawn(super::aitools::keep_current(move || {
+            c.restart_when_idle(Duration::from_secs(2))
+        }));
+    }
     match super::daemon::from_state(&state, exec, pty, agents, Some(control), tls, stopping).await {
         Ok(()) if restart.load(std::sync::atomic::Ordering::SeqCst) => {
             eprintln!("ainkrad-runner: restarting to apply a new policy");
@@ -743,6 +752,7 @@ async fn agents(
     share_history: bool,
 ) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
+    super::aitools::set_home(work.clone());
     let mut executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
     // Every run of this driver goes through its process sandbox (`ProcessSandbox` below), which
     // refuses a run it cannot confine and marks the run's environment once it has; the executor
@@ -774,9 +784,14 @@ async fn agents(
     executor.check_roots(&home)?;
     // launchd gives a bundled runner a bare PATH and cannot name the home folder, so a tool the
     // person installed under ~/.local/bin (where Claude Code's installer puts it) is found here.
+    // The tools the runner installed itself (`aitools`, D-22) come first: they are the tested versions.
     for name in ["claude", "codex", "opencode", "agy"] {
-        let bin = home.join(".local/bin").join(name);
-        if bin.is_file() {
+        let managed = super::aitools::bin_dir().map(|d| d.join(name));
+        let local = home.join(".local/bin").join(name);
+        if let Some(bin) = managed
+            .filter(|b| b.is_file())
+            .or(local.is_file().then_some(local))
+        {
             executor.bins.entry(name.to_owned()).or_insert(bin);
         }
     }

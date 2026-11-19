@@ -68,6 +68,7 @@ pub fn gather(
         // Fail closed without the egress block (`deploy/run-egress.nft`).
         run_caps: run_caps(podman.as_ref(), Path::new("/"), host_resources())
             .filter(|_| super::run::egress_active()),
+        ..RunnerFacts::default()
     }
 }
 
