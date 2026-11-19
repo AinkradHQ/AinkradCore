@@ -46,6 +46,15 @@ fn sample(action: &str) -> Value {
             {"at": "2026-11-10T10:00:00.000Z", "level": "info", "text": "started"},
             {"at": "2026-11-10T10:00:01.000Z", "level": "warn", "text": "slow"}],
             "next_before": "s=abc;i=1"}),
+        "backup_info" => json!({
+            "installed": true,
+            "timer": {"active": "active", "calendar": "*-*-* 22:00:00",
+                      "next": "Fri 2026-11-20 22:00:00 UTC", "last": ""},
+            "run": {"active": "inactive", "result": "success",
+                    "started": "Thu 2026-11-19 22:00:01 UTC",
+                    "finished": "Thu 2026-11-19 22:03:10 UTC", "exit_status": 0},
+            "history": [{"at": 1_795_100_000u64, "bytes": 2_100_000u64}],
+        }),
         _ => json!({"accepted": true}),
     }
 }
@@ -150,7 +159,7 @@ async fn fast(mut fx: Fx) -> Fx {
     fx
 }
 
-/// The contract: all six routes are `admin`; only the restart and the runner and backup logs are
+/// The contract: all the routes are `admin`; only the restart and the runner and backup logs are
 /// destructive (D4).
 #[tokio::test]
 async fn the_contract_declares_admin_everywhere_and_step_up_only_where_d4_says() {
@@ -182,7 +191,7 @@ async fn the_contract_declares_admin_everywhere_and_step_up_only_where_d4_says()
         .keys()
         .filter(|p| p.starts_with("/api/v1/system/"))
         .count();
-    assert_eq!(n, 6);
+    assert_eq!(n, 8, "six, and the backup start and the backup schedule");
 }
 
 /// Only `admin` gets in: read, agent, terminal and runner devices get 403 on every route, and
@@ -752,4 +761,53 @@ async fn a_socket_served_by_the_wrong_user_is_refused() {
         )
     );
     assert!(calls(&seen).is_empty());
+}
+
+/// A backup now: no step-up (it starts the unit the timer starts), audited before and after the
+/// helper call, the helper asked with no input, and a second start inside a minute held back.
+#[tokio::test]
+async fn a_backup_now_is_audited_and_asked_with_no_input() {
+    let mut fx = fast(fx().await).await;
+    let seen = fake(&mut fx, Mode::Ok).await;
+    let post = |fx: &Fx| {
+        send(
+            &fx.app,
+            req(Method::POST, "/api/v1/system/backup", Some(&fx.dev), None),
+        )
+    };
+    let (s, b) = post(&fx).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{b}");
+    let call = calls(&seen).remove(0);
+    assert_eq!(
+        (call["action"].as_str(), &call["params"]),
+        (Some("backup_now"), &json!({}))
+    );
+    assert_eq!(call["id"], b["request_id"]);
+    let before = rows(&fx, "host.backup_requested").await;
+    assert_eq!(before.len(), 1);
+    assert_eq!(call["actor"]["audit_seq"], before[0].0);
+    let after = rows(&fx, "host.action_result").await;
+    assert_eq!(after[0].1["code"], "accepted");
+    let (s, _) = post(&fx).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "held back for a minute");
+    assert_eq!(calls(&seen).len(), 1, "the helper was not asked again");
+}
+
+#[tokio::test]
+async fn the_backup_schedule_is_read_through_the_helper() {
+    let mut fx = fast(fx().await).await;
+    let seen = fake(&mut fx, Mode::Ok).await;
+    let (s, b) = get(&fx, &fx.dev, "/api/v1/system/backups").await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(calls(&seen)[0]["action"], "backup_info");
+    assert_eq!(b["helper"], "present");
+    assert_eq!(b["schedule"], "*-*-* 22:00:00");
+    assert_eq!(b["timer_active"], true);
+    assert!(b["next_at"].is_string(), "{b}");
+    assert_eq!(b["last_run"]["result"], "success");
+    assert_eq!(b["history"][0]["bytes"], 2_100_000);
+    // A reader may not see it.
+    let phone = fx.enroll("phone", &["read"]).await;
+    let (s, _) = get(&fx, &phone, "/api/v1/system/backups").await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
 }

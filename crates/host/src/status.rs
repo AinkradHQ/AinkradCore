@@ -148,11 +148,24 @@ fn bin_dir_safe(ctx: &Ctx) -> bool {
 
 /// One unit's `systemctl show`: `None` when systemctl cannot be run at all.
 fn unit(ctx: &Ctx, name: &str) -> Option<BTreeMap<String, String>> {
+    unit_with(
+        ctx,
+        name,
+        "ActiveState,SubState,ActiveEnterTimestamp,NRestarts,LoadState",
+    )
+}
+
+/// `unit` for a fixed list of properties (a literal of this crate, never input).
+pub(crate) fn unit_with(
+    ctx: &Ctx,
+    name: &str,
+    props: &'static str,
+) -> Option<BTreeMap<String, String>> {
     let args = [
         "--no-ask-password".to_owned(),
         "show".to_owned(),
         "-p".to_owned(),
-        "ActiveState,SubState,ActiveEnterTimestamp,NRestarts,LoadState".to_owned(),
+        props.to_owned(),
         name.to_owned(),
     ];
     let out = ctx.exec.run(SYSTEMCTL, &args, 16 * 1024).ok()?;
@@ -240,8 +253,13 @@ pub fn status(ctx: &Ctx) -> Result<Value, Code> {
     )
 }
 
-/// Whether `ainkrad-runner.service` is installed (`LoadState` is anything but `not-found`).
-pub fn runner_installed(ctx: &Ctx) -> Option<bool> {
-    let p = unit(ctx, "ainkrad-runner.service")?;
+/// Whether the unit `name` is installed (`LoadState` is anything but `not-found`).
+pub fn unit_installed(ctx: &Ctx, name: &str) -> Option<bool> {
+    let p = unit(ctx, name)?;
     Some(p.get("LoadState").is_some_and(|l| l != "not-found"))
+}
+
+/// Whether `ainkrad-runner.service` is installed.
+pub fn runner_installed(ctx: &Ctx) -> Option<bool> {
+    unit_installed(ctx, "ainkrad-runner.service")
 }

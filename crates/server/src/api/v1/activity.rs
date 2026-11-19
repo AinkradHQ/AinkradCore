@@ -38,6 +38,19 @@ pub struct OpsSample {
     /// Share of the data disk in use, 0 to 100.
     #[schema(required = false)]
     pub disk_used_pct: Option<i64>,
+    /// The whole host's CPU, 0 to 100 (a Linux Core only).
+    #[schema(required = false)]
+    pub host_cpu_pct: Option<f64>,
+    /// The host's memory in use and in total, in bytes (a Linux Core only).
+    #[schema(required = false)]
+    pub ram_used_bytes: Option<u64>,
+    #[schema(required = false)]
+    pub ram_total_bytes: Option<u64>,
+    /// The data disk in use and in total, in bytes.
+    #[schema(required = false)]
+    pub disk_used_bytes: Option<u64>,
+    #[schema(required = false)]
+    pub disk_total_bytes: Option<u64>,
 }
 
 /// The Core's readings, oldest first, one a minute. Kept in memory: a restart empties it.
@@ -68,6 +81,11 @@ pub async fn ops_history(
             cpu_pct: s.cpu_pct,
             memory_bytes: s.memory_bytes,
             disk_used_pct: s.disk_used_pct,
+            host_cpu_pct: s.host_cpu_pct,
+            ram_used_bytes: s.ram_used_bytes,
+            ram_total_bytes: s.ram_total_bytes,
+            disk_used_bytes: s.disk_used_bytes,
+            disk_total_bytes: s.disk_total_bytes,
         })
         .collect();
     Ok(Json(OpsHistory {

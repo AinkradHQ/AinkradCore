@@ -112,7 +112,49 @@ async fn the_core_health_route_answers_a_read_device() {
     if let Some(p) = h["disk_used_pct"].as_i64() {
         assert!((0..=100).contains(&p), "{h}");
     }
-    assert!(h["memory_bytes"].is_null() || h["memory_bytes"].is_u64(), "{h}");
+    assert!(
+        h["memory_bytes"].is_null() || h["memory_bytes"].is_u64(),
+        "{h}"
+    );
+    // Host stats are absent off Linux, whole numbers on it.
+    for k in ["ram_used_bytes", "ram_total_bytes", "disk_used_bytes"] {
+        assert!(h[k].is_null() || h[k].is_u64(), "{k}: {h}");
+    }
+    if let Some(c) = h["host_cpu_pct"].as_f64() {
+        assert!((0.0..=100.0).contains(&c), "{h}");
+    }
+}
+
+/// The fleet counts every active runner once: a paired runner that never connected is offline.
+#[tokio::test]
+async fn the_core_health_fleet_counts_a_runner_that_is_not_connected_as_offline() {
+    let fx = fx().await;
+    TestDevice::enroll(
+        &fx.app.pool,
+        "vm",
+        "runner",
+        &["runner"],
+        &fx.app.auth.identity.fp,
+        fx.clock.clone(),
+    )
+    .await;
+    let phone = fx.enroll("phone", &["read"]).await;
+    let (s, h) = send(
+        &fx.app,
+        req(Method::GET, "/api/v1/core/health", Some(&phone), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{h}");
+    let f = &h["fleet"];
+    assert_eq!(
+        (&f["working"], &f["idle"], &f["offline"]),
+        (&0.into(), &0.into(), &1.into()),
+        "{h}"
+    );
+    assert_eq!(
+        (&f["runners"][0]["name"], &f["runners"][0]["state"]),
+        (&"vm".into(), &"offline".into())
+    );
 }
 
 /// An offline runner still has its slots (nothing used) and no live facts; the built-in mark
