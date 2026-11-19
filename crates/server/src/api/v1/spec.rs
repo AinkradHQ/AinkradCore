@@ -87,6 +87,7 @@ use super::{
         runners::noop,
         runner_control::set_policy,
         runner_control::install_tool,
+        runner_control::update_runner,
         runner_control::get_operation,
         terminals::create,
         terminals::list,

@@ -922,6 +922,7 @@ async fn serve(
     ));
     tokio::spawn(ainkrad_core_server::mirrors::sweep_loop(app.clone()));
     tokio::spawn(ainkrad_core_server::runs::sweep_loop(app.clone()));
+    tokio::spawn(ainkrad_core_server::runner_update::sweep_loop(app.clone()));
     for m in modules.iter() {
         m.attach(&app);
     }

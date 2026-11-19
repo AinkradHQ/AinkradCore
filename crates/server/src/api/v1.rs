@@ -222,6 +222,10 @@ pub fn router(app: App) -> Router {
             post(runner_control::install_tool),
         )
         .route(
+            "/api/v1/runners/{id}/update",
+            post(runner_control::update_runner),
+        )
+        .route(
             "/api/v1/runners/{id}/tools/operations/{op}",
             get(runner_control::get_operation),
         )

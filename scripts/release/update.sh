@@ -10,41 +10,51 @@
 #   6. any failure after 3: put the binaries and the database back, start Core, report "rolled_back".
 # `auto` (the timer, hourly) only records what is available, and installs only between 02:00 and 05:00 local time.
 # Progress is /var/lib/ainkrad/update/status.json (the Core reads it for the app).
+# `runner` (E12-4, started by ainkrad-update-runner.path when the runner drops <runner state>/update-request): the same steps for
+# the runner's programs on this host: no Core stop and no database; after the install it restarts ainkrad-runner.service and
+# rolls the binaries back when that does not stay active. Status: runner-status.json.
 set -uo pipefail
-mode=${1:-now}; case $mode in now | auto) ;; *) echo "update: mode is now|auto" >&2; exit 2 ;; esac
+mode=${1:-now}; case $mode in now | auto | runner) ;; *) echo "update: mode is now|auto|runner" >&2; exit 2 ;; esac
+kind=core svc=ainkrad-core.service vbin=ainkrad-core-server statusf=status.json
+[ "$mode" = runner ] && { kind=runner svc=ainkrad-runner.service vbin=ainkrad-runner statusf=runner-status.json; }
 LIB=/usr/local/lib/ainkrad PREFIX=/usr/local STATE=/var/lib/ainkrad/update HOMEDIR=/var/lib/ainkrad/core
-BASE=https://ainkrad.io/releases CHANNEL=stable SYSTEMCTL=/usr/bin/systemctl
+BASE=https://ainkrad.io/releases CHANNEL=stable SYSTEMCTL=/usr/bin/systemctl RUNNER_STATE=/var/lib/ainkrad-runner/core
 [ -r /etc/ainkrad/update.conf ] && . /etc/ainkrad/update.conf   # root-owned: BASE=, CHANNEL=
 # Test hooks only (a non-root run against a scratch tree); never set in the unit.
-if [ "${AINKRAD_UPDATE_TEST:-}" = 1 ]; then LIB=${UPD_LIB:-$LIB} PREFIX=${UPD_PREFIX:-$PREFIX} STATE=${UPD_STATE:-$STATE} HOMEDIR=${UPD_HOME:-$HOMEDIR} BASE=${UPD_BASE:-$BASE} SYSTEMCTL=${UPD_SYSTEMCTL:-$SYSTEMCTL} HEALTH_URL=${UPD_HEALTH:-} WINDOW=${UPD_WINDOW:-}; fi
+if [ "${AINKRAD_UPDATE_TEST:-}" = 1 ]; then LIB=${UPD_LIB:-$LIB} PREFIX=${UPD_PREFIX:-$PREFIX} STATE=${UPD_STATE:-$STATE} HOMEDIR=${UPD_HOME:-$HOMEDIR} BASE=${UPD_BASE:-$BASE} SYSTEMCTL=${UPD_SYSTEMCTL:-$SYSTEMCTL} RUNNER_STATE=${UPD_RUNNER_STATE:-$RUNNER_STATE} HEALTH_URL=${UPD_HEALTH:-} WINDOW=${UPD_WINDOW:-}; fi
 umask 022
 mkdir -p "$STATE/snapshots" && chmod 755 "$STATE"
 exec 9>"$STATE/lock"; command -v flock >/dev/null && { flock -n 9 || exit 0; }   # one update at a time
 now() { date +%s; }
+if [ "$mode" = runner ]; then   # the request file only says "go": nothing in it is read. A flood of requests costs one fetch per 5 minutes.
+  rm -f "$RUNNER_STATE/update-request"
+  last=$(cat "$STATE/runner_last" 2>/dev/null || echo 0); [ $(($(now) - last)) -ge "${UPD_RUNNER_GAP:-300}" ] || exit 0
+  now >"$STATE/runner_last"
+fi
 events=''; from=''; to=''; avail=''; state=idle; prog=0; err=''
 ev() { events="${events:+$events,}{\"at\":$(now),\"step\":\"$1\",\"text\":\"$2\"}"; }   # $1,$2 are fixed words from this file
 jv() { if [ -n "$1" ]; then printf '"%s"' "$1"; else printf null; fi; }   # every value is a version, a word or a number from this file
 put() { # put STATE PROGRESS [ERROR]: atomically rewrite status.json
   state=$1 prog=$2 err=${3:-}
   printf '{"state":"%s","mode":"%s","from":%s,"to":%s,"available":%s,"progress":%s,"error":%s,"updated_at":%s,"events":[%s]}\n' \
-    "$state" "$mode" "$(jv "$from")" "$(jv "$to")" "$(jv "$avail")" "$prog" "$(jv "$err")" "$(now)" "$events" >"$STATE/status.json.tmp" \
-    && mv -f "$STATE/status.json.tmp" "$STATE/status.json"
+    "$state" "$mode" "$(jv "$from")" "$(jv "$to")" "$(jv "$avail")" "$prog" "$(jv "$err")" "$(now)" "$events" >"$STATE/$statusf.tmp" \
+    && mv -f "$STATE/$statusf.tmp" "$STATE/$statusf"
 }
 verre='^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.]+)?$'
 gt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]; }
 fail() { put failed 0 "$1"; echo "update: $1" >&2; exit 1; }
 for c in curl minisign python3; do command -v "$c" >/dev/null || fail "missing_$c"; done
 
-cur=$("$PREFIX/bin/ainkrad-core-server" --version 2>/dev/null | awk '{print $NF}')
+cur=$("$PREFIX/bin/$vbin" --version 2>/dev/null | awk '{print $NF}')
 [[ $cur =~ $verre ]] || fail "unknown_version"
 from=$cur
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 fetch() { case $BASE in https://*) curl -fsSL --proto '=https' --tlsv1.3 --max-time 30 --max-filesize 1000000 -o "$tmp/$1" "$BASE/$1" ;; /*) cp "$BASE/$1" "$tmp/$1" ;; *) return 1 ;; esac; }
 fetch manifest.json && fetch manifest.json.minisig || fail "no_manifest"
 minisign -Vq -p "$LIB/ainkrad-release.pub" -x "$tmp/manifest.json.minisig" -m "$tmp/manifest.json" || fail "bad_signature"
-read -r new url gen exp < <(python3 -I - "$tmp/manifest.json" "$CHANNEL" <<'PY'
+read -r new url gen exp < <(python3 -I - "$tmp/manifest.json" "$CHANNEL" "$kind" <<'PY'
 import json, sys
-m = json.load(open(sys.argv[1])); c = m["channels"][sys.argv[2]]["core"]
+m = json.load(open(sys.argv[1])); c = m["channels"][sys.argv[2]][sys.argv[3]]
 print(c["version"], c["url"], int(m["generated"]), int(m["expires"]))
 PY
 ) || fail "bad_manifest"
@@ -62,33 +72,33 @@ if [ "$mode" = auto ] && ! { [ -n "${WINDOW:-}" ] || { [ "$hour" -ge 2 ] && [ "$
 # 3. snapshot
 ev snapshot "Snapshot taken"; put snapshot 0.12
 snap="$STATE/snapshots/$cur-$(now)"; mkdir -p "$snap/bin" "$snap/db"; chmod 700 "$snap"
-"$SYSTEMCTL" stop ainkrad-core.service || fail "stop_failed"
+[ "$kind" = runner ] || "$SYSTEMCTL" stop "$svc" || fail "stop_failed"
 bins="ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost"
 for b in $bins; do [ -e "$PREFIX/bin/$b" ] && cp -p "$PREFIX/bin/$b" "$snap/bin/$b"; done
-for f in "$HOMEDIR"/core.db "$HOMEDIR"/core.db-wal "$HOMEDIR"/core.db-shm; do [ -e "$f" ] && cp -p "$f" "$snap/db/"; done
-[ -f "$snap/db/core.db" ] && [ -f "$snap/bin/ainkrad-core-server" ] || { "$SYSTEMCTL" start ainkrad-core.service; fail "snapshot_failed"; }
+if [ "$kind" = core ]; then for f in "$HOMEDIR"/core.db "$HOMEDIR"/core.db-wal "$HOMEDIR"/core.db-shm; do [ -e "$f" ] && cp -p "$f" "$snap/db/"; done; fi
+{ [ "$kind" = runner ] || [ -f "$snap/db/core.db" ]; } && [ -f "$snap/bin/$vbin" ] || { [ "$kind" = runner ] || "$SYSTEMCTL" start "$svc"; fail "snapshot_failed"; }
 
 back() { # roll back to the snapshot and say why
   ev install "Went back to $cur"
   for b in $bins; do [ -e "$snap/bin/$b" ] && { cp -p "$snap/bin/$b" "$PREFIX/bin/.$b.rb" && mv -f "$PREFIX/bin/.$b.rb" "$PREFIX/bin/$b"; }; done
-  "$SYSTEMCTL" stop ainkrad-core.service
-  rm -f "$HOMEDIR"/core.db "$HOMEDIR"/core.db-wal "$HOMEDIR"/core.db-shm
-  cp -p "$snap/db/"* "$HOMEDIR/"
-  "$SYSTEMCTL" start ainkrad-core.service
+  "$SYSTEMCTL" stop "$svc"
+  if [ "$kind" = core ]; then rm -f "$HOMEDIR"/core.db "$HOMEDIR"/core.db-wal "$HOMEDIR"/core.db-shm; cp -p "$snap/db/"* "$HOMEDIR/"; fi
+  "$SYSTEMCTL" start "$svc"
   put rolled_back 1 "$1"; echo "update: rolled back ($1)" >&2; exit 1
 }
 
 # 4. install (install.sh re-verifies the signed sums and each file)
 ev install "Installed $new"; put install 0.5
 "$LIB/install.sh" --from "$url" --prefix "$PREFIX" --pubkey "$LIB/ainkrad-release.pub" >"$STATE/install.log" 2>&1 || back install_failed
-got=$("$PREFIX/bin/ainkrad-core-server" --version 2>/dev/null | awk '{print $NF}')
+got=$("$PREFIX/bin/$vbin" --version 2>/dev/null | awk '{print $NF}')
 [ "$got" = "$new" ] || back wrong_version
 
 # 5. health: active for 20 s and answering
 ev health "Health check"; put health 0.85
-"$SYSTEMCTL" start ainkrad-core.service || back start_failed
+if [ "$kind" = runner ]; then "$SYSTEMCTL" restart "$svc" || back start_failed; else "$SYSTEMCTL" start "$svc" || back start_failed; fi
 healthy() {
-  "$SYSTEMCTL" is-active --quiet ainkrad-core.service || return 1
+  "$SYSTEMCTL" is-active --quiet "$svc" || return 1
+  [ "$kind" = core ] || return 0   # a runner: active and staying active is the check (it has no health URL)
   local l=${AINKRAD_LISTEN:-}; [ -r /etc/ainkrad/core.env ] && l=$(sed -n 's/^AINKRAD_LISTEN=//p' /etc/ainkrad/core.env | tail -1)
   if [ -n "${HEALTH_URL:-}" ]; then curl -fsS --max-time 3 "$HEALTH_URL" 2>/dev/null | grep -qx ok; return; fi
   case $l in
@@ -100,7 +110,7 @@ healthy() {
 ok=0; for _ in $(seq 1 "${UPD_HEALTH_TRIES:-20}"); do if healthy; then ok=$((ok + 1)); else ok=0; fi; [ "$ok" -ge "${UPD_HEALTH_NEED:-5}" ] && break; sleep "${UPD_HEALTH_SLEEP:-3}"; done
 [ "$ok" -ge "${UPD_HEALTH_NEED:-5}" ] || back health_failed
 
-ev done "Core is on $new"; avail=''; put done 1
+if [ "$kind" = core ]; then lbl=Core; else lbl=Runner; fi; ev done "$lbl is on $new"; avail=''; put done 1
 # keep the two newest snapshots
 ls -1t "$STATE/snapshots" | tail -n +3 | while read -r d; do case $d in *[!0-9A-Za-z._-]* | '') ;; *) rm -rf "${STATE:?}/snapshots/$d" ;; esac; done
-echo "update: Core is on $new"
+echo "update: $kind is on $new"

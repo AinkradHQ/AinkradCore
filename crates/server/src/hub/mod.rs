@@ -488,6 +488,21 @@ impl Hub {
         self.send_command(runner, command)
     }
 
+    /// `runner.update` (E12-4): the Core's own idle-runner updater and `POST /runners/{id}/update`. The type admits nothing
+    /// else, and the runner only drops a request file: the root-side updater installs nothing the pinned key did not sign.
+    pub(crate) fn dispatch_runner_update(
+        self: &Arc<Self>,
+        runner: &str,
+        version: &str,
+    ) -> Result<Dispatched, StreamError> {
+        self.send_command(
+            runner,
+            Command::RunnerUpdate(ainkrad_proto::v2::RunnerUpdate {
+                version: version.to_owned(),
+            }),
+        )
+    }
+
     /// `port.open` (P6-01): the Host router's one command. The type admits nothing else; no elevation
     /// leaves here, because the public router has no caller to step up. The runner serves only an
     /// `expose: true` port of a live run (see `ainkrad_proto::v2::PortOpen`), and the router checks

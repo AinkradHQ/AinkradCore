@@ -209,6 +209,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "runner.policy_set",
     "runner.refused",
     "runner.tool_install",
+    "runner.update_requested",
     "terminal.attached",
     "terminal.closed",
     "terminal.detached",

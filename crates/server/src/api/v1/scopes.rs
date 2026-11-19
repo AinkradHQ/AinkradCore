@@ -88,6 +88,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/runners/{id}/noop", "agent"),
     ("PUT", "/api/v1/runners/{id}/policy", "admin"),
     ("POST", "/api/v1/runners/{id}/tools", "admin"),
+    ("POST", "/api/v1/runners/{id}/update", "admin"),
     ("GET", "/api/v1/runners/{id}/tools/operations/{op}", "read"),
     ("GET", "/api/v1/accounts", "read"),
     // Before `/accounts/{id}`: the first template that fits a path decides, and `usage` fits `{id}`.
@@ -283,6 +284,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     // A runner's policy decides what runs on that machine, and a tool install runs a root-side installer there.
     ("PUT", "/api/v1/runners/{id}/policy"),
     ("POST", "/api/v1/runners/{id}/tools"),
+    // Replaces the programs a runner runs on its host (signed releases only), like a tool install.
+    ("POST", "/api/v1/runners/{id}/update"),
     ("GET", "/api/v1/system/logs/runner"),
     ("GET", "/api/v1/system/logs/backup"),
     // Projects (P1-02): every write decides what the Core fetches and which repos a session gets.

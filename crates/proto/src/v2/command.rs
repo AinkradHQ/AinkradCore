@@ -110,6 +110,9 @@ pub enum Command {
     /// A TCP stream to an exposed port of a live run (P6-01); bytes are `output` frames.
     #[serde(rename = "port.open")]
     PortOpen(super::PortOpen),
+    /// E12-4 (after every older op: the schema-compat gate tells variants by position).
+    #[serde(rename = "runner.update")]
+    RunnerUpdate(super::RunnerUpdate),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -165,6 +168,7 @@ impl Command {
             Self::RunStatus(_) => super::OP_RUN_STATUS,
             Self::RunObserve(_) => super::OP_RUN_OBSERVE,
             Self::PortOpen(_) => super::OP_PORT_OPEN,
+            Self::RunnerUpdate(_) => super::OP_RUNNER_UPDATE,
             Self::Unknown => "unknown",
         }
     }
@@ -309,6 +313,9 @@ pub enum Reply {
     /// The last frame of `port.open`.
     #[serde(rename = "port.open")]
     PortOpen(super::PortClosed),
+    /// The answer to `runner.update` (E12-4).
+    #[serde(rename = "runner.update")]
+    RunnerUpdate(super::RunnerUpdateAccepted),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,
