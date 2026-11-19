@@ -29,6 +29,7 @@ mod ai_propose;
 mod ai_semantic;
 mod aliases;
 mod areas;
+mod auto_import;
 mod answer;
 mod answer_turns;
 mod auto_distil;
@@ -165,6 +166,7 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/rooms/{room}/redistil"),
 ];
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
+    ("POST", "/auto-imports/{run}/undo"),
     ("POST", "/imports"),
     ("POST", "/imports/{run}/items"),
     ("POST", "/imports/{run}/collected"),
@@ -240,6 +242,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/overview/progress", "read"),
     ("GET", "/activity", "read"),
     ("GET", "/areas", "read"),
+    ("GET", "/auto-imports", "read"),
     ("GET", "/areas/{area}", "read"),
     ("GET", "/rooms/{room}/access", "read"),
     // Code Mode (E4): a session acts as its creator without `admin`, so these name the scopes a
@@ -599,6 +602,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         activity::get,
         areas::summary,
         areas::records,
+        auto_import::list,
+        auto_import::undo,
         overview::instructions,
         policy::get,
         card::get,
@@ -625,6 +630,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         areas::AreaSummary,
         areas::AreaRecord,
         areas::AreaPage,
+        auto_import::AutoImport,
+        auto_import::Undone,
         imports::StartRun,
         imports::RunId,
         imports::Batch,
@@ -797,6 +804,8 @@ impl Module for Brain {
             .route("/activity", get(activity::get))
             .route("/areas", get(areas::summary))
             .route("/areas/{area}", get(areas::records))
+            .route("/auto-imports", get(auto_import::list))
+            .route("/auto-imports/{run}/undo", post(auto_import::undo))
             .route(
                 "/rooms/{room}/policy",
                 get(policy::get).patch(policy::patch),
@@ -930,6 +939,7 @@ impl Module for Brain {
             index::job(self),
             distil::job(self),
             auto_distil::job(self),
+            auto_import::job(self),
             overview::job(self),
             project_rooms::job(self),
             changes::job(self),

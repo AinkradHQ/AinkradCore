@@ -43,3 +43,34 @@ async fn records_land_in_one_area_each_and_a_closed_room_is_counted_not_read() {
     let (st, _) = call(&fx, &fx.admin, Method::GET, "/areas/places", None).await;
     assert_eq!(st.as_u16(), 404);
 }
+
+/// E9-5: a full run in review is accepted and imported by the Core; Undo archives its rooms.
+#[tokio::test]
+async fn the_core_accepts_a_sorted_import_by_itself_and_undo_archives_its_rooms() {
+    let fx = fx().await;
+    let run = start(&fx).await;
+    let items = (0..3)
+        .map(|i| item(i + 1, "/h/Projects/Auto/a", "Note", "auto room text"))
+        .collect();
+    send(&fx, &run, items).await;
+    let v = finish(&fx, &run).await;
+    assert_eq!(v["state"], "review", "{v}");
+    // The semantic step may still be pending: the step waits, so poll until it has made the room.
+    let mut made = 0;
+    for _ in 0..600 {
+        made = fx.brain.auto_import_step().await.unwrap();
+        if made > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(made > 0);
+    let l = ok(&fx, Method::GET, "/auto-imports", None).await;
+    assert_eq!(l[0]["run"], run, "{l}");
+    let u = ok(&fx, Method::POST, &format!("/auto-imports/{run}/undo"), None).await;
+    assert_eq!(u["rooms"], l[0]["rooms"], "{u}");
+    let l = ok(&fx, Method::GET, "/auto-imports", None).await;
+    assert_eq!(l.as_array().unwrap().len(), 0, "{l}");
+    let (st, _) = call(&fx, &fx.admin, Method::POST, "/auto-imports/nope/undo", None).await;
+    assert_eq!(st.as_u16(), 409);
+}
