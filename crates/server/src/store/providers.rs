@@ -200,6 +200,19 @@ pub fn built_in() -> Vec<Definition> {
     );
     opencode.delivery = vec!["env".to_owned()];
     opencode.login_methods = vec!["runner_login".to_owned()];
+    // An Antigravity sign-in (E7-5b): the login is stored in the runner's OS keyring through a guided
+    // terminal on that runner. Runner-bound. It is against Antigravity's terms for consumer plans;
+    // Ahmed accepted that risk on 2026-11-19 (plan D-20), and the app says so before it starts.
+    let mut agy = builtin(
+        "agy-sub",
+        "Antigravity subscription",
+        "agy",
+        "GEMINI_API_KEY",
+        "https://generativelanguage.googleapis.com",
+        "google",
+    );
+    agy.delivery = vec!["env".to_owned()];
+    agy.login_methods = vec!["runner_login".to_owned()];
     vec![
         builtin(
             "anthropic",
@@ -228,6 +241,7 @@ pub fn built_in() -> Vec<Definition> {
         sub,
         codex,
         opencode,
+        agy,
     ]
 }
 

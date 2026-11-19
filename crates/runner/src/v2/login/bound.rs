@@ -52,6 +52,7 @@ fn login_args(harness: &str) -> &'static [&'static str] {
     match harness {
         "codex" => &["login", "--device-auth"],
         "opencode" => &["auth", "login"],
+        // agy has no login subcommand: its first run asks to sign in (E7-5b, unverified per CLI version).
         _ => &[],
     }
 }
@@ -71,8 +72,27 @@ fn home_env(harness: &str, home: &Path) -> Vec<(String, String)> {
                 )
             })
             .collect(),
+        // agy reads `~/.gemini/...` and keeps its login in the runner user's OS keyring (E7-5b):
+        // HOME is the account's private home for its settings; the login itself is the runner's.
+        "agy" => vec![("HOME".to_owned(), d(home.to_owned()))],
         _ => vec![],
     }
+}
+
+/// Whether the CLI says, in so many words, that the sign-in worked. A TUI like agy's does not
+/// exit when it is signed in, so this is what ends its sign-in; nothing else counts.
+pub(super) fn signed_in(lines: &[String]) -> bool {
+    const SAID: [&str; 5] = [
+        "logged in as",
+        "signed in as",
+        "successfully signed in",
+        "successfully logged in",
+        "login successful",
+    ];
+    lines.iter().any(|l| {
+        let l = l.to_ascii_lowercase();
+        !l.contains("not ") && SAID.iter().any(|s| l.contains(s))
+    })
 }
 
 /// What the home needs before the CLI runs: Codex keeps its login in `auth.json`, never the OS
@@ -467,6 +487,13 @@ impl LoginDriver {
                     }
                     if Instant::now() >= deadline {
                         return End::Fail("the sign-in timed out".to_owned());
+                    }
+                    // A harness that stays up once signed in (agy) ends its sign-in on its own words.
+                    if harness == "agy"
+                        && last_out.elapsed() >= Duration::from_millis(1500)
+                        && signed_in(screen.done())
+                    {
+                        return End::Done;
                     }
                     if url_tx.is_some() && !guided && Instant::now() >= url_deadline {
                         return End::Fail(format!("{harness} showed no sign-in page in time"));

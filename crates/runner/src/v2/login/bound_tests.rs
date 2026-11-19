@@ -9,7 +9,7 @@ use ainkrad_proto::v2::{
     ErrorCode, LoginCancel, LoginInput, LoginScreenReq, LoginStart, LoginWait,
 };
 
-use super::bound::{BoundCli, find_device_code, find_page};
+use super::bound::{BoundCli, find_device_code, find_page, signed_in};
 use super::tests::Tmp;
 use super::{LoginConfig, LoginDriver};
 
@@ -289,4 +289,92 @@ async fn a_typed_line_is_one_printable_line_and_a_codex_sign_in_is_not_guided_by
         .await
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::InvalidArgs);
+}
+
+/// A stand-in `agy`: shows a page and wants the pasted code, then says it is signed in and stays up
+/// (a TUI does not exit). It records HOME so the test sees the account's home was used.
+fn agy_driver(t: &Tmp, said: &str) -> Arc<LoginDriver> {
+    let p = t.file("agy");
+    let body = format!(
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo 'agy 9.9.9'; exit 0; fi
+printf 'Sign in: https://accounts.google.com/o/oauth2/auth?x=1\r\nPaste code: '
+read -r pasted
+[ "$pasted" = "4/0TESTONLY-code" ] || exit 5
+printf '%s' "$HOME" > "$HOME/home-used"
+printf '\r\n{said}\r\n'
+sleep 30
+"#
+    );
+    std::fs::write(&p, body).unwrap();
+    let mut cfg = LoginConfig::new(t.file("logins"), PathBuf::from("/bin/false"));
+    cfg.bound = vec![BoundCli {
+        harness: "agy",
+        program: PathBuf::from("/bin/sh"),
+        args: vec![p.display().to_string()],
+        pinned: vec!["9.9.9".to_owned()],
+    }];
+    cfg.homes = t.file("homes");
+    cfg.grace = Duration::from_millis(100);
+    cfg.enter_delay = Duration::from_millis(20);
+    Arc::new(LoginDriver::new(cfg).unwrap())
+}
+
+#[tokio::test]
+async fn an_antigravity_sign_in_ends_when_the_cli_says_it_is_signed_in_and_keeps_its_home() {
+    let t = Tmp::new();
+    let d = agy_driver(&t, "Successfully signed in as someone@example.test");
+    let u = d
+        .start(LoginStart {
+            harness: "agy".to_owned(),
+            ..start("l_1", "lg_1")
+        })
+        .await
+        .unwrap();
+    // It paused at the code prompt, so the sign-in was handed over with the page.
+    assert_eq!(u.url, "https://accounts.google.com/o/oauth2/auth?x=1");
+    d.input(LoginInput {
+        login_id: "l_1".into(),
+        text: "4/0TESTONLY-code".into(),
+    })
+    .await
+    .unwrap();
+    let r = d.wait(wait("l_1")).await.unwrap();
+    assert!(r.done, "{:?}", r.error);
+    let home = t.file("homes").join("lg_1");
+    assert_eq!(
+        std::fs::read_to_string(home.join("home-used")).unwrap(),
+        home.display().to_string()
+    );
+}
+
+#[tokio::test]
+async fn a_wrong_code_does_not_count_and_the_words_must_say_signed_in() {
+    let t = Tmp::new();
+    let d = agy_driver(&t, "Sign in failed: you are not signed in");
+    d.start(LoginStart {
+        harness: "agy".to_owned(),
+        ..start("l_1", "lg_1")
+    })
+    .await
+    .unwrap();
+    d.input(LoginInput {
+        login_id: "l_1".into(),
+        text: "4/0TESTONLY-code".into(),
+    })
+    .await
+    .unwrap();
+    // "not signed in" is not a success: the sign-in is still open, and a cancel wipes the home.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    d.cancel(LoginCancel {
+        login_id: "l_1".into(),
+    })
+    .await
+    .unwrap();
+    assert!(!t.file("homes").join("lg_1").exists());
+    let l = |s: &str| vec![s.to_owned()];
+    assert!(signed_in(&l("Successfully signed in as a@b.test")));
+    assert!(signed_in(&l("Logged in as a@b.test")));
+    assert!(!signed_in(&l("You are not logged in as anyone")));
+    assert!(!signed_in(&l("Sign in to continue")));
 }
