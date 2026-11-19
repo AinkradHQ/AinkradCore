@@ -624,7 +624,8 @@ async fn an_unlock_only_route_needs_an_approval_even_when_listed_as_a_plain_writ
     ops(&fx, &[("createTerminal", Risk::Write)]);
     let s = session(&fx, &["read", "agent", "terminal"]).await;
     let approver = fx.enroll("approver", &["read", "agent", "approve"]).await;
-    let open = json!({"op": "createTerminal", "args": {"body": {"runner": s.runner}}});
+    let open = json!({"op": "createTerminal", "args": {"body": {
+        "runner": s.runner, "size": {"rows": 24, "cols": 80}}}});
 
     let h = spawn(&fx, &s, open.clone());
     let id = parked(&fx, &s).await;

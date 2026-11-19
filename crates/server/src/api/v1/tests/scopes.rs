@@ -79,11 +79,12 @@ async fn read_and_runner_devices_are_refused_what_their_scopes_do_not_allow() {
             "read {m} {uri}: {r:?}"
         );
         let r = send(&fx.app, as_(&fx.dev)).await;
-        // The bundled-runner attestation refuses any device that is not a macOS app that minted
-        // the runner's invite (forbidden_scope, by design), so the admin test device is refused.
-        if !uri.ends_with("/bundled") {
-            assert!(!refused(r.clone()), "admin {m} {uri}: {r:?}");
-        }
+        // The bundled attestation answers 403 from its handler to a device that is not the Mac app
+        // which enrolled the runner (E6).
+        assert!(
+            !refused(r.clone()) || uri.ends_with("/bundled"),
+            "admin {m} {uri}: {r:?}"
+        );
         admin_ops += usize::from(scope == "admin");
         checked += 1;
     }
