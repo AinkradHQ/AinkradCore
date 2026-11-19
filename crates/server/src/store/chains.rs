@@ -28,7 +28,7 @@ use sqlx::SqliteConnection;
 use sqlx::sqlite::SqlitePool;
 
 use super::secrets::Error;
-use super::{account_keys, costs, pools, prices, providers};
+use super::{account_keys, account_models, costs, pools, prices, providers};
 
 pub const MAX_CHAINS: i64 = 64;
 pub const MAX_ENTRIES: usize = 16;
@@ -176,6 +176,9 @@ pub(super) async fn check_entries(
         if let Some(m) = s.model {
             if !prices::valid_model(m) {
                 return refused("bad_request", "a model id is 1 to 80 of [A-Za-z0-9._:/-]");
+            }
+            if account_models::pool_refuses(conn, s.pool, m).await? {
+                return refused("bad_request", "the account has switched this model off");
             }
             // A built-in's or a preset's unlisted model runs at the flagged default price.
             if !subscription

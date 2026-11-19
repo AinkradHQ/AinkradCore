@@ -96,6 +96,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("DELETE", "/api/v1/accounts/logins/{id}", "admin"),
     ("GET", "/api/v1/accounts/{id}", "read"),
     ("GET", "/api/v1/accounts/{id}/models", "read"),
+    ("PUT", "/api/v1/accounts/{id}/models/{model}", "admin"),
     ("GET", "/api/v1/accounts/providers", "read"),
     ("POST", "/api/v1/accounts", "admin"),
     ("PUT", "/api/v1/accounts/{id}/secret", "admin"),
@@ -323,6 +324,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/accounts/{id}/secret"),
     ("PUT", "/api/v1/accounts/{id}/state"),
     ("PUT", "/api/v1/accounts/{id}/cap"),
+    // It decides which model a run may spend on.
+    ("PUT", "/api/v1/accounts/{id}/models/{model}"),
     // It raises what one session may spend (a test is not here: one fixed free request).
     ("PUT", "/api/v1/accounts/{id}/session-limits"),
     ("DELETE", "/api/v1/accounts/{id}"),

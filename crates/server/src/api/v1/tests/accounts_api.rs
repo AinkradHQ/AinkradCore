@@ -167,6 +167,11 @@ async fn every_write_needs_admin_and_a_step_up_and_a_phone_may_only_read() {
         (Method::PUT, "/api/v1/accounts/1/cap", json!({"cap": 8})),
         (
             Method::PUT,
+            "/api/v1/accounts/1/models/m",
+            json!({"allowed": false}),
+        ),
+        (
+            Method::PUT,
             "/api/v1/accounts/1/session-limits",
             json!({"max_tokens": 400_000}),
         ),

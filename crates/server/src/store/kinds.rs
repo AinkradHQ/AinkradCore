@@ -104,6 +104,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "account.login_cancelled",
     "account.login_failed",
     "account.login_started",
+    "account.model_allowed_set",
     "account.secret_replaced",
     "account.session_limits_set",
     "account.state_set",

@@ -280,18 +280,6 @@ pub struct AccountTested {
     pub models: Option<u32>,
 }
 
-/// What `GET /accounts/{id}/models` answers: the model ids the provider listed for the account.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AccountModels {
-    /// Exactly as the provider names them; empty until a list was read (a preset's add or check
-    /// through a runner). No price: an unpriced model runs at the flagged default price.
-    pub models: Vec<String>,
-    /// When the list was read; absent when none was.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(required = false)]
-    pub fetched_at: Option<Timestamp>,
-}
-
 /// What `POST /accounts/{id}/check` answers.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AccountChecked {
