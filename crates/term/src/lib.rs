@@ -300,6 +300,19 @@ impl Terminal {
         out.push_str(&screen.input_mode_formatted());
     }
 
+    /// The last `n` non-empty rows of the visible screen as plain text (no escapes), trailing
+    /// blanks trimmed: a preview of what the terminal shows now. An alt-screen app shows its own.
+    pub fn tail(&self, n: usize) -> Vec<String> {
+        let s = self.parser.screen();
+        let (_, cols) = s.size();
+        let mut rows: Vec<String> = s.rows(0, cols).map(|r| r.trim_end().to_owned()).collect();
+        while rows.last().is_some_and(String::is_empty) {
+            rows.pop();
+        }
+        let at = rows.len().saturating_sub(n);
+        rows.split_off(at)
+    }
+
     /// A stable text form of the state (size, cursor, modes, kept scrollback, visible rows with
     /// SGR shown as `\e`), for goldens and debugging. It leaves out `seq` and dropped-line counts,
     /// so a terminal rebuilt from a snapshot dumps the same as the original.

@@ -310,9 +310,14 @@ pub struct NewTerminal {
     /// session's folder, which the Core resolves: no `cwd`), or `real` (the runner's host view,
     /// allowed only to the Mac that owns a macOS runner, over that Mac's own device key). 400
     /// `bad_request` for a bad value or a `cwd` with a private mode, 403 `real_terminal_refused`
-    /// for `real` from anyone else, 409 `sandbox_unsupported` when the runner predates sandboxes.
+    /// for `real` from anyone else. 409 `runner_update_required` ("Update this runner to open
+    /// terminals") when the runner predates sandboxes: no terminal opens on it.
     #[schema(required = false)]
     pub sandbox: Option<String>,
+    /// With `sandbox: real` only: start the shell in this project's folder (a cwd on the runner,
+    /// not a mount). A sandbox names its project in `sandbox` (400 otherwise).
+    #[schema(required = false)]
+    pub project: Option<i64>,
 }
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct TerminalSignal {
@@ -895,6 +900,7 @@ pub async fn create(
         req.sandbox.as_deref(),
         req.session.as_deref(),
         req.cwd.as_deref(),
+        req.project,
     )
     .await
     {
@@ -1258,6 +1264,48 @@ pub async fn close(
         status: TerminalStatus::Reaped,
         ..before
     }))
+}
+#[derive(Debug, Deserialize)]
+pub struct TailQuery {
+    pub lines: Option<u16>,
+}
+/// The last rows of a terminal's screen.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TerminalTailView {
+    /// Plain text, oldest first; empty when the terminal is not running.
+    pub lines: Vec<String>,
+}
+#[utoipa::path(get,path="/api/v1/terminals/{id}/tail",operation_id="tailTerminal",tag="terminals",params(("id"=String,Path),("lines"=Option<u16>,Query,description="1 to 20, default 5")),responses((status=200,description="The last rows of the screen as text, for a live preview. The terminal scope and the caller's own terminal; no step-up",body=TerminalTailView)))]
+pub async fn tail(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    Query(q): Query<TailQuery>,
+) -> ApiResult<TerminalTailView> {
+    let t = owned_row(&app, &id, &me.device.id).await?;
+    if t.status != TerminalStatus::Running {
+        return Ok(Json(TerminalTailView { lines: Vec::new() }));
+    }
+    let lines = q.lines.unwrap_or(5).clamp(1, 20);
+    let d = app
+        .hub
+        .dispatch_elevated(
+            &t.runner,
+            Command::PtyTail(ainkrad_proto::v2::PtyTail {
+                terminal: id,
+                lines,
+            }),
+            app.hub.tail_elevation(),
+        )
+        .map_err(|e| failed(&e))?;
+    match tokio::time::timeout(Duration::from_secs(3), d.outcome()).await {
+        Ok(Ok(Body::Result(Reply::PtyTail(x)))) => Ok(Json(TerminalTailView { lines: x.lines })),
+        _ => Err(ApiError::new(
+            axum::http::StatusCode::BAD_GATEWAY,
+            "terminal_failed",
+            "the runner did not answer",
+        )),
+    }
 }
 #[utoipa::path(post,path="/api/v1/terminals/{id}/signal",operation_id="signalTerminal",tag="terminals",request_body=TerminalSignal,params(("id"=String,Path)),responses((status=204,description="The signal was delivered")))]
 pub async fn signal(

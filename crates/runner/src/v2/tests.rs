@@ -1366,7 +1366,15 @@ mod pty {
         let dir = tmp();
         let (mut core, hello) = Core::start_pty(driver(&dir, true)).await;
         let pty = hello.drivers.iter().find(|d| d.name == "pty").unwrap();
-        assert_eq!(pty.commands, [OP_PTY_OPEN, OP_PTY_ATTACH, OP_PTY_CLOSE]);
+        assert_eq!(
+            pty.commands,
+            [
+                OP_PTY_OPEN,
+                OP_PTY_ATTACH,
+                OP_PTY_CLOSE,
+                ainkrad_proto::v2::OP_PTY_TAIL
+            ]
+        );
         core.send(1, open("echo UP; while read l; do echo \"got $l\"; done"))
             .await;
         let mut out = String::new();

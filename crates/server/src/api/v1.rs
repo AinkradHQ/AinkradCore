@@ -79,6 +79,7 @@ pub const BY: AuditActor = AuditActor::User(ADMIN);
 
 /// Query parameter names any `/api/v1` route may take; nothing else is let through.
 pub const QUERY: &[&str] = &[
+    "lines",
     "after",
     "limit",
     "before",
@@ -234,6 +235,7 @@ pub fn router(app: App) -> Router {
             get(terminals::get).delete(terminals::close),
         )
         .route("/api/v1/terminals/{id}/signal", post(terminals::signal))
+        .route("/api/v1/terminals/{id}/tail", get(terminals::tail))
         .route("/api/v1/terminals/{id}/ws", get(terminals::attach))
         .route(
             "/api/v1/terminals/{id}/local",

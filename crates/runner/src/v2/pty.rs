@@ -329,9 +329,14 @@ impl PtyDriver {
     pub fn info(&self) -> Option<DriverInfo> {
         self.config.enabled.then(|| DriverInfo {
             name: DRIVER_PTY.to_owned(),
-            commands: [OP_PTY_OPEN, OP_PTY_ATTACH, OP_PTY_CLOSE]
-                .map(str::to_owned)
-                .to_vec(),
+            commands: [
+                OP_PTY_OPEN,
+                OP_PTY_ATTACH,
+                OP_PTY_CLOSE,
+                ainkrad_proto::v2::OP_PTY_TAIL,
+            ]
+            .map(str::to_owned)
+            .to_vec(),
             capacity: self.config.capacity,
             // Tells the Core this runner honours `PtyOpen::sandbox` (an older one would ignore
             // the field and start a host-view shell, so the Core sends it only when this is here).
@@ -501,8 +506,10 @@ impl PtyDriver {
             // Only the sandbox can change a shell's network: never start one on the host's.
             return Err(invalid("a terminal network needs the terminal sandbox"));
         }
+        let id = new_id().map_err(|e| err(ErrorCode::Internal, e.to_string()))?;
         if private {
-            self.private_shell(mode.as_ref().expect("private"), req, &mut spec)
+            self.reap_scratch().await;
+            self.private_shell(mode.as_ref().expect("private"), req, &mut spec, &id)
                 .map_err(|m| invalid(&m))?;
         } else if self.config.hide.is_some() || self.config.user.is_some() {
             // The shell the host would start by default is named here, so the wrapper can run it.
@@ -573,7 +580,6 @@ impl PtyDriver {
             spec.args = args;
             spec.cwd.get_or_insert(cwd);
         }
-        let id = new_id().map_err(|e| err(ErrorCode::Internal, e.to_string()))?;
         // The network this shell gets, recorded before it starts: the host process outlives the
         // runner, and a later runner must know what an adopted shell was given (`retire_weaker`).
         // Host mode writes nothing: no record means the host network.
@@ -600,6 +606,21 @@ impl PtyDriver {
         Ok(id)
     }
 
+    /// Removes the scratch directories (`<home>/.tmp/<terminal>`, macOS) of terminals that are gone:
+    /// not a live host, and older than a minute (an open still starting has none yet).
+    async fn reap_scratch(&self) {
+        let Some(base) = self.config.sandbox_dir.clone() else {
+            return;
+        };
+        let live: std::collections::HashSet<String> = scan(&self.config.dir)
+            .await
+            .iter()
+            .map(|h| h.id.clone())
+            .collect();
+        let _ =
+            tokio::task::spawn_blocking(move || super::termbox::reap_scratch(&base, &live)).await;
+    }
+
     /// Starts `spec` in a private root (D-17, `termbox::wrap_private`): the user's persistent home,
     /// plus the session's or project's folder when `mode` names one. Fails closed.
     fn private_shell(
@@ -607,6 +628,7 @@ impl PtyDriver {
         mode: &ainkrad_proto::v2::SandboxMode,
         req: &PtyOpen,
         spec: &mut Spec,
+        id: &str,
     ) -> Result<(), String> {
         use super::termbox as tb;
         use ainkrad_proto::v2::SandboxMode as M;
@@ -616,7 +638,14 @@ impl PtyDriver {
             .as_deref()
             .ok_or("this runner has no sandbox directory")?;
         if self.config.user.is_some() {
-            return Err("a private-root terminal cannot run under --terminal-user".to_owned());
+            // The sandbox home is made by the runner's own user, and a shell run as another account
+            // could not write it; making it that account's would need root (or a sudoers rule for
+            // mkdir and chown that no installer grants). Refused, with the way out.
+            return Err(
+                "private terminals need shells that run as the runner's own user: \
+                        start the runner without --terminal-user"
+                    .to_owned(),
+            );
         }
         let user = req
             .sandbox_user
@@ -667,6 +696,7 @@ impl PtyDriver {
             &program,
             &spec.args,
             &self.config.net,
+            id,
         )?;
         spec.env.extend(b.env);
         spec.program = Some(b.launcher);
@@ -816,6 +846,40 @@ impl PtyDriver {
         Ok((info, rd, wr))
     }
 
+    /// The last `lines` rows of `terminal`'s screen as text (`pty.tail`): one short connection to
+    /// its host, nothing attached, nothing recorded. An older host never answers: `lost`.
+    pub async fn tail(
+        &self,
+        terminal: &str,
+        lines: u16,
+    ) -> Result<ainkrad_proto::v2::TerminalTail, StreamError> {
+        self.enabled()?;
+        if !(1..=20).contains(&lines) {
+            return Err(err(ErrorCode::InvalidArgs, "lines must be 1 to 20"));
+        }
+        let (_, mut rd, mut wr) = self.connect(terminal).await?;
+        let lost = |e: std::io::Error| err(ErrorCode::Internal, e.to_string());
+        wr.send(&ToHost::Tail { lines }).await.map_err(lost)?;
+        let wait = async {
+            loop {
+                match rd.recv().await {
+                    Ok(Some(FromHost::Tail { lines })) => return Some(lines),
+                    Ok(Some(_)) => {}
+                    _ => return None,
+                }
+            }
+        };
+        match tokio::time::timeout(Duration::from_secs(2), wait).await {
+            Ok(Some(lines)) => Ok(ainkrad_proto::v2::TerminalTail {
+                lines: lines
+                    .into_iter()
+                    .map(|l| l.chars().take(400).collect())
+                    .collect(),
+            }),
+            _ => Err(err(ErrorCode::Lost, "the terminal host did not answer")),
+        }
+    }
+
     /// Hangs `terminal` up and answers its exit once the host reports it.
     pub async fn close(&self, terminal: &str) -> Result<TerminalExit, StreamError> {
         self.enabled()?;
@@ -842,6 +906,7 @@ impl PtyDriver {
                         while let Ok(Some(_)) = rd.recv().await {}
                     })
                     .await;
+                    self.reap_scratch().await;
                     return Ok(exit_of(terminal, &exit));
                 }
                 Some(_) => {}

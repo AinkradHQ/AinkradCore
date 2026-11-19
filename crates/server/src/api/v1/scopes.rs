@@ -225,6 +225,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/terminals/{id}/local", "terminal"),
     ("DELETE", "/api/v1/terminals/{id}/local", "terminal"),
     ("POST", "/api/v1/terminals/{id}/signal", "terminal"),
+    // A preview of the screen's last rows: normal unlock and the terminal scope, no step-up.
+    ("GET", "/api/v1/terminals/{id}/tail", "terminal"),
     ("DELETE", "/api/v1/terminals/{id}", "terminal"),
     ("GET", "/api/v1/agent-sessions", "agent"),
     ("POST", "/api/v1/agent-sessions", "agent"),

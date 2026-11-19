@@ -674,7 +674,15 @@ pub fn wrap_private(
     program: &str,
     args: &[String],
     net: &Net,
+    terminal: &str,
 ) -> Result<Boxed, String> {
+    if terminal.is_empty()
+        || !terminal
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+    {
+        return Err("a terminal id is letters, digits, _ and -".to_owned());
+    }
     if !program.starts_with('/') || program.contains("/../") || program.ends_with("/..") {
         return Err("a terminal program must be an absolute path".to_owned());
     }
@@ -689,7 +697,7 @@ pub fn wrap_private(
         if matches!(net, Net::Filtered { .. }) {
             return Err("a filtered terminal network is Linux only".to_owned());
         }
-        let tmp = home.join(".tmp").join(fresh());
+        let tmp = home.join(".tmp").join(terminal);
         {
             use std::os::unix::fs::DirBuilderExt;
             std::fs::DirBuilder::new()
@@ -818,19 +826,27 @@ pub fn wrap_private(
     })
 }
 
-/// A name for a per-terminal scratch directory (macOS `TMPDIR`), unique per call.
-// ponytail: scratch dirs under <home>/.tmp are not reaped; sweep them at runner start if they pile up.
-fn fresh() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(0);
-    let t = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    format!(
-        "{}-{t:x}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    )
+/// Removes every `<base>/<user>/.tmp/<terminal>` whose terminal is not in `live` and that has not
+/// been touched for a minute (a terminal still starting has no host yet). Never follows a link.
+pub fn reap_scratch(base: &Path, live: &std::collections::HashSet<String>) {
+    let old = |p: &Path| {
+        std::fs::symlink_metadata(p)
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| {
+                t.elapsed()
+                    .is_ok_and(|e| e > std::time::Duration::from_secs(60))
+            })
+    };
+    for user in std::fs::read_dir(base).into_iter().flatten().flatten() {
+        let tmp = user.path().join(".tmp");
+        for d in std::fs::read_dir(&tmp).into_iter().flatten().flatten() {
+            let (p, name) = (d.path(), d.file_name().to_string_lossy().into_owned());
+            let is_dir = d.file_type().is_ok_and(|t| t.is_dir());
+            if is_dir && !live.contains(&name) && old(&p) {
+                let _ = std::fs::remove_dir_all(&p);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

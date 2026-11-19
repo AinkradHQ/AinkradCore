@@ -103,7 +103,8 @@ fn only_the_home_and_the_named_folder_are_writable() {
     let home = sandbox_home(&base.join("sb"), "u").unwrap();
     let folder = base.join("proj");
     std::fs::create_dir_all(&folder).unwrap();
-    let go = |f: Option<&Path>| wrap_private(&home, f, "/bin/sh", &["-i".to_owned()], &Net::Host);
+    let go =
+        |f: Option<&Path>| wrap_private(&home, f, "/bin/sh", &["-i".to_owned()], &Net::Host, "t_1");
     assert!(go(None).is_ok());
     let b = go(Some(&folder)).unwrap();
     assert_eq!(b.cwd, folder.to_string_lossy());
@@ -131,7 +132,7 @@ fn only_the_home_and_the_named_folder_are_writable() {
     // A program outside the provided system directories, or an option, is refused.
     for bad in ["/tmp/evil", "/Users/x/sh", "-f", "sh", "/usr/../tmp/x"] {
         assert!(
-            wrap_private(&home, None, bad, &[], &Net::Host).is_err(),
+            wrap_private(&home, None, bad, &[], &Net::Host, "t_1").is_err(),
             "{bad}"
         );
     }
@@ -162,6 +163,7 @@ fn seatbelt_denies_everything_but_the_home_and_the_folder() {
             "/bin/sh",
             &["-c".to_owned(), script],
             &Net::Host,
+            "t_real",
         )
         .unwrap();
         let o = Command::new(&b.launcher)
@@ -196,5 +198,42 @@ fn seatbelt_denies_everything_but_the_home_and_the_folder() {
         assert!(out.contains(want), "{want} missing in {out}");
     }
     assert!(!out.contains("secret") && !out.contains("no\n"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// E6 gap: a terminal's scratch directory goes with it. Gone and old: removed; still live, or
+/// younger than a minute (an open still starting), or a plain file: kept.
+#[test]
+fn scratch_of_gone_terminals_is_reaped() {
+    let base = tmp("reap");
+    let home = sandbox_home(&base.join("sb"), "u").unwrap();
+    let t = home.join(".tmp");
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for n in ["gone", "live", "young"] {
+        std::fs::create_dir_all(t.join(n)).unwrap();
+        std::fs::write(t.join(n).join("f"), "x").unwrap();
+        if n != "young" {
+            std::fs::File::open(t.join(n))
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+    }
+    std::fs::write(t.join("file"), "x").unwrap();
+    let live = std::collections::HashSet::from(["live".to_owned()]);
+    reap_scratch(&base.join("sb"), &live);
+    assert!(!t.join("gone").exists());
+    assert!(t.join("live").exists() && t.join("young").exists() && t.join("file").exists());
+    // The directory a terminal is given is named after it.
+    #[cfg(target_os = "macos")]
+    {
+        let b = wrap_private(&home, None, "/bin/sh", &[], &Net::Host, "t_9").unwrap();
+        assert!(
+            b.env
+                .iter()
+                .any(|(k, v)| k == "TMPDIR" && v.ends_with(".tmp/t_9"))
+        );
+    }
+    assert!(wrap_private(&home, None, "/bin/sh", &[], &Net::Host, "../x").is_err());
     let _ = std::fs::remove_dir_all(&base);
 }

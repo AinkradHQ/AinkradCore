@@ -4,13 +4,16 @@
 //! session's folder is added only when the caller asks for that mode and may see it. `real` (the
 //! runner's own host view) is allowed to exactly one caller: the Mac that owns a macOS runner.
 //!
-//! **How the Core proves "this Mac, from this Mac's app".** Every request is signed by a paired
-//! device key (Secure Enclave on a Mac), so `me.device` is the app. The runner is "this Mac's"
-//! when the pairing that enrolled it (`core_pairings.created_by`, the device that made the invite
-//! the bundled runner redeemed) is that same device, the runner's hello says it runs on macOS, and
-//! the caller is a `device` on macOS holding the `terminal` scope. A Core-local runner (enrolled on
-//! the host socket, no creator), a Linux or Windows runner, and a runner another device paired
-//! all fail. The mode is never a default: the app must ask for `real`.
+//! **How the Core proves "this Mac's bundled runner, from this Mac's app".** Every request is
+//! signed by a paired device key (Secure Enclave on a Mac), so `me.device` is the app. The runner
+//! is the bundled one when the invite it redeemed was minted by that same app device with
+//! `bundled: true` (`core_pairings.bundled`, set only for a macOS app device and a `runner`
+//! invite). The app mints that invite for the runner inside its own bundle and passes it to that
+//! process over stdin; it is never displayed, so a runner on another machine (even one this same
+//! Mac paired through the Add-runner wizard, which mints an ordinary invite) cannot hold one. On
+//! top of that, the runner's hello must say macOS and the caller must be a macOS `device` with the
+//! `terminal` scope. A Core-local runner (no creator), Linux, and a runner another device or the
+//! wizard paired all fail. The mode is never a default: the app must ask for `real`.
 
 use super::*;
 use ainkrad_proto::v2::{SandboxMode, valid_sandbox_user};
@@ -33,6 +36,7 @@ fn refused(why: &str) -> ApiError {
 /// The rule for `real`, apart from the database: `owner` is the device that enrolled the runner.
 pub(super) fn real_ok(
     owner: Option<&str>,
+    bundled: bool,
     me: &gov::Device,
     runner_os: Option<&str>,
 ) -> Result<(), &'static str> {
@@ -47,22 +51,23 @@ pub(super) fn real_ok(
         return Err("a real shell is only for a macOS runner");
     }
     match owner {
-        Some(o) if o == me.id => Ok(()),
+        Some(o) if o == me.id && bundled => Ok(()),
+        Some(o) if o == me.id => Err("this runner is not the one bundled with this Mac's app"),
         _ => Err("this runner was not enrolled by this Mac"),
     }
 }
 
 async fn real(app: &App, me: &Caller, runner: &str) -> Result<(), ApiError> {
-    let owner: Option<String> = sqlx::query_scalar(
-        "SELECT created_by FROM core_pairings WHERE kind = 'runner' AND device_id = ? \
+    let (owner, bundled): (Option<String>, i64) = sqlx::query_as(
+        "SELECT created_by, bundled FROM core_pairings WHERE kind = 'runner' AND device_id = ? \
          AND status = 'approved'",
     )
     .bind(runner)
     .fetch_optional(&app.pool)
     .await?
-    .flatten();
+    .unwrap_or((None, 0));
     let os = app.hub.runners().get(runner).and_then(|r| r.os.clone());
-    real_ok(owner.as_deref(), &me.device, os.as_deref()).map_err(refused)
+    real_ok(owner.as_deref(), bundled == 1, &me.device, os.as_deref()).map_err(refused)
 }
 
 /// The newest live session of project `id` on `runner`: the folder a project terminal mounts.
@@ -101,7 +106,17 @@ pub(super) async fn plan(
     sandbox: Option<&str>,
     session: Option<&str>,
     cwd: Option<&str>,
+    project: Option<i64>,
 ) -> Result<Plan, ApiError> {
+    // A runner that predates sandboxes would ignore the fields and start a host-view shell: no
+    // terminal opens on it, whatever was asked (E12 updates runners on its own).
+    if !runner_supports(app, runner) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "runner_update_required",
+            "Update this runner to open terminals",
+        ));
+    }
     let default;
     let want = match (sandbox, session) {
         (Some(s), _) => s,
@@ -114,7 +129,27 @@ pub(super) async fn plan(
     let mode = SandboxMode::parse(want).map_err(|m| ApiError::bad_request(&m))?;
     if mode == SandboxMode::Real {
         real(app, me, runner).await?;
-        // The host view as before: a folder by path, or a session's.
+        // The host view: a project's folder (a cwd, not a mount: the runner lets the shell into
+        // that session folder), a session's, or a path.
+        if let Some(p) = project {
+            if session.is_some() || cwd.is_some() {
+                return Err(ApiError::bad_request(
+                    "give a project, a session or a cwd, not two",
+                ));
+            }
+            let mut c = app.pool.acquire().await?;
+            crate::store::projects::get(&mut c, p)
+                .await
+                .map_err(|_| ApiError::not_found("no such project"))?;
+            drop(c);
+            let sid = project_session(app, runner, p).await?;
+            return Ok(Plan {
+                sandbox: Some("real".into()),
+                user: None,
+                cwd: Some(super::super::agents::terminal_folder(app, me, runner, &sid).await?),
+                session: Some(sid),
+            });
+        }
         return match (session, cwd) {
             (Some(id), None) => Ok(Plan {
                 sandbox: Some("real".into()),
@@ -130,6 +165,11 @@ pub(super) async fn plan(
                 session: None,
             }),
         };
+    }
+    if project.is_some() {
+        return Err(ApiError::bad_request(
+            "project is for a real shell; a sandbox names it in `sandbox`",
+        ));
     }
     if cwd.is_some() {
         return Err(ApiError::bad_request(
@@ -162,13 +202,6 @@ pub(super) async fn plan(
         Some(id) => Some(super::super::agents::terminal_folder(app, me, runner, &id).await?),
         None => None,
     };
-    if !runner_supports(app, runner) {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "sandbox_unsupported",
-            "this runner predates terminal sandboxes; update it",
-        ));
-    }
     let uid: i64 = sqlx::query_scalar("SELECT user_id FROM core_devices WHERE id = ?")
         .bind(&me.device.id)
         .fetch_one(&app.pool)
@@ -211,12 +244,14 @@ mod tests {
     #[test]
     fn a_real_shell_needs_every_link_of_the_proof() {
         let me = dev("device", Some("macos"), &["terminal"]);
-        assert!(real_ok(Some("d_me"), &me, Some("macos")).is_ok());
+        assert!(real_ok(Some("d_me"), true, &me, Some("macos")).is_ok());
+        // A remote Mac runner this same Mac paired through the wizard (not bundled).
+        assert!(real_ok(Some("d_me"), false, &me, Some("macos")).is_err());
         // Another device's runner, a Core-local runner (no creator), a Linux runner.
-        assert!(real_ok(Some("d_other"), &me, Some("macos")).is_err());
-        assert!(real_ok(None, &me, Some("macos")).is_err());
-        assert!(real_ok(Some("d_me"), &me, Some("linux")).is_err());
-        assert!(real_ok(Some("d_me"), &me, None).is_err());
+        assert!(real_ok(Some("d_other"), true, &me, Some("macos")).is_err());
+        assert!(real_ok(None, true, &me, Some("macos")).is_err());
+        assert!(real_ok(Some("d_me"), true, &me, Some("linux")).is_err());
+        assert!(real_ok(Some("d_me"), true, &me, None).is_err());
         // Not the Mac app: a runner, a passkey (browser), an iPhone, no terminal scope.
         for bad in [
             dev("runner", Some("macos"), &["terminal"]),
@@ -226,7 +261,7 @@ mod tests {
             dev("device", Some("macos"), &["agent"]),
         ] {
             assert!(
-                real_ok(Some("d_me"), &bad, Some("macos")).is_err(),
+                real_ok(Some("d_me"), true, &bad, Some("macos")).is_err(),
                 "{bad:?}"
             );
         }
