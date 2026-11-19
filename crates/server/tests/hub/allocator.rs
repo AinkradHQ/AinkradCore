@@ -373,9 +373,10 @@ async fn a_refusal_that_is_not_about_the_account_ends_the_session_and_never_move
     )
     .await
     .unwrap();
-    // The entry's model has no price: every account of it would be refused alike.
+    // The entry's model id is not a valid one (a built-in provider prices any valid id at the
+    // flagged default), so every account of it is refused alike.
     let mut chain = [pool_of(&core, &runner, &[a.id, b.id]).await];
-    chain[0].model = Some("no-such-model".to_owned());
+    chain[0].model = Some("no such model".to_owned());
     let session = picked_row(&core, &runner, &chain, &a).await;
     until("the end", &core, &session, |s| !s.live()).await;
     let (account, tried): (i64, String) =
