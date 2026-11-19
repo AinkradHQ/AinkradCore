@@ -522,6 +522,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             user: terminal_user.clone(),
             net: net.clone(),
             sessions: Some(state.0.join("agents")),
+            sandbox_dir: Some(state.0.join("sandbox")),
             ..super::PtyConfig::new(state.0.join("terminals"))
         }));
         d.spawn_budget_loop();

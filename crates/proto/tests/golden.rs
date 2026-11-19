@@ -380,6 +380,8 @@ fn v2_terminal_frames_are_pinned() {
             scrollback_bytes: None,
             scrollback_budget: None,
             ssh: None,
+            sandbox: None,
+            sandbox_user: None,
         })),
     );
     t(

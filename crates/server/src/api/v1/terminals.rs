@@ -1012,6 +1012,8 @@ async fn open(
                 scrollback_bytes: u64::try_from(scrollback.0).ok(),
                 scrollback_budget: u64::try_from(scrollback.1).ok(),
                 ssh: spec.ssh,
+                sandbox: None,
+                sandbox_user: None,
             }),
             app.hub.terminal_elevation(me),
         )
