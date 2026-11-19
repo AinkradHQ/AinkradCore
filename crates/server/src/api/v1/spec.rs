@@ -32,7 +32,7 @@ use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
-    accounts, agents, audit, budgets, chains, connections, corehealth, costs, devices, events,
+    accounts, agents, audit, budgets, chains, connections, corehealth, coreprefs, costs, devices, events,
     handshake, lockouts, me, pair, pairing, passkey, projects, projects_github, runner_control,
     runners, secret_groups, secrets, session, settings, stepup, system, terminals, ticket, types,
     websession,
@@ -74,6 +74,10 @@ use super::{
         audit::list,
         system::host,
         corehealth::get,
+        coreprefs::get,
+        coreprefs::put,
+        coreprefs::storage,
+        coreprefs::check_update,
         system::restart,
         system::logs_core,
         system::logs_helper,
