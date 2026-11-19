@@ -67,7 +67,7 @@ async fn a_step_up_elevates_the_session_for_destructive_routes_then_lapses() {
     );
     let (s, b) = step_up(&fx, &mac).await;
     assert_eq!(s, StatusCode::OK, "{b}");
-    let until = crate::scheduler::iso_of_unix(fx.clock.unix() + 300);
+    let until = crate::scheduler::iso_of_unix(fx.clock.unix() + 60);
     assert_eq!(b["elevated_until"], json!(super::super::types::ts(&until)));
     assert_eq!(rename(&fx, &mac, "Mac").await.0, StatusCode::OK);
     let audited: i64 = sqlx::query_scalar(
@@ -83,13 +83,13 @@ async fn a_step_up_elevates_the_session_for_destructive_routes_then_lapses() {
     fx.clock.advance(200);
     fx.ok("/api/v1/me").await;
     let (_, b) = step_up(&fx, &mac).await;
-    let until = crate::scheduler::iso_of_unix(fx.clock.unix() + 300);
+    let until = crate::scheduler::iso_of_unix(fx.clock.unix() + 60);
     assert_eq!(b["elevated_until"], json!(super::super::types::ts(&until)));
     // A refreshed session carries it over, not extended (§6.2).
     let s = fx.app.auth.issue_session(&mac.id, fx.clock.unix() + 10);
-    assert_eq!(s.elevated_until, Some(fx.clock.unix() + 300));
+    assert_eq!(s.elevated_until, Some(fx.clock.unix() + 60));
     // §17.12: past it, refused again.
-    fx.clock.advance(300);
+    fx.clock.advance(60);
     assert_eq!(
         code(&rename(&fx, &mac, "Mac").await),
         forbidden("step_up_required")
@@ -357,8 +357,16 @@ async fn pairing_enrols_a_second_key_never_the_routine_key_twice() {
 
 /// E2-01, spec §17.11/§17.12: opening or attaching a terminal needs `terminal` and a live
 /// elevation; `read` may only list; an expired elevation is refused again.
+/// The app unlock (E1-1): one proof with `purpose: session`, held by heartbeat, ended by the client.
+pub(super) async fn unlock(fx: &Fx, dev: &TestDevice) -> (StatusCode, Value) {
+    let c = challenge(fx, dev).await;
+    let mut body = dev.stepup_body(&c);
+    body["purpose"] = json!("session");
+    post(fx, dev, "/api/v1/auth/step-up", body).await
+}
+
 #[tokio::test]
-async fn terminals_need_their_scope_and_a_live_step_up() {
+async fn terminals_need_their_scope_and_the_app_unlock_not_a_step_up() {
     let fx = fx().await;
     let open = json!({"runner": "d_00000000000000000000000000", "size": {"rows": 24, "cols": 80}});
     let attach = |dev| {
@@ -384,20 +392,89 @@ async fn terminals_need_their_scope_and_a_live_step_up() {
     let mac = plain(&fx, "mac", &["read", "terminal"], true).await;
     assert_eq!(
         code(&post(&fx, &mac, "/api/v1/terminals", open.clone()).await),
-        forbidden("step_up_required")
+        forbidden("unlock_required")
     );
     assert_eq!(
         code(&send(&fx.app, attach(&mac)).await),
-        forbidden("step_up_required")
+        forbidden("unlock_required")
     );
+    // A per-action step-up is not the unlock.
     step_up(&fx, &mac).await;
+    assert_eq!(
+        code(&post(&fx, &mac, "/api/v1/terminals", open.clone()).await),
+        forbidden("unlock_required")
+    );
+    assert_eq!(unlock(&fx, &mac).await.0, StatusCode::OK);
     // Past the gate: the terminal service validates the runner before dispatch.
     let r = post(&fx, &mac, "/api/v1/terminals", open.clone()).await;
     assert_eq!(r.0, StatusCode::NOT_FOUND, "{r:?}");
-    fx.clock.advance(301);
+    // No time cap (D-5): over an hour on, with a beat inside every 90 s, it still holds.
+    for _ in 0..50 {
+        fx.clock.advance(80);
+        assert_eq!(
+            post(&fx, &mac, "/api/v1/auth/unlock/beat", json!({})).await.0,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        post(&fx, &mac, "/api/v1/terminals", open.clone()).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn the_unlock_survives_a_renewed_session_and_ends_on_end_lapse_or_restart() {
+    let mut fx = fx().await;
+    let open = json!({"runner": "d_00000000000000000000000000", "size": {"rows": 24, "cols": 80}});
+    let mac = plain(&fx, "mac", &["read", "terminal"], true).await;
+    let (s, b) = unlock(&fx, &mac).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert!(b["unlocked_until"].is_string() && b["elevated_until"].is_null(), "{b}");
+    // A session renewed every 15 minutes is still unlocked: the unlock is the device's.
+    let s = fx.app.auth.issue_session(&mac.id, fx.clock.unix());
+    mac.set_session(Some(s.id));
+    assert_eq!(
+        post(&fx, &mac, "/api/v1/terminals", open.clone()).await.0,
+        StatusCode::NOT_FOUND
+    );
+    // The client ends it (the Mac locked, slept, or the app quit): refused at once, and a beat
+    // cannot bring it back.
+    assert_eq!(post(&fx, &mac, "/api/v1/auth/unlock/end", json!({})).await.0, StatusCode::OK);
+    assert_eq!(
+        code(&post(&fx, &mac, "/api/v1/terminals", open.clone()).await),
+        forbidden("unlock_required")
+    );
+    assert_eq!(
+        code(&post(&fx, &mac, "/api/v1/auth/unlock/beat", json!({})).await),
+        forbidden("unlock_required")
+    );
+    // No heartbeat for 90 s: it lapses.
+    unlock(&fx, &mac).await;
+    fx.clock.advance(crate::auth::UNLOCK_BEAT_SECS);
+    assert_eq!(
+        code(&post(&fx, &mac, "/api/v1/terminals", open.clone()).await),
+        forbidden("unlock_required")
+    );
+    // A restart forgets it: the app signs again.
+    unlock(&fx, &mac).await;
+    fx.restart();
+    let s = fx.app.auth.issue_session(&mac.id, fx.clock.unix());
+    mac.set_session(Some(s.id));
     assert_eq!(
         code(&post(&fx, &mac, "/api/v1/terminals", open).await),
-        forbidden("step_up_required")
+        forbidden("unlock_required")
+    );
+}
+
+#[tokio::test]
+async fn the_unlock_does_not_open_the_danger_list() {
+    let fx = fx().await;
+    let mac = plain(&fx, "mac", &ALL, true).await;
+    unlock(&fx, &mac).await;
+    assert_eq!(
+        code(&rename(&fx, &mac, "Mac").await),
+        forbidden("step_up_required"),
+        "danger still asks for a fresh step-up"
     );
 }
 

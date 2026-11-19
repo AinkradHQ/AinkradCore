@@ -37,7 +37,7 @@ async fn a_refused_cancel_settles_nothing_and_an_owners_cancel_of_the_old_attemp
     // the refusal comes before anything is settled, so the run still moves.
     let other = super::stepup::plain(&w.fx, "other-agent", &["agent", "read"], true).await;
     assert_eq!(
-        super::stepup::step_up(&w.fx, &other).await.0,
+        super::stepup::unlock(&w.fx, &other).await.0,
         StatusCode::OK
     );
     let uri = format!("/api/v1/agent-sessions/{}/cancel", old.id);

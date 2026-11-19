@@ -33,7 +33,7 @@ async fn one_room(fx: &Fx) -> String {
 }
 
 #[tokio::test]
-async fn opening_a_room_needs_a_step_up_and_a_closed_room_gives_no_handle() {
+async fn opening_a_room_needs_the_app_unlock_and_a_closed_room_gives_no_handle() {
     let fx = fx().await;
     let room = one_room(&fx).await;
     let key = key_of(&fx).await;
@@ -51,7 +51,7 @@ async fn opening_a_room_needs_a_step_up_and_a_closed_room_gives_no_handle() {
     .await;
     assert_eq!(
         (s, &v["code"]),
-        (StatusCode::FORBIDDEN, &json!("step_up_required"))
+        (StatusCode::FORBIDDEN, &json!("unlock_required"))
     );
     assert_eq!(
         fx.brain.rooms().access(&fx.app, &key, &room).await.err(),

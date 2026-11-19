@@ -193,7 +193,7 @@ async fn an_instruction_like_item_is_stored_flagged() {
 }
 
 #[tokio::test]
-async fn rules_a_locked_seed_cannot_change_and_switching_off_needs_a_step_up() {
+async fn rules_a_locked_seed_cannot_change_and_switching_off_needs_no_step_up() {
     let fx = fx().await;
     let rules = ok(&fx, Method::GET, "/rules", None).await;
     let seeds: Vec<_> = rules
@@ -222,7 +222,7 @@ async fn rules_a_locked_seed_cannot_change_and_switching_off_needs_a_step_up() {
         (s, &v["code"]),
         (StatusCode::CONFLICT, &json!("rule_locked"))
     );
-    // A user rule: adding narrows (no step-up), switching off widens (step-up).
+    // A user rule: neither adding nor switching off needs a step-up.
     let (s, made) = call(
         &fx,
         &fx.laptop,
@@ -241,22 +241,7 @@ async fn rules_a_locked_seed_cannot_change_and_switching_off_needs_a_step_up() {
         Some(json!({"enabled": false})),
     )
     .await;
-    assert_eq!(
-        (s, &v["code"]),
-        (StatusCode::FORBIDDEN, &json!("step_up_required"))
-    );
-    assert_eq!(
-        call(
-            &fx,
-            &fx.admin,
-            Method::PATCH,
-            &path,
-            Some(json!({"enabled": false}))
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
+    assert_eq!(s, StatusCode::OK, "{v}");
 }
 
 #[tokio::test]

@@ -1,4 +1,4 @@
-//! The chain routes' guards (S7): the non-admin 403, the missing step-up, another user's chains,
+//! The chain routes' guards (S7): the non-admin 403, no step-up for a write, another user's chains,
 //! the contract's marks, the deprecation of the pool bindings, and that nothing holds a key.
 
 use axum::http::{Method, StatusCode};
@@ -16,7 +16,7 @@ const KEY: &str = "throwaway-chain-value-3f7a19c2";
 const BY: ainkrad_core::audit::AuditActor = super::super::BY;
 
 #[tokio::test]
-async fn a_non_admin_is_refused_everywhere_and_a_write_needs_a_step_up() {
+async fn a_non_admin_is_refused_everywhere_and_a_write_needs_no_step_up() {
     let fx = setup().await;
     let a = pool(&fx, "a", "anthropic").await;
     let c = make(&fx, "main", &[a]).await;
@@ -29,20 +29,24 @@ async fn a_non_admin_is_refused_everywhere_and_a_write_needs_a_step_up() {
             assert_eq!(refusal(&r), (403, "forbidden_scope"), "{m} {uri}: {}", r.1);
         }
     }
-    // An admin that never stepped up reads, and every write needs one.
+    // An admin that never stepped up reads, and no write needs one.
     let plain = super::stepup::plain(&fx, "plain", &["read", "admin"], true).await;
     for (m, uri, body, write) in routes(c.id, a) {
-        let r = call(&fx, &plain, m.clone(), &uri, body).await;
-        match write {
-            true => assert_eq!(refusal(&r), (403, "step_up_required"), "{m} {uri}: {}", r.1),
-            false => assert_eq!(r.0, StatusCode::OK, "{m} {uri}: {}", r.1),
+        if write {
+            continue;
         }
+        let r = call(&fx, &plain, m.clone(), &uri, body).await;
+        assert_eq!(r.0, StatusCode::OK, "{m} {uri}: {}", r.1);
     }
     // Nothing changed.
     let all = ch::list(&fx.app.pool).await.unwrap();
     assert_eq!(all.len(), 1);
     assert_eq!((all[0].name.as_str(), all[0].is_default), ("main", false));
     assert!(ch::list_bindings(&fx.app.pool).await.unwrap().is_empty());
+    // A write is a plain write: the admin scope alone gets past the gate.
+    let (m, uri, body, _) = routes(c.id, a).into_iter().find(|r| r.3).unwrap();
+    let r = call(&fx, &plain, m.clone(), &uri, body).await;
+    assert_ne!(r.0, StatusCode::FORBIDDEN, "{m} {uri}: {}", r.1);
 }
 
 #[tokio::test]
@@ -146,10 +150,10 @@ async fn another_users_chains_pools_and_bindings_do_not_exist_for_a_caller() {
 }
 
 #[tokio::test]
-async fn the_contract_marks_every_chain_route_admin_and_each_write_destructive() {
+async fn the_contract_marks_every_chain_route_admin_and_no_write_destructive() {
     let spec: Value = serde_json::from_str(&super::super::spec::json()).unwrap();
     let id = 1;
-    for (m, uri, _, write) in routes(id, 1) {
+    for (m, uri, _, _) in routes(id, 1) {
         let template = uri
             .replace(&format!("/chains/{id}"), "/chains/{id}")
             .replace("agent-9", "{agent}");
@@ -157,15 +161,15 @@ async fn the_contract_marks_every_chain_route_admin_and_each_write_destructive()
         assert_eq!(op["x-ainkrad-scope"], "admin", "{m} {template}");
         assert_eq!(
             op["x-ainkrad-destructive"] == json!(true),
-            write,
-            "{m} {template}: destructive only when it writes"
+            false,
+            "{m} {template}: no chain route is destructive"
         );
     }
     // The routes that overlap by shape resolve to their own template.
     use crate::api::v1::scopes::{destructive, required};
     for (m, p, d) in [
-        (Method::PUT, "/api/v1/chains/bindings/default", true),
-        (Method::PUT, "/api/v1/chains/default/default", true),
+        (Method::PUT, "/api/v1/chains/bindings/default", false),
+        (Method::PUT, "/api/v1/chains/default/default", false),
         (Method::GET, "/api/v1/chains/bindings", false),
         (Method::GET, "/api/v1/chains/7", false),
     ] {

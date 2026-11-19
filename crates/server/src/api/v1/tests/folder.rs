@@ -85,10 +85,10 @@ async fn a_terminal_for_a_session_is_refused_unless_its_folder_is_known_on_that_
     let vm = super::secrets::runner(&fx, "vm").await;
     let other = super::secrets::runner(&fx, "other").await;
     let dev = super::stepup::plain(&fx, "term-agent", &["terminal", "agent", "read"], true).await;
-    assert_eq!(super::stepup::step_up(&fx, &dev).await.0, StatusCode::OK);
+    assert_eq!(super::stepup::unlock(&fx, &dev).await.0, StatusCode::OK);
     let no_agent = super::stepup::plain(&fx, "term-only", &["terminal", "read"], true).await;
     assert_eq!(
-        super::stepup::step_up(&fx, &no_agent).await.0,
+        super::stepup::unlock(&fx, &no_agent).await.0,
         StatusCode::OK
     );
     let s = session(&fx, &vm.id).await;

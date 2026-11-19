@@ -113,6 +113,7 @@ async fn fx() -> Fx {
     let admin = enroll(&app, "admin", "device", &["admin", "read"]).await;
     let session = admin.session.lock().unwrap().clone().unwrap();
     app.auth.elevate(&session, &admin.id, clock.unix() + 3600);
+    app.auth.unlock(&admin.id, clock.unix() + 3600);
     let runner = enroll(&app, "runner-1", "runner", &["runner"]).await;
     // Captured on this thread (a `#[tokio::test]` runs on one): any log line the Core writes.
     let logs = Arc::new(Mutex::new(Vec::new()));
@@ -802,10 +803,7 @@ async fn scopes_step_up_and_the_contract_expose_public_data_only() {
         p["/modules/leyline/v1/keys/import"]["post"]["x-ainkrad-scope"],
         "admin"
     );
-    assert_eq!(
-        p["/modules/leyline/v1/keys/{key}"]["delete"]["x-ainkrad-destructive"],
-        true
-    );
+    assert!(p["/modules/leyline/v1/keys/{key}"]["delete"]["x-ainkrad-destructive"].is_null());
     // No schema a key route answers with has a private or passphrase field.
     let view = spec["components"]["schemas"]["KeyView"]["properties"]
         .as_object()
@@ -864,20 +862,13 @@ async fn a_hostile_bcrypt_cost_is_refused_at_once_and_junk_is_only_invalid() {
 }
 
 #[tokio::test]
-async fn importing_needs_the_step_up_and_generating_does_not() {
+async fn importing_and_generating_need_no_step_up() {
     let fx = fx().await;
     let laptop = enroll(&fx.app, "laptop", "device", &["admin"]).await; // admin, not elevated
     let uri = format!("{BASE}/keys/import");
     let body = json!({"name": "i", "private_key": ED});
     let (s, v) = send(&fx, &laptop, Method::POST, &uri, Some(body), true).await;
-    assert_eq!(
-        (s, v["code"].as_str()),
-        (StatusCode::FORBIDDEN, Some("step_up_required"))
-    );
-    assert_eq!(
-        count(&fx, "leyline_keys").await + count(&fx, "core_secrets").await,
-        0
-    );
+    assert_eq!(s, StatusCode::OK, "{v}");
     let uri = format!("{BASE}/keys");
     let (s, _) = send(
         &fx,
@@ -889,17 +880,13 @@ async fn importing_needs_the_step_up_and_generating_does_not() {
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    import_ok(&fx, "i", ED, None).await; // the elevated admin
     let spec: Value =
         serde_json::from_str(&ainkrad_core_server::api::v1::spec::json_for(&[Arc::new(
             Leyline,
         )]))
         .unwrap();
     let p = &spec["paths"];
-    assert_eq!(
-        p["/modules/leyline/v1/keys/import"]["post"]["x-ainkrad-destructive"],
-        true
-    );
+    assert!(p["/modules/leyline/v1/keys/import"]["post"]["x-ainkrad-destructive"].is_null());
     assert!(p["/modules/leyline/v1/keys"]["post"]["x-ainkrad-destructive"].is_null());
 }
 

@@ -475,6 +475,17 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
         }
         return e.into_response();
     }
+    // The app unlock (E1-3): one Touch ID at open, held by heartbeat; never a per-action prompt.
+    if super::scopes::needs_unlock(&parts.method, parts.uri.path(), &app.modules)
+        && !plain_signal(&parts.method, parts.uri.path(), &v.body)
+        && app
+            .auth
+            .unlocked_until(&v.device.id, app.clock.unix())
+            .is_none()
+    {
+        tracing::warn!(device = v.device.id, "route refused: app not unlocked");
+        return super::stepup::unlock_required().into_response();
+    }
     let session = session.id;
     // Everything this request writes to the diary starts with this device's person (E1).
     let origin = ainkrad_core::audit::AuditOrigin::new(

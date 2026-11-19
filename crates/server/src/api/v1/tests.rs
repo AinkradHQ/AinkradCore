@@ -214,7 +214,7 @@ pub(super) async fn fx() -> Fx {
 }
 
 /// A new device enrolled with `scopes` and logged in (a session issued directly), elevated as
-/// if it had stepped up (`stepup` tests the real thing).
+/// if it had stepped up and unlocked the app (`stepup` tests the real thing).
 async fn enroll(app: &App, clock: &Arc<FixedClock>, name: &str, scopes: &[&str]) -> TestDevice {
     let dev = TestDevice::enroll(
         &app.pool,
@@ -228,6 +228,7 @@ async fn enroll(app: &App, clock: &Arc<FixedClock>, name: &str, scopes: &[&str])
     let s = app.auth.issue_session(&dev.id, clock.unix());
     app.auth
         .elevate(&s.id, &dev.id, clock.unix() + 10 * 365 * 86_400);
+    app.auth.unlock(&dev.id, clock.unix() + 10 * 365 * 86_400);
     dev.set_session(Some(s.id));
     dev
 }

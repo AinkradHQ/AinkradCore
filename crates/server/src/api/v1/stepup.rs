@@ -50,12 +50,30 @@ pub struct StepUpRequest {
     #[serde(default)]
     #[schema(value_type = Option<Object>)]
     pub assertion: Option<serde_json::Value>,
+    /// What the proof opens. `action` (the default) elevates the session for the danger routes
+    /// for `auth.step_up_secs`; `session` opens the app unlock instead (E1-1), held while the
+    /// app sends `POST /api/v1/auth/unlock/beat` and ended by `POST /api/v1/auth/unlock/end`.
+    #[serde(default)]
+    #[schema(required = false)]
+    pub purpose: Option<StepUpPurpose>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StepUpPurpose {
+    Action,
+    Session,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct Elevation {
     /// Until when this session may call routes marked `x-ainkrad-destructive`.
     pub elevated_until: Option<Timestamp>,
+    /// For an app unlock (`purpose: session`, and the heartbeat): until when it holds if no
+    /// further beat arrives. Null otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub unlocked_until: Option<Timestamp>,
 }
 
 /// The one answer for a failed proof, whatever the reason.
@@ -159,6 +177,9 @@ async fn elevate(
             return Err(failed());
         }
     }
+    if b.purpose == Some(StepUpPurpose::Session) {
+        return unlock(app, me, now).await;
+    }
     let secs = crate::store::settings::value(&app.pool, Key::AuthStepUpSecs, Scope::Server).await?;
     let until = now + secs;
     // Audited first, then elevated: a request dropped in between is never elevated unaudited.
@@ -181,8 +202,70 @@ async fn elevate(
     tracing::info!(device = me.device.id, until, "session elevated");
     Ok(Json(Elevation {
         elevated_until: Some(ts(&iso_of_unix(until))),
+        unlocked_until: None,
     })
     .into_response())
+}
+
+/// A verified `purpose: session` proof: audited as `auth.unlock`, then the device's app unlock opens.
+async fn unlock(app: &App, me: &Caller, now: i64) -> Result<Response, ApiError> {
+    let mut tx = begin_write(&app.pool).await?;
+    let event = NewAuditEvent {
+        actor: BY,
+        action: "auth.unlock".to_owned(),
+        entity: Some(AuditEntity {
+            kind: "device".to_owned(),
+            id: me.device.seq,
+        }),
+        details: json!({"device": me.device.id, "by_device": me.device.id}).to_string(),
+    };
+    audit::append(&mut tx, &event).await?;
+    tx.commit().await?;
+    app.auth.unlock(&me.device.id, now);
+    tracing::info!(device = me.device.id, "app unlocked");
+    Ok(unlocked(app, &me.device.id, now))
+}
+
+fn unlocked(app: &App, device: &str, now: i64) -> Response {
+    Json(Elevation {
+        elevated_until: None,
+        unlocked_until: app
+            .auth
+            .unlocked_until(device, now)
+            .map(|t| ts(&iso_of_unix(t))),
+    })
+    .into_response()
+}
+
+#[utoipa::path(post, path = "/api/v1/auth/unlock/beat", operation_id = "beatUnlock", tag = "devices",
+    responses((status = 200, description = "The app unlock is kept alive; `unlocked_until` is when \
+        it lapses without another beat. 403 `unlock_required` when there is none (never opened, \
+        ended, lapsed, or lost to a Core restart): sign again with `stepUp` and `purpose: session`",
+        body = Elevation)))]
+pub async fn beat(State(app): State<App>, Extension(me): Extension<Caller>) -> Response {
+    let now = app.clock.unix();
+    if !app.auth.beat(&me.device.id, now) {
+        return unlock_required().into_response();
+    }
+    unlocked(&app, &me.device.id, now)
+}
+
+#[utoipa::path(post, path = "/api/v1/auth/unlock/end", operation_id = "endUnlock", tag = "devices",
+    responses((status = 200, description = "The app unlock is ended (the Mac locked or slept, or \
+        the app quit); idempotent", body = Elevation)))]
+pub async fn end(State(app): State<App>, Extension(me): Extension<Caller>) -> Response {
+    app.auth.lock(&me.device.id);
+    tracing::info!(device = me.device.id, "app unlock ended");
+    unlocked(&app, &me.device.id, app.clock.unix())
+}
+
+/// The answer a route that needs the app unlock gives a device that has none.
+pub fn unlock_required() -> ApiError {
+    ApiError::new(
+        StatusCode::FORBIDDEN,
+        "unlock_required",
+        "this needs the app unlocked (POST /api/v1/auth/step-up with purpose session)",
+    )
 }
 
 /// A passkey step-up: the assertion against the device's stored passkey. A verified one moves

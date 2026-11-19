@@ -120,6 +120,7 @@ async fn admin(core: &super::Core) -> ainkrad_core_server::auth::testing::TestDe
     let sid = dev.session.lock().unwrap().clone().unwrap();
     let until = ainkrad_core_server::scheduler::Clock::unix(&*core.app.clock) + 300;
     assert!(core.app.auth.elevate(&sid, &dev.id, until));
+    core.app.auth.unlock(&dev.id, until + 3300);
     dev
 }
 

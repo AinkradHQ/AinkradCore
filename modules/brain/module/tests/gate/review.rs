@@ -209,7 +209,7 @@ async fn refusing_a_room_writes_a_draft_rule_that_commit_turns_on() {
 }
 
 #[tokio::test]
-async fn commit_needs_a_step_up_and_writes_personal_and_employer_rooms() {
+async fn commit_needs_no_step_up_and_writes_personal_and_employer_rooms() {
     let fx = fx().await;
     let run = sample_run(&fx).await;
     let p = proposals(&fx, &run).await;
@@ -231,11 +231,9 @@ async fn commit_needs_a_step_up_and_writes_personal_and_employer_rooms() {
         None,
     )
     .await;
-    assert_eq!(
-        (s, &v["code"]),
-        (StatusCode::FORBIDDEN, &json!("step_up_required"))
-    );
-    let r = ok(&fx, Method::POST, &format!("/imports/{run}/commit"), None).await;
+    // A commit is a plain write: no step-up.
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let r = v;
     // Employer rooms commit like any other room (no backup hold since 2026-11-15).
     let mut names: Vec<(&str, i64)> = r["rooms"]
         .as_array()
