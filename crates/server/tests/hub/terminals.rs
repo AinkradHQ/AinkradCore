@@ -120,7 +120,7 @@ fn spawn_daemon_with(
 /// The app unlock (E1): held an hour ahead, so no heartbeat is needed.
 fn unlock(core: &Core, dev: &TestDevice) {
     let until = ainkrad_core_server::scheduler::Clock::unix(&*core.app.clock) + 3600;
-    core.app.auth.unlock(&dev.id, until);
+    dev.unlock(&core.app.auth, until);
 }
 
 impl Fx {

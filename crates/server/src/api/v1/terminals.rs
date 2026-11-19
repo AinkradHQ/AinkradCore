@@ -1354,11 +1354,6 @@ pub async fn attach(
     if let Err(e) = event(&app, "terminal.attached", &id, &me.device.id).await {
         return e.into_response();
     }
-    let elevation = app
-        .auth
-        .session(&me.session, &me.device.id, app.clock.unix())
-        .and_then(|s| s.elevated_until)
-        .unwrap_or(app.clock.unix());
     let terminal_id = id.clone();
     let by_device = me.device.id.clone();
     let from = q.after.unwrap_or(0);
@@ -1373,7 +1368,6 @@ pub async fn attach(
                 t.runner,
                 terminal_id,
                 by_device,
-                elevation,
                 revoked,
                 rescoped,
                 slot,
@@ -1389,7 +1383,6 @@ async fn stream(
     runner: String,
     terminal: String,
     by_device: String,
-    elevation: i64,
     revoked: impl std::future::Future<Output = ()>,
     rescoped: impl std::future::Future<Output = ()>,
     _slot: AttachSlot,
@@ -1405,10 +1398,17 @@ async fn stream(
     touch(&app, &terminal).await;
     tokio::pin!(revoked);
     tokio::pin!(rescoped);
-    let expiry = tokio::time::sleep(Duration::from_secs(
-        elevation.saturating_sub(app.clock.unix()).max(0) as u64,
-    ));
-    tokio::pin!(expiry);
+    // The app unlock ends (the Mac locked or slept, the app quit, or no heartbeat): the socket
+    // closes within 2 s (E1 review: a shell must not outlive the unlock that opened it).
+    let lapse = async {
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            if app.auth.unlocked_until(&by_device, app.clock.unix()).is_none() {
+                break;
+            }
+        }
+    };
+    tokio::pin!(lapse);
     // A send to a client that stopped reading is bounded, so revoke, rescope and expiry are
     // always polled again within it (spec §4.7: 5 s).
     let cap = app.hub.config.send_timeout.min(Duration::from_secs(4));
@@ -1424,7 +1424,7 @@ async fn stream(
         biased;
         ()=&mut revoked=>{close_socket(&mut socket,4001,"revoked",cap).await;break},
         ()=&mut rescoped=>{close_socket(&mut socket,4003,"scope changed",cap).await;break},
-        ()=&mut expiry=>{close_socket(&mut socket,4003,"step-up expired",cap).await;break},
+        ()=&mut lapse=>{close_socket(&mut socket,4003,"unlock ended",cap).await;break},
         next=d.next()=>match next{Some(body)=>{
                 if let Some(t)=&tap{match &body{
                     Body::Output(o)=>{t.output(at,&o.data);at=at.saturating_add(b64_len(&o.data))}

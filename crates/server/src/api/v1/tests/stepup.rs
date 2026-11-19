@@ -360,9 +360,70 @@ async fn pairing_enrols_a_second_key_never_the_routine_key_twice() {
 /// The app unlock (E1-1): one proof with `purpose: session`, held by heartbeat, ended by the client.
 pub(super) async fn unlock(fx: &Fx, dev: &TestDevice) -> (StatusCode, Value) {
     let c = challenge(fx, dev).await;
-    let mut body = dev.stepup_body(&c);
+    let r = post(fx, dev, "/api/v1/auth/step-up", dev.unlock_body(&c)).await;
+    if r.0 == StatusCode::OK {
+        dev.set_unlock_token(r.1["unlock_token"].as_str().map(str::to_owned));
+    }
+    r
+}
+
+/// Review M1 and M2: the unlock token is the proof of the process that unlocked; a V1 (action)
+/// signature is never an unlock, and a stolen routine key without the token gets nowhere.
+#[tokio::test]
+async fn the_unlock_needs_its_token_and_a_session_signature_of_its_own() {
+    let fx = fx().await;
+    let open = json!({"runner": "d_00000000000000000000000000", "size": {"rows": 24, "cols": 80}});
+    let mac = plain(&fx, "mac", &["read", "terminal"], true).await;
+    // An action proof (V1) with `purpose: session` added is refused: not the V2 message.
+    let c = challenge(&fx, &mac).await;
+    let mut body = mac.stepup_body(&c);
     body["purpose"] = json!("session");
-    post(fx, dev, "/api/v1/auth/step-up", body).await
+    assert_eq!(code(&post(&fx, &mac, "/api/v1/auth/step-up", body).await), forbidden("step_up_failed"));
+    // A real unlock: the answer carries the token.
+    let (s, b) = unlock(&fx, &mac).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert!(b["unlock_token"].as_str().is_some_and(|t| t.len() >= 40), "{b}");
+    assert_eq!(post(&fx, &mac, "/api/v1/terminals", open.clone()).await.0, StatusCode::NOT_FOUND);
+    // The same device without the token (a stolen routine key) or with a wrong one: refused, and
+    // a beat does not work either.
+    let good = mac.unlock_token.lock().unwrap().clone();
+    for bad in [None, Some("not-the-token".to_owned())] {
+        mac.set_unlock_token(bad);
+        assert_eq!(
+            code(&post(&fx, &mac, "/api/v1/terminals", open.clone()).await),
+            forbidden("unlock_required")
+        );
+        assert_eq!(
+            code(&post(&fx, &mac, "/api/v1/auth/unlock/beat", json!({})).await),
+            forbidden("unlock_required")
+        );
+    }
+    // The refusals are counted and the first audited.
+    assert!(fx.app.auth.refusals.count("unlock_required") >= 4);
+    let audited: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE action = 'api.refused' AND json_extract(details, '$.code') = 'unlock_required'")
+        .fetch_one(&fx.app.pool).await.unwrap();
+    assert_eq!(audited, 1);
+    mac.set_unlock_token(good);
+    assert_eq!(post(&fx, &mac, "/api/v1/terminals", open).await.0, StatusCode::NOT_FOUND);
+}
+
+/// Review H1: `auth.*` settings are danger whatever the path spells; the handler decides from the key.
+#[tokio::test]
+async fn a_percent_encoded_security_setting_still_needs_a_step_up() {
+    let fx = fx().await;
+    let mac = plain(&fx, "mac", &ALL, true).await;
+    for key in ["auth.step_up_secs", "%61uth.step_up_secs"] {
+        let uri = format!("/api/v1/settings/server/{key}");
+        let r = send(&fx.app, req(Method::PUT, &uri, Some(&mac), Some(json!({"value": 900})))).await;
+        assert_eq!(code(&r), forbidden("step_up_required"), "{key}");
+        let r = send(&fx.app, req(Method::DELETE, &uri, Some(&mac), None)).await;
+        assert_eq!(code(&r), forbidden("step_up_required"), "{key}");
+    }
+    // Elevated, it goes through.
+    step_up(&fx, &mac).await;
+    let uri = "/api/v1/settings/server/%61uth.step_up_secs";
+    let r = send(&fx.app, req(Method::PUT, uri, Some(&mac), Some(json!({"value": 120})))).await;
+    assert_eq!(r.0, StatusCode::OK, "{:?}", r.1);
 }
 
 #[tokio::test]

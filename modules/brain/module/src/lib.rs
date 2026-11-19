@@ -156,12 +156,15 @@ pub const ROOM_BACKUP_READY: bool = true;
 // D-4: changing a room's retention is danger. Opening a room needs only the app unlock (D-6); the
 // rest are normal writes.
 const DESTRUCTIVE: &[(&str, &str)] = &[("PATCH", "/rooms/{room}/policy")];
-const NEEDS_UNLOCK: &[(&str, &str)] = &[("POST", "/rooms/{room}/open")];
+// Review M3: who may read a room, and claiming one, are as sensitive as opening it.
+const NEEDS_UNLOCK: &[(&str, &str)] = &[
+    ("POST", "/rooms/{room}/open"),
+    ("PUT", "/rooms/{room}/access"),
+    ("POST", "/rooms/{room}/claims"),
+];
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports/{run}/commit"),
     ("PATCH", "/rules/{id}"),
-    ("POST", "/rooms/{room}/claims"),
-    ("PUT", "/rooms/{room}/access"),
     ("POST", "/rooms/{room}/redistil"),
     ("POST", "/imports"),
     ("POST", "/imports/{run}/items"),

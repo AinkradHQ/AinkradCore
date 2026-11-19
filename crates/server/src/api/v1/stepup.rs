@@ -74,6 +74,11 @@ pub struct Elevation {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
     pub unlocked_until: Option<Timestamp>,
+    /// Only in the answer to `purpose: session` (review M1): a secret to keep in memory and send as
+    /// `Ainkrad-Unlock` on the heartbeat and on every request that needs the unlock. Never stored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub unlock_token: Option<String>,
 }
 
 /// The one answer for a failed proof, whatever the reason.
@@ -154,13 +159,17 @@ async fn elevate(
         Some(a) => prove_passkey(app, me, addr, &b.challenge, a, now).await?,
         None => {
             let sig = b.stepup_sig.as_deref().and_then(|s| crypto::unb64(s, 86));
-            app.auth.prove_stepup(
+            // A session proof signs the V2 message with its purpose; an action proof the V1 one,
+            // so neither can stand in for the other (review M2).
+            let purpose = (b.purpose == Some(StepUpPurpose::Session)).then_some("session");
+            app.auth.prove_stepup_for(
                 addr,
                 &me.device,
                 &me.session,
                 &b.challenge,
                 sig.as_deref(),
                 now,
+                purpose,
             )
         }
     };
@@ -203,6 +212,7 @@ async fn elevate(
     Ok(Json(Elevation {
         elevated_until: Some(ts(&iso_of_unix(until))),
         unlocked_until: None,
+        unlock_token: None,
     })
     .into_response())
 }
@@ -221,13 +231,14 @@ async fn unlock(app: &App, me: &Caller, now: i64) -> Result<Response, ApiError> 
     };
     audit::append(&mut tx, &event).await?;
     tx.commit().await?;
-    app.auth.unlock(&me.device.id, now);
+    let token = app.auth.unlock(&me.device.id, now);
     tracing::info!(device = me.device.id, "app unlocked");
-    Ok(unlocked(app, &me.device.id, now))
+    Ok(unlocked(app, &me.device.id, now, Some(token)))
 }
 
-fn unlocked(app: &App, device: &str, now: i64) -> Response {
+fn unlocked(app: &App, device: &str, now: i64, unlock_token: Option<String>) -> Response {
     Json(Elevation {
+        unlock_token,
         elevated_until: None,
         unlocked_until: app
             .auth
@@ -242,12 +253,19 @@ fn unlocked(app: &App, device: &str, now: i64) -> Response {
         it lapses without another beat. 403 `unlock_required` when there is none (never opened, \
         ended, lapsed, or lost to a Core restart): sign again with `stepUp` and `purpose: session`",
         body = Elevation)))]
-pub async fn beat(State(app): State<App>, Extension(me): Extension<Caller>) -> Response {
+pub async fn beat(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    headers: axum::http::HeaderMap,
+) -> Response {
     let now = app.clock.unix();
-    if !app.auth.beat(&me.device.id, now) {
+    let token = headers
+        .get(crate::auth::signed::UNLOCK)
+        .and_then(|v| v.to_str().ok());
+    if !app.auth.beat(&me.device.id, token, now) {
         return unlock_required().into_response();
     }
-    unlocked(&app, &me.device.id, now)
+    unlocked(&app, &me.device.id, now, None)
 }
 
 #[utoipa::path(post, path = "/api/v1/auth/unlock/end", operation_id = "endUnlock", tag = "devices",
@@ -256,7 +274,7 @@ pub async fn beat(State(app): State<App>, Extension(me): Extension<Caller>) -> R
 pub async fn end(State(app): State<App>, Extension(me): Extension<Caller>) -> Response {
     app.auth.lock(&me.device.id);
     tracing::info!(device = me.device.id, "app unlock ended");
-    unlocked(&app, &me.device.id, app.clock.unix())
+    unlocked(&app, &me.device.id, app.clock.unix(), None)
 }
 
 /// The answer a route that needs the app unlock gives a device that has none.
@@ -321,6 +339,20 @@ async fn prove_passkey(
 
 fn throttled(secs: i64) -> Response {
     too_many(std::time::Duration::from_secs(secs.max(1) as u64))
+}
+
+/// The authoritative "fresh step-up" check for a handler that decides danger from the parsed
+/// request (a security setting, moving a secret into a group), whatever the path looked like.
+pub fn require_elevated(app: &App, me: &Caller) -> Result<(), ApiError> {
+    let now = app.clock.unix();
+    match app
+        .auth
+        .session(&me.session, &me.device.id, now)
+        .is_some_and(|s| s.elevated(now))
+    {
+        true => Ok(()),
+        false => Err(required()),
+    }
 }
 
 /// The answer a route marked destructive gives a session that is not elevated.

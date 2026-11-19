@@ -512,7 +512,9 @@ fn security_setting(method: &Method, path: &str) -> bool {
         && path
             .strip_prefix("/api/v1/settings/")
             .and_then(|rest| rest.split_once('/'))
-            .is_some_and(|(_, key)| key.starts_with("auth."))
+            // Fail closed: a `%` could spell `auth.` after decoding, so it is danger here; the
+            // handler decides from the parsed key (`settings::guard`).
+            .is_some_and(|(_, key)| key.starts_with("auth.") || key.contains('%'))
 }
 
 /// Whether a request needs the app unlock (E1-2, E1-3, D-6): a route in [`UNLOCKED`], or in its

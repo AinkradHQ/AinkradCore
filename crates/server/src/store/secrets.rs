@@ -942,7 +942,7 @@ pub async fn reveal(
     }
     let mut tx = super::begin_write(pool).await?;
     enabled(&mut tx).await?;
-    let row = sqlx::query("SELECT id, version, key_id, sealed FROM core_secrets WHERE name = ?")
+    let row = sqlx::query("SELECT id, version, key_id, sealed, kind FROM core_secrets WHERE name = ?")
         .bind(name)
         .fetch_optional(&mut *tx)
         .await?;
@@ -950,6 +950,9 @@ pub async fn reveal(
         return refused("not_found", "no such secret");
     };
     let (id, version): (i64, i64) = (row.try_get("id")?, row.try_get("version")?);
+    if row.try_get::<String, _>("kind")? != "text" {
+        return refused("bad_request", "only a text secret is shown");
+    }
     let key_id: String = row.try_get("key_id")?;
     let sealed: Vec<u8> = row.try_get("sealed")?;
     if !sealer.holds(&key_id) {
