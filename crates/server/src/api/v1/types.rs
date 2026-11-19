@@ -314,7 +314,7 @@
 ///    routes, audit actions and events live in `modules/brain/api`; the Code Mode allow-list gains the `brainAi*` v2
 ///    operations (`api/ai-ops.allow.json`) and the runner wire protocol the Brain hook commands (`api/runner.schema.json`).
 ///    Regenerated once, at the epic's build.
-pub const API_MINOR: u32 = 94;
+pub const API_MINOR: u32 = 95;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
