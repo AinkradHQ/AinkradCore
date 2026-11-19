@@ -277,7 +277,7 @@ async fn an_approval_is_single_use_and_bound_to_its_arguments() {
 }
 
 #[tokio::test]
-async fn only_a_device_with_approve_and_a_step_up_can_decide() {
+async fn only_a_device_with_approve_and_the_app_unlock_can_decide() {
     let fx = fx().await;
     ops(&fx, &[("titleAgentSession", Risk::Risky)]);
     let s = session(&fx, &["read", "agent"]).await;
@@ -306,7 +306,7 @@ async fn only_a_device_with_approve_and_a_step_up_can_decide() {
     let (st, body) = decide(&fx, &cold, &s, &id, true).await;
     assert_eq!(
         (st, body["code"].as_str()),
-        (StatusCode::FORBIDDEN, Some("step_up_required"))
+        (StatusCode::FORBIDDEN, Some("unlock_required"))
     );
     let (st, _) = send(
         &fx.app,

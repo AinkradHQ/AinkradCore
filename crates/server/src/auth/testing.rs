@@ -29,6 +29,8 @@ pub struct TestDevice {
     pub core_fp: String,
     /// The session it signs with, once it has one.
     pub session: Mutex<Option<String>>,
+    /// The unlock token once the device unlocked (sent as `Ainkrad-Unlock`).
+    pub unlock_token: Mutex<Option<String>>,
     clock: Arc<dyn Clock + Send + Sync>,
 }
 
@@ -83,6 +85,7 @@ impl TestDevice {
             spki,
             core_fp: core_fp.to_owned(),
             session: Mutex::new(None),
+            unlock_token: Mutex::new(None),
             clock,
         }
     }
@@ -155,6 +158,23 @@ impl TestDevice {
         })
     }
 
+    /// Unlocks this device at `auth` (as the app's step-up would) and keeps the token it sends.
+    pub fn unlock(&self, auth: &super::Auth, at: i64) {
+        *self.unlock_token.lock().unwrap() = Some(auth.unlock(&self.id, at));
+    }
+
+    pub fn set_unlock_token(&self, token: Option<String>) {
+        *self.unlock_token.lock().unwrap() = token;
+    }
+
+    /// The step-up body for a `purpose: session` proof: the V2 message, under this session.
+    pub fn unlock_body(&self, challenge: &str) -> serde_json::Value {
+        let session = self.session.lock().unwrap().clone().unwrap_or_default();
+        let m = super::stepup::message_v2(&self.core_fp, &self.id, &session, challenge, "session");
+        serde_json::json!({"challenge": challenge, "stepup_sig": b64(&self.sign_stepup(&m)),
+                           "purpose": "session"})
+    }
+
     pub fn set_session(&self, session: Option<String>) {
         *self.session.lock().unwrap() = session;
     }
@@ -216,6 +236,9 @@ impl TestDevice {
         ];
         if let Some(s) = session {
             h.push((signed::SESSION, s.to_owned()));
+        }
+        if let Some(t) = self.unlock_token.lock().unwrap().clone() {
+            h.push((signed::UNLOCK, t));
         }
         h
     }

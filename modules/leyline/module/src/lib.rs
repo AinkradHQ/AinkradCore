@@ -105,38 +105,36 @@ pub static MIGRATIONS: &[Migration] = &[
     },
 ];
 
-// A key write is a secret write: importing needs the step-up like the Core's own secret writes.
-// Generating does not (the Core makes the key; nothing of the caller's is stored).
-const DESTRUCTIVE: &[(&str, &str)] = &[
-    ("DELETE", "/hosts/{host}"),
-    ("DELETE", "/keys/{key}"),
-    ("POST", "/keys/import"),
-    // A terminal needs the step-up like the Core's own; replacing a pinned host key is a trust
-    // decision that could point a session at an impostor.
+// D-4: only a key leaving the Core is danger (a Mac-direct lease hands one to a runner on the
+// person's machine). Opening a shell, writing a file and installing the runner run code on a host:
+// they need the app unlock and no per-action prompt. Everything else is a normal write.
+const DESTRUCTIVE: &[(&str, &str)] = &[("POST", "/hosts/{host}/direct")];
+const NEEDS_UNLOCK: &[(&str, &str)] = &[
     ("POST", "/hosts/{host}/terminals"),
-    ("POST", "/hosts/{host}/host-keys/replace"),
-    // A Mac-direct lease hands a key to a runner on the person's machine: Touch ID, like a terminal.
-    ("POST", "/hosts/{host}/direct"),
-    // Recording on or off both need it: turning it off hides what happens on a host. Resuming a
-    // paused recording too; pausing does not (a person who sees one can stop it at once).
-    ("PUT", "/hosts/{host}/recording"),
-    // Writing a file on a host: a person at a live step-up, like a terminal.
     ("PUT", "/hosts/{host}/files/content"),
-    ("POST", "/sessions/{session}/recording/resume"),
-    // Installs software as root on a host and pairs it: a person at a live step-up.
     ("POST", "/hosts/{host}/runner"),
+    // Review H3: saved commands and fleet runs run code on hosts, and a command's text is what runs.
+    ("POST", "/commands"),
+    ("PATCH", "/commands/{command}"),
+    ("POST", "/commands/{command}/run"),
+    ("POST", "/fleet/runs"),
+    // Review M3: reading a host's files is a read of the host.
+    ("GET", "/hosts/{host}/files"),
+    ("GET", "/hosts/{host}/files/content"),
 ];
 // POST and PATCH need a step-up only for what widens an AI's reach or repoints a host (`allowed`,
 // address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
+    ("DELETE", "/hosts/{host}"),
+    ("DELETE", "/keys/{key}"),
+    ("POST", "/keys/import"),
+    ("POST", "/hosts/{host}/host-keys/replace"),
+    ("PUT", "/hosts/{host}/recording"),
+    ("POST", "/sessions/{session}/recording/resume"),
     ("POST", "/hosts"),
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
-    ("POST", "/commands"),
-    ("PATCH", "/commands/{command}"),
     ("DELETE", "/commands/{command}"),
-    ("POST", "/commands/{command}/run"),
-    ("POST", "/fleet/runs"),
     ("POST", "/runs/{run}/cancel"),
     ("POST", "/hosts/{host}/host-keys/trust"),
     // Ending a lease only takes access away.
@@ -457,6 +455,10 @@ impl Module for Leyline {
 
     fn destructive(&self) -> &'static [(&'static str, &'static str)] {
         DESTRUCTIVE
+    }
+
+    fn needs_unlock(&self) -> &'static [(&'static str, &'static str)] {
+        NEEDS_UNLOCK
     }
 
     fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {

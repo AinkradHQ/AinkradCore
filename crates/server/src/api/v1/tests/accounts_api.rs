@@ -145,7 +145,7 @@ async fn a_key_is_written_never_read_and_a_phone_sees_neither_secret_name_nor_ru
 }
 
 #[tokio::test]
-async fn every_write_needs_admin_and_a_step_up_and_a_phone_may_only_read() {
+async fn every_write_needs_admin_and_no_step_up_and_a_phone_may_only_read() {
     let (fx, _vm, phone) = setup().await;
     let plain = plain_admin(&fx).await;
     let writes = [
@@ -197,13 +197,10 @@ async fn every_write_needs_admin_and_a_step_up_and_a_phone_may_only_read() {
             (StatusCode::FORBIDDEN, Some("forbidden_scope")),
             "{m} {uri}: {b}"
         );
-        let (s, b) = call(&fx, &plain, m.clone(), uri, body).await;
-        assert_eq!(
-            (s, b["code"].as_str()),
-            (StatusCode::FORBIDDEN, Some("step_up_required")),
-            "{m} {uri}: {b}"
-        );
     }
+    // An admin needs no step-up: its scope is enough, so the route answers (here not found).
+    let (s, b) = call(&fx, &plain, Method::DELETE, "/api/v1/pools/1", Value::Null).await;
+    assert_ne!(s, StatusCode::FORBIDDEN, "{b}");
     // Nothing was written.
     let n: i64 = sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM core_accounts) + (SELECT count(*) FROM core_pools)",

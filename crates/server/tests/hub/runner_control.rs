@@ -1,6 +1,6 @@
 //! Runner control through the real API and a runner played by hand (`Fake`): the policy command
 //! (`PUT /runners/{id}/policy`) and the tool install (`POST /runners/{id}/tools`, its events and
-//! its poll route). Both need `admin` and a live step-up.
+//! its poll route). Both need `admin` and the app unlock.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -31,10 +31,10 @@ struct Fx {
     admin: TestDevice,
 }
 
-fn elevate(core: &Core, dev: &TestDevice) {
-    let sid = dev.session.lock().unwrap().clone().unwrap();
-    let until = ainkrad_core_server::scheduler::Clock::unix(&*core.app.clock) + 300;
-    assert!(core.app.auth.elevate(&sid, &dev.id, until));
+/// The app unlock (E1): held an hour ahead, so no heartbeat is needed.
+fn unlock(core: &Core, dev: &TestDevice) {
+    let until = ainkrad_core_server::scheduler::Clock::unix(&*core.app.clock) + 3600;
+    dev.unlock(&core.app.auth, until);
 }
 
 async fn up(name: &str, with_control: bool) -> Fx {
@@ -47,7 +47,7 @@ async fn up(name: &str, with_control: bool) -> Fx {
     };
     let fake = Fake::welcomed(&core, &dev, drivers).await;
     let admin = core.device("device", &["read", "admin"]).await;
-    elevate(&core, &admin);
+    unlock(&core, &admin);
     Fx {
         runner: dev.id.clone(),
         core,
@@ -180,7 +180,7 @@ async fn a_policy_without_share_history_keeps_the_runners_setting_and_false_turn
             .await;
         fake.welcome().await;
         let admin = core.device("device", &["read", "admin"]).await;
-        elevate(&core, &admin);
+        unlock(&core, &admin);
         Fx {
             runner: dev.id.clone(),
             core,
@@ -252,7 +252,7 @@ async fn a_refused_policy_says_why_and_bad_input_never_reaches_the_runner() {
     )
     .await;
     assert!(s == 400 || s == 422, "{s}");
-    // Without a step-up the route is refused before anything is sent.
+    // Without the app unlock the route is refused before anything is sent.
     let plain = core.device("device", &["read", "admin"]).await;
     let (s, b) = call(
         &core,
@@ -262,7 +262,7 @@ async fn a_refused_policy_says_why_and_bad_input_never_reaches_the_runner() {
         Some(json!({"terminals": true, "agents": false, "agent_capacity": 2})),
     )
     .await;
-    assert_eq!((s, &b["code"]), (403, &json!("step_up_required")));
+    assert_eq!((s, &b["code"]), (403, &json!("unlock_required")));
     // A read-only device may not.
     let reader = core.device("device", &["read"]).await;
     let (s, _) = call(

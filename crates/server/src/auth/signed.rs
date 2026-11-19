@@ -11,6 +11,9 @@ pub const ALG: &str = "ES256";
 
 pub const DEVICE: &str = "ainkrad-device";
 pub const SESSION: &str = "ainkrad-session";
+/// The unlock token (E1 review M1): a secret the app keeps in memory, sent with every request once
+/// unlocked. Not part of the signature; it proves the caller is the process that unlocked.
+pub const UNLOCK: &str = "ainkrad-unlock";
 pub const ALG_HEADER: &str = "ainkrad-alg";
 pub const TIMESTAMP: &str = "ainkrad-timestamp";
 pub const NONCE: &str = "ainkrad-nonce";

@@ -26,7 +26,7 @@ async fn a_terminal_for_a_session_starts_in_the_sessions_folder() {
         .core
         .device("device", &["read", "terminal", "agent"])
         .await;
-    elevate(&fx.core, &dev);
+    unlock(&fx.core, &dev);
     let new = NewSession {
         runner: &fx.runner,
         harness: "claude",

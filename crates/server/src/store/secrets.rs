@@ -922,6 +922,63 @@ pub async fn revoke_lease(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error
     Ok(())
 }
 
+/// Opens secret `name` for a person at the app (E1, the mockup's "Reveal"): the plain value,
+/// audited as `secret.revealed` with the device. Never an account key (`acct.*`: the Accounts
+/// screen owns those) and only a text value: a file or bundle is not shown.
+///
+/// # Errors
+///
+/// `not_found`, `secrets_disabled`, `bad_request` for an account key, `secrets_unavailable`
+/// when the value cannot be opened.
+pub async fn reveal(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    name: &str,
+    by_device: &str,
+    actor: AuditActor,
+) -> Result<Zeroizing<String>, Error> {
+    if name.starts_with(ACCOUNT_PREFIX) {
+        return refused("bad_request", "a provider account's key is never shown");
+    }
+    let mut tx = super::begin_write(pool).await?;
+    enabled(&mut tx).await?;
+    let row = sqlx::query("SELECT id, version, key_id, sealed, kind FROM core_secrets WHERE name = ?")
+        .bind(name)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(row) = row else {
+        return refused("not_found", "no such secret");
+    };
+    let (id, version): (i64, i64) = (row.try_get("id")?, row.try_get("version")?);
+    if row.try_get::<String, _>("kind")? != "text" {
+        return refused("bad_request", "only a text secret is shown");
+    }
+    let key_id: String = row.try_get("key_id")?;
+    let sealed: Vec<u8> = row.try_get("sealed")?;
+    if !sealer.holds(&key_id) {
+        return refused(
+            "secrets_unavailable",
+            "the secret is sealed under a master key this Core does not hold",
+        );
+    }
+    let plain = sealer
+        .open_as(&key_id, &label(name, version), &sealed)
+        .or_else(|_| refused("secrets_unavailable", "the secret did not open"))?;
+    let value = std::str::from_utf8(&plain)
+        .map(|v| Zeroizing::new(v.to_owned()))
+        .or_else(|_| refused("secrets_unavailable", "the secret did not open"))?;
+    audit(
+        &mut tx,
+        actor,
+        "secret.revealed",
+        id,
+        json!({"name": name, "version": version, "by_device": by_device}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(value)
+}
+
 /// Redeems lease `id` for `runner` (the calling device): once, before it expires, while the
 /// runner is still in the secret's scope. Audited as `secret.redeemed`. A lease that is not
 /// this runner's is `not_found`, as one that never existed; a spent or expired one is

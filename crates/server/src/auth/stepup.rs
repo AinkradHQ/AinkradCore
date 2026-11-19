@@ -39,6 +39,19 @@ pub fn message(core_fp: &str, device: &str, session: &str, challenge: &str) -> V
     format!("{DOMAIN}\n{core_fp}\n{device}\n{session}\n{challenge}").into_bytes()
 }
 
+/// The exact bytes a **session** proof signs (E1 review M2): `AINKRAD-STEPUP-V2` and the purpose
+/// join the V1 fields, so a signature for one purpose is never valid for another, and an action
+/// proof (V1) can never be replayed as an unlock.
+pub fn message_v2(
+    core_fp: &str,
+    device: &str,
+    session: &str,
+    challenge: &str,
+    purpose: &str,
+) -> Vec<u8> {
+    format!("AINKRAD-STEPUP-V2\n{core_fp}\n{device}\n{session}\n{challenge}\n{purpose}").into_bytes()
+}
+
 /// What a step-up proof came to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Proof {
@@ -130,6 +143,21 @@ impl Auth {
         sig: Option<&[u8]>,
         now: i64,
     ) -> Proof {
+        self.prove_stepup_for(addr, device, session, challenge, sig, now, None)
+    }
+
+    /// [`Auth::prove_stepup`] for a proof with a `purpose` (`Some("session")` signs the V2 message).
+    #[allow(clippy::too_many_arguments)]
+    pub fn prove_stepup_for(
+        &self,
+        addr: &str,
+        device: &Device,
+        session: &str,
+        challenge: &str,
+        sig: Option<&[u8]>,
+        now: i64,
+        purpose: Option<&str>,
+    ) -> Proof {
         if !self.stepup_failures.take(&device.id, now) {
             return Proof::Throttled;
         }
@@ -140,7 +168,10 @@ impl Auth {
                 .and_then(|s| s.stepup_challenge.take())
                 .is_some_and(|(c, exp)| exp > now && c.as_bytes() == challenge.as_bytes())
         };
-        let m = message(&self.identity.fp, &device.id, session, challenge);
+        let m = match purpose {
+            Some(p) => message_v2(&self.identity.fp, &device.id, session, challenge, p),
+            None => message(&self.identity.fp, &device.id, session, challenge),
+        };
         // One verify whatever failed first, so every refusal costs the same.
         let ok = match (live, &device.stepup_spki, sig) {
             (true, Some(key), Some(sig)) => crypto::verify(key, &m, sig),
