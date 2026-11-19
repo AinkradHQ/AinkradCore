@@ -450,6 +450,12 @@ impl Hub {
         Elevated(())
     }
 
+    /// The step-up proof for restarting a crashed run of a configuration a person started
+    /// (`runs::restart`): it starts only that configuration again, in its environment.
+    pub(crate) fn continue_run_elevation(&self) -> Elevated {
+        Elevated(())
+    }
+
     /// Mint the terminal capability after the API gate has verified route scope and step-up
     /// (`POST /terminals`, its `ws`, `signal` and `DELETE`, all `DESTRUCTIVE`).
     pub(crate) fn terminal_elevation(&self, caller: &crate::api::v1::Caller) -> Elevated {

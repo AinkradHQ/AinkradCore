@@ -205,6 +205,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/run/activity", "read"),
     // Run configurations and environments (Core 0.10, E11-3): values never leave except `value`.
     ("GET", "/api/v1/projects/{id}/runs", "read"),
+    ("POST", "/api/v1/projects/{id}/runs/{run}/stop", "admin"),
     ("GET", "/api/v1/projects/{id}/code", "read"),
     ("GET", "/api/v1/projects/{id}/usage", "read"),
     ("GET", "/api/v1/projects/{id}/changes", "read"),
@@ -358,6 +359,7 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/run/stop"),
     ("POST", "/api/v1/projects/{id}/run/restart"),
     ("POST", "/api/v1/projects/{id}/run-configs/{config}/run"),
+    ("POST", "/api/v1/projects/{id}/runs/{run}/stop"),
     // Project secrets (P4-04): a write stores or removes a credential a run will be given.
     ("PUT", "/api/v1/projects/{id}/secrets/{name}"),
     ("DELETE", "/api/v1/projects/{id}/secrets/{name}"),
