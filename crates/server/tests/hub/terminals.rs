@@ -201,7 +201,7 @@ impl Fx {
     }
 
     async fn create(&self, dev: &TestDevice, program: &str, args: &[&str]) -> (u16, Value) {
-        let body = json!({"runner": self.runner, "program": program, "args": args, "cwd": "/",
+        let body = json!({"runner": self.runner, "program": program, "args": args,
             "env": {"PLANTED": PLANTED}, "size": {"rows": 24, "cols": 80}});
         self.call(dev, "POST", "/api/v1/terminals", Some(body))
             .await
