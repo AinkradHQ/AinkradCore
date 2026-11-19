@@ -856,3 +856,28 @@ async fn an_unknown_project_is_refused_and_attach_detach_are_audited() {
         "{ev}"
     );
 }
+
+/// Review H3, M3: every Leyline route that runs code on a host or reads its files is refused
+/// to a device that never unlocked the app, before the route looks at the request.
+#[tokio::test]
+async fn the_unlock_routes_are_refused_without_the_unlock() {
+    let fx = fx().await;
+    let locked = enroll(&fx.app, "locked", &["admin", "read", "terminal"]).await;
+    let routes = [
+        (Method::POST, "/hosts/h_x/terminals"),
+        (Method::PUT, "/hosts/h_x/files/content"),
+        (Method::POST, "/hosts/h_x/runner"),
+        (Method::POST, "/commands"),
+        (Method::PATCH, "/commands/c_x"),
+        (Method::POST, "/commands/c_x/run"),
+        (Method::POST, "/fleet/runs"),
+        (Method::GET, "/hosts/h_x/files"),
+        (Method::GET, "/hosts/h_x/files/content"),
+    ];
+    for (m, path) in routes {
+        let (s, v, _) = call_raw(&fx, &locked, m.clone(), path, Some("{}")).await;
+        assert_eq!((s, &v["code"]), (StatusCode::FORBIDDEN, &json!("unlock_required")), "{m} {path}");
+        let (_, v, _) = call_raw(&fx, &fx.admin, m.clone(), path, Some("{}")).await;
+        assert_ne!(v["code"], json!("unlock_required"), "{m} {path}: the unlocked admin passes the gate");
+    }
+}

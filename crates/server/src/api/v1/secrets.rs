@@ -316,6 +316,7 @@ pub async fn create(
 ) -> ApiResult<SecretInfo> {
     let b: NewSecret = parse(&body)?;
     not_account(&b.name)?;
+    not_module(&b.name)?;
     not_project(&app, None, b.group.as_deref()).await?;
     not_project_slug(&app, &b.name).await?;
     let new = NewValue {
@@ -351,10 +352,15 @@ pub async fn rotate(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path(n): Path<String>,
+    headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> ApiResult<SecretInfo> {
     let n = not_module(not_account(name(&n)?)?)?;
     let b: RotateSecret = parse(&body)?;
+    // Widening which runners may lease a secret needs the app unlock, not just its scope.
+    if b.runners.is_some() {
+        super::stepup::require_unlock(&app, &me, &headers)?;
+    }
     // Putting an existing secret in a group widens who may lease it: danger (E1 review M6).
     if b.group.as_deref().is_some_and(|g| !g.is_empty()) {
         super::stepup::require_elevated(&app, &me)?;

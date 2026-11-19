@@ -273,8 +273,26 @@ pub async fn beat(
         the app quit); idempotent", body = Elevation)))]
 pub async fn end(State(app): State<App>, Extension(me): Extension<Caller>) -> Response {
     app.auth.lock(&me.device.id);
+    // A local-path terminal lease ends with the unlock too.
+    super::terminals::lapse(&app).await;
     tracing::info!(device = me.device.id, "app unlock ended");
     unlocked(&app, &me.device.id, app.clock.unix(), None)
+}
+
+/// The authoritative "app unlocked" check for a handler that decides from the parsed request
+/// (widening who may use a secret), with the token the app sends.
+pub fn require_unlock(
+    app: &App,
+    me: &Caller,
+    headers: &axum::http::HeaderMap,
+) -> Result<(), ApiError> {
+    let token = headers
+        .get(crate::auth::signed::UNLOCK)
+        .and_then(|v| v.to_str().ok());
+    match app.auth.unlock_ok(&me.device.id, token, app.clock.unix()) {
+        true => Ok(()),
+        false => Err(unlock_required()),
+    }
 }
 
 /// The answer a route that needs the app unlock gives a device that has none.

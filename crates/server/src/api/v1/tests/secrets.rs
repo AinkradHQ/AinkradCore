@@ -1059,3 +1059,24 @@ async fn module_secrets_and_non_text_values_stay_out_of_the_general_routes() {
     let r = call(&fx, &plain, Method::PUT, "/api/v1/secrets/git.token", json!({"value": V2, "group": "g"})).await;
     assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
 }
+
+/// Low items: a module's reserved name cannot be created through the general route, and widening
+/// who may use a secret or a group needs the app unlock.
+#[tokio::test]
+async fn reserved_names_cannot_be_created_and_widening_runners_needs_the_unlock() {
+    let (fx, vm) = broker().await;
+    for name in ["brain.key", "leyline.master"] {
+        let r = post_secret(&fx, json!({"name": name, "value": V1})).await;
+        assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"), "{name}");
+    }
+    create(&fx, "git.token", V1, &[]).await;
+    call(&fx, &fx.dev, Method::POST, "/api/v1/secret-groups", json!({"name": "g", "runners": []})).await;
+    let plain = super::stepup::plain(&fx, "plain", &ALL, true).await;
+    let r = call(&fx, &plain, Method::PUT, "/api/v1/secrets/git.token", json!({"value": V2, "runners": [vm.id]})).await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "unlock_required"));
+    let r = call(&fx, &plain, Method::PUT, "/api/v1/secret-groups/g", json!({"runners": [vm.id]})).await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "unlock_required"));
+    // The unlocked device may.
+    let r = call(&fx, &fx.dev, Method::PUT, "/api/v1/secrets/git.token", json!({"value": V2, "runners": [vm.id]})).await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+}
