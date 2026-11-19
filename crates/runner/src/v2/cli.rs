@@ -484,6 +484,18 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         eprintln!("ainkrad-runner: WARNING: {m}");
         tracing::warn!("{m}");
     }
+    // Linux before 6.2, or a host that turned it back on: a shell could push keystrokes into its
+    // own controlling terminal with TIOCSTI (bwrap's --new-session would stop that but detaches the
+    // shell from its pty, so it is not used).
+    if pty_enabled
+        && cfg!(target_os = "linux")
+        && std::fs::read_to_string("/proc/sys/dev/tty/legacy_tiocsti")
+            .map_or(true, |v| v.trim() != "0")
+    {
+        let m = "dev.tty.legacy_tiocsti is not 0: set it to 0 (sysctl) so a terminal's shell cannot inject input with TIOCSTI";
+        eprintln!("ainkrad-runner: WARNING: {m}");
+        tracing::warn!("{m}");
+    }
     let terminal_user = flag(args, "--terminal-user").map(str::to_owned);
     let egress_dir = state.0.join("terminal-egress");
     let exe = std::env::current_exe().unwrap_or_default();
