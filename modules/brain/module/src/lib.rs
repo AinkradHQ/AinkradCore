@@ -54,6 +54,7 @@ pub mod key;
 mod loaded;
 mod lore;
 pub mod me_card;
+mod me_profile;
 pub mod merge;
 mod overview;
 pub mod overview_select;
@@ -179,6 +180,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("DELETE", "/aliases/{from}"),
     ("POST", "/imports/{run}/semantic/undo"),
     ("PUT", "/settings/{name}"),
+    ("PUT", "/me/profile"),
     ("POST", "/rules"),
     ("POST", "/sync"),
     ("POST", "/rooms/{room}/distil"),
@@ -569,6 +571,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         rules_api::list,
         rules_api::create,
         rules_api::patch,
+        me_profile::put_profile,
         rooms::list,
         rooms::open,
         sync::sources,
@@ -650,6 +653,9 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         rules_api::RuleView,
         rules_api::NewRule,
         rules_api::RulePatch,
+        me_profile::ProfileBody,
+        me_profile::ProfileItem,
+        me_profile::ProfileSaved,
         rooms::RoomView,
         rooms::Opened,
         sync::SourceView,
@@ -747,6 +753,7 @@ impl Module for Brain {
             .route("/imports/{run}/commit", post(commit::commit))
             .route("/rules", get(rules_api::list).post(rules_api::create))
             .route("/rules/{id}", patch(rules_api::patch))
+            .route("/me/profile", put(me_profile::put_profile))
             .route("/rooms", get(rooms::list))
             .route("/rooms/{room}/open", post(rooms::open))
             .route("/rooms/{room}/search", get(index::search))
@@ -860,6 +867,7 @@ impl Module for Brain {
             "brain.ai.evidence",
             "brain.ai.context",
             "brain.me_card.served",
+            "brain.me.profile",
             "brain.ai.proposed",
             "brain.ai.checkpoint_requested",
             "brain.ai.outcome",

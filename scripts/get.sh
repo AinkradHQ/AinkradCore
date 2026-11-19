@@ -421,7 +421,7 @@ pc_checks() { # pc_checks "443 80": 0 when all is well; else 1 with PC_WHAT (wha
 pc_urlb() { # stdin -> base64url without padding
   openssl base64 -A | tr '+/' '-_' | tr -d '='
 }
-pc_probe_call() { # pc_probe_call PORTS OUTFILE: POST /v1/probe to the sign-in service, signed AINKRAD-SVC-V1 with a throw-away ES256 key; 0 on a 2xx
+pc_probe_call() { # pc_probe_call PORTS OUTFILE [CURL-FLAG, e.g. -4 so the answer is this machine's IPv4]: POST /v1/probe to the sign-in service, signed AINKRAD-SVC-V1 with a throw-away ES256 key; 0 on a 2xx
   command -v openssl >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 || return 1
   _d=$(mktemp -d) || return 1
   _body="{\"ports\":[$(printf '%s' "$1" | tr ' ' ',')]}"
@@ -442,7 +442,8 @@ pc_probe_call() { # pc_probe_call PORTS OUTFILE: POST /v1/probe to the sign-in s
   # shellcheck disable=SC2059 # the octal escape is the format: a raw byte for the signature file
   while [ -n "$_hex" ]; do _x=${_hex%"${_hex#??}"}; _hex=${_hex#??}; printf "\\$(printf %03o "0x$_x")" >>"$_d/sig.raw"; done
   _sig=$(pc_urlb <"$_d/sig.raw")
-  curl -fsS --max-time 15 -X POST "${AINKRAD_SIGNIN_URL:-https://signin.ainkrad.io}/v1/probe" \
+  # shellcheck disable=SC2086 # $3 is one optional curl flag
+  curl ${3:-} -fsS --max-time 15 -X POST "${AINKRAD_SIGNIN_URL:-https://signin.ainkrad.io}/v1/probe" \
     -H 'Content-Type: application/json' -H "Ainkrad-Core: $_fp" -H "Ainkrad-Key: $(pc_urlb <"$_d/spki")" -H 'Ainkrad-Alg: ES256' \
     -H "Ainkrad-Timestamp: $_ts" -H "Ainkrad-Nonce: $_nonce" -H "Ainkrad-Signature: $_sig" \
     --data-binary "@$_d/body" -o "$2" 2>/dev/null
@@ -504,15 +505,22 @@ pc_dns_probe() { # pc_dns_probe NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when
       getent ahostsv6 "$1" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9a-fA-F:]+$' | sort -u | sed 's/^/AAAA /' || true
     fi; } >"$2"
 }
-pc_pub_probe() { # pc_pub_probe OUTFILE: this machine's public IPv4 from a third party (api.ipify.org); never fails
-  { curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true; } >"$1"
+pc_pub_probe() { # pc_pub_probe OUTFILE: this machine's public IPv4 from Ainkrad's outside check (signin.ainkrad.io, the call the port probe makes), no third party; empty when it cannot run
+  _po=$(mktemp) || { : >"$1"; return 0; }
+  if pc_probe_call 443 "$_po" -4 2>/dev/null; then sed -n 's/.*"ip" *: *"\([0-9.]*\)".*/\1/p' "$_po" | head -n1 >"$1"; else : >"$1"; fi
+  rm -f "$_po"
 }
 pc_dns() { # pc_dns NAME: the A record is this machine's public address and any AAAA record is on it; else the red card (blocking)
   ui_logopen || { ui_warn "cannot create a log directory, so the DNS check is skipped"; return 0; }
   _f=$UI_LOGDIR/dns
-  UI_QUIET=1 ui_run "Looking up this machine's public address (a request to api.ipify.org)" pc_pub_probe "$_f.pub" || true
+  UI_QUIET=1 ui_run "Looking up this machine's public address (a request to signin.ainkrad.io)" pc_pub_probe "$_f.pub" || true
   _pub=$(tr -cd '0-9.' <"$_f.pub" 2>/dev/null | head -c 15)
   printf '%s' "$_pub" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || _pub=''
+  if [ -z "$_pub" ] && ( : </dev/tty ) 2>/dev/null; then # the outside check could not run: ask
+    printf "Could not look up this machine's public address. Type it, or press Return to skip the comparison: " >/dev/tty 2>/dev/null || true
+    read -r _pub </dev/tty 2>/dev/null || _pub=''
+    printf '%s' "$_pub" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || _pub=''
+  fi
   UI_QUIET=1 ui_run "Checking that $1 points at ${_pub:-this machine}" pc_dns_probe "$1" "$_f.dns" || true
   _a=$(sed -n 's/^A //p' "$_f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
   _aaaa=$(sed -n 's/^AAAA //p' "$_f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
@@ -550,7 +558,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   }
   rerun_cmd() { # the command the user ran, rebuilt from the variables they set, the version floor and their flags
     _env=''; _args=''
-    for _v in AINKRAD_HOSTNAME AINKRAD_ACME_EMAIL AINKRAD_ACME_ENV AINKRAD_HARDEN AINKRAD_FIREWALL AINKRAD_BACKUP_RECIPIENT AINKRAD_RELEASE_URL; do
+    for _v in AINKRAD_HOSTNAME AINKRAD_ACME_EMAIL AINKRAD_ACME_ENV AINKRAD_HARDEN AINKRAD_FIREWALL AINKRAD_MDNS AINKRAD_BACKUP_RECIPIENT AINKRAD_RELEASE_URL; do
       eval "_val=\${$_v:-}"
       if [ -n "$_val" ] && _q=$(shq "$_val"); then _env="$_env $_v=$_q"; fi
     done
@@ -648,6 +656,36 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     fi
 
     pkgs='ca-certificates curl minisign bubblewrap qrencode openssl iproute2 git unzip jq ripgrep build-essential xz-utils zsh' persist=''
+    # Avahi lets the Mac app find this Core on the same network. On by default only on a host with a private (home or office)
+    # address; a public server is not advertised. AINKRAD_MDNS=yes|no overrides. The decision is exported, so the installer
+    # and the firewall step follow it: yes installs avahi-daemon, writes the service file and, on the iptables path, opens
+    # UDP 5353 to the mDNS multicast groups. The ufw path is left alone (Ubuntu's before.rules already accept mDNS).
+    _ip=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1)
+    # A cloud VM often has a private address too, so the vendor (DMI) counts first, then a public address that differs from
+    # the local one (NAT: could be a cloud host or a home router) is asked about, default no; without a terminal it is no.
+    _vend=$(cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/chassis_asset_tag /sys/class/dmi/id/product_name 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    case ${AINKRAD_MDNS:-} in yes | no) ;; *)
+      AINKRAD_MDNS=no
+      case $_vend in *oracle* | *microsoft* | *amazon* | *google* | *digitalocean* | *hetzner*) ;; *)
+        case $_ip in 10.* | 192.168.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].*)
+          # The public address comes from Ainkrad's own outside check (the one the port probe already uses), never a third party.
+          _pub=''
+          if [ -z "${AINKRAD_SKIP_PROBE:-}" ] && _o=$(mktemp); then
+            if pc_probe_call 443 "$_o" -4 2>/dev/null; then _pub=$(sed -n 's/.*"ip" *: *"\([^"]*\)".*/\1/p' "$_o" | head -n1); fi
+            rm -f "$_o"
+          fi
+          if [ -n "$_pub" ] && [ "$_pub" = "$_ip" ]; then AINKRAD_MDNS=yes
+          elif ( : </dev/tty ) 2>/dev/null; then
+            # Unsure (NAT, or the check could not run): ask.
+            printf 'Advertise this Core on your local network so the Mac app can find it (mDNS)? Only say y on a home or office machine, not a cloud server. [y/N] ' >/dev/tty 2>/dev/null || true
+            read -r _a </dev/tty 2>/dev/null || _a=''
+            case $_a in [yY]*) AINKRAD_MDNS=yes ;; esac
+          fi ;;
+        esac ;;
+      esac ;;
+    esac
+    export AINKRAD_MDNS
+    [ "$AINKRAD_MDNS" != yes ] || pkgs="$pkgs avahi-daemon"
     # Firewall tooling only when hardening was asked for. iptables-persistent clashes with ufw: with ufw installed nothing is
     # added that could remove it; APT::Get::Remove=false makes apt refuse any removal instead of doing it.
     if [ "$harden" = 1 ]; then pkgs="$pkgs iptables"; dpkg -s ufw >/dev/null 2>&1 || persist=iptables-persistent; fi

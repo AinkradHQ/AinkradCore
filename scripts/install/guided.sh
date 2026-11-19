@@ -203,8 +203,10 @@ dns_probe() { # NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when there is one, e
       getent ahostsv6 "$1" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9a-fA-F:]+$' | sort -u | sed 's/^/AAAA /' || true
     fi; } >"$2"
 }
-pub_probe() { # OUTFILE: this machine's public IPv4 from a third party (api.ipify.org); never fails
-  { curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true; } >"$1"
+pub_probe() { # OUTFILE: this machine's public IPv4 from Ainkrad's outside check (signin.ainkrad.io, the call the port probe makes), no third party; empty when it cannot run
+  _po=$(mktemp) || { : >"$1"; return 0; }
+  if pc_probe_call 443 "$_po" -4 2>/dev/null; then sed -n 's/.*"ip" *: *"\([0-9.]*\)".*/\1/p' "$_po" | head -n1 >"$1"; else : >"$1"; fi
+  rm -f "$_po"
 }
 # ui_check_dns NAME: A record against this machine's public address, then the AAAA record. A name that does not point at this
 # machine STOPS the install here (the red card), before anything of the Core is set up; a dry run only warns.
@@ -215,8 +217,13 @@ ui_check_dns() {
   local name=$1 pub a aaaa x here f bad6=''
   ui_logopen || { ui_warn "cannot create a log directory, so the DNS check is skipped"; return 0; }
   f=$UI_LOGDIR/dns
-  UI_QUIET=1 ui_run "Looking up this machine's public address (a request to api.ipify.org)" pub_probe "$f.pub" || true
+  UI_QUIET=1 ui_run "Looking up this machine's public address (a request to signin.ainkrad.io)" pub_probe "$f.pub" || true
   pub=$(clean_ip "$(cat "$f.pub" 2>/dev/null || true)")
+  if [ -z "$pub" ] && ( : </dev/tty ) 2>/dev/null; then # the outside check could not run: ask
+    printf "Could not look up this machine's public address. Type it, or press Return to skip the comparison: " >/dev/tty 2>/dev/null || true
+    read -r pub </dev/tty 2>/dev/null || pub=''
+    pub=$(clean_ip "$pub")
+  fi
   UI_QUIET=1 ui_run "Checking that $name points at ${pub:-this machine}" dns_probe "$name" "$f.dns" || true
   a=$(sed -n 's/^A //p' "$f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'); aaaa=$(sed -n 's/^AAAA //p' "$f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
   if [ -z "$a" ]; then
@@ -284,6 +291,36 @@ guided_invite() {
   say "     The Core is installed and running. This release may predate 'pairing-invite'. With a newer one, run:"
   say "       $cmd"
   return 1
+}
+
+# After the invite: advertise this Core to its LAN (an Avahi service file, public facts only) and, when the install command
+# carried AINKRAD_RENDEZVOUS=<code>.<app key>, leave the link there sealed to that app's key, so the app moves on by itself.
+# Both are best effort: the link on the terminal and the paste screen stay as they were.
+guided_announce() {
+  [ "$DRY" = 0 ] || return 0
+  # The code is single use and, whatever happens below, must not stay in this installer's environment.
+  local rv=${AINKRAD_RENDEZVOUS:-}
+  unset AINKRAD_RENDEZVOUS
+  local f=/etc/avahi/services/ainkrad-core.service
+  if [ "${AINKRAD_MDNS:-no}" = yes ] && [ -d /etc/avahi/services ]; then
+    if runuser -u ainkrad -- "$BIN/ainkrad-core-server" mdns-service "$CORE_HOME/core.db" "$A_HOSTNAME" >"$f.new" 2>/dev/null; then
+      chmod 644 "$f.new" && mv "$f.new" "$f"
+    else rm -f "$f.new"; fi
+  fi
+  [ -n "$rv" ] && [ -n "$INVITE" ] || return 0
+  local fp=${INVITE#*fp=} rc=0
+  fp=${fp%%&*}
+  printf '%s\n' "$INVITE" | AINKRAD_RENDEZVOUS="$rv" "$BIN/ainkrad-core-server" rendezvous-post "${AINKRAD_SIGNIN_URL:-https://signin.ainkrad.io}" >/dev/null 2>&1 || rc=$?
+  case $rc in
+    0)
+      say "     The link was sent to the app that is waiting for it, sealed so only that app can read it."
+      say "     Fingerprint: $fp"
+      say "     In the app, press Connect only if the fingerprint it shows is exactly this one." ;;
+    4)
+      printf '   %s! SOMEONE ELSE ANSWERED THIS SETUP CODE FIRST. Do not press Connect in the app.%s\n' "$YL" "$R" >&2
+      say "     The app may be showing another Core. Close that setup, start again, and paste the link above instead." ;;
+    *) say "     Could not reach the waiting app. Paste the link above into it instead." ;;
+  esac
 }
 
 # The link, the secret alone and a QR: to the terminal only.
