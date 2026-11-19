@@ -17,6 +17,7 @@ type Mutate = Box<dyn Fn(&mut NewBudget<'_>)>;
 
 fn bud<'a>(kind: &'a str, subject: &'a str, period: &'a str, tokens: i64) -> NewBudget<'a> {
     NewBudget {
+        message_cap: None,
         kind,
         subject,
         company: None,
@@ -399,6 +400,7 @@ async fn an_approved_raise_lifts_the_stop_and_the_next_exhaustion_alerts_again()
 }
 
 mod holds;
+mod messages;
 mod pool_budgets;
 
 #[tokio::test]

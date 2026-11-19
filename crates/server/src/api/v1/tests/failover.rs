@@ -93,6 +93,7 @@ pub(super) async fn row(w: &W, id: &str) -> (Option<i64>, String, i64, Option<St
 pub(super) async fn budget(w: &W, pool: i64) {
     let subject = pool.to_string();
     let b = NewBudget {
+        message_cap: None,
         kind: "pool",
         subject: &subject,
         company: None,

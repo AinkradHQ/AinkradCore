@@ -15,6 +15,7 @@ const BY: ainkrad_core::audit::AuditActor = super::super::BY;
 
 fn budget<'a>(subject: &'a str, tokens: i64, usd: Option<i64>) -> NewBudget<'a> {
     NewBudget {
+        message_cap: None,
         kind: "account",
         subject,
         company: None,
@@ -129,6 +130,7 @@ async fn the_pools_of_the_account_limit_it_too_and_the_smallest_wins() {
     cap(&g, 9_000_000, None).await;
     let subject = p.id.to_string();
     let pool_budget = NewBudget {
+        message_cap: None,
         kind: "pool",
         ..budget(&subject, 4_000_000, None)
     };
