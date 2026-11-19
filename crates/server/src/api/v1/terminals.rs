@@ -27,6 +27,7 @@ use std::time::Instant;
 use utoipa::ToSchema;
 
 mod local;
+mod sandbox;
 pub use local::*;
 mod ssh_ops;
 pub use ssh_ops::{MAX_SMALL_FILE, MAX_UPLOAD, SftpJob, sftp_job, type_into};
@@ -285,6 +286,10 @@ pub struct Terminal {
     pub attached: Option<u32>,
     /// Running with no client attached: it is closed once idle past `terminal.idle_secs`.
     pub orphaned: Option<bool>,
+    /// Where the shell lives (D-17): `home`, `project:<id>`, `session:<id>` or `real` (this Mac's
+    /// own shell). Absent: a terminal opened before sandboxes, a host-view shell.
+    #[schema(required = false)]
+    pub sandbox: Option<String>,
 }
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct NewTerminal {
@@ -300,6 +305,14 @@ pub struct NewTerminal {
     pub session: Option<String>,
     pub env: Option<BTreeMap<String, String>>,
     pub size: TerminalSize,
+    /// Where the shell lives (D-17): `home` (the default: a private root with the caller's
+    /// persistent sandbox home), `project:<id>` or `session:<id>` (that, plus the project's or
+    /// session's folder, which the Core resolves: no `cwd`), or `real` (the runner's host view,
+    /// allowed only to the Mac that owns a macOS runner, over that Mac's own device key). 400
+    /// `bad_request` for a bad value or a `cwd` with a private mode, 403 `real_terminal_refused`
+    /// for `real` from anyone else, 409 `sandbox_unsupported` when the runner predates sandboxes.
+    #[schema(required = false)]
+    pub sandbox: Option<String>,
 }
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct TerminalSignal {
@@ -326,7 +339,7 @@ fn failed(e: &ainkrad_proto::v2::StreamError) -> ApiError {
     )
 }
 async fn row(app: &App, id: &str) -> Result<Terminal, ApiError> {
-    let r = sqlx::query_as::<_, (String,String,String,i64,i64,i64,Option<String>,String,Option<i32>,Option<String>)>("SELECT id,runner,status,rows,cols,output_seq,opened_by,created_at,exit_code,exit_signal FROM core_terminals WHERE id=? AND status!='reaped'").bind(id).fetch_optional(&app.pool).await?.ok_or_else(|| ApiError::not_found("no such terminal"))?;
+    let r = sqlx::query_as::<_, (String,String,String,i64,i64,i64,Option<String>,String,Option<i32>,Option<String>,Option<String>)>("SELECT id,runner,status,rows,cols,output_seq,opened_by,created_at,exit_code,exit_signal,sandbox FROM core_terminals WHERE id=? AND status!='reaped'").bind(id).fetch_optional(&app.pool).await?.ok_or_else(|| ApiError::not_found("no such terminal"))?;
     let status = TerminalStatus::parse(&r.2);
     let attached = app.terminals.attached(id);
     Ok(Terminal {
@@ -344,6 +357,7 @@ async fn row(app: &App, id: &str) -> Result<Terminal, ApiError> {
         exit_signal: r.9,
         attached: Some(attached),
         orphaned: Some(attached == 0 && status == TerminalStatus::Running),
+        sandbox: r.10,
     })
 }
 
@@ -874,28 +888,30 @@ pub async fn create(
     if !(1..=1000).contains(&req.size.rows) || !(1..=1000).contains(&req.size.cols) {
         return ApiError::bad_request("terminal size is out of range").into_response();
     }
-    let session = req.session.clone();
-    let cwd = match (req.session.as_deref(), req.cwd) {
-        (Some(_), Some(_)) => {
-            return ApiError::bad_request("give cwd or session, not both").into_response();
-        }
-        (Some(id), None) => {
-            match super::agents::terminal_folder(&app, &me, &req.runner, id).await {
-                Ok(folder) => Some(folder),
-                Err(e) => return e.into_response(),
-            }
-        }
-        (None, cwd) => cwd,
+    let plan = match sandbox::plan(
+        &app,
+        &me,
+        &req.runner,
+        req.sandbox.as_deref(),
+        req.session.as_deref(),
+        req.cwd.as_deref(),
+    )
+    .await
+    {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
     };
     let spec = Spec {
         program: req.program,
         args: req.args.unwrap_or_default(),
-        cwd,
-        // Only this path names a session: the runner then lets the shell into that session's
+        cwd: plan.cwd,
+        // Only the host view names a session: the runner then lets the shell into that session's
         // folder, inside its hidden state, once it has checked it is the folder it recorded.
-        session,
+        session: plan.session,
         env: req.env.unwrap_or_default(),
         ssh: None,
+        sandbox: plan.sandbox,
+        sandbox_user: plan.user,
     };
     match open(&app, &me, &req.runner, req.size, spec, None).await {
         Ok(t) => (axum::http::StatusCode::CREATED, Json(t)).into_response(),
@@ -911,6 +927,9 @@ struct Spec {
     session: Option<String>,
     env: BTreeMap<String, String>,
     ssh: Option<ainkrad_proto::v2::SshTerminal>,
+    /// `PtyOpen::sandbox` and `sandbox_user`, set only by [`sandbox::plan`].
+    sandbox: Option<String>,
+    sandbox_user: Option<String>,
 }
 
 /// How a terminal ended, as its monitor saw it, handed to whoever asked to be told
@@ -1012,8 +1031,8 @@ async fn open(
                 scrollback_bytes: u64::try_from(scrollback.0).ok(),
                 scrollback_budget: u64::try_from(scrollback.1).ok(),
                 ssh: spec.ssh,
-                sandbox: None,
-                sandbox_user: None,
+                sandbox: spec.sandbox.clone(),
+                sandbox_user: spec.sandbox_user,
             }),
             app.hub.terminal_elevation(me),
         )
@@ -1041,7 +1060,7 @@ async fn open(
             return Err(e);
         }
     };
-    if let Err(e) = register(app, me, &runner.id, &info).await {
+    if let Err(e) = register(app, me, &runner.id, &info, spec.sandbox.as_deref()).await {
         abandon(app, &runner.id, &info.terminal);
         return Err(e);
     }
@@ -1110,6 +1129,8 @@ pub async fn open_ssh(
         session: None,
         env: BTreeMap::new(),
         ssh: Some(ssh),
+        sandbox: None,
+        sandbox_user: None,
     };
     open(app, me, runner, size, spec, Some(tx))
         .await
@@ -1122,6 +1143,7 @@ async fn register(
     me: &Caller,
     runner: &str,
     info: &TerminalInfo,
+    sandbox: Option<&str>,
 ) -> Result<(), ApiError> {
     let t = &info.terminal;
     if !named(t) {
@@ -1132,8 +1154,8 @@ async fn register(
         ));
     }
     let mut tx = store::begin_write(&app.pool).await?;
-    let seq=sqlx::query_scalar::<_,i64>("INSERT INTO core_terminals(id,runner,status,rows,cols,output_seq,opened_by,created_at,last_activity) VALUES(?,?, 'running',?,?,?,?,?,?) RETURNING seq").bind(t).bind(runner).bind(info.size.rows.clamp(1,1000)).bind(info.size.cols.clamp(1,1000)).bind(info.seq as i64).bind(&me.device.id).bind(iso_of_unix(app.clock.unix())).bind(app.clock.unix()).fetch_one(&mut *tx).await?;
-    let details = json!({"terminal":t,"runner":runner,"by_device":me.device.id});
+    let seq=sqlx::query_scalar::<_,i64>("INSERT INTO core_terminals(id,runner,status,rows,cols,output_seq,opened_by,created_at,last_activity,sandbox) VALUES(?,?, 'running',?,?,?,?,?,?,?) RETURNING seq").bind(t).bind(runner).bind(info.size.rows.clamp(1,1000)).bind(info.size.cols.clamp(1,1000)).bind(info.seq as i64).bind(&me.device.id).bind(iso_of_unix(app.clock.unix())).bind(app.clock.unix()).bind(sandbox).fetch_one(&mut *tx).await?;
+    let details = json!({"terminal":t,"runner":runner,"by_device":me.device.id,"sandbox":sandbox});
     let ae = NewAuditEvent {
         actor: BY,
         action: "terminal.opened".to_owned(),
