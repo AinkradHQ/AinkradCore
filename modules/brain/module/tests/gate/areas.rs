@@ -47,6 +47,33 @@ async fn records_land_in_one_area_each_and_a_closed_room_is_counted_not_read() {
     let v = ok(&fx, Method::GET, "/areas/knowledge", None).await;
     assert_eq!(v["records"][0]["id"], "r2", "{v}");
     assert_eq!(v["total"], 1, "{v}");
+    // Learned today (the records carry a fixed 2026-11-10 date, so only a fresh one shows), and per-record archive.
+    let l = ok(&fx, Method::GET, "/learned", None).await;
+    assert!(l.as_array().is_some(), "{l}");
+    let a = ok(
+        &fx,
+        Method::POST,
+        &format!("/rooms/{room}/records/r1/archive"),
+        None,
+    )
+    .await;
+    assert_eq!(a["archived"], true, "{a}");
+    let a = ok(
+        &fx,
+        Method::POST,
+        &format!("/rooms/{room}/records/r1/archive"),
+        None,
+    )
+    .await;
+    assert_eq!(a["archived"], false, "{a}");
+    let v = ok(&fx, Method::GET, "/areas", None).await;
+    let rules = v["areas"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["area"] == "rules")
+        .unwrap();
+    assert_eq!(rules["count"], 0, "{v}");
     let (st, _) = call(&fx, &fx.admin, Method::GET, "/areas/places", None).await;
     assert_eq!(st.as_u16(), 404);
 }

@@ -12,7 +12,7 @@
 //! A room that is not open is skipped and counted in `locked_rooms`, never read around its lease.
 
 use ainkrad_core_server::api::App;
-use ainkrad_core_server::api::v1::{ApiError, ApiResult};
+use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
 use ainkrad_core_server::scheduler::iso_of_unix;
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
@@ -278,6 +278,103 @@ pub(crate) async fn records(
         total,
         locked_rooms,
     }))
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct Learned {
+    pub id: String,
+    pub room: String,
+    pub room_name: String,
+    #[serde(rename = "type")]
+    #[schema(rename = "type")]
+    pub kind: String,
+    /// `me`, `rules`, `knowledge` or `timeline`.
+    pub area: String,
+    pub body: String,
+    pub created_at: String,
+}
+
+/// The area a record of `kind` in a room of `room_kind` lands in.
+pub(crate) fn area_of(room_kind: &str, kind: &str) -> Option<Area> {
+    Area::ALL
+        .into_iter()
+        .find(|a| types_for(*a, room_kind).contains(&kind))
+}
+
+#[utoipa::path(get, path = "/learned", operation_id = "brainLearned", tag = "brain",
+    responses((status = 200, description = "Records accepted in the last 24 hours across the open rooms, newest first (at most 12), each with its area. Archive one with `POST /rooms/{room}/records/{id}/archive`", body = Vec<Learned>)))]
+pub(crate) async fn learned(
+    State(app): State<App>,
+    Extension(b): Extension<Brain>,
+) -> ApiResult<Vec<Learned>> {
+    let (rooms, _) = open_rooms(&app, &b).await?;
+    let day = iso_of_unix(app.clock.unix() - 86_400);
+    let mut all = vec![];
+    for (room, access) in &rooms {
+        let rows = sqlx::query(
+            "SELECT id, type, body, created_at FROM memory WHERE created_at >= ? \
+             ORDER BY created_at DESC, id LIMIT 12",
+        )
+        .bind(&day)
+        .fetch_all(access.pool())
+        .await?;
+        for r in rows {
+            let kind: String = r.try_get("type")?;
+            let Some(area) = area_of(&room.kind, &kind) else {
+                continue;
+            };
+            all.push(Learned {
+                id: r.try_get("id")?,
+                room: room.id.clone(),
+                room_name: room.name.clone(),
+                area: area.name().to_owned(),
+                kind,
+                body: r.try_get("body")?,
+                created_at: r.try_get("created_at")?,
+            });
+        }
+        access.pool().close().await;
+    }
+    all.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    all.truncate(12);
+    Ok(Json(all))
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct Archived {
+    /// False when it was archived already.
+    pub archived: bool,
+}
+
+#[utoipa::path(post, path = "/rooms/{room}/records/{id}/archive", operation_id = "brainArchiveRecord", tag = "brain",
+    params(("room" = String, Path, description = "Room id"), ("id" = String, Path, description = "Record id")),
+    responses((status = 200, description = "The record leaves memory (archived, kept for the retention window; never deleted). Person only; the room must be open", body = Archived)))]
+pub(crate) async fn archive(
+    State(app): State<App>,
+    Extension(b): Extension<Brain>,
+    Extension(me): Extension<Caller>,
+    Path((room, id)): Path<(String, String)>,
+) -> ApiResult<Archived> {
+    crate::change_routes::person_only(&me)?;
+    let access = crate::inbox::open_room(&app, &b, &room).await?;
+    let now = app.clock.now();
+    let mut tx = access.pool().begin().await?;
+    let n = sqlx::query("UPDATE records SET archived_at = ? WHERE id = ? AND archived_at IS NULL")
+        .bind(&now)
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if n == 1 {
+        crate::distil::log_op(&mut tx, "record.archived", &id, &now).await?;
+    }
+    tx.commit().await?;
+    access.pool().close().await;
+    Ok(Json(Archived { archived: n == 1 }))
 }
 
 #[cfg(test)]
