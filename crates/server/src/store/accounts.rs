@@ -37,7 +37,14 @@ pub const DEFAULT_CAP: i64 = 4;
 pub const MAX_CAP: i64 = 64;
 /// The built-in providers (pools are of these only). An account may also name a stored user
 /// definition (`account_keys::holds_keys_problem`).
-pub const PROVIDERS: [&str; 5] = ["anthropic", "openai", "google", "claude-sub", "codex-sub"];
+pub const PROVIDERS: [&str; 6] = [
+    "anthropic",
+    "openai",
+    "google",
+    "claude-sub",
+    "codex-sub",
+    "opencode-sub",
+];
 /// The states an account is in.
 pub const STATES: [&str; 5] = ["active", "cooling", "limited", "unhealthy", "disabled"];
 

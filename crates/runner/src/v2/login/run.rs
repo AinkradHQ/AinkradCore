@@ -218,6 +218,11 @@ impl LoginDriver {
                     Msg::Wait(tx) => {
                         let _ = tx.send(result(id, Some("this sign-in has no wait")));
                     }
+                    // Only a runner-bound sign-in is guided; the Core never sends these here.
+                    Msg::Input(_, tx) => {
+                        let _ = tx.send(result(id, Some("this sign-in takes no typed line")));
+                    }
+                    Msg::Screen(_) => {}
                     Msg::Code(code, tx) => {
                         if typed || pending.is_some() {
                             let _ = tx.send(result(id, Some("a code was already given")));
@@ -296,7 +301,7 @@ impl LoginDriver {
 
 /// The code, then its Enter as a write of its own `delay` later (see `ENTER_DELAY`); a zero
 /// `delay` sends both in one write.
-async fn type_code(
+pub(super) async fn type_code(
     writer: &mut Box<dyn Write + Send>,
     code: &str,
     delay: Duration,

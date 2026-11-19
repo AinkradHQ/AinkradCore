@@ -300,6 +300,14 @@ pub fn router(app: App) -> Router {
             post(accounts::send_login_code),
         )
         .route(
+            "/api/v1/accounts/logins/{id}/input",
+            post(accounts::send_login_input),
+        )
+        .route(
+            "/api/v1/accounts/logins/{id}/screen",
+            get(accounts::get_login_screen),
+        )
+        .route(
             "/api/v1/accounts/{id}",
             get(accounts::get).delete(accounts::delete),
         )

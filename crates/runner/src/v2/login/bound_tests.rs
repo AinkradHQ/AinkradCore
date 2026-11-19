@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ainkrad_proto::v2::{ErrorCode, LoginCancel, LoginStart, LoginWait};
+use ainkrad_proto::v2::{
+    ErrorCode, LoginCancel, LoginInput, LoginScreenReq, LoginStart, LoginWait,
+};
 
 use super::bound::{BoundCli, find_device_code, find_page};
 use super::tests::Tmp;
@@ -161,4 +163,130 @@ fn the_device_code_and_page_are_read_from_the_screen() {
         find_device_code(&lines(&["ONE-TIME CODE", "one-time", "0.154.0"])),
         None
     );
+}
+
+/// A stand-in `opencode`: asks for a provider, then prints a page and a code and wants the code
+/// pasted back, then writes its "login" under XDG_DATA_HOME and exits 0.
+fn opencode_driver(t: &Tmp) -> Arc<LoginDriver> {
+    let p = t.file("opencode");
+    let body = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo '9.9.9'; exit 0; fi
+printf 'Select provider: '
+read -r pick
+printf '\r\nOpen https://github.com/login/device\r\nCode: ABCD-1234\r\nPaste code: '
+read -r pasted
+[ "$pasted" = "ABCD-1234" ] || exit 5
+test -d "$XDG_CONFIG_HOME" && test -d "$XDG_STATE_HOME" || exit 6
+printf 'fake-login-TESTONLY' > "$XDG_DATA_HOME/auth.json"
+printf 'ok\r\n'
+"#;
+    std::fs::write(&p, body).unwrap();
+    let mut cfg = LoginConfig::new(t.file("logins"), PathBuf::from("/bin/false"));
+    cfg.bound = vec![BoundCli {
+        harness: "opencode",
+        program: PathBuf::from("/bin/sh"),
+        args: vec![p.display().to_string()],
+        pinned: vec!["9.9.9".to_owned()],
+    }];
+    cfg.homes = t.file("homes");
+    cfg.grace = Duration::from_millis(100);
+    cfg.enter_delay = Duration::from_millis(20);
+    Arc::new(LoginDriver::new(cfg).unwrap())
+}
+
+fn opencode_start(id: &str, key: &str) -> LoginStart {
+    LoginStart {
+        harness: "opencode".to_owned(),
+        ..start(id, key)
+    }
+}
+
+#[tokio::test]
+async fn a_guided_sign_in_shows_its_screen_takes_typed_lines_and_finishes_in_its_home() {
+    let t = Tmp::new();
+    let d = opencode_driver(&t);
+    // The CLI asks a question and waits: the sign-in is handed over with no page yet.
+    let u = d.start(opencode_start("l_1", "lg_1")).await.unwrap();
+    assert_eq!((u.url.as_str(), u.code), ("", None));
+    let s = d
+        .screen(LoginScreenReq {
+            login_id: "l_1".into(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        s.lines.iter().any(|l| l.contains("Select provider")),
+        "{:?}",
+        s.lines
+    );
+    d.input(LoginInput {
+        login_id: "l_1".into(),
+        text: "GitHub".into(),
+    })
+    .await
+    .unwrap();
+    // The page and the code now show on the screen.
+    let mut shown = None;
+    for _ in 0..60 {
+        let s = d
+            .screen(LoginScreenReq {
+                login_id: "l_1".into(),
+            })
+            .await
+            .unwrap();
+        if s.url.is_some() && s.code.is_some() {
+            shown = Some(s);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let s = shown.expect("the page and the code were never shown");
+    assert_eq!(
+        (s.url.as_deref(), s.code.as_deref()),
+        (Some("https://github.com/login/device"), Some("ABCD-1234"))
+    );
+    d.input(LoginInput {
+        login_id: "l_1".into(),
+        text: "ABCD-1234".into(),
+    })
+    .await
+    .unwrap();
+    let r = d.wait(wait("l_1")).await.unwrap();
+    assert!(r.done, "{:?}", r.error);
+    assert_eq!(
+        std::fs::read_to_string(t.file("homes").join("lg_1/data/auth.json")).unwrap(),
+        "fake-login-TESTONLY"
+    );
+}
+
+#[tokio::test]
+async fn a_typed_line_is_one_printable_line_and_a_codex_sign_in_is_not_guided_by_it() {
+    let t = Tmp::new();
+    let d = opencode_driver(&t);
+    d.start(opencode_start("l_1", "lg_1")).await.unwrap();
+    for bad in ["a\nb", "a\rb", "x\u{7}y", &"z".repeat(513)] {
+        let e = d
+            .input(LoginInput {
+                login_id: "l_1".into(),
+                text: bad.into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidArgs, "{bad:?}");
+    }
+    d.cancel(LoginCancel {
+        login_id: "l_1".into(),
+    })
+    .await
+    .unwrap();
+    assert!(!t.file("homes").join("lg_1").exists());
+    // No such sign-in: nothing to type into.
+    let e = d
+        .input(LoginInput {
+            login_id: "l_1".into(),
+            text: "x".into(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgs);
 }

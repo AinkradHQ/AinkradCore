@@ -169,7 +169,7 @@ pub const ACCOUNT_PREFIX: &str = "acct.";
 
 /// The provider kinds an account secret may name. Extending it is a code change on purpose.
 /// Each is paired with the redactor kind of its own key shape.
-pub const ACCOUNT_PROVIDERS: [(&str, &str); 5] = [
+pub const ACCOUNT_PROVIDERS: [(&str, &str); 6] = [
     ("anthropic", "anthropic_key"),
     // A Claude subscription's `setup-token` (`sk-ant-oat01-…`): the redactor reads it as an
     // Anthropic key, so the narrow gate judges it as one.
@@ -179,6 +179,7 @@ pub const ACCOUNT_PROVIDERS: [(&str, &str); 5] = [
     // A runner-bound sign-in (E7-4): the secret holds a non-secret marker (`ainkrad-bound:<home>`),
     // never a token. Its scope is the one runner that holds the login.
     ("codex-sub", "openai_key"),
+    ("opencode-sub", "openai_key"),
 ];
 
 /// What a secret is for, from its name alone (the account model will mint these names).

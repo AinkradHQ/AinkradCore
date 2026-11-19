@@ -113,6 +113,10 @@ pub enum Command {
     /// (After every older op.) Wait for a runner-bound sign-in to finish (E7-4).
     #[serde(rename = "login.wait")]
     LoginWait(super::LoginWait),
+    #[serde(rename = "login.input")]
+    LoginInput(super::LoginInput),
+    #[serde(rename = "login.screen")]
+    LoginScreen(super::LoginScreenReq),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -144,6 +148,8 @@ impl Command {
             Self::LoginCode(_) => super::OP_LOGIN_CODE,
             Self::LoginCancel(_) => super::OP_LOGIN_CANCEL,
             Self::LoginWait(_) => super::OP_LOGIN_WAIT,
+            Self::LoginInput(_) => super::OP_LOGIN_INPUT,
+            Self::LoginScreen(_) => super::OP_LOGIN_SCREEN,
             Self::RunnerPolicy(_) => super::OP_RUNNER_POLICY,
             Self::ToolsInstall(_) => super::OP_TOOLS_INSTALL,
             Self::ToolsStatus(_) => super::OP_TOOLS_STATUS,
@@ -313,6 +319,9 @@ pub enum Reply {
     /// The last frame of `port.open`.
     #[serde(rename = "port.open")]
     PortOpen(super::PortClosed),
+    /// The answer to `login.screen`.
+    #[serde(rename = "login.screen")]
+    LoginScreen(super::LoginScreen),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

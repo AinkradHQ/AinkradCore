@@ -22,6 +22,7 @@ async fn up(name: &str, bound_cap: bool) -> W {
     let mut commands: Vec<String> = AGENT_OPS.iter().map(|o| (*o).to_owned()).collect();
     if bound_cap {
         commands.push(format!("{CAP_LOGIN_BOUND}codex"));
+        commands.push(format!("{CAP_LOGIN_BOUND}opencode"));
         commands.push(CAP_BOUND_HOME.to_owned());
     }
     let driver = DriverInfo {
@@ -195,4 +196,123 @@ async fn a_runner_without_the_bound_login_is_not_picked_and_a_foreign_page_or_co
         )
         .await;
     until(&w, &l.id, "failed").await;
+}
+
+#[tokio::test]
+async fn an_opencode_login_is_guided_through_a_screen_and_typed_lines_and_stays_on_its_runner() {
+    let mut w = up("bound-guided", true).await;
+    let l = login::start(&w.core.app, &w.who, "opencode-sub", "oc", None)
+        .await
+        .unwrap();
+    let (stream, cmd) = command(&mut w.fake).await;
+    let Command::LoginStart(st) = cmd else {
+        panic!("{cmd:?}")
+    };
+    assert_eq!(
+        (st.harness.as_str(), st.home.as_deref()),
+        ("opencode", Some(l.id.as_str()))
+    );
+    // The CLI asked a question first: no page yet is a valid hand-over for a guided login.
+    w.fake
+        .send(
+            stream,
+            Body::Result(Reply::LoginUrl(LoginUrl {
+                login_id: l.id.clone(),
+                url: String::new(),
+                code: None,
+            })),
+        )
+        .await;
+    let open = until(&w, &l.id, "open_url").await;
+    assert_eq!(open.url, None);
+    let (_wait_stream, cmd) = command(&mut w.fake).await;
+    assert!(matches!(cmd, Command::LoginWait(_)));
+
+    // The screen is read from the runner, redacted again, and a foreign page or a bad code dropped.
+    let screen = login::screen(&w.core.app, &w.who, &l.id);
+    let respond = async {
+        let (st, c) = command(&mut w.fake).await;
+        assert!(matches!(c, Command::LoginScreen(_)));
+        w.fake
+            .send(
+                st,
+                Body::Result(Reply::LoginScreen(LoginScreen {
+                    login_id: l.id.clone(),
+                    lines: vec![
+                        "Select provider".to_owned(),
+                        "key sk-proj-abcdefghijklmnopqrstuvwxyz0123456789".to_owned(),
+                    ],
+                    url: Some("https://evil.example.com/login".to_owned()),
+                    code: Some("lower-case".to_owned()),
+                })),
+            )
+            .await;
+    };
+    let (s, ()) = tokio::join!(screen, respond);
+    let s = s.unwrap();
+    assert_eq!((s.url, s.code), (None, None));
+    assert!(
+        s.lines.iter().all(|x| !x.contains("sk-proj-abcdefghij")),
+        "{:?}",
+        s.lines
+    );
+
+    // One typed line goes to the runner, once, and the Debug of it hides the text.
+    let input = login::input(
+        &w.core.app,
+        &w.who,
+        &l.id,
+        zeroize::Zeroizing::new("GitHub".to_owned()),
+    );
+    let respond = async {
+        let (st, c) = command(&mut w.fake).await;
+        let Command::LoginInput(i) = c else {
+            panic!("{c:?}")
+        };
+        assert_eq!(i.text, "GitHub");
+        assert!(!format!("{i:?}").contains("GitHub"));
+        w.fake
+            .send(
+                st,
+                Body::Result(Reply::LoginResult(LoginResult {
+                    login_id: i.login_id.clone(),
+                    token: None,
+                    error: None,
+                    done: false,
+                })),
+            )
+            .await;
+    };
+    let (r, ()) = tokio::join!(input, respond);
+    r.unwrap();
+    let (code, _) = refusal(
+        login::input(
+            &w.core.app,
+            &w.who,
+            &l.id,
+            zeroize::Zeroizing::new("a\nb".to_owned()),
+        )
+        .await,
+    );
+    assert_eq!(code, "bad_request");
+}
+
+#[tokio::test]
+async fn a_codex_login_has_no_screen_and_takes_no_typed_line() {
+    let mut w = up("bound-codex-noscreen", true).await;
+    let (l, _) = to_open_url(&mut w, "codex-x").await;
+    let (c, _) = refusal(
+        login::input(
+            &w.core.app,
+            &w.who,
+            &l.id,
+            zeroize::Zeroizing::new("x".to_owned()),
+        )
+        .await,
+    );
+    assert_eq!(c, "bad_request");
+    assert_eq!(
+        refusal(login::screen(&w.core.app, &w.who, &l.id).await).0,
+        "bad_request"
+    );
 }

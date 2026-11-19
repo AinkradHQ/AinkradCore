@@ -304,6 +304,8 @@ impl Hub {
                 | Command::LoginCode(_)
                 | Command::LoginCancel(_)
                 | Command::LoginWait(_)
+                | Command::LoginInput(_)
+                | Command::LoginScreen(_)
         ) {
             return Err(StreamError::new(
                 ErrorCode::InvalidArgs,
