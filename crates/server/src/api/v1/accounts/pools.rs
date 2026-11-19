@@ -11,6 +11,7 @@ pub async fn list_pools(State(app): State<App>) -> ApiResult<Vec<Pool>> {
         pl::list(&app.pool)
             .await?
             .into_iter()
+            .filter(|p| !p.hidden)
             .map(Into::into)
             .collect(),
     ))

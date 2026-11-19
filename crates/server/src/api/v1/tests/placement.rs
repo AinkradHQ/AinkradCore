@@ -31,7 +31,7 @@ async fn add(fx: &Fx, provider: &str, label: &str, p: Placement) -> (i64, i64, O
 }
 
 #[tokio::test]
-async fn a_new_account_gets_a_default_pool_a_default_chain_and_a_monthly_limit() {
+async fn a_new_account_gets_a_hidden_pool_of_its_own_the_ai_order_and_a_monthly_limit() {
     let fx = fx().await;
     let p = &fx.app.pool;
     crate::store::settings::set(p, Key::SecretsMode, Scope::Server, "1", BY, NOW)
@@ -47,15 +47,16 @@ async fn a_new_account_gets_a_default_pool_a_default_chain_and_a_monthly_limit()
     let (a1, pool, chain) = add(&fx, "anthropic", "one", me).await;
     let chain = chain.expect("a default chain was made");
     let pl1 = pl::get(p, pool).await.unwrap();
-    assert!(pl1.is_default && pl1.members == [a1]);
+    assert!(pl1.hidden && !pl1.is_default && pl1.members == [a1]);
     let c = ch::get(p, chain).await.unwrap();
-    assert!(c.is_default && c.entries.len() == 1 && c.entries[0].pool == pool);
+    assert!(c.hidden && c.is_default && c.entries.len() == 1 && c.entries[0].pool == pool);
 
-    // A second key account joins the same pool; the chain is not touched.
+    // A second key account of the same provider gets a pool of its own, appended to the order.
     let (a2, pool2, chain2) = add(&fx, "anthropic", "two", me).await;
-    assert_eq!((pool2, chain2), (pool, Some(chain)));
-    assert_eq!(pl::get(p, pool).await.unwrap().members, [a1, a2]);
-    assert_eq!(ch::get(p, chain).await.unwrap().entries.len(), 1);
+    assert_ne!(pool2, pool);
+    assert_eq!(chain2, Some(chain));
+    assert_eq!(pl::get(p, pool2).await.unwrap().members, [a2]);
+    assert_eq!(ch::get(p, chain).await.unwrap().entries.len(), 2);
 
     // Each key account has the $20 monthly limit.
     let usd: i64 = sqlx::query_scalar(
@@ -68,8 +69,7 @@ async fn a_new_account_gets_a_default_pool_a_default_chain_and_a_monthly_limit()
     .unwrap();
     assert_eq!(usd, 20_000_000);
 
-    // A Claude plan account is alone in its pool, appended to the default chain; a second one
-    // gets a pool of its own.
+    // Claude plan accounts are appended too, two of them: the order holds several subscriptions.
     let (s1, sp1, _) = add(&fx, "claude-sub", "plan-a", me).await;
     let (s2, sp2, _) = add(&fx, "claude-sub", "plan-b", me).await;
     assert_ne!(sp1, sp2);
@@ -82,8 +82,7 @@ async fn a_new_account_gets_a_default_pool_a_default_chain_and_a_monthly_limit()
         .iter()
         .map(|e| e.pool)
         .collect();
-    // The chain takes one subscription entry: the second plan's pool is left out of the default chain.
-    assert_eq!(pools, [pool, sp1]);
+    assert_eq!(pools, [pool, pool2, sp1, sp2]);
 
     // A chosen position, and no limit with 0.
     let (a3, ..) = add(
@@ -105,6 +104,66 @@ async fn a_new_account_gets_a_default_pool_a_default_chain_and_a_monthly_limit()
         .await
         .unwrap();
     assert_eq!(n, 0);
+}
+
+#[tokio::test]
+async fn the_ai_order_lists_accounts_reorders_them_and_keeps_agent_overrides() {
+    use crate::store::chains::order::{self, Spec};
+    let fx = fx().await;
+    let p = &fx.app.pool;
+    crate::store::settings::set(p, Key::SecretsMode, Scope::Server, "1", BY, NOW)
+        .await
+        .unwrap();
+    crate::store::settings::set(p, Key::SecretsProviderAccounts, Scope::Server, "1", BY, NOW)
+        .await
+        .unwrap();
+    let me = Placement {
+        user: 1,
+        ..Default::default()
+    };
+    let (a1, ..) = add(&fx, "anthropic", "one", me).await;
+    let (a2, ..) = add(&fx, "openai", "two", me).await;
+    let (s1, ..) = add(&fx, "claude-sub", "plan", me).await;
+    let ids = |o: &order::Order| o.items.iter().map(|i| i.account).collect::<Vec<_>>();
+    assert_eq!(ids(&order::get(p, 1).await.unwrap()), [a1, a2, s1]);
+
+    // Reordered as a whole; the same hidden pools are reused, so nothing new appears.
+    let pools_before = pl::list(p).await.unwrap().len();
+    let spec = |a| Spec {
+        account: a,
+        model: None,
+    };
+    order::set(p, 1, None, &[spec(s1), spec(a1), spec(a2)], "d_x", BY, NOW)
+        .await
+        .unwrap();
+    assert_eq!(ids(&order::get(p, 1).await.unwrap()), [s1, a1, a2]);
+    assert_eq!(pl::list(p).await.unwrap().len(), pools_before);
+
+    // An account twice, none, and a missing account are refused; the order stays.
+    for bad in [vec![spec(a1), spec(a1)], vec![], vec![spec(9999)]] {
+        assert!(order::set(p, 1, None, &bad, "d_x", BY, NOW).await.is_err());
+    }
+    assert_eq!(ids(&order::get(p, 1).await.unwrap()), [s1, a1, a2]);
+
+    // An agent's override; the default order is untouched; clearing it falls back.
+    order::set(p, 1, Some("agent-x"), &[spec(a2)], "d_x", BY, NOW)
+        .await
+        .unwrap();
+    let o = order::get(p, 1).await.unwrap();
+    assert_eq!(
+        (o.overrides.len(), o.overrides[0].items[0].account),
+        (1, a2)
+    );
+    assert_eq!(ids(&o), [s1, a1, a2]);
+    order::clear_agent(p, 1, "agent-x", "d_x", BY)
+        .await
+        .unwrap();
+    assert!(order::get(p, 1).await.unwrap().overrides.is_empty());
+    assert!(
+        order::clear_agent(p, 1, "agent-x", "d_x", BY)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

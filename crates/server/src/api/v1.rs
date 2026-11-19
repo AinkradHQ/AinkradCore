@@ -29,6 +29,7 @@ mod agents;
 #[cfg(feature = "test-support")]
 pub use agents::create as create_agent_for_tests;
 mod accounts;
+mod ai_order;
 mod audit;
 mod budgets;
 mod chains;
@@ -331,6 +332,11 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/bindings/{agent}/{provider}",
             delete(accounts::unbind),
+        )
+        .route("/api/v1/ai-order", get(ai_order::get).put(ai_order::set))
+        .route(
+            "/api/v1/ai-order/agents/{agent}",
+            put(ai_order::set_agent).delete(ai_order::clear_agent),
         )
         .route("/api/v1/chains", get(chains::list).post(chains::create))
         .route("/api/v1/chains/bindings", get(chains::list_bindings))

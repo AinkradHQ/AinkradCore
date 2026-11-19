@@ -42,6 +42,62 @@ pub const DEPRECATED: &[Deprecation] = &[
         deprecated_at: 1_793_923_200,
         sunset: 1_809_561_600,
     },
+    // 2026-11-19 and 2027-05-19 (E7-1, D-18): the pool and chain writes. The AI order
+    // (`/api/v1/ai-order`) replaces them; they keep answering until the sunset.
+    Deprecation {
+        method: "POST",
+        path: "/api/v1/pools",
+        deprecated_at: 1_795_046_400,
+        sunset: 1_810_684_800,
+    },
+    Deprecation {
+        method: "DELETE",
+        path: "/api/v1/pools/{id}",
+        deprecated_at: 1_795_046_400,
+        sunset: 1_810_684_800,
+    },
+    Deprecation {
+        method: "PUT",
+        path: "/api/v1/pools/{id}/members/{account}",
+        deprecated_at: 1_795_046_400,
+        sunset: 1_810_684_800,
+    },
+    Deprecation {
+        method: "DELETE",
+        path: "/api/v1/pools/{id}/members/{account}",
+        deprecated_at: 1_795_046_400,
+        sunset: 1_810_684_800,
+    },
+    Deprecation {
+        method: "PUT",
+        path: "/api/v1/pools/{id}/default",
+        deprecated_at: 1_795_046_400,
+        sunset: 1_810_684_800,
+    },
+    Deprecation {
+        method: "POST",
+        path: "/api/v1/chains",
+        deprecated_at: 1_795_046_400,
+        sunset: 1_810_684_800,
+    },
+    Deprecation {
+        method: "PUT",
+        path: "/api/v1/chains/{id}",
+        deprecated_at: 1_795_046_400,
+        sunset: 1_810_684_800,
+    },
+    Deprecation {
+        method: "DELETE",
+        path: "/api/v1/chains/{id}",
+        deprecated_at: 1_795_046_400,
+        sunset: 1_810_684_800,
+    },
+    Deprecation {
+        method: "PUT",
+        path: "/api/v1/chains/{id}/default",
+        deprecated_at: 1_795_046_400,
+        sunset: 1_810_684_800,
+    },
 ];
 
 /// `Sun, 06 Nov 1994 08:49:37 GMT`.

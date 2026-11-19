@@ -116,6 +116,11 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/bindings", "read"),
     ("PUT", "/api/v1/bindings", "admin"),
     ("DELETE", "/api/v1/bindings/{agent}/{provider}", "admin"),
+    // The AI order (E7-1): reading says which accounts a run may walk, so it is `admin` too.
+    ("GET", "/api/v1/ai-order", "admin"),
+    ("PUT", "/api/v1/ai-order", "admin"),
+    ("PUT", "/api/v1/ai-order/agents/{agent}", "admin"),
+    ("DELETE", "/api/v1/ai-order/agents/{agent}", "admin"),
     // Fallback chains (S7): reading says which accounts a run may walk, so it is `admin` too.
     ("GET", "/api/v1/chains", "admin"),
     ("POST", "/api/v1/chains", "admin"),
@@ -328,6 +333,10 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/pools/{id}/default"),
     ("PUT", "/api/v1/bindings"),
     ("DELETE", "/api/v1/bindings/{agent}/{provider}"),
+    // The AI order (E7-1): it decides which key a run spends next.
+    ("PUT", "/api/v1/ai-order"),
+    ("PUT", "/api/v1/ai-order/agents/{agent}"),
+    ("DELETE", "/api/v1/ai-order/agents/{agent}"),
     // Chains (S7): a chain decides which key a run spends next.
     ("POST", "/api/v1/chains"),
     ("PUT", "/api/v1/chains/bindings/{agent}"),
