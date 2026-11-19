@@ -663,7 +663,7 @@ async fn an_unlock_only_route_needs_an_approval_even_when_listed_as_a_plain_writ
 fn every_unlocked_route_is_risky_in_code_mode() {
     use crate::api::v1::scopes::{UNLOCKED, needs_unlock};
     for (m, t) in UNLOCKED {
-        let path = t.replace('{', "").replace('}', "");
+        let path = t.replace(['{', '}'], "");
         let method: Method = m.parse().unwrap();
         assert!(needs_unlock(&method, &path, &[]), "{m} {t}");
     }
