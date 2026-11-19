@@ -227,6 +227,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "secret_group.updated",
     "setting.reset",
     "setting.set",
+    "core.prefs_changed",
 ];
 
 /// Whether `name` is dotted lowercase with at least `segments` segments.

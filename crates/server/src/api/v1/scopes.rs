@@ -63,6 +63,10 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     // The Core machine (host-helper plan §4): all `admin`; see DESTRUCTIVE for the step-up ones.
     ("GET", "/api/v1/system/host", "admin"),
     ("GET", "/api/v1/core/health", "read"),
+    ("GET", "/api/v1/core/prefs", "read"),
+    ("PUT", "/api/v1/core/prefs", "admin"),
+    ("GET", "/api/v1/core/storage", "admin"),
+    ("POST", "/api/v1/core/update/check", "admin"),
     ("POST", "/api/v1/system/restart", "admin"),
     ("GET", "/api/v1/system/logs/core", "admin"),
     ("GET", "/api/v1/system/logs/helper", "admin"),
