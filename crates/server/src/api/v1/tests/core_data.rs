@@ -108,6 +108,11 @@ async fn the_core_health_route_answers_a_read_device() {
     assert_eq!(s, StatusCode::OK, "{h}");
     assert_eq!(h["version"], env!("CARGO_PKG_VERSION"));
     assert!(h["uptime_secs"].is_u64(), "{h}");
+    // Host facts for the top bar's Core menu are present or null, never out of range.
+    if let Some(p) = h["disk_used_pct"].as_i64() {
+        assert!((0..=100).contains(&p), "{h}");
+    }
+    assert!(h["memory_bytes"].is_null() || h["memory_bytes"].is_u64(), "{h}");
 }
 
 /// An offline runner still has its slots (nothing used) and no live facts; the built-in mark
