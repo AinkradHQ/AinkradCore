@@ -28,6 +28,9 @@ pub const RESERVED: &[&str] = &[
     "design", "leyline", "lore", "toy",
 ];
 
+/// The values of a project's runner preference.
+pub const RUNNERS: [&str; 3] = ["auto", "this_mac", "home_server"];
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Project {
     pub id: i64,
@@ -41,6 +44,8 @@ pub struct Project {
     pub idle_minutes: i64,
     pub cpu_limit: f64,
     pub mem_limit_mb: i64,
+    /// `auto`, `this_mac` or `home_server`.
+    pub runner_pref: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -94,7 +99,7 @@ pub fn slug_problem(slug: &str) -> Option<&'static str> {
 }
 
 const SELECT: &str = "SELECT id, slug, name, description, state, source, secret_group, expose, \
-    idle_minutes, cpu_limit, mem_limit_mb, created_at, updated_at FROM core_projects";
+    idle_minutes, cpu_limit, mem_limit_mb, runner_pref, created_at, updated_at FROM core_projects";
 
 fn project(r: SqliteRow) -> Result<Project, sqlx::Error> {
     Ok(Project {
@@ -109,6 +114,7 @@ fn project(r: SqliteRow) -> Result<Project, sqlx::Error> {
         idle_minutes: r.try_get("idle_minutes")?,
         cpu_limit: r.try_get("cpu_limit")?,
         mem_limit_mb: r.try_get("mem_limit_mb")?,
+        runner_pref: r.try_get("runner_pref")?,
         created_at: r.try_get("created_at")?,
         updated_at: r.try_get("updated_at")?,
     })
@@ -289,6 +295,8 @@ pub struct Change<'a> {
     pub idle_minutes: Option<i64>,
     pub cpu_limit: Option<f64>,
     pub mem_limit_mb: Option<i64>,
+    /// `auto`, `this_mac` or `home_server`.
+    pub runner: Option<&'a str>,
 }
 
 /// Changes name, description and/or public exposure (`None` keeps it). An archived project is
@@ -331,6 +339,10 @@ pub async fn change(
     let idle = c.idle_minutes.unwrap_or(old.idle_minutes);
     let cpu = c.cpu_limit.unwrap_or(old.cpu_limit);
     let mem = c.mem_limit_mb.unwrap_or(old.mem_limit_mb);
+    let runner = c.runner.unwrap_or(&old.runner_pref);
+    if !RUNNERS.contains(&runner) {
+        return refused("bad_request", "where it runs is auto, this_mac or home_server");
+    }
     if !(5..=1440).contains(&idle) {
         return refused("bad_request", "idle stop is 5 to 1440 minutes");
     }
@@ -365,7 +377,7 @@ pub async fn change(
     }
     sqlx::query(
         "UPDATE core_projects SET slug = ?, name = ?, description = ?, expose = ?, \
-         idle_minutes = ?, cpu_limit = ?, mem_limit_mb = ?, updated_at = ? WHERE id = ?",
+         idle_minutes = ?, cpu_limit = ?, mem_limit_mb = ?, runner_pref = ?, updated_at = ? WHERE id = ?",
     )
     .bind(slug)
     .bind(name)
@@ -374,12 +386,13 @@ pub async fn change(
     .bind(idle)
     .bind(cpu)
     .bind(mem)
+    .bind(runner)
     .bind(who.now)
     .bind(id)
     .execute(&mut *tx)
     .await?;
     let details = json!({"name": name, "slug": slug, "expose": expose, "idle_minutes": idle,
-        "cpu_limit": cpu, "mem_limit_mb": mem, "by_device": who.by_device});
+        "cpu_limit": cpu, "mem_limit_mb": mem, "runner": runner, "by_device": who.by_device});
     record(&mut tx, who.actor, "project.updated", id, details, true).await?;
     let p = get(&mut tx, id).await?;
     tx.commit().await?;

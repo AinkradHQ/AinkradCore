@@ -331,3 +331,20 @@ async fn a_mirror_has_an_explicit_state_and_every_change_is_an_event() {
             .unwrap();
     assert_eq!(events, 2);
 }
+
+#[tokio::test]
+async fn runner_preference_defaults_to_auto_and_only_takes_known_values() {
+    let fx = fx().await;
+    let p = mk(&fx, "shop").await.unwrap();
+    assert_eq!(p.runner_pref, "auto");
+    let set = |r| Change {
+        runner: Some(r),
+        ..Change::default()
+    };
+    let u = change(&fx.pool, p.id, &set("home_server"), W).await.unwrap();
+    assert_eq!(u.runner_pref, "home_server");
+    assert_eq!(code(change(&fx.pool, p.id, &set("cloud"), W).await), "bad_request");
+    // An unrelated change keeps the preference.
+    let k = update(&fx.pool, p.id, Some("Shop 2"), None, None, W).await.unwrap();
+    assert_eq!(k.runner_pref, "home_server");
+}
