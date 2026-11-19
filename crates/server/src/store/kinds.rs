@@ -230,6 +230,8 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "setting.reset",
     "setting.set",
     "core.prefs_changed",
+    "project.defaults_changed",
+    "project.unarchived",
 ];
 
 /// Whether `name` is dotted lowercase with at least `segments` segments.

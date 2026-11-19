@@ -101,6 +101,9 @@ pub struct ProjectInfo {
     /// Whether the running project gets a public link.
     pub expose: bool,
     pub idle_minutes: i64,
+    /// The idle stop is off: the run keeps going while nobody visits.
+    #[schema(required = false)]
+    pub idle_never: Option<bool>,
     pub cpu_limit: f64,
     pub mem_limit_mb: i64,
     /// The primary repo first, then by name.
@@ -144,6 +147,7 @@ pub(super) async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError>
         source: p.source,
         expose: p.expose,
         idle_minutes: p.idle_minutes,
+        idle_never: Some(p.idle_never),
         cpu_limit: p.cpu_limit,
         mem_limit_mb: p.mem_limit_mb,
         repos,
@@ -249,6 +253,8 @@ pub struct UpdateProject {
     pub slug: Option<String>,
     /// Idle stop, 5 to 1440 minutes.
     pub idle_minutes: Option<i64>,
+    /// Turn the idle stop off (true) or back on (false).
+    pub idle_never: Option<bool>,
     /// CPUs a run may use, 0.1 to 16.
     pub cpu_limit: Option<f64>,
     /// Memory a run may use, 64 to 32768 MB.
@@ -274,6 +280,7 @@ pub async fn update(
         expose: b.expose,
         slug: b.slug.as_deref(),
         idle_minutes: b.idle_minutes,
+        idle_never: b.idle_never,
         cpu_limit: b.cpu_limit,
         mem_limit_mb: b.mem_limit_mb,
     };
@@ -294,6 +301,89 @@ pub async fn archive(
     let now = app.clock.now();
     let p = store::archive(&app.pool, num(&id, "project")?, who(&me, &now)).await?;
     Ok(Json(info(&app, p).await?))
+}
+
+#[utoipa::path(post, path = "/api/v1/projects/{id}/unarchive", operation_id = "unarchiveProject",
+    tag = "projects", params(("id" = String, Path, description = "The project's id")),
+    responses((status = 200, description = "Active again, with its repos, mirrors and sessions \
+        (audited as `project.unarchived`). 404 for no such project; 409 `conflict` when it is \
+        not archived", body = ProjectInfo)))]
+pub async fn unarchive(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<ProjectInfo> {
+    let now = app.clock.now();
+    let p = store::unarchive(&app.pool, num(&id, "project")?, who(&me, &now)).await?;
+    Ok(Json(info(&app, p).await?))
+}
+
+/// What a run gets unless a project says otherwise: the Settings page's Projects > Options.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectDefaults {
+    /// CPUs a run may use; 2 until set.
+    pub cpu_limit: f64,
+    /// Memory a run may use in MB; 4096 until set.
+    pub mem_limit_mb: i64,
+    /// Idle stop in minutes; 30 until set.
+    pub idle_minutes: i64,
+    /// Whether the idle stop is off.
+    pub idle_never: bool,
+}
+
+/// The defaults to change; a field left out stays. Saving also sets every project.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetProjectDefaults {
+    pub cpu_limit: Option<f64>,
+    pub mem_limit_mb: Option<i64>,
+    pub idle_minutes: Option<i64>,
+    pub idle_never: Option<bool>,
+}
+
+impl From<store::Defaults> for ProjectDefaults {
+    fn from(d: store::Defaults) -> Self {
+        Self {
+            cpu_limit: d.cpu_limit,
+            mem_limit_mb: d.mem_limit_mb,
+            idle_minutes: d.idle_minutes,
+            idle_never: d.idle_never,
+        }
+    }
+}
+
+#[utoipa::path(get, path = "/api/v1/projects/defaults", operation_id = "getProjectDefaults",
+    tag = "projects",
+    responses((status = 200, description = "The limits new projects start with. Needs `read`",
+        body = ProjectDefaults)))]
+pub async fn defaults(State(app): State<App>) -> ApiResult<ProjectDefaults> {
+    let mut conn = app.pool.acquire().await?;
+    Ok(Json(store::defaults(&mut conn).await?.into()))
+}
+
+#[utoipa::path(put, path = "/api/v1/projects/defaults", operation_id = "setProjectDefaults",
+    tag = "projects", request_body = SetProjectDefaults,
+    responses((status = 200, description = "Saved and applied to every project (audited as \
+        `project.defaults_changed`); the defaults now. A run already going keeps the limits it \
+        started with. 400 for a value out of range: CPUs 0.1 to 16, memory 64 to 32768 MB, idle \
+        stop 5 to 1440 minutes. Needs `admin`", body = ProjectDefaults)))]
+pub async fn set_defaults(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Json(b): Json<SetProjectDefaults>,
+) -> ApiResult<ProjectDefaults> {
+    let now = app.clock.now();
+    let c = store::DefaultsChange {
+        cpu_limit: b.cpu_limit,
+        mem_limit_mb: b.mem_limit_mb,
+        idle_minutes: b.idle_minutes,
+        idle_never: b.idle_never,
+    };
+    Ok(Json(
+        store::set_defaults(&app.pool, &c, who(&me, &now))
+            .await?
+            .into(),
+    ))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]

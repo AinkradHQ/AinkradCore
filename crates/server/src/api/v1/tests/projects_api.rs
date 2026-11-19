@@ -61,6 +61,12 @@ async fn reading_is_read_scope_and_every_change_needs_admin_and_a_step_up() {
         ),
         (Method::PATCH, p.clone(), json!({"name": "New"})),
         (Method::POST, format!("{p}/archive"), Value::Null),
+        (Method::POST, format!("{p}/unarchive"), Value::Null),
+        (
+            Method::PUT,
+            "/api/v1/projects/defaults".to_owned(),
+            json!({"cpu_limit": 1}),
+        ),
         (Method::POST, format!("{p}/repos"), repo("web")),
         (Method::DELETE, format!("{p}/repos/1"), Value::Null),
         (Method::POST, format!("{p}/repos/1/primary"), Value::Null),
@@ -358,4 +364,45 @@ async fn the_link_name_and_run_limits_change_through_the_update_route() {
     assert_eq!(other.0, StatusCode::OK);
     let taken = admin(&fx, Method::PATCH, &p, json!({"slug": "other"})).await;
     assert_eq!(code(&taken), (StatusCode::CONFLICT, "conflict"));
+}
+
+#[tokio::test]
+async fn project_defaults_are_set_for_all_and_an_archived_project_is_unarchived() {
+    let fx = fx().await;
+    let id = shop(&fx).await;
+    let d = admin(&fx, Method::GET, "/api/v1/projects/defaults", Value::Null).await;
+    assert_eq!(
+        (
+            d.1["cpu_limit"].as_f64(),
+            d.1["mem_limit_mb"].as_i64(),
+            d.1["idle_never"].as_bool()
+        ),
+        (Some(2.0), Some(4096), Some(false)),
+        "{}",
+        d.1
+    );
+    let put = |b| admin(&fx, Method::PUT, "/api/v1/projects/defaults", b);
+    let set = put(json!({"cpu_limit": 8, "idle_never": true})).await;
+    assert_eq!(set.0, StatusCode::OK, "{}", set.1);
+    let p = format!("/api/v1/projects/{id}");
+    let got = admin(&fx, Method::GET, &p, Value::Null).await.1;
+    assert_eq!(
+        (got["cpu_limit"].as_f64(), got["idle_never"].as_bool()),
+        (Some(8.0), Some(true))
+    );
+    assert_eq!(
+        put(json!({"mem_limit_mb": 1})).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(put(json!({"nope": 1})).await.0, StatusCode::BAD_REQUEST);
+
+    let un = admin(&fx, Method::POST, &format!("{p}/unarchive"), Value::Null).await;
+    assert_eq!(
+        code(&un),
+        (StatusCode::CONFLICT, "conflict"),
+        "active already"
+    );
+    admin(&fx, Method::POST, &format!("{p}/archive"), Value::Null).await;
+    let un = admin(&fx, Method::POST, &format!("{p}/unarchive"), Value::Null).await;
+    assert_eq!(un.1["state"], "active", "{}", un.1);
 }
