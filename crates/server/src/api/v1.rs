@@ -423,6 +423,7 @@ pub fn router(app: App) -> Router {
             post(projects_github::create),
         )
         .route("/api/v1/projects/{id}/archive", post(projects::archive))
+        .route("/api/v1/projects/{id}/unarchive", post(projects::unarchive))
         .route("/api/v1/projects/{id}/repos", post(projects::add_repo))
         .route(
             "/api/v1/projects/{id}/repos/{repo}",
@@ -453,6 +454,63 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/projects/{id}/run/restart",
             post(projects::runs::restart),
+        )
+        .route("/api/v1/projects/{id}/runs", get(projects::runs::history))
+        .route(
+            "/api/v1/projects/{id}/runs/{run}/stop",
+            post(projects::runs::stop_run),
+        )
+        .route("/api/v1/projects/{id}/code", get(projects::insight::code))
+        .route("/api/v1/projects/{id}/usage", get(projects::insight::usage))
+        .route(
+            "/api/v1/projects/{id}/changes",
+            get(projects::insight::changes),
+        )
+        .route(
+            "/api/v1/projects/{id}/run-configs",
+            get(projects::run_configs::list).post(projects::run_configs::create),
+        )
+        .route(
+            "/api/v1/projects/{id}/run-configs/{config}",
+            get(projects::run_configs::get)
+                .patch(projects::run_configs::update)
+                .delete(projects::run_configs::delete),
+        )
+        .route(
+            "/api/v1/projects/{id}/run-configs/{config}/duplicate",
+            post(projects::run_configs::duplicate),
+        )
+        .route(
+            "/api/v1/projects/{id}/run-configs/{config}/run",
+            post(projects::run_configs::run),
+        )
+        .route(
+            "/api/v1/projects/{id}/run-configs/{config}/env-diff",
+            get(projects::run_configs::env_diff),
+        )
+        .route(
+            "/api/v1/projects/{id}/run-configs/{config}/env/{env}",
+            get(projects::run_configs::vars),
+        )
+        .route(
+            "/api/v1/projects/{id}/run-configs/{config}/env/{env}/import",
+            post(projects::run_configs::import),
+        )
+        .route(
+            "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}",
+            put(projects::run_configs::set_var).delete(projects::run_configs::delete_var),
+        )
+        .route(
+            "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}/value",
+            get(projects::run_configs::reveal),
+        )
+        .route(
+            "/api/v1/projects/{id}/run-envs",
+            get(projects::run_configs::envs).post(projects::run_configs::add_env),
+        )
+        .route(
+            "/api/v1/projects/{id}/run-envs/{name}",
+            delete(projects::run_configs::delete_env),
         )
         .route(
             "/api/v1/projects/{id}/run/activity",

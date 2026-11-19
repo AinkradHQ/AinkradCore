@@ -30,6 +30,9 @@ pub struct Run {
     pub started_at: String,
     pub stopped_at: Option<String>,
     pub last_activity_at: Option<String>,
+    /// The run configuration it started from, and the environment it ran in (Core 0.10).
+    pub config_id: Option<i64>,
+    pub environment: Option<String>,
 }
 
 impl Run {
@@ -39,7 +42,7 @@ impl Run {
 }
 
 const COLS: &str = "id, project_id, spec_version, runner, state, stop_reason, error, started_by, \
-                    started_at, stopped_at, last_activity_at";
+                    started_at, stopped_at, last_activity_at, config_id, environment";
 
 fn row(r: &SqliteRow) -> Result<Run, sqlx::Error> {
     Ok(Run {
@@ -54,6 +57,8 @@ fn row(r: &SqliteRow) -> Result<Run, sqlx::Error> {
         started_at: r.try_get("started_at")?,
         stopped_at: r.try_get("stopped_at")?,
         last_activity_at: r.try_get("last_activity_at")?,
+        config_id: r.try_get("config_id")?,
+        environment: r.try_get("environment")?,
     })
 }
 
@@ -64,19 +69,56 @@ fn refused<T>(code: &'static str, message: impl Into<String>) -> Result<T, Error
     })
 }
 
-/// The project's live run, if any.
+/// The project's newest live run, if any (a project may have one live run per configuration).
 pub async fn live(pool: &SqlitePool, project_id: i64) -> Result<Option<Run>, sqlx::Error> {
+    Ok(live_list(pool, project_id).await?.into_iter().next())
+}
+
+/// Every live run of the project, newest first.
+pub async fn live_list(pool: &SqlitePool, project_id: i64) -> Result<Vec<Run>, sqlx::Error> {
     let q = format!(
         "SELECT {COLS} FROM core_project_runs WHERE project_id = ? \
-         AND state IN ('starting', 'running', 'stopping')"
+         AND state IN ('starting', 'running', 'stopping') ORDER BY started_at DESC, rowid DESC"
     );
     sqlx::query(sqlx::AssertSqlSafe(q))
         .bind(project_id)
-        .fetch_optional(pool)
+        .fetch_all(pool)
         .await?
-        .as_ref()
+        .iter()
         .map(row)
-        .transpose()
+        .collect()
+}
+
+/// The live run of one configuration (`None`: the project's setup as saved).
+pub async fn live_for(
+    pool: &SqlitePool,
+    project_id: i64,
+    config: Option<i64>,
+) -> Result<Option<Run>, sqlx::Error> {
+    Ok(live_list(pool, project_id)
+        .await?
+        .into_iter()
+        .find(|r| r.config_id.unwrap_or(0) == config.unwrap_or(0)))
+}
+
+/// The project's newest runs, live or not, newest first.
+pub async fn recent(
+    pool: &SqlitePool,
+    project_id: i64,
+    limit: i64,
+) -> Result<Vec<Run>, sqlx::Error> {
+    let q = format!(
+        "SELECT {COLS} FROM core_project_runs WHERE project_id = ? \
+         ORDER BY started_at DESC, rowid DESC LIMIT ?"
+    );
+    sqlx::query(sqlx::AssertSqlSafe(q))
+        .bind(project_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(row)
+        .collect()
 }
 
 /// The project's newest run, live or not.
@@ -151,6 +193,7 @@ pub async fn begin(
     project_id: i64,
     spec_version: i64,
     runner: &str,
+    config: Option<(i64, &str)>,
     who: Who<'_>,
 ) -> Result<Run, Error> {
     let mut tx = super::begin_write(pool).await?;
@@ -160,7 +203,7 @@ pub async fn begin(
     }
     let inserted = sqlx::query(
         "INSERT INTO core_project_runs (id, project_id, spec_version, runner, state, started_by, \
-         started_at) VALUES (?, ?, ?, ?, 'starting', ?, ?)",
+         started_at, config_id, environment) VALUES (?, ?, ?, ?, 'starting', ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(project_id)
@@ -168,17 +211,20 @@ pub async fn begin(
     .bind(runner)
     .bind(who.by_device)
     .bind(who.now)
+    .bind(config.map(|c| c.0))
+    .bind(config.map(|c| c.1))
     .execute(&mut *tx)
     .await;
     match inserted {
         Ok(_) => {}
         Err(sqlx::Error::Database(d)) if d.is_unique_violation() => {
-            return refused("conflict", "the project already has a live run");
+            return refused("conflict", "that run is already live");
         }
         Err(e) => return Err(e.into()),
     }
     let details = json!({"run": id, "spec_version": spec_version, "runner": runner,
-                         "by_device": who.by_device});
+                         "by_device": who.by_device, "config": config.map(|c| c.0),
+                         "environment": config.map(|c| c.1)});
     record(
         &mut tx,
         who.actor,
@@ -350,5 +396,63 @@ pub async fn touch(pool: &SqlitePool, project_id: i64, now: &str) -> Result<(), 
     .bind(project_id)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+/// Runs that ended as a `crash` since `since`, of a configuration that wants a restart, with no
+/// newer run of that configuration: the ones a restart is owed for.
+pub async fn crashed_to_restart(pool: &SqlitePool, since: &str) -> Result<Vec<Run>, sqlx::Error> {
+    let cols = COLS
+        .split(", ")
+        .map(|c| format!("r.{c}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let q = format!(
+        "SELECT {cols} FROM core_project_runs r JOIN core_run_configs c ON c.id = r.config_id \
+         WHERE r.state IN ('failed', 'stopped') AND r.stop_reason = 'crash' AND c.restart = 1 \
+         AND r.stopped_at >= ? AND NOT EXISTS (SELECT 1 FROM core_project_runs n \
+         WHERE n.project_id = r.project_id AND n.config_id = r.config_id AND n.rowid > r.rowid)"
+    );
+    sqlx::query(sqlx::AssertSqlSafe(q))
+        .bind(since)
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(row)
+        .collect()
+}
+
+/// How many runs of the configuration ended as a `crash` since `since`.
+pub async fn crashes_since(
+    pool: &SqlitePool,
+    project_id: i64,
+    config: i64,
+    since: &str,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM core_project_runs WHERE project_id = ? AND config_id = ? \
+         AND stop_reason = 'crash' AND stopped_at >= ?",
+    )
+    .bind(project_id)
+    .bind(config)
+    .bind(since)
+    .fetch_one(pool)
+    .await
+}
+
+/// Audits and emits `project.run_gave_up`: the Core stopped restarting `run`'s configuration.
+pub async fn gave_up(pool: &SqlitePool, run: &Run, crashes: i64, max: i64) -> Result<(), Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let details = json!({"run": run.id, "config": run.config_id, "crashes": crashes,
+                         "max_retries": max, "environment": run.environment});
+    record(
+        &mut tx,
+        AuditActor::System,
+        "project.run_gave_up",
+        run.project_id,
+        details,
+    )
+    .await?;
+    tx.commit().await?;
     Ok(())
 }

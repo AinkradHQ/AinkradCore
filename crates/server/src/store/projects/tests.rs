@@ -101,6 +101,16 @@ async fn bad_and_reserved_slugs_are_refused_and_good_ones_work() {
 }
 
 #[tokio::test]
+async fn unarchive_undoes_an_archive_only_once() {
+    let fx = fx().await;
+    let p = mk(&fx, "undo").await.unwrap();
+    assert_eq!(code(unarchive(&fx.pool, p.id, W).await), "conflict");
+    archive(&fx.pool, p.id, W).await.unwrap();
+    assert_eq!(unarchive(&fx.pool, p.id, W).await.unwrap().state, "active");
+    assert_eq!(code(unarchive(&fx.pool, p.id, W).await), "conflict");
+}
+
+#[tokio::test]
 async fn defaults_update_and_archive_keeps_every_row() {
     let fx = fx().await;
     let p = mk(&fx, "shop").await.unwrap();
@@ -330,4 +340,73 @@ async fn a_mirror_has_an_explicit_state_and_every_change_is_an_event() {
             .await
             .unwrap();
     assert_eq!(events, 2);
+}
+
+#[tokio::test]
+async fn runner_preference_defaults_to_auto_and_only_takes_known_values() {
+    let fx = fx().await;
+    let p = mk(&fx, "shop").await.unwrap();
+    assert_eq!(p.runner_pref, "auto");
+    let set = |r| Change {
+        runner: Some(r),
+        ..Change::default()
+    };
+    let u = change(&fx.pool, p.id, &set("home_server"), W)
+        .await
+        .unwrap();
+    assert_eq!(u.runner_pref, "home_server");
+    assert_eq!(
+        code(change(&fx.pool, p.id, &set("cloud"), W).await),
+        "bad_request"
+    );
+    // An unrelated change keeps the preference.
+    let k = update(&fx.pool, p.id, Some("Shop 2"), None, None, W)
+        .await
+        .unwrap();
+    assert_eq!(k.runner_pref, "home_server");
+}
+
+#[tokio::test]
+async fn fetch_interval_and_default_environment_are_checked() {
+    let fx = fx().await;
+    let p = mk(&fx, "shop").await.unwrap();
+    assert_eq!(
+        (p.fetch_interval_minutes, p.default_environment.as_deref()),
+        (15, None)
+    );
+    let fetch = |m| Change {
+        fetch_interval_minutes: Some(m),
+        ..Change::default()
+    };
+    assert_eq!(
+        change(&fx.pool, p.id, &fetch(60), W)
+            .await
+            .unwrap()
+            .fetch_interval_minutes,
+        60
+    );
+    assert_eq!(
+        change(&fx.pool, p.id, &fetch(0), W)
+            .await
+            .unwrap()
+            .fetch_interval_minutes,
+        0
+    );
+    assert_eq!(
+        code(change(&fx.pool, p.id, &fetch(7), W).await),
+        "bad_request"
+    );
+    let env = |e| Change {
+        default_environment: Some(e),
+        ..Change::default()
+    };
+    // A project that never opened its environments has Development and Staging.
+    let u = change(&fx.pool, p.id, &env("Staging"), W).await.unwrap();
+    assert_eq!(u.default_environment.as_deref(), Some("Staging"));
+    assert_eq!(
+        code(change(&fx.pool, p.id, &env("Nope"), W).await),
+        "bad_request"
+    );
+    let cleared = change(&fx.pool, p.id, &env(""), W).await.unwrap();
+    assert_eq!(cleared.default_environment, None);
 }
