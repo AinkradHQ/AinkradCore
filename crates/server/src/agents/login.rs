@@ -318,12 +318,12 @@ fn url_ok_for(url: &str, hosts: &[&str]) -> bool {
 
 /// Ends an open login as failed and tells its runner to drop the sign-in. A login that already
 /// ended is left alone.
-async fn fail(app: &App, l: &Login, reason: &str) {
+pub(crate) async fn fail(app: &App, l: &Login, reason: &str) {
     fail_from(app, l, reason, &[]).await;
 }
 
 /// [`fail`] from the states `from` only (any open state when empty).
-async fn fail_from(app: &App, l: &Login, reason: &str, from: &[&str]) {
+pub(crate) async fn fail_from(app: &App, l: &Login, reason: &str, from: &[&str]) {
     let change = Change {
         reason: Some(reason),
         ..Change::default()
@@ -331,6 +331,20 @@ async fn fail_from(app: &App, l: &Login, reason: &str, from: &[&str]) {
     if let Ok(Some(_)) = logins::step(&app.pool, &l.id, from, "failed", &change, BY, now(app)).await
     {
         tell_cancel(app, l);
+        owe_bound_wipe(app, l).await;
+    }
+}
+
+/// A runner-bound login the Core ended (failed, expired, cancelled, a wait that timed out) may
+/// still finish on the runner: its late `login.result` finds no one waiting, and `login.cancel` is
+/// best effort. So the home is owed a wipe whenever the Core ends such a login; the runner confirms
+/// it (`core_account_wipes`), and a home that never existed is wiped as a no-op. Idempotent. A login
+/// that became an account never passes here (its step is refused from `done`).
+async fn owe_bound_wipe(app: &App, l: &Login) {
+    if bound_harness(&l.provider).is_some()
+        && let Err(e) = accounts::owe_wipe(&app.pool, &l.runner, &l.id, &app.clock.now()).await
+    {
+        tracing::warn!(error = %e, "recording a runner wipe");
     }
 }
 
@@ -742,6 +756,7 @@ pub async fn cancel(app: &App, caller: &Caller, id: &str) -> Result<Login, Error
     {
         Some(done) => {
             tell_cancel(app, &done);
+            owe_bound_wipe(app, &done).await;
             Ok(done)
         }
         None => Ok(l),

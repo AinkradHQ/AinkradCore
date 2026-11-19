@@ -7,7 +7,10 @@
 //! Trust decisions: the home is never the sandbox's config dir (never writable by the agent); what
 //! the session wrote is untrusted, so a file is taken back only when it is a regular file reached
 //! without a symlink on its path, at most [`MAX_CREDENTIAL`] bytes, valid JSON, and is written
-//! atomically (temp file, then rename). The copy-back never recreates a wiped home.
+//! atomically (temp file, then rename). The copy-back never recreates a wiped home. A rotated
+//! credential is also taken back only for the SAME account: a session cannot swap in the login of
+//! another account (see [`same_account`]); a mismatch keeps the stored one and is logged by file
+//! name only.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -64,6 +67,66 @@ fn read_credential(root: &Path, rel: &str) -> Option<Vec<u8>> {
     let ok = buf.len() as u64 <= MAX_CREDENTIAL
         && serde_json::from_slice::<serde_json::Value>(&buf).is_ok();
     ok.then_some(buf)
+}
+
+/// The identity a credential carries, as sorted `(claim, value)` pairs: Codex's `tokens.account_id`
+/// and the `sub`, `email` and `chatgpt_account_id` claims of its `id_token` (a JWT whose payload is
+/// decoded, NOT verified: a rotation is compared with the stored one, never trusted on its own).
+fn identity(v: &serde_json::Value) -> Vec<(String, String)> {
+    use base64::Engine;
+    let mut out = Vec::new();
+    let tokens = v.get("tokens").unwrap_or(v);
+    if let Some(a) = tokens.get("account_id").and_then(|x| x.as_str()) {
+        out.push(("account_id".to_owned(), a.to_owned()));
+    }
+    let payload = tokens
+        .get("id_token")
+        .and_then(|t| t.as_str())
+        .and_then(|t| t.split('.').nth(1))
+        .and_then(|p| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(p)
+                .ok()
+        })
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    if let Some(c) = payload {
+        for k in ["sub", "email"] {
+            if let Some(x) = c.get(k).and_then(|x| x.as_str()) {
+                out.push((k.to_owned(), x.to_owned()));
+            }
+        }
+        let auth = c.get("https://api.openai.com/auth");
+        if let Some(x) = auth
+            .and_then(|a| a.get("chatgpt_account_id"))
+            .and_then(|x| x.as_str())
+        {
+            out.push(("chatgpt_account_id".to_owned(), x.to_owned()));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Whether the rotated credential `new` is the stored `old`'s own account: the same identity claims
+/// when the stored one carries any (a rotated token keeps them), else the same top-level key set
+/// (names only, never values). Unparseable either way: not the same.
+fn same_account(old: &[u8], new: &[u8]) -> bool {
+    let (Ok(o), Ok(n)) = (
+        serde_json::from_slice::<serde_json::Value>(old),
+        serde_json::from_slice::<serde_json::Value>(new),
+    ) else {
+        return false;
+    };
+    let id = identity(&o);
+    if !id.is_empty() {
+        return id == identity(&n);
+    }
+    let keys = |v: &serde_json::Value| -> Option<Vec<String>> {
+        let mut k: Vec<_> = v.as_object()?.keys().cloned().collect();
+        k.sort();
+        Some(k)
+    };
+    keys(&o).is_some() && keys(&o) == keys(&n)
 }
 
 /// A private dir, every parent a real dir (created when missing), never through a symlink.
@@ -138,7 +201,17 @@ impl BoundSession {
             let Some(new) = read_credential(&self.dir, rel) else {
                 continue;
             };
-            if read_credential(&self.home, rel).as_deref() == Some(new.as_slice()) {
+            let old = read_credential(&self.home, rel);
+            if old.as_deref() == Some(new.as_slice()) {
+                continue;
+            }
+            // Only the same account's rotation comes back. No stored credential to compare with
+            // (the home had none) is a refusal too: a session never plants a first login.
+            if !old.is_some_and(|o| same_account(&o, &new)) {
+                tracing::warn!(
+                    file = rel,
+                    "refused a rotated credential of another account"
+                );
                 continue;
             }
             if let Err(e) = write_credential(&self.home, rel, &new) {
@@ -324,6 +397,69 @@ mod tests {
         fs::remove_dir_all(&home).unwrap();
         drop(s);
         assert!(!home.exists());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A dummy Codex `auth.json`: a fake id_token whose payload carries fake identity claims.
+    fn fake_auth(email: &str, acct: &str, refresh: &str) -> Vec<u8> {
+        use base64::Engine;
+        let b = |v: &serde_json::Value| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string())
+        };
+        let jwt = format!(
+            "{}.{}.fake-sig",
+            b(&serde_json::json!({"alg": "none"})),
+            b(&serde_json::json!({
+                "sub": format!("sub-{email}"),
+                "email": email,
+                "https://api.openai.com/auth": {"chatgpt_account_id": acct}
+            }))
+        );
+        serde_json::json!({"tokens": {"id_token": jwt, "refresh_token": refresh}})
+            .to_string()
+            .into_bytes()
+    }
+
+    /// Runs one session on `home` whose credential the agent replaced with `new`; the stored one after.
+    fn rotate(d: &Path, key: &str, old: &[u8], new: &[u8]) -> Vec<u8> {
+        let (ex, j) = session(d, "codex", key);
+        let home = d.join("config/bound").join(key);
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("auth.json"), old).unwrap();
+        let s = ex.bound_session(&j, &home).unwrap().unwrap();
+        let dir = s.dir().to_path_buf();
+        fs::write(dir.join("auth.json"), new).unwrap();
+        drop(s);
+        assert!(!dir.exists(), "the session dir is wiped either way");
+        fs::read(home.join("auth.json")).unwrap()
+    }
+
+    #[test]
+    fn a_rotation_comes_back_only_for_the_same_account() {
+        let d = scratch("identity");
+        let old = fake_auth("fake-a@example.invalid", "acct-fake-1", "r1");
+        // Same identity, new refresh token: accepted.
+        let rot = fake_auth("fake-a@example.invalid", "acct-fake-1", "r2");
+        assert_eq!(rotate(&d, "id_1", &old, &rot), rot);
+        // Another account swapped in: refused, the stored one stays.
+        let other = fake_auth("fake-b@example.invalid", "acct-fake-2", "r3");
+        assert_eq!(rotate(&d, "id_2", &old, &other), old);
+        // Same email, different account id: refused too.
+        let other = fake_auth("fake-a@example.invalid", "acct-fake-9", "r3");
+        assert_eq!(rotate(&d, "id_3", &old, &other), old);
+        // The stored one has claims and the new one none: refused.
+        assert_eq!(rotate(&d, "id_4", &old, br#"{"tokens":{}}"#), old);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn without_a_claim_the_same_key_set_is_the_account_and_another_one_is_not() {
+        let d = scratch("keyset");
+        let old = br#"{"a":"x","b":"y"}"#;
+        let same = br#"{"b":"y2","a":"x2"}"#;
+        assert_eq!(rotate(&d, "ks_1", old, same), same);
+        let other = br#"{"a":"x","c":"y"}"#;
+        assert_eq!(rotate(&d, "ks_2", old, other), old);
         let _ = fs::remove_dir_all(&d);
     }
 

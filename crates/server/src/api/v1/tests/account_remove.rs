@@ -218,7 +218,7 @@ async fn a_bound_login_that_finished_on_the_runner_but_was_not_stored_owes_its_h
     .await
     .unwrap();
     crate::agents::login::store_bound(&fx.app, &made[1]).await;
-    let mut owed: Vec<_> = acc::pending_wipes(p)
+    let mut owed: Vec<_> = acc::pending_wipes(p, &["rn_1".to_owned()])
         .await
         .unwrap()
         .into_iter()
@@ -229,6 +229,54 @@ async fn a_bound_login_that_finished_on_the_runner_but_was_not_stored_owes_its_h
         .map(|l| ("rn_1".to_owned(), l.id.clone()))
         .collect();
     owed.sort();
+    want.sort();
+    assert_eq!(owed, want);
+}
+
+#[tokio::test]
+async fn a_bound_login_the_core_gave_up_on_owes_its_home_a_wipe_even_if_the_runner_finishes_late() {
+    use crate::agents::login::{fail, fail_from};
+    use crate::store::logins::{self, Change};
+    let (fx, _vm, _s) = setup().await;
+    let p = &fx.app.pool;
+    let n = unix_secs(NOW).unwrap();
+    let mut made = Vec::new();
+    for (prov, label) in [
+        ("codex-sub", "timed-out"),
+        ("codex-sub", "expired"),
+        ("claude-sub", "plain"),
+    ] {
+        let l = logins::create(p, (prov, label, "rn_1"), &fx.dev.id, BY, n)
+            .await
+            .unwrap();
+        logins::step(
+            p,
+            &l.id,
+            &["starting"],
+            "open_url",
+            &Change::default(),
+            BY,
+            n,
+        )
+        .await
+        .unwrap();
+        made.push(l);
+    }
+    // The wait timed out (the runner may be finishing right now), then the expiry watchdog.
+    fail(&fx.app, &made[0], "the runner failed: nothing happened").await;
+    fail_from(&fx.app, &made[1], "expired", &["open_url"]).await;
+    // A token login keeps no home on a runner: nothing is owed.
+    fail(&fx.app, &made[2], "the runner failed").await;
+    // Failing again (a late result, a second watchdog) stays one row.
+    fail(&fx.app, &made[0], "again").await;
+    let mut owed: Vec<_> = acc::pending_wipes(p, &["rn_1".to_owned()])
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|w| w.home)
+        .collect();
+    owed.sort();
+    let mut want = vec![made[0].id.clone(), made[1].id.clone()];
     want.sort();
     assert_eq!(owed, want);
 }
