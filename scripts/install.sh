@@ -205,7 +205,11 @@ checks() { # ports and the host firewall first (before anything is installed), t
   fi
   if ! command -v getent >/dev/null; then warn "no getent here: DNS not checked"; return 0; fi
   addrs=$(getent ahosts "$A_HOSTNAME" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true) # pipefail: an unresolved name must reach the message below, not kill the script
-  pub=${A_PUBLIC_IP:-$(_pf=$(mktemp) && { pub_probe "$_pf"; cat "$_pf"; rm -f "$_pf"; } || true)} # Ainkrad's own outside check, no third party
+  pub=${A_PUBLIC_IP:-}
+  if [ -z "$pub" ]; then # Ainkrad's own outside check (signin.ainkrad.io), no third party
+    _pf=$(mktemp) || _pf=''
+    if [ -n "$_pf" ]; then pub_probe "$_pf"; pub=$(cat "$_pf" 2>/dev/null || true); rm -f "$_pf"; fi
+  fi
   pub=$(clean_ip "$pub")
   info "DNS $A_HOSTNAME -> ${addrs:-nothing}; this host's public IPv4: ${pub:-unknown}"
   if [ -z "$addrs" ]; then bad="$A_HOSTNAME does not resolve: add an A record for this host"
