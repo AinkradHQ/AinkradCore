@@ -6,10 +6,12 @@
 //!   key exchange. A key that is not pinned ends the connection there: `host_key_unknown` (nothing
 //!   pinned yet, so a person may trust it) or `host_key_changed`. No authentication request has been
 //!   sent by then, so a man in the middle never sees even a signature.
-//! - **Modern algorithms only.** Ed25519 and ECDSA host and user keys; russh's SHA-2 key exchanges,
-//!   AEAD/CTR ciphers and SHA-2 MACs. No RSA at all (the `rsa` feature is off: RUSTSEC-2023-0071), so
-//!   no `ssh-rsa`/SHA-1; no DSA (the `dsa` feature is off), no CBC, no compression. `kex-strict`
-//!   (Terrapin) is on in russh 0.65.1.
+//! - **Modern algorithms only.** Ed25519 and ECDSA host keys; Ed25519, ECDSA and RSA user keys
+//!   (E0-9); russh's SHA-2 key exchanges, AEAD/CTR ciphers and SHA-2 MACs. An RSA user key signs
+//!   with `rsa-sha2-512` or `rsa-sha2-256` only (`rsa_hash`): a host that offers only `ssh-rsa`
+//!   (SHA-1) is refused, and no RSA host key is offered. The `rsa` crate is 0.10.0, the release that
+//!   fixes RUSTSEC-2023-0071 (Marvin). No DSA (the `dsa` feature is off), no CBC, no compression.
+//!   `kex-strict` (Terrapin) is on in russh 0.65.2.
 //! - **The key.** Redeemed from the lease by this runner, held in `Zeroizing`/`ZeroizeOnDrop` types,
 //!   used for one `publickey` authentication and dropped. It is never in argv, env, a file or a log;
 //!   errors are fixed texts or russh's own (which carry no key bytes). Gap, stated: russh and
@@ -443,12 +445,47 @@ async fn publickey(
     hop: usize,
 ) -> Result<(), StreamError> {
     let denied = |m: &str| fail(ErrorCode::SshAuthFailed, format!("hop {hop}: {m}"));
-    let key = PrivateKeyWithHashAlg::new(Arc::new(key), None);
+    let key = with_hash(handle, key).await.map_err(denied)?;
     match handle.authenticate_publickey(user, key).await {
         Ok(r) if r.success() => Ok(()),
         Ok(_) => Err(denied("the host refused the key")),
         Err(_) => Err(denied("the connection ended during authentication")),
     }
+}
+
+/// The RSA signature hash to use, given what the host said it accepts (`best_supported_rsa_hash`):
+/// SHA-512 or SHA-256 as the host prefers; a host that does not say (no `server-sig-algs`) gets SHA-512;
+/// a host that accepts only SHA-1 `ssh-rsa` gets nothing, never SHA-1. Other key types have no hash.
+pub(super) fn rsa_hash(
+    is_rsa: bool,
+    host: Option<Option<HashAlg>>,
+) -> Result<Option<HashAlg>, &'static str> {
+    match (is_rsa, host) {
+        (false, _) => Ok(None),
+        (true, Some(Some(h))) => Ok(Some(h)),
+        (true, Some(None)) => Err("the host accepts only SHA-1 RSA signatures, which are refused"),
+        (true, None) => Ok(Some(HashAlg::Sha512)),
+    }
+}
+
+/// `key` ready to sign a `publickey` request on `handle`: an RSA key with `rsa_hash`'s choice.
+pub(super) async fn with_hash(
+    handle: &Handle<Verify>,
+    key: PrivateKey,
+) -> Result<PrivateKeyWithHashAlg, &'static str> {
+    let is_rsa = key.algorithm().is_rsa();
+    let host = if is_rsa {
+        handle
+            .best_supported_rsa_hash()
+            .await
+            .map_err(|_| "the connection ended during authentication")?
+    } else {
+        None
+    };
+    Ok(PrivateKeyWithHashAlg::new(
+        Arc::new(key),
+        rsa_hash(is_rsa, host)?,
+    ))
 }
 
 /// An OpenSSH private key, unencrypted. The error is fixed text.

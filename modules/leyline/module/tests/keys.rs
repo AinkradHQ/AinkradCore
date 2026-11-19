@@ -275,6 +275,7 @@ async fn a_generated_key_is_sealed_and_leases_only_to_the_runner_of_a_host_that_
         fields,
         [
             "algo",
+            "bits",
             "created_at",
             "fingerprint",
             "id",
@@ -360,19 +361,105 @@ async fn ed25519_and_ecdsa_import_and_the_passphrase_is_used_once_and_not_kept()
 }
 
 #[tokio::test]
-async fn rsa_dsa_and_unreadable_keys_are_refused_and_nothing_is_left_behind() {
+async fn rsa_2048_imports_from_openssh_and_both_pem_forms_and_is_stored_in_openssh_form() {
     let fx = fx().await;
-    let (s, v) = import(&fx, "old", RSA, None).await;
-    assert_eq!(s, StatusCode::BAD_REQUEST);
-    let msg = v["message"].as_str().unwrap();
-    assert!(
-        msg.contains("RSA keys are not supported; generate an ed25519 key")
-            && msg.contains("DSA")
-            && msg.contains("Generate Key"),
-        "{msg}"
+    for (i, pem) in [RSA_2048, RSA_PKCS1, RSA_PKCS8].into_iter().enumerate() {
+        let v = import_ok(&fx, &format!("rsa{i}"), pem, None).await;
+        assert_eq!(
+            (v["algo"].as_str(), v["bits"].as_u64()),
+            (Some("rsa"), Some(2048))
+        );
+        let id = v["id"].as_str().unwrap();
+        let (_, got) = call(&fx, Method::GET, &format!("/keys/{id}"), None).await;
+        assert_eq!(got["bits"], 2048);
+        host_with(&fx, &format!("h{i}"), id, Some(&fx.runner.id)).await;
+        let stored = lease_and_redeem(&fx, id).await.unwrap();
+        assert!(stored.algorithm().is_rsa() && !stored.is_encrypted());
+        // Whatever the input form, what is sealed is the OpenSSH form of the same key.
+        assert!(
+            stored
+                .to_openssh(ssh_key::LineEnding::LF)
+                .unwrap()
+                .starts_with("-----BEGIN OPENSSH PRIVATE KEY-----")
+        );
+    }
+    // The three are different keys, so the first has the fixture's public key.
+    let (_, list) = call(&fx, Method::GET, "/keys", None).await;
+    let pubs: Vec<_> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k["public_key"].as_str().unwrap())
+        .collect();
+    assert!(pubs.contains(&RSA_2048_PUB));
+    // An ed25519 key reports its size too.
+    assert_eq!(import_ok(&fx, "e", ED, None).await["bits"], 256);
+}
+
+#[tokio::test]
+async fn an_encrypted_rsa_key_takes_its_passphrase_and_an_old_format_one_is_refused_plainly() {
+    let fx = fx().await;
+    let (s, v) = import(&fx, "e", RSA_ENC, None).await;
+    assert_eq!(
+        (s, v["message"].as_str().unwrap().contains("passphrase")),
+        (StatusCode::BAD_REQUEST, true)
     );
-    // An encrypted RSA key is refused before its passphrase is looked at (DSA is the same
-    // branch: the algorithm is public on an encrypted key).
+    assert_eq!(
+        import(&fx, "e", RSA_ENC, Some("wrong")).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let ok = import_ok(&fx, "e", RSA_ENC, Some(PASS)).await;
+    assert_eq!(
+        (ok["algo"].as_str(), ok["bits"].as_u64()),
+        (Some("rsa"), Some(2048))
+    );
+    let (s, v) = import(&fx, "old", RSA_PEM_ENC, Some(PASS)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert!(
+        v["message"].as_str().unwrap().contains("ssh-keygen -p"),
+        "{v}"
+    );
+}
+
+#[tokio::test]
+async fn damaged_and_foreign_pem_keys_are_not_valid_and_leave_nothing_behind() {
+    let fx = fx().await;
+    let cut = &RSA_PKCS1[..RSA_PKCS1.len() / 2];
+    let flipped = RSA_PKCS8.replacen("MIIE", "MIIF", 1);
+    for junk in [
+        "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n",
+        "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n",
+        "-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----\n",
+        cut,
+        &flipped,
+    ] {
+        let (s, v) = import(&fx, "j", junk, None).await;
+        assert_eq!(
+            (s, v["message"].as_str()),
+            (StatusCode::BAD_REQUEST, Some("the key is not valid")),
+            "{junk}"
+        );
+    }
+    assert_eq!(
+        count(&fx, "leyline_keys").await + count(&fx, "core_secrets").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn weak_rsa_p521_and_unreadable_keys_are_refused_and_nothing_is_left_behind() {
+    let fx = fx().await;
+    // The 1024-bit fixture, in OpenSSH form and in PKCS#8 form: the same plain sentence.
+    for weak in [RSA, RSA_WEAK_PKCS8] {
+        let (s, v) = import(&fx, "old", weak, None).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            v["message"],
+            "This key is too weak (1024 bits). Make a new key instead."
+        );
+    }
+    // A weak RSA key is refused before its passphrase is looked at (the size is public on an
+    // encrypted key).
     assert_eq!(
         import(&fx, "old2", RSA, Some(PASS)).await.0,
         StatusCode::BAD_REQUEST
@@ -766,12 +853,12 @@ async fn a_hostile_bcrypt_cost_is_refused_at_once_and_junk_is_only_invalid() {
     let (s, v) = import(&fx, "junk", "not a key", None).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     assert_eq!(v["message"], "the key is not valid");
-    let (_, v) = import(&fx, "rsa", RSA, None).await;
+    let (_, v) = import(&fx, "p521", P521, None).await;
     assert!(
         v["message"]
             .as_str()
             .unwrap()
-            .contains("RSA keys are not supported"),
+            .contains("This key type is not supported"),
         "{v}"
     );
 }
