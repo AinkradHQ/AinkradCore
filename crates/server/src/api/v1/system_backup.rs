@@ -83,7 +83,12 @@ fn write_keep(path: &Path, keep: u32) -> io::Result<()> {
             .open(&tmp)?;
         f.write_all(with_keep(&text, keep).as_bytes())?;
         f.sync_all()?;
-        std::fs::rename(&tmp, path)
+        std::fs::rename(&tmp, path)?;
+        // The rename is durable only once its folder is: sync it too.
+        match path.parent() {
+            Some(dir) => std::fs::File::open(dir)?.sync_all(),
+            None => Ok(()),
+        }
     })();
     if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
@@ -332,7 +337,13 @@ pub async fn set_retention(
     .await
     .map_err(internal)?;
     let result = match &path {
-        Some(p) => write_keep(p, keep),
+        Some(p) => {
+            // Blocking file work (read, write, fsync) stays off the async workers.
+            let p = p.clone();
+            tokio::task::spawn_blocking(move || write_keep(&p, keep))
+                .await
+                .unwrap_or_else(|e| Err(io::Error::other(e)))
+        }
         None => Err(io::Error::from(io::ErrorKind::NotFound)),
     };
     let code = match &result {
