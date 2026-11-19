@@ -30,6 +30,7 @@ mod policy;
 mod ready;
 /// Terminal recording; public so `benches/relay_tap.rs` can time the relay's tap.
 pub mod record;
+mod rsa_import;
 mod scrub;
 mod terminal;
 mod valid;

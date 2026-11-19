@@ -18,8 +18,13 @@ getrandom = "0.4.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10.9"
-# No `rsa`/`dsa` feature (RUSTSEC-2023-0071) and no `p256`/`p384` (they pull crypto-bigint 0.5, RUSTSEC-2026-0387).
+# No `rsa`/`dsa` feature (the `rsa` crate 0.9 it pulls has RUSTSEC-2023-0071; RSA keys are only parsed here, see
+# `rsa_import.rs`) and no `p256`/`p384` (they pull crypto-bigint 0.5, RUSTSEC-2026-0387).
 ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "ecdsa", "encryption"] }
+# PEM RSA keys (E0-9): DER readers only, no RSA arithmetic. Both versions and `pem-rfc7468` were already in the lockfile.
+pem-rfc7468 = { version = "0.7.0", features = ["alloc"] }
+pkcs1 = { version = "0.7.5", default-features = false }
+pkcs8 = { version = "0.10.2", default-features = false }
 futures-util = { version = "0.3.34", default-features = false }
 tokio = { version = "1.54.0", features = ["macros", "rt", "sync", "time"] }
 tracing = "0.1.44"

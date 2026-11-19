@@ -673,9 +673,9 @@ async fn an_unanswered_prompt_times_out_and_a_closed_connection_ends_it() {
     assert!(got.is_none(), "the closed connection ended the prompt");
 }
 
-/// What the key handoff can hold (`FD3_MAX`): RSA keys cannot reach this path (the `rsa` feature is
-/// off, so `parse_key` refuses them before a terminal exists), so a full chain, three jumps and
-/// the target, of the biggest keys that can (ECDSA P-521, ed25519) must fit.
+/// What the key handoff can hold (`FD3_MAX`): a full chain, three jumps and the target, of ECDSA
+/// P-521 and ed25519 keys must fit, and so must one of RSA 2048 keys (E0-9). A chain of four RSA
+/// 4096 keys does not (about 15 KiB): it is refused with a fixed sentence, never truncated.
 #[test]
 fn a_full_chain_of_the_biggest_usable_keys_fits_the_handoff() {
     use russh::keys::ssh_key::{Algorithm, EcdsaCurve, PrivateKey};
@@ -702,4 +702,21 @@ fn a_full_chain_of_the_biggest_usable_keys_fits_the_handoff() {
     let mut buf = Vec::with_capacity(ainkrad_ptyhost::pty::FD3_MAX);
     serde_json::to_writer(ainkrad_ptyhost::pty::Capped(&mut buf), &p).expect("fits FD3_MAX");
     assert!(buf.len() < ainkrad_ptyhost::pty::FD3_MAX);
+}
+
+#[test]
+fn a_full_chain_of_rsa_2048_keys_fits_the_handoff() {
+    let key = russh::keys::decode_secret_key(super::fixture::RSA_KEY, None).unwrap();
+    let h = SshHop {
+        host: "a".repeat(255),
+        port: 22,
+        user: "u".repeat(32),
+        pinned_keys: vec![format!("SHA256:{}", "x".repeat(43)); 4],
+        lease: String::new(),
+    };
+    let p = Params {
+        hops: (0..=MAX_SSH_HOPS).map(|_| hop(&h, &key)).collect(),
+    };
+    let mut buf = Vec::with_capacity(ainkrad_ptyhost::pty::FD3_MAX);
+    serde_json::to_writer(ainkrad_ptyhost::pty::Capped(&mut buf), &p).expect("fits FD3_MAX");
 }

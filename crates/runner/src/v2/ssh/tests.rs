@@ -402,3 +402,38 @@ async fn real_openssh_exec_trust_jump_and_refused_algorithms() {
     assert_eq!(e.code, ErrorCode::SshFailed, "{e:?}");
     assert!(e.message.contains("No common"), "{e:?}");
 }
+
+#[test]
+fn an_rsa_key_signs_with_sha2_and_never_with_sha1() {
+    use HashAlg::{Sha256, Sha512};
+    // No hash for a key that is not RSA, whatever the host says.
+    assert_eq!(rsa_hash(false, Some(None)), Ok(None));
+    // The host's preference, else SHA-512 when it does not say.
+    assert_eq!(rsa_hash(true, Some(Some(Sha256))), Ok(Some(Sha256)));
+    assert_eq!(rsa_hash(true, Some(Some(Sha512))), Ok(Some(Sha512)));
+    assert_eq!(rsa_hash(true, None), Ok(Some(Sha512)));
+    // A host that takes only `ssh-rsa` (SHA-1) is refused: there is no SHA-1 answer.
+    assert!(rsa_hash(true, Some(None)).is_err());
+    // And no combination yields SHA-1 (`None` for an RSA key means `ssh-rsa`).
+    for host in [None, Some(None), Some(Some(Sha256)), Some(Some(Sha512))] {
+        assert_ne!(rsa_hash(true, host), Ok(None));
+    }
+}
+
+#[tokio::test]
+async fn an_rsa_key_logs_in_with_rsa_sha2_and_the_host_never_sees_ssh_rsa() {
+    let (leases, s) = (Leases::default(), serve("T", true).await);
+    leases.add("l_rsa", RSA_KEY);
+    let r = ssh(&leases)
+        .run(&req(s.hop("me", "l_rsa"), vec![], "name"), never())
+        .await
+        .unwrap();
+    assert!(!r.timed_out);
+    let algos = s.seen.algos.lock().unwrap().clone();
+    assert!(
+        matches!(algos.as_slice(), [a] if a == "rsa-sha2-512" || a == "rsa-sha2-256"),
+        "{algos:?}"
+    );
+    // The key itself is not in the output or the logs.
+    assert!(!format!("{r:?}").contains("BEGIN OPENSSH"));
+}

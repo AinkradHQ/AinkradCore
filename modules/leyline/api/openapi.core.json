@@ -3780,7 +3780,7 @@
             ]
           },
           "private_key": {
-            "description": "An OpenSSH private key (`-----BEGIN OPENSSH PRIVATE KEY-----`), at most 16 KiB.",
+            "description": "A private key, at most 16 KiB: OpenSSH (`BEGIN OPENSSH PRIVATE KEY`) or an unencrypted PEM RSA key\n(`BEGIN RSA PRIVATE KEY`, `BEGIN PRIVATE KEY`).",
             "type": "string"
           }
         },
@@ -3883,8 +3883,17 @@
       "KeyView": {
         "properties": {
           "algo": {
-            "description": "`ed25519`, `ecdsa-p256` or `ecdsa-p384`.",
+            "description": "`ed25519`, `ecdsa-p256`, `ecdsa-p384` or `rsa`.",
             "type": "string"
+          },
+          "bits": {
+            "description": "The key size in bits (RSA modulus, or the curve size); absent when unknown.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "created_at": {
             "type": "string"
