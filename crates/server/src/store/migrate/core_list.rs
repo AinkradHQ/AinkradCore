@@ -269,4 +269,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0044_pairing_bundled_e6.up.sql"),
         down: include_str!("../../../migrations/0044_pairing_bundled_e6.down.sql"),
     },
+    Migration {
+        version: 45,
+        name: "approval_rules",
+        up: include_str!("../../../migrations/0045_approval_rules.up.sql"),
+        down: include_str!("../../../migrations/0045_approval_rules.down.sql"),
+    },
 ];

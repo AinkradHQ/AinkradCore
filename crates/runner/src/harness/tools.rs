@@ -20,6 +20,10 @@ const MAX_INPUT_FIELD: usize = 1024;
 /// whatever the harness's own shape. A new file's `old` is empty.
 pub(super) fn event(event: &HarnessEvent) -> Value {
     let mut v = serde_json::to_value(event).expect("events serialise");
+    if let HarnessEvent::Thinking { text } = event {
+        v["text"] = cut_thinking(text).into();
+        return v;
+    }
     if let HarnessEvent::ToolUse { name, input, .. } = event
         && let Some(changes) = changes(name, input)
     {
@@ -35,6 +39,16 @@ pub(super) fn event(event: &HarnessEvent) -> Value {
         v["edit"] = json!({"changes": changes, "truncated": truncated});
     }
     v
+}
+
+/// Reasoning cut to `MAX_THINKING_BYTES` at a char boundary, marked when cut.
+pub(super) fn cut_thinking(text: &str) -> String {
+    let max = ainkrad_proto::v2::MAX_THINKING_BYTES;
+    if text.len() <= max {
+        return text.to_owned();
+    }
+    let at = text.floor_char_boundary(max - 6);
+    format!("{}\n[cut]", &text[..at])
 }
 
 /// `(path, old, new)` of each change a file edit makes; `None` for any other tool.
@@ -201,6 +215,15 @@ mod tests {
         let id = "t1".to_owned();
         let name = name.to_owned();
         event(&HarnessEvent::ToolUse { id, name, input })["edit"].clone()
+    }
+
+    #[test]
+    fn reasoning_is_its_own_entry_cut_to_16_kib() {
+        let say = |t: String| event(&HarnessEvent::Thinking { text: t });
+        assert_eq!(say("hm".into()), json!({"type": "thinking", "text": "hm"}));
+        let long = say("é".repeat(20_000));
+        let text = long["text"].as_str().unwrap();
+        assert!(text.len() <= 16 * 1024 && text.ends_with("[cut]"));
     }
 
     #[test]

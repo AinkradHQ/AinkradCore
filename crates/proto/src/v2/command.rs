@@ -115,6 +115,13 @@ pub enum Command {
     /// Session documents (E10-2): list, read or write the `.md` files of a session's folder.
     #[serde(rename = "agent.docs")]
     AgentDocs(super::AgentDocs),
+    // After every older op: the schema-compat gate tells variants by position.
+    #[serde(rename = "agent.files")]
+    AgentFiles(super::AgentFiles),
+    #[serde(rename = "agent.revert")]
+    AgentRevert(super::AgentRevert),
+    #[serde(rename = "agent.write")]
+    AgentWrite(super::AgentWrite),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -172,6 +179,9 @@ impl Command {
             Self::RunStatus(_) => super::OP_RUN_STATUS,
             Self::RunObserve(_) => super::OP_RUN_OBSERVE,
             Self::PortOpen(_) => super::OP_PORT_OPEN,
+            Self::AgentFiles(_) => super::OP_AGENT_FILES,
+            Self::AgentRevert(_) => super::OP_AGENT_REVERT,
+            Self::AgentWrite(_) => super::OP_AGENT_WRITE,
             Self::Unknown => "unknown",
         }
     }
@@ -321,6 +331,12 @@ pub enum Reply {
     /// The answer to `agent.docs`.
     #[serde(rename = "agent.docs")]
     AgentDocs(super::DocsReply),
+    #[serde(rename = "agent.files")]
+    AgentFiles(super::AgentFolder),
+    #[serde(rename = "agent.revert")]
+    AgentRevert(super::AgentReverted),
+    #[serde(rename = "agent.write")]
+    AgentWrite(super::AgentWritten),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

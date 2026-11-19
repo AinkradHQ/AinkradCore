@@ -605,8 +605,9 @@ impl Hub {
         })
     }
 
-    /// The sole non-code agent operation. Transcript reads do not need elevation, but are
-    /// still restricted to the agent driver and cannot be smuggled through plain dispatch.
+    /// The non-code agent reads: transcript reads and a session's folder listing (`agent.files`:
+    /// names and sizes inside the session's own folder, read like the transcript). They need no
+    /// elevation, but are still restricted to these ops and cannot be smuggled through plain dispatch.
     pub fn dispatch_agent_read(
         self: &Arc<Self>,
         runner: &str,
@@ -614,11 +615,11 @@ impl Hub {
     ) -> Result<Dispatched, StreamError> {
         if !matches!(
             command.op(),
-            OP_AGENT_READ | ainkrad_proto::v2::OP_AGENT_TOOLS
+            OP_AGENT_READ | ainkrad_proto::v2::OP_AGENT_TOOLS | ainkrad_proto::v2::OP_AGENT_FILES
         ) {
             return Err(err(
                 ErrorCode::InvalidArgs,
-                "only agent.read and agent.tools use the read path",
+                "only agent.read, agent.tools and agent.files use the read path",
             ));
         }
         self.send_command(runner, command)

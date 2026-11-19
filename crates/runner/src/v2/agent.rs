@@ -43,6 +43,7 @@ use tokio::sync::{Notify, mpsc};
 use crate::{Answer, Control, Executor, Job, Report};
 
 mod attach;
+mod files;
 pub mod secrets;
 use secrets::{Delivered, Redeem};
 mod docs;
@@ -448,6 +449,10 @@ impl AgentDriver {
                     &ainkrad_proto::v2::OP_AGENT_ATTACH,
                     &ainkrad_proto::v2::OP_AGENT_DOCS,
                     &ainkrad_proto::v2::OP_AGENT_SUBAGENT_STOP,
+                    &ainkrad_proto::v2::OP_AGENT_FILES,
+                    &ainkrad_proto::v2::OP_AGENT_REVERT,
+                    &ainkrad_proto::v2::OP_AGENT_WRITE,
+                    &ainkrad_proto::v2::CAP_EFFORT,
                 ])
                 .chain(
                     self.config
@@ -992,8 +997,14 @@ impl AgentDriver {
                 approved: req.approved,
                 reply: req.reply.clone(),
             });
-            let entry = json!({"type": "approval_decided", "id": req.request,
+            let mut entry = json!({"type": "approval_decided", "id": req.request,
                                "approved": req.approved});
+            // The Core approving by a project rule says which: kept as the entry's note.
+            if req.approved
+                && let Some(note) = &req.reply
+            {
+                entry["note"] = note.clone().into();
+            }
             push(cfg, &req.session, live, entry);
             Ok(())
         })
@@ -1021,8 +1032,11 @@ impl AgentDriver {
                     "the policy needs more isolation than the session started with",
                 ));
             }
-            let entry = json!({"type": "mode_changed", "mode": req.policy.mode.as_str(),
+            let mut entry = json!({"type": "mode_changed", "mode": req.policy.mode.as_str(),
                                "plan": req.policy.plan});
+            if let Some(effort) = &req.policy.effort {
+                entry["effort"] = effort.clone().into();
+            }
             self.harness
                 .control(live.run, Control::Policy(req.policy.clone()));
             push(cfg, &req.session, live, entry);

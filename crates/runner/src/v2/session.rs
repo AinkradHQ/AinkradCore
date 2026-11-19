@@ -589,6 +589,9 @@ impl Session {
             | Command::AgentAttach(_)
             | Command::AgentDocs(_)
             | Command::AgentSubagentStop(_)
+            | Command::AgentFiles(_)
+            | Command::AgentRevert(_)
+            | Command::AgentWrite(_)
             | Command::GatewayTest(_) => self.start_agent(stream, command),
             Command::RunStart(_)
             | Command::RunStop(_)
@@ -880,6 +883,9 @@ impl Session {
                 Command::AgentSubagentStop(req) => {
                     agent.subagent_stop(req).map(Reply::AgentSubagentStop)
                 }
+                Command::AgentFiles(req) => agent.files(req).map(Reply::AgentFiles),
+                Command::AgentRevert(req) => agent.revert(req).map(Reply::AgentRevert),
+                Command::AgentWrite(req) => agent.write(req).map(Reply::AgentWrite),
                 Command::AgentLimit(req) => agent.limit(req).map(Reply::AgentLimit),
                 Command::AgentTools(req) => agent.tools(&req).await.map(Reply::AgentTools),
                 Command::GatewayTest(req) => agent.gateway_test(req).await.map(Reply::GatewayTest),
