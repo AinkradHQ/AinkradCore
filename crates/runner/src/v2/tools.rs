@@ -135,6 +135,17 @@ impl ToolsDriver {
 
     /// One conversation with the helper.
     async fn drive(&self, req: &ToolsInstall) -> Result<(), String> {
+        // The AI tools go into the runner's own folder, as the runner's user (D-22): no root helper.
+        if super::aitools::is_ai_tool(req.tool) {
+            let op = req.operation.clone();
+            return super::aitools::install(req.tool, &|percent, step| {
+                self.update(&op, |s| {
+                    s.percent = percent.min(99).max(s.percent);
+                    s.step = step.chars().take(200).collect();
+                });
+            })
+            .await;
+        }
         let stream = UnixStream::connect(&self.socket).await.map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused => {
                 "the tool installer is not set up on this runner (ainkrad-runner-tools.socket is missing); re-run the runner installer".to_owned()
@@ -198,12 +209,17 @@ fn probe_of(t: Tool) -> (&'static str, &'static str) {
 /// asked once, `--version`, a few seconds at most). Blocking: call it from `spawn_blocking`.
 pub fn probe_tools() -> BTreeMap<String, String> {
     let mut found = BTreeMap::new();
+    // The runner's own AI tools first, then the system's.
+    let path = match super::aitools::bin_dir() {
+        Some(d) => format!("{}:/usr/local/bin:/usr/bin:/bin", d.display()),
+        None => "/usr/local/bin:/usr/bin:/bin".to_owned(),
+    };
     for t in Tool::ALL {
         let (program, arg) = probe_of(t);
         let Ok(mut child) = Command::new(program)
             .arg(arg)
             .env_clear()
-            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+            .env("PATH", path.as_str())
             .env("HOME", "/nonexistent")
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

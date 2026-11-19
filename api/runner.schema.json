@@ -6055,6 +6055,8 @@
       "enum": [
         "claude",
         "codex",
+        "opencode",
+        "agy",
         "node",
         "git",
         "python",
