@@ -30,10 +30,12 @@ use crate::ops::secretbox::SecretBox;
 
 mod create;
 mod remove;
+mod retired_limits;
 pub use create::{bound_marker, create, create_bound, create_by, create_placed};
 pub use remove::{
     PendingWipe, UNDO_SECS, pending_wipes, restore, soft_delete, wipe_done, wipe_due, wipe_tried,
 };
+pub use retired_limits::audit_retired as audit_retired_limits;
 
 /// The cap a new API-key account starts with.
 pub const DEFAULT_CAP: i64 = 4;

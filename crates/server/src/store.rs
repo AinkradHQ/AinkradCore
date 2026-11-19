@@ -186,6 +186,10 @@ pub async fn connect(path: &Path) -> Result<SqlitePool, sqlx::Error> {
         e => sqlx::Error::Configuration(Box::new(e)),
     })?;
     kinds::register_platform(&pool).await?;
+    // 0049 leaves its converted limits to be audited (SQL cannot write the hash-chained log).
+    accounts::audit_retired_limits(&pool)
+        .await
+        .map_err(|e| sqlx::Error::Configuration(e.to_string().into()))?;
     Ok(pool)
 }
 
