@@ -353,7 +353,9 @@ fn write_last_error(state: &std::path::Path, why: Option<&str>) {
     let _ = match why {
         Some(why) => std::fs::create_dir_all(state).and_then(|()| std::fs::write(&file, why)),
         None => std::fs::remove_file(&file).or_else(|e| {
-            (e.kind() == std::io::ErrorKind::NotFound).then_some(()).ok_or(e)
+            (e.kind() == std::io::ErrorKind::NotFound)
+                .then_some(())
+                .ok_or(e)
         }),
     };
 }
@@ -834,7 +836,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ainkrad-last-error-{}", std::process::id()));
         let file = dir.join("last-error");
         super::write_last_error(&dir, Some("no AI tool installed"));
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "no AI tool installed");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "no AI tool installed"
+        );
         super::write_last_error(&dir, None);
         assert!(!file.exists());
         super::write_last_error(&dir, None); // nothing to remove is fine
