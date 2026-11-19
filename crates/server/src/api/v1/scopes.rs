@@ -304,6 +304,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
 pub const UNLOCKED: &[(&str, &str)] = &[
     ("POST", "/api/v1/terminals"),
     ("GET", "/api/v1/terminals/{id}/ws"),
+    // The last lines of a terminal's screen are the terminal's output: it reads like an attach (E6).
+    ("GET", "/api/v1/terminals/{id}/tail"),
     ("POST", "/api/v1/terminals/{id}/local"),
     // The gate lets INT, TSTP and CONT through (Ctrl-C, Ctrl-Z, fg: `gate::plain_signal`).
     ("POST", "/api/v1/terminals/{id}/signal"),
