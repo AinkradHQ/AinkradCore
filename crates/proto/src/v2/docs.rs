@@ -9,6 +9,9 @@
 //! - `write`: replaces one file's text, only when its current sha-256 is `base` (a Lore edit that flows back).
 //!   A new file takes no `base`.
 //!
+//! After the session ends the runner keeps the files it made or changed (copied just before its folder goes), and
+//! `list` and `read` serve those; `write` is refused.
+//!
 //! A runner that takes the op lists it among its agent driver's commands; the Core sends it to no other.
 
 use serde::{Deserialize, Serialize};
@@ -22,6 +25,8 @@ pub const DOC_MAX_FILES: usize = 200;
 /// The deepest folder `list` walks into, and the most entries it looks at.
 pub const DOC_MAX_DEPTH: usize = 8;
 pub const DOC_MAX_VISITED: usize = 20_000;
+/// What a runner answers (`invalid_args`) for an ended session it kept no documents for; the Core stops asking.
+pub const DOCS_NO_FINAL: &str = "no documents were kept for that session";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
