@@ -547,3 +547,26 @@ async fn a_secret_name_cannot_borrow_another_accounts_host() {
     let r = crate::store::secrets::create(p, &s, &name, &new, &fx.dev.id, BY, NOW).await;
     assert_eq!(code(r), "bad_request");
 }
+
+#[tokio::test]
+async fn an_accounts_key_is_not_a_row_in_the_secrets_list() {
+    let (fx, _vm, s) = setup().await;
+    open_gate(&fx).await;
+    let a = store(&fx, &s, "anthropic", "ant-list", ANT).await.unwrap();
+    let (st, body) = send(
+        &fx.app,
+        req(Method::GET, "/api/v1/secrets", Some(&fx.dev), None),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let names: Vec<&str> = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["name"].as_str())
+        .collect();
+    assert!(!names.iter().any(|n| n.starts_with("acct.")), "{names:?}");
+    // The account is still stored: the store's own list (the secret groups') holds it.
+    let all = crate::store::secrets::list(&fx.app.pool).await.unwrap();
+    assert!(all.iter().any(|m| m.name == a.secret_name));
+}

@@ -128,7 +128,8 @@ async fn each_validation_rule_refuses() {
         ..spec(b)
     };
     assert!(new(p, "priced", &[priced]).await.is_ok());
-    assert_eq!(code(new(p, "unpriced", &[unpriced]).await), "bad_request");
+    // A built-in provider's unlisted model is not refused: the gateway prices it at a flagged default.
+    assert!(new(p, "unpriced", &[unpriced]).await.is_ok());
     assert_eq!(code(new(p, "shapeless", &[shapeless]).await), "bad_request");
     // A subscription's model needs no price.
     let plan = EntrySpec {

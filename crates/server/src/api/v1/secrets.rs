@@ -280,7 +280,14 @@ async fn not_project_slug(app: &App, name: &str) -> Result<(), ApiError> {
     responses((status = 200, description = "Every secret, by name, without its value", body = Vec<SecretInfo>)))]
 pub async fn list(State(app): State<App>) -> ApiResult<Vec<SecretInfo>> {
     let all = store::list(&app.pool).await?;
-    Ok(Json(all.into_iter().map(Into::into).collect()))
+    // An account's key (`acct.*`) is the Accounts screen's: it is never a row here. (`store::list`
+    // stays whole: the secret groups read it.)
+    Ok(Json(
+        all.into_iter()
+            .filter(|m| !m.name.starts_with(store::ACCOUNT_PREFIX))
+            .map(Into::into)
+            .collect(),
+    ))
 }
 
 #[utoipa::path(post, path = "/api/v1/secrets", operation_id = "createSecret", tag = "secrets",

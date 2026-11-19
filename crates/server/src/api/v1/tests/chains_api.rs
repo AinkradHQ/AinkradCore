@@ -177,10 +177,6 @@ async fn validation_refuses_with_400_and_conflicts_with_409_and_a_missing_row_is
             json!({"name": "twice", "entries": [{"pool": a}, {"pool": a}]}),
         ),
         (
-            "an unpriced model",
-            json!({"name": "unpriced", "entries": [{"pool": a, "model": "no-such-model"}]}),
-        ),
-        (
             "a bad model id",
             json!({"name": "badmodel", "entries": [{"pool": a, "model": "has space"}]}),
         ),

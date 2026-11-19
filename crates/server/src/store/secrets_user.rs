@@ -72,7 +72,7 @@ pub(super) async fn bind(
     }
     let key = value.trim();
     // A built-in provider's throwaway or OAuth token has no shape this rule knows.
-    if !user && !(key.starts_with("sk-") || key.starts_with("AIza")) {
+    if !user && !(key.starts_with("sk-") || key.starts_with("AIza") || key.starts_with("AQ.")) {
         return Ok(());
     }
     let account = account_secret(name).map(|(_, id)| id);

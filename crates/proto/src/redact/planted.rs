@@ -10,6 +10,10 @@ pub const PLANTED: &[(&str, &str)] = &[
     ("openai_key", "sk-proj-Q1w2E3r4T5y6U7i8O9p0AsDfGhJkLzXcVbNm"),
     ("openai_key", "sk-Q1w2E3r4T5y6U7i8O9p0AsDfGhJkLzXcVbNm"),
     ("google_key", "AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY"),
+    (
+        "google_key",
+        "AQ.Ab8RN6Zx9QWERTYuiopASDFghjkl0123456789abcdEF",
+    ),
     ("github_token", "ghp_16C7e42F292c6912E7710c838347Ae178B4a"),
     (
         "github_token",

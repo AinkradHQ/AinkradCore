@@ -222,3 +222,15 @@ fn a_lowercase_copy_of_a_mixed_case_value_is_redacted() {
     }
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }
+
+#[test]
+fn a_google_aq_key_is_masked_in_a_log_line_dot_and_all() {
+    let r = Redactor::new();
+    let key = "AQ.Ab8RN6Zx9QWERTYuiopASDFgh.jkl0123456789abcdEF";
+    assert_eq!(
+        r.text(&format!("GEMINI_API_KEY={key} failed")),
+        "GEMINI_API_KEY=[redacted:google_key] failed"
+    );
+    // Too short to be a key: left alone.
+    assert_eq!(r.text("AQ.short"), "AQ.short");
+}
