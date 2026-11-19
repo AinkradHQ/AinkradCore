@@ -206,6 +206,35 @@ pub(super) fn module_refusal(secrets: &[store::SessionSecret]) -> Option<&'stati
              budgets would not bind the gateway's spend"
         })
         .or_else(|| super::subscription::module_refusal(secrets))
+        // A runner-bound account is a plan's login too (its home never leaves its runner), and it
+        // is not a subscription *secret*: it needs its own refusal.
+        .or_else(|| {
+            secrets.iter().any(super::bound::is_bound).then_some(
+                "a module's session may not use a runner-bound account: its budgets would count a \
+                 cost the plan does not bill",
+            )
+        })
+}
+
+#[cfg(test)]
+mod module_refusal_tests {
+    use super::*;
+
+    fn secret(name: &str) -> store::SessionSecret {
+        store::SessionSecret {
+            name: name.to_owned(),
+            var: "X".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_module_session_is_refused_a_runner_bound_account_like_every_other_account() {
+        for name in ["acct.codex-sub.7", "acct.opencode-sub.7", "acct.agy-sub.7"] {
+            assert!(module_refusal(&[secret(name)]).is_some(), "{name}");
+        }
+        assert!(module_refusal(&[]).is_none());
+        assert!(module_refusal(&[secret("project.token")]).is_none());
+    }
 }
 
 /// What the Core does about a gateway session after each answer it stored: a stop a budget ordered,

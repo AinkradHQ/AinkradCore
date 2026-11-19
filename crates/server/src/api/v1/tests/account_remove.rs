@@ -137,3 +137,70 @@ async fn a_stop_wipes_every_removed_account_inside_its_window_and_a_bound_login_
     acc::wipe_done(p, owed[0].id).await.unwrap();
     assert!(acc::pending_wipes(p).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_bound_login_that_finished_on_the_runner_but_was_not_stored_owes_its_home_a_wipe() {
+    use crate::store::logins::{self, Change};
+    let (fx, _vm, _s) = setup().await;
+    let p = &fx.app.pool;
+    let n = unix_secs(NOW).unwrap();
+    let mut made = Vec::new();
+    for label in ["no-key", "cancelled"] {
+        let l = logins::create(p, ("codex-sub", label, "rn_1"), &fx.dev.id, BY, n)
+            .await
+            .unwrap();
+        logins::step(
+            p,
+            &l.id,
+            &["starting"],
+            "open_url",
+            &Change::default(),
+            BY,
+            n,
+        )
+        .await
+        .unwrap();
+        made.push(l);
+    }
+    // No master key loaded (the fixture has none): the account cannot be stored.
+    crate::agents::login::store_bound(&fx.app, &made[0]).await;
+    // Cancelled while the runner finished: the step to `storing` is refused.
+    logins::step(
+        p,
+        &made[1].id,
+        &["open_url"],
+        "cancelled",
+        &Change::default(),
+        BY,
+        n,
+    )
+    .await
+    .unwrap();
+    crate::agents::login::store_bound(&fx.app, &made[1]).await;
+    let mut owed: Vec<_> = acc::pending_wipes(p)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|w| (w.runner, w.home))
+        .collect();
+    let mut want: Vec<_> = made
+        .iter()
+        .map(|l| ("rn_1".to_owned(), l.id.clone()))
+        .collect();
+    owed.sort();
+    want.sort();
+    assert_eq!(owed, want);
+}
+
+#[tokio::test]
+async fn a_removed_account_cannot_be_put_in_a_hidden_order_pool() {
+    let (fx, _vm, s) = setup().await;
+    let p = &fx.app.pool;
+    let a = make(&fx, &s, "claude-main", V1, &[]).await;
+    acc::soft_delete(p, a.id, &fx.dev.id, BY, NOW)
+        .await
+        .unwrap();
+    let mut tx = crate::store::begin_write(p).await.unwrap();
+    let got = crate::store::chains::order::pool_for(&mut tx, 1, a.id, &fx.dev.id, BY, NOW).await;
+    assert!(got.is_err(), "a removed account has no order pool");
+}

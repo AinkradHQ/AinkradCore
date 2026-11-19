@@ -29,6 +29,7 @@
 //! runner does not set `RLIMIT_CORE` (no safe std call, and `unsafe` is forbidden outside
 //! `crates/sys`): run it with core dumps off (`LimitCORE=0`, `ulimit -c 0`).
 
+mod agy;
 mod bound;
 #[cfg(test)]
 mod bound_tests;
@@ -110,6 +111,9 @@ pub struct LoginConfig {
     pub bound: Vec<bound::BoundCli>,
     /// `<config root>/bound`: one account home per runner-bound sign-in.
     pub homes: PathBuf,
+    /// Whether an Antigravity sign-in runs inside the session sandbox. Always true outside a test
+    /// (a stand-in script under a temp dir is not readable from inside it).
+    pub sandbox: bool,
 }
 
 impl LoginConfig {
@@ -125,6 +129,7 @@ impl LoginConfig {
             pinned: PINNED.iter().map(|v| (*v).to_owned()).collect(),
             bound: Vec::new(),
             homes: bound::homes_of(&root),
+            sandbox: true,
             root,
         }
     }

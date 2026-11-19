@@ -92,6 +92,20 @@ pub struct LoginResult {
     pub done: bool,
 }
 
+/// Whether `text` is a line an Antigravity sign-in takes: a menu choice (one or two digits) or a
+/// code (8 to 256 of `[A-Za-z0-9_/-]`, no space; Google's codes start `4/`). Never free text: the
+/// guided terminal is an agent, so a typed sentence would be an instruction to it.
+pub fn agy_input_ok(text: &str) -> bool {
+    let b = text.as_bytes();
+    match b.len() {
+        1..=2 => b.iter().all(u8::is_ascii_digit),
+        8..=256 => b
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'/')),
+        _ => false,
+    }
+}
+
 /// Core to runner: one line the user typed into a guided sign-in (a pasted code, or a menu choice),
 /// sent with Enter. A secret: no `Debug` that shows it, never stored, never logged.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -110,7 +124,9 @@ impl std::fmt::Debug for LoginInput {
 
 /// Core to runner: delete the home of a removed runner-bound account. The runner checks the key
 /// (`bound_key_ok`), touches only `<agents-config>/bound/<home>`, refuses a symlink there, and answers
-/// a `login.result` with `done` set (also when there was nothing to delete), or an error.
+/// a `login.result` with `done` set (also when there was nothing to delete), or an error. An
+/// Antigravity home's login also lives in the OS keyring, which cannot be cleared per account: the
+/// answer is then `done` with `error = "keyring_not_cleared"` (the home is gone; the Core records the note).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LoginWipe {
     /// The account's home key (`[A-Za-z0-9_-]{1,64}`).

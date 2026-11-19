@@ -12,7 +12,8 @@
 //! - `login.cancel`, a failure, a timeout or a panic: the account home is wiped, with the scratch.
 //!
 //! Output passes [`parse::redact`] before any of it leaves; nothing child-written is logged.
-//! Like the claude sign-in, the child is not sandboxed (see the module doc of `login`).
+//! Like the claude sign-in, the Codex and OpenCode children are not sandboxed (see the module doc of
+//! `login`); the Antigravity one, an agent fed by typed lines, runs in the session sandbox (`agy`).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -29,6 +30,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use zeroize::Zeroizing;
 
+use super::agy;
 use super::parse::{self, Screen};
 use super::run::{Guard, type_code};
 use super::{
@@ -234,6 +236,14 @@ impl LoginDriver {
                 "a runner-bound sign-in is for an installed harness, with a plain home key",
             ));
         }
+        // One Antigravity account per runner: its login is in the runner user's OS keyring, shared by
+        // every home, so a second account could not be told apart from the first (or wiped alone).
+        if req.harness == "agy" && agy::exists(&self.cfg.homes) {
+            return Err(err(
+                ErrorCode::Busy,
+                "this runner already has an Antigravity account; remove it before signing in another",
+            ));
+        }
         let (tx, rx) = mpsc::unbounded_channel();
         {
             let mut a = self.active.lock().unwrap();
@@ -268,11 +278,19 @@ impl LoginDriver {
     /// `login.wipe`: deletes a removed account's home from this runner. Idempotent: a home that is not
     /// there is already wiped.
     pub async fn wipe(&self, req: LoginWipe) -> Result<LoginResult, StreamError> {
+        // Read before the home goes: an agy home's login also lives in the OS keyring, which no
+        // tool here clears per account. The files are wiped; the answer says the keyring is not.
+        let agy = agy::is_agy(&self.cfg.homes, &req.home);
         match wipe_home(&self.cfg.homes, &req.home) {
-            Ok(()) => Ok(LoginResult {
-                done: true,
-                ..result(&req.home, None)
-            }),
+            Ok(()) => {
+                if agy {
+                    agy::unmark(&self.cfg.homes, &req.home);
+                }
+                Ok(LoginResult {
+                    done: true,
+                    ..result(&req.home, agy.then_some(agy::KEYRING_NOT_CLEARED))
+                })
+            }
             Err(why) => Err(err(ErrorCode::InvalidArgs, why)),
         }
     }
@@ -397,22 +415,29 @@ impl LoginDriver {
             return End::Fail("the runner could not make a scratch directory".to_owned());
         }
         // A key that already has a home is never reused: its credential is another sign-in's.
-        if home.exists() || seed(harness, home).is_err() {
-            return End::Fail("the runner could not make the account's home".to_owned());
+        if let Err(why) = self.claim_home(harness, home) {
+            return End::Fail(why);
         }
         if let Err(why) = self.bound_version(cli, scratch).await {
             return End::Unsupported(why);
         }
         let mut env = child_env(&runner_env(), scratch);
         env.extend(home_env(harness, home));
+        let mut program = cli.program.clone();
+        let mut args: Vec<String> = cli
+            .args
+            .iter()
+            .cloned()
+            .chain(login_args(harness).iter().map(|a| (*a).to_owned()))
+            .collect();
+        // The Antigravity sign-in is an agent fed by typed lines: it runs in the session sandbox,
+        // writing only its own home (and its scratch). The sandbox failing to build fails the start.
+        if harness == "agy" && self.cfg.sandbox {
+            (program, args) = agy::sandboxed(&program, &args, scratch, home, &self.cfg.homes);
+        }
         let spec = Spec {
-            program: Some(cli.program.display().to_string()),
-            args: cli
-                .args
-                .iter()
-                .cloned()
-                .chain(login_args(harness).iter().map(|a| (*a).to_owned()))
-                .collect(),
+            program: Some(program.display().to_string()),
+            args,
             cwd: Some(scratch.join("home").display().to_string()),
             env,
             size: SIZE,
@@ -457,6 +482,27 @@ impl LoginDriver {
         }
         pty.reap();
         end
+    }
+
+    /// Makes the account's home (it must not exist). For Antigravity also checks, atomically with
+    /// the creation, that this runner has no other agy home, and marks this one.
+    fn claim_home(&self, harness: &str, home: &Path) -> Result<(), String> {
+        let _held = agy::START.lock().unwrap_or_else(|e| e.into_inner());
+        let key = home
+            .file_name()
+            .and_then(|k| k.to_str())
+            .unwrap_or_default();
+        if harness == "agy" && agy::exists(&self.cfg.homes) {
+            return Err(
+                "this runner already has an Antigravity account; remove it before signing in another"
+                    .to_owned(),
+            );
+        }
+        let made = !home.exists()
+            && seed(harness, home).is_ok()
+            && (harness != "agy" || agy::mark(&self.cfg.homes, key).is_ok());
+        made.then_some(())
+            .ok_or_else(|| "the runner could not make the account's home".to_owned())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -521,6 +567,11 @@ impl LoginDriver {
                         let _ = tx.send(result(id, Some("this sign-in takes no code")));
                     }
                     Msg::Input(text, tx) => {
+                        // An Antigravity sign-in takes a menu choice or a code, never free text.
+                        if harness == "agy" && !agy::input_ok(&text) {
+                            let _ = tx.send(result(id, Some("an Antigravity sign-in takes a menu number or a code, not text")));
+                            continue;
+                        }
                         // Typed as the claude sign-in types its code: the text, then Enter as a
                         // write of its own. It is never kept, logged or echoed back.
                         let sent = type_code(writer, &text, self.cfg.enter_delay).await;

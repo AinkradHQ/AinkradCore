@@ -133,6 +133,28 @@ async fn audit(
     Ok(())
 }
 
+/// Audits that a line was typed into a guided sign-in (`account.login_input`): its length and
+/// nothing else. The text is a secret (a code) or an instruction to an agent; it is never recorded.
+pub async fn audit_input(
+    pool: &SqlitePool,
+    actor: AuditActor,
+    l: &Login,
+    len: usize,
+) -> Result<(), Error> {
+    let details = json!({"login_id": l.id, "provider": l.provider, "runner": l.runner,
+                         "by_device": l.device, "len": len});
+    let e = NewAuditEvent {
+        actor,
+        action: "account.login_input".to_owned(),
+        entity: None,
+        details: details.to_string(),
+    };
+    let mut tx = super::begin_write(pool).await?;
+    super::audit::append(&mut tx, &e).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Starts a login in `starting`, at `now` (unix seconds). One open login per label, a few at once.
 pub async fn create(
     pool: &SqlitePool,

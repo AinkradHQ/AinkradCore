@@ -158,11 +158,12 @@ pub(crate) async fn pool_for(
     now: &str,
 ) -> Result<i64, Error> {
     // Accounts are the server's (the account rows carry no per-user owner), so only existence is checked.
-    let provider: Option<String> =
-        sqlx::query_scalar("SELECT provider FROM core_accounts WHERE id = ?")
-            .bind(account)
-            .fetch_optional(&mut *conn)
-            .await?;
+    let provider: Option<String> = sqlx::query_scalar(
+        "SELECT provider FROM core_accounts WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(account)
+    .fetch_optional(&mut *conn)
+    .await?;
     let Some(provider) = provider else {
         return refused("not_found", format!("no account {account}"));
     };
