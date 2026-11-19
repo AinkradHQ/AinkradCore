@@ -377,6 +377,123 @@ pub(crate) async fn archive(
     Ok(Json(Archived { archived: n == 1 }))
 }
 
+#[derive(Serialize, ToSchema)]
+pub struct TraceStep {
+    /// `record.candidate`, `record.accepted`, `record.edited`, `record.archived`, `record.restored` or `record.purged`.
+    pub op: String,
+    pub at: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct TraceRecord {
+    pub id: String,
+    #[serde(rename = "type")]
+    #[schema(rename = "type")]
+    pub kind: String,
+    pub body: String,
+    pub archived: bool,
+    /// The record's history from the room's op-log, oldest first.
+    pub history: Vec<TraceStep>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct SourceTrace {
+    /// The start of the source's text (as outside data); empty once the text was compacted.
+    pub excerpt: String,
+    /// The records that cite this source, at most 5.
+    pub records: Vec<TraceRecord>,
+}
+
+const EXCERPT_CHARS: usize = 400;
+
+#[utoipa::path(get, path = "/rooms/{room}/sources/{item}/trace", operation_id = "brainSourceTrace", tag = "brain",
+    params(("room" = String, Path, description = "Room id"), ("item" = String, Path, description = "Source item id")),
+    responses((status = 200, description = "What a source produced: the start of its text and the records that cite it, each with its change history. The room must be open", body = SourceTrace)))]
+pub(crate) async fn trace(
+    State(app): State<App>,
+    Extension(b): Extension<Brain>,
+    Path((room, item)): Path<(String, String)>,
+) -> ApiResult<SourceTrace> {
+    let access = crate::inbox::open_room(&app, &b, &room).await?;
+    let text: Option<String> = sqlx::query_scalar("SELECT text FROM sources WHERE item_id = ?")
+        .bind(&item)
+        .fetch_optional(access.pool())
+        .await?;
+    let Some(text) = text else {
+        access.pool().close().await;
+        return Err(code(404, "no_such_source", "no such source in this room"));
+    };
+    let recs = sqlx::query(
+        "SELECT r.id, r.type, r.body, r.archived_at IS NOT NULL AS archived FROM records r \
+         JOIN record_sources rs ON rs.record = r.id WHERE rs.source = ? ORDER BY r.created_at, r.id LIMIT 5",
+    )
+    .bind(&item)
+    .fetch_all(access.pool())
+    .await?;
+    let mut records = vec![];
+    for r in recs {
+        let id: String = r.try_get("id")?;
+        let history = sqlx::query("SELECT op, at FROM op_log WHERE ref = ? ORDER BY seq")
+            .bind(&id)
+            .fetch_all(access.pool())
+            .await?
+            .iter()
+            .map(|h| {
+                Ok(TraceStep {
+                    op: h.try_get("op")?,
+                    at: h.try_get("at")?,
+                })
+            })
+            .collect::<Result<_, sqlx::Error>>()?;
+        records.push(TraceRecord {
+            archived: r.try_get::<i64, _>("archived")? == 1,
+            kind: r.try_get("type")?,
+            body: r.try_get("body")?,
+            id,
+            history,
+        });
+    }
+    access.pool().close().await;
+    Ok(Json(SourceTrace {
+        excerpt: text.chars().take(EXCERPT_CHARS).collect(),
+        records,
+    }))
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct Restored {
+    /// False when it was not archived.
+    pub restored: bool,
+}
+
+#[utoipa::path(post, path = "/rooms/{room}/records/{id}/restore", operation_id = "brainRestoreRecord", tag = "brain",
+    params(("room" = String, Path, description = "Room id"), ("id" = String, Path, description = "Record id")),
+    responses((status = 200, description = "Puts an archived record back in memory (the Undo of an archive). Person only; the room must be open", body = Restored)))]
+pub(crate) async fn restore(
+    State(app): State<App>,
+    Extension(b): Extension<Brain>,
+    Extension(me): Extension<Caller>,
+    Path((room, id)): Path<(String, String)>,
+) -> ApiResult<Restored> {
+    crate::change_routes::person_only(&me)?;
+    let access = crate::inbox::open_room(&app, &b, &room).await?;
+    let now = app.clock.now();
+    let mut tx = access.pool().begin().await?;
+    let n = sqlx::query(
+        "UPDATE records SET archived_at = NULL WHERE id = ? AND archived_at IS NOT NULL",
+    )
+    .bind(&id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if n == 1 {
+        crate::distil::log_op(&mut *tx, "record.restored", &id, &now).await?;
+    }
+    tx.commit().await?;
+    access.pool().close().await;
+    Ok(Json(Restored { restored: n == 1 }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

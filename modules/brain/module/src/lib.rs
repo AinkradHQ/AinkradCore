@@ -167,6 +167,7 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/rooms/{room}/redistil"),
 ];
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
+    ("POST", "/rooms/{room}/records/{id}/restore"),
     ("POST", "/rooms/{room}/records/{id}/archive"),
     ("POST", "/auto-imports/{run}/undo"),
     ("POST", "/imports"),
@@ -246,6 +247,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/activity", "read"),
     ("GET", "/areas", "read"),
     ("GET", "/learned", "read"),
+    ("GET", "/rooms/{room}/sources/{item}/trace", "read"),
     ("GET", "/auto-imports", "read"),
     ("GET", "/areas/{area}", "read"),
     ("GET", "/rooms/{room}/access", "read"),
@@ -608,6 +610,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         areas::records,
         areas::learned,
         areas::archive,
+        areas::trace,
+        areas::restore,
         auto_import::list,
         learning::get,
         auto_import::undo,
@@ -639,6 +643,10 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         areas::AreaPage,
         areas::Learned,
         areas::Archived,
+        areas::SourceTrace,
+        areas::TraceRecord,
+        areas::TraceStep,
+        areas::Restored,
         auto_import::AutoImport,
         learning::Learning,
         learning::LearningPlace,
@@ -816,6 +824,8 @@ impl Module for Brain {
             .route("/areas", get(areas::summary))
             .route("/areas/{area}", get(areas::records))
             .route("/learned", get(areas::learned))
+            .route("/rooms/{room}/sources/{item}/trace", get(areas::trace))
+            .route("/rooms/{room}/records/{id}/restore", post(areas::restore))
             .route("/rooms/{room}/records/{id}/archive", post(areas::archive))
             .route("/imports/{run}/learning", get(learning::get))
             .route("/auto-imports", get(auto_import::list))

@@ -74,6 +74,24 @@ async fn records_land_in_one_area_each_and_a_closed_room_is_counted_not_read() {
         .find(|x| x["area"] == "rules")
         .unwrap();
     assert_eq!(rules["count"], 0, "{v}");
+    // Restore is the Undo of the archive.
+    let u = ok(
+        &fx,
+        Method::POST,
+        &format!("/rooms/{room}/records/r1/restore"),
+        None,
+    )
+    .await;
+    assert_eq!(u["restored"], true, "{u}");
+    let (st, _) = call(
+        &fx,
+        &fx.admin,
+        Method::GET,
+        &format!("/rooms/{room}/sources/nope/trace"),
+        None,
+    )
+    .await;
+    assert_eq!(st.as_u16(), 404);
     let (st, _) = call(&fx, &fx.admin, Method::GET, "/areas/places", None).await;
     assert_eq!(st.as_u16(), 404);
 }
