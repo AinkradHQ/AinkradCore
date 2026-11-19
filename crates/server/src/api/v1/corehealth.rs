@@ -28,6 +28,15 @@ pub struct CoreHealth {
     pub last_backup_at: Option<Timestamp>,
     /// That backup's size in bytes.
     pub last_backup_bytes: Option<u64>,
+    /// Resident memory of the Core process in bytes (the top bar's Core menu).
+    #[schema(required = false)]
+    pub memory_bytes: Option<u64>,
+    /// Share of the data disk in use, 0 to 100, when the host says.
+    #[schema(required = false)]
+    pub disk_used_pct: Option<i64>,
+    /// Size of the data disk in bytes.
+    #[schema(required = false)]
+    pub disk_total_bytes: Option<u64>,
 }
 
 #[utoipa::path(get, path = "/api/v1/core/health", operation_id = "getCoreHealth",
@@ -35,7 +44,8 @@ pub struct CoreHealth {
     responses((status = 200, description = "The Core's version, uptime, certificate end and \
         newest backup, as of at most five seconds ago. Needs `read`", body = CoreHealth)))]
 pub async fn get(State(app): State<App>) -> ApiResult<CoreHealth> {
-    let r = &app.health.host().await.readings;
+    let host = app.health.host().await;
+    let r = &host.readings;
     let now = app.clock.unix();
     let at = |t: i64| ts(&iso_of_unix(t));
     Ok(Json(CoreHealth {
@@ -45,5 +55,8 @@ pub async fn get(State(app): State<App>) -> ApiResult<CoreHealth> {
         cert_days_left: r.cert_days_left(now),
         last_backup_at: r.backup_at.map(at),
         last_backup_bytes: r.backup_bytes,
+        memory_bytes: host.rss_bytes,
+        disk_used_pct: r.disk_free_pct().map(|f| 100 - f),
+        disk_total_bytes: r.disk_total_bytes,
     }))
 }
