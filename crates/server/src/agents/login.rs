@@ -59,6 +59,9 @@ const OPENCODE_HOSTS: [&str; 10] = [
     "microsoft.com",
 ];
 
+/// An Antigravity sign-in goes to Google's own hosts.
+const AGY_HOSTS: [&str; 3] = ["google.com", "antigravity.google", "googleapis.com"];
+
 /// Whether `provider`'s sign-in is a guided terminal: the CLI asks questions the user answers
 /// through `login.input`, reading `login.screen` (OpenCode, Antigravity).
 fn guided(provider: &str) -> bool {
@@ -70,6 +73,7 @@ fn hosts_of(provider: &str) -> &'static [&'static str] {
     match provider {
         "codex-sub" => &CODEX_HOSTS,
         "opencode-sub" => &OPENCODE_HOSTS,
+        "agy-sub" => &AGY_HOSTS,
         _ => &URL_HOSTS,
     }
 }

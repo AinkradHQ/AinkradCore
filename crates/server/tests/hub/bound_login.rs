@@ -23,6 +23,7 @@ async fn up(name: &str, bound_cap: bool) -> W {
     if bound_cap {
         commands.push(format!("{CAP_LOGIN_BOUND}codex"));
         commands.push(format!("{CAP_LOGIN_BOUND}opencode"));
+        commands.push(format!("{CAP_LOGIN_BOUND}agy"));
         commands.push(CAP_BOUND_HOME.to_owned());
     }
     let driver = DriverInfo {
@@ -315,4 +316,73 @@ async fn a_codex_login_has_no_screen_and_takes_no_typed_line() {
         refusal(login::screen(&w.core.app, &w.who, &l.id).await).0,
         "bad_request"
     );
+}
+
+#[tokio::test]
+async fn an_antigravity_login_is_guided_and_only_googles_pages_are_taken() {
+    let mut w = up("bound-agy", true).await;
+    let l = login::start(&w.core.app, &w.who, "agy-sub", "ag", None)
+        .await
+        .unwrap();
+    let (stream, cmd) = command(&mut w.fake).await;
+    let Command::LoginStart(st) = cmd else {
+        panic!("{cmd:?}")
+    };
+    assert_eq!(
+        (st.harness.as_str(), st.home.as_deref()),
+        ("agy", Some(l.id.as_str()))
+    );
+    w.fake
+        .send(
+            stream,
+            Body::Result(Reply::LoginUrl(LoginUrl {
+                login_id: l.id.clone(),
+                url: "https://accounts.google.com/o/oauth2/auth?x=1".to_owned(),
+                code: None,
+            })),
+        )
+        .await;
+    let open = until(&w, &l.id, "open_url").await;
+    assert_eq!(
+        open.url.as_deref(),
+        Some("https://accounts.google.com/o/oauth2/auth?x=1")
+    );
+    let (wait_stream, cmd) = command(&mut w.fake).await;
+    assert!(matches!(cmd, Command::LoginWait(_)));
+    w.fake
+        .send(
+            wait_stream,
+            Body::Result(Reply::LoginResult(LoginResult {
+                login_id: l.id.clone(),
+                token: None,
+                error: None,
+                done: true,
+            })),
+        )
+        .await;
+    let done = until(&w, &l.id, "done").await;
+    let a = accounts::get(&w.core.app.pool, done.account_id.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        (a.provider.as_str(), a.runners.len(), a.cap),
+        ("agy-sub", 1, 1)
+    );
+
+    // Another provider's page is refused for this one.
+    let l2 = login::start(&w.core.app, &w.who, "agy-sub", "ag2", None)
+        .await
+        .unwrap();
+    let (stream, _) = command(&mut w.fake).await;
+    w.fake
+        .send(
+            stream,
+            Body::Result(Reply::LoginUrl(LoginUrl {
+                login_id: l2.id.clone(),
+                url: "https://auth.openai.com/codex/device".to_owned(),
+                code: None,
+            })),
+        )
+        .await;
+    until(&w, &l2.id, "failed").await;
 }

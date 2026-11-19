@@ -158,6 +158,7 @@ fn bound_clis() -> Vec<bound::BoundCli> {
     [
         ("codex", ainkrad_harness::codex::VERSION),
         ("opencode", ainkrad_harness::opencode::VERSION),
+        ("agy", ainkrad_harness::agy::VERSION),
     ]
     .into_iter()
     .filter_map(|(harness, version)| {

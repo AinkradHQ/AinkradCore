@@ -148,7 +148,7 @@ pub async fn create(
     if !super::accounts::PROVIDERS.contains(&provider) {
         return refused(
             "bad_request",
-            "provider is anthropic, openai, google, claude-sub, codex-sub or opencode-sub",
+            "provider is anthropic, openai, google, claude-sub, codex-sub, opencode-sub or agy-sub",
         );
     }
     let mut tx = super::begin_write(pool).await?;

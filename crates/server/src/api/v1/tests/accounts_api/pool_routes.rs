@@ -132,6 +132,7 @@ async fn provider_definitions_are_validated_and_built_ins_are_fixed() {
             "claude-sub",
             "codex-sub",
             "opencode-sub",
+            "agy-sub",
             "openrouter",
             "aimlapi",
             "groq",
