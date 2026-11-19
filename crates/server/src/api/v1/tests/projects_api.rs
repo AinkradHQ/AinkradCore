@@ -1,4 +1,4 @@
-//! The projects routes (P1-02): reading is `read`, every change is `admin` plus a step-up, remotes
+//! The projects routes (P1-02): reading is `read`, every change is `admin`, remotes
 //! are checked, an archived project is read-only, and mirror state shows in the project.
 
 use axum::http::{Method, StatusCode};
@@ -37,7 +37,7 @@ async fn shop(fx: &Fx) -> i64 {
 }
 
 #[tokio::test]
-async fn reading_is_read_scope_and_every_change_needs_admin_and_a_step_up() {
+async fn reading_is_read_scope_and_every_change_needs_admin_and_no_step_up() {
     let fx = fx().await;
     let phone = fx.enroll("phone", &["read"]).await;
     let plain = TestDevice::enroll(
@@ -72,13 +72,17 @@ async fn reading_is_read_scope_and_every_change_needs_admin_and_a_step_up() {
             (StatusCode::FORBIDDEN, "forbidden_scope"),
             "{m} {uri}"
         );
-        let r = call(&fx, &plain, m.clone(), uri, b.clone()).await;
-        assert_eq!(
-            code(&r),
-            (StatusCode::FORBIDDEN, "step_up_required"),
-            "{m} {uri}"
-        );
     }
+    // An admin needs no step-up: its scope is enough, so the route answers (here not found).
+    let r = call(
+        &fx,
+        &plain,
+        Method::DELETE,
+        &format!("{p}/repos/1"),
+        Value::Null,
+    )
+    .await;
+    assert_ne!(r.0, StatusCode::FORBIDDEN, "{}", r.1);
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_projects")
         .fetch_one(&fx.app.pool)
         .await

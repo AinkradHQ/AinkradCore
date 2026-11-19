@@ -89,14 +89,12 @@ const SETTINGS: &[ModuleSetting] = &[
     },
 ];
 
-// Archiving hides a design from every list, so it needs a step-up like archiving a project.
-// Deleting an asset or a collection is as final as archiving a design.
-const DESTRUCTIVE: &[(&str, &str)] = &[
+// D-4: nothing here is on the danger list; archiving and deleting are normal writes.
+const DESTRUCTIVE: &[(&str, &str)] = &[];
+const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/docs/{doc}/archive"),
     ("DELETE", "/assets/{sha}"),
     ("DELETE", "/collections/{id}"),
-];
-const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/docs"),
     ("PATCH", "/docs/{doc}"),
     ("POST", "/docs/{doc}/take-over"),

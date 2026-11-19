@@ -244,6 +244,7 @@ async fn connection_access_is_admin_only_and_validated_before_anything_is_writte
     let vm = super::secrets::runner(&cx.fx, "vm").await;
     let agent = super::stepup::plain(&cx.fx, "agent", &["agent", "read"], true).await;
     super::stepup::step_up(&cx.fx, &agent).await;
+    super::stepup::unlock(&cx.fx, &agent).await;
     // A device without `admin` that names the field at all is refused, an empty list included.
     for list in [json!(["read_repo"]), json!([])] {
         let r = create(&cx, &agent, &vm.id, json!({"connection_access": list})).await;

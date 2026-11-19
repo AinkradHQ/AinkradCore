@@ -7,7 +7,7 @@
 
 use ainkrad_core::settings::{Key, Scope};
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,7 +15,7 @@ use utoipa::ToSchema;
 
 use super::audit::EventActor;
 use super::types::{SettingScope, SettingUnit, Timestamp, ts};
-use super::{ApiError, ApiResult, BY};
+use super::{ApiError, ApiResult, BY, Caller};
 use crate::api::App;
 use crate::store::settings::{self as store, Change, Effective, SetError};
 
@@ -96,6 +96,15 @@ fn key(text: &str) -> Result<Key, ApiError> {
         .map_err(|e: ainkrad_core::settings::SettingError| ApiError::not_found(e.to_string()))
 }
 
+/// The authoritative danger check for a security setting (`auth.*`), made from the parsed key so
+/// no encoding of the path can dodge it (the gate's path check is only the first line).
+fn guard(app: &App, me: &Caller, k: Key) -> Result<(), ApiError> {
+    match k.name().starts_with("auth.") {
+        true => super::stepup::require_elevated(app, me),
+        false => Ok(()),
+    }
+}
+
 fn refused(e: SetError) -> ApiError {
     match e {
         SetError::Refused(e) => ApiError::new(StatusCode::BAD_REQUEST, e.code(), e.to_string()),
@@ -144,10 +153,12 @@ pub async fn get(
     responses((status = 200, description = "Set; its effective value there. 400 `out_of_bounds`, `wrong_scope` or `not_integer` when refused", body = Setting)))]
 pub async fn set(
     State(app): State<App>,
+    Extension(me): Extension<Caller>,
     Path((at, name)): Path<(String, String)>,
     Json(body): Json<SetSetting>,
 ) -> ApiResult<Setting> {
     let (k, at) = (key(&name)?, scope(&at)?);
+    guard(&app, &me, k)?;
     let value = body.value.to_string();
     let e = store::set(&app.pool, k, at, &value, BY, &app.clock.now()).await;
     Ok(Json(e.map_err(refused)?.into()))
@@ -160,9 +171,11 @@ pub async fn set(
     responses((status = 200, description = "Reset: the value it inherits there now", body = Setting)))]
 pub async fn reset(
     State(app): State<App>,
+    Extension(me): Extension<Caller>,
     Path((at, name)): Path<(String, String)>,
 ) -> ApiResult<Setting> {
     let (k, at) = (key(&name)?, scope(&at)?);
+    guard(&app, &me, k)?;
     let e = store::reset(&app.pool, k, at, BY, &app.clock.now()).await;
     Ok(Json(e.map_err(refused)?.into()))
 }

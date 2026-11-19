@@ -15,6 +15,7 @@
 
 package ainkrad.client.models
 
+import ainkrad.client.models.StepUpPurpose
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -25,6 +26,7 @@ import kotlinx.serialization.Contextual
  *
  * @param challenge The challenge from `POST /api/v1/auth/step-up/challenge` for this session.
  * @param assertion A passkey device's proof: the WebAuthn `PublicKeyCredential` answering the challenge's `options`, with user verification.
+ * @param purpose What the proof opens. `action` (the default) elevates the session for the danger routes for `auth.step_up_secs`; `session` opens the app unlock instead (E1-1), held while the app sends `POST /api/v1/auth/unlock/beat` and ended by `POST /api/v1/auth/unlock/end`.
  * @param stepupSig The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`, no trailing newline. The device's OS releases that key only after user verification. Required for a native device; a passkey device sends `assertion` instead.
  */
 @Serializable
@@ -38,6 +40,10 @@ data class StepUpRequest (
     /* A passkey device's proof: the WebAuthn `PublicKeyCredential` answering the challenge's `options`, with user verification. */
     @Contextual @SerialName(value = "assertion")
     val assertion: kotlin.Any? = null,
+
+    /* What the proof opens. `action` (the default) elevates the session for the danger routes for `auth.step_up_secs`; `session` opens the app unlock instead (E1-1), held while the app sends `POST /api/v1/auth/unlock/beat` and ended by `POST /api/v1/auth/unlock/end`. */
+    @SerialName(value = "purpose")
+    val purpose: StepUpPurpose? = null,
 
     /* The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`, no trailing newline. The device's OS releases that key only after user verification. Required for a native device; a passkey device sends `assertion` instead. */
     @SerialName(value = "stepup_sig")

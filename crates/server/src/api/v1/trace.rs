@@ -184,11 +184,14 @@ pub(super) async fn audit_refusals(State(app): State<App>, req: Request, next: N
         .iter()
         .find(|(m, t)| *m == method.as_str() && super::scopes::fits(t, &path))
         .map(|r| r.1);
-    if route.is_some() || response.status() == StatusCode::TOO_MANY_REQUESTS {
+    // An unlock refusal is audited once per device and window by the gate itself (E1, review M4);
+    // a repeat is only counted, so a script cannot grow the permanent log.
+    let unlock = refused.code == "unlock_required";
+    if route.is_some() || unlock || response.status() == StatusCode::TOO_MANY_REQUESTS {
         let key = format!(
             "{} {method} {}",
             refused.code,
-            route.unwrap_or("(rate limited)")
+            route.unwrap_or(if unlock { "(unlock)" } else { "(rate limited)" })
         );
         if app.auth.refusals.note(&key, app.clock.unix()) {
             tracing::warn!(key, "refusals counted, not audited, for this window");

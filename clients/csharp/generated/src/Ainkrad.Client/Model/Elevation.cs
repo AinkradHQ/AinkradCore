@@ -36,9 +36,13 @@ namespace Ainkrad.Client.Model
         /// Initializes a new instance of the <see cref="Elevation" /> class.
         /// </summary>
         /// <param name="elevatedUntil">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
-        public Elevation(DateTime elevatedUntil = default)
+        /// <param name="unlockToken">Only in the answer to &#x60;purpose: session&#x60; (review M1): a secret to keep in memory and send as &#x60;Ainkrad-Unlock&#x60; on the heartbeat and on every request that needs the unlock. Never stored..</param>
+        /// <param name="unlockedUntil">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
+        public Elevation(DateTime elevatedUntil = default, string unlockToken = default, DateTime unlockedUntil = default)
         {
             this.ElevatedUntil = elevatedUntil;
+            this.UnlockToken = unlockToken;
+            this.UnlockedUntil = unlockedUntil;
         }
 
         /// <summary>
@@ -49,6 +53,20 @@ namespace Ainkrad.Client.Model
         public DateTime ElevatedUntil { get; set; }
 
         /// <summary>
+        /// Only in the answer to &#x60;purpose: session&#x60; (review M1): a secret to keep in memory and send as &#x60;Ainkrad-Unlock&#x60; on the heartbeat and on every request that needs the unlock. Never stored.
+        /// </summary>
+        /// <value>Only in the answer to &#x60;purpose: session&#x60; (review M1): a secret to keep in memory and send as &#x60;Ainkrad-Unlock&#x60; on the heartbeat and on every request that needs the unlock. Never stored.</value>
+        [DataMember(Name = "unlock_token", EmitDefaultValue = true)]
+        public string UnlockToken { get; set; }
+
+        /// <summary>
+        /// RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4).
+        /// </summary>
+        /// <value>RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4).</value>
+        [DataMember(Name = "unlocked_until", EmitDefaultValue = false)]
+        public DateTime UnlockedUntil { get; set; }
+
+        /// <summary>
         /// Returns the string presentation of the object
         /// </summary>
         /// <returns>String presentation of the object</returns>
@@ -57,6 +75,8 @@ namespace Ainkrad.Client.Model
             StringBuilder sb = new StringBuilder();
             sb.Append("class Elevation {\n");
             sb.Append("  ElevatedUntil: ").Append(ElevatedUntil).Append("\n");
+            sb.Append("  UnlockToken: ").Append(UnlockToken).Append("\n");
+            sb.Append("  UnlockedUntil: ").Append(UnlockedUntil).Append("\n");
             sb.Append("}\n");
             return sb.ToString();
         }

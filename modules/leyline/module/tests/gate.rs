@@ -59,6 +59,7 @@ async fn fx_with(on: bool) -> Fx {
     let admin = enroll(&app, "admin", &["admin", "read"]).await;
     let session = admin.session.lock().unwrap().clone().unwrap();
     app.auth.elevate(&session, &admin.id, clock.unix() + 3600);
+    admin.unlock(&app.auth, clock.unix() + 3600);
     Fx { app, admin, dir }
 }
 
@@ -153,7 +154,7 @@ async fn count(fx: &Fx, table: &str) -> i64 {
 }
 
 #[tokio::test]
-async fn scopes_and_step_up_follow_the_modules_tables() {
+async fn scopes_follow_the_modules_tables_and_a_delete_needs_no_step_up() {
     let fx = fx().await;
     let reader = enroll(&fx.app, "reader", &["read"]).await;
     let laptop = enroll(&fx.app, "laptop", &["admin"]).await; // admin, not elevated
@@ -182,15 +183,8 @@ async fn scopes_and_step_up_follow_the_modules_tables() {
     .await;
     assert_eq!(s, StatusCode::OK, "a plain change needs no step-up: {b}");
     let (s, b) = call(&fx, &laptop, Method::DELETE, &path, None).await;
-    assert_eq!(
-        (s, &b["code"]),
-        (StatusCode::FORBIDDEN, &json!("step_up_required"))
-    );
-    assert_eq!(count(&fx, "leyline_hosts").await, 1);
-    assert_eq!(
-        call(&fx, &fx.admin, Method::DELETE, &path, None).await.0,
-        StatusCode::OK
-    );
+    assert_eq!(s, StatusCode::OK, "a delete needs no step-up: {b}");
+    assert_eq!(count(&fx, "leyline_hosts").await, 0);
     assert_eq!(
         call(&fx, &fx.admin, Method::DELETE, &path, None).await.0,
         StatusCode::NOT_FOUND
@@ -684,10 +678,7 @@ fn the_contract_marks_scope_and_step_up_and_carries_no_key_material_routes() {
         p["/modules/leyline/v1/hosts"]["post"]["x-ainkrad-scope"],
         "admin"
     );
-    assert_eq!(
-        p["/modules/leyline/v1/hosts/{host}"]["delete"]["x-ainkrad-destructive"],
-        true
-    );
+    assert!(p["/modules/leyline/v1/hosts/{host}"]["delete"]["x-ainkrad-destructive"].is_null());
     assert!(p["/modules/leyline/v1/hosts/{host}"]["patch"]["x-ainkrad-destructive"].is_null());
 }
 
@@ -864,4 +855,29 @@ async fn an_unknown_project_is_refused_and_attach_detach_are_audited() {
         ev.contains("attached") && ev.contains("detached") && !ev.contains("example.com"),
         "{ev}"
     );
+}
+
+/// Review H3, M3: every Leyline route that runs code on a host or reads its files is refused
+/// to a device that never unlocked the app, before the route looks at the request.
+#[tokio::test]
+async fn the_unlock_routes_are_refused_without_the_unlock() {
+    let fx = fx().await;
+    let locked = enroll(&fx.app, "locked", &["admin", "read", "terminal"]).await;
+    let routes = [
+        (Method::POST, "/hosts/h_x/terminals"),
+        (Method::PUT, "/hosts/h_x/files/content"),
+        (Method::POST, "/hosts/h_x/runner"),
+        (Method::POST, "/commands"),
+        (Method::PATCH, "/commands/c_x"),
+        (Method::POST, "/commands/c_x/run"),
+        (Method::POST, "/fleet/runs"),
+        (Method::GET, "/hosts/h_x/files"),
+        (Method::GET, "/hosts/h_x/files/content"),
+    ];
+    for (m, path) in routes {
+        let (s, v, _) = call_raw(&fx, &locked, m.clone(), path, Some("{}")).await;
+        assert_eq!((s, &v["code"]), (StatusCode::FORBIDDEN, &json!("unlock_required")), "{m} {path}");
+        let (_, v, _) = call_raw(&fx, &fx.admin, m.clone(), path, Some("{}")).await;
+        assert_ne!(v["code"], json!("unlock_required"), "{m} {path}: the unlocked admin passes the gate");
+    }
 }

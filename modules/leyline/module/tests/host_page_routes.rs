@@ -11,6 +11,7 @@ async fn term(fx: &Fx) -> ainkrad_core_server::auth::testing::TestDevice {
     let d = enroll(&fx.app, "term", &["admin", "read", "terminal"]).await;
     let s = d.session.lock().unwrap().clone().unwrap();
     fx.app.auth.elevate(&s, &d.id, fx.app.clock.unix() + 3600);
+    d.unlock(&fx.app.auth, fx.app.clock.unix() + 3600);
     d
 }
 
@@ -97,7 +98,7 @@ async fn file_routes_refuse_without_a_runner_and_echo_nothing() {
 }
 
 #[tokio::test]
-async fn an_upload_chunk_out_of_order_or_without_the_step_up_is_refused() {
+async fn an_upload_chunk_out_of_order_or_without_the_unlock_is_refused() {
     let fx = fx().await;
     add(&fx, "alpha", "ask").await;
     let t = term(&fx).await;

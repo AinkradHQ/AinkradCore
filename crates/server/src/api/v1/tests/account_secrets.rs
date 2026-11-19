@@ -357,6 +357,7 @@ async fn a_device_without_admin_can_neither_name_nor_lease_nor_list_an_account_s
     store_account(&fx, &vm, V1).await;
     let agent = super::stepup::plain(&fx, "agent-only", &["agent", "read", "approve"], true).await;
     assert_eq!(super::stepup::step_up(&fx, &agent).await.0, StatusCode::OK);
+    assert_eq!(super::stepup::unlock(&fx, &agent).await.0, StatusCode::OK);
     // A valid, sandboxed request naming the account secret: stopped by the scope, not later.
     let r = call(
         &fx,

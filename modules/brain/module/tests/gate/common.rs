@@ -74,6 +74,7 @@ pub async fn fx_with(brain: Brain, mode: i64) -> Fx {
     let admin = enroll(&app, "admin", &["admin", "read"]).await;
     let session = admin.session.lock().unwrap().clone().unwrap();
     app.auth.elevate(&session, &admin.id, clock.unix() + 3600);
+    admin.unlock(&app.auth, clock.unix() + 3600);
     let laptop = enroll(&app, "laptop", &["admin", "read"]).await;
     Fx {
         app,

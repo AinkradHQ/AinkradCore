@@ -24,6 +24,8 @@ import kotlinx.serialization.Contextual
  * 
  *
  * @param elevatedUntil RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param unlockToken Only in the answer to `purpose: session` (review M1): a secret to keep in memory and send as `Ainkrad-Unlock` on the heartbeat and on every request that needs the unlock. Never stored.
+ * @param unlockedUntil RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  */
 @Serializable
 
@@ -31,7 +33,15 @@ data class Elevation (
 
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "elevated_until")
-    val elevatedUntil: java.time.OffsetDateTime? = null
+    val elevatedUntil: java.time.OffsetDateTime? = null,
+
+    /* Only in the answer to `purpose: session` (review M1): a secret to keep in memory and send as `Ainkrad-Unlock` on the heartbeat and on every request that needs the unlock. Never stored. */
+    @SerialName(value = "unlock_token")
+    val unlockToken: kotlin.String? = null,
+
+    /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
+    @Contextual @SerialName(value = "unlocked_until")
+    val unlockedUntil: java.time.OffsetDateTime? = null
 
 ) {
 

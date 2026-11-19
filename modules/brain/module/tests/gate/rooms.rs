@@ -33,7 +33,7 @@ async fn one_room(fx: &Fx) -> String {
 }
 
 #[tokio::test]
-async fn opening_a_room_needs_a_step_up_and_a_closed_room_gives_no_handle() {
+async fn opening_a_room_needs_the_app_unlock_and_a_closed_room_gives_no_handle() {
     let fx = fx().await;
     let room = one_room(&fx).await;
     let key = key_of(&fx).await;
@@ -51,7 +51,7 @@ async fn opening_a_room_needs_a_step_up_and_a_closed_room_gives_no_handle() {
     .await;
     assert_eq!(
         (s, &v["code"]),
-        (StatusCode::FORBIDDEN, &json!("step_up_required"))
+        (StatusCode::FORBIDDEN, &json!("unlock_required"))
     );
     assert_eq!(
         fx.brain.rooms().access(&fx.app, &key, &room).await.err(),
@@ -133,4 +133,20 @@ async fn a_room_file_from_a_newer_version_is_refused_and_stays_closed() {
             .await
             .unwrap();
     assert_eq!(refused, 1);
+}
+
+/// Review: an unlock that lapsed (no heartbeat for 90 s) or whose token is wrong opens nothing.
+#[tokio::test]
+async fn a_lapsed_or_tokenless_unlock_does_not_open_a_room() {
+    let fx = fx().await;
+    let room = one_room(&fx).await;
+    let uri = format!("/rooms/{room}/open");
+    let now = fx.app.clock.unix();
+    fx.admin.unlock(&fx.app.auth, now - 1000);
+    let (s, v) = call(&fx, &fx.admin, Method::POST, &uri, None).await;
+    assert_eq!((s, &v["code"]), (StatusCode::FORBIDDEN, &json!("unlock_required")), "lapsed");
+    fx.admin.unlock(&fx.app.auth, now);
+    fx.admin.set_unlock_token(Some("not-the-token".to_owned()));
+    let (s, v) = call(&fx, &fx.admin, Method::POST, &uri, None).await;
+    assert_eq!((s, &v["code"]), (StatusCode::FORBIDDEN, &json!("unlock_required")), "wrong token");
 }

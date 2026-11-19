@@ -564,6 +564,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/unlock/beat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["beatUnlock"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/unlock/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["endUnlock"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/bindings": {
         parameters: {
             query?: never;
@@ -1896,6 +1928,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/secrets/{id}/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["revealSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings": {
         parameters: {
             query?: never;
@@ -3207,6 +3255,16 @@ export interface components {
         Elevation: {
             /** @description Until when this session may call routes marked `x-ainkrad-destructive`. */
             elevated_until?: components["schemas"]["Timestamp"];
+            /**
+             * @description Only in the answer to `purpose: session` (review M1): a secret to keep in memory and send as
+             *     `Ainkrad-Unlock` on the heartbeat and on every request that needs the unlock. Never stored.
+             */
+            unlock_token?: string | null;
+            /**
+             * @description For an app unlock (`purpose: session`, and the heartbeat): until when it holds if no
+             *     further beat arrives. Null otherwise.
+             */
+            unlocked_until?: components["schemas"]["Timestamp"];
         };
         /**
          * @description What started an audited change, and the root of its chain. Absent on rows from before
@@ -4355,6 +4413,10 @@ export interface components {
             /** @description The id the restart is audited under (`host.restart_requested`, `host.action_result`). */
             request_id: string;
         };
+        /** @description A secret's value, shown to the person who asked. No `Debug`. */
+        RevealedSecret: {
+            value: string;
+        };
         /** @description A rotation: the new value, and optionally a new scope or delivery. No `Debug`. */
         RotateSecret: {
             delivery?: string | null;
@@ -4931,6 +4993,7 @@ export interface components {
             /** @description Names the connection it makes; absent, `<kind>-<n>`. */
             name?: string | null;
         };
+        StepUpPurpose: ("action" | "session") | string;
         StepUpRequest: {
             /**
              * @description A passkey device's proof: the WebAuthn `PublicKeyCredential` answering the challenge's
@@ -4939,6 +5002,12 @@ export interface components {
             assertion?: Record<string, never> | null;
             /** @description The challenge from `POST /api/v1/auth/step-up/challenge` for this session. */
             challenge: string;
+            /**
+             * @description What the proof opens. `action` (the default) elevates the session for the danger routes
+             *     for `auth.step_up_secs`; `session` opens the app unlock instead (E1-1), held while the
+             *     app sends `POST /api/v1/auth/unlock/beat` and ended by `POST /api/v1/auth/unlock/end`.
+             */
+            purpose?: components["schemas"]["StepUpPurpose"];
             /**
              * @description The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string
              *     `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`,
@@ -6570,6 +6639,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Challenge"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    beatUnlock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The app unlock is kept alive; `unlocked_until` is when it lapses without another beat. 403 `unlock_required` when there is none (never opened, ended, lapsed, or lost to a Core restart): sign again with `stepUp` and `purpose: session` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Elevation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    endUnlock: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The app unlock is ended (the Mac locked or slept, or the app quit); idempotent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Elevation"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -10035,6 +10158,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LeaseGrant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    revealSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The secret's name */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plain value, for the app's Reveal (a fresh step-up, audited as `secret.revealed`). 404 no such secret, 409 `secrets_disabled` or `secrets_unavailable`, 400 for a provider account's key */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevealedSecret"];
                 };
             };
             400: components["responses"]["BadRequest"];

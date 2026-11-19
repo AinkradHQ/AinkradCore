@@ -396,7 +396,7 @@ async fn leases_go_only_to_their_runner_in_scope_and_not_after_expiry_or_revocat
 }
 
 #[tokio::test]
-async fn management_needs_admin_and_a_step_up_and_redemption_needs_runner() {
+async fn management_needs_admin_a_lease_needs_a_step_up_and_redemption_needs_runner() {
     let (fx, vm) = broker().await;
     create(&fx, "k", V1, &[vm.id.as_str()]).await;
     let reader = fx
@@ -418,7 +418,7 @@ async fn management_needs_admin_and_a_step_up_and_redemption_needs_runner() {
             assert_eq!(code(&r), forbidden, "runner {m} {uri}");
         }
     }
-    // An admin device that has not stepped up may list, and nothing else.
+    // An admin device that has not stepped up may list and write, but not lease.
     let mac = TestDevice::enroll(
         &fx.app.pool,
         "mac",
@@ -436,7 +436,6 @@ async fn management_needs_admin_and_a_step_up_and_redemption_needs_runner() {
             .0,
         StatusCode::OK
     );
-    let step_up = (StatusCode::FORBIDDEN, "step_up_required");
     for (m, uri, body) in [
         (
             Method::POST,
@@ -445,18 +444,19 @@ async fn management_needs_admin_and_a_step_up_and_redemption_needs_runner() {
         ),
         (Method::PUT, "/api/v1/secrets/k", json!({"value": V2})),
         (Method::DELETE, "/api/v1/secrets/k", Value::Null),
-        (
-            Method::POST,
-            "/api/v1/secrets/k/leases",
-            json!({"runner": vm.id}),
-        ),
     ] {
-        assert_eq!(
-            code(&call(&fx, &mac, m.clone(), uri, body).await),
-            step_up,
-            "{m} {uri}"
-        );
+        let r = call(&fx, &mac, m.clone(), uri, body).await;
+        assert_ne!(r.0, StatusCode::FORBIDDEN, "{m} {uri}: {}", r.1);
     }
+    let r = call(
+        &fx,
+        &mac,
+        Method::POST,
+        "/api/v1/secrets/k/leases",
+        json!({"runner": vm.id}),
+    )
+    .await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
     assert!(!trail(&fx).await.contains(V2));
 }
 
@@ -966,26 +966,13 @@ fn secrets_are_classified_by_name() {
     }
 }
 
-/// Flipping the gate is an admin setting write: it needs a step-up and leaves a `setting.set`
-/// audit row.
+/// Flipping the gate is an admin setting write (no step-up: only `auth.*` keys are danger) and
+/// leaves a `setting.set` audit row.
 #[tokio::test]
-async fn flipping_the_provider_account_gate_needs_a_step_up_and_is_audited() {
+async fn flipping_the_provider_account_gate_is_an_admin_write_and_is_audited() {
     let (fx, _vm) = broker().await;
     let uri = "/api/v1/settings/server/secrets.provider_accounts";
     let body = json!({"value": 1});
-    let mac = TestDevice::enroll(
-        &fx.app.pool,
-        "mac",
-        "device",
-        &ALL,
-        &fx.app.auth.identity.fp,
-        fx.clock.clone(),
-    )
-    .await;
-    let s = fx.app.auth.issue_session(&mac.id, fx.clock.unix());
-    mac.set_session(Some(s.id));
-    let r = call(&fx, &mac, Method::PUT, uri, body.clone()).await;
-    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
     let reader = fx.enroll("phone", &["read", "approve", "agent"]).await;
     let r = call(&fx, &reader, Method::PUT, uri, body.clone()).await;
     assert_eq!(code(&r), (StatusCode::FORBIDDEN, "forbidden_scope"));
@@ -1005,4 +992,174 @@ async fn flipping_the_provider_account_gate_needs_a_step_up_and_is_audited() {
     // Default off, and bounded to 0 or 1.
     let r = call(&fx, &fx.dev, Method::PUT, uri, json!({"value": 2})).await;
     assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "out_of_bounds"));
+}
+
+/// The app's Reveal (E1): a danger route that shows the plain value once, audited with the device;
+/// unknown names and a provider account's key are refused, and nothing is revealed without a step-up.
+#[tokio::test]
+async fn a_secret_can_be_revealed_to_an_elevated_admin_and_is_audited() {
+    let (fx, vm) = broker().await;
+    create(&fx, "git.token", V1, &[vm.id.as_str()]).await;
+    let uri = "/api/v1/secrets/git.token/reveal";
+    let r = call(&fx, &fx.dev, Method::POST, uri, json!({})).await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    assert_eq!(r.1["value"], json!(V1));
+    let by: String = sqlx::query_scalar(
+        "SELECT json_extract(details, '$.by_device') FROM audit_events WHERE action = 'secret.revealed'",
+    )
+    .fetch_one(&fx.app.pool)
+    .await
+    .unwrap();
+    assert_eq!(by, fx.dev.id);
+    assert!(!trail(&fx).await.contains(V1), "the value is never audited");
+    let gone = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/secrets/nope/reveal",
+        json!({}),
+    )
+    .await;
+    assert_eq!(gone.0, StatusCode::NOT_FOUND);
+    let acct = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/secrets/acct.x/reveal",
+        json!({}),
+    )
+    .await;
+    assert_eq!(acct.0, StatusCode::BAD_REQUEST);
+}
+
+/// Review: reveal without a step-up is refused before it looks at the secret.
+#[tokio::test]
+async fn reveal_needs_a_fresh_step_up_and_is_throttled() {
+    let (fx, vm) = broker().await;
+    create(&fx, "git.token", V1, &[vm.id.as_str()]).await;
+    let uri = "/api/v1/secrets/git.token/reveal";
+    let plain = super::stepup::plain(&fx, "plain", &ALL, true).await;
+    let r = call(&fx, &plain, Method::POST, uri, json!({})).await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
+    // Three in a burst, then the device is throttled (review M6).
+    for _ in 0..3 {
+        assert_eq!(
+            call(&fx, &fx.dev, Method::POST, uri, json!({})).await.0,
+            StatusCode::OK
+        );
+    }
+    let r = call(&fx, &fx.dev, Method::POST, uri, json!({})).await;
+    assert_eq!(code(&r), (StatusCode::TOO_MANY_REQUESTS, "rate_limited"));
+}
+
+/// Review H2: a module's own secrets are not rotated, deleted, leased or revealed here, a
+/// multiline or file value is not shown, and moving a secret into a group needs a step-up (M6).
+#[tokio::test]
+async fn module_secrets_and_non_text_values_stay_out_of_the_general_routes() {
+    let (fx, vm) = broker().await;
+    for (m, uri, body) in [
+        (
+            Method::PUT,
+            "/api/v1/secrets/brain.key",
+            json!({"value": V2}),
+        ),
+        (
+            Method::DELETE,
+            "/api/v1/secrets/leyline.master",
+            Value::Null,
+        ),
+        (
+            Method::POST,
+            "/api/v1/secrets/brain.key/leases",
+            json!({"runner": vm.id}),
+        ),
+        (
+            Method::POST,
+            "/api/v1/secrets/leyline.master/reveal",
+            json!({}),
+        ),
+    ] {
+        let r = call(&fx, &fx.dev, m.clone(), uri, body).await;
+        assert_eq!(
+            code(&r),
+            (StatusCode::BAD_REQUEST, "bad_request"),
+            "{m} {uri}"
+        );
+    }
+    let made = post_secret(
+        &fx,
+        json!({"name": "notes.multi", "value": "a\nb", "kind": "multiline"}),
+    )
+    .await;
+    assert_eq!(made.0, StatusCode::OK, "{}", made.1);
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/secrets/notes.multi/reveal",
+        json!({}),
+    )
+    .await;
+    assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"));
+    // Putting a secret in a group asks a fresh step-up even for a device that unlocked.
+    create(&fx, "git.token", V1, &[vm.id.as_str()]).await;
+    let plain = super::stepup::plain(&fx, "plain", &ALL, true).await;
+    let r = call(
+        &fx,
+        &plain,
+        Method::PUT,
+        "/api/v1/secrets/git.token",
+        json!({"value": V2, "group": "g"}),
+    )
+    .await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
+}
+
+/// Low items: a module's reserved name cannot be created through the general route, and widening
+/// who may use a secret or a group needs the app unlock.
+#[tokio::test]
+async fn reserved_names_cannot_be_created_and_widening_runners_needs_the_unlock() {
+    let (fx, vm) = broker().await;
+    for name in ["brain.key", "leyline.master"] {
+        let r = post_secret(&fx, json!({"name": name, "value": V1})).await;
+        assert_eq!(code(&r), (StatusCode::BAD_REQUEST, "bad_request"), "{name}");
+    }
+    create(&fx, "git.token", V1, &[]).await;
+    call(
+        &fx,
+        &fx.dev,
+        Method::POST,
+        "/api/v1/secret-groups",
+        json!({"name": "g", "runners": []}),
+    )
+    .await;
+    let plain = super::stepup::plain(&fx, "plain", &ALL, true).await;
+    let r = call(
+        &fx,
+        &plain,
+        Method::PUT,
+        "/api/v1/secrets/git.token",
+        json!({"value": V2, "runners": [vm.id]}),
+    )
+    .await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "unlock_required"));
+    let r = call(
+        &fx,
+        &plain,
+        Method::PUT,
+        "/api/v1/secret-groups/g",
+        json!({"runners": [vm.id]}),
+    )
+    .await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "unlock_required"));
+    // The unlocked device may.
+    let r = call(
+        &fx,
+        &fx.dev,
+        Method::PUT,
+        "/api/v1/secrets/git.token",
+        json!({"value": V2, "runners": [vm.id]}),
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
 }

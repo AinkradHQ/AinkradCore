@@ -172,6 +172,7 @@ async fn a_create_naming_a_chain_or_an_agent_is_admin_only_and_refused_cleanly()
     // A device that is not an admin: 403 for a chain and for an agent, KAN-433.
     let agent = super::stepup::plain(&fx, "agent-dev", &["agent", "read"], true).await;
     assert_eq!(super::stepup::step_up(&fx, &agent).await.0, StatusCode::OK);
+    assert_eq!(super::stepup::unlock(&fx, &agent).await.0, StatusCode::OK);
     for body in [
         base(json!({"chain": c.id})),
         base(json!({"agent": "agent-1"})),

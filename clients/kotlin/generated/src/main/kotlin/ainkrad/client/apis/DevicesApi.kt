@@ -46,6 +46,39 @@ import io.ktor.http.ParametersBuilder
     ) {
 
         /**
+        * POST /api/v1/auth/unlock/beat
+        * 
+        * 
+         * @return Elevation
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun beatUnlock(): HttpResponse<Elevation> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/auth/unlock/beat",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * POST /api/v1/auth/lockouts/clear
         * 
         * 
@@ -132,6 +165,39 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.POST,
             "/api/v1/auth/step-up/challenge",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/auth/unlock/end
+        * 
+        * 
+         * @return Elevation
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun endUnlock(): HttpResponse<Elevation> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/auth/unlock/end",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

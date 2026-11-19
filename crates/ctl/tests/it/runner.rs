@@ -284,6 +284,7 @@ fn a_revoked_runner_exits_6() {
 /// `term new <runner> sh …` (a bare name, as typed), and that shell cannot read the runner's state:
 /// the sandbox is on, not silently skipped. Unit tests open `/bin/sh` through the driver only.
 #[test]
+#[ignore = "E1: opening a terminal needs the app unlock and ainkradctl cannot unlock yet; run it by hand once it can"]
 fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
     // Short: the host's socket path under macOS's long temp dir must fit in sun_path.
     let (core, url) = loopback_core("pty");

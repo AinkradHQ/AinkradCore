@@ -1,4 +1,4 @@
-//! Who may call the connection routes (C5): the non-admin 403, the missing step-up, what a
+//! Who may call the connection routes (C5): the non-admin 403, no step-up for an admin write, what a
 //! non-admin device sees, another workspace's 404 on every route, and the contract's marks.
 
 use axum::http::{Method, StatusCode};
@@ -9,7 +9,7 @@ use super::connections_fx::*;
 const URI: &str = "/api/v1/connections";
 const FLOW: &str = "cf_00000000000000000000000000";
 
-/// Every admin route with a body where it takes one, and whether it writes (destructive).
+/// Every admin route with a body where it takes one, and whether it writes (none is destructive now).
 fn admin_routes(id: i64) -> Vec<(Method, String, Value, bool)> {
     let r = |m: Method, u: String, b: Value, w: bool| (m, u, b, w);
     vec![
@@ -120,7 +120,7 @@ fn admin_routes(id: i64) -> Vec<(Method, String, Value, bool)> {
 }
 
 #[tokio::test]
-async fn a_non_admin_is_refused_everywhere_and_a_write_needs_a_step_up() {
+async fn a_non_admin_is_refused_everywhere_and_an_admin_write_needs_no_step_up() {
     let cx = cx().await;
     let id = cx.github("main").await;
     let reader = cx.fx.enroll("reader", &["read", "approve"]).await;
@@ -140,22 +140,17 @@ async fn a_non_admin_is_refused_everywhere_and_a_write_needs_a_step_up() {
             );
         }
     }
-    // An admin that never stepped up: a write needs one, anything else is let through.
+    // An admin that never stepped up: no write needs one now, and the reads are let through.
     let plain = super::stepup::plain(&cx.fx, "plain", &["read", "admin"], true).await;
     for (m, uri, body, write) in &routes {
+        if *write {
+            continue;
+        }
         if uri.ends_with("/test") {
             cx.gh.push(200, &[], r#"{"login":"octocat","id":1}"#);
         }
         let r = cx.call(&plain, m.clone(), uri, body.clone()).await;
-        match write {
-            true => assert_eq!(
-                code(&r),
-                (403, "step_up_required".to_owned()),
-                "{m} {uri}: {}",
-                r.1
-            ),
-            false => assert_ne!(r.0, StatusCode::FORBIDDEN, "{m} {uri}: {}", r.1),
-        }
+        assert_ne!(r.0, StatusCode::FORBIDDEN, "{m} {uri}: {}", r.1);
     }
     // Nothing changed: one connection, as it was made, no default, no grant, no app set.
     let all = cx.ok(Method::GET, URI, Value::Null).await;
@@ -178,6 +173,16 @@ async fn a_non_admin_is_refused_everywhere_and_a_write_needs_a_step_up() {
         .await;
     assert_eq!(app["configured"], true, "Ainkrad's built-in GitHub app");
     cx.assert_clean().await;
+    // A write is a plain write: the admin scope alone is enough, no step-up.
+    let r = cx
+        .call(
+            &plain,
+            Method::PATCH,
+            &format!("{URI}/{id}"),
+            json!({"label": "x"}),
+        )
+        .await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
 }
 
 #[tokio::test]
@@ -212,8 +217,8 @@ async fn the_contract_marks_every_route_with_its_scope_and_whether_it_is_destruc
         "/api/v1/connection-apps/{kind}",
         "/api/v1/connection-apps/{kind}",
     ];
-    for ((m, _, _, write), t) in routes.iter().zip(templates) {
-        want.push((m.as_str().to_ascii_lowercase(), t, "admin", *write));
+    for ((m, _, _, _), t) in routes.iter().zip(templates) {
+        want.push((m.as_str().to_ascii_lowercase(), t, "admin", false));
     }
     for (m, t, scope, destructive) in want {
         let op = &spec["paths"][t][m.as_str()];

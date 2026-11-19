@@ -47,6 +47,9 @@ pub const SESSION_SECS: i64 = 15 * 60;
 pub const CHALLENGE_SECS: i64 = 60;
 /// Domain of a challenge's HMAC (nothing else uses the per-process challenge key).
 const CHALLENGE_DOMAIN: &[u8] = b"AINKRAD-CHALLENGE-V1\n";
+/// An app unlock (`Auth::unlock`) holds while a heartbeat arrived within this many seconds; the
+/// app beats every 30 s, so one missed beat is forgiven and a vanished app locks within 90 s.
+pub const UNLOCK_BEAT_SECS: i64 = 90;
 /// Live sessions kept per device; the oldest goes first.
 pub const SESSIONS_PER_DEVICE: usize = 32;
 /// How often a socket re-checks its device in the database (§10 backstop).
@@ -103,12 +106,18 @@ pub struct Auth {
     pub token_failures: AddressFailures,
     /// The global wrong-claim budget (`PairBudget`).
     pub pair_budget: PairBudget,
+    /// Secret reveals per device (E1 review M6): three in a burst, then one every 20 s.
+    pub reveal_limit: Limiter,
     /// Failed step-up proofs per device (`stepup`).
     pub stepup_failures: StepUpFailures,
     /// Refusals counted instead of audited one row each (`refusals`).
     pub refusals: refusals::Refusals,
     /// Devices whose scopes changed: their sockets close with 4003 (§10).
     rescoped: broadcast::Sender<String>,
+    /// App unlocks (E1, D-5): device to when its last heartbeat arrived. Per device, not per
+    /// session, so a renewed session (every 15 minutes) is still unlocked. In memory: a restart
+    /// forgets it and the app signs again.
+    unlocks: Mutex<HashMap<String, (i64, String)>>,
     /// One-time WebSocket tickets (`ticket`).
     tickets: Mutex<HashMap<String, ticket::Ticket>>,
     /// Ticket issuance per session (`ticket`).
@@ -129,9 +138,11 @@ impl Auth {
             failures: AddressFailures::default(),
             token_failures: AddressFailures::default(),
             pair_budget: PairBudget::default(),
+            reveal_limit: Limiter::new(3, 0.05),
             stepup_failures: StepUpFailures::default(),
             refusals: refusals::Refusals::default(),
             rescoped: broadcast::channel(64).0,
+            unlocks: Mutex::default(),
             tickets: Mutex::default(),
             ticket_limit: Limiter::new(ticket::PER_SESSION_BURST, ticket::PER_SESSION_PER_SEC),
         }
@@ -247,8 +258,65 @@ impl Auth {
         Ok(())
     }
 
+    /// Opens the app unlock of `device` (its step-up proof verified): it holds until the client
+    /// ends it, or no heartbeat arrives for [`UNLOCK_BEAT_SECS`]. No time cap (D-5).
+    /// Returns the unlock token (E1 review M1): a random secret only the unlocking process holds,
+    /// required on the heartbeat and on every route that needs the unlock.
+    pub fn unlock(&self, device: &str, now: i64) -> String {
+        let token = crypto::b64(&crypto::random::<32>());
+        self.unlocks
+            .lock()
+            .unwrap()
+            .insert(device.to_owned(), (now, token.clone()));
+        token
+    }
+
+    /// Whether `device`'s unlock is live and `token` is its token (constant time).
+    pub fn unlock_ok(&self, device: &str, token: Option<&str>, now: i64) -> bool {
+        let all = self.unlocks.lock().unwrap();
+        match (all.get(device), token) {
+            (Some((t, want)), Some(got)) => {
+                *t + UNLOCK_BEAT_SECS > now && pairing::ct_eq(want, got)
+            }
+            _ => false,
+        }
+    }
+
+    /// A heartbeat: keeps a live unlock alive. `false` when there is none (never opened, ended,
+    /// lapsed, or lost to a restart): a beat never opens one, only a proof does.
+    pub fn beat(&self, device: &str, token: Option<&str>, now: i64) -> bool {
+        let mut all = self.unlocks.lock().unwrap();
+        match all.get_mut(device) {
+            Some((t, want)) if *t + UNLOCK_BEAT_SECS > now => {
+                if !token.is_some_and(|got| pairing::ct_eq(want, got)) {
+                    return false;
+                }
+                *t = now;
+                true
+            }
+            _ => {
+                all.remove(device);
+                false
+            }
+        }
+    }
+
+    /// Ends `device`'s unlock (the Mac locked or slept, or the app quit).
+    pub fn lock(&self, device: &str) {
+        self.unlocks.lock().unwrap().remove(device);
+    }
+
+    /// Until when `device`'s unlock holds if no further beat arrives; `None` when it is not open.
+    pub fn unlocked_until(&self, device: &str, now: i64) -> Option<i64> {
+        let all = self.unlocks.lock().unwrap();
+        all.get(device)
+            .map(|(t, _)| t + UNLOCK_BEAT_SECS)
+            .filter(|t| *t > now)
+    }
+
     /// Fans out a committed revocation: drops the device's sessions, then tells its sockets.
     pub fn revoked(&self, device: &str) {
+        self.lock(device);
         self.sessions
             .lock()
             .unwrap()
@@ -392,6 +460,44 @@ mod tests {
             device_now(&pool, "d_nobody", None).await,
             DeviceNow::Unknown
         );
+    }
+
+    #[test]
+    fn an_unlock_holds_on_beats_ends_on_lock_and_lapses_without_one() {
+        let a = auth();
+        assert!(
+            !a.beat("d_a", Some("x"), 100),
+            "a beat never opens an unlock"
+        );
+        assert_eq!(a.unlocked_until("d_a", 100), None);
+        let tok = a.unlock("d_a", 100);
+        assert!(a.unlock_ok("d_a", Some(&tok), 100));
+        assert!(
+            !a.unlock_ok("d_a", Some("guess"), 100),
+            "the token is the proof"
+        );
+        assert!(!a.unlock_ok("d_a", None, 100));
+        assert!(!a.beat("d_a", Some("guess"), 120), "a beat needs the token");
+        assert!(!a.beat("d_a", None, 120));
+        assert_eq!(a.unlocked_until("d_a", 100), Some(100 + UNLOCK_BEAT_SECS));
+        assert!(
+            a.beat("d_a", Some(&tok), 150),
+            "no time cap: beats keep it open"
+        );
+        assert!(a.beat("d_a", Some(&tok), 150 + UNLOCK_BEAT_SECS - 1));
+        assert_eq!(a.unlocked_until("d_b", 150), None, "per device");
+        a.lock("d_a");
+        assert!(!a.beat("d_a", Some(&tok), 400), "ended");
+        let tok = a.unlock("d_a", 500);
+        assert_eq!(
+            a.unlocked_until("d_a", 500 + UNLOCK_BEAT_SECS),
+            None,
+            "lapsed"
+        );
+        assert!(!a.beat("d_a", Some(&tok), 500 + UNLOCK_BEAT_SECS));
+        a.unlock("d_a", 900);
+        a.revoked("d_a");
+        assert_eq!(a.unlocked_until("d_a", 900), None, "revocation ends it");
     }
 
     #[test]

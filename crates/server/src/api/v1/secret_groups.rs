@@ -151,10 +151,14 @@ pub async fn update(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path(n): Path<String>,
+    headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> ApiResult<SecretGroupInfo> {
     let b: UpdateSecretGroup = parse(&body)?;
     not_project(&n)?;
+    if b.runners.is_some() {
+        super::stepup::require_unlock(&app, &me, &headers)?;
+    }
     let g = store::update(
         &app.pool,
         name(&n)?,

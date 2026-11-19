@@ -3020,15 +3020,35 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Elevation/elevated_until`.
             public var elevatedUntil: Components.Schemas.Timestamp?
+            /// Only in the answer to `purpose: session` (review M1): a secret to keep in memory and send as
+            /// `Ainkrad-Unlock` on the heartbeat and on every request that needs the unlock. Never stored.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Elevation/unlock_token`.
+            public var unlockToken: Swift.String?
+            /// For an app unlock (`purpose: session`, and the heartbeat): until when it holds if no
+            /// further beat arrives. Null otherwise.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Elevation/unlocked_until`.
+            public var unlockedUntil: Components.Schemas.Timestamp?
             /// Creates a new `Elevation`.
             ///
             /// - Parameters:
             ///   - elevatedUntil: Until when this session may call routes marked `x-ainkrad-destructive`.
-            public init(elevatedUntil: Components.Schemas.Timestamp? = nil) {
+            ///   - unlockToken: Only in the answer to `purpose: session` (review M1): a secret to keep in memory and send as
+            ///   - unlockedUntil: For an app unlock (`purpose: session`, and the heartbeat): until when it holds if no
+            public init(
+                elevatedUntil: Components.Schemas.Timestamp? = nil,
+                unlockToken: Swift.String? = nil,
+                unlockedUntil: Components.Schemas.Timestamp? = nil
+            ) {
                 self.elevatedUntil = elevatedUntil
+                self.unlockToken = unlockToken
+                self.unlockedUntil = unlockedUntil
             }
             public enum CodingKeys: String, CodingKey {
                 case elevatedUntil = "elevated_until"
+                case unlockToken = "unlock_token"
+                case unlockedUntil = "unlocked_until"
             }
         }
         /// What started an audited change, and the root of its chain. Absent on rows from before
@@ -7050,6 +7070,23 @@ extension Components {
                 case requestId = "request_id"
             }
         }
+        /// A secret's value, shown to the person who asked. No `Debug`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RevealedSecret`.
+        public struct RevealedSecret: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RevealedSecret/value`.
+            public var value: Swift.String
+            /// Creates a new `RevealedSecret`.
+            ///
+            /// - Parameters:
+            ///   - value:
+            public init(value: Swift.String) {
+                self.value = value
+            }
+            public enum CodingKeys: String, CodingKey {
+                case value
+            }
+        }
         /// A rotation: the new value, and optionally a new scope or delivery. No `Debug`.
         ///
         /// - Remark: Generated from `#/components/schemas/RotateSecret`.
@@ -9152,6 +9189,58 @@ extension Components {
                 case name
             }
         }
+        /// - Remark: Generated from `#/components/schemas/StepUpPurpose`.
+        public struct StepUpPurpose: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/StepUpPurpose/value1`.
+            @frozen public enum Value1Payload: String, Codable, Hashable, Sendable, CaseIterable {
+                case action = "action"
+                case session = "session"
+            }
+            /// - Remark: Generated from `#/components/schemas/StepUpPurpose/value1`.
+            public var value1: Components.Schemas.StepUpPurpose.Value1Payload?
+            /// - Remark: Generated from `#/components/schemas/StepUpPurpose/value2`.
+            public var value2: Swift.String?
+            /// Creates a new `StepUpPurpose`.
+            ///
+            /// - Parameters:
+            ///   - value1:
+            ///   - value2:
+            public init(
+                value1: Components.Schemas.StepUpPurpose.Value1Payload? = nil,
+                value2: Swift.String? = nil
+            ) {
+                self.value1 = value1
+                self.value2 = value2
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                var errors: [any Swift.Error] = []
+                do {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                do {
+                    self.value2 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                try Swift.DecodingError.verifyAtLeastOneSchemaIsNotNil(
+                    [
+                        self.value1,
+                        self.value2
+                    ],
+                    type: Self.self,
+                    codingPath: decoder.codingPath,
+                    errors: errors
+                )
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                try encoder.encodeFirstNonNilValueToSingleValueContainer([
+                    self.value1,
+                    self.value2
+                ])
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/StepUpRequest`.
         public struct StepUpRequest: Codable, Hashable, Sendable {
             /// A passkey device's proof: the WebAuthn `PublicKeyCredential` answering the challenge's
@@ -9163,6 +9252,12 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/StepUpRequest/challenge`.
             public var challenge: Swift.String
+            /// What the proof opens. `action` (the default) elevates the session for the danger routes
+            /// for `auth.step_up_secs`; `session` opens the app unlock instead (E1-1), held while the
+            /// app sends `POST /api/v1/auth/unlock/beat` and ended by `POST /api/v1/auth/unlock/end`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/StepUpRequest/purpose`.
+            public var purpose: Components.Schemas.StepUpPurpose?
             /// The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string
             /// `AINKRAD-STEPUP-V1` LF `<core_fp>` LF `<device_id>` LF `<session_id>` LF `<challenge>`,
             /// no trailing newline. The device's OS releases that key only after user verification.
@@ -9175,19 +9270,23 @@ extension Components {
             /// - Parameters:
             ///   - assertion: A passkey device's proof: the WebAuthn `PublicKeyCredential` answering the challenge's
             ///   - challenge: The challenge from `POST /api/v1/auth/step-up/challenge` for this session.
+            ///   - purpose: What the proof opens. `action` (the default) elevates the session for the danger routes
             ///   - stepupSig: The step-up key's ES256 signature (raw r||s, base64url) over the UTF-8 string
             public init(
                 assertion: OpenAPIRuntime.OpenAPIObjectContainer? = nil,
                 challenge: Swift.String,
+                purpose: Components.Schemas.StepUpPurpose? = nil,
                 stepupSig: Swift.String? = nil
             ) {
                 self.assertion = assertion
                 self.challenge = challenge
+                self.purpose = purpose
                 self.stepupSig = stepupSig
             }
             public enum CodingKeys: String, CodingKey {
                 case assertion
                 case challenge
+                case purpose
                 case stepupSig = "stepup_sig"
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -9200,6 +9299,10 @@ extension Components {
                     Swift.String.self,
                     forKey: .challenge
                 )
+                self.purpose = try container.decodeIfPresent(
+                    Components.Schemas.StepUpPurpose.self,
+                    forKey: .purpose
+                )
                 self.stepupSig = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .stepupSig
@@ -9207,6 +9310,7 @@ extension Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "assertion",
                     "challenge",
+                    "purpose",
                     "stepup_sig"
                 ])
             }

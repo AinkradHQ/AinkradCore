@@ -16,6 +16,7 @@ async fn naming_a_secret_requires_admin_even_with_agent_step_up() {
     let fx = fx().await;
     let agent = super::stepup::plain(&fx, "agent-only", &["agent", "read"], true).await;
     assert_eq!(super::stepup::step_up(&fx, &agent).await.0, StatusCode::OK);
+    assert_eq!(super::stepup::unlock(&fx, &agent).await.0, StatusCode::OK);
     let r = call(
         &fx,
         &agent,
@@ -124,7 +125,7 @@ async fn a_create_is_checked_before_any_runner_is_asked() {
         .await
         .unwrap();
     assert_eq!(leases, 0);
-    // A device with `read` only, and one without a step-up.
+    // A device with `read` only, and one without the app unlock.
     let reader = enroll(&fx.app, &fx.clock, "reader", &["read"]).await;
     let r = call(
         &fx,
@@ -142,7 +143,7 @@ async fn a_create_is_checked_before_any_runner_is_asked() {
     let r = call(&fx, &unelevated, Method::POST, "/api/v1/agent-sessions", ok).await;
     assert_eq!(
         (r.0, r.1["code"].as_str()),
-        (StatusCode::FORBIDDEN, Some("step_up_required"))
+        (StatusCode::FORBIDDEN, Some("unlock_required"))
     );
     // A runner device reaches none of it.
     let r = call(&fx, &vm, Method::GET, "/api/v1/agent-sessions", Value::Null).await;
@@ -578,6 +579,7 @@ async fn an_admin_may_kill_a_module_session_and_nobody_else() {
     let uri = format!("/api/v1/agent-sessions/{}/kill", owned.id);
     let agent = super::stepup::plain(&fx, "agent-only", &["agent", "read"], true).await;
     assert_eq!(super::stepup::step_up(&fx, &agent).await.0, StatusCode::OK);
+    assert_eq!(super::stepup::unlock(&fx, &agent).await.0, StatusCode::OK);
     let r = call(&fx, &agent, Method::POST, &uri, Value::Null).await;
     assert_eq!(
         (r.0, r.1["code"].as_str()),
@@ -636,7 +638,7 @@ async fn an_agent_device_cannot_drive_or_read_a_session_that_holds_secrets() {
         (Method::GET, "transcript", Value::Null),
     ];
     let agent = super::stepup::plain(&fx, "agent-only", &["agent", "approve", "read"], true).await;
-    assert_eq!(super::stepup::step_up(&fx, &agent).await.0, StatusCode::OK);
+    assert_eq!(super::stepup::unlock(&fx, &agent).await.0, StatusCode::OK);
     for (m, path, body) in routes.clone() {
         let r = call(&fx, &agent, m, &format!("{base}/{path}"), body).await;
         assert_eq!(r.0, StatusCode::FORBIDDEN, "{path}: {}", r.1);
@@ -649,7 +651,7 @@ async fn an_agent_device_cannot_drive_or_read_a_session_that_holds_secrets() {
     // Another admin (not the creator) and the creator are not stopped by the rule.
     let admin =
         super::stepup::plain(&fx, "admin2", &["admin", "agent", "approve", "read"], true).await;
-    assert_eq!(super::stepup::step_up(&fx, &admin).await.0, StatusCode::OK);
+    assert_eq!(super::stepup::unlock(&fx, &admin).await.0, StatusCode::OK);
     for who in [&admin, &fx.dev] {
         for (m, path, body) in routes.clone() {
             let r = call(&fx, who, m, &format!("{base}/{path}"), body).await;

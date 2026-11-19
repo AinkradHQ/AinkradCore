@@ -138,12 +138,14 @@ async fn a_write_runs_inside_the_creators_scopes_and_leaves_origin_and_root() {
 }
 
 #[tokio::test]
-async fn a_write_on_a_step_up_route_is_not_available_unless_it_is_risky() {
+async fn a_session_never_reaches_a_danger_list_route() {
     let fx = fx().await;
-    ops(&fx, &[("cancelAgentSession", Risk::Write)]);
-    let s = session(&fx, &["read", "agent"]).await;
-    let a = json!({"op": "cancelAgentSession", "args": {"id": s.id}});
-    assert_eq!(go(&fx, &s, a).await, (false, "not_available".to_owned()));
+    // The restart is on the danger list (D-4) and needs `admin`, which a session never holds,
+    // even when its creator does (the step-up marks of the session routes are gone with E1).
+    ops(&fx, &[("restartHostService", Risk::Write)]);
+    let s = session(&fx, &["read", "admin"]).await;
+    let a = json!({"op": "restartHostService", "args": {"body": {}}});
+    assert_eq!(go(&fx, &s, a).await, (false, "forbidden_scope".to_owned()));
     // The class and the method must agree: a GET is never a write.
     let fx = self::fx().await;
     ops(&fx, &[("getCoreHealth", Risk::Write)]);
@@ -277,7 +279,7 @@ async fn an_approval_is_single_use_and_bound_to_its_arguments() {
 }
 
 #[tokio::test]
-async fn only_a_device_with_approve_and_a_step_up_can_decide() {
+async fn only_a_device_with_approve_and_the_app_unlock_can_decide() {
     let fx = fx().await;
     ops(&fx, &[("titleAgentSession", Risk::Risky)]);
     let s = session(&fx, &["read", "agent"]).await;
@@ -306,7 +308,7 @@ async fn only_a_device_with_approve_and_a_step_up_can_decide() {
     let (st, body) = decide(&fx, &cold, &s, &id, true).await;
     assert_eq!(
         (st, body["code"].as_str()),
-        (StatusCode::FORBIDDEN, Some("step_up_required"))
+        (StatusCode::FORBIDDEN, Some("unlock_required"))
     );
     let (st, _) = send(
         &fx.app,
