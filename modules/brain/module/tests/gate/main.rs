@@ -6,6 +6,7 @@ mod ai;
 mod ai_semantic;
 mod ai_write;
 mod auto_distil;
+mod areas;
 mod backfill;
 mod changes;
 mod checkpoint;
