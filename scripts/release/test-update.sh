@@ -54,6 +54,10 @@ setup; release 1.1.0; manifest 1.1.0 100 "$FUT"; echo 500 >"$w/state/last_genera
 setup; release 1.1.0; manifest 1.1.0 100 1000; run now; check "an expired manifest is refused" "$(ver)" 1.0.0
 setup; release 1.1.0; manifest 1.1.0 100 "$FUT"; run auto
 h=$(date +%H); if [ $((10#$h)) -ge 2 ] && [ $((10#$h)) -lt 5 ]; then :; else check "auto outside the window installs nothing" "$(ver)" 1.0.0; check "auto records what is available" "$(sed -n 's/.*"available":"\([^"]*\)".*/\1/p' "$w/state/status.json")" 1.1.0; fi
+# the real manifest generator, end to end: its output is what update.sh accepts
+setup; release 1.1.0; "$here/manifest.sh" 1.1.0 "$w/rel" "$w/rel/manifest.json"; rm -f "$w/rel/manifest.json.minisig"
+minisign -S -s "$w/a.key" -m "$w/rel/manifest.json" -x "$w/rel/manifest.json.minisig" >/dev/null; run now
+check "manifest.sh output installs" "$(ver)" 1.1.0
 # the runner: dropped request file -> update.sh runner installs, removes the request, leaves the Core database alone
 mkdir -p "$w/rstate"
 setup; release 1.1.0; manifest 1.1.0 100 "$FUT"; touch "$w/rstate/update-request"; echo db-keep >"$w/home/core.db"; run runner

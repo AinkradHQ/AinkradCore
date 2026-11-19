@@ -1,0 +1,83 @@
+# E12-4b (D-7, D-35): the Core and runner release. A tag `core-vX.Y.Z` builds every target, signs the checksums with the release
+# key, uploads to ainkrad.io (R2) and the GitHub release (mirror), and then publishes the signed manifest the updaters read.
+#
+# The release key never reaches a build job or a pull request: only the `publish` job has it, as an ENVIRONMENT secret of the
+# `release` environment, whose deployment rule allows tags `core-v*` only (docs: Runbooks/2026-11-19-github-release-secrets.md,
+# "Scoping the secrets"). The tag must equal the workspace version in Cargo.toml.
+name: release
+on:
+  push:
+    tags: ['core-v*']
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          ver=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
+          [ "$GITHUB_REF_NAME" = "core-v$ver" ] || { echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $ver" >&2; exit 1; }
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+  build:
+    needs: check
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: linux-x86_64, os: ubuntu-24.04 }
+          - { target: linux-arm64, os: ubuntu-24.04-arm }
+          - { target: macos-arm64, os: macos-15 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: rustup show
+      - if: runner.os == 'macOS'
+        run: brew install openssl@3
+      - run: scripts/release/build.sh ${{ matrix.target }} dist/.build a
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.target }}
+          path: dist/.build/${{ matrix.target }}
+          retention-days: 3
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-24.04
+    environment: release   # tags core-v* only; holds MINISIGN_SECRET_KEY and RELEASE_UPLOAD_TOKEN
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: sudo apt-get update && sudo apt-get install -y minisign zip
+      - uses: actions/download-artifact@v4
+        with: { path: dist/.build }
+      - name: Lay the builds out as <target>/<binary>
+        run: for d in dist/.build/build-*; do mv "$d" "dist/.build/${d#dist/.build/build-}"; done
+      - name: Sign, verify with the pinned key, upload, publish the manifest
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          RELEASE_UPLOAD_TOKEN: ${{ secrets.RELEASE_UPLOAD_TOKEN }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key=$(mktemp); trap 'shred -u "$key" 2>/dev/null || rm -f "$key"' EXIT
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          scripts/release/ci-assemble.sh dist/.build "dist/$VERSION" "$key"
+          scripts/release/ci-publish.sh "dist/$VERSION" "$key"
+      - name: GitHub release (the mirror get.sh falls back to)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          gh release create "core-v$VERSION" "dist/$VERSION"/* --title "Ainkrad Core $VERSION" \
+            --notes "Signed release (minisign). One-line install: see https://ainkrad.io/download"
