@@ -20,6 +20,7 @@ import ainkrad.client.models.LocalTerminalGrant
 import ainkrad.client.models.NewTerminal
 import ainkrad.client.models.Terminal
 import ainkrad.client.models.TerminalSignal
+import ainkrad.client.models.TerminalTailView
 
 import ainkrad.client.infrastructure.*
 import io.ktor.client.HttpClientConfig
@@ -300,6 +301,42 @@ import io.ktor.http.ParametersBuilder
             )
 
             return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/terminals/{id}/tail
+        * 
+        * 
+         * @param id  
+         * @param lines 1 to 20, default 5 (optional)
+         * @return TerminalTailView
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun tailTerminal(id: kotlin.String, lines: kotlin.Int?): HttpResponse<TerminalTailView> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+            lines?.apply { localVariableQuery["lines"] = listOf("$lines") }
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/terminals/{id}/tail".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames

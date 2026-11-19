@@ -1586,6 +1586,33 @@ extension Components {
                 case repo
             }
         }
+        /// Who may be told apart as "the runner bundled in this Mac's app" (E6, L1): the pairing row of
+        /// `runner` after the Mac app, which reads that runner's own enrolment file on its local disk
+        /// (a remote runner has none there), attests it.
+        ///
+        /// - Remark: Generated from `#/components/schemas/BundledAttested`.
+        public struct BundledAttested: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/BundledAttested/bundled`.
+            public var bundled: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/BundledAttested/runner`.
+            public var runner: Swift.String
+            /// Creates a new `BundledAttested`.
+            ///
+            /// - Parameters:
+            ///   - bundled:
+            ///   - runner:
+            public init(
+                bundled: Swift.Bool,
+                runner: Swift.String
+            ) {
+                self.bundled = bundled
+                self.runner = runner
+            }
+            public enum CodingKeys: String, CodingKey {
+                case bundled
+                case runner
+            }
+        }
         /// An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first
         /// entry that has one to give.
         ///
@@ -5627,8 +5654,23 @@ extension Components {
             public var env: Components.Schemas.NewTerminal.EnvPayload?
             /// - Remark: Generated from `#/components/schemas/NewTerminal/program`.
             public var program: Swift.String?
+            /// With `sandbox: real` only: start the shell in this project's folder (a cwd on the runner,
+            /// not a mount). A sandbox names its project in `sandbox` (400 otherwise).
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/project`.
+            public var project: Swift.Int64?
             /// - Remark: Generated from `#/components/schemas/NewTerminal/runner`.
             public var runner: Swift.String
+            /// Where the shell lives (D-17): `home` (the default: a private root with the caller's
+            /// persistent sandbox home), `project:<id>` or `session:<id>` (that, plus the project's or
+            /// session's folder, which the Core resolves: no `cwd`), or `real` (the runner's host view,
+            /// allowed only to the Mac that owns a macOS runner, over that Mac's own device key). 400
+            /// `bad_request` for a bad value or a `cwd` with a private mode, 403 `real_terminal_refused`
+            /// for `real` from anyone else. 409 `runner_update_required` ("Update this runner to open
+            /// terminals") when the runner predates sandboxes: no terminal opens on it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewTerminal/sandbox`.
+            public var sandbox: Swift.String?
             /// Start in the folder of this AI session (`as_…`, its `AgentSession.folder`) without naming
             /// the path: the Core resolves it. The session must be on `runner`, one the caller can see (and
             /// the caller needs the `agent` scope), and its runner must have reported its folder. Not with
@@ -5645,7 +5687,9 @@ extension Components {
             ///   - cwd: An absolute directory to start in; absent, the home folder. Not with `session`.
             ///   - env:
             ///   - program:
+            ///   - project: With `sandbox: real` only: start the shell in this project's folder (a cwd on the runner,
             ///   - runner:
+            ///   - sandbox: Where the shell lives (D-17): `home` (the default: a private root with the caller's
             ///   - session: Start in the folder of this AI session (`as_…`, its `AgentSession.folder`) without naming
             ///   - size:
             public init(
@@ -5653,7 +5697,9 @@ extension Components {
                 cwd: Swift.String? = nil,
                 env: Components.Schemas.NewTerminal.EnvPayload? = nil,
                 program: Swift.String? = nil,
+                project: Swift.Int64? = nil,
                 runner: Swift.String,
+                sandbox: Swift.String? = nil,
                 session: Swift.String? = nil,
                 size: Components.Schemas.TerminalSize
             ) {
@@ -5661,7 +5707,9 @@ extension Components {
                 self.cwd = cwd
                 self.env = env
                 self.program = program
+                self.project = project
                 self.runner = runner
+                self.sandbox = sandbox
                 self.session = session
                 self.size = size
             }
@@ -5670,7 +5718,9 @@ extension Components {
                 case cwd
                 case env
                 case program
+                case project
                 case runner
+                case sandbox
                 case session
                 case size
             }
@@ -7457,6 +7507,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/drivers`.
             public var drivers: [Components.Schemas.RunnerDriver]?
+            /// The folder its work happens in, as the runner reports it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/home`.
+            public var home: Swift.String?
             /// The host's load as its runner last reported it (E2-15.2), if it has.
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/host_load`.
@@ -7470,6 +7524,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/isolation`.
             public var isolation: Components.Schemas.RunnerIsolation?
+            /// Why it is not fully working, in words: its last-error note.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/last_error`.
+            public var lastError: Swift.String?
             /// Its last frame or request; null if never seen.
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/last_seen`.
@@ -7515,6 +7573,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Runner/slots`.
             public var slots: Components.Schemas.RunnerSlots?
+            /// The AI tool install under way on its host, or the last one, as the runner reports it in
+            /// its heartbeats (D-22). Absent until a runner of this version reports.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Runner/tool_install`.
+            public var toolInstall: Components.Schemas.RunnerToolInstall?
             /// Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`,
             /// `go`, `rust`, `docker`, `codex`); a tool that is not installed is not listed.
             ///
@@ -7559,9 +7622,11 @@ extension Components {
             ///   - connectedSince: When its current connection began; absent when it is offline.
             ///   - degraded: Connected but silent past two heartbeats.
             ///   - drivers: What it last advertised (empty until it first connected since the Core started).
+            ///   - home: The folder its work happens in, as the runner reports it.
             ///   - hostLoad: The host's load as its runner last reported it (E2-15.2), if it has.
             ///   - id: The runner's device id, `d_…`.
             ///   - isolation: The isolation it offers now (E8a-09): absent until it reports, and then no tier can be
+            ///   - lastError: Why it is not fully working, in words: its last-error note.
             ///   - lastSeen: Its last frame or request; null if never seen.
             ///   - load: Commands in flight.
             ///   - name:
@@ -7573,6 +7638,7 @@ extension Components {
             ///   - runsAs: The user the runner process runs as, and whether that is root.
             ///   - sandbox: `process` when the runner offers a process sandbox for agents, else `none`; absent when it
             ///   - slots: Sessions and terminals running now, and how many it takes.
+            ///   - toolInstall: The AI tool install under way on its host, or the last one, as the runner reports it in
             ///   - tools: Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`,
             ///   - updateAvailable: This Core's own version is newer than the runner's `version`. Absent until it connected.
             ///   - version: Its `ainkrad-runner` version, once connected.
@@ -7584,9 +7650,11 @@ extension Components {
                 connectedSince: Components.Schemas.Timestamp? = nil,
                 degraded: Swift.Bool? = nil,
                 drivers: [Components.Schemas.RunnerDriver]? = nil,
+                home: Swift.String? = nil,
                 hostLoad: Components.Schemas.RunnerHostLoad? = nil,
                 id: Swift.String,
                 isolation: Components.Schemas.RunnerIsolation? = nil,
+                lastError: Swift.String? = nil,
                 lastSeen: Components.Schemas.Timestamp? = nil,
                 load: Swift.Int32? = nil,
                 name: Swift.String,
@@ -7598,6 +7666,7 @@ extension Components {
                 runsAs: Components.Schemas.RunnerRunsAs? = nil,
                 sandbox: Swift.String? = nil,
                 slots: Components.Schemas.RunnerSlots? = nil,
+                toolInstall: Components.Schemas.RunnerToolInstall? = nil,
                 tools: Components.Schemas.Runner.ToolsPayload? = nil,
                 updateAvailable: Swift.Bool? = nil,
                 version: Swift.String? = nil
@@ -7609,9 +7678,11 @@ extension Components {
                 self.connectedSince = connectedSince
                 self.degraded = degraded
                 self.drivers = drivers
+                self.home = home
                 self.hostLoad = hostLoad
                 self.id = id
                 self.isolation = isolation
+                self.lastError = lastError
                 self.lastSeen = lastSeen
                 self.load = load
                 self.name = name
@@ -7623,6 +7694,7 @@ extension Components {
                 self.runsAs = runsAs
                 self.sandbox = sandbox
                 self.slots = slots
+                self.toolInstall = toolInstall
                 self.tools = tools
                 self.updateAvailable = updateAvailable
                 self.version = version
@@ -7635,9 +7707,11 @@ extension Components {
                 case connectedSince = "connected_since"
                 case degraded
                 case drivers
+                case home
                 case hostLoad = "host_load"
                 case id
                 case isolation
+                case lastError = "last_error"
                 case lastSeen = "last_seen"
                 case load
                 case name
@@ -7649,6 +7723,7 @@ extension Components {
                 case runsAs = "runs_as"
                 case sandbox
                 case slots
+                case toolInstall = "tool_install"
                 case tools
                 case updateAvailable = "update_available"
                 case version
@@ -7957,6 +8032,51 @@ extension Components {
                 case agentsUsed = "agents_used"
                 case terminalsCapacity = "terminals_capacity"
                 case terminalsUsed = "terminals_used"
+            }
+        }
+        /// An AI tool install as a runner reports it.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunnerToolInstall`.
+        public struct RunnerToolInstall: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunnerToolInstall/percent`.
+            public var percent: Swift.Int32
+            /// - Remark: Generated from `#/components/schemas/RunnerToolInstall/reason`.
+            public var reason: Swift.String?
+            /// `running`, `done` or `failed`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerToolInstall/state`.
+            public var state: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunnerToolInstall/step`.
+            public var step: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RunnerToolInstall/tool`.
+            public var tool: Swift.String
+            /// Creates a new `RunnerToolInstall`.
+            ///
+            /// - Parameters:
+            ///   - percent:
+            ///   - reason:
+            ///   - state: `running`, `done` or `failed`.
+            ///   - step:
+            ///   - tool:
+            public init(
+                percent: Swift.Int32,
+                reason: Swift.String? = nil,
+                state: Swift.String,
+                step: Swift.String,
+                tool: Swift.String
+            ) {
+                self.percent = percent
+                self.reason = reason
+                self.state = state
+                self.step = step
+                self.tool = tool
+            }
+            public enum CodingKeys: String, CodingKey {
+                case percent
+                case reason
+                case state
+                case step
+                case tool
             }
         }
         /// What a delete answers.
@@ -9484,6 +9604,11 @@ extension Components {
             public var orphaned: Swift.Bool?
             /// - Remark: Generated from `#/components/schemas/Terminal/runner`.
             public var runner: Swift.String
+            /// Where the shell lives (D-17): `home`, `project:<id>`, `session:<id>` or `real` (this Mac's
+            /// own shell). Absent: a terminal opened before sandboxes, a host-view shell.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Terminal/sandbox`.
+            public var sandbox: Swift.String?
             /// - Remark: Generated from `#/components/schemas/Terminal/seq`.
             public var seq: Swift.Int64?
             /// - Remark: Generated from `#/components/schemas/Terminal/size`.
@@ -9501,6 +9626,7 @@ extension Components {
             ///   - openedBy:
             ///   - orphaned: Running with no client attached: it is closed once idle past `terminal.idle_secs`.
             ///   - runner:
+            ///   - sandbox: Where the shell lives (D-17): `home`, `project:<id>`, `session:<id>` or `real` (this Mac's
             ///   - seq:
             ///   - size:
             ///   - status:
@@ -9513,6 +9639,7 @@ extension Components {
                 openedBy: Swift.String? = nil,
                 orphaned: Swift.Bool? = nil,
                 runner: Swift.String,
+                sandbox: Swift.String? = nil,
                 seq: Swift.Int64? = nil,
                 size: Components.Schemas.TerminalSize? = nil,
                 status: Components.Schemas.TerminalStatus
@@ -9525,6 +9652,7 @@ extension Components {
                 self.openedBy = openedBy
                 self.orphaned = orphaned
                 self.runner = runner
+                self.sandbox = sandbox
                 self.seq = seq
                 self.size = size
                 self.status = status
@@ -9538,6 +9666,7 @@ extension Components {
                 case openedBy = "opened_by"
                 case orphaned
                 case runner
+                case sandbox
                 case seq
                 case size
                 case status
@@ -9633,6 +9762,25 @@ extension Components {
                     self.value1,
                     self.value2
                 ])
+            }
+        }
+        /// The last rows of a terminal's screen.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TerminalTailView`.
+        public struct TerminalTailView: Codable, Hashable, Sendable {
+            /// Plain text, oldest first; empty when the terminal is not running.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TerminalTailView/lines`.
+            public var lines: [Swift.String]
+            /// Creates a new `TerminalTailView`.
+            ///
+            /// - Parameters:
+            ///   - lines: Plain text, oldest first; empty when the terminal is not running.
+            public init(lines: [Swift.String]) {
+                self.lines = lines
+            }
+            public enum CodingKeys: String, CodingKey {
+                case lines
             }
         }
         /// RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a

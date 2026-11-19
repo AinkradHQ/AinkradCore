@@ -75,6 +75,7 @@ src/Ainkrad.Client/Model/BindChain.cs
 src/Ainkrad.Client/Model/Binding.cs
 src/Ainkrad.Client/Model/BudgetDeleted.cs
 src/Ainkrad.Client/Model/Build.cs
+src/Ainkrad.Client/Model/BundledAttested.cs
 src/Ainkrad.Client/Model/Chain.cs
 src/Ainkrad.Client/Model/ChainBinding.cs
 src/Ainkrad.Client/Model/ChainEntry.cs
@@ -208,6 +209,7 @@ src/Ainkrad.Client/Model/RunnerIsolation.cs
 src/Ainkrad.Client/Model/RunnerPolicyBody.cs
 src/Ainkrad.Client/Model/RunnerRunsAs.cs
 src/Ainkrad.Client/Model/RunnerSlots.cs
+src/Ainkrad.Client/Model/RunnerToolInstall.cs
 src/Ainkrad.Client/Model/SecretDeleted.cs
 src/Ainkrad.Client/Model/SecretGroupDeleted.cs
 src/Ainkrad.Client/Model/SecretGroupInfo.cs
@@ -240,6 +242,7 @@ src/Ainkrad.Client/Model/Terminal.cs
 src/Ainkrad.Client/Model/TerminalSignal.cs
 src/Ainkrad.Client/Model/TerminalSize.cs
 src/Ainkrad.Client/Model/TerminalStatus.cs
+src/Ainkrad.Client/Model/TerminalTailView.cs
 src/Ainkrad.Client/Model/ToolOperation.cs
 src/Ainkrad.Client/Model/UpdateConnection.cs
 src/Ainkrad.Client/Model/UpdateProject.cs

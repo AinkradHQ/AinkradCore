@@ -30,6 +30,8 @@ import kotlinx.serialization.Contextual
  * @param cwd An absolute directory to start in; absent, the home folder. Not with `session`.
  * @param env 
  * @param program 
+ * @param project With `sandbox: real` only: start the shell in this project's folder (a cwd on the runner, not a mount). A sandbox names its project in `sandbox` (400 otherwise).
+ * @param sandbox Where the shell lives (D-17): `home` (the default: a private root with the caller's persistent sandbox home), `project:<id>` or `session:<id>` (that, plus the project's or session's folder, which the Core resolves: no `cwd`), or `real` (the runner's host view, allowed only to the Mac that owns a macOS runner, over that Mac's own device key). 400 `bad_request` for a bad value or a `cwd` with a private mode, 403 `real_terminal_refused` for `real` from anyone else. 409 `runner_update_required` (\"Update this runner to open terminals\") when the runner predates sandboxes: no terminal opens on it.
  * @param session Start in the folder of this AI session (`as_…`, its `AgentSession.folder`) without naming the path: the Core resolves it. The session must be on `runner`, one the caller can see (and the caller needs the `agent` scope), and its runner must have reported its folder. Not with `cwd`.
  */
 @Serializable
@@ -54,6 +56,14 @@ data class NewTerminal (
 
     @SerialName(value = "program")
     val program: kotlin.String? = null,
+
+    /* With `sandbox: real` only: start the shell in this project's folder (a cwd on the runner, not a mount). A sandbox names its project in `sandbox` (400 otherwise). */
+    @SerialName(value = "project")
+    val project: kotlin.Long? = null,
+
+    /* Where the shell lives (D-17): `home` (the default: a private root with the caller's persistent sandbox home), `project:<id>` or `session:<id>` (that, plus the project's or session's folder, which the Core resolves: no `cwd`), or `real` (the runner's host view, allowed only to the Mac that owns a macOS runner, over that Mac's own device key). 400 `bad_request` for a bad value or a `cwd` with a private mode, 403 `real_terminal_refused` for `real` from anyone else. 409 `runner_update_required` (\"Update this runner to open terminals\") when the runner predates sandboxes: no terminal opens on it. */
+    @SerialName(value = "sandbox")
+    val sandbox: kotlin.String? = null,
 
     /* Start in the folder of this AI session (`as_…`, its `AgentSession.folder`) without naming the path: the Core resolves it. The session must be on `runner`, one the caller can see (and the caller needs the `agent` scope), and its runner must have reported its folder. Not with `cwd`. */
     @SerialName(value = "session")

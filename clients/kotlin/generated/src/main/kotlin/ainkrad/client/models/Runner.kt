@@ -22,6 +22,7 @@ import ainkrad.client.models.RunnerIsolation
 import ainkrad.client.models.RunnerPolicyBody
 import ainkrad.client.models.RunnerRunsAs
 import ainkrad.client.models.RunnerSlots
+import ainkrad.client.models.RunnerToolInstall
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -39,8 +40,10 @@ import kotlinx.serialization.Contextual
  * @param connectedSince RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param degraded Connected but silent past two heartbeats.
  * @param drivers What it last advertised (empty until it first connected since the Core started).
+ * @param home The folder its work happens in, as the runner reports it.
  * @param hostLoad The host's load as its runner last reported it (E2-15.2), if it has.
  * @param isolation The isolation it offers now (E8a-09): absent until it reports, and then no tier can be assumed.
+ * @param lastError Why it is not fully working, in words: its last-error note.
  * @param lastSeen RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param load Commands in flight.
  * @param online Connected to this Core now.
@@ -51,6 +54,7 @@ import kotlinx.serialization.Contextual
  * @param runsAs The user the runner process runs as, and whether that is root.
  * @param sandbox `process` when the runner offers a process sandbox for agents, else `none`; absent when it did not report (agents off).
  * @param slots Sessions and terminals running now, and how many it takes.
+ * @param toolInstall The AI tool install under way on its host, or the last one, as the runner reports it in its heartbeats (D-22). Absent until a runner of this version reports.
  * @param tools Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`, `go`, `rust`, `docker`, `codex`); a tool that is not installed is not listed.
  * @param updateAvailable This Core's own version is newer than the runner's `version`. Absent until it connected.
  * @param version Its `ainkrad-runner` version, once connected.
@@ -94,6 +98,10 @@ data class Runner (
     @SerialName(value = "drivers")
     val drivers: kotlin.collections.List<RunnerDriver>? = null,
 
+    /* The folder its work happens in, as the runner reports it. */
+    @SerialName(value = "home")
+    val home: kotlin.String? = null,
+
     /* The host's load as its runner last reported it (E2-15.2), if it has. */
     @SerialName(value = "host_load")
     val hostLoad: RunnerHostLoad? = null,
@@ -101,6 +109,10 @@ data class Runner (
     /* The isolation it offers now (E8a-09): absent until it reports, and then no tier can be assumed. */
     @SerialName(value = "isolation")
     val isolation: RunnerIsolation? = null,
+
+    /* Why it is not fully working, in words: its last-error note. */
+    @SerialName(value = "last_error")
+    val lastError: kotlin.String? = null,
 
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "last_seen")
@@ -141,6 +153,10 @@ data class Runner (
     /* Sessions and terminals running now, and how many it takes. */
     @SerialName(value = "slots")
     val slots: RunnerSlots? = null,
+
+    /* The AI tool install under way on its host, or the last one, as the runner reports it in its heartbeats (D-22). Absent until a runner of this version reports. */
+    @SerialName(value = "tool_install")
+    val toolInstall: RunnerToolInstall? = null,
 
     /* Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`, `go`, `rust`, `docker`, `codex`); a tool that is not installed is not listed. */
     @SerialName(value = "tools")

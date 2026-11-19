@@ -430,6 +430,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/runners/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/runners/{id}/get(getRunner)`.
     func getRunner(_ input: Operations.GetRunner.Input) async throws -> Operations.GetRunner.Output
+    /// - Remark: HTTP `POST /api/v1/runners/{id}/bundled`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/bundled/post(attestBundledRunner)`.
+    func attestBundledRunner(_ input: Operations.AttestBundledRunner.Input) async throws -> Operations.AttestBundledRunner.Output
     /// - Remark: HTTP `POST /api/v1/runners/{id}/noop`.
     /// - Remark: Generated from `#/paths//api/v1/runners/{id}/noop/post(runNoop)`.
     func runNoop(_ input: Operations.RunNoop.Input) async throws -> Operations.RunNoop.Output
@@ -535,6 +538,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/terminals/{id}/signal`.
     /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/signal/post(signalTerminal)`.
     func signalTerminal(_ input: Operations.SignalTerminal.Input) async throws -> Operations.SignalTerminal.Output
+    /// - Remark: HTTP `GET /api/v1/terminals/{id}/tail`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/tail/get(tailTerminal)`.
+    func tailTerminal(_ input: Operations.TailTerminal.Input) async throws -> Operations.TailTerminal.Output
     /// - Remark: HTTP `GET /api/v1/terminals/{id}/ws`.
     /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/ws/get(attachTerminal)`.
     func attachTerminal(_ input: Operations.AttachTerminal.Input) async throws -> Operations.AttachTerminal.Output
@@ -2054,6 +2060,17 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// - Remark: HTTP `POST /api/v1/runners/{id}/bundled`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/bundled/post(attestBundledRunner)`.
+    public func attestBundledRunner(
+        path: Operations.AttestBundledRunner.Input.Path,
+        headers: Operations.AttestBundledRunner.Input.Headers = .init()
+    ) async throws -> Operations.AttestBundledRunner.Output {
+        try await attestBundledRunner(Operations.AttestBundledRunner.Input(
+            path: path,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `POST /api/v1/runners/{id}/noop`.
     /// - Remark: Generated from `#/paths//api/v1/runners/{id}/noop/post(runNoop)`.
     public func runNoop(
@@ -2423,6 +2440,19 @@ extension APIProtocol {
             path: path,
             headers: headers,
             body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/terminals/{id}/tail`.
+    /// - Remark: Generated from `#/paths//api/v1/terminals/{id}/tail/get(tailTerminal)`.
+    public func tailTerminal(
+        path: Operations.TailTerminal.Input.Path,
+        query: Operations.TailTerminal.Input.Query = .init(),
+        headers: Operations.TailTerminal.Input.Headers = .init()
+    ) async throws -> Operations.TailTerminal.Output {
+        try await tailTerminal(Operations.TailTerminal.Input(
+            path: path,
+            query: query,
+            headers: headers
         ))
     }
     /// - Remark: HTTP `GET /api/v1/terminals/{id}/ws`.
