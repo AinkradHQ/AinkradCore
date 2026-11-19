@@ -578,6 +578,7 @@ impl Session {
             | Command::HistoryRead(_)
             | Command::AgentMode(_)
             | Command::AgentAttach(_)
+            | Command::AgentDocs(_)
             | Command::AgentSubagentStop(_)
             | Command::GatewayTest(_) => self.start_agent(stream, command),
             Command::RunStart(_)
@@ -855,6 +856,7 @@ impl Session {
                 Command::AgentStop(req) => agent.stop(req).map(Reply::AgentStop),
                 Command::AgentMode(req) => agent.mode(req).map(Reply::AgentMode),
                 Command::AgentAttach(req) => agent.attach(req).map(Reply::AgentAttach),
+                Command::AgentDocs(req) => agent.docs(req).await.map(Reply::AgentDocs),
                 Command::AgentSubagentStop(req) => {
                     agent.subagent_stop(req).map(Reply::AgentSubagentStop)
                 }

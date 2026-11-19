@@ -110,6 +110,9 @@ pub enum Command {
     /// A TCP stream to an exposed port of a live run (P6-01); bytes are `output` frames.
     #[serde(rename = "port.open")]
     PortOpen(super::PortOpen),
+    /// Session documents (E10-2): list, read or write the `.md` files of a session's folder.
+    #[serde(rename = "agent.docs")]
+    AgentDocs(super::AgentDocs),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -136,6 +139,7 @@ impl Command {
             Self::HistoryRead(_) => super::OP_HISTORY_READ,
             Self::AgentMode(_) => super::OP_AGENT_MODE,
             Self::AgentAttach(_) => super::OP_AGENT_ATTACH,
+            Self::AgentDocs(_) => super::OP_AGENT_DOCS,
             Self::AgentSubagentStop(_) => super::OP_AGENT_SUBAGENT_STOP,
             Self::LoginStart(_) => super::OP_LOGIN_START,
             Self::LoginCode(_) => super::OP_LOGIN_CODE,
@@ -309,6 +313,9 @@ pub enum Reply {
     /// The last frame of `port.open`.
     #[serde(rename = "port.open")]
     PortOpen(super::PortClosed),
+    /// The answer to `agent.docs`.
+    #[serde(rename = "agent.docs")]
+    AgentDocs(super::DocsReply),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

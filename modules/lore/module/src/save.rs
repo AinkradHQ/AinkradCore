@@ -400,6 +400,7 @@ pub(crate) async fn put_text(
     if r.text != h.text {
         commit_text(&mut tx, &h, &r.text, &who, "person", Snap::IfIdle).await?;
     }
+    let linked = r.text != h.text && crate::session_docs::mark_dirty(&mut tx, &note).await?;
     let missing_attachments = crate::attachments::missing(&mut tx, &r.text).await?;
     let out = SaveOut {
         missing_attachments,
@@ -408,5 +409,8 @@ pub(crate) async fn put_text(
         version: kept,
     };
     tx.commit().await?;
+    if linked {
+        crate::session_docs::kick(&app, &note);
+    }
     Ok(Json(out))
 }
