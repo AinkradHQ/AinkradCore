@@ -25,6 +25,8 @@ pub struct Fake {
     pub journal: Mutex<Vec<(String, String, Value)>>,
     pub restart_fails: Mutex<bool>,
     pub journal_fails: Mutex<bool>,
+    /// systemd before 251: `show --timestamp=unix` fails.
+    pub old_systemd: Mutex<bool>,
 }
 
 impl Fake {
@@ -82,6 +84,12 @@ impl Exec for Shared {
             (SYSTEMCTL, Some("--no-ask-password"))
                 if args.get(1).map(String::as_str) == Some("show") =>
             {
+                if *f.old_systemd.lock().unwrap() && args.iter().any(|a| a == "--timestamp=unix") {
+                    return Ok(Out {
+                        ok: false,
+                        stdout: vec![],
+                    });
+                }
                 let unit = args.last().unwrap();
                 let load = f
                     .loaded

@@ -172,17 +172,26 @@ pub(crate) fn unit_ts(
     props: &'static str,
     unix: bool,
 ) -> Option<BTreeMap<String, String>> {
-    let mut args = vec![
-        "--no-ask-password".to_owned(),
-        "show".to_owned(),
-        "-p".to_owned(),
-        props.to_owned(),
-        name.to_owned(),
-    ];
-    if unix {
-        args.insert(2, "--timestamp=unix".to_owned());
-    }
-    let out = ctx.exec.run(SYSTEMCTL, &args, 16 * 1024).ok()?;
+    let args_for = |unix: bool| {
+        let mut args = vec![
+            "--no-ask-password".to_owned(),
+            "show".to_owned(),
+            "-p".to_owned(),
+            props.to_owned(),
+            name.to_owned(),
+        ];
+        if unix {
+            args.insert(2, "--timestamp=unix".to_owned());
+        }
+        args
+    };
+    // `--timestamp=unix` needs systemd 251; an older one refuses the flag, so ask again without
+    // it and let the reader parse the default (UTC) form.
+    let out = match ctx.exec.run(SYSTEMCTL, &args_for(unix), 16 * 1024) {
+        Ok(o) if o.ok => o,
+        _ if unix => ctx.exec.run(SYSTEMCTL, &args_for(false), 16 * 1024).ok()?,
+        _ => return None,
+    };
     out.ok.then_some(())?;
     Some(
         String::from_utf8_lossy(&out.stdout)

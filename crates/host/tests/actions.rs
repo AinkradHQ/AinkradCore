@@ -360,37 +360,41 @@ fn backup_info_lists_the_age_files_newest_first_and_a_read_is_not_logged() {
 }
 
 #[test]
-fn backup_keep_rewrites_only_the_keep_line_and_backup_info_reads_it() {
+fn backup_info_reads_the_retention_and_backup_keep_is_refused() {
     let fx = Fx::new();
     fx.fake.load("ainkrad-backup.service");
-    let config = fx.dir.path().join("config.toml");
-    assert_eq!(
-        fx.code("backup_keep", r#"{"keep":10}"#),
-        "not_installed",
-        "no config, nothing written"
-    );
     std::fs::write(
-        &config,
+        fx.dir.path().join("config.toml"),
         "home = \"/x\"\nbackup_keep_local = 7\nmodules = []\n",
     )
     .unwrap();
     assert_eq!(fx.call("backup_info", "{}")["result"]["retention"], 7);
-    let v = fx.call("backup_keep", r#"{"keep":10}"#);
-    assert_eq!(v["result"]["keep"], 10, "{v}");
+    assert_eq!(fx.code("backup_keep", r#"{"keep":10}"#), "unknown_action");
     assert_eq!(
-        std::fs::read_to_string(&config).unwrap(),
-        "home = \"/x\"\nbackup_keep_local = 10\nmodules = []\n"
+        std::fs::read_to_string(fx.dir.path().join("config.toml")).unwrap(),
+        "home = \"/x\"\nbackup_keep_local = 7\nmodules = []\n",
+        "the helper wrote nothing"
     );
-    assert!(!fx.dir.path().join("config.toml.keep.tmp").exists());
-    assert_eq!(fx.call("backup_info", "{}")["result"]["retention"], 10);
-    assert!(fx.log().contains(" accepted backup_keep "), "{}", fx.log());
-    assert!(fx.log().contains("keep=10"), "{}", fx.log());
-    assert_eq!(fx.fake.restarts(), 0, "no unit was touched");
-    // Out of range is refused before anything is read or written.
-    assert_eq!(fx.code("backup_keep", r#"{"keep":0}"#), "bad_request");
-    assert_eq!(fx.code("backup_keep", r#"{"keep":61}"#), "bad_request");
-    // A link in the config's place is never followed.
-    std::fs::remove_file(&config).unwrap();
-    std::os::unix::fs::symlink("/etc/hostname", &config).unwrap();
-    assert_eq!(fx.code("backup_keep", r#"{"keep":5}"#), "failed");
+}
+
+#[test]
+fn backup_info_falls_back_to_default_timestamps_on_an_old_systemd() {
+    let fx = Fx::new();
+    fx.fake.load("ainkrad-backup.service");
+    fx.fake.load("ainkrad-backup.timer");
+    *fx.fake.old_systemd.lock().unwrap() = true;
+    let v = fx.call("backup_info", "{}");
+    assert_eq!(v["ok"], true, "{v}");
+    let shows: Vec<Vec<String>> = fx
+        .fake
+        .argv()
+        .into_iter()
+        .filter(|a| a.iter().any(|x| x == "show"))
+        .collect();
+    assert!(
+        shows
+            .iter()
+            .any(|a| !a.iter().any(|x| x == "--timestamp=unix")),
+        "retried without the flag: {shows:?}"
+    );
 }

@@ -1,7 +1,7 @@
 //! Exporting every value to its owner (E2-6, D-4): a danger route (a fresh step-up) that
 //! is rate limited. The broker must be on, each value is opened inside the write transaction that
 //! audits the export (`secret.exported`: the count, never a value), and every plaintext lives in a
-//! `Zeroizing` buffer. Never exported: provider-account keys (`acct.*`, the Accounts screen's),
+//! `Zeroizing` buffer. Never exported: provider-account keys (the secrets `core_accounts` names, and any `acct.*`),
 //! a module's own secrets (`brain.*`, `leyline.*`) and file secrets.
 
 use ainkrad_core::audit::{AuditActor, NewAuditEvent};
@@ -65,7 +65,8 @@ pub async fn export_all(
     let rows = sqlx::query(
         "SELECT s.name, s.version, s.key_id, s.sealed, s.kind, s.file_name, g.name AS group_name \
          FROM core_secrets s LEFT JOIN core_secret_groups g ON g.id = s.group_id \
-         WHERE s.name NOT LIKE 'acct.%' AND s.name NOT LIKE 'brain.%' \
+         WHERE s.name NOT LIKE 'acct.%' \
+         AND NOT EXISTS (SELECT 1 FROM core_accounts a WHERE a.secret_name = s.name) AND s.name NOT LIKE 'brain.%' \
          AND s.name NOT LIKE 'leyline.%' AND s.kind <> 'file' ORDER BY s.name",
     )
     .fetch_all(&mut *tx)
