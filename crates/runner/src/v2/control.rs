@@ -102,7 +102,7 @@ impl Control {
     }
 
     /// Stops this process after `after`, as a restart.
-    fn restart_after(self: &Arc<Self>, after: Duration) {
+    pub(super) fn restart_after(self: &Arc<Self>, after: Duration) {
         let me = Arc::clone(self);
         tokio::spawn(async move {
             tokio::time::sleep(after).await;
@@ -156,7 +156,7 @@ impl Control {
     ) -> Result<ainkrad_proto::v2::ToolsStatus, StreamError> {
         let me = Arc::clone(self);
         self.tools.install(req, move |tool| {
-            if me.active.agents && matches!(tool, Tool::Claude | Tool::Codex) {
+            if me.active.agents && super::aitools::is_ai_tool(tool) {
                 me.restart_after(Duration::from_secs(5));
             }
         })

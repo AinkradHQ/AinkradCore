@@ -25,6 +25,7 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
 pub mod agent;
+mod aitools;
 pub mod cli;
 pub mod client;
 pub mod control;
