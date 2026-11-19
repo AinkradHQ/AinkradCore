@@ -72,18 +72,30 @@ via_cron() {
 if command -v flock >/dev/null 2>&1; then
   exec 9>"$HOME/.ainkrad-runner/run.lock"
   flock -n 9 || exit 0
+else
+  # No flock: a lock folder holding the wrapper's pid; a dead pid's lock is taken over.
+  lock="$HOME/.ainkrad-runner/run.lock.d"
+  if ! mkdir "\$lock" 2>/dev/null; then
+    pid=\$(cat "\$lock/pid" 2>/dev/null)
+    if [ -n "\$pid" ] && kill -0 "\$pid" 2>/dev/null; then exit 0; fi
+    rm -rf "\$lock"
+    mkdir "\$lock" 2>/dev/null || exit 0
+  fi
+  echo \$\$ >"\$lock/pid"
+  trap 'rm -rf "\$lock"' EXIT
 fi
 while :; do
   "$bin/ainkrad-runner" connect --state "$state" --enable-pty
-  [ "\$?" = 75 ] || exit \$?
+  rc=\$?
+  [ "\$rc" = 75 ] || exit "\$rc"
   sleep 1
 done
 WRAP
   chmod 0700 "$wrap"
   local keep
-  keep=$(crontab -l 2>/dev/null | grep -v 'ainkrad-runner/run.sh' || true)
+  keep=$(crontab -l 2>/dev/null | grep -v -e 'ainkrad-runner/run.sh' -e 'ainkrad-runner connect' || true)
   { [ -z "$keep" ] || printf '%s\n' "$keep"; printf '@reboot "%s" >>"%s" 2>&1\n' "$wrap" "$log"
-    command -v flock >/dev/null 2>&1 && printf '*/5 * * * * "%s" >>"%s" 2>&1\n' "$wrap" "$log"; true; } | crontab - || return 1
+    printf '*/5 * * * * "%s" >>"%s" 2>&1\n' "$wrap" "$log"; } | crontab - || return 1
   setsid nohup "$wrap" >>"$log" 2>&1 </dev/null &
   return 0
 }

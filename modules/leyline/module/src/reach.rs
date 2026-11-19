@@ -40,6 +40,15 @@ const BANNER: Duration = Duration::from_secs(4);
 /// Probes at once in a round.
 const AT_ONCE: usize = 4;
 
+/// A failed check is answered this long after it began, whatever the cause.
+const FAIL_AFTER: Duration = Duration::from_secs(5);
+
+/// An address the Core never probes (it is this machine): not marked down, simply not checked.
+pub(crate) fn is_local(address: &str) -> bool {
+    let a = address.trim_matches(['[', ']']).to_ascii_lowercase();
+    a == "localhost" || a.ends_with(".localhost") || a.parse::<IpAddr>().is_ok_and(refused)
+}
+
 /// The one sentence for every failure: which of the reasons it was is not the caller's to learn.
 const NO_ANSWER: &str = "it did not answer like an SSH server";
 
@@ -168,17 +177,22 @@ pub(crate) async fn check(
     }
     let gate = AT_ONCE_CHECKS.get_or_init(|| Semaphore::new(AT_ONCE));
     let _permit = gate.try_acquire().map_err(|_| busy())?;
+    let started = Instant::now();
     Ok(Json(match answer(&req.address, port).await {
         Ok(ms) => Checked {
             ok: true,
             ms: Some(ms),
             reason: None,
         },
-        Err(why) => Checked {
-            ok: false,
-            ms: None,
-            reason: Some(why.to_owned()),
-        },
+        Err(why) => {
+            // Every failure takes the same time, so how fast it failed says nothing about why.
+            tokio::time::sleep(FAIL_AFTER.saturating_sub(started.elapsed())).await;
+            Checked {
+                ok: false,
+                ms: None,
+                reason: Some(why.to_owned()),
+            }
+        }
     }))
 }
 
@@ -230,6 +244,9 @@ async fn round(app: &App) -> Result<(), String> {
             h.try_get("id").map_err(err)?,
             h.try_get("address").map_err(err)?,
         );
+        if is_local(&address) {
+            continue;
+        }
         let port = u16::try_from(h.try_get::<i64, _>("port").map_err(err)?).unwrap_or(22);
         let gate = Arc::clone(&gate);
         set.spawn(async move {
@@ -315,6 +332,23 @@ mod tests {
         let ssh = server(b"SSH-2.0-OpenSSH_9.6\r\n").await;
         assert_eq!(answer("127.0.0.1", ssh).await.unwrap_err(), NO_ANSWER);
         assert_eq!(answer("localhost", ssh).await.unwrap_err(), NO_ANSWER);
+    }
+
+    #[test]
+    fn this_machine_is_skipped_by_the_round_not_marked_down() {
+        for a in [
+            "localhost",
+            "127.0.0.1",
+            "::1",
+            "[::1]",
+            "db.localhost",
+            "169.254.169.254",
+        ] {
+            assert!(is_local(a), "{a}");
+        }
+        for a in ["10.0.0.4", "birch.example.com"] {
+            assert!(!is_local(a), "{a}");
+        }
     }
 
     #[test]

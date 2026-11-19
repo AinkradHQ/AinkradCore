@@ -77,6 +77,22 @@ pub async fn precheck_agents(state: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The longest a pending restart waits for the runner to go idle; then it restarts anyway, so the
+/// "no new work" flag cannot block the runner for good.
+const IDLE_CAP: Duration = Duration::from_secs(20 * 60);
+
+/// Waits until `idle()` or `cap` has passed; true when it was idle.
+async fn wait_idle(cap: Duration, poll: Duration, idle: impl Fn() -> bool) -> bool {
+    let start = tokio::time::Instant::now();
+    while !idle() {
+        if start.elapsed() >= cap {
+            return false;
+        }
+        tokio::time::sleep(poll).await;
+    }
+    true
+}
+
 /// The control driver's state, shared by the session of every connection.
 pub struct Control {
     pub state: PathBuf,
@@ -118,9 +134,7 @@ impl Control {
         super::aitools::set_restart_pending();
         tokio::spawn(async move {
             tokio::time::sleep(after).await;
-            while !super::aitools::idle() {
-                tokio::time::sleep(Duration::from_secs(15)).await;
-            }
+            wait_idle(IDLE_CAP, Duration::from_secs(15), super::aitools::idle).await;
             me.restart.store(true, Ordering::SeqCst);
             me.stop.send_replace(true);
         });
@@ -181,6 +195,15 @@ impl Control {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pending_restart_waits_for_idle_but_not_past_its_cap() {
+        let busy = || false;
+        assert!(!wait_idle(IDLE_CAP, Duration::from_secs(15), busy).await);
+        let n = std::sync::atomic::AtomicUsize::new(0);
+        let soon = || n.fetch_add(1, Ordering::SeqCst) >= 3;
+        assert!(wait_idle(IDLE_CAP, Duration::from_secs(15), soon).await);
+    }
 
     fn dir() -> PathBuf {
         let p = std::env::temp_dir().join(format!(
