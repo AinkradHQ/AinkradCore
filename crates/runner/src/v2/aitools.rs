@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ainkrad_proto::v2::Tool;
@@ -46,9 +46,36 @@ pub fn set_idle(f: impl Fn() -> bool + Send + Sync + 'static) {
     let _ = IDLE.set(Box::new(f));
 }
 
-/// True when nothing is running; a runner that never said is idle.
+static WORKING: AtomicUsize = AtomicUsize::new(0);
+static PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Held while something that must not be cut runs (an `ssh.exec`): the runner is not idle until it is dropped.
+pub struct Working;
+
+impl Drop for Working {
+    fn drop(&mut self) {
+        WORKING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+pub fn working() -> Working {
+    WORKING.fetch_add(1, Ordering::SeqCst);
+    Working
+}
+
+/// A restart is waiting for the runner to go idle: no new session or `ssh.exec` starts meanwhile, so it does get idle.
+pub fn restart_pending() -> bool {
+    PENDING.load(Ordering::SeqCst)
+}
+
+pub fn set_restart_pending() {
+    PENDING.store(true, Ordering::SeqCst);
+}
+
+/// True when nothing is running: no agent session holds a slot and no `ssh.exec` is in flight. A runner that never
+/// said about its sessions is idle.
 pub fn idle() -> bool {
-    IDLE.get().is_none_or(|f| f())
+    WORKING.load(Ordering::SeqCst) == 0 && IDLE.get().is_none_or(|f| f())
 }
 
 /// What goes in every heartbeat (`RunnerReport`): the install note, the home folder, the last-error note.
@@ -245,6 +272,51 @@ impl Drop for Busy {
     }
 }
 
+/// The most one download may be (the biggest tool is about 340 MB).
+const MAX_DOWNLOAD: u64 = 400 * 1024 * 1024;
+
+/// A member of a tarball that must not be unpacked: an absolute path, a `..` step, or anything that is not a plain
+/// file or folder (a link could point out of the install folder). `names` is `tar -tzf`, `verbose` is `tar -tzvf`.
+fn unsafe_member(names: &str, verbose: &str) -> Option<String> {
+    for n in names.lines() {
+        if n.starts_with('/') || n.split('/').any(|p| p == "..") {
+            return Some(n.to_owned());
+        }
+    }
+    for l in verbose.lines() {
+        if !matches!(l.chars().next(), Some('-' | 'd')) {
+            return Some(l.chars().take(80).collect());
+        }
+    }
+    None
+}
+
+/// Lists `file`'s members and refuses it when one is unsafe.
+async fn vet_tar(file: &Path) -> Result<(), String> {
+    let list = |flags: &'static str| {
+        let file = file.to_owned();
+        async move {
+            let out = tokio::process::Command::new("tar")
+                .arg(flags)
+                .arg(&file)
+                .output()
+                .await
+                .map_err(|e| format!("could not read the download: {e}"))?;
+            if !out.status.success() {
+                return Err("the download is not a tarball".to_owned());
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        }
+    };
+    let (names, verbose) = (list("-tzf").await?, list("-tzvf").await?);
+    match unsafe_member(&names, &verbose) {
+        Some(m) => Err(format!(
+            "the download has a member it must not unpack ({m}), so it was refused"
+        )),
+        None => Ok(()),
+    }
+}
+
 /// Downloads `build` to `file`, hashing as it goes, and checks the digest. `progress` gets 0..=100.
 async fn download(
     build: &Build,
@@ -253,6 +325,8 @@ async fn download(
 ) -> Result<(), String> {
     use std::io::Write;
     let client = reqwest::Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::limited(3))
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(25 * 60))
         .build()
@@ -264,6 +338,11 @@ async fn download(
         .and_then(|r| r.error_for_status())
         .map_err(|e| format!("could not download it: {}", e.without_url()))?;
     let total = res.content_length().unwrap_or(0);
+    if total > MAX_DOWNLOAD {
+        return Err(
+            "the download is larger than any AI tool should be, so it was refused".to_owned(),
+        );
+    }
     let mut out = std::fs::File::create(file).map_err(|e| e.to_string())?;
     let mut sha256 = digest::Context::new(&digest::SHA256);
     let mut sha512 = digest::Context::new(&digest::SHA512);
@@ -278,6 +357,11 @@ async fn download(
         sha512.update(&chunk);
         out.write_all(&chunk).map_err(|e| e.to_string())?;
         got += chunk.len() as u64;
+        if got > MAX_DOWNLOAD {
+            drop(out);
+            let _ = std::fs::remove_file(file);
+            return Err("the download grew past the size limit, so it was stopped".to_owned());
+        }
         if total > 0 {
             let p = (got * 100 / total).min(100) as u8;
             if p != last {
@@ -370,7 +454,10 @@ pub async fn install(tool: Tool, progress: &(dyn Fn(u8, &str) + Sync)) -> Result
         .await?;
         if pin.packed {
             report(91, &format!("Unpacking {label}"));
+            vet_tar(&file).await?;
             let status = tokio::process::Command::new("tar")
+                .arg("--no-same-owner")
+                .arg("--no-same-permissions")
                 .arg("-xzf")
                 .arg(&file)
                 .arg("-C")
@@ -496,6 +583,38 @@ mod tests {
             (Failed, Some("no network"))
         );
         assert!(install_of(&serde_json::json!({"percent":3})).is_none());
+    }
+
+    #[test]
+    fn a_tarball_member_that_could_leave_the_folder_is_refused() {
+        let ok_names = "package/bin/opencode\npackage/package.json\n";
+        let ok_verbose = "-rwxr-xr-x  0 0 0 100 Jan  1  1970 package/bin/opencode\ndrwxr-xr-x  0 0 0 0 Jan  1  1970 package/bin/\n";
+        assert_eq!(unsafe_member(ok_names, ok_verbose), None);
+        assert!(unsafe_member("/etc/passwd\n", ok_verbose).is_some());
+        assert!(unsafe_member("package/../../x\n", ok_verbose).is_some());
+        assert!(
+            unsafe_member(
+                ok_names,
+                "lrwxrwxrwx 0 0 0 0 Jan 1 1970 package/x -> /etc\n"
+            )
+            .is_some()
+        );
+        assert!(
+            unsafe_member(
+                ok_names,
+                "hrwxr-xr-x 0 0 0 0 Jan 1 1970 package/y link to package/x\n"
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn an_ssh_exec_in_flight_keeps_the_runner_from_being_idle() {
+        let before = idle();
+        let g = working();
+        assert!(!idle());
+        drop(g);
+        assert_eq!(idle(), before);
     }
 
     #[test]

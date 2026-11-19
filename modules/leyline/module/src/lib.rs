@@ -115,6 +115,8 @@ pub static MIGRATIONS: &[Migration] = &[
 // A key write is a secret write: importing needs the step-up like the Core's own secret writes.
 // Generating does not (the Core makes the key; nothing of the caller's is stored).
 const DESTRUCTIVE: &[(&str, &str)] = &[
+    // A reachability check makes the Core connect to an address a caller names: a live step-up, like pointing a host.
+    ("POST", "/hosts/check"),
     ("DELETE", "/hosts/{host}"),
     ("DELETE", "/keys/{key}"),
     ("POST", "/keys/import"),
@@ -137,7 +139,6 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
 // address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/hosts"),
-    ("POST", "/hosts/check"),
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
     ("POST", "/commands"),

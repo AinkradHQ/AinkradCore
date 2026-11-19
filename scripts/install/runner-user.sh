@@ -32,8 +32,8 @@ mkdir -p "$state"; chmod 0700 "$HOME/.ainkrad-runner" "$state"
 printf '%s\n' "$invite" | "$bin/ainkrad-runner" pair "https://$host" --invite - --state "$state" ||
   die "the runner did not pair. An invite works once and for 15 minutes: make a new one in the App"
 unset invite AINKRAD_PAIR_INVITE
-args=(connect --state "$state" --enable-pty)
-cmd="$bin/ainkrad-runner ${args[*]}"
+# Paths go into a unit file, a script and a crontab line: refuse anything that would need escaping there.
+case $bin$state in *[!A-Za-z0-9_./-]*) die "the install folder has a character this installer will not put in a service file (letters, digits, . _ / - only)" ;; esac
 
 via_systemd() {
   command -v systemctl >/dev/null || return 1
@@ -47,7 +47,7 @@ Description=Ainkrad runner (dials out to the Core)
 After=network-online.target
 [Service]
 Type=exec
-ExecStart=$cmd
+ExecStart="$bin/ainkrad-runner" connect --state "$state" --enable-pty
 Environment=PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
 Restart=on-failure
 RestartSec=5
@@ -61,11 +61,30 @@ UNIT
   return 0
 }
 
+# The cron fallback. The runner exits 75 to be restarted (a new policy, a new AI tool), which systemd's Restart= does for the unit; here
+# a small loop does. The loop holds a lock, so the every-five-minutes cron line only starts a copy when none is running (a watchdog
+# for a runner that was killed), and @reboot starts it after a restart.
 via_cron() {
   command -v crontab >/dev/null || return 1
-  local line="@reboot $cmd >>\$HOME/.ainkrad-runner/runner.log 2>&1"
-  ( crontab -l 2>/dev/null | grep -v 'ainkrad-runner connect' || true; echo "$line" ) | crontab - || return 1
-  setsid nohup $cmd >>"$HOME/.ainkrad-runner/runner.log" 2>&1 </dev/null &
+  local wrap=$HOME/.ainkrad-runner/run.sh log=$HOME/.ainkrad-runner/runner.log
+  cat >"$wrap" <<WRAP
+#!/bin/sh
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$HOME/.ainkrad-runner/run.lock"
+  flock -n 9 || exit 0
+fi
+while :; do
+  "$bin/ainkrad-runner" connect --state "$state" --enable-pty
+  [ "\$?" = 75 ] || exit \$?
+  sleep 1
+done
+WRAP
+  chmod 0700 "$wrap"
+  local keep
+  keep=$(crontab -l 2>/dev/null | grep -v 'ainkrad-runner/run.sh' || true)
+  { [ -z "$keep" ] || printf '%s\n' "$keep"; printf '@reboot "%s" >>"%s" 2>&1\n' "$wrap" "$log"
+    command -v flock >/dev/null 2>&1 && printf '*/5 * * * * "%s" >>"%s" 2>&1\n' "$wrap" "$log"; true; } | crontab - || return 1
+  setsid nohup "$wrap" >>"$log" 2>&1 </dev/null &
   return 0
 }
 
