@@ -9,7 +9,8 @@
 //! - **Modern algorithms only.** Ed25519 and ECDSA host keys; Ed25519, ECDSA and RSA user keys
 //!   (E0-9); russh's SHA-2 key exchanges, AEAD/CTR ciphers and SHA-2 MACs. An RSA user key signs
 //!   with `rsa-sha2-512` or `rsa-sha2-256` only (`rsa_hash`): a host that offers only `ssh-rsa`
-//!   (SHA-1) is refused, and no RSA host key is offered. The `rsa` crate is 0.10.0, the release that
+//!   (SHA-1) is refused, and no RSA host key is offered. The Mac-direct agent (`agent.rs`) does the
+//!   same: an RSA key signs only for sign-request flags 2 (SHA-256) or 4 (SHA-512), never flags 0. The `rsa` crate is 0.10.0, the release that
 //!   fixes RUSTSEC-2023-0071 (Marvin). No DSA (the `dsa` feature is off), no CBC, no compression.
 //!   `kex-strict` (Terrapin) is on in russh 0.65.2.
 //! - **The key.** Redeemed from the lease by this runner, held in `Zeroizing`/`ZeroizeOnDrop` types,

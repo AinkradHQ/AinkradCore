@@ -167,12 +167,18 @@ fn parse(pem: &str, pass: Option<&str>) -> Result<PrivateKey, ApiError> {
         return Err(refuse(UNSUPPORTED));
     }
     // The size is public on an encrypted key too: a weak key is refused before the passphrase.
-    if let Some(n) = rsa_import::modulus_bits(key.public_key())
-        && n < rsa_import::MIN_BITS
-    {
-        return Err(ApiError::bad_request(format!(
-            "This key is too weak ({n} bits). Make a new key instead."
-        )));
+    if let Some(n) = rsa_import::modulus_bits(key.public_key()) {
+        if n < rsa_import::MIN_BITS {
+            return Err(ApiError::bad_request(format!(
+                "This key is too weak ({n} bits). Make a new key instead."
+            )));
+        }
+        if n > rsa_import::MAX_BITS {
+            return Err(ApiError::bad_request(format!(
+                "This key is too large ({n} bits). Use a key of {} bits or fewer.",
+                rsa_import::MAX_BITS
+            )));
+        }
     }
     if !key.is_encrypted() {
         return Ok(key);
