@@ -615,3 +615,46 @@ async fn secrets_and_device_or_runner_admin_are_never_callable() {
         assert!(!hidden.contains(&a.op), "{} is allow-listed", a.op);
     }
 }
+
+/// A Code Mode session never inherits the person's app unlock: a route that needs it (`UNLOCKED`)
+/// is risky whatever the allow-list calls it, so even a `write` op waits for an approval.
+#[tokio::test]
+async fn an_unlock_only_route_needs_an_approval_even_when_listed_as_a_plain_write() {
+    let fx = fx().await;
+    ops(&fx, &[("createTerminal", Risk::Write)]);
+    let s = session(&fx, &["read", "agent", "terminal"]).await;
+    let approver = fx.enroll("approver", &["read", "agent", "approve"]).await;
+    let open = json!({"op": "createTerminal", "args": {"body": {"runner": s.runner}}});
+
+    let h = spawn(&fx, &s, open.clone());
+    let id = parked(&fx, &s).await;
+    let held = crate::ops_catalog::pending(&fx.app, &s.id).await.unwrap();
+    assert_eq!(held[0].tool, "ainkrad.createTerminal");
+    let none: i64 = sqlx::query_scalar("SELECT count(*) FROM core_terminals")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(none, 0, "nothing ran while it waited");
+    // Denied: refused, plainly.
+    assert_eq!(decide(&fx, &approver, &s, &id, false).await.0, StatusCode::OK);
+    assert_eq!(done(h).await, (false, "approval_denied".to_owned()));
+
+    // Approved: it is allowed through (the runner is not connected here, so the route itself
+    // answers; what matters is that it was dispatched after an approval, not refused for one).
+    let h = spawn(&fx, &s, open);
+    let id = parked(&fx, &s).await;
+    assert_eq!(decide(&fx, &approver, &s, &id, true).await.0, StatusCode::OK);
+    let (_, code) = done(h).await;
+    assert!(!code.starts_with("approval_") && code != "not_available", "{code}");
+}
+
+/// Every route that needs the unlock is risky in Code Mode, a module's included.
+#[test]
+fn every_unlocked_route_is_risky_in_code_mode() {
+    use crate::api::v1::scopes::{UNLOCKED, needs_unlock};
+    for (m, t) in UNLOCKED {
+        let path = t.replace('{', "").replace('}', "");
+        let method: Method = m.parse().unwrap();
+        assert!(needs_unlock(&method, &path, &[]), "{m} {t}");
+    }
+}

@@ -156,7 +156,7 @@ pub(super) async fn run(app: &App, (runner, session): (&str, &str), call: &ToolC
         body,
         approval: wait.map_or(lim.approval, |w| w.min(lim.approval)),
     };
-    if op.risk == Risk::Read {
+    if risk_of(app, op, &method) == Risk::Read {
         return send(app, op, &req, &lim, &method).await;
     }
     // 7. A write: claimed once per key (a retried script never writes twice).
@@ -225,6 +225,17 @@ struct Req<'a> {
     approval: Duration,
 }
 
+/// The risk a call runs under. A route that needs the app unlock (`scopes::UNLOCKED`, a module's
+/// `needs_unlock`) is always `Risky` here, whatever the allow-list says: a Code Mode session never
+/// inherits the person's unlock, so each such call waits for an explicit approval.
+fn risk_of(app: &App, op: &Op, method: &Method) -> Risk {
+    if crate::api::v1::scopes::needs_unlock(method, &op.path, &app.modules) {
+        Risk::Risky
+    } else {
+        op.risk
+    }
+}
+
 /// The principal of `session` as it is NOW, its scopes holding the op's, and its route allowed to
 /// it: a route that needs a step-up only as `risky` (the approver's stands for it).
 async fn authorize(app: &App, session: &str, op: &Op, method: &Method) -> Result<(), Done> {
@@ -247,7 +258,8 @@ async fn authorize(app: &App, session: &str, op: &Op, method: &Method) -> Result
             Some(op),
         ));
     }
-    if op.risk != Risk::Risky && crate::api::v1::scopes::destructive(method, &op.path, &app.modules)
+    if risk_of(app, op, method) != Risk::Risky
+        && crate::api::v1::scopes::destructive(method, &op.path, &app.modules)
     {
         return Err(deny(
             "not_available",
@@ -268,7 +280,7 @@ async fn guarded(
 ) -> Done {
     // A module route that asks a person itself (Leyline's gate) is not parked twice: its own
     // policy decides, and its approval is the same Core-held `cm_` request (T11).
-    if op.risk != Risk::Risky
+    if risk_of(app, op, method) != Risk::Risky
         || crate::api::v1::scopes::self_approved(method, &op.path, &app.modules)
     {
         return send(app, op, req, lim, method).await;
