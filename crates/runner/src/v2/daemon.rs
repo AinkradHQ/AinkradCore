@@ -247,6 +247,16 @@ pub async fn from_state(
         });
         // A tier that goes away mid-life ends the sessions that need it (E8a-09.3).
         agent.watch_isolation(std::time::Duration::from_secs(5));
+        // A tool install restarts the runner only when no session holds a slot.
+        let probe = Arc::clone(&agent);
+        super::aitools::set_idle(move || {
+            !probe.states().values().any(|s| {
+                matches!(
+                    s,
+                    ainkrad_proto::v2::AgentState::Running | ainkrad_proto::v2::AgentState::Waiting
+                )
+            })
+        });
         agent
     });
     // Whatever is enabled, a crash may have left a sign-in's scratch HOME behind.

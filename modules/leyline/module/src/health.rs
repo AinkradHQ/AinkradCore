@@ -411,6 +411,11 @@ async fn sweep_runs(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 // make `Leyline` carry an `Arc<OnceLock<App>>` like Lore if a test ever needs two servers' jobs.
 static APP: OnceLock<App> = OnceLock::new();
 
+/// The app the jobs run on, once attached.
+pub(crate) fn app() -> Option<&'static App> {
+    APP.get()
+}
+
 pub(crate) fn attach(app: &App) {
     let _ = APP.set(app.clone());
 }

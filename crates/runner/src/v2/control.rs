@@ -111,6 +111,20 @@ impl Control {
         });
     }
 
+    /// Restarts once nothing is running: an AI tool landed, and a session must not be cut for it.
+    /// Looks every 15 seconds until the runner is idle (no agent session holds a slot).
+    pub(super) fn restart_when_idle(self: &Arc<Self>, after: Duration) {
+        let me = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(after).await;
+            while !super::aitools::idle() {
+                tokio::time::sleep(Duration::from_secs(15)).await;
+            }
+            me.restart.store(true, Ordering::SeqCst);
+            me.stop.send_replace(true);
+        });
+    }
+
     /// `runner.policy`: validate, check what it needs, save, and restart when it changes what runs.
     pub async fn set_policy(
         self: &Arc<Self>,
@@ -157,7 +171,7 @@ impl Control {
         let me = Arc::clone(self);
         self.tools.install(req, move |tool| {
             if me.active.agents && super::aitools::is_ai_tool(tool) {
-                me.restart_after(Duration::from_secs(5));
+                me.restart_when_idle(Duration::from_secs(5));
             }
         })
     }

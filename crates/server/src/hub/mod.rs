@@ -967,6 +967,15 @@ impl Hub {
         if let Some(isolation) = heartbeat.isolation {
             r.hello.isolation = Some(isolation);
         }
+        // Its install, home and last error: what the runner says now replaces the earlier word.
+        if let Some(rep) = heartbeat.report {
+            let facts = r.hello.facts.get_or_insert_with(Default::default);
+            facts.tool_install = rep.install;
+            facts.last_error = rep.last_error;
+            if rep.home.is_some() {
+                facts.home = rep.home;
+            }
+        }
     }
 
     /// A frame from the runner on a command stream. A frame seen before is dropped.

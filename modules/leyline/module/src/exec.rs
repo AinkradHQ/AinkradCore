@@ -227,6 +227,22 @@ pub(crate) async fn probe(
         .map_err(|e| why(e.code))
 }
 
+/// Make Runner's steps: the gate re-checked, then one non-interactive `ssh.exec` of `step` (up to
+/// 20 minutes: an installer downloads and unpacks a release).
+pub(crate) async fn once(app: &App, auth: &Authorized, step: &str) -> Result<ExecResult, String> {
+    let link = checked(app, auth).await.map_err(|e| e.message)?;
+    let (runner, exec) = build(app, auth, step, Duration::from_secs(20 * 60), link).await?;
+    let sent = app
+        .hub
+        .dispatch_ssh_exec(&runner, exec)
+        .map_err(|e| why(e.code))?;
+    match sent.outcome().await {
+        Ok(Body::Result(Reply::SshExec(r))) => Ok(r),
+        Ok(_) => Err("the runner answered something else".to_owned()),
+        Err(e) => Err(why(e.code)),
+    }
+}
+
 /// One `ssh.exec` of `step` on the authorised host: leases, hops, dispatch, the answer.
 ///
 /// A stop signal ends the wait for the answer: the runner finishes the step on its own limit

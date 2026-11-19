@@ -587,7 +587,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     if agents_enabled {
         let c = Arc::clone(&control);
         tokio::spawn(super::aitools::keep_current(move || {
-            c.restart_after(Duration::from_secs(2))
+            c.restart_when_idle(Duration::from_secs(2))
         }));
     }
     match super::daemon::from_state(&state, exec, pty, agents, Some(control), tls, stopping).await {
@@ -719,6 +719,7 @@ async fn agents(
     share_history: bool,
 ) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
+    super::aitools::set_home(work.clone());
     let mut executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
     // Every run of this driver goes through its process sandbox (`ProcessSandbox` below), which
     // refuses a run it cannot confine and marks the run's environment once it has; the executor

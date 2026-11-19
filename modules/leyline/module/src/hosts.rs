@@ -69,6 +69,11 @@ pub struct HostView {
     pub updated_at: String,
     /// The projects it is attached to, with the role in each.
     pub projects: Vec<crate::attach::HostProject>,
+    /// How it answered the Core's last reachability check (an SSH banner, no login); absent for a host the
+    /// Core cannot reach directly (behind a jump host or a runner) or before the first check.
+    pub reach: Option<crate::reach::HostReach>,
+    /// How Make runner stands on this host (`installing`, `failed`, `paired`), with how it installs and why it failed.
+    pub runner_install: Option<crate::makerunner::InstallState>,
 }
 
 fn view(r: &sqlx::sqlite::SqliteRow) -> Result<HostView, sqlx::Error> {
@@ -95,6 +100,8 @@ fn view(r: &sqlx::sqlite::SqliteRow) -> Result<HostView, sqlx::Error> {
         created_at: text("created_at")?,
         updated_at: text("updated_at")?,
         projects: Vec::new(),
+        reach: None,
+        runner_install: None,
     })
 }
 
@@ -338,6 +345,18 @@ pub(crate) async fn list(
         let (mine, rest): (Vec<_>, Vec<_>) = all.into_iter().partition(|(id, _)| *id == h.id);
         h.projects = mine.into_iter().map(|(_, p)| p).collect();
         all = rest;
+    }
+    let mut states = crate::makerunner::states(&app.pool).await?;
+    for h in &mut out {
+        if let Some(i) = states.iter().position(|(id, _)| *id == h.id) {
+            h.runner_install = Some(states.swap_remove(i).1);
+        }
+    }
+    let mut reach = crate::reach::all(&app.pool).await?;
+    for h in &mut out {
+        if let Some(i) = reach.iter().position(|(id, _)| *id == h.id) {
+            h.reach = Some(reach.swap_remove(i).1);
+        }
     }
     out.iter_mut().for_each(|h| for_reader(&me, h));
     Ok(Json(out))

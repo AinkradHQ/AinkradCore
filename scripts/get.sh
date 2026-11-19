@@ -599,9 +599,10 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     printf '   A piped script cannot ask you questions through sudo (the terminal is not handed to it), so it would hang at the\n   first question. Nothing was changed. Run this instead:\n\n     %s\n\n' "$UI_RERUN" >&2
     exit 2
   fi
-  runner=0 invite='' _prev=''
+  runner=0 invite='' _prev='' user=0
   for a in "$@"; do
     [ "$a" != --runner ] || runner=1
+    [ "$a" != --user ] || user=1
     [ "$_prev" != --invite ] || invite=$a
     _prev=$a
   done
@@ -616,6 +617,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
       *) die "--runner needs --invite <invite> (single use, 15 minutes): make one in the App, Add device, a runner" ;;
     esac
     case $invite in *[!A-Za-z0-9_./:-]*) die "--invite is a runner invite from the App: <host>/<fingerprint>.<secret>" ;; esac
+  elif [ "$user" = 1 ]; then die "--user is for --runner (a runner that needs no root)"
   elif [ -n "$invite" ]; then die "--invite is for --runner (an invite for a runner on this machine)"; fi
   harden=0
   case ${AINKRAD_HARDEN:-} in '' | no) ;; yes) harden=1 ;; *) die "AINKRAD_HARDEN must be yes or no (got '$AINKRAD_HARDEN')" ;; esac
@@ -628,15 +630,23 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     *) die "no build for $(uname -m) (x86_64 and arm64 only)" ;;
   esac
   if [ "${AINKRAD_GET_VERIFY_ONLY:-}" != 1 ]; then
+    if [ "$user" = 1 ]; then # a runner for this user only: no root, no apt, no firewall
+      ui_step 1 "$(ui_rname 1)" "A runner for your own user: needs Linux, curl, tar and minisign. No root, nothing system-wide."
+      [ "$(uname -s)" = Linux ] || die "this is $(uname -s); a user runner installs on Linux only"
+      [ "$(id -u)" != 0 ] || die "--user is for a normal user; as root leave it out"
+      for _t in curl tar minisign; do command -v "$_t" >/dev/null || die "$_t is needed to verify and unpack the release and is not installed (no root, so it is not installed for you)"; done
+      ui_ok "This is Linux $(uname -m) and you are not root: a user runner can be installed"
+    else
     ui_step 1 "$(ui_rname 1)" "Needs Linux with systemd, root, and Debian or Ubuntu (apt). Asks your DNS name and email, then checks port 443 and that the name points here. Nothing is installed yet."
     [ "$(uname -s)" = Linux ] || die "this is $(uname -s); Core installs on Linux only"
     [ "$(id -u)" = 0 ] || die "run it as root: sudo sh -c \"\$(curl -fsSL ...)\" (see the command printed below)"
     [ -d /run/systemd/system ] || die "systemd is not running here (a container without systemd?)"
     command -v apt-get >/dev/null || die "apt-get not found: only Debian and Ubuntu are supported by this installer"
     ui_ok "This is Linux $(uname -m) with systemd and apt, and you are root: supported"
+    fi
     # The two questions and everything this machine can tell about itself come BEFORE anything is installed (N6): a busy or
     # closed port 443, or a DNS name that does not point here, stops here, with nothing installed.
-    if [ "$runner" = 0 ]; then # a runner only dials out: it needs no port and no name
+    if [ "$runner" = 0 ] && [ "$user" = 0 ]; then # a runner only dials out: it needs no port and no name
       ui_note "The Core is served over HTTPS with a free Let's Encrypt certificate, so it needs a public DNS name that points at this machine."
       ui_note "There is no IP-only or self-signed mode yet. No name? Any free dynamic-DNS name works: create it first, then answer."
       pc_ask AINKRAD_HOSTNAME "What is the public DNS name of this Core?" "core.yourdomain.com" pc_valid_hostname
@@ -647,6 +657,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
       export AINKRAD_DNS_CHECKED=1 # install.sh does not look it up a second time
     fi
 
+    if [ "$user" = 0 ]; then
     pkgs='ca-certificates curl minisign bubblewrap qrencode openssl iproute2 git unzip jq ripgrep build-essential xz-utils zsh' persist=''
     # Firewall tooling only when hardening was asked for. iptables-persistent clashes with ufw: with ufw installed nothing is
     # added that could remove it; APT::Get::Remove=false makes apt refuse any removal instead of doing it.
@@ -659,6 +670,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     ui_run "Installing the prerequisite packages with apt (nothing is ever removed)" apt_install ||
       die "could not install the prerequisites with apt-get (the end of its output is above)"
     command -v minisign >/dev/null || die "minisign is not available on this distribution; it is required to verify the release"
+    fi
   fi
 
   W=$(mktemp -d)
@@ -707,8 +719,9 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   UI_STATE="The programs in /usr/local/bin may be partly replaced (the install is all or none and restores the previous set when it fails, but a stop in the middle can leave it half done). Run the command again to finish."
   ui_step 4 "Install the programs" "ainkrad-core-server, ainkrad-runner, ainkradctl and ainkrad-ptyhost go to /usr/local/bin as one set (all or none)."
   # release/install.sh verifies again, with the key pinned here (never the bundle's own copy), then installs atomically.
-  ui_run "Installing the four programs to /usr/local/bin" \
-    bash "$INST/scripts/release/install.sh" --from "$W" --pubkey "$W/release.pub" --prefix /usr/local --target "$TARGET" ||
+  if [ "$user" = 1 ]; then PREFIX=$HOME/.local; else PREFIX=/usr/local; fi
+  ui_run "Installing the programs to $PREFIX/bin" \
+    bash "$INST/scripts/release/install.sh" --from "$W" --pubkey "$W/release.pub" --prefix "$PREFIX" --target "$TARGET" ||
     die "installing the programs failed (the previous set, if any, was restored)"
   UI_STATE="The Core programs are in /usr/local/bin; the guided installer did not finish."
 
@@ -718,7 +731,9 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   export AINKRAD_FROM_GET=1 AINKRAD_STEP_BASE=0 AINKRAD_STEP_TOTAL=8 AINKRAD_T0="$UI_T0" AINKRAD_RERUN="$UI_RERUN"
   if [ "$UI_FANCY" = 1 ] && [ "$UI_LIVE" = 1 ]; then printf '\r\033[K'; export AINKRAD_UI_LIVE=1; UI_LIVE=0; fi # install.sh carries on from this progress line
   trap 'got=130' INT; trap 'got=143' TERM
-  if [ "$runner" = 1 ]; then # only a runner: no Core, no questions
+  if [ "$runner" = 1 ] && [ "$user" = 1 ]; then # a runner for this user: no root
+    AINKRAD_PAIR_INVITE=$invite bash "$INST/scripts/install/runner-user.sh" --binary "$HOME/.local/bin" </dev/null || rc=$?
+  elif [ "$runner" = 1 ]; then # only a runner: no Core, no questions
     AINKRAD_PAIR_INVITE=$invite bash "$INST/scripts/install/runner-only.sh" --binary /usr/local/bin </dev/null || rc=$?
   elif ( : </dev/tty ) 2>/dev/null; then bash "$INST/scripts/install.sh" --binary /usr/local/bin "$@" </dev/tty || rc=$?
   else bash "$INST/scripts/install.sh" --binary /usr/local/bin "$@" </dev/null || rc=$?; fi
