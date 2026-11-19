@@ -49,6 +49,13 @@ pub struct ProviderAccount {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
     pub runner: Option<String>,
+    /// Whether a model the person switched off for this account is refused in its sessions: true for
+    /// an API-key account (its gateway grants only the models left on), false for a subscription or
+    /// runner-bound login, where the harness talks to its provider itself and the Core only skips the
+    /// account when a session asks for a switched-off model at its start. The app shows the
+    /// limit as advice when it is false.
+    #[schema(required = false)]
+    pub models_enforced: bool,
 }
 
 /// An account's health counters, as the scheduler keeps them.
@@ -147,6 +154,7 @@ impl ProviderAccount {
 
 impl From<acc::Account> for ProviderAccount {
     fn from(a: acc::Account) -> Self {
+        let models_enforced = !crate::store::account_keys::subscription_provider(&a.provider);
         Self {
             id: a.id,
             provider: a.provider,
@@ -176,6 +184,7 @@ impl From<acc::Account> for ProviderAccount {
             month_limit_usd_micros: None,
             usage: None,
             runner: None,
+            models_enforced,
         }
     }
 }
