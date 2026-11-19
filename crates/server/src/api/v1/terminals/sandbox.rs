@@ -99,9 +99,8 @@ async fn project_session(
     })
 }
 
-/// Whether a runner the hub knows has a hello that does NOT say it honours `PtyOpen::sandbox`. A
-/// runner the hub does not know is not this check's to refuse: the open answers it (no such
-/// runner) once the request is validated.
+/// Whether `runner` is connected with a hello that does NOT say it honours `PtyOpen::sandbox`.
+/// A runner that is not connected has no hello to judge: the open stops later as unknown or offline.
 fn runner_predates_sandboxes(app: &App, runner: &str) -> bool {
     app.hub.runners().get(runner).is_some_and(|r| {
         !r.drivers

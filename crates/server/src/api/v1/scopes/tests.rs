@@ -426,6 +426,9 @@ fn the_danger_list_is_the_d4_list() {
         ("POST", "/api/v1/secrets/{id}/reveal"),
         ("POST", "/api/v1/secrets/{id}/leases"),
         ("POST", "/api/v1/secret-groups/{id}/leases"),
+        // E6: only the Mac app that enrolled a runner may call it the bundled one, which alone can
+        // be given a real shell; a live step-up keeps a stolen routine key from claiming it.
+        ("POST", "/api/v1/runners/{id}/bundled"),
     ];
     want.sort();
     assert_eq!(have, want);
