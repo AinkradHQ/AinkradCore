@@ -150,11 +150,20 @@ async fn the_ai_order_lists_accounts_reorders_them_and_keeps_agent_overrides() {
         .await
         .unwrap();
     let o = order::get(p, 1).await.unwrap();
-    assert_eq!((o.overrides.len(), o.overrides[0].items[0].account), (1, a2));
+    assert_eq!(
+        (o.overrides.len(), o.overrides[0].items[0].account),
+        (1, a2)
+    );
     assert_eq!(ids(&o), [s1, a1, a2]);
-    order::clear_agent(p, 1, "agent-x", "d_x", BY).await.unwrap();
+    order::clear_agent(p, 1, "agent-x", "d_x", BY)
+        .await
+        .unwrap();
     assert!(order::get(p, 1).await.unwrap().overrides.is_empty());
-    assert!(order::clear_agent(p, 1, "agent-x", "d_x", BY).await.is_err());
+    assert!(
+        order::clear_agent(p, 1, "agent-x", "d_x", BY)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

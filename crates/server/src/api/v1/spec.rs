@@ -32,10 +32,10 @@ use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
-    accounts, agents, ai_order, audit, budgets, chains, connections, corehealth, costs, devices, events,
-    handshake, lockouts, me, pair, pairing, passkey, projects, projects_github, runner_control,
-    runners, secret_groups, secrets, session, settings, stepup, system, terminals, ticket, types,
-    websession,
+    accounts, agents, ai_order, audit, budgets, chains, connections, corehealth, costs, devices,
+    events, handshake, lockouts, me, pair, pairing, passkey, projects, projects_github,
+    runner_control, runners, secret_groups, secrets, session, settings, stepup, system, terminals,
+    ticket, types, websession,
 };
 
 #[derive(OpenApi)]

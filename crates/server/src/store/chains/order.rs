@@ -20,7 +20,9 @@ use serde_json::json;
 use sqlx::SqliteConnection;
 use sqlx::sqlite::SqlitePool;
 
-use super::{ChainEntry, EntrySpec, audit, check_entries, find, load, refused, shown, write_entries};
+use super::{
+    ChainEntry, EntrySpec, audit, check_entries, find, load, refused, shown, write_entries,
+};
 use crate::store::pools;
 use crate::store::secrets::Error;
 
@@ -146,7 +148,7 @@ async fn next_id(conn: &mut SqliteConnection, table: &str) -> Result<i64, Error>
         .await?)
 }
 
-/// The hidden pool that holds `account` alone; made when missing. 
+/// The hidden pool that holds `account` alone; made when missing.
 pub(crate) async fn pool_for(
     conn: &mut SqliteConnection,
     user: i64,
@@ -156,10 +158,11 @@ pub(crate) async fn pool_for(
     now: &str,
 ) -> Result<i64, Error> {
     // Accounts are the server's (the account rows carry no per-user owner), so only existence is checked.
-    let provider: Option<String> = sqlx::query_scalar("SELECT provider FROM core_accounts WHERE id = ?")
-        .bind(account)
-        .fetch_optional(&mut *conn)
-        .await?;
+    let provider: Option<String> =
+        sqlx::query_scalar("SELECT provider FROM core_accounts WHERE id = ?")
+            .bind(account)
+            .fetch_optional(&mut *conn)
+            .await?;
     let Some(provider) = provider else {
         return refused("not_found", format!("no account {account}"));
     };
@@ -248,7 +251,11 @@ pub async fn set(
     if agent.is_some_and(|a| !pools::valid_agent(a)) {
         return refused("bad_request", "an agent id is 1 to 64 of [A-Za-z0-9._:-]");
     }
-    if specs.iter().enumerate().any(|(i, s)| specs[..i].iter().any(|t| t.account == s.account)) {
+    if specs
+        .iter()
+        .enumerate()
+        .any(|(i, s)| specs[..i].iter().any(|t| t.account == s.account))
+    {
         return refused("bad_request", "an account is in the order once");
     }
     let mut tx = crate::store::begin_write(pool).await?;
@@ -265,7 +272,11 @@ pub async fn set(
     let (chain, was, created) = match agent {
         None => match default_chain(&mut tx, user).await? {
             Some(id) => (id, Some(find(&mut tx, id).await?.entries), false),
-            None => (new_chain(&mut tx, user, "ai-order", true, now).await?, None, true),
+            None => (
+                new_chain(&mut tx, user, "ai-order", true, now).await?,
+                None,
+                true,
+            ),
         },
         Some(a) => match agent_chain(&mut tx, user, a).await? {
             Some((id, true)) => (id, Some(find(&mut tx, id).await?.entries), false),
@@ -300,7 +311,11 @@ pub async fn set(
     if let Some(was) = was {
         details["from"] = shown(&was);
     }
-    let action = if created { "chain.created" } else { "chain.updated" };
+    let action = if created {
+        "chain.created"
+    } else {
+        "chain.updated"
+    };
     audit(&mut tx, actor, action, chain, details).await?;
     let items = flatten(&mut tx, chain).await?;
     tx.commit().await?;
