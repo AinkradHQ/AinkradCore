@@ -32,10 +32,10 @@ use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
-    accounts, agents, audit, budgets, chains, connections, corehealth, coreprefs, costs, devices, events,
-    handshake, lockouts, me, pair, pairing, passkey, projects, projects_github, runner_control,
-    runners, secret_groups, secrets, session, settings, stepup, system, terminals, ticket, types,
-    websession,
+    accounts, activity, agents, audit, budgets, chains, connections, corehealth, coreprefs, costs,
+    devices, events, handshake, lockouts, me, pair, pairing, passkey, projects, projects_github,
+    runner_control, runners, secret_groups, secret_reveal, secrets, session, settings, stepup,
+    system, terminals, ticket, types, websession,
 };
 
 #[derive(OpenApi)]
@@ -72,6 +72,8 @@ use super::{
         pairing::reject,
         me::me,
         audit::list,
+        activity::audit_stats,
+        activity::ops_history,
         system::host,
         corehealth::get,
         coreprefs::get,
@@ -187,6 +189,8 @@ use super::{
         secrets::delete,
         secrets::lease,
         secrets::redeem,
+        secret_reveal::reveal,
+        secret_reveal::export,
         secret_groups::list,
         secret_groups::create,
         secret_groups::update,

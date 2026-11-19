@@ -29,6 +29,7 @@ mod agents;
 #[cfg(feature = "test-support")]
 pub use agents::create as create_agent_for_tests;
 mod accounts;
+mod activity;
 mod audit;
 mod budgets;
 mod chains;
@@ -53,6 +54,7 @@ mod runner_control;
 mod runners;
 pub mod scopes;
 mod secret_groups;
+mod secret_reveal;
 mod secrets;
 pub mod session;
 mod settings;
@@ -210,6 +212,8 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/events/latest", get(events::latest))
         .route("/api/v1/ws-ticket", post(ticket::issue))
         .route("/api/v1/audit", get(audit::list))
+        .route("/api/v1/audit/stats", get(activity::audit_stats))
+        .route("/api/v1/ops/history", get(activity::ops_history))
         .route("/api/v1/metrics", get(crate::health::metrics::get))
         .route("/api/v1/runners", get(runners::list))
         .route("/api/v1/runners/{id}", get(runners::get))
@@ -499,6 +503,8 @@ pub fn router(app: App) -> Router {
             put(secrets::rotate).delete(secrets::delete),
         )
         .route("/api/v1/secrets/{id}/leases", post(secrets::lease))
+        .route("/api/v1/secrets/{id}/reveal", post(secret_reveal::reveal))
+        .route("/api/v1/secrets/export", post(secret_reveal::export))
         .route("/api/v1/secret-leases/redeem", post(secrets::redeem))
         .route(
             "/api/v1/secret-groups",
