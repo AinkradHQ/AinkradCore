@@ -159,9 +159,8 @@ async fn the_contract_marks_every_chain_route_admin_and_no_write_destructive() {
             .replace("agent-9", "{agent}");
         let op = &spec["paths"][template.as_str()][m.as_str().to_lowercase()];
         assert_eq!(op["x-ainkrad-scope"], "admin", "{m} {template}");
-        assert_eq!(
-            op["x-ainkrad-destructive"] == json!(true),
-            false,
+        assert!(
+            op["x-ainkrad-destructive"] != json!(true),
             "{m} {template}: no chain route is destructive"
         );
     }
