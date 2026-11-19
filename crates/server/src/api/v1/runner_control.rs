@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use ainkrad_core::audit::{AuditEntity, NewAuditEvent};
 use ainkrad_proto::v2::{
-    Body, Command, ErrorCode, MAX_AGENT_CAPACITY, Reply, RunnerPolicy, StreamError, Tool,
-    ToolOpState, ToolsInstall, ToolsStatus, ToolsStatusReq,
+    Body, Command, ErrorCode, MAX_AGENT_CAPACITY, Reply, RunnerPolicy, RunnerUpdate, StreamError,
+    Tool, ToolOpState, ToolsInstall, ToolsStatus, ToolsStatusReq,
 };
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -35,6 +35,7 @@ use crate::scheduler::iso_of_unix;
 /// Audit actions and event kinds (`store::kinds`).
 pub const POLICY_SET: &str = "runner.policy_set";
 pub const TOOL_INSTALL: &str = "runner.tool_install";
+pub const UPDATE_REQUESTED: &str = "runner.update_requested";
 pub const POLICY_EVENT: &str = "runner.policy";
 
 /// How long the runner gets to check and save a policy (its agent check runs a self-test).
@@ -495,4 +496,51 @@ pub async fn get_operation(
         .filter(|o| o.runner == id)
         .map(|o| Json(o.view()))
         .ok_or_else(|| ApiError::not_found("no such operation"))
+}
+
+#[utoipa::path(post, path = "/api/v1/runners/{id}/update", operation_id = "updateRunner",
+    tag = "runners",
+    params(("id" = String, Path, description = "The runner's device id, `d_…`")),
+    responses((status = 202, description = "The runner was asked to update to this Core's version (audited as \
+        `runner.update_requested`). Its root-side updater verifies the signed release, swaps the programs and \
+        restarts the runner; `GET /runners` shows `updating` until it is back on the new version, and rolls back by \
+        itself when it does not stay up. Linux runners set up by the installer only: a Mac runner updates with the \
+        app. 409 `runner_offline`, `unsupported_command`; 503 `runner_busy`; 504 `runner_lost`. Needs `admin` and a \
+        step-up")))]
+pub async fn update_runner(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let d = one(&app, &id).await?;
+    if app.hub.runners().get(&id).and_then(|r| r.os.as_deref()) == Some("macos") {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "unsupported_command",
+            "a Mac runner updates with the app",
+        ));
+    }
+    let proof = app.hub.admin_elevation(&me);
+    let version = env!("CARGO_PKG_VERSION").to_owned();
+    ask(
+        &app,
+        &id,
+        Command::RunnerUpdate(RunnerUpdate {
+            version: version.clone(),
+        }),
+        proof,
+        Duration::from_secs(20),
+    )
+    .await
+    .map_err(|e| failed(&e))?;
+    crate::runner_update::note_asked(&id, crate::runner_update::unix_now());
+    audit(
+        &app,
+        &me,
+        d.seq,
+        UPDATE_REQUESTED,
+        json!({"runner": id, "to": version}),
+    )
+    .await?;
+    Ok(StatusCode::ACCEPTED)
 }

@@ -618,7 +618,10 @@ impl Session {
                 });
                 None
             }
-            Command::RunnerPolicy(_) | Command::ToolsInstall(_) | Command::ToolsStatus(_) => {
+            Command::RunnerPolicy(_)
+            | Command::ToolsInstall(_)
+            | Command::ToolsStatus(_)
+            | Command::RunnerUpdate(_) => {
                 self.start_control(stream, command)
             }
             // The sign-in driver's, or (an op of a newer Core) `unsupported_command`.
@@ -824,6 +827,7 @@ impl Session {
                 Command::ToolsStatus(r) => {
                     control.tools.status(&r.operation).map(Reply::ToolsStatus)
                 }
+                Command::RunnerUpdate(r) => control.update(&r).map(Reply::RunnerUpdate),
                 _ => return,
             };
             let body = match answer {
