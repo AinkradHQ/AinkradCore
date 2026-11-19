@@ -71,6 +71,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/metrics", "admin"),
     ("POST", "/api/v1/pairings", "admin"),
     ("POST", "/api/v1/pairings/invites", "admin"),
+    ("POST", "/api/v1/runners/{id}/bundled", "admin"),
     ("GET", "/api/v1/pairings/{id}", "admin"),
     ("POST", "/api/v1/pairings/{id}/approve", "admin"),
     ("POST", "/api/v1/pairings/{id}/reject", "admin"),
@@ -225,7 +226,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/terminals/{id}/local", "terminal"),
     ("DELETE", "/api/v1/terminals/{id}/local", "terminal"),
     ("POST", "/api/v1/terminals/{id}/signal", "terminal"),
-    // A preview of the screen's last rows: normal unlock and the terminal scope, no step-up.
+    // A preview of a sandbox terminal's last screen rows: the terminal scope and the caller's own
+    // terminal, no per-action step-up (it attaches nothing). At integration it joins E1's
+    // `UNLOCKED` gate, so a locked Core answers `unlock_required`.
     ("GET", "/api/v1/terminals/{id}/tail", "terminal"),
     ("DELETE", "/api/v1/terminals/{id}", "terminal"),
     ("GET", "/api/v1/agent-sessions", "agent"),
@@ -270,6 +273,7 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/pairings"),
     // It hands out a credential that enrols a device with no second approval.
     ("POST", "/api/v1/pairings/invites"),
+    ("POST", "/api/v1/runners/{id}/bundled"),
     ("POST", "/api/v1/pairings/{id}/approve"),
     ("POST", "/api/v1/pairings/{id}/reject"),
     ("PUT", "/api/v1/settings/{scope}/{key}"),

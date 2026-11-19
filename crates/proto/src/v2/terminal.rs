@@ -553,4 +553,37 @@ mod sandbox_tests {
         let j = serde_json::to_string(&o).unwrap();
         assert!(!j.contains("sandbox"), "{j}");
     }
+
+    /// C2: what a client may put in a terminal's environment.
+    #[test]
+    fn a_terminals_environment_cannot_steer_the_loader() {
+        for ok in ["EDITOR", "http_proxy", "_X", "LANGUAGE", "GIT_AUTHOR_NAME"] {
+            assert!(crate::v2::valid_terminal_env(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "1A",
+            "A-B",
+            "A B",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "GCONV_PATH",
+            "LOCPATH",
+            "NLSPATH",
+            "HOSTALIASES",
+            "BASH_ENV",
+            "NODE_OPTIONS",
+            "HOME",
+            "PATH",
+            "TMPDIR",
+            "SHELL",
+            "AINKRAD_RUNNER",
+        ] {
+            assert!(!crate::v2::valid_terminal_env(bad), "{bad}");
+        }
+        assert!(!crate::v2::valid_terminal_env(&"A".repeat(65)));
+        // The secret-name rule keeps refusing the same loader names.
+        assert!(!crate::v2::valid_secret_var("GCONV_PATH") && !crate::v2::valid_secret_var("LD_X"));
+    }
 }

@@ -43,11 +43,6 @@ pub struct NewInviteBody {
     /// active at the claim with the `runner` scope, and needs no check code.
     #[serde(default)]
     pub kind: Option<String>,
-    /// A `runner` invite the Mac app mints for the runner inside its own bundle and feeds to it
-    /// itself (never shown). Only this kind can later be given a real shell (`sandbox: real`):
-    /// the Core records it on the pairing. Needs a macOS app device as the caller (400 otherwise).
-    #[serde(default)]
-    pub bundled: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -256,19 +251,6 @@ pub async fn create_invite(
     if scopes.iter().any(|s| !me.device.scopes.contains(s)) {
         return Err(forbidden_scope());
     }
-    if b.bundled
-        && (kind != "runner"
-            || me.device.kind != "device"
-            || !me
-                .device
-                .platform
-                .as_deref()
-                .is_some_and(|p| p.eq_ignore_ascii_case("macos")))
-    {
-        return Err(ApiError::bad_request(
-            "only a macOS app can mint a bundled runner invite",
-        ));
-    }
     let new = NewPairing {
         kind,
         name: &b.name,
@@ -284,12 +266,6 @@ pub async fn create_invite(
             sqlx::Error::InvalidArgument(why) => ApiError::conflict(why),
             e => e.into(),
         })?;
-    if b.bundled {
-        sqlx::query("UPDATE core_pairings SET bundled = 1 WHERE id = ?")
-            .bind(&created.id)
-            .execute(&app.pool)
-            .await?;
-    }
     Ok(Json(InviteCreated {
         pairing_id: Some(created.id),
         link: Some(invite_link(
@@ -397,4 +373,50 @@ pub async fn reject(
     };
     decision(gov::reject_pairing(&app.pool, &id, by, app.clock.unix()).await?)?;
     view(&app, &id).await
+}
+
+/// Who may be told apart as "the runner bundled in this Mac's app" (E6, L1): the pairing row of
+/// `runner` after the Mac app, which reads that runner's own enrolment file on its local disk
+/// (a remote runner has none there), attests it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BundledAttested {
+    pub runner: String,
+    pub bundled: bool,
+}
+
+#[utoipa::path(post, path = "/api/v1/runners/{id}/bundled", operation_id = "attestBundledRunner",
+    tag = "pairing", params(("id" = String, Path)),
+    responses((status = 200, description = "The runner is recorded as the one bundled with the \
+        calling Mac app, which alone can then be given a real shell. Only a macOS app device that \
+        minted the invite that enrolled the runner may say so (403 otherwise); the app does it \
+        only for the runner whose enrolment file it reads on its own disk. Needs `admin` and a \
+        step-up", body = BundledAttested)))]
+pub async fn attest_bundled(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> ApiResult<BundledAttested> {
+    let mac = me
+        .device
+        .platform
+        .as_deref()
+        .is_some_and(|p| p.eq_ignore_ascii_case("macos"));
+    if me.device.kind != "device" || !mac {
+        return Err(forbidden_scope());
+    }
+    let done = sqlx::query(
+        "UPDATE core_pairings SET bundled = 1 WHERE kind = 'runner' AND device_id = ? \
+         AND created_by = ? AND status = 'approved'",
+    )
+    .bind(&id)
+    .bind(&me.device.id)
+    .execute(&app.pool)
+    .await?;
+    if done.rows_affected() == 0 {
+        return Err(forbidden_scope());
+    }
+    Ok(Json(BundledAttested {
+        runner: id,
+        bundled: true,
+    }))
 }

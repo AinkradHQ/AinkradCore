@@ -367,6 +367,8 @@ fn agents_enabled(args: &[&str]) -> bool {
 pub async fn connect_main(args: &[&str]) -> ExitCode {
     let run_enabled = args.contains(&"--enable-exec");
     let pty_flag = args.contains(&"--enable-pty");
+    // Set only by the Mac app's LaunchAgent: this runner may open a real (host-view) shell.
+    let bundled = args.contains(&"--bundled");
     let agents_flag = agents_enabled(args);
     // Off unless asked: the Brain may then read this runner's harness history (`history.read`).
     let share_history = args.contains(&"--share-history");
@@ -397,7 +399,11 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         .filter(|a| {
             !matches!(
                 *a,
-                "--enable-exec" | "--enable-pty" | "--enable-agents" | "--share-history"
+                "--enable-exec"
+                    | "--enable-pty"
+                    | "--enable-agents"
+                    | "--share-history"
+                    | "--bundled"
             ) && !a.starts_with("--terminal-sandbox=")
                 && !a.starts_with("--terminal-network=")
         })
@@ -459,7 +465,10 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         stop_signal.send_replace(true);
     });
     // Held until the runner stops: the proxy terminals reach through their socket dir.
-    let _terminal_proxy = if pty_enabled && terminal_network == "filtered" {
+    // Linux private-root terminals reach the network through it too unless the runner is set to
+    // `none`, so it also starts for the default `host` (E6 M1).
+    let private_filtered = cfg!(target_os = "linux") && terminal_network != "none";
+    let _terminal_proxy = if pty_enabled && (terminal_network == "filtered" || private_filtered) {
         match terminal_proxy(&state.0.join("terminal-egress")).await {
             Ok(p) => Some(p),
             Err(e) => {
@@ -523,6 +532,17 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             net: net.clone(),
             sessions: Some(state.0.join("agents")),
             sandbox_dir: Some(state.0.join("sandbox")),
+            private_net: if private_filtered {
+                super::termbox::Net::Filtered {
+                    dir: egress_dir.clone(),
+                    exe: std::env::current_exe().unwrap_or_default(),
+                }
+            } else if terminal_network == "none" {
+                super::termbox::Net::None
+            } else {
+                net.clone()
+            },
+            allow_real: bundled,
             ..super::PtyConfig::new(state.0.join("terminals"))
         }));
         d.spawn_budget_loop();
