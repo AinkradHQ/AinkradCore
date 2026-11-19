@@ -115,6 +115,7 @@ impl Control {
     /// Looks every 15 seconds until the runner is idle (no agent session holds a slot).
     pub(super) fn restart_when_idle(self: &Arc<Self>, after: Duration) {
         let me = Arc::clone(self);
+        super::aitools::set_restart_pending();
         tokio::spawn(async move {
             tokio::time::sleep(after).await;
             while !super::aitools::idle() {

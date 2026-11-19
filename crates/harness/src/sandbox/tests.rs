@@ -771,3 +771,31 @@ fn the_runners_mac_direct_agent_sockets_are_denied_by_name_last() {
     assert!(!text.contains("ainkrad-ssh"));
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// The runner's own tools (`<state>/ai-tools/bin/<tool>` execs `<state>/ai-tools/<tool>/<version>/...`) are readable in the
+/// sandbox: the tool's folder, and no other part of the state.
+#[test]
+fn a_tool_the_runner_installed_is_readable_and_only_that_tool() {
+    let (root, spec) = fixture("managed");
+    let tools = root.join("state/ai-tools");
+    std::fs::create_dir_all(tools.join("bin")).unwrap();
+    std::fs::create_dir_all(tools.join("claude/2.1.318")).unwrap();
+    std::fs::create_dir_all(tools.join("codex/0.167.1")).unwrap();
+    std::fs::write(tools.join("bin/claude"), "#!/bin/sh\n").unwrap();
+    let dirs = program_dirs(tools.join("bin/claude").as_os_str(), &spec);
+    assert!(dirs.contains(&tools.join("claude")), "{dirs:?}");
+    assert!(
+        !dirs.contains(&tools.join("codex")),
+        "another tool stays hidden: {dirs:?}"
+    );
+    assert!(
+        !dirs.contains(&root.join("state")),
+        "never the whole state: {dirs:?}"
+    );
+    assert_eq!(
+        managed_dir(&tools.join("bin/claude")),
+        Some(tools.join("claude"))
+    );
+    assert_eq!(managed_dir(Path::new("/usr/local/bin/claude")), None);
+    let _ = std::fs::remove_dir_all(root);
+}
