@@ -287,6 +287,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0047_e7_model_allow.up.sql"),
         down: include_str!("../../../migrations/0047_e7_model_allow.down.sql"),
     },
+    Migration {
+        version: 48,
+        name: "e7_provider_limits",
+        up: include_str!("../../../migrations/0048_e7_provider_limits.up.sql"),
+        down: include_str!("../../../migrations/0048_e7_provider_limits.down.sql"),
+    },
 ];
 
 #[cfg(test)]
@@ -309,7 +315,7 @@ mod tests {
         files.sort();
         let listed: Vec<(i64, String)> = CORE_MIGRATIONS
             .iter()
-            .map(|m| (m.version as i64, m.name.to_owned()))
+            .map(|m| (m.version, m.name.to_owned()))
             .collect();
         assert_eq!(listed, files);
     }

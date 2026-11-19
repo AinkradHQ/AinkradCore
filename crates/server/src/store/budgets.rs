@@ -1,5 +1,5 @@
 //! The budget engine (KAN-448; design `2026-11-02-ai-provider-accounts` §7, §11b item 3, §12d). Moved
-//! here from Citadel's E7.2: a limit per subject (account, pool, agent, company, department, project,
+//! here from Citadel's E7.2: a limit per subject (account, pool, provider, agent, company, department, project,
 //! sprint, issue) over a period (a fixed 5-hour UTC bucket, UTC day, week from Monday, month, or all
 //! time), a cap of tokens, dollars and/or messages, a warning at
 //! `warn_at_percent`, and with `hard_stop` a stop at the cap.
@@ -26,9 +26,10 @@ use super::secrets::Error;
 
 pub mod guard;
 
-pub const KINDS: [&str; 8] = [
+pub const KINDS: [&str; 9] = [
     "account",
     "pool",
+    "provider",
     "agent",
     "company",
     "department",

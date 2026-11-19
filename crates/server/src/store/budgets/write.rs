@@ -70,6 +70,9 @@ pub async fn set(
             return refused("not_found", "no such account or pool");
         }
     }
+    if b.kind == "provider" {
+        super::super::providers::get_in(&mut tx, b.subject).await?;
+    }
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM core_budgets")
         .fetch_one(&mut *tx)
         .await?;

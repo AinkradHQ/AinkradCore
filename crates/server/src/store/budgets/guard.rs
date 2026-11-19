@@ -191,14 +191,14 @@ pub async fn check_in(
     Ok(out)
 }
 
-/// `account.budget {subject_kind, subject, state}` for an account's or a pool's budget (`state`
+/// `account.budget {subject_kind, subject, state}` for an account's, a provider's or a pool's budget (`state`
 /// `warning` or `exhausted`), beside the audit row; other subjects raise none.
 async fn announce(
     conn: &mut SqliteConnection,
     s: &Standing,
     state: &str,
 ) -> Result<(), sqlx::Error> {
-    if !matches!(s.budget.kind.as_str(), "account" | "pool") {
+    if !matches!(s.budget.kind.as_str(), "account" | "pool" | "provider") {
         return Ok(());
     }
     let payload =

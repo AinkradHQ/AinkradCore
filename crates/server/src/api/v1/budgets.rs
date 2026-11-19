@@ -18,9 +18,9 @@ use crate::store::budgets::{self, guard};
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SubjectBudget {
     pub id: i64,
-    /// `account`, `pool`, `agent`, `company`, `department`, `project`, `sprint` or `issue`.
+    /// `account`, `pool`, `provider`, `agent`, `company`, `department`, `project`, `sprint` or `issue`.
     pub kind: String,
-    /// The subject's id: an account or pool id, or the owning module's opaque id.
+    /// The subject's id: an account or pool id, a provider id (`anthropic`, `openrouter`, `claude-sub`), or the owning module's opaque id.
     pub subject: String,
     /// The owner's company binding (a company budget's is its subject).
     pub company: Option<String>,
@@ -146,7 +146,7 @@ pub struct SetSubjectBudget {
 #[utoipa::path(put, path = "/api/v1/budgets", operation_id = "setBudget", tag = "budgets",
     request_body = SetSubjectBudget,
     responses((status = 200, description = "Created, or its caps changed (audited as `budget.created` \
-        or `budget.set`), with the period's spend counted from the ledger. 404 for an account or pool \
+        or `budget.set`), with the period's spend counted from the ledger. 404 for an account, pool or provider \
         that does not exist; 400 for a bad kind, subject, period or cap", body = SubjectBudget)))]
 pub async fn set(
     State(app): State<App>,
