@@ -225,7 +225,7 @@ pub async fn set_state(
 
 /// Removes account `id` with an Undo window (`accounts::soft_delete`: gone to every reader and to the
 /// allocator at once, wiped for real when the window ends), and kills the live sessions holding a
-/// subscription account's token. Answers when the window ends.
+/// account's key or token, whatever its kind. Answers when the window ends.
 pub async fn delete(
     app: &App,
     id: i64,
@@ -234,9 +234,9 @@ pub async fn delete(
 ) -> Result<String, secrets::Error> {
     let a = accounts::get(&app.pool, id).await?;
     let until = accounts::soft_delete(&app.pool, id, by_device, actor, &app.clock.now()).await?;
-    if crate::store::account_keys::subscription_provider(&a.provider) {
-        stop_live(app, &a.secret_name, "the subscription account was deleted").await;
-    }
+    // Every kind of account: a gateway (API-key) session also holds the key's name, and a removed
+    // account's live sessions end at the soft delete, an Undo does not resurrect them.
+    stop_live(app, &a.secret_name, "the account was deleted").await;
     Ok(until)
 }
 
