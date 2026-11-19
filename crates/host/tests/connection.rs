@@ -173,7 +173,6 @@ fn every_refusal_is_answered_with_its_code_logged_and_changes_nothing() {
     for class_b in [
         "runner_policy",
         "install_tool",
-        "update",
         "restore",
         "uninstall",
         "host_config",

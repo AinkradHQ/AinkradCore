@@ -1,0 +1,25 @@
+# E12-3: one Core self-update (scripts/release/update.sh). `ainkrad-update@now` is started by the host helper's `update`
+# action ("Update now"); `ainkrad-update@auto` by ainkrad-update.timer. Root, because it replaces /usr/local/bin and stops the
+# Core; it is told nothing but the mode, and installs only what the pinned release key signed.
+
+[Unit]
+Description=Ainkrad Core update (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/ainkrad/update.sh %i
+TimeoutStartSec=30min
+UMask=0022
+Nice=10
+LimitCORE=0
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+NoNewPrivileges=yes
