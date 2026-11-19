@@ -35,11 +35,26 @@ pub fn message(core_fp: &str, device: &str, session: &str, challenge: &str) -> V
 /// What the step-up key signs for a **session** proof (the app unlock): V2 and the purpose.
 /// The CLI never makes one (a routine key must not unlock); the library offers it so a test
 /// fixture can unlock a device for real.
-pub fn message_v2(core_fp: &str, device: &str, session: &str, challenge: &str, purpose: &str) -> Vec<u8> {
-    ["AINKRAD-STEPUP-V2", core_fp, device, session, challenge, purpose]
-        .join("
-")
-        .into_bytes()
+pub fn message_v2(
+    core_fp: &str,
+    device: &str,
+    session: &str,
+    challenge: &str,
+    purpose: &str,
+) -> Vec<u8> {
+    [
+        "AINKRAD-STEPUP-V2",
+        core_fp,
+        device,
+        session,
+        challenge,
+        purpose,
+    ]
+    .join(
+        "
+",
+    )
+    .into_bytes()
 }
 
 const VERSION: u32 = 1;

@@ -624,7 +624,8 @@ async fn an_unlock_only_route_needs_an_approval_even_when_listed_as_a_plain_writ
     ops(&fx, &[("createTerminal", Risk::Write)]);
     let s = session(&fx, &["read", "agent", "terminal"]).await;
     let approver = fx.enroll("approver", &["read", "agent", "approve"]).await;
-    let open = json!({"op": "createTerminal", "args": {"body": {"runner": s.runner}}});
+    let open = json!({"op": "createTerminal", "args": {"body": {
+        "runner": s.runner, "size": {"rows": 24, "cols": 80}}}});
 
     let h = spawn(&fx, &s, open.clone());
     let id = parked(&fx, &s).await;
@@ -636,16 +637,25 @@ async fn an_unlock_only_route_needs_an_approval_even_when_listed_as_a_plain_writ
         .unwrap();
     assert_eq!(none, 0, "nothing ran while it waited");
     // Denied: refused, plainly.
-    assert_eq!(decide(&fx, &approver, &s, &id, false).await.0, StatusCode::OK);
+    assert_eq!(
+        decide(&fx, &approver, &s, &id, false).await.0,
+        StatusCode::OK
+    );
     assert_eq!(done(h).await, (false, "approval_denied".to_owned()));
 
     // Approved: it is allowed through (the runner is not connected here, so the route itself
     // answers; what matters is that it was dispatched after an approval, not refused for one).
     let h = spawn(&fx, &s, open);
     let id = parked(&fx, &s).await;
-    assert_eq!(decide(&fx, &approver, &s, &id, true).await.0, StatusCode::OK);
+    assert_eq!(
+        decide(&fx, &approver, &s, &id, true).await.0,
+        StatusCode::OK
+    );
     let (_, code) = done(h).await;
-    assert!(!code.starts_with("approval_") && code != "not_available", "{code}");
+    assert!(
+        !code.starts_with("approval_") && code != "not_available",
+        "{code}"
+    );
 }
 
 /// Every route that needs the unlock is risky in Code Mode, a module's included.

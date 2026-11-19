@@ -373,7 +373,8 @@ impl Client {
             .filter(|c| c.len() == 43)
             .ok_or_else(|| Error::Protocol("a step-up challenge that is not 32 bytes".into()))?;
         let proof = b64(&sign(&message(&s.id, challenge)));
-        let body = serde_json::json!({"challenge": challenge, "stepup_sig": proof, "purpose": "session"});
+        let body =
+            serde_json::json!({"challenge": challenge, "stepup_sig": proof, "purpose": "session"});
         let res = self
             .signed(
                 "POST",
