@@ -2,16 +2,19 @@
 //! `GET /system/backups` reads the schedule, the last run and the backups on disk. The helper
 //! classes both like a restart (class A: a fixed argv or a read, rate limited, logged), not like
 //! a restore or an update (class B): starting the unit the timer starts anyway changes no data and
-//! no access. Nothing the caller sends reaches the helper. The start is audited before the helper
+//! no access. Nothing the caller sends reaches the helper but one integer (the retention, 1 to 60). The start is audited before the helper
 //! is asked (`host.backup_requested`) and after (`host.action_result`), as a restart is.
 
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
-use serde::Serialize;
+use axum::response::IntoResponse;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use utoipa::ToSchema;
 
+use super::ApiError;
 use super::system::{ACTION_RESULT, Fail, audit, fail, internal, outcome, refused};
 use super::types::{Timestamp, ts};
 use super::{Caller, system};
@@ -20,6 +23,10 @@ use crate::host::{Actor, Failure, request_id};
 use crate::scheduler::iso_of_unix;
 
 pub const BACKUP_REQUESTED: &str = "host.backup_requested";
+pub const RETENTION_REQUESTED: &str = "host.backup_retention_requested";
+/// The fewest and most local backups the Core may be set to keep (the helper checks the same).
+const KEEP_MIN: u32 = 1;
+const KEEP_MAX: u32 = 60;
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct BackupStarted {
@@ -56,11 +63,34 @@ pub struct BackupStatus {
     pub schedule: Option<String>,
     /// Whether the timer is armed.
     pub timer_active: Option<bool>,
-    /// When the timer fires next; absent when the host's clock zone is not UTC.
+    /// When the timer fires next, in any clock zone of the host (the helper asks systemd for unix
+    /// time); absent when the timer is not armed.
     pub next_at: Option<Timestamp>,
     pub last_run: Option<BackupRun>,
     /// The backups on disk, newest first, at most 60.
     pub history: Option<Vec<BackupFile>>,
+    /// How many local backups the Core keeps (`PUT /system/backups/retention` changes it).
+    pub keep: Option<u32>,
+}
+
+/// How many local backups the Core keeps.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BackupRetention {
+    /// `present` (the host helper answered), `absent` (not installed here) or `error`.
+    pub helper: String,
+    /// The backups kept in the Core's backups folder; older ones are removed after each backup.
+    pub keep: Option<u32>,
+    /// The fewest `PUT` accepts.
+    pub min: u32,
+    /// The most `PUT` accepts.
+    pub max: u32,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetRetention {
+    /// 1 to 60.
+    pub keep: i64,
 }
 
 /// A time as systemd prints it (`Fri 2026-11-20 00:12:00 UTC`), in unix seconds. Only UTC is read:
@@ -89,6 +119,15 @@ pub fn parse_systemd_utc(text: &str) -> Option<i64> {
     Some(days * 86_400 + h * 3_600 + mi * 60 + s)
 }
 
+/// A systemd time: `@<unix seconds>` (what the helper asks for, right in any zone), or the
+/// printed UTC form of an older helper.
+pub fn parse_systemd_time(text: &str) -> Option<i64> {
+    match text.strip_prefix('@') {
+        Some(n) => n.parse::<i64>().ok().filter(|n| *n > 0),
+        None => parse_systemd_utc(text),
+    }
+}
+
 fn at(secs: i64) -> Timestamp {
     ts(&iso_of_unix(secs))
 }
@@ -101,7 +140,7 @@ fn word(v: &Value) -> Option<String> {
 
 /// The helper's `backup_info` result as the API's, every string bounded and plain.
 pub fn status_of(r: &Value) -> BackupStatus {
-    let when = |v: &Value| v.as_str().and_then(parse_systemd_utc).map(at);
+    let when = |v: &Value| v.as_str().and_then(parse_systemd_time).map(at);
     let history = r["history"].as_array().map(|a| {
         a.iter()
             .take(60)
@@ -128,6 +167,10 @@ pub fn status_of(r: &Value) -> BackupStatus {
             finished_at: when(&r["run"]["finished"]),
         }),
         history,
+        keep: r["retention"]
+            .as_u64()
+            .and_then(|k| u32::try_from(k).ok())
+            .filter(|k| (KEEP_MIN..=KEEP_MAX).contains(k)),
     }
 }
 
@@ -140,6 +183,7 @@ fn empty(helper: &str) -> BackupStatus {
         next_at: None,
         last_run: None,
         history: None,
+        keep: None,
     }
 }
 
@@ -167,6 +211,99 @@ pub async fn backups(
             refused(&app, &me, "backup_info", &f).await;
             Ok(Json(empty("error")))
         }
+    }
+}
+
+#[utoipa::path(get, path = "/api/v1/system/backups/retention", operation_id = "getBackupRetention",
+    tag = "system",
+    responses((status = 200, description = "How many local backups the Core keeps, from the host \
+        helper (`helper` is `absent` or `error` when it did not answer; `keep` is then missing). \
+        Needs `admin`", body = BackupRetention)))]
+pub async fn retention(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+) -> Result<Json<BackupRetention>, Fail> {
+    let s = backups(State(app), Extension(me)).await?.0;
+    Ok(Json(BackupRetention {
+        helper: s.helper,
+        keep: s.keep,
+        min: KEEP_MIN,
+        max: KEEP_MAX,
+    }))
+}
+
+#[utoipa::path(put, path = "/api/v1/system/backups/retention", operation_id = "setBackupRetention",
+    tag = "system", request_body = SetRetention,
+    responses((status = 200, description = "The Core now keeps this many local backups (audited \
+        first as `host.backup_retention_requested`, then `host.action_result`); the helper writes \
+        it into the Core's config and the next backup applies it. Needs `admin` and a step-up. \
+        400 for a body other than `{\"keep\": 1..60}`; 409 `not_installed` (no config); 429 with \
+        `Retry-After`; 503 `host_helper_unavailable`, `host_helper_busy` or \
+        `host_state_unavailable`; 504 `host_helper_timeout`; 502 `host_helper_failed`",
+        body = BackupRetention)))]
+pub async fn set_retention(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    body: Bytes,
+) -> Result<Json<BackupRetention>, Fail> {
+    let action = "backup_keep";
+    let keep = serde_json::from_slice::<SetRetention>(&body)
+        .ok()
+        .and_then(|b| u32::try_from(b.keep).ok())
+        .filter(|k| (KEEP_MIN..=KEEP_MAX).contains(k))
+        .ok_or_else(|| {
+            Fail::from(
+                ApiError::bad_request("the body is {\"keep\": a count from 1 to 60}")
+                    .into_response(),
+            )
+        })?;
+    let now = u64::try_from(app.clock.unix()).unwrap_or(0);
+    if let Some(f) = app.host_helper.blocked(action, now) {
+        refused(&app, &me, action, &f).await;
+        return Err(fail(f));
+    }
+    let id = request_id();
+    let row = audit(
+        &app,
+        &me,
+        RETENTION_REQUESTED,
+        json!({"request_id": id, "keep": keep, "by_device": me.device.id}),
+    )
+    .await
+    .map_err(internal)?;
+    let actor = Actor {
+        device: me.device.id.clone(),
+        audit_seq: u64::try_from(row.seq.0).unwrap_or(0),
+    };
+    let result = app
+        .host_helper
+        .call(&id, action, json!({"keep": keep}), &actor)
+        .await;
+    let code = match &result {
+        Ok(_) => "accepted".to_owned(),
+        Err(f) => outcome(f),
+    };
+    if let Err(f) = &result {
+        let secs = match f {
+            Failure::Refused { code, retry_after } if code == "rate_limited" => {
+                retry_after.unwrap_or(60).clamp(1, 3600)
+            }
+            _ => 10,
+        };
+        app.host_helper.block(action, now, secs, f.clone());
+    }
+    let details = json!({"request_id": id, "action": action, "code": code});
+    if let Err(e) = audit(&app, &me, ACTION_RESULT, details).await {
+        tracing::error!(error = %e, request_id = id, "auditing a host action result failed");
+    }
+    match result {
+        Ok(_) => Ok(Json(BackupRetention {
+            helper: "present".to_owned(),
+            keep: Some(keep),
+            min: KEEP_MIN,
+            max: KEEP_MAX,
+        })),
+        Err(f) => Err(fail(f)),
     }
 }
 
@@ -249,6 +386,24 @@ mod tests {
         assert_eq!(parse_systemd_utc("n/a"), None);
         assert_eq!(parse_systemd_utc(""), None);
         assert_eq!(parse_systemd_utc("Fri 2026-13-20 00:12:00 UTC"), None);
+    }
+
+    #[test]
+    fn unix_times_read_in_any_host_zone() {
+        assert_eq!(parse_systemd_time("@1795133520"), Some(1_795_133_520));
+        assert_eq!(
+            parse_systemd_time("Fri 2026-11-20 00:12:00 UTC"),
+            Some(1_795_133_520),
+            "an older helper's UTC form still reads"
+        );
+        for bad in ["@", "@0", "@-5", "@abc", "", "n/a"] {
+            assert_eq!(parse_systemd_time(bad), None, "{bad}");
+        }
+        let s = status_of(&json!({"timer": {"next": "@1795133520"}, "retention": 14}));
+        assert!(s.next_at.is_some());
+        assert_eq!(s.keep, Some(14));
+        assert_eq!(status_of(&json!({"retention": 0})).keep, None);
+        assert_eq!(status_of(&json!({"retention": 61})).keep, None);
     }
 
     #[test]
