@@ -144,6 +144,37 @@ pub struct HostLoad {
     pub cores: u32,
 }
 
+/// How an AI tool install on a runner stands (D-22): the one under way, or the last one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ToolInstallReport {
+    /// `claude`, `codex`, `opencode`, `agy`.
+    pub tool: String,
+    pub state: ToolOpState,
+    /// 0 to 100.
+    pub percent: u8,
+    /// What it is doing, a short sentence: `Downloading Claude 2.1.318`.
+    pub step: String,
+    /// Why it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// What a runner says about itself in every heartbeat, beyond load: its AI tool install, its
+/// sandbox home folder and the plain-words reason it is not fully working. The Core keeps it
+/// beside the hello's facts and serves it with `GET /runners`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RunnerReport {
+    /// The install under way or the last one; absent when none ran since the runner started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<ToolInstallReport>,
+    /// The folder the runner's work happens in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
+    /// The runner's last-error note (why it is up without AI tools), cleared when it starts them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
 /// A runner's heartbeat: carries `load` when the runner measured one, and the isolation it
 /// offers now.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -156,6 +187,9 @@ pub struct Heartbeat {
     /// runner that does not report it, and from one that offers no agent driver.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<IsolationCaps>,
+    /// Its tool install, home folder and last error. Absent from a runner that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<RunnerReport>,
 }
 
 /// Facts a runner reports about itself in its hello (display only: the Core decides nothing by
@@ -191,6 +225,13 @@ pub struct RunnerFacts {
     /// not place a run on a runner without it, because the limits would be silently ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_caps: Option<RunCaps>,
+    /// The runner's own report (latest heartbeat): see [`RunnerReport`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_install: Option<ToolInstallReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 /// Podman as the runner finds it.

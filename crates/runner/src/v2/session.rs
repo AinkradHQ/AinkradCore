@@ -387,6 +387,7 @@ impl Session {
                                     cores: l.cores,
                                 }),
                                 isolation: self.agent.as_ref().map(|a| a.isolation()),
+                                report: super::aitools::report(),
                             }),
                         ),
                     )

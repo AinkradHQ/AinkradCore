@@ -32,6 +32,72 @@ pub fn prefix() -> Option<&'static Path> {
     PREFIX.get().map(PathBuf::as_path)
 }
 
+static HOME: OnceLock<PathBuf> = OnceLock::new();
+type Idle = Box<dyn Fn() -> bool + Send + Sync>;
+static IDLE: OnceLock<Idle> = OnceLock::new();
+
+/// The folder the runner's work happens in, for its report (set when the agent driver starts).
+pub fn set_home(p: PathBuf) {
+    let _ = HOME.set(p);
+}
+
+/// How the runner tells whether it is idle: no agent session holds a slot. Set once, by the daemon.
+pub fn set_idle(f: impl Fn() -> bool + Send + Sync + 'static) {
+    let _ = IDLE.set(Box::new(f));
+}
+
+/// True when nothing is running; a runner that never said is idle.
+pub fn idle() -> bool {
+    IDLE.get().is_none_or(|f| f())
+}
+
+/// What goes in every heartbeat (`RunnerReport`): the install note, the home folder, the last-error note.
+pub fn report() -> Option<ainkrad_proto::v2::RunnerReport> {
+    let prefix = prefix()?;
+    let state = prefix.parent()?;
+    let install = std::fs::read_to_string(prefix.join("status.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| install_of(&v));
+    let last_error = std::fs::read_to_string(state.join("last-error"))
+        .ok()
+        .map(|t| t.trim().chars().take(500).collect::<String>())
+        .filter(|t| !t.is_empty());
+    Some(ainkrad_proto::v2::RunnerReport {
+        install,
+        home: HOME.get().map(|h| h.display().to_string()),
+        last_error,
+    })
+}
+
+/// `status.json` as a report: failed when it says why, done at 100, else running.
+fn install_of(v: &serde_json::Value) -> Option<ainkrad_proto::v2::ToolInstallReport> {
+    use ainkrad_proto::v2::{ToolInstallReport, ToolOpState};
+    let failed = v.get("failed").and_then(|f| f.as_str()).map(str::to_owned);
+    let percent = v
+        .get("percent")
+        .and_then(|p| p.as_u64())
+        .unwrap_or(0)
+        .min(100) as u8;
+    Some(ToolInstallReport {
+        tool: v.get("tool")?.as_str()?.to_owned(),
+        state: match (&failed, percent) {
+            (Some(_), _) => ToolOpState::Failed,
+            (None, 100) => ToolOpState::Done,
+            _ => ToolOpState::Running,
+        },
+        percent,
+        step: v
+            .get("step")
+            .and_then(|s| s.as_str())
+            .unwrap_or_default()
+            .chars()
+            .take(200)
+            .collect(),
+        reason: failed.map(|f| f.chars().take(600).collect()),
+    })
+}
+
 /// The folder of the launchers, for a `PATH` that should find the managed tools.
 pub fn bin_dir() -> Option<PathBuf> {
     prefix().map(|p| p.join("bin"))
@@ -406,6 +472,30 @@ mod tests {
                 assert_eq!(p.packed, b.url.ends_with(".tgz"));
             }
         }
+    }
+
+    #[test]
+    fn the_status_note_becomes_a_running_done_or_failed_report() {
+        use ainkrad_proto::v2::ToolOpState::*;
+        let r = |v: serde_json::Value| install_of(&v).unwrap();
+        let run = r(
+            serde_json::json!({"tool":"claude","percent":40,"step":"Downloading Claude","failed":null}),
+        );
+        assert_eq!(
+            (run.state, run.percent, run.tool.as_str()),
+            (Running, 40, "claude")
+        );
+        assert_eq!(
+            r(serde_json::json!({"tool":"codex","percent":100,"step":"Installed"})).state,
+            Done
+        );
+        let bad =
+            r(serde_json::json!({"tool":"codex","percent":0,"step":"x","failed":"no network"}));
+        assert_eq!(
+            (bad.state, bad.reason.as_deref()),
+            (Failed, Some("no network"))
+        );
+        assert!(install_of(&serde_json::json!({"percent":3})).is_none());
     }
 
     #[test]

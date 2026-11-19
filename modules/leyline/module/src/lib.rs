@@ -27,6 +27,7 @@ mod hosts;
 mod keys;
 mod makerunner;
 mod policy;
+mod reach;
 mod ready;
 /// Terminal recording; public so `benches/relay_tap.rs` can time the relay's tap.
 pub mod record;
@@ -103,6 +104,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0009_direct.up.sql"),
         down: include_str!("../migrations/0009_direct.down.sql"),
     },
+    Migration {
+        version: 10,
+        name: "0010_reach",
+        up: include_str!("../migrations/0010_reach.up.sql"),
+        down: include_str!("../migrations/0010_reach.down.sql"),
+    },
 ];
 
 // A key write is a secret write: importing needs the step-up like the Core's own secret writes.
@@ -130,6 +137,7 @@ const DESTRUCTIVE: &[(&str, &str)] = &[
 // address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/hosts"),
+    ("POST", "/hosts/check"),
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
     ("POST", "/commands"),
@@ -190,6 +198,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("POST", "/sessions/{session}/recording/pause", "terminal"),
     ("POST", "/sessions/{session}/recording/resume", "terminal"),
     ("POST", "/hosts/{host}/runner", "terminal"),
+    ("POST", "/hosts/check", "admin"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -205,6 +214,7 @@ pub struct Leyline;
         hosts::remove,
         hosts::groups,
         hosts::tags,
+        reach::check,
         health::read,
         files::list,
         files::read,
@@ -287,6 +297,10 @@ pub struct Leyline;
         history::HostRecording,
         history::Paused,
         makerunner::Install,
+        makerunner::InstallState,
+        reach::CheckHost,
+        reach::Checked,
+        reach::HostReach,
         health::HealthView,
         health::HealthPoint,
         files::RemoteFile,
@@ -322,6 +336,7 @@ impl Module for Leyline {
     fn routes(&self) -> Router<App> {
         Router::new()
             .route("/hosts", get(hosts::list).post(hosts::create))
+            .route("/hosts/check", post(reach::check))
             .route(
                 "/hosts/{host}",
                 get(hosts::get).patch(hosts::patch).delete(hosts::remove),
@@ -477,6 +492,7 @@ impl Module for Leyline {
 
     fn jobs(&self) -> Vec<Job> {
         let mut jobs = health::jobs();
+        jobs.extend(reach::jobs());
         jobs.extend(history::jobs());
         jobs
     }
