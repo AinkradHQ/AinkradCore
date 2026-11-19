@@ -376,19 +376,19 @@ mod tests {
     #[test]
     fn an_alias_makes_two_employers_one_room() {
         let mut items: Vec<Item> = (0..3)
-            .map(|n| it(n, "/u/Home/Projects/dvxmotive/Repositories/api", "t"))
+            .map(|n| it(n, "/u/Home/Projects/harborauto/Repositories/api", "t"))
             .collect();
-        items.extend((3..6).map(|n| it(n, "/u/Home/Projects/AutomotiveAi", "t")));
+        items.extend((3..6).map(|n| it(n, "/u/Home/Projects/HarborMotors", "t")));
         assert_eq!(group(&items).len(), 2);
-        let a: Aliases = [("dvxmotive".to_owned(), "AutomotiveAi".to_owned())].into();
+        let a: Aliases = [("harborauto".to_owned(), "HarborMotors".to_owned())].into();
         let g = group_with(&items, &a);
         assert_eq!(g.len(), 1, "{g:?}");
         assert_eq!(
             (g[0].name.as_str(), g[0].item_ids.len()),
-            ("AutomotiveAi", 6)
+            ("HarborMotors", 6)
         );
         assert!(g[0].warnings.is_empty());
-        assert_eq!(canonical(&a, "DVXMotive"), "AutomotiveAi");
+        assert_eq!(canonical(&a, "HarborAuto"), "HarborMotors");
     }
 
     #[test]
@@ -398,7 +398,7 @@ mod tests {
             it(2, "/h/Projects/Alpha/y", "a2"),
             it(3, "/h/Projects/Beta/x", "b1"),
             it(4, "/h/Projects/Optimus/api", "o1"),
-            it(5, "/h/Projects/Gamma/x", "g1 for AutomotiveAi"),
+            it(5, "/h/Projects/Gamma/x", "g1 for HarborMotors"),
             it(6, "", "nothing here"),
         ];
         let p = group(&items);
@@ -416,7 +416,7 @@ mod tests {
     fn two_employers_in_one_folder_never_share_a_proposal() {
         let items = vec![
             it(1, "/h/Projects/Shared/a", "work for Optimus"),
-            it(2, "/h/Projects/Shared/b", "work for AutomotiveAi"),
+            it(2, "/h/Projects/Shared/b", "work for HarborMotors"),
             it(3, "/h/Projects/Shared/c", "plain note"),
         ];
         let p = group(&items);

@@ -343,7 +343,7 @@ async fn two_employers_never_share_a_room_and_a_mixed_commit_is_refused() {
         &run,
         vec![
             item(1, "/h/Projects/Shared/a", "for Optimus", "opt text"),
-            item(2, "/h/Projects/Shared/b", "for AutomotiveAi", "auto text"),
+            item(2, "/h/Projects/Shared/b", "for HarborMotors", "auto text"),
         ],
     )
     .await;

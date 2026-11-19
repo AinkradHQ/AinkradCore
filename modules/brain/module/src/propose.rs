@@ -302,8 +302,8 @@ mod tests {
         ("ProjectA", "invoice ledger billing refund"),
         ("ProjectB", "garden seedling compost trellis"),
         ("ProjectC", "telescope orbit nebula lens"),
-        ("AutomotiveAi", "dealer telephony callback voicemail"),
-        ("dvxmotive", "dealer inventory listing showroom"),
+        ("HarborMotors", "dealer telephony callback voicemail"),
+        ("harborauto", "dealer inventory listing showroom"),
     ];
 
     fn corpus() -> (Vec<Item>, String) {
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn every_project_keeps_its_room_and_shared_preambles_are_no_duplicates() {
         let (items, newest) = corpus();
-        let aliases: Aliases = [("dvxmotive".to_owned(), "AutomotiveAi".to_owned())].into();
+        let aliases: Aliases = [("harborauto".to_owned(), "HarborMotors".to_owned())].into();
         let p = propose(&items, &aliases, &Words, 2).unwrap();
         let room = |n: &str| {
             p.rooms.iter().find(|r| r.name == n).unwrap_or_else(|| {
@@ -414,8 +414,8 @@ mod tests {
             "the kept copy of the plan"
         );
         // The alias: both employers' sessions in one room, never split by the employer guard.
-        assert_eq!(room("AutomotiveAi").item_ids.len(), 800);
-        assert!(p.rooms.iter().all(|r| r.name != "dvxmotive"));
+        assert_eq!(room("HarborMotors").item_ids.len(), 800);
+        assert!(p.rooms.iter().all(|r| r.name != "harborauto"));
         // Only the vault's own notes are filed under its name.
         assert!(room("Ainkrad").item_ids.len() <= 4);
         // Exactly one near-copy: the plan, never a transcript.
