@@ -305,7 +305,10 @@ impl Terminal {
     pub fn tail(&self, n: usize) -> Vec<String> {
         let s = self.parser.screen();
         let (_, cols) = s.size();
-        let mut rows: Vec<String> = s.rows(0, cols).map(|r| r.trim_end().to_owned()).collect();
+        let mut rows: Vec<String> = s
+            .rows(0, cols.get())
+            .map(|r| r.trim_end().to_owned())
+            .collect();
         while rows.last().is_some_and(String::is_empty) {
             rows.pop();
         }
