@@ -269,11 +269,6 @@ pub fn router(app: App) -> Router {
             get(accounts::list).post(accounts::create),
         )
         .route("/api/v1/accounts/usage", get(costs::accounts_usage))
-        .route("/api/v1/accounts/{id}/limits", put(costs::set_limit))
-        .route(
-            "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
-            delete(costs::clear_limit),
-        )
         .route("/api/v1/costs", get(costs::list))
         .route("/api/v1/budgets", get(budgets::list).put(budgets::set))
         .route("/api/v1/budgets/{id}", delete(budgets::delete))

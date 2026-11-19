@@ -152,8 +152,6 @@ use super::{
         costs::list_prices,
         costs::set_price,
         costs::accounts_usage,
-        costs::set_limit,
-        costs::clear_limit,
         budgets::list,
         budgets::set,
         budgets::delete,
