@@ -23,11 +23,16 @@ pub(super) struct Guard {
     pub(super) driver: Arc<LoginDriver>,
     pub(super) id: String,
     pub(super) scratch: PathBuf,
+    /// A runner-bound sign-in's account home, wiped unless the sign-in ended `done`.
+    pub(super) home: Option<PathBuf>,
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.scratch);
+        if let Some(h) = &self.home {
+            let _ = std::fs::remove_dir_all(h);
+        }
         self.driver
             .active
             .lock()
@@ -49,6 +54,7 @@ impl LoginDriver {
             driver: Arc::clone(&self),
             id: id.clone(),
             scratch: scratch.clone(),
+            home: None,
         };
         let mut run = Run {
             url_tx: Some(url_tx),
@@ -209,6 +215,9 @@ impl LoginDriver {
                         }
                         return End::Cancelled;
                     }
+                    Msg::Wait(tx) => {
+                        let _ = tx.send(result(id, Some("this sign-in has no wait")));
+                    }
                     Msg::Code(code, tx) => {
                         if typed || pending.is_some() {
                             let _ = tx.send(result(id, Some("a code was already given")));
@@ -234,6 +243,7 @@ impl LoginDriver {
                         let _ = tx.send(Ok(LoginUrl {
                             login_id: id.to_owned(),
                             url,
+                            code: None,
                         }));
                     }
                 } else if parse::asks_for_code(screen.done(), &screen.tail()) {
@@ -339,6 +349,7 @@ impl Run {
                     login_id: id.to_owned(),
                     token: Some(t.to_string()),
                     error: None,
+                    done: false,
                 },
                 End::Fail(w) | End::Unsupported(w) => result(id, Some(&w)),
                 End::Cancelled => result(id, Some("cancelled")),

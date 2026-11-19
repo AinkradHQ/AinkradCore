@@ -300,7 +300,10 @@ impl Hub {
     ) -> Result<Dispatched, StreamError> {
         if !matches!(
             command,
-            Command::LoginStart(_) | Command::LoginCode(_) | Command::LoginCancel(_)
+            Command::LoginStart(_)
+                | Command::LoginCode(_)
+                | Command::LoginCancel(_)
+                | Command::LoginWait(_)
         ) {
             return Err(StreamError::new(
                 ErrorCode::InvalidArgs,

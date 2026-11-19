@@ -161,7 +161,7 @@ async fn a_user_provider_without_a_key_prefix_holds_no_key() {
     // The API-key built-ins are delivered through the gateway only; a subscription's token is a
     // leased env variable (KAN-441), signed in through a login.
     for p in prov::built_in() {
-        let sub = p.id == "claude-sub";
+        let sub = p.id == "claude-sub" || p.id == "codex-sub";
         assert_eq!(
             p.delivery,
             if sub { ["env"] } else { ["gateway"] },

@@ -25,7 +25,10 @@ fn refused<T>(message: impl Into<String>) -> Result<T, Error> {
 /// created by a login, never by a pasted value.
 pub fn is_subscription(def: &Definition) -> bool {
     def.builtin
-        && def.login_methods.iter().any(|m| m == "browser_code")
+        && def
+            .login_methods
+            .iter()
+            .any(|m| super::providers::RUNNER_LOGINS.contains(&m.as_str()))
         && !def.login_methods.iter().any(|m| m == "paste")
 }
 

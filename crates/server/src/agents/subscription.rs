@@ -171,13 +171,30 @@ pub(super) fn account_refusal(
     runner: &RunnerState,
     secrets: &[store::SessionSecret],
 ) -> Option<String> {
-    super::account_refusal(runner).or_else(|| {
-        (secrets.iter().any(is_subscription) && !lists_cap(runner)).then(|| {
-            "a session holding a subscription account's token needs a runner that checks it \
-             before redeeming (the subscription-env command): update the runner"
-                .to_owned()
+    super::account_refusal(runner)
+        .or_else(|| {
+            (secrets.iter().any(is_subscription) && !lists_cap(runner)).then(|| {
+                "a session holding a subscription account's token needs a runner that checks it \
+                 before redeeming (the subscription-env command): update the runner"
+                    .to_owned()
+            })
         })
-    })
+        .or_else(|| {
+            let lists_home = runner
+                .drivers
+                .iter()
+                .filter(|d| d.name == AGENT_DRIVER)
+                .any(|d| {
+                    d.commands
+                        .iter()
+                        .any(|c| c == ainkrad_proto::v2::CAP_BOUND_HOME)
+                });
+            (secrets.iter().any(super::bound::is_bound) && !lists_home).then(|| {
+                "a session holding a runner-bound account needs a runner that starts it in the \
+                 account's home (the bound-home command): update the runner"
+                    .to_owned()
+            })
+        })
 }
 
 /// Sets account `id`'s state, and when a subscription account leaves `active` also kills the live

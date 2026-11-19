@@ -110,6 +110,9 @@ pub enum Command {
     /// A TCP stream to an exposed port of a live run (P6-01); bytes are `output` frames.
     #[serde(rename = "port.open")]
     PortOpen(super::PortOpen),
+    /// (After every older op.) Wait for a runner-bound sign-in to finish (E7-4).
+    #[serde(rename = "login.wait")]
+    LoginWait(super::LoginWait),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -140,6 +143,7 @@ impl Command {
             Self::LoginStart(_) => super::OP_LOGIN_START,
             Self::LoginCode(_) => super::OP_LOGIN_CODE,
             Self::LoginCancel(_) => super::OP_LOGIN_CANCEL,
+            Self::LoginWait(_) => super::OP_LOGIN_WAIT,
             Self::RunnerPolicy(_) => super::OP_RUNNER_POLICY,
             Self::ToolsInstall(_) => super::OP_TOOLS_INSTALL,
             Self::ToolsStatus(_) => super::OP_TOOLS_STATUS,

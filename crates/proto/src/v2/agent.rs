@@ -190,6 +190,12 @@ pub fn account_var_problem<'a>(
     grants: impl IntoIterator<Item = (&'a str, &'a str)> + Clone,
 ) -> Option<&'static str> {
     let allowed = account_vars(harness);
+    // A runner-bound account holds no key: nothing is delivered, `bound_problem` judges it.
+    let grants: Vec<(&str, &str)> = grants
+        .into_iter()
+        .filter(|(n, _)| !super::subscription::is_bound_secret(n))
+        .collect();
+    let grants = grants.iter().copied();
     // An ordinary secret may not take a harness authentication variable either: it would carry a
     // credential past every rule below.
     if !grants
@@ -289,6 +295,11 @@ pub struct AgentStart {
     /// beside the session, never inside the repo checkout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+    /// A runner-bound account's home key (`CAP_BOUND_HOME`, E7-4): the harness runs with its
+    /// config dir at `<config root>/bound/<home>`, where the account's login lives. No credential
+    /// travels: the runner reads its own files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
 }
 
 fn is_zero(n: &u32) -> bool {

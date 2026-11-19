@@ -11,11 +11,13 @@ use crate::store::logins::Login;
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewLogin {
-    /// A subscription provider: `claude-sub`.
+    /// A subscription provider: `claude-sub` (a pasted approval code), or the runner-bound
+    /// `codex-sub` (a device code; the login stays on that runner and no token comes back).
     pub provider: String,
     /// The new account's label.
     pub label: String,
-    /// A runner device id; absent, the best ready runner that has the provider's harness.
+    /// A runner device id; absent, the best ready runner that has the provider's harness. A
+    /// runner-bound provider keeps the login on the runner it runs on: the account is pinned to it.
     #[serde(default)]
     pub runner: Option<String>,
 }
@@ -42,6 +44,10 @@ pub struct AccountLogin {
     pub state: String,
     /// The sign-in URL, from `open_url` on.
     pub url: Option<String>,
+    /// The one-time device code to type on that page (`codex-sub`), from `open_url` on. Not a
+    /// credential. Absent for a sign-in with no device code. A runner-bound sign-in takes no
+    /// `/code`: it goes `open_url` then `storing` then `done` by itself once the user finishes.
+    pub code: Option<String>,
     /// The new account, once `done`.
     pub account_id: Option<i64>,
     /// Why it `failed` or was `cancelled`; provider text passes the redactor.
@@ -61,6 +67,7 @@ impl From<Login> for AccountLogin {
             runner: l.runner,
             state: l.state,
             url: l.url,
+            code: l.code,
             account_id: l.account_id,
             reason: l.reason,
             created_at: ts(&l.created_at),
