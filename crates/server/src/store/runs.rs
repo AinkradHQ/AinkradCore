@@ -30,6 +30,9 @@ pub struct Run {
     pub started_at: String,
     pub stopped_at: Option<String>,
     pub last_activity_at: Option<String>,
+    /// The run configuration it started from, and the environment it ran in (Core 0.10).
+    pub config_id: Option<i64>,
+    pub environment: Option<String>,
 }
 
 impl Run {
@@ -39,7 +42,7 @@ impl Run {
 }
 
 const COLS: &str = "id, project_id, spec_version, runner, state, stop_reason, error, started_by, \
-                    started_at, stopped_at, last_activity_at";
+                    started_at, stopped_at, last_activity_at, config_id, environment";
 
 fn row(r: &SqliteRow) -> Result<Run, sqlx::Error> {
     Ok(Run {
@@ -54,6 +57,8 @@ fn row(r: &SqliteRow) -> Result<Run, sqlx::Error> {
         started_at: r.try_get("started_at")?,
         stopped_at: r.try_get("stopped_at")?,
         last_activity_at: r.try_get("last_activity_at")?,
+        config_id: r.try_get("config_id")?,
+        environment: r.try_get("environment")?,
     })
 }
 
@@ -77,6 +82,26 @@ pub async fn live(pool: &SqlitePool, project_id: i64) -> Result<Option<Run>, sql
         .as_ref()
         .map(row)
         .transpose()
+}
+
+/// The project's newest runs, live or not, newest first.
+pub async fn recent(
+    pool: &SqlitePool,
+    project_id: i64,
+    limit: i64,
+) -> Result<Vec<Run>, sqlx::Error> {
+    let q = format!(
+        "SELECT {COLS} FROM core_project_runs WHERE project_id = ? \
+         ORDER BY started_at DESC, rowid DESC LIMIT ?"
+    );
+    sqlx::query(sqlx::AssertSqlSafe(q))
+        .bind(project_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(row)
+        .collect()
 }
 
 /// The project's newest run, live or not.
@@ -151,6 +176,7 @@ pub async fn begin(
     project_id: i64,
     spec_version: i64,
     runner: &str,
+    config: Option<(i64, &str)>,
     who: Who<'_>,
 ) -> Result<Run, Error> {
     let mut tx = super::begin_write(pool).await?;
@@ -160,7 +186,7 @@ pub async fn begin(
     }
     let inserted = sqlx::query(
         "INSERT INTO core_project_runs (id, project_id, spec_version, runner, state, started_by, \
-         started_at) VALUES (?, ?, ?, ?, 'starting', ?, ?)",
+         started_at, config_id, environment) VALUES (?, ?, ?, ?, 'starting', ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(project_id)
@@ -168,6 +194,8 @@ pub async fn begin(
     .bind(runner)
     .bind(who.by_device)
     .bind(who.now)
+    .bind(config.map(|c| c.0))
+    .bind(config.map(|c| c.1))
     .execute(&mut *tx)
     .await;
     match inserted {
@@ -178,7 +206,8 @@ pub async fn begin(
         Err(e) => return Err(e.into()),
     }
     let details = json!({"run": id, "spec_version": spec_version, "runner": runner,
-                         "by_device": who.by_device});
+                         "by_device": who.by_device, "config": config.map(|c| c.0),
+                         "environment": config.map(|c| c.1)});
     record(
         &mut tx,
         who.actor,

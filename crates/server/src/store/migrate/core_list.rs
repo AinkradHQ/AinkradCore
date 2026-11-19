@@ -263,4 +263,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0043_project_runner_pref.up.sql"),
         down: include_str!("../../../migrations/0043_project_runner_pref.down.sql"),
     },
+    Migration {
+        version: 44,
+        name: "run_configs",
+        up: include_str!("../../../migrations/0044_run_configs.up.sql"),
+        down: include_str!("../../../migrations/0044_run_configs.down.sql"),
+    },
 ];

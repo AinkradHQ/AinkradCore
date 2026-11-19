@@ -5,6 +5,7 @@
 //! read-only here; the mirror scheduler writes it (P3-01). Every remote goes through
 //! `repo_url_problem` here and again in the store, so no credential or odd scheme gets in.
 
+pub mod run_configs;
 pub mod run_logs;
 pub mod run_spec;
 pub mod runs;
