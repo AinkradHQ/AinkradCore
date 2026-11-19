@@ -14,7 +14,10 @@ async fn records_land_in_one_area_each_and_a_closed_room_is_counted_not_read() {
         .fetch_one(&fx.app.pool)
         .await
         .unwrap();
-    assert!(!matches!(kind.as_str(), "personal" | "global-safe"), "{kind}");
+    assert!(
+        !matches!(kind.as_str(), "personal" | "global-safe"),
+        "{kind}"
+    );
     // Not open yet: nothing is read, one room is counted as locked.
     let v = ok(&fx, Method::GET, "/areas", None).await;
     assert_eq!(v["locked_rooms"], 1, "{v}");
@@ -34,7 +37,11 @@ async fn records_land_in_one_area_each_and_a_closed_room_is_counted_not_read() {
             .as_i64()
             .unwrap()
     };
-    assert_eq!((n("rules"), n("knowledge"), n("timeline"), n("me")), (1, 1, 1, 0), "{v}");
+    assert_eq!(
+        (n("rules"), n("knowledge"), n("timeline"), n("me")),
+        (1, 1, 1, 0),
+        "{v}"
+    );
     assert_eq!(v["locked_rooms"], 0, "{v}");
     assert_eq!(v["places"], 1, "{v}");
     let v = ok(&fx, Method::GET, "/areas/knowledge", None).await;
@@ -67,10 +74,68 @@ async fn the_core_accepts_a_sorted_import_by_itself_and_undo_archives_its_rooms(
     assert!(made > 0);
     let l = ok(&fx, Method::GET, "/auto-imports", None).await;
     assert_eq!(l[0]["run"], run, "{l}");
-    let u = ok(&fx, Method::POST, &format!("/auto-imports/{run}/undo"), None).await;
+    let u = ok(
+        &fx,
+        Method::POST,
+        &format!("/auto-imports/{run}/undo"),
+        None,
+    )
+    .await;
     assert_eq!(u["rooms"], l[0]["rooms"], "{u}");
+    // Back to one pile: the run is open for review again, everything in Unsorted, and the Core
+    // does not accept it again by itself.
+    assert!(u["items"].as_i64().unwrap() > 0, "{u}");
+    let r = ok(&fx, Method::GET, &format!("/imports/{run}"), None).await;
+    assert_eq!(r["state"], "review", "{r}");
+    let p = proposals(&fx, &run).await;
+    assert!(p.iter().all(|x| x["id"] == "unsorted"), "{p:?}");
+    assert_eq!(fx.brain.auto_import_step().await.unwrap(), 0);
+    let (st, _) = call(
+        &fx,
+        &fx.admin,
+        Method::POST,
+        &format!("/auto-imports/{run}/undo"),
+        None,
+    )
+    .await;
+    assert_eq!(st.as_u16(), 409);
     let l = ok(&fx, Method::GET, "/auto-imports", None).await;
     assert_eq!(l.as_array().unwrap().len(), 0, "{l}");
-    let (st, _) = call(&fx, &fx.admin, Method::POST, "/auto-imports/nope/undo", None).await;
+    let (st, _) = call(
+        &fx,
+        &fx.admin,
+        Method::POST,
+        "/auto-imports/nope/undo",
+        None,
+    )
+    .await;
     assert_eq!(st.as_u16(), 409);
+}
+
+/// The Learn step's per-place progress and cost, from the control plane.
+#[tokio::test]
+async fn the_learning_step_counts_places_and_sums_cost() {
+    let fx = fx().await;
+    let run = start(&fx).await;
+    send(
+        &fx,
+        &run,
+        vec![item(1, "/h/Projects/Lrn/a", "Note", "learn text")],
+    )
+    .await;
+    finish(&fx, &run).await;
+    let mut made = 0;
+    for _ in 0..600 {
+        made = fx.brain.auto_import_step().await.unwrap();
+        if made > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(made > 0);
+    let v = ok(&fx, Method::GET, &format!("/imports/{run}/learning"), None).await;
+    assert_eq!(v["places"].as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(v["places"][0]["state"], "pending", "{v}");
+    assert_eq!(v["total_cost_usd_micros"], 0, "{v}");
+    assert_eq!(v["done"], false, "{v}");
 }

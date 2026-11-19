@@ -28,11 +28,11 @@ mod ai;
 mod ai_propose;
 mod ai_semantic;
 mod aliases;
-mod areas;
-mod auto_import;
 mod answer;
 mod answer_turns;
+mod areas;
 mod auto_distil;
+mod auto_import;
 mod backfill;
 pub mod card;
 mod change_routes;
@@ -54,6 +54,7 @@ mod inbox;
 mod index;
 mod judge;
 pub mod key;
+mod learning;
 mod loaded;
 mod lore;
 pub mod me_card;
@@ -230,6 +231,7 @@ const SETTINGS: &[ModuleSetting] = &[
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/status", "read"),
     ("GET", "/imports/{run}", "read"),
+    ("GET", "/imports/{run}/learning", "read"),
     ("GET", "/rooms", "read"),
     ("GET", "/sync", "read"),
     ("GET", "/rooms/{room}/search", "read"),
@@ -603,6 +605,7 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         areas::summary,
         areas::records,
         auto_import::list,
+        learning::get,
         auto_import::undo,
         overview::instructions,
         policy::get,
@@ -631,6 +634,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         areas::AreaRecord,
         areas::AreaPage,
         auto_import::AutoImport,
+        learning::Learning,
+        learning::LearningPlace,
         auto_import::Undone,
         imports::StartRun,
         imports::RunId,
@@ -804,6 +809,7 @@ impl Module for Brain {
             .route("/activity", get(activity::get))
             .route("/areas", get(areas::summary))
             .route("/areas/{area}", get(areas::records))
+            .route("/imports/{run}/learning", get(learning::get))
             .route("/auto-imports", get(auto_import::list))
             .route("/auto-imports/{run}/undo", post(auto_import::undo))
             .route(
