@@ -8,12 +8,13 @@ Looks in the working tree (tracked files) and, with --history, in every line eve
   name    - the real names in SCAN_NAMES
 It only reads. It never rewrites history and never prints a whole secret: each finding shows the rule, the place and a masked
 excerpt (first 4 characters, then `...`). Exit 0 whatever it finds: it is a report, not a gate (`--strict` makes findings exit 1).
-SCAN_HOSTS / SCAN_NAMES (comma separated) extend the lists; the defaults are the machines and people this project has used.
+SCAN_HOSTS / SCAN_NAMES (comma separated) name the machines and people to look for. They are empty by default on purpose: a list of
+real names inside a public repository would be the leak it looks for.
 """
 import os, re, subprocess, sys
 
-HOSTS = [h for h in os.environ.get("SCAN_HOSTS", "192.168.1.173,4.213.123.76").split(",") if h]
-NAMES = [n for n in os.environ.get("SCAN_NAMES", "ahmedmelhalaby,Elhalaby,Bilal,Bashar,Jamil,dvxmotive").split(",") if n]
+HOSTS = [h for h in os.environ.get("SCAN_HOSTS", "").split(",") if h]
+NAMES = [n for n in os.environ.get("SCAN_NAMES", "").split(",") if n]
 RULES = [
     ("token", re.compile(r"gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|sk-ant-[A-Za-z0-9_-]{20,}|\bsk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("email", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")),
