@@ -189,6 +189,8 @@ pub async fn run_with_defaults(available: Vec<Arc<dyn Module>>, default_on: &[&s
         ["pairing-invite", db, host, name] => {
             admin::bootstrap::invite(Path::new(db), host, name).await
         }
+        ["mdns-service", db, host] => admin::bootstrap::mdns_service(Path::new(db), host).await,
+        ["rendezvous-post", base] => admin::rendezvous::post(base).await,
         ["runner-enroll-local", db, out, url] => {
             admin::runner_local::enrol_local(Path::new(db), Path::new(out), url).await
         }

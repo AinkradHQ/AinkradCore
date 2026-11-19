@@ -550,7 +550,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   }
   rerun_cmd() { # the command the user ran, rebuilt from the variables they set, the version floor and their flags
     _env=''; _args=''
-    for _v in AINKRAD_HOSTNAME AINKRAD_ACME_EMAIL AINKRAD_ACME_ENV AINKRAD_HARDEN AINKRAD_FIREWALL AINKRAD_BACKUP_RECIPIENT AINKRAD_RELEASE_URL; do
+    for _v in AINKRAD_HOSTNAME AINKRAD_ACME_EMAIL AINKRAD_ACME_ENV AINKRAD_HARDEN AINKRAD_FIREWALL AINKRAD_MDNS AINKRAD_BACKUP_RECIPIENT AINKRAD_RELEASE_URL; do
       eval "_val=\${$_v:-}"
       if [ -n "$_val" ] && _q=$(shq "$_val"); then _env="$_env $_v=$_q"; fi
     done
@@ -648,6 +648,8 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     fi
 
     pkgs='ca-certificates curl minisign bubblewrap qrencode openssl iproute2 git unzip jq ripgrep build-essential xz-utils zsh' persist=''
+    # Avahi lets the Mac app find this Core on the same network (AINKRAD_MDNS=no leaves it out and the firewall closed to it).
+    case ${AINKRAD_MDNS:-yes} in no) ;; *) pkgs="$pkgs avahi-daemon" ;; esac
     # Firewall tooling only when hardening was asked for. iptables-persistent clashes with ufw: with ufw installed nothing is
     # added that could remove it; APT::Get::Remove=false makes apt refuse any removal instead of doing it.
     if [ "$harden" = 1 ]; then pkgs="$pkgs iptables"; dpkg -s ufw >/dev/null 2>&1 || persist=iptables-persistent; fi

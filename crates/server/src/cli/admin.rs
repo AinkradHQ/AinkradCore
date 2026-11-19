@@ -12,6 +12,7 @@ use super::{ADMIN, Result_};
 
 mod audit;
 pub mod bootstrap;
+pub mod rendezvous;
 pub mod runner_local;
 
 pub const USAGE: &str = "  ainkrad-core-server setting list <db> [--scope <scope>]

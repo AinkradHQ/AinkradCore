@@ -191,6 +191,11 @@ fw_family() { # IPTABLES-COMMAND PORTS
       else "$ipt" -A AINKRAD_NEW -p tcp -m state --state NEW --dport "$sp" -j ACCEPT || return 1; fi
     done
     for port in 80 443; do "$ipt" -A AINKRAD_NEW -p tcp -m state --state NEW --dport "$port" -j ACCEPT || return 1; done
+    # mDNS (the app finds this Core on the LAN): queries to the multicast group only, so nothing else on UDP 5353 is reachable.
+    if [ "${AINKRAD_MDNS:-yes}" != no ]; then
+      if [ "$ipt" = ip6tables ]; then "$ipt" -A AINKRAD_NEW -p udp --dport 5353 -d ff02::fb -j ACCEPT || return 1
+      else "$ipt" -A AINKRAD_NEW -p udp --dport 5353 -d 224.0.0.251 -j ACCEPT || return 1; fi
+    fi
     if [ "$ipt" = iptables ]; then "$ipt" -A AINKRAD_NEW -j REJECT --reject-with icmp-host-prohibited || return 1
     else "$ipt" -A AINKRAD_NEW -j REJECT --reject-with icmp6-adm-prohibited || return 1; fi
   } || { "$ipt" -F AINKRAD_NEW 2>/dev/null; "$ipt" -X AINKRAD_NEW 2>/dev/null; return 1; }
@@ -224,6 +229,7 @@ apply_firewall() {
       else ufw allow "$sp"/tcp >/dev/null; fi
     done
     ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
+    if [ "${AINKRAD_MDNS:-yes}" != no ]; then ufw allow in proto udp to 224.0.0.251 port 5353 >/dev/null; ufw allow in proto udp to ff02::fb port 5353 >/dev/null; fi
     ufw default deny incoming >/dev/null
     ufw --force enable >/dev/null
     state "firewall=ufw"
