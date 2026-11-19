@@ -103,6 +103,9 @@ pub struct ProjectInfo {
     pub idle_minutes: i64,
     pub cpu_limit: f64,
     pub mem_limit_mb: i64,
+    /// Where it prefers to run: `auto`, `this_mac` or `home_server`.
+    #[schema(required = false)]
+    pub runner: String,
     /// The primary repo first, then by name.
     pub repos: Vec<ProjectRepo>,
     /// The linked Brain room; null when the Brain is off or the project has none.
@@ -146,6 +149,7 @@ pub(super) async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError>
         idle_minutes: p.idle_minutes,
         cpu_limit: p.cpu_limit,
         mem_limit_mb: p.mem_limit_mb,
+        runner: p.runner_pref.clone(),
         repos,
         room,
         created_at: ts(&p.created_at),
@@ -214,6 +218,8 @@ pub struct NewProject {
     pub name: String,
     /// Default empty.
     pub description: Option<String>,
+    /// `auto` (default), `this_mac` or `home_server`.
+    pub runner: Option<String>,
 }
 
 #[utoipa::path(post, path = "/api/v1/projects", operation_id = "createProject", tag = "projects",
@@ -236,6 +242,16 @@ pub async fn create(
         who(&me, &now),
     )
     .await?;
+    let p = match b.runner.as_deref() {
+        Some(r) => {
+            let c = store::Change {
+                runner: Some(r),
+                ..store::Change::default()
+            };
+            store::change(&app.pool, p.id, &c, who(&me, &now)).await?
+        }
+        None => p,
+    };
     Ok(Json(info(&app, p).await?))
 }
 
@@ -253,6 +269,8 @@ pub struct UpdateProject {
     pub cpu_limit: Option<f64>,
     /// Memory a run may use, 64 to 32768 MB.
     pub mem_limit_mb: Option<i64>,
+    /// Where it prefers to run: `auto`, `this_mac` or `home_server`.
+    pub runner: Option<String>,
 }
 
 #[utoipa::path(patch, path = "/api/v1/projects/{id}", operation_id = "updateProject",
@@ -276,6 +294,7 @@ pub async fn update(
         idle_minutes: b.idle_minutes,
         cpu_limit: b.cpu_limit,
         mem_limit_mb: b.mem_limit_mb,
+        runner: b.runner.as_deref(),
     };
     let p = store::change(&app.pool, num(&id, "project")?, &c, who(&me, &now)).await?;
     Ok(Json(info(&app, p).await?))
