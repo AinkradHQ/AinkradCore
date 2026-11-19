@@ -284,7 +284,6 @@ fn a_revoked_runner_exits_6() {
 /// `term new <runner> sh …` (a bare name, as typed), and that shell cannot read the runner's state:
 /// the sandbox is on, not silently skipped. Unit tests open `/bin/sh` through the driver only.
 #[test]
-#[ignore = "E1: opening a terminal needs the app unlock and ainkradctl cannot unlock yet; run it by hand once it can"]
 fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
     // Short: the host's socket path under macOS's long temp dir must fit in sun_path.
     let (core, url) = loopback_core("pty");
@@ -327,9 +326,47 @@ fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
         core.dir.join("vm").display(),
         o = out.display()
     );
-    let o = ctl(&args(&[&a, &s(&["term", "new", &id, "sh", "-c", &script])]));
     let log = || std::fs::read_to_string(core.dir.join("vm.log")).unwrap_or_default();
-    assert!(o.status.success(), "{o:?}\n{}", log());
+    // The CLI cannot unlock (a routine key must not), and says so plainly.
+    let refused = ctl(&args(&[&a, &s(&["term", "new", &id, "sh", "-c", &script])]));
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr)
+            .contains("Terminals open from the Ainkrad app (they need the app unlock)"),
+        "{refused:?}"
+    );
+    // The fixture unlocks the device for real, with its step-up key (the V2 session proof), and
+    // opens the terminal in-process with the token; the gate is the production one.
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let (mut client, term) = rt.block_on(async {
+        use ainkrad_ctl::client::Client;
+        use ainkrad_ctl::keystore::Keystore;
+        use ainkrad_ctl::net::{Endpoint, Net};
+        use ainkrad_ctl::terminals::{Options, terminal};
+        let net = Net::new(Endpoint::Unix(core.sock.clone()), core.host.clone(), None).unwrap();
+        let store = Keystore::load(&ks).unwrap();
+        let (device, core_fp) = (store.device_id.clone(), store.core_fp.clone());
+        let key = ainkrad_ctl::stepup::load(
+            &ainkrad_ctl::stepup::path_for(&ks),
+            PASSPHRASE.as_bytes(),
+            &device,
+            &core_fp,
+        )
+        .unwrap();
+        let mut c = Client::new(net, store);
+        c.unlock_with(
+            |m| key.sign(m),
+            |sess, ch| ainkrad_ctl::stepup::message_v2(&core_fp, &device, sess, ch, "session"),
+        )
+        .await
+        .unwrap();
+        let mut out = Vec::new();
+        let opts = Options { rows: None, cols: None, cwd: None, signal: None };
+        terminal(&mut c, &["new", &id, "sh", "-c", &script], &opts, false, &mut out)
+            .await
+            .unwrap();
+        (c, String::from_utf8(out).unwrap().trim().to_owned())
+    });
     let start = Instant::now();
     let seen = loop {
         let seen = std::fs::read_to_string(&out).unwrap_or_default();
@@ -344,8 +381,13 @@ fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
         std::thread::sleep(Duration::from_millis(100));
     };
     // Closed, so the host (which keeps an exited terminal until it is acknowledged) goes too.
-    let o = ctl(&args(&[&a, &s(&["term", "kill", stdout(&o).trim()])]));
-    assert!(o.status.success(), "{o:?}");
+    rt.block_on(async {
+        use ainkrad_ctl::terminals::{Options, terminal};
+        let opts = Options { rows: None, cols: None, cwd: None, signal: None };
+        terminal(&mut client, &["kill", &term], &opts, false, &mut Vec::new())
+            .await
+            .unwrap();
+    });
     // Background jobs and /dev/null work in the sandbox (E2 exit step 2).
     assert!(seen.contains("DEV-OK"), "{seen}");
     assert!(
