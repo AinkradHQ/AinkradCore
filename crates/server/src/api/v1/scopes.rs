@@ -246,6 +246,18 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
         "agent",
     ),
     ("POST", "/api/v1/agent-sessions/{id}/mode", "agent"),
+    // A session's folder (E14): the listing is read like the transcript; a revert and a write
+    // change files on the runner.
+    ("GET", "/api/v1/agent-sessions/{id}/files", "agent"),
+    ("POST", "/api/v1/agent-sessions/{id}/files/revert", "agent"),
+    ("POST", "/api/v1/agent-sessions/{id}/files/write", "agent"),
+    // "Always for this project" rules (E14).
+    ("GET", "/api/v1/projects/{id}/approval-rules", "agent"),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/approval-rules/{rule}",
+        "approve",
+    ),
     ("POST", "/api/v1/agent-sessions/{id}/cancel", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/kill", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/resume", "agent"),
@@ -384,6 +396,11 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ),
     // A mode change can widen what the harness does unasked (accept_edits, leaving plan).
     ("POST", "/api/v1/agent-sessions/{id}/mode"),
+    // They change files on the runner, as a message could.
+    ("POST", "/api/v1/agent-sessions/{id}/files/revert"),
+    ("POST", "/api/v1/agent-sessions/{id}/files/write"),
+    // Removing a rule makes later calls ask again; it is a deletion like any other.
+    ("DELETE", "/api/v1/projects/{id}/approval-rules/{rule}"),
     ("POST", "/api/v1/agent-sessions/{id}/cancel"),
     ("POST", "/api/v1/agent-sessions/{id}/kill"),
     ("POST", "/api/v1/agent-sessions/{id}/resume"),

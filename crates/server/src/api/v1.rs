@@ -541,6 +541,26 @@ pub fn router(app: App) -> Router {
             "/api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop",
             post(agents::stop_subagent),
         )
+        .route(
+            "/api/v1/agent-sessions/{id}/files",
+            get(agents::files::list),
+        )
+        .route(
+            "/api/v1/agent-sessions/{id}/files/revert",
+            post(agents::files::revert),
+        )
+        .route(
+            "/api/v1/agent-sessions/{id}/files/write",
+            post(agents::files::write),
+        )
+        .route(
+            "/api/v1/projects/{id}/approval-rules",
+            get(agents::rules::list),
+        )
+        .route(
+            "/api/v1/projects/{id}/approval-rules/{rule}",
+            axum::routing::delete(agents::rules::delete),
+        )
         .route("/api/v1/agent-sessions/{id}/mode", post(agents::mode))
         .route("/api/v1/agent-sessions/{id}/cancel", post(agents::cancel))
         .route("/api/v1/agent-sessions/{id}/kill", post(agents::kill))
