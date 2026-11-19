@@ -136,7 +136,7 @@ async fn no_account_column_or_audit_row_holds_the_value() {
             "account.created",
             "account.secret_replaced",
             "account.state_set",
-            "account.deleted"
+            "account.wiped"
         ]
     );
     let cols: Vec<String> =

@@ -173,5 +173,8 @@ pub async fn clear_agent(
 ) -> ApiResult<AccountsDeleted> {
     let user = ch::user_of(&app.pool, &me.device.id).await?;
     order::clear_agent(&app.pool, user, &agent, &me.device.id, BY).await?;
-    Ok(Json(AccountsDeleted { deleted: true }))
+    Ok(Json(AccountsDeleted {
+        deleted: true,
+        undo_until: None,
+    }))
 }

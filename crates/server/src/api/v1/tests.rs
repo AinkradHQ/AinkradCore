@@ -24,6 +24,7 @@ use crate::scheduler::Clock;
 use crate::store::connect;
 
 mod abuse;
+mod account_remove;
 mod account_secrets;
 mod accounts_api;
 mod accounts_gateway;

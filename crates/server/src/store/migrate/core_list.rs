@@ -299,6 +299,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0049_e7_retire_account_limits.up.sql"),
         down: include_str!("../../../migrations/0049_e7_retire_account_limits.down.sql"),
     },
+    Migration {
+        version: 50,
+        name: "e7_account_soft_delete",
+        up: include_str!("../../../migrations/0050_e7_account_soft_delete.up.sql"),
+        down: include_str!("../../../migrations/0050_e7_account_soft_delete.down.sql"),
+    },
 ];
 
 #[cfg(test)]

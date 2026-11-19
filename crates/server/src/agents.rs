@@ -24,6 +24,7 @@
 //! - **Capacity** (E2-08.1): a create is refused `runner_busy` when the runner's `agent`
 //!   driver, or the harness's slot on it, is full (the runner refuses it too).
 
+pub mod account_wipe;
 mod allocate;
 pub mod attach;
 mod bound;

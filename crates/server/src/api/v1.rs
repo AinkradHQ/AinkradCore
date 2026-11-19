@@ -306,6 +306,7 @@ pub fn router(app: App) -> Router {
             "/api/v1/accounts/{id}",
             get(accounts::get).delete(accounts::delete),
         )
+        .route("/api/v1/accounts/{id}/restore", post(accounts::restore))
         .route(
             "/api/v1/accounts/{id}/secret",
             put(accounts::replace_secret),

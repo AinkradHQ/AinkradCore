@@ -205,6 +205,7 @@ fn offers(listed: &str, op: &str) -> bool {
                     | ainkrad_proto::v2::OP_LOGIN_SCREEN
             ))
         || (listed == CAP_LOGIN && op == ainkrad_proto::v2::OP_LOGIN_WAIT)
+        || (listed == ainkrad_proto::v2::CAP_LOGIN_WIPE && op == ainkrad_proto::v2::OP_LOGIN_WIPE)
 }
 
 impl Runner {

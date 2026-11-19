@@ -296,7 +296,7 @@ async fn deleting_an_account_leaves_no_tied_seats_and_audits_the_pools() {
     assert_eq!(pl::get(p, pool.id).await.unwrap().members, [c, d]);
     // The audit row of the deletion names both pools that held `a`.
     let details: String =
-        sqlx::query_scalar("SELECT details FROM audit_events WHERE action = 'account.deleted'")
+        sqlx::query_scalar("SELECT details FROM audit_events WHERE action = 'account.wiped'")
             .fetch_one(p)
             .await
             .unwrap();

@@ -112,7 +112,10 @@ pub async fn delete_provider(
     prov::delete(&app.pool, &id, &me.device.id, BY)
         .await
         .map_err(err)?;
-    Ok(Json(AccountsDeleted { deleted: true }))
+    Ok(Json(AccountsDeleted {
+        deleted: true,
+        undo_until: None,
+    }))
 }
 
 /// The accounts' load and health, for an `admin` device only: how many sessions hold an account
@@ -524,17 +527,46 @@ pub async fn check_account(
 
 #[utoipa::path(delete, path = "/api/v1/accounts/{id}", operation_id = "deleteAccount",
     tag = "accounts", params(("id" = String, Path, description = "The account's id")),
-    responses((status = 200, description = "Deleted with its key, its leases and its pool \
-        seats (audited as `account.deleted`)", body = AccountsDeleted)))]
+    responses((status = 200, description = "Removed with an Undo window (audited as \
+        `account.deleted`): at once it is gone from every list, out of its pool seats and the AI \
+        order, takes no new session and holds no lease. `undo_until` is when `POST \
+        /accounts/{id}/restore` stops working; after it the key, the row, the seats, the budgets and a \
+        runner-bound login on its runner are wiped for good (audited as `account.wiped`)",
+        body = AccountsDeleted)))]
 pub async fn delete(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path(id): Path<String>,
 ) -> ApiResult<AccountsDeleted> {
-    crate::agents::subscription::delete(&app, num(&id, "account")?, &me.device.id, BY)
+    let until = crate::agents::subscription::delete(&app, num(&id, "account")?, &me.device.id, BY)
         .await
         .map_err(err)?;
-    Ok(Json(AccountsDeleted { deleted: true }))
+    Ok(Json(AccountsDeleted {
+        deleted: true,
+        undo_until: Some(until),
+    }))
+}
+
+#[utoipa::path(post, path = "/api/v1/accounts/{id}/restore", operation_id = "restoreAccount",
+    tag = "accounts", params(("id" = String, Path, description = "The account's id")),
+    responses((status = 200, description = "Undoes a delete within its window (audited as \
+        `account.restored`): its state and its pool seats come back. 404 for an account that is not \
+        removed or whose window has ended", body = AccountRestored)))]
+pub async fn restore(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<AccountRestored> {
+    crate::store::accounts::restore(
+        &app.pool,
+        num(&id, "account")?,
+        &me.device.id,
+        BY,
+        &app.clock.now(),
+    )
+    .await
+    .map_err(err)?;
+    Ok(Json(AccountRestored { restored: true }))
 }
 
 mod logins;

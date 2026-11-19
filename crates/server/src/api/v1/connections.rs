@@ -411,7 +411,10 @@ pub async fn delete(
     let user = workspace(&app, &me).await?;
     let now = app.clock.now();
     store::delete(&app.pool, num(&id)?, who(&me, user, &now)).await?;
-    Ok(Json(AccountsDeleted { deleted: true }))
+    Ok(Json(AccountsDeleted {
+        deleted: true,
+        undo_until: None,
+    }))
 }
 
 #[derive(Debug, Default, Deserialize, IntoParams)]

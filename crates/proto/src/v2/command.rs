@@ -117,6 +117,9 @@ pub enum Command {
     LoginInput(super::LoginInput),
     #[serde(rename = "login.screen")]
     LoginScreen(super::LoginScreenReq),
+    /// (After every older op.) Wipe a removed runner-bound account's home (E7 closeout).
+    #[serde(rename = "login.wipe")]
+    LoginWipe(super::LoginWipe),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -150,6 +153,7 @@ impl Command {
             Self::LoginWait(_) => super::OP_LOGIN_WAIT,
             Self::LoginInput(_) => super::OP_LOGIN_INPUT,
             Self::LoginScreen(_) => super::OP_LOGIN_SCREEN,
+            Self::LoginWipe(_) => super::OP_LOGIN_WIPE,
             Self::RunnerPolicy(_) => super::OP_RUNNER_POLICY,
             Self::ToolsInstall(_) => super::OP_TOOLS_INSTALL,
             Self::ToolsStatus(_) => super::OP_TOOLS_STATUS,

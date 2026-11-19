@@ -125,7 +125,7 @@ pub async fn report(
 ) -> Result<Vec<AccountUsage>, sqlx::Error> {
     let mut conn = pool.acquire().await?;
     let ids: Vec<i64> =
-        sqlx::query_scalar("SELECT id FROM core_accounts WHERE ?1 IS NULL OR id = ?1 ORDER BY id")
+        sqlx::query_scalar("SELECT id FROM core_accounts WHERE deleted_at IS NULL AND (?1 IS NULL OR id = ?1) ORDER BY id")
             .bind(only)
             .fetch_all(&mut *conn)
             .await?;

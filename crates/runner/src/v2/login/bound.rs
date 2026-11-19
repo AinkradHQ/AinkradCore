@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use ainkrad_proto::v2::{
     BOUND_HOME_DIR, ErrorCode, LOGIN_INPUT_MAX, LoginInput, LoginResult, LoginScreen,
-    LoginScreenReq, LoginStart, LoginUrl, LoginWait, StreamError, bound_key_ok,
+    LoginScreenReq, LoginStart, LoginUrl, LoginWait, LoginWipe, StreamError, bound_key_ok,
 };
 use ainkrad_ptyhost::pty::{self, Pty, Spec};
 use std::io::Write;
@@ -263,6 +263,18 @@ impl LoginDriver {
             .map_err(|_| err(ErrorCode::Internal, "the sign-in ended"))?;
         rrx.await
             .map_err(|_| err(ErrorCode::Internal, "the sign-in ended"))
+    }
+
+    /// `login.wipe`: deletes a removed account's home from this runner. Idempotent: a home that is not
+    /// there is already wiped.
+    pub async fn wipe(&self, req: LoginWipe) -> Result<LoginResult, StreamError> {
+        match wipe_home(&self.cfg.homes, &req.home) {
+            Ok(()) => Ok(LoginResult {
+                done: true,
+                ..result(&req.home, None)
+            }),
+            Err(why) => Err(err(ErrorCode::InvalidArgs, why)),
+        }
     }
 
     /// `login.input`: one typed line, with Enter, into the sign-in's terminal.
@@ -611,6 +623,23 @@ fn snapshot(id: &str, screen: &Screen) -> LoginScreen {
         lines,
         url: find_page(done),
         code: find_device_code(done),
+    }
+}
+
+/// Deletes `<homes>/<key>`. The key must be a plain one (`bound_key_ok`: no separator, no `..`), so
+/// the path can only be a direct child of `homes`; a symlink there is refused (its target is never
+/// followed or touched); `remove_dir_all` does not follow links inside the home either.
+pub(super) fn wipe_home(homes: &Path, key: &str) -> Result<(), &'static str> {
+    if !bound_key_ok(key) {
+        return Err("a home key is 1 to 64 of [A-Za-z0-9_-]");
+    }
+    let dir = homes.join(key);
+    match std::fs::symlink_metadata(&dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("the home could not be read"),
+        Ok(m) if m.file_type().is_symlink() => Err("the home is a symlink: left alone"),
+        Ok(m) if !m.is_dir() => Err("the home is not a directory"),
+        Ok(_) => std::fs::remove_dir_all(&dir).map_err(|_| "the home could not be deleted"),
     }
 }
 

@@ -378,3 +378,29 @@ async fn a_wrong_code_does_not_count_and_the_words_must_say_signed_in() {
     assert!(!signed_in(&l("You are not logged in as anyone")));
     assert!(!signed_in(&l("Sign in to continue")));
 }
+
+#[test]
+fn a_wipe_deletes_only_a_plain_home_under_the_homes_dir_and_never_follows_a_symlink() {
+    use super::bound::wipe_home;
+    let t = Tmp::new();
+    let homes = t.file("homes");
+    std::fs::create_dir_all(homes.join("lg_1/sub")).unwrap();
+    std::fs::write(homes.join("lg_1/sub/auth.json"), FAKE_AUTH).unwrap();
+    // A neighbour and an outside dir that must survive.
+    std::fs::create_dir_all(homes.join("lg_2")).unwrap();
+    let outside = t.file("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, homes.join("evil")).unwrap();
+    assert_eq!(wipe_home(&homes, "lg_1"), Ok(()));
+    assert!(!homes.join("lg_1").exists() && homes.join("lg_2").exists());
+    // Already gone: still done.
+    assert_eq!(wipe_home(&homes, "lg_1"), Ok(()));
+    // A symlink is refused and its target stays.
+    assert!(wipe_home(&homes, "evil").is_err());
+    assert!(outside.exists() && homes.join("evil").exists());
+    // A key that is not plain never becomes a path.
+    for bad in ["", "..", "../outside", "a/b", "a.b"] {
+        assert!(wipe_home(&homes, bad).is_err(), "{bad}");
+    }
+    assert!(outside.exists());
+}

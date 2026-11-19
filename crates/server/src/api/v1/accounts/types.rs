@@ -307,6 +307,15 @@ pub struct AccountChecked {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AccountsDeleted {
     pub deleted: bool,
+    /// Only for `deleteAccount`: when its Undo window ends (RFC 3339, UTC).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub undo_until: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AccountRestored {
+    pub restored: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

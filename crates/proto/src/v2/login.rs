@@ -22,6 +22,8 @@ pub const OP_LOGIN_WAIT: &str = "login.wait";
 pub const OP_LOGIN_INPUT: &str = "login.input";
 /// Core to runner: read the redacted screen of a runner-bound sign-in (the guided terminal).
 pub const OP_LOGIN_SCREEN: &str = "login.screen";
+/// Core to runner: delete a runner-bound account's login (its home dir) from the runner.
+pub const OP_LOGIN_WIPE: &str = "login.wipe";
 /// The most a typed line may be.
 pub const LOGIN_INPUT_MAX: usize = 512;
 
@@ -30,6 +32,8 @@ pub const CAP_LOGIN: &str = "login";
 /// Prefix of the command a runner lists for each harness whose login it can run bound to itself
 /// (`login-bound:codex`): the credential stays in that runner's own home for the account.
 pub const CAP_LOGIN_BOUND: &str = "login-bound:";
+/// The command a runner lists when it can wipe a bound account's home (`login.wipe`).
+pub const CAP_LOGIN_WIPE: &str = "login-wipe";
 
 /// Core to runner: begin the sign-in of `harness` (`claude`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -102,6 +106,15 @@ impl std::fmt::Debug for LoginInput {
             .field("login_id", &self.login_id)
             .finish_non_exhaustive()
     }
+}
+
+/// Core to runner: delete the home of a removed runner-bound account. The runner checks the key
+/// (`bound_key_ok`), touches only `<agents-config>/bound/<home>`, refuses a symlink there, and answers
+/// a `login.result` with `done` set (also when there was nothing to delete), or an error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct LoginWipe {
+    /// The account's home key (`[A-Za-z0-9_-]{1,64}`).
+    pub home: String,
 }
 
 /// Core to runner: the current screen of the sign-in.

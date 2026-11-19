@@ -29,7 +29,11 @@ use super::secrets::{self, Error, NewValue};
 use crate::ops::secretbox::SecretBox;
 
 mod create;
+mod remove;
 pub use create::{bound_marker, create, create_bound, create_by, create_placed};
+pub use remove::{
+    PendingWipe, UNDO_SECS, pending_wipes, restore, soft_delete, wipe_done, wipe_due, wipe_tried,
+};
 
 /// The cap a new API-key account starts with.
 pub const DEFAULT_CAP: i64 = 4;
@@ -177,13 +181,20 @@ pub(super) async fn audit(
     Ok(())
 }
 
+/// An account that is not removed (a removed one is waiting out its Undo window: it is gone to everyone).
 pub(super) async fn find(conn: &mut SqliteConnection, id: i64) -> Result<Account, Error> {
+    find_in(conn, id, false).await
+}
+
+/// The same, a removed account too (its restore and its wipe).
+async fn find_in(conn: &mut SqliteConnection, id: i64, removed: bool) -> Result<Account, Error> {
     let sql = format!(
         "SELECT {COLUMNS} FROM core_accounts a LEFT JOIN core_secrets s ON s.name = a.secret_name \
-         WHERE a.id = ?"
+         WHERE a.id = ? AND (? OR a.deleted_at IS NULL)"
     );
     match sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(id)
+        .bind(removed)
         .fetch_optional(&mut *conn)
         .await?
     {
@@ -201,7 +212,7 @@ pub async fn get(pool: &SqlitePool, id: i64) -> Result<Account, Error> {
 pub async fn list(pool: &SqlitePool) -> Result<Vec<Account>, sqlx::Error> {
     let sql = format!(
         "SELECT {COLUMNS} FROM core_accounts a LEFT JOIN core_secrets s ON s.name = a.secret_name \
-         ORDER BY a.id"
+         WHERE a.deleted_at IS NULL ORDER BY a.id"
     );
     sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
@@ -388,7 +399,9 @@ pub async fn set_cap(
     Ok(a)
 }
 
-/// Deletes the account and its key (with the key's leases).
+/// Wipes the account for real: the row, its key (with the key's leases), its seats and budgets; for a
+/// runner-bound account also a pending wipe of its login on its runner. The API removes with an Undo
+/// window first ([`soft_delete`]); this is what ends it, audited `account.wiped`.
 pub async fn delete(
     pool: &SqlitePool,
     id: i64,
@@ -396,13 +409,23 @@ pub async fn delete(
     actor: AuditActor,
 ) -> Result<(), Error> {
     let mut tx = super::begin_write(pool).await?;
-    let a = find(&mut tx, id).await?;
+    let a = find_in(&mut tx, id, true).await?;
     // The seats the cascade takes with the row, so the audit trail says which pools lost it.
     let pools: Vec<i64> = sqlx::query_scalar(
         "SELECT pool_id FROM core_pool_members WHERE account_id = ? ORDER BY pool_id",
     )
     .bind(id)
     .fetch_all(&mut *tx)
+    .await?;
+    // The runner still holds the login: remember where, until it says it is wiped (the row is gone
+    // after this, and so is its `core_account_bound`).
+    sqlx::query(
+        "INSERT OR IGNORE INTO core_account_wipes (runner, home, created_at) \
+         SELECT runner, home, ? FROM core_account_bound WHERE account_id = ?",
+    )
+    .bind(&a.updated_at)
+    .bind(id)
+    .execute(&mut *tx)
     .await?;
     sqlx::query("DELETE FROM core_accounts WHERE id = ?")
         .bind(id)
@@ -418,7 +441,7 @@ pub async fn delete(
     audit(
         &mut tx,
         actor,
-        "account.deleted",
+        "account.wiped",
         id,
         json!({"provider": a.provider, "label": a.label, "pools": pools, "by_device": by_device}),
     )
