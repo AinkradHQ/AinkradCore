@@ -10,6 +10,11 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/lib/ainkrad/update.sh %i
+# However this run ends (a crash, the timeout, a kill), the service it stopped is started again.
+ExecStopPost=/usr/local/lib/ainkrad/update.sh recover-%i
+# Root's own state: /var/lib/ainkrad-update, 0755 root. Never inside the Core's /var/lib/ainkrad.
+StateDirectory=ainkrad-update
+StateDirectoryMode=0755
 TimeoutStartSec=30min
 UMask=0022
 Nice=10
