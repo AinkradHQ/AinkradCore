@@ -274,6 +274,7 @@ pub fn router(app: App) -> Router {
             delete(costs::clear_limit),
         )
         .route("/api/v1/costs", get(costs::list))
+        .route("/api/v1/costs/series", get(costs::series))
         .route("/api/v1/budgets", get(budgets::list).put(budgets::set))
         .route("/api/v1/budgets/{id}", delete(budgets::delete))
         .route("/api/v1/budgets/{id}/raise", post(budgets::raise))
