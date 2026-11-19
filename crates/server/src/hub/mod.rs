@@ -194,6 +194,18 @@ fn offers(listed: &str, op: &str) -> bool {
         || (listed == ainkrad_proto::v2::CAP_HISTORY_READ
             && op == ainkrad_proto::v2::OP_HISTORY_READ)
         || (listed == CAP_LOGIN && matches!(op, OP_LOGIN_START | OP_LOGIN_CODE | OP_LOGIN_CANCEL))
+        // A runner-bound sign-in (E7-4): `login-bound:<harness>` brings the start, wait and cancel ops.
+        || (listed.starts_with(ainkrad_proto::v2::CAP_LOGIN_BOUND)
+            && matches!(
+                op,
+                OP_LOGIN_START
+                    | OP_LOGIN_CANCEL
+                    | ainkrad_proto::v2::OP_LOGIN_WAIT
+                    | ainkrad_proto::v2::OP_LOGIN_INPUT
+                    | ainkrad_proto::v2::OP_LOGIN_SCREEN
+            ))
+        || (listed == CAP_LOGIN && op == ainkrad_proto::v2::OP_LOGIN_WAIT)
+        || (listed == ainkrad_proto::v2::CAP_LOGIN_WIPE && op == ainkrad_proto::v2::OP_LOGIN_WIPE)
 }
 
 impl Runner {

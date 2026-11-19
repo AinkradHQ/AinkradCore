@@ -119,7 +119,7 @@ async fn bad_input_is_refused_before_it_is_written() {
 }
 
 #[tokio::test]
-async fn usage_windows_limits_company_slices_and_drops_read_from_the_ledger() {
+async fn usage_windows_company_slices_and_drops_read_from_the_ledger() {
     let (fx, vm, s) = setup().await;
     let a = make(&fx, &s, "main", V1, std::slice::from_ref(&vm.id)).await;
     let other = make(&fx, &s, "other", "throwaway-account-value-two-77d0be", &[]).await;
@@ -141,31 +141,6 @@ async fn usage_windows_limits_company_slices_and_drops_read_from_the_ledger() {
     costs::record(&fx.app.pool, &cost("s9", 0, "z", Some(other.id)), NOW)
         .await
         .unwrap();
-    // A limit of 120 tokens in 5 hours: 150 used is over; a message cap of 10 in a day.
-    usage::set_limit(
-        &fx.app.pool,
-        a.id,
-        "tokens",
-        5 * 3600,
-        120,
-        None,
-        &fx.dev.id,
-        BY,
-    )
-    .await
-    .unwrap();
-    usage::set_limit(
-        &fx.app.pool,
-        a.id,
-        "messages",
-        86_400,
-        10,
-        Some(50),
-        &fx.dev.id,
-        BY,
-    )
-    .await
-    .unwrap();
     let mut conn = fx.app.pool.acquire().await.unwrap();
     for _ in 0..6 {
         usage::record_event_in(&mut conn, a.id, Some("s1"), "message", NOW)
@@ -186,22 +161,6 @@ async fn usage_windows_limits_company_slices_and_drops_read_from_the_ledger() {
     );
     assert_eq!((r.seven_days.total_tokens, r.five_hours.messages), (300, 6));
     assert_eq!(r.recent_drops, 1);
-    let tokens = &r.limits[0];
-    assert_eq!(
-        (
-            tokens.unit.as_str(),
-            tokens.used,
-            tokens.exhausted,
-            tokens.warn_percent
-        ),
-        ("tokens", 150, true, 80)
-    );
-    let msgs = &r.limits[1];
-    assert_eq!(
-        (msgs.used, msgs.exhausted, msgs.warn_percent),
-        (6, false, 50)
-    );
-    assert_eq!(r.max_utilisation_bps, 12_500);
     // Company 7 used 150 in 5 hours (one event) and 300 in 7 days; company 8 only the day-old one.
     let slice = |c: &str| r.by_company.iter().find(|s| s.company == c).unwrap();
     assert_eq!(slice("7").five_hours.total_tokens, 150);
@@ -210,44 +169,6 @@ async fn usage_windows_limits_company_slices_and_drops_read_from_the_ledger() {
     assert_eq!(slice("8").seven_days.total_tokens, 150);
     // The other account has its own usage and no limits.
     assert_eq!(report[1].five_hours.total_tokens, 3_500_000);
-    assert!(report[1].limits.is_empty());
-    // Limits are audited, refused when malformed, and cleared once.
-    assert_eq!(
-        code(usage::set_limit(&fx.app.pool, a.id, "bytes", 60, 1, None, &fx.dev.id, BY).await),
-        "bad_request"
-    );
-    assert_eq!(
-        code(usage::set_limit(&fx.app.pool, a.id, "tokens", 0, 1, None, &fx.dev.id, BY).await),
-        "bad_request"
-    );
-    assert_eq!(
-        code(usage::set_limit(&fx.app.pool, 999, "tokens", 60, 1, None, &fx.dev.id, BY).await),
-        "not_found"
-    );
-    assert!(
-        usage::clear_limit(&fx.app.pool, a.id, "tokens", 5 * 3600, &fx.dev.id, BY)
-            .await
-            .unwrap()
-    );
-    assert!(
-        !usage::clear_limit(&fx.app.pool, a.id, "tokens", 5 * 3600, &fx.dev.id, BY)
-            .await
-            .unwrap()
-    );
-    let actions: Vec<String> = sqlx::query_scalar(
-        "SELECT action FROM audit_events WHERE action LIKE 'account.limit_%' ORDER BY seq",
-    )
-    .fetch_all(&fx.app.pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        actions,
-        [
-            "account.limit_set",
-            "account.limit_set",
-            "account.limit_cleared"
-        ]
-    );
 }
 
 #[tokio::test]

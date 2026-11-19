@@ -29,6 +29,7 @@ mod agents;
 #[cfg(feature = "test-support")]
 pub use agents::create as create_agent_for_tests;
 mod accounts;
+mod ai_order;
 mod audit;
 mod budgets;
 mod chains;
@@ -276,11 +277,6 @@ pub fn router(app: App) -> Router {
             get(accounts::list).post(accounts::create),
         )
         .route("/api/v1/accounts/usage", get(costs::accounts_usage))
-        .route("/api/v1/accounts/{id}/limits", put(costs::set_limit))
-        .route(
-            "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
-            delete(costs::clear_limit),
-        )
         .route("/api/v1/costs", get(costs::list))
         .route("/api/v1/costs/series", get(costs::series))
         .route("/api/v1/budgets", get(budgets::list).put(budgets::set))
@@ -308,9 +304,18 @@ pub fn router(app: App) -> Router {
             post(accounts::send_login_code),
         )
         .route(
+            "/api/v1/accounts/logins/{id}/input",
+            post(accounts::send_login_input),
+        )
+        .route(
+            "/api/v1/accounts/logins/{id}/screen",
+            get(accounts::get_login_screen),
+        )
+        .route(
             "/api/v1/accounts/{id}",
             get(accounts::get).delete(accounts::delete),
         )
+        .route("/api/v1/accounts/{id}/restore", post(accounts::restore))
         .route(
             "/api/v1/accounts/{id}/secret",
             put(accounts::replace_secret),
@@ -320,6 +325,11 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/accounts/{id}/session-limits",
             put(accounts::set_session_limits),
+        )
+        .route("/api/v1/accounts/{id}/models", get(accounts::list_models))
+        .route(
+            "/api/v1/accounts/{id}/models/{model}",
+            put(accounts::set_model_allowed),
         )
         .route("/api/v1/accounts/{id}/test", post(accounts::test_account))
         .route("/api/v1/accounts/{id}/check", post(accounts::check_account))
@@ -340,6 +350,11 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/bindings/{agent}/{provider}",
             delete(accounts::unbind),
+        )
+        .route("/api/v1/ai-order", get(ai_order::get).put(ai_order::set))
+        .route(
+            "/api/v1/ai-order/agents/{agent}",
+            put(ai_order::set_agent).delete(ai_order::clear_agent),
         )
         .route("/api/v1/chains", get(chains::list).post(chains::create))
         .route("/api/v1/chains/bindings", get(chains::list_bindings))
@@ -387,6 +402,10 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/connections/{id}/activity",
             get(connections::activity),
+        )
+        .route(
+            "/api/v1/connections/{id}/resources",
+            get(connections::resources::list),
         )
         .route(
             "/api/v1/connections/{id}/grants",

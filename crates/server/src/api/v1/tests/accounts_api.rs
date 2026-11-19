@@ -167,6 +167,11 @@ async fn every_write_needs_admin_and_no_step_up_and_a_phone_may_only_read() {
         (Method::PUT, "/api/v1/accounts/1/cap", json!({"cap": 8})),
         (
             Method::PUT,
+            "/api/v1/accounts/1/models/m",
+            json!({"allowed": false}),
+        ),
+        (
+            Method::PUT,
             "/api/v1/accounts/1/session-limits",
             json!({"max_tokens": 400_000}),
         ),
@@ -415,5 +420,25 @@ async fn the_list_gives_an_admin_the_months_spend_and_limit() {
     assert!(
         seen[0]["month_spend_usd_micros"].is_null(),
         "a phone does not see spend"
+    );
+    // The usage meter of the row: the dollar budget's use and the state, for an admin only.
+    let u = &of(a)["usage"];
+    assert_eq!(
+        (
+            u["state"].as_str(),
+            u["unit"].as_str(),
+            u["window"].as_str()
+        ),
+        (Some("ready"), Some("usd_micros"), Some("month"))
+    );
+    assert_eq!(
+        (u["used"].as_f64(), u["limit"].as_f64()),
+        (Some(2e6), Some(5e7))
+    );
+    assert!((u["fraction"].as_f64().unwrap() - 0.04).abs() < 1e-9);
+    assert!(u["resets_at"].is_string());
+    assert!(
+        seen[0].get("usage").is_none(),
+        "a phone does not see the meter"
     );
 }

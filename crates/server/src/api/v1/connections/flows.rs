@@ -234,7 +234,10 @@ pub async fn cancel(
     let user = workspace(&app, &me).await?;
     mine(&app, &me, user, &id)?;
     app.conn_flows.cancel(user, &me.device.id, &id).await;
-    Ok(Json(AccountsDeleted { deleted: true }))
+    Ok(Json(AccountsDeleted {
+        deleted: true,
+        undo_until: None,
+    }))
 }
 
 #[utoipa::path(post, path = "/api/v1/connections/flows/{id}/callback",

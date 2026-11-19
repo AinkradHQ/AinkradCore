@@ -155,6 +155,7 @@ async fn a_user_definitions_own_prices_are_the_fallback_when_the_book_has_none()
         key_prefix: None,
         test_path: None,
         builtin: false,
+        preset: false,
         version: 0,
     };
     prov::create(&fx.app.pool, &d, &fx.dev.id, BY, NOW)

@@ -243,6 +243,7 @@ fn budget<'a>(
     usd: Option<i64>,
 ) -> NewBudget<'a> {
     NewBudget {
+        message_cap: None,
         kind,
         subject,
         company: None,
@@ -458,6 +459,7 @@ fn the_allocator_and_the_grant_price_a_turn_from_one_book() {
         key_prefix: Some("sk-or-".to_owned()),
         test_path: None,
         builtin: false,
+        preset: false,
         version: 1,
     };
     // No book price: the definition's own model is priced (the grant would admit it).

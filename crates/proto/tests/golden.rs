@@ -579,6 +579,7 @@ fn v2_agent_frames_are_pinned() {
             gateway: None,
             epoch: 0,
             live: false,
+            home: None,
         })),
     );
     // A policy with every isolation field set (E8a-08); the frame above pins the unchanged shape.
@@ -612,6 +613,7 @@ fn v2_agent_frames_are_pinned() {
             gateway: None,
             epoch: 0,
             live: false,
+            home: None,
         })),
     );
     v2(
@@ -856,6 +858,7 @@ fn v2_agent_frames_are_pinned() {
             })),
             epoch: 0,
             live: false,
+            home: None,
         })),
     );
     v2(
@@ -880,6 +883,7 @@ fn v2_agent_frames_are_pinned() {
             user_key: None,
             upstream,
             test_path: None,
+            want_models: false,
         })),
     );
     v2(
@@ -889,6 +893,7 @@ fn v2_agent_frames_are_pinned() {
         Body::Command(Command::LoginStart(LoginStart {
             login_id: "lg_test".to_owned(),
             harness: "claude".to_owned(),
+            home: None,
         })),
     );
     v2(
@@ -898,6 +903,7 @@ fn v2_agent_frames_are_pinned() {
         Body::Result(Reply::LoginUrl(LoginUrl {
             login_id: "lg_test".to_owned(),
             url: "https://claude.ai/oauth/authorize?state=TESTONLY".to_owned(),
+            code: None,
         })),
     );
     v2(
@@ -917,6 +923,7 @@ fn v2_agent_frames_are_pinned() {
             login_id: "lg_test".to_owned(),
             token: Some("sk-ant-oat01-TESTONLY".to_owned()),
             error: None,
+            done: false,
         })),
     );
     v2(
