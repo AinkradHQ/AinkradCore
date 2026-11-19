@@ -203,6 +203,64 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/run/stop", "admin"),
     ("POST", "/api/v1/projects/{id}/run/restart", "admin"),
     ("POST", "/api/v1/projects/{id}/run/activity", "read"),
+    // Run configurations and environments (Core 0.10, E11-3): values never leave except `value`.
+    ("GET", "/api/v1/projects/{id}/runs", "read"),
+    ("GET", "/api/v1/projects/{id}/run-configs", "read"),
+    ("POST", "/api/v1/projects/{id}/run-configs", "admin"),
+    ("GET", "/api/v1/projects/{id}/run-configs/{config}", "read"),
+    (
+        "PATCH",
+        "/api/v1/projects/{id}/run-configs/{config}",
+        "admin",
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/run-configs/{config}",
+        "admin",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/run-configs/{config}/duplicate",
+        "admin",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/run-configs/{config}/run",
+        "admin",
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/run-configs/{config}/env-diff",
+        "read",
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}",
+        "read",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}/import",
+        "admin",
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}",
+        "admin",
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}",
+        "admin",
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}/value",
+        "admin",
+    ),
+    ("GET", "/api/v1/projects/{id}/run-envs", "read"),
+    ("POST", "/api/v1/projects/{id}/run-envs", "admin"),
+    ("DELETE", "/api/v1/projects/{id}/run-envs/{name}", "admin"),
     ("GET", "/api/v1/projects/{id}/run/services", "read"),
     // Logs are what the project's code printed (redacted, but still its own words): admin.
     ("GET", "/api/v1/projects/{id}/run/logs", "admin"),
@@ -296,6 +354,7 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/run/start"),
     ("POST", "/api/v1/projects/{id}/run/stop"),
     ("POST", "/api/v1/projects/{id}/run/restart"),
+    ("POST", "/api/v1/projects/{id}/run-configs/{config}/run"),
     // Project secrets (P4-04): a write stores or removes a credential a run will be given.
     ("PUT", "/api/v1/projects/{id}/secrets/{name}"),
     ("DELETE", "/api/v1/projects/{id}/secrets/{name}"),
