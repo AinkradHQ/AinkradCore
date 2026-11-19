@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use ainkrad_proto::v2::{
     DRIVER_CONTROL, DriverInfo, ErrorCode, OP_RUNNER_POLICY, OP_TOOLS_INSTALL, OP_TOOLS_STATUS,
-    PolicyApplied, RunnerPolicy, StreamError, Tool, ToolsInstall,
+    PolicyApplied, RunnerPolicy, StreamError, ToolsInstall,
 };
 use tokio::sync::watch;
 
