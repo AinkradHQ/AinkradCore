@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 pub const OP_RUNNER_POLICY: &str = "runner.policy";
 pub const OP_TOOLS_INSTALL: &str = "tools.install";
 pub const OP_TOOLS_STATUS: &str = "tools.status";
+/// E12-4. After every older op: the schema-compat gate tells variants by position.
+pub const OP_RUNNER_UPDATE: &str = "runner.update";
 
 /// The driver that lists the three ops.
 pub const DRIVER_CONTROL: &str = "control";
@@ -143,4 +145,44 @@ pub struct ToolsStatus {
     /// When `done`: the tools the runner found on its host after the install (what `RunnerFacts::tools` holds).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tools: BTreeMap<String, String>,
+}
+
+/// Core to runner (E12-4): the Core saw a newer signed runner and this one is idle, so update. `version` is only what the
+/// Core expects (a plain version, checked for shape); the runner's root-side updater reads the signed manifest itself,
+/// installs only a newer signed release, restarts the runner and rolls back if it does not stay up. A Mac runner updates
+/// with the app and answers `unsupported_command`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RunnerUpdate {
+    pub version: String,
+}
+
+/// The answer to `runner.update`: the request was handed to the updater; the runner restarts a moment later and
+/// reconnects on the new version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RunnerUpdateAccepted {
+    pub version: String,
+}
+
+/// A version as `ainkrad-runner --version` and the manifest print it: digits and dots, an optional `-` or `.` suffix.
+pub fn plain_version(v: &str) -> bool {
+    let (core, rest) = v.split_once(['-', '+']).unwrap_or((v, ""));
+    v.len() <= 40
+        && core.split('.').count() == 3
+        && core.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::plain_version;
+
+    #[test]
+    fn only_plain_versions_pass() {
+        for ok in ["0.10.1", "1.2.3-beta.1", "10.0.0+build5"] {
+            assert!(plain_version(ok), "{ok}");
+        }
+        for bad in ["", "1.2", "1.2.x", "../1.2.3", "1.2.3 ; rm", "1.2.3\n", &"1".repeat(50)] {
+            assert!(!plain_version(bad), "{bad}");
+        }
+    }
 }

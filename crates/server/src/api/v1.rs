@@ -234,6 +234,10 @@ pub fn router(app: App) -> Router {
             post(runner_control::install_tool),
         )
         .route(
+            "/api/v1/runners/{id}/update",
+            post(runner_control::update_runner),
+        )
+        .route(
             "/api/v1/runners/{id}/tools/operations/{op}",
             get(runner_control::get_operation),
         )
@@ -266,6 +270,10 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/system/backups/retention",
             get(system_backup::retention).put(system_backup::set_retention),
+        )
+        .route(
+            "/api/v1/system/update",
+            get(system::update_status).post(system::update_now),
         )
         .route("/api/v1/system/logs/core", get(system::logs_core))
         .route("/api/v1/system/logs/helper", get(system::logs_helper))

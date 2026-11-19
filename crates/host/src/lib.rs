@@ -401,9 +401,11 @@ fn mutate(ctx: &Ctx, trail: &Trail, req: &Request, stream: &mut UnixStream) {
     limits.mark_accepted(&req.id);
     let _ = limits::save(&ctx.state_dir, &limits);
     say(stream, wire::ok(&req.id, json!({"accepted": true})));
+    // `update` uses `start`, never `restart`: an update already running must not be killed halfway.
     let (verb, unit) = match name {
         "restart_core" => ("restart", "ainkrad-core.service"),
         "restart_runner" => ("restart", "ainkrad-runner.service"),
+        "update" => ("start", "ainkrad-update@now.service"),
         _ => ("start", backup::SERVICE),
     };
     let args = ["--no-block", "--no-ask-password", verb, unit].map(String::from);

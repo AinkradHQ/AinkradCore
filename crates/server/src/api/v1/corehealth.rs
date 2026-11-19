@@ -53,6 +53,12 @@ pub struct CoreHealth {
     /// The runners at a glance.
     #[schema(required = false)]
     pub fleet: Option<Fleet>,
+    /// E12-5: the oldest app this Core works with. An app below it tells the person to update the app.
+    #[schema(required = false)]
+    pub min_app: Option<String>,
+    /// E12-5: the oldest runner this Core works with (`GET /runners` marks older ones `update_required`).
+    #[schema(required = false)]
+    pub min_runner: Option<String>,
 }
 
 /// One runner of the fleet.
@@ -144,5 +150,7 @@ pub async fn get(State(app): State<App>) -> ApiResult<CoreHealth> {
             .zip(r.disk_free_bytes)
             .map(|(t, f)| t.saturating_sub(f)),
         fleet: Some(fleet),
+        min_app: Some(crate::runner_update::MIN_APP.to_owned()),
+        min_runner: Some(crate::runner_update::MIN_RUNNER.to_owned()),
     }))
 }

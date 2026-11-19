@@ -78,6 +78,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     // How many local backups are kept: reading is `admin`; the write is in DESTRUCTIVE (D-4).
     ("GET", "/api/v1/system/backups/retention", "admin"),
     ("PUT", "/api/v1/system/backups/retention", "admin"),
+    ("GET", "/api/v1/system/update", "admin"),
+    ("POST", "/api/v1/system/update", "admin"),
     ("GET", "/api/v1/system/logs/core", "admin"),
     ("GET", "/api/v1/system/logs/helper", "admin"),
     ("GET", "/api/v1/system/logs/runner", "admin"),
@@ -103,6 +105,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/runners/{id}/noop", "agent"),
     ("PUT", "/api/v1/runners/{id}/policy", "admin"),
     ("POST", "/api/v1/runners/{id}/tools", "admin"),
+    ("POST", "/api/v1/runners/{id}/update", "admin"),
     ("GET", "/api/v1/runners/{id}/tools/operations/{op}", "read"),
     ("GET", "/api/v1/accounts", "read"),
     // Before `/accounts/{id}`: the first template that fits a path decides, and `usage` fits `{id}`.
@@ -386,6 +389,10 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/system/restart"),
     // Retention decides how much history survives a loss (D-4): it writes the Core's config.
     ("PUT", "/api/v1/system/backups/retention"),
+    // Replaces the Core's own programs (signed releases only) and restarts it: a step-up, like a restart.
+    ("POST", "/api/v1/system/update"),
+    // Replaces the programs a runner runs on its host (signed releases only), like a tool install.
+    ("POST", "/api/v1/runners/{id}/update"),
     ("GET", "/api/v1/system/logs/runner"),
     ("GET", "/api/v1/system/logs/backup"),
     // A lease or a reveal is how a secret's value leaves the Core.

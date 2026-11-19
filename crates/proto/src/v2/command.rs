@@ -132,6 +132,9 @@ pub enum Command {
     /// (After every older op.) Wipe a removed runner-bound account's home (E7 closeout).
     #[serde(rename = "login.wipe")]
     LoginWipe(super::LoginWipe),
+    /// E12-4 (after every older op: the schema-compat gate tells variants by position).
+    #[serde(rename = "runner.update")]
+    RunnerUpdate(super::RunnerUpdate),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -196,6 +199,7 @@ impl Command {
             Self::AgentFiles(_) => super::OP_AGENT_FILES,
             Self::AgentRevert(_) => super::OP_AGENT_REVERT,
             Self::AgentWrite(_) => super::OP_AGENT_WRITE,
+            Self::RunnerUpdate(_) => super::OP_RUNNER_UPDATE,
             Self::Unknown => "unknown",
         }
     }
@@ -354,6 +358,9 @@ pub enum Reply {
     /// The answer to `login.screen`.
     #[serde(rename = "login.screen")]
     LoginScreen(super::LoginScreen),
+    /// The answer to `runner.update` (E12-4).
+    #[serde(rename = "runner.update")]
+    RunnerUpdate(super::RunnerUpdateAccepted),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

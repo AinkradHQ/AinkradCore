@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034,SC1003,SC2016 # the UI variables are read by the functions below; the clean-up string is eval'd later
 # Ainkrad Core: one command to set up a Core on a Linux machine (Debian or Ubuntu, x86_64 or arm64).
 #
-#   sudo sh -c "$(curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh)"
+#   sudo sh -c "$(curl -fsSL https://ainkrad.io/releases/core/latest/get.sh)"
 #
 # NOT `curl ... | sudo sh`: piped into sudo the script cannot read your answers (sudo does not hand the terminal to a command
 # whose stdin is a pipe, so the first question stops it with SIGTTIN). It refuses to run that way and prints the command above.
@@ -544,7 +544,11 @@ pc_dns() { # pc_dns NAME: the A record is this machine's public address and any 
 main() {
   set -eu
   MIN_VERSION=0.0.0 # stamped by scripts/release/dry.sh with the release version this file ships in
-  BASE=${AINKRAD_RELEASE_URL:-https://github.com/AinkradHQ/AinkradCore/releases/latest/download}
+  # Primary: ainkrad.io (R2). The GitHub release is the mirror: used for a file only when the primary cannot serve it and no
+  # AINKRAD_RELEASE_URL was set. Every file is held to the signed SHA256SUMS, so a mirror cannot change what installs.
+  MIRROR=https://github.com/AinkradHQ/AinkradCore/releases/latest/download
+  BASE=${AINKRAD_RELEASE_URL:-https://ainkrad.io/releases/core/latest}
+  [ -n "${AINKRAD_RELEASE_URL:-}" ] && MIRROR=''
   # The pinned release key (same as scripts/release/ainkrad-release.pub). Compare the key id with the project's.
   KEY_ID=FB3618BCFCA5393E
   KEY_FILE='untrusted comment: minisign public key FB3618BCFCA5393E
@@ -571,7 +575,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
       _prev=$_a
       if _q=$(shq "$_a"); then _args="$_args $_q"; fi
     done
-    echo "sudo$_env sh -c \"\$(curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh)\"${_args:+ sh$_args}"
+    echo "sudo$_env sh -c \"\$(curl -fsSL https://ainkrad.io/releases/core/latest/get.sh)\"${_args:+ sh$_args}"
   }
   UI_RERUN=$(rerun_cmd "$@")
   W=''
@@ -585,7 +589,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   if [ "$demo" = 1 ]; then
     # A demo of the first four steps: nothing is downloaded, installed or changed (only harmless sleeps). The questions and the
     # end screens: scripts/install.sh --demo from a checkout. It exits 3 so that no script can mistake it for an install.
-    UI_DEMO=1; UI_RERUN='sudo sh -c "$(curl -fsSL https://github.com/AinkradHQ/AinkradCore/releases/latest/download/get.sh)" sh --demo'
+    UI_DEMO=1; UI_RERUN='sudo sh -c "$(curl -fsSL https://ainkrad.io/releases/core/latest/get.sh)" sh --demo'
     ui_roadmap
     ui_step 1 "$(ui_rname 1)" "Asks your DNS name and email, then checks port 443 and that the name points here (demo: nothing is asked or checked)."
     ui_run "Looking at this machine (demo)" sleep 1
@@ -715,7 +719,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   printf '%s\n' "$KEY_FILE" >"$W/release.pub"
   fetch() { # fetch NAME: from the release (https url or a directory) into $W; returns 1 on failure
     case $BASE in
-      https://*) curl -fsSL --proto '=https' --tlsv1.3 -o "$W/$1" "$BASE/$1" ;;
+      https://*) curl -fsSL --proto '=https' --tlsv1.3 -o "$W/$1" "$BASE/$1" || { [ -n "$MIRROR" ] && curl -fsSL --proto '=https' --tlsv1.3 -o "$W/$1" "$MIRROR/$1"; } ;;
       http://*) echo "plain http is refused" >&2; return 1 ;;
       *) cp "$BASE/$1" "$W/$1" 2>/dev/null ;;
     esac

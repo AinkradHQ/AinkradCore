@@ -33,9 +33,9 @@ impl RoomKind {
 /// A company Ahmed's work is known to touch. ponytail: a built-in seed list; a user-editable list
 /// (rules of kind `org`) is the upgrade. The kinds are guesses the review screen lets the user fix.
 pub const COMPANIES: &[(&str, &str, RoomKind)] = &[
-    ("automotiveai", "AutomotiveAi", RoomKind::Employer),
+    ("harbormotors", "HarborMotors", RoomKind::Employer),
     ("optimus", "Optimus", RoomKind::Employer),
-    ("dvxmotive", "dvxmotive", RoomKind::Employer),
+    ("harborauto", "harborauto", RoomKind::Employer),
     ("ainkrad", "Ainkrad", RoomKind::Product),
     ("workan", "Workan.Space", RoomKind::Product),
     ("voutra", "Voutra", RoomKind::Product),

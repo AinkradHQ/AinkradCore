@@ -398,3 +398,20 @@ fn backup_info_falls_back_to_default_timestamps_on_an_old_systemd() {
         "retried without the flag: {shows:?}"
     );
 }
+
+#[test]
+fn update_starts_the_fixed_oneshot_unit_with_start_not_restart() {
+    let fx = Fx::new();
+    let v = fx.call("update", "{}");
+    assert_eq!(v["result"]["accepted"], true);
+    assert_eq!(
+        fx.fake.argv(),
+        vec![
+            ["--no-block", "--no-ask-password", "start", "ainkrad-update@now.service"]
+                .map(String::from)
+                .to_vec()
+        ]
+    );
+    // A second ask inside 5 minutes is refused, so a loop cannot hammer the release server.
+    assert_eq!(fx.call("update", "{}")["code"], "rate_limited");
+}

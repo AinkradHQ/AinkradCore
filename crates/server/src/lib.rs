@@ -18,6 +18,7 @@ pub mod module;
 pub mod ops;
 pub mod ops_catalog;
 pub mod push;
+pub mod runner_update;
 pub mod runs;
 pub mod scheduler;
 pub mod store;

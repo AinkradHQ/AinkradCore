@@ -69,10 +69,12 @@ pub const REGISTRY: &[(&str, Class)] = &[
     ("restart_runner", Class::A),
     ("backup_now", Class::A),
     ("backup_info", Class::A),
+    // E12-3: starts the fixed unit `ainkrad-update@now.service`. No version, URL or path is a parameter: the updater
+    // reads the signed manifest itself and installs only what the pinned release key signed.
+    ("update", Class::A),
     ("runner_policy", Class::B),
     ("install_tool", Class::B),
-    ("update", Class::B),
-    ("restore", Class::B),
+        ("restore", Class::B),
     ("uninstall", Class::B),
     ("host_config", Class::B),
     ("add_owner", Class::B),
@@ -117,6 +119,7 @@ pub enum Action {
     BackupNow,
     /// The backup timer's schedule, the last run and the backups on disk (a read).
     BackupInfo,
+    Update,
 }
 
 impl Action {
@@ -128,6 +131,7 @@ impl Action {
             Action::RestartRunner => "restart_runner",
             Action::BackupNow => "backup_now",
             Action::BackupInfo => "backup_info",
+            Action::Update => "update",
         }
     }
 
@@ -136,6 +140,10 @@ impl Action {
         matches!(
             self,
             Action::RestartCore | Action::RestartRunner | Action::BackupNow
+        )
+        matches!(
+            self,
+            Action::RestartCore | Action::RestartRunner | Action::Update
         )
     }
 }
@@ -279,6 +287,7 @@ pub fn parse(line: &[u8]) -> Result<Request, Refusal> {
         "restart_runner" if no_params => Action::RestartRunner,
         "backup_now" if no_params => Action::BackupNow,
         "backup_info" if no_params => Action::BackupInfo,
+        "update" if no_params => Action::Update,
         "logs" => {
             let Ok(p) = serde_json::from_value::<LogsParams>(params) else {
                 return Err(refusal);

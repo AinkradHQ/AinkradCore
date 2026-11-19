@@ -16,6 +16,7 @@ fn the_class_a_actions_round_trip() {
         ("restart_runner", "{}", Action::RestartRunner),
         ("backup_now", "{}", Action::BackupNow),
         ("backup_info", "{}", Action::BackupInfo),
+        ("update", "{}", Action::Update),
     ] {
         let r = parse(req(a, p).as_bytes()).unwrap();
         assert_eq!((r.id.as_str(), r.action), (ID, want));
@@ -205,4 +206,12 @@ fn the_parser_survives_random_and_mutated_input() {
 fn backup_keep_is_no_longer_a_helper_action() {
     let r = parse(req("backup_keep", r#"{"keep":14}"#).as_bytes()).unwrap_err();
     assert_eq!(r.code, Code::UnknownAction);
+}
+
+#[test]
+fn update_takes_no_parameters() {
+    // No version, URL or path: the updater reads the signed manifest itself.
+    for p in [r#"{"version":"9"}"#, r#"{"url":"https://x"}"#, r#"{"path":"/x"}"#] {
+        assert_eq!(code(&req("update", p)), Code::BadRequest, "{p}");
+    }
 }
