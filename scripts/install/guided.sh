@@ -205,7 +205,7 @@ dns_probe() { # NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when there is one, e
 }
 pub_probe() { # OUTFILE: this machine's public IPv4 from Ainkrad's outside check (signin.ainkrad.io, the call the port probe makes), no third party; empty when it cannot run
   _po=$(mktemp) || { : >"$1"; return 0; }
-  if pc_probe_call 443 "$_po" 2>/dev/null; then sed -n 's/.*"ip" *: *"\([0-9.]*\)".*/\1/p' "$_po" | head -n1 >"$1"; else : >"$1"; fi
+  if pc_probe_call 443 "$_po" -4 2>/dev/null; then sed -n 's/.*"ip" *: *"\([0-9.]*\)".*/\1/p' "$_po" | head -n1 >"$1"; else : >"$1"; fi
   rm -f "$_po"
 }
 # ui_check_dns NAME: A record against this machine's public address, then the AAAA record. A name that does not point at this
