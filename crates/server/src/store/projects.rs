@@ -475,6 +475,26 @@ pub async fn archive(pool: &SqlitePool, id: i64, who: Who<'_>) -> Result<Project
     Ok(p)
 }
 
+/// Undoes an archive (the app's delete-with-undo): back to `active`, audited and emitted as
+/// `project.updated`. 409 `conflict` when it is not archived.
+pub async fn unarchive(pool: &SqlitePool, id: i64, who: Who<'_>) -> Result<Project, Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let old = get(&mut tx, id).await?;
+    if old.state != "archived" {
+        return refused("conflict", "the project is not archived");
+    }
+    sqlx::query("UPDATE core_projects SET state = 'active', updated_at = ? WHERE id = ?")
+        .bind(who.now)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let details = json!({"slug": old.slug, "what": "unarchived", "by_device": who.by_device});
+    record(&mut tx, who.actor, "project.updated", id, details, true).await?;
+    let p = get(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(p)
+}
+
 mod github;
 mod repos;
 pub use github::{NewGithubRepo, create_from_github};

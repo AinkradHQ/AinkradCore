@@ -155,6 +155,7 @@ use super::{
         projects::create,
         projects::update,
         projects::archive,
+        projects::unarchive,
         projects::add_repo,
         projects::remove_repo,
         projects::set_primary,

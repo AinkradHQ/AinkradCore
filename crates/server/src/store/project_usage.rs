@@ -95,27 +95,45 @@ pub async fn usage(pool: &SqlitePool, project: i64, now: &str) -> Result<Usage, 
     })
 }
 
-/// A session of the project in the last 7 days, newest first (at most 50): the AI side of "who
-/// changed what". `(title, created_at)`.
-pub async fn recent_sessions(
+/// A file a session of the project edited in the last 7 days: `(session id, session title, unix
+/// ms, path)`, newest first, one row per (session, path) with its newest time (at most 100). Read
+/// from the transcript's `tool_use` entries that carry an `edit` (the harness's Edit, Write and
+/// MultiEdit); only the path is read, never the old or new text.
+pub async fn recent_edits(
     pool: &SqlitePool,
     project: i64,
-    now: &str,
-) -> Result<Vec<(Option<String>, String)>, sqlx::Error> {
+    since_ms: i64,
+) -> Result<Vec<(String, Option<String>, i64, String)>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT title, created_at FROM core_agent_sessions \
-         WHERE project_id = ?1 AND julianday(created_at) > julianday(?2) - 7 \
-         ORDER BY created_at DESC LIMIT 50",
+        "SELECT s.id, s.title, max(t.at) AS at, json_extract(c.value, '$.path') AS path \
+         FROM core_agent_transcript t JOIN core_agent_sessions s ON s.id = t.session, \
+              json_each(t.body, '$.edit.changes') c \
+         WHERE s.project_id = ?1 AND t.at > ?2 AND json_extract(t.body, '$.type') = 'tool_use' \
+           AND json_extract(c.value, '$.path') IS NOT NULL \
+         GROUP BY s.id, path ORDER BY at DESC LIMIT 100",
     )
     .bind(project)
-    .bind(now)
+    .bind(since_ms)
     .fetch_all(pool)
     .await
+}
+
+/// A path as a short line: its last two parts (`src/login.swift`). Pure.
+pub fn short_path(path: &str) -> String {
+    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    parts[parts.len().saturating_sub(2)..].join("/")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_is_cut_to_its_last_two_parts() {
+        assert_eq!(short_path("/w/app/src/login.swift"), "src/login.swift");
+        assert_eq!(short_path("a.rs"), "a.rs");
+        assert_eq!(short_path(""), "");
+    }
 
     #[test]
     fn rows_fold_into_the_week_the_week_before_and_a_spark_per_session() {

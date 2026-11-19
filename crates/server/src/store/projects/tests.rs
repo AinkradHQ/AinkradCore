@@ -101,6 +101,16 @@ async fn bad_and_reserved_slugs_are_refused_and_good_ones_work() {
 }
 
 #[tokio::test]
+async fn unarchive_undoes_an_archive_only_once() {
+    let fx = fx().await;
+    let p = mk(&fx, "undo").await.unwrap();
+    assert_eq!(code(unarchive(&fx.pool, p.id, W).await), "conflict");
+    archive(&fx.pool, p.id, W).await.unwrap();
+    assert_eq!(unarchive(&fx.pool, p.id, W).await.unwrap().state, "active");
+    assert_eq!(code(unarchive(&fx.pool, p.id, W).await), "conflict");
+}
+
+#[tokio::test]
 async fn defaults_update_and_archive_keeps_every_row() {
     let fx = fx().await;
     let p = mk(&fx, "shop").await.unwrap();
