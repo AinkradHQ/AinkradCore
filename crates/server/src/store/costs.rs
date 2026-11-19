@@ -350,6 +350,15 @@ async fn add_subjects(
         .bind(a)
         .execute(&mut *conn)
         .await?;
+        // The account's provider counts it too (a provider's budget spans every account of it).
+        sqlx::query(
+            "INSERT OR IGNORE INTO core_cost_subjects (event_id, kind, subject_id) \
+             SELECT ?1, 'provider', provider FROM core_accounts WHERE id = ?2",
+        )
+        .bind(id)
+        .bind(a)
+        .execute(&mut *conn)
+        .await?;
     }
     Ok(())
 }

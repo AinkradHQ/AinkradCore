@@ -402,6 +402,7 @@ async fn an_approved_raise_lifts_the_stop_and_the_next_exhaustion_alerts_again()
 mod holds;
 mod messages;
 mod pool_budgets;
+mod provider;
 
 #[tokio::test]
 async fn an_account_or_pool_budget_raises_account_budget_once_per_state_and_an_agent_budget_none() {
