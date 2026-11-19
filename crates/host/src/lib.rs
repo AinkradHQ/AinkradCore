@@ -316,7 +316,7 @@ fn read_limit(ctx: &Ctx, action: &str) -> Result<(), u64> {
     Ok(())
 }
 
-/// `restart_core`, `restart_runner`, `backup_now` and `backup_keep`: lock, fail-closed limits, dedupe, rate limit, log, then
+/// `restart_core`, `restart_runner` and `backup_now`: lock, fail-closed limits, dedupe, rate limit, log, then
 /// **answer, then act**: `{"accepted":true}` is written before `systemctl` is run, so the answer
 /// reaches the client even when the restart tears the Core down. If systemctl then fails, the
 /// failure is logged and a repeat of the same id answers `failed`.
@@ -376,13 +376,8 @@ fn mutate(ctx: &Ctx, trail: &Trail, req: &Request, stream: &mut UnixStream) {
     if limits::save(&ctx.state_dir, &limits).is_err() {
         return say(stream, refuse(trail, req, Code::StateUnavailable, None));
     }
-    // The one validated integer of `backup_keep` is the whole of its log line's extra.
-    let extra = match &req.action {
-        Action::BackupKeep(n) => format!(" keep={n}"),
-        _ => String::new(),
-    };
     if trail
-        .log("accepted", name, Some(&req.id), Some(&req.actor), &extra)
+        .log("accepted", name, Some(&req.id), Some(&req.actor), "")
         .is_err()
     {
         // Counted but not run: a repeat of this id must not claim it was accepted, and the
@@ -403,23 +398,6 @@ fn mutate(ctx: &Ctx, trail: &Trail, req: &Request, stream: &mut UnixStream) {
     }
     // Only now may a repeat read "accepted". If this save fails the action still runs and a repeat
     // answers `failed`: the wrong direction, but the safe one.
-    // `backup_keep` acts first and answers after, so the answer says whether the config changed.
-    if let Action::BackupKeep(keep) = &req.action {
-        return match backup::set_keep(ctx, *keep) {
-            Ok(()) => {
-                limits.mark_accepted(&req.id);
-                let _ = limits::save(&ctx.state_dir, &limits);
-                say(stream, wire::ok(&req.id, json!({"keep": keep})));
-            }
-            Err(code) => {
-                limits.mark_failed(&req.id);
-                let _ = limits::save(&ctx.state_dir, &limits);
-                let why = format!(" code={}", code.as_str());
-                let _ = trail.log("failed", name, Some(&req.id), Some(&req.actor), &why);
-                say(stream, wire::err(Some(&req.id), code, None));
-            }
-        };
-    }
     limits.mark_accepted(&req.id);
     let _ = limits::save(&ctx.state_dir, &limits);
     say(stream, wire::ok(&req.id, json!({"accepted": true})));

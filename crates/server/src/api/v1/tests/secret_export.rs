@@ -11,11 +11,18 @@ use super::*;
 
 const EXPORT: &str = "/api/v1/secrets/export";
 
+/// The device just proved a step-up (what an export now needs).
+fn fresh(fx: &Fx, dev: &TestDevice) {
+    let sid = dev.session.lock().unwrap().clone().unwrap();
+    fx.app.auth.mark_fresh(&sid, &dev.id, fx.clock.unix());
+}
+
 #[tokio::test]
 async fn an_owner_exports_the_values_and_the_audit_row_never_holds_them() {
     let (fx, _vm) = broker().await;
     create(&fx, "git.token", V1, &[]).await;
     create(&fx, "other.key", V2, &[]).await;
+    fresh(&fx, &fx.dev);
     let (s, all) = call(&fx, &fx.dev, Method::POST, EXPORT, Value::Null).await;
     assert_eq!(s, StatusCode::OK, "{all}");
     assert_eq!(all["count"], 2);
@@ -37,6 +44,7 @@ async fn an_export_leaves_out_accounts_module_secrets_and_files() {
     let file =
         json!({"name": "ssh.config", "kind": "file", "file_name": "config", "value": "aGVsbG8="});
     post_secret(&fx, file).await;
+    fresh(&fx, &fx.dev);
     let (s, all) = call(&fx, &fx.dev, Method::POST, EXPORT, Value::Null).await;
     assert_eq!(s, StatusCode::OK, "{all}");
     assert_eq!(all["count"], 1, "{all}");
@@ -66,9 +74,56 @@ async fn exporting_needs_a_step_up_the_admin_scope_and_a_live_broker() {
     let r = call(&fx, &mac, Method::POST, EXPORT, Value::Null).await;
     assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
     set(&fx, Key::SecretsMode, 0).await;
+    fresh(&fx, &fx.dev);
     let r = call(&fx, &fx.dev, Method::POST, EXPORT, Value::Null).await;
     assert_eq!(code(&r), (StatusCode::CONFLICT, "secrets_disabled"));
     assert!(!trail(&fx).await.contains(V1));
+}
+
+#[tokio::test]
+async fn an_export_needs_a_step_up_proved_just_now_and_spends_it() {
+    let (fx, _vm) = broker().await;
+    create(&fx, "git.token", V1, &[]).await;
+    // Elevated (a long step-up) but never proved fresh: refused.
+    let r = call(&fx, &fx.dev, Method::POST, EXPORT, Value::Null).await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
+    // Proved 31 s ago: too old.
+    fresh(&fx, &fx.dev);
+    fx.clock.advance(31);
+    let r = call(&fx, &fx.dev, Method::POST, EXPORT, Value::Null).await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
+    // Proved now: works once, then the proof is spent.
+    fresh(&fx, &fx.dev);
+    let r = call(&fx, &fx.dev, Method::POST, EXPORT, Value::Null).await;
+    assert_eq!(r.0, StatusCode::OK);
+    let r = call(&fx, &fx.dev, Method::POST, EXPORT, Value::Null).await;
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
+}
+
+#[tokio::test]
+async fn an_export_is_never_cached_and_leaves_out_a_secret_an_account_owns() {
+    let (fx, _vm) = broker().await;
+    create(&fx, "git.token", V1, &[]).await;
+    create(&fx, "renamed.key", V2, &[]).await;
+    sqlx::query(
+        "INSERT INTO core_accounts (provider, label, secret_name, masked_tail, owner, \
+         created_at, updated_at) VALUES ('openai', 'x', 'renamed.key', 'abcd', ?, 'n', 'n')",
+    )
+    .bind(&fx.dev.id)
+    .execute(&fx.app.pool)
+    .await
+    .unwrap();
+    fresh(&fx, &fx.dev);
+    let (s, all) = call(&fx, &fx.dev, Method::POST, EXPORT, Value::Null).await;
+    assert_eq!(s, StatusCode::OK, "{all}");
+    assert_eq!(all["count"], 1, "{all}");
+    assert_eq!(all["items"][0]["name"], "git.token");
+    fresh(&fx, &fx.dev);
+    let resp = router(fx.app.clone())
+        .oneshot(req(Method::POST, EXPORT, Some(&fx.dev), None))
+        .await
+        .unwrap();
+    assert_eq!(resp.headers()["cache-control"], "no-store");
 }
 
 #[tokio::test]
@@ -76,9 +131,11 @@ async fn exporting_is_rate_limited_per_device() {
     let (fx, _vm) = broker().await;
     create(&fx, "git.token", V1, &[]).await;
     for _ in 0..2 {
+        fresh(&fx, &fx.dev);
         let r = call(&fx, &fx.dev, Method::POST, EXPORT, Value::Null).await;
         assert_eq!(r.0, StatusCode::OK);
     }
+    fresh(&fx, &fx.dev);
     let r = call(&fx, &fx.dev, Method::POST, EXPORT, Value::Null).await;
     assert_eq!(code(&r), (StatusCode::TOO_MANY_REQUESTS, "rate_limited"));
 }

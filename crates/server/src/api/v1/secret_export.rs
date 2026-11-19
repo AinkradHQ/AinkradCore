@@ -1,7 +1,7 @@
 //! Exporting every secret to its owner (E2-6, D-4). `POST /secrets/export` is `admin` and a danger
-//! route (a fresh step-up, like a lease), audited (`secret.exported`, the count only), rate limited
+//! route (a step-up proved within the last 30 s, spent by the export), audited (`secret.exported`, the count only), rate limited
 //! per device; no value is in a log, an event or an audit row, and no `Debug` type holds one. Not
-//! in an export: provider-account keys (`acct.*`), a module's own secrets (`brain.*`, `leyline.*`)
+//! in an export: provider-account keys (`core_accounts`, `acct.*`), a module's own secrets (`brain.*`, `leyline.*`)
 //! and file secrets. Showing one value is E1's `POST /secrets/{id}/reveal` (`secrets::reveal`).
 
 use std::sync::OnceLock;
@@ -15,7 +15,7 @@ use utoipa::ToSchema;
 use zeroize::Zeroizing;
 
 use super::secrets::sealer;
-use super::{ApiError, ApiResult, BY, Caller};
+use super::{ApiError, BY, Caller};
 use crate::api::App;
 use crate::api::limit::Limiter;
 use crate::store::secrets as store;
@@ -23,6 +23,8 @@ use crate::store::secrets as store;
 /// Exports a device may take at once, then per minute: stricter than a reveal, it is every value.
 const BURST: u32 = 2;
 const PER_MIN: f64 = 2.0;
+/// How old the step-up may be, seconds.
+const FRESH_SECS: i64 = 30;
 
 /// One secret of an export. No `Debug`.
 #[derive(Serialize, ToSchema)]
@@ -61,15 +63,21 @@ fn allow(device: &str) -> Result<(), ApiError> {
     tag = "secrets",
     responses((status = 200, description = "Every secret the Secrets screen lists with its \
         value, for a file the owner saves (audited once as `secret.exported` with the count; \
-        needs a step-up). Provider-account keys, a module's own secrets and file secrets are not in it. 409 `secrets_disabled`; 429 \
+        needs a step-up proved in the last 30 s, spent by the call; `Cache-Control: no-store`). Provider-account keys, a module's own secrets and file secrets are not in it. 409 `secrets_disabled`; 429 \
         `rate_limited`; 503 `secrets_unavailable`", body = SecretsExport)))]
 pub async fn export(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
-) -> ApiResult<SecretsExport> {
+) -> Result<axum::response::Response, ApiError> {
+    if !app
+        .auth
+        .take_fresh(&me.session, &me.device.id, app.clock.unix(), FRESH_SECS)
+    {
+        return Err(super::stepup::required());
+    }
     allow(&me.device.id)?;
     let all = store::export_all(&app.pool, sealer(&app)?, &me.device.id, BY).await?;
-    Ok(Json(SecretsExport {
+    let body = Json(SecretsExport {
         count: all.len() as i64,
         items: all
             .into_iter()
@@ -81,5 +89,11 @@ pub async fn export(
                 value: e.value,
             })
             .collect(),
-    }))
+    });
+    let mut r = axum::response::IntoResponse::into_response(body);
+    r.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(r)
 }

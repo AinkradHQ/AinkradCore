@@ -56,7 +56,6 @@ fn sample(action: &str) -> Value {
             "history": [{"at": 1_795_100_000u64, "bytes": 2_100_000u64}],
             "retention": 14,
         }),
-        "backup_keep" => json!({"keep": 30}),
         _ => json!({"accepted": true}),
     }
 }
@@ -819,10 +818,11 @@ async fn the_backup_schedule_is_read_through_the_helper() {
     assert_eq!(s, StatusCode::FORBIDDEN);
 }
 
-/// The retention: read through `backup_info`, written through `backup_keep` with one integer,
-/// audited before and after, a step-up for the write, and a bad body never reaches the helper.
+/// The retention: read through `backup_info`, written by the Core itself into its own config
+/// (never through the helper), audited before and after, a step-up for the write, and a bad body
+/// touches nothing.
 #[tokio::test]
-async fn the_backup_retention_is_read_and_written_through_the_helper() {
+async fn the_backup_retention_is_read_through_the_helper_and_written_by_the_core() {
     let mut fx = fast(fx().await).await;
     let seen = fake(&mut fx, Mode::Ok).await;
     let (s, b) = get(&fx, &fx.dev, "/api/v1/system/backups/retention").await;
@@ -832,6 +832,8 @@ async fn the_backup_retention_is_read_and_written_through_the_helper() {
         (&b["helper"], &b["keep"], &b["min"], &b["max"]),
         (&json!("present"), &json!(14), &json!(1), &json!(60))
     );
+    let config = fx.dir.join("config.toml");
+    fx.app.health = std::sync::Arc::new(crate::health::Health::new(&fx.dir.join("core.db")));
     let put = |fx: &Fx, dev: &TestDevice, body: Value| {
         send(
             &fx.app,
@@ -843,6 +845,14 @@ async fn the_backup_retention_is_read_and_written_through_the_helper() {
             ),
         )
     };
+    // No config yet: nothing to change.
+    let (s, b) = put(&fx, &fx.dev, json!({"keep": 30})).await;
+    assert_eq!(
+        (s, b["code"].as_str()),
+        (StatusCode::CONFLICT, Some("not_installed"))
+    );
+    let text = "home = \"/x\"\nbackup_keep_local = 7\nmodules = []\n";
+    std::fs::write(&config, text).unwrap();
     for bad in [
         json!({}),
         json!({"keep": 0}),
@@ -854,24 +864,42 @@ async fn the_backup_retention_is_read_and_written_through_the_helper() {
         let (s, _) = put(&fx, &fx.dev, bad.clone()).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}");
     }
-    assert_eq!(calls(&seen).len(), 1, "no bad body reached the helper");
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
     let (s, b) = put(&fx, &fx.dev, json!({"keep": 30})).await;
     assert_eq!(s, StatusCode::OK, "{b}");
     assert_eq!(b["keep"], 30);
-    let call = calls(&seen).remove(1);
     assert_eq!(
-        (call["action"].as_str(), &call["params"]),
-        (Some("backup_keep"), &json!({"keep": 30}))
+        std::fs::read_to_string(&config).unwrap(),
+        "home = \"/x\"\nbackup_keep_local = 30\nmodules = []\n"
     );
+    assert!(!fx.dir.join("config.toml.keep.tmp").exists());
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o640)).unwrap();
+    }
+    put(&fx, &fx.dev, json!({"keep": 31})).await;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&config).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640, "the mode is kept");
+    }
+    assert_eq!(calls(&seen).len(), 1, "the helper was asked only to read");
     let before = rows(&fx, "host.backup_retention_requested").await;
-    assert_eq!(before.len(), 1);
-    assert_eq!(before[0].1["keep"], 30);
-    assert_eq!(call["actor"]["audit_seq"], before[0].0);
+    assert!(before.len() >= 2);
+    assert_eq!(before.last().unwrap().1["keep"], 31);
     assert_eq!(
         rows(&fx, "host.action_result").await[0].1["code"],
-        "accepted"
+        "not_installed"
     );
-    // Without a step-up it is refused before the helper; a reader never gets in.
+    // A link in the config's place is never followed or replaced through.
+    std::fs::remove_file(&config).unwrap();
+    let target = fx.dir.join("elsewhere");
+    std::fs::write(&target, "x").unwrap();
+    std::os::unix::fs::symlink(&target, &config).unwrap();
+    let (s, _) = put(&fx, &fx.dev, json!({"keep": 5})).await;
+    assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "x");
+    // Without a step-up it is refused; a reader never gets in.
     let cold = plain(&fx, "cold", &ALL, true).await;
     let (s, b) = put(&fx, &cold, json!({"keep": 5})).await;
     assert_eq!(
@@ -881,5 +909,4 @@ async fn the_backup_retention_is_read_and_written_through_the_helper() {
     let phone = fx.enroll("phone", &["read"]).await;
     let (s, _) = put(&fx, &phone, json!({"keep": 5})).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
-    assert_eq!(calls(&seen).len(), 2);
 }

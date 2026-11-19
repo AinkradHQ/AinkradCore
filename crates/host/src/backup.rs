@@ -3,8 +3,7 @@
 //! unit's properties through `systemctl show` and the metadata of `*.age` files (never followed
 //! through a link, never read, and no name leaves).
 
-use std::io::{self, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
@@ -38,66 +37,6 @@ pub fn retention(ctx: &Ctx) -> Option<u32> {
     let bytes = state::read_capped(&config_path(ctx)?, CONFIG_MAX).ok()?;
     let text = String::from_utf8(bytes).ok()?;
     text.lines().find_map(keep_of).unwrap_or(Some(KEEP_DEFAULT))
-}
-
-/// `text` with the `backup_keep_local` line set to `keep` (added at the end when there is none).
-/// Every other line is kept byte for byte.
-fn with_keep(text: &str, keep: u32) -> String {
-    let line = format!("{KEY} = {keep}");
-    let mut done = false;
-    let mut out: Vec<String> = text
-        .lines()
-        .map(|l| {
-            if !done && keep_of(l).is_some() {
-                done = true;
-                line.clone()
-            } else {
-                l.to_owned()
-            }
-        })
-        .collect();
-    if !done {
-        out.push(line);
-    }
-    out.join("\n") + "\n"
-}
-
-/// Sets `backup_keep_local` in the Core's config (the one thing this action may write). The
-/// config is the Core user's, in a directory that user can write, and this runs as root, so: the
-/// file is read without following a link and capped; the new copy is a fresh file made
-/// exclusively (a link or file planted at its name is removed first, and one planted after the
-/// removal fails the write), given the old file's mode and owner, synced, then renamed over it.
-pub fn set_keep(ctx: &Ctx, keep: u32) -> Result<(), Code> {
-    let path = config_path(ctx).ok_or(Code::Failed)?;
-    let old = match std::fs::symlink_metadata(&path) {
-        Ok(m) if m.is_file() => m,
-        Ok(_) => return Err(Code::Failed),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(Code::NotInstalled),
-        Err(_) => return Err(Code::Failed),
-    };
-    let text = state::read_capped(&path, CONFIG_MAX)
-        .ok()
-        .and_then(|b| String::from_utf8(b).ok())
-        .ok_or(Code::Failed)?;
-    let tmp = path.with_file_name("config.toml.keep.tmp");
-    let _ = std::fs::remove_file(&tmp);
-    let written = (|| -> io::Result<()> {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(old.mode() & 0o777)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&tmp)?;
-        std::os::unix::fs::fchown(&f, Some(old.uid()), Some(old.gid()))?;
-        f.write_all(with_keep(&text, keep).as_bytes())?;
-        f.sync_all()?;
-        std::fs::rename(&tmp, &path)
-    })();
-    if written.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(Code::Failed);
-    }
-    Ok(())
 }
 
 /// The `OnCalendar=` expression in `systemctl show`'s `TimersCalendar` value
@@ -191,17 +130,9 @@ mod tests {
     }
 
     #[test]
-    fn the_keep_line_is_read_and_set_and_the_rest_of_the_config_is_kept() {
+    fn the_keep_line_is_read() {
         let text = "home = \"/x\"\n# keep\nbackup_keep_local = 7 # days\nmodules = []\n";
         assert_eq!(text.lines().find_map(keep_of), Some(Some(7)));
-        assert_eq!(
-            with_keep(text, 30),
-            "home = \"/x\"\n# keep\nbackup_keep_local = 30\nmodules = []\n"
-        );
-        assert_eq!(
-            with_keep("home = \"/x\"", 3),
-            "home = \"/x\"\nbackup_keep_local = 3\n"
-        );
         assert_eq!(keep_of("backup_keep_local_x = 1"), None, "another key");
         assert_eq!(keep_of("backup_keep_local = many"), Some(None));
     }

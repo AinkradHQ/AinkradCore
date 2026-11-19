@@ -2,8 +2,12 @@
 //! `GET /system/backups` reads the schedule, the last run and the backups on disk. The helper
 //! classes both like a restart (class A: a fixed argv or a read, rate limited, logged), not like
 //! a restore or an update (class B): starting the unit the timer starts anyway changes no data and
-//! no access. Nothing the caller sends reaches the helper but one integer (the retention, 1 to 60). The start is audited before the helper
+//! no access. The retention is not the helper's: the Core writes its own config. The start is audited before the helper
 //! is asked (`host.backup_requested`) and after (`host.action_result`), as a restart is.
+
+use std::io::{self, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::Path;
 
 use axum::Json;
 use axum::body::Bytes;
@@ -24,9 +28,68 @@ use crate::scheduler::iso_of_unix;
 
 pub const BACKUP_REQUESTED: &str = "host.backup_requested";
 pub const RETENTION_REQUESTED: &str = "host.backup_retention_requested";
-/// The fewest and most local backups the Core may be set to keep (the helper checks the same).
+/// The fewest and most local backups the Core may be set to keep.
 const KEEP_MIN: u32 = 1;
 const KEEP_MAX: u32 = 60;
+
+const KEY: &str = "backup_keep_local";
+const CONFIG_MAX: u64 = 64 * 1024;
+
+/// The value of `backup_keep_local = N` on a line (a trailing `# comment` is ignored).
+fn keep_of(line: &str) -> Option<Option<u32>> {
+    let rest = line.trim_start().strip_prefix(KEY)?;
+    let value = rest.trim_start().strip_prefix('=')?;
+    Some(value.split('#').next()?.trim().parse().ok())
+}
+
+/// `text` with the `backup_keep_local` line set to `keep` (added at the end when there is none);
+/// every other line is kept.
+fn with_keep(text: &str, keep: u32) -> String {
+    let line = format!("{KEY} = {keep}");
+    let mut done = false;
+    let mut out: Vec<String> = text
+        .lines()
+        .map(|l| {
+            if !done && keep_of(l).is_some() {
+                done = true;
+                line.clone()
+            } else {
+                l.to_owned()
+            }
+        })
+        .collect();
+    if !done {
+        out.push(line);
+    }
+    out.join("\n") + "\n"
+}
+
+/// Sets `backup_keep_local` in the config at `path`: a regular file only (a link is refused), a
+/// fresh temp file made exclusively next to it (so a link planted at its name is never followed)
+/// with the old file's mode, synced, then renamed over it.
+fn write_keep(path: &Path, keep: u32) -> io::Result<()> {
+    let old = std::fs::symlink_metadata(path)?;
+    if !old.is_file() || old.len() > CONFIG_MAX {
+        return Err(io::Error::other("the config is not a regular file"));
+    }
+    let text = std::fs::read_to_string(path)?;
+    let tmp = path.with_file_name("config.toml.keep.tmp");
+    let _ = std::fs::remove_file(&tmp);
+    let written = (|| {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(old.mode() & 0o777)
+            .open(&tmp)?;
+        f.write_all(with_keep(&text, keep).as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct BackupStarted {
@@ -235,18 +298,15 @@ pub async fn retention(
 #[utoipa::path(put, path = "/api/v1/system/backups/retention", operation_id = "setBackupRetention",
     tag = "system", request_body = SetRetention,
     responses((status = 200, description = "The Core now keeps this many local backups (audited \
-        first as `host.backup_retention_requested`, then `host.action_result`); the helper writes \
-        it into the Core's config and the next backup applies it. Needs `admin` and a step-up. \
-        400 for a body other than `{\"keep\": 1..60}`; 409 `not_installed` (no config); 429 with \
-        `Retry-After`; 503 `host_helper_unavailable`, `host_helper_busy` or \
-        `host_state_unavailable`; 504 `host_helper_timeout`; 502 `host_helper_failed`",
+        first as `host.backup_retention_requested`, then `host.action_result`); the Core writes \
+        it into its own config and the next backup applies it. Needs `admin` and a step-up. \
+        400 for a body other than `{\"keep\": 1..60}`; 409 `not_installed` (no config)",
         body = BackupRetention)))]
 pub async fn set_retention(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     body: Bytes,
 ) -> Result<Json<BackupRetention>, Fail> {
-    let action = "backup_keep";
     let keep = serde_json::from_slice::<SetRetention>(&body)
         .ok()
         .and_then(|b| u32::try_from(b.keep).ok())
@@ -257,13 +317,13 @@ pub async fn set_retention(
                     .into_response(),
             )
         })?;
-    let now = u64::try_from(app.clock.unix()).unwrap_or(0);
-    if let Some(f) = app.host_helper.blocked(action, now) {
-        refused(&app, &me, action, &f).await;
-        return Err(fail(f));
-    }
+    let path = app
+        .health
+        .db_path()
+        .and_then(Path::parent)
+        .map(|home| home.join("config.toml"));
     let id = request_id();
-    let row = audit(
+    audit(
         &app,
         &me,
         RETENTION_REQUESTED,
@@ -271,39 +331,45 @@ pub async fn set_retention(
     )
     .await
     .map_err(internal)?;
-    let actor = Actor {
-        device: me.device.id.clone(),
-        audit_seq: u64::try_from(row.seq.0).unwrap_or(0),
+    let result = match &path {
+        Some(p) => write_keep(p, keep),
+        None => Err(io::Error::from(io::ErrorKind::NotFound)),
     };
-    let result = app
-        .host_helper
-        .call(&id, action, json!({"keep": keep}), &actor)
-        .await;
     let code = match &result {
-        Ok(_) => "accepted".to_owned(),
-        Err(f) => outcome(f),
+        Ok(()) => "accepted",
+        Err(e) if e.kind() == io::ErrorKind::NotFound => "not_installed",
+        Err(_) => "failed",
     };
-    if let Err(f) = &result {
-        let secs = match f {
-            Failure::Refused { code, retry_after } if code == "rate_limited" => {
-                retry_after.unwrap_or(60).clamp(1, 3600)
-            }
-            _ => 10,
-        };
-        app.host_helper.block(action, now, secs, f.clone());
-    }
-    let details = json!({"request_id": id, "action": action, "code": code});
+    let details = json!({"request_id": id, "action": "backup_retention", "code": code});
     if let Err(e) = audit(&app, &me, ACTION_RESULT, details).await {
         tracing::error!(error = %e, request_id = id, "auditing a host action result failed");
     }
     match result {
-        Ok(_) => Ok(Json(BackupRetention {
+        Ok(()) => Ok(Json(BackupRetention {
             helper: "present".to_owned(),
             keep: Some(keep),
             min: KEEP_MIN,
             max: KEEP_MAX,
         })),
-        Err(f) => Err(fail(f)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Err(Fail::from(
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "not_installed",
+                "the Core has no config file to change",
+            )
+            .into_response(),
+        )),
+        Err(e) => {
+            tracing::error!(error = %e, "writing the backup retention failed");
+            Err(Fail::from(
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal",
+                    "the Core could not write its config",
+                )
+                .into_response(),
+            ))
+        }
     }
 }
 
@@ -374,6 +440,36 @@ pub async fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_audit_action_the_backup_and_export_routes_emit_is_declared() {
+        use crate::store::kinds::PLATFORM_AUDIT_ACTIONS as A;
+        for a in [
+            BACKUP_REQUESTED,
+            RETENTION_REQUESTED,
+            ACTION_RESULT,
+            "host.restart_requested",
+            "secret.exported",
+            "project.defaults_changed",
+            "project.unarchived",
+            "core.prefs_changed",
+        ] {
+            assert!(A.contains(&a), "{a} is not in PLATFORM_AUDIT_ACTIONS");
+        }
+    }
+
+    #[test]
+    fn the_keep_line_is_set_and_the_rest_of_the_config_is_kept() {
+        let t = "home = \"/x\"\n# keep\nbackup_keep_local = 7 # days\nmodules = []\n";
+        assert_eq!(
+            with_keep(t, 30),
+            "home = \"/x\"\n# keep\nbackup_keep_local = 30\nmodules = []\n"
+        );
+        assert_eq!(
+            with_keep("home = 1", 3),
+            "home = 1\nbackup_keep_local = 3\n"
+        );
+    }
 
     #[test]
     fn systemd_utc_times_are_read_and_other_zones_are_not() {
