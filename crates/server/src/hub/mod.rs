@@ -615,6 +615,23 @@ impl Hub {
         self.send_command(runner, command)
     }
 
+    /// `agent.docs` (E10-2): list, read and write the `.md` files of a session's own folder. The runner
+    /// scopes every path to the folder it recorded for the session, refuses symlinks and instruction
+    /// files, and runs nothing, so Lore may send it without a step-up. Only that op passes.
+    pub fn dispatch_agent_docs(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+    ) -> Result<Dispatched, StreamError> {
+        if !matches!(command, Command::AgentDocs(_)) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "only agent.docs uses the docs path",
+            ));
+        }
+        self.send_command(runner, command)
+    }
+
     /// Design helper ops (V6-01): the runner runs its own fixed `ainkrad-design` helper, or headless
     /// Chromium, in a sandbox with no network, on data the Core sends; no program or path the caller
     /// chooses runs. So a module may send them without a step-up. Only the design commands pass.

@@ -45,6 +45,7 @@ use crate::{Answer, Control, Executor, Job, Report};
 mod attach;
 pub mod secrets;
 use secrets::{Delivered, Redeem};
+mod docs;
 mod front;
 mod gw;
 mod history;
@@ -333,6 +334,10 @@ pub struct AgentDriver {
     /// Woken on every new entry or state change, for reads.
     changed: Notify,
     next_run: Mutex<i64>,
+    /// Per session, the `.md` files its folder held when its harness started (size, mtime in ns), so
+    /// `agent.docs` lists only what the session made or changed. Not persisted: after a runner restart a
+    /// session lists nothing until its next start (ponytail: persist it if restarts mid-session matter).
+    docs_base: Mutex<HashMap<String, HashMap<String, (u64, i128)>>>,
     /// Harness name to version, as probed at start; reported to the Core as `RunnerFacts.tools`.
     versions: BTreeMap<String, String>,
 }
@@ -376,6 +381,7 @@ impl AgentDriver {
             // Unique across runner processes: a harness names its scratch dirs `run-<id>`, and a
             // run after a restart must never land in a dead session's.
             next_run: Mutex::new(now_ms()),
+            docs_base: Mutex::new(HashMap::new()),
             versions: BTreeMap::new(),
         })
     }
@@ -440,6 +446,7 @@ impl AgentDriver {
                     &CAP_LIVE,
                     &ainkrad_proto::v2::OP_AGENT_MODE,
                     &ainkrad_proto::v2::OP_AGENT_ATTACH,
+                    &ainkrad_proto::v2::OP_AGENT_DOCS,
                     &ainkrad_proto::v2::OP_AGENT_SUBAGENT_STOP,
                 ])
                 .chain(
@@ -756,6 +763,8 @@ impl AgentDriver {
                 .stopped_before_start(&session, run, workspace_prepared)
                 .await;
         }
+        self.take_docs_baseline(&session, self.harness.work_dir(&job))
+            .await;
         self.harness.session_env(run, Some(env));
         let started = match self.harness.start(&job).await {
             Ok(id) => id,
