@@ -301,9 +301,10 @@ pub(crate) async fn launch_as(
         chain: None,
         agent: Some(agent),
     };
-    let s = ch::create_session(&app.pool, &new, None, None, req, BY, &app.clock.now())
-        .await
-        .map_err(ApiError::from)?;
+    let s =
+        ch::create_session_ordered(&app.pool, &new, None, None, req, true, BY, &app.clock.now())
+            .await
+            .map_err(ApiError::from)?;
     agents::authorize_module_session(app, &s.id);
     if claim::claim(app, room, &s.id, by).await.is_err() {
         alloc::end_unstarted_why(
