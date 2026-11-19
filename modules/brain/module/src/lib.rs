@@ -28,6 +28,7 @@ mod ai;
 mod ai_propose;
 mod ai_semantic;
 mod aliases;
+mod areas;
 mod answer;
 mod answer_turns;
 mod auto_distil;
@@ -238,6 +239,8 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/rooms/{room}/overview", "read"),
     ("GET", "/overview/progress", "read"),
     ("GET", "/activity", "read"),
+    ("GET", "/areas", "read"),
+    ("GET", "/areas/{area}", "read"),
     ("GET", "/rooms/{room}/access", "read"),
     // Code Mode (E4): a session acts as its creator without `admin`, so these name the scopes a
     // creator holds. They answer only a session's own calls (`ai::session_of`).
@@ -594,6 +597,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         overview::write_all,
         overview::progress_route,
         activity::get,
+        areas::summary,
+        areas::records,
         overview::instructions,
         policy::get,
         card::get,
@@ -616,6 +621,10 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         BrainStatus,
         activity::BrainActivity,
         activity::Need,
+        areas::Areas,
+        areas::AreaSummary,
+        areas::AreaRecord,
+        areas::AreaPage,
         imports::StartRun,
         imports::RunId,
         imports::Batch,
@@ -786,6 +795,8 @@ impl Module for Brain {
             .route("/overview/write-all", post(overview::write_all))
             .route("/overview/progress", get(overview::progress_route))
             .route("/activity", get(activity::get))
+            .route("/areas", get(areas::summary))
+            .route("/areas/{area}", get(areas::records))
             .route(
                 "/rooms/{room}/policy",
                 get(policy::get).patch(policy::patch),
