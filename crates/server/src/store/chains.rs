@@ -177,9 +177,10 @@ pub(super) async fn check_entries(
             if !prices::valid_model(m) {
                 return refused("bad_request", "a model id is 1 to 80 of [A-Za-z0-9._:/-]");
             }
-            // A built-in provider's unlisted model runs at the flagged default price.
+            // A built-in's or a preset's unlisted model runs at the flagged default price.
             if !subscription
                 && !def.builtin
+                && !def.preset
                 && prices::rates_in(conn, &provider, m).await?.is_none()
             {
                 return refused("bad_request", "an API-key pool's model needs a price");

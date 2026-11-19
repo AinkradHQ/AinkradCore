@@ -106,6 +106,7 @@ mod passkeys;
 mod placement;
 mod pools;
 mod preauth;
+mod presets;
 mod project_run_checkouts;
 mod project_run_checkouts_review;
 mod project_runs;

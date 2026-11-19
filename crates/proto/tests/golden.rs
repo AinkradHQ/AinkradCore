@@ -878,6 +878,7 @@ fn v2_agent_frames_are_pinned() {
             user_key: None,
             upstream,
             test_path: None,
+            want_models: false,
         })),
     );
     v2(

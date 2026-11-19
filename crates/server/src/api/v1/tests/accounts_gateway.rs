@@ -38,6 +38,7 @@ pub(super) fn router(id: &str, prefix: Option<&str>) -> Definition {
         key_prefix: prefix.map(str::to_owned),
         test_path: None,
         builtin: false,
+        preset: false,
         version: 0,
     }
 }
