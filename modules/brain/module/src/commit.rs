@@ -80,7 +80,7 @@ pub(crate) async fn commit(
     if let Some(k) = &keep {
         decide(&app, &b, &st, &run, k).await?;
     }
-    Ok(Json(commit_accepted(&app, &b, &run, st).await?))
+    Ok(Json(commit_accepted(&app, &b, &run, st, false).await?))
 }
 
 /// Imports every accepted room of the run (`st` is its staging file, closed here) and closes the
@@ -90,6 +90,7 @@ pub(crate) async fn commit_accepted(
     b: &Brain,
     run: &str,
     st: SqlitePool,
+    hold_unsorted: bool,
 ) -> Result<CommitResult, ApiError> {
     let key = b.key(app).await?;
     let accepted =
@@ -134,8 +135,17 @@ pub(crate) async fn commit_accepted(
         sqlx::query_scalar("SELECT count(*) FROM proposals WHERE state IN ('accepted','held')")
             .fetch_one(&st)
             .await?;
+    // The auto-import keeps a run open while Unsorted still holds items, so they keep being re-sorted.
+    let waiting: i64 = if hold_unsorted {
+        sqlx::query_scalar("SELECT count(*) FROM items WHERE proposal = ?")
+            .bind(UNSORTED)
+            .fetch_one(&st)
+            .await?
+    } else {
+        0
+    };
     st.close().await;
-    if open == 0 {
+    if open == 0 && waiting == 0 {
         close_run(app, run, result.rooms.len()).await?;
         result.state = "committed".to_owned();
     }

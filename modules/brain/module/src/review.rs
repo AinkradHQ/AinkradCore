@@ -467,156 +467,26 @@ pub(crate) async fn patch_proposal(
     Json(req): Json<ProposalPatch>,
 ) -> ApiResult<ProposalCard> {
     let st = review_run(&app, &b, &run).await?;
-    let row = one(&st, &p).await?;
-    editable(&row.try_get::<String, _>("state")?)?;
-    if let Some(n) = &req.name {
-        if n.trim().is_empty() || n.chars().count() > 100 {
-            return Err(ApiError::bad_request("a name of 1 to 100 characters"));
-        }
-        sqlx::query("UPDATE proposals SET name = ? WHERE id = ?")
-            .bind(n.trim())
-            .bind(&p)
-            .execute(&st)
-            .await?;
-    }
-    if let Some(k) = &req.kind {
-        if !KINDS.contains(&k.as_str()) {
-            return Err(ApiError::bad_request("an unknown room kind"));
-        }
-        sqlx::query("UPDATE proposals SET kind = ? WHERE id = ?")
-            .bind(k)
-            .bind(&p)
-            .execute(&st)
-            .await?;
-    }
-    if let Some(c) = &req.config {
-        c.validate()?;
-        sqlx::query("UPDATE proposals SET config = ? WHERE id = ?")
-            .bind(serde_json::to_string(c).expect("config"))
-            .bind(&p)
-            .execute(&st)
-            .await?;
-    }
-    match req.state.as_deref() {
-        None => {}
-        Some("proposed") => {
-            sqlx::query("UPDATE proposals SET state = 'proposed' WHERE id = ? AND state IN ('accepted','held')")
-                .bind(&p)
-                .execute(&st)
-                .await?;
-        }
-        Some("accepted") => {
-            if p == UNSORTED {
-                return Err(code(
-                    400,
-                    "unsorted_not_a_room",
-                    "Unsorted is not a room: move its items to one",
-                ));
-            }
-            if mixed(&st, &p).await? {
-                return Err(code(
-                    409,
-                    "mixed_employers",
-                    "two employers in one room: split it first",
-                ));
-            }
-            sqlx::query("UPDATE proposals SET state = 'accepted' WHERE id = ?")
-                .bind(&p)
-                .execute(&st)
-                .await?;
-        }
-        Some(_) => return Err(ApiError::bad_request("state is accepted or proposed")),
-    }
-    let out = card(&st, &one(&st, &p).await?).await?;
+    let new_id = split_into(&st, &p, &req.item_ids, req.name.as_deref()).await?;
+    let out = card(&st, &one(&st, &new_id).await?).await?;
     st.close().await;
     Ok(Json(out))
 }
 
-#[derive(Deserialize, ToSchema)]
-pub struct MergeInto {
-    pub into: String,
-}
-
-#[utoipa::path(post, path = "/imports/{run}/proposals/{p}/merge", operation_id = "brainMergeProposal", tag = "brain",
-    params(("run" = String, Path, description = "Run id"), ("p" = String, Path, description = "Proposal id")),
-    request_body = MergeInto,
-    responses((status = 200, description = "The room merged into", body = ProposalCard)))]
-pub(crate) async fn merge(
-    State(app): State<App>,
-    Extension(b): Extension<Brain>,
-    Path((run, p)): Path<(String, String)>,
-    Json(req): Json<MergeInto>,
-) -> ApiResult<ProposalCard> {
-    let st = review_run(&app, &b, &run).await?;
-    let out = merge_in(&st, &p, &req.into).await?;
-    st.close().await;
-    Ok(Json(out))
-}
-
-/// Merges proposal `p` into `into` (both editable) and answers `into`'s card.
-pub(crate) async fn merge_in(
+/// Moves `item_ids` out of proposal `p` into a new proposal named `name` (default "<p> (split)") and
+/// returns its id. The person's split and the auto-import's re-sort of Unsorted (E9-5) both end here.
+pub(crate) async fn split_into(
     st: &SqlitePool,
     p: &str,
-    into: &str,
-) -> Result<ProposalCard, ApiError> {
-    if into == p || into == UNSORTED {
-        return Err(ApiError::bad_request(
-            "merge into another room, not into itself or Unsorted",
-        ));
-    }
-    editable(&one(st, p).await?.try_get::<String, _>("state")?)?;
-    editable(&one(st, into).await?.try_get::<String, _>("state")?)?;
-    let mut tx = st.begin().await?;
-    sqlx::query("UPDATE items SET proposal = ? WHERE proposal = ?")
-        .bind(into)
-        .bind(p)
-        .execute(&mut *tx)
-        .await?;
-    if p == UNSORTED {
-        sqlx::query("UPDATE proposals SET warnings = '[]' WHERE id = ?")
-            .bind(UNSORTED)
-            .execute(&mut *tx)
-            .await?;
-    } else {
-        sqlx::query("UPDATE proposals SET state = 'merged' WHERE id = ?")
-            .bind(p)
-            .execute(&mut *tx)
-            .await?;
-    }
-    // Both ends are reviewed again: a merged room is a new question.
-    sqlx::query(
-        "UPDATE proposals SET state = 'proposed' WHERE id = ? AND state IN ('accepted','held')",
-    )
-    .bind(into)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    card(st, &one(st, into).await?).await
-}
-
-#[derive(Deserialize, ToSchema)]
-pub struct SplitItems {
-    pub item_ids: Vec<String>,
-    pub name: Option<String>,
-}
-
-#[utoipa::path(post, path = "/imports/{run}/proposals/{p}/split", operation_id = "brainSplitProposal", tag = "brain",
-    params(("run" = String, Path, description = "Run id"), ("p" = String, Path, description = "Proposal id")),
-    request_body = SplitItems,
-    responses((status = 200, description = "The new room", body = ProposalCard)))]
-pub(crate) async fn split(
-    State(app): State<App>,
-    Extension(b): Extension<Brain>,
-    Path((run, p)): Path<(String, String)>,
-    Json(req): Json<SplitItems>,
-) -> ApiResult<ProposalCard> {
-    let st = review_run(&app, &b, &run).await?;
-    let row = one(&st, &p).await?;
+    item_ids: &[String],
+    name: Option<&str>,
+) -> Result<String, ApiError> {
+    let row = one(st, p).await?;
     editable(&row.try_get::<String, _>("state")?)?;
-    if req.item_ids.is_empty() || req.item_ids.len() > 5000 {
+    if item_ids.is_empty() || item_ids.len() > 5000 {
         return Err(ApiError::bad_request("1 to 5000 item ids"));
     }
-    let name = req.name.clone().unwrap_or_else(|| {
+    let name = name.map(str::to_owned).unwrap_or_else(|| {
         format!(
             "{} (split)",
             row.try_get::<String, _>("name").unwrap_or_default()
@@ -635,11 +505,11 @@ pub(crate) async fn split(
         .bind(row.try_get::<String, _>("signals")?)
         .execute(&mut *tx)
         .await?;
-    for id in &req.item_ids {
+    for id in item_ids {
         let moved = sqlx::query("UPDATE items SET proposal = ? WHERE item_id = ? AND proposal = ?")
             .bind(&new_id)
             .bind(id)
-            .bind(&p)
+            .bind(p)
             .execute(&mut *tx)
             .await?;
         if moved.rows_affected() != 1 {
@@ -649,13 +519,11 @@ pub(crate) async fn split(
     sqlx::query(
         "UPDATE proposals SET state = 'proposed' WHERE id = ? AND state IN ('accepted','held')",
     )
-    .bind(&p)
+    .bind(p)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    let out = card(&st, &one(&st, &new_id).await?).await?;
-    st.close().await;
-    Ok(Json(out))
+    Ok(new_id)
 }
 
 #[utoipa::path(post, path = "/imports/{run}/proposals/{p}/refuse", operation_id = "brainRefuseProposal", tag = "brain",
