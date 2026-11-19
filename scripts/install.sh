@@ -681,6 +681,7 @@ main() {
     step "First device"
     ui_live_end
     guided_invite || rc=$?
+    guided_announce
     guided_summary "$rc"
     [ "$rc" != 0 ] || [ -z "$INVITE" ] || guided_show_invite
     guided_next_steps "$rc"

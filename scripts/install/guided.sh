@@ -286,6 +286,23 @@ guided_invite() {
   return 1
 }
 
+# After the invite: advertise this Core to its LAN (an Avahi service file, public facts only) and, when the install command
+# carried AINKRAD_RENDEZVOUS=<code>.<app key>, leave the link there sealed to that app's key, so the app moves on by itself.
+# Both are best effort: the link on the terminal and the paste screen stay as they were.
+guided_announce() {
+  [ "$DRY" = 0 ] || return 0
+  local f=/etc/avahi/services/ainkrad-core.service
+  if [ "${AINKRAD_MDNS:-yes}" != no ] && [ -d /etc/avahi/services ]; then
+    if runuser -u ainkrad -- "$BIN/ainkrad-core-server" mdns-service "$CORE_HOME/core.db" "$A_HOSTNAME" >"$f.new" 2>/dev/null; then
+      chmod 644 "$f.new" && mv "$f.new" "$f"
+    else rm -f "$f.new"; fi
+  fi
+  [ -n "${AINKRAD_RENDEZVOUS:-}" ] && [ -n "$INVITE" ] || return 0
+  if printf '%s\n' "$INVITE" | "$BIN/ainkrad-core-server" rendezvous-post "${AINKRAD_SIGNIN_URL:-https://signin.ainkrad.io}" >/dev/null 2>&1; then
+    say "     The link was sent to the app that is waiting for it, sealed so only that app can read it."
+  else say "     Could not reach the waiting app. Paste the link above into it instead."; fi
+}
+
 # The link, the secret alone and a QR: to the terminal only.
 guided_show_invite() {
   local secret=${INVITE##*secret=}

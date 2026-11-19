@@ -32,6 +32,8 @@ pub const USAGE: &str = "Devices (E1-07):
   ainkrad-core-server bootstrap <db> [<name>]
   ainkrad-core-server recover <db> [--keep-devices] [--revoke-runners] [<name>]
   ainkrad-core-server pairing-invite <db> <host> [<name>]
+  ainkrad-core-server mdns-service <db> <host>
+  ainkrad-core-server rendezvous-post <https url>   (the link on stdin, <code>.<app key> in AINKRAD_RENDEZVOUS)
   ainkrad-core-server runner-enroll-local <db> <out-dir> <url>
 bootstrap pairs the first device, and only the first: it prints a one-time code, good for 5
 minutes and only over the server's Unix socket (core.sock, or admin.sock beside a TCP or public
@@ -40,6 +42,10 @@ or lapsed attempt can be run again. recover does the same for a new admin device
 devices exist, after you type the host name; it first revokes every app device (they may be
 lost or stolen) unless --keep-devices, and the runners too with --revoke-runners. Both run only
 as the owner of an existing database (the service user), checked before it is opened.
+mdns-service prints an Avahi service file that advertises this Core on its LAN as _ainkrad._tcp (port 443,
+TXT: its fingerprint, host name and API major), so the app can list it: a Core found that way still needs
+the link or code to pair. rendezvous-post leaves the first owner's link, sealed to the app's key, for an app
+that is waiting for it (the installer runs it when the command carried AINKRAD_RENDEZVOUS).
 pairing-invite is the installer's way to the first owner: like bootstrap it is refused once any
 device exists, but it prints one link, ainkrad://connect?host=<host>&fp=<core fp>&secret=<secret>
 (<host> is what clients send as Host), that never expires and is claimed once, from anywhere, by
@@ -187,6 +193,30 @@ pub async fn invite(db: &Path, host: &str, name: &str) -> Result_ {
         ainkrad_core_server::auth::pairing::invite_link(host, &identity.fp, &created.secret)
     );
     eprintln!("Valid until used, once; running this again replaces it.");
+    Ok(())
+}
+
+/// An Avahi service file that advertises this Core as `_ainkrad._tcp`: public facts only (its fingerprint, the name
+/// clients use, the API major). Nothing in it lets anyone pair; that still needs the link or the code.
+pub async fn mdns_service(db: &Path, host: &str) -> Result_ {
+    if host.is_empty()
+        || !host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b))
+    {
+        return Err("host is the DNS name clients use (letters, digits, . -)".into());
+    }
+    owner_only(db)?;
+    let identity = Identity::load_or_create(
+        state_dir(db),
+        &ainkrad_core_server::ops::secretbox::SecretBox::for_home(state_dir(db))?,
+    )?;
+    println!(
+        "<?xml version=\"1.0\" standalone='no'?>\n<!DOCTYPE service-group SYSTEM \"avahi-service.dtd\">\n\
+<service-group>\n  <name replace-wildcards=\"yes\">Ainkrad Core on %h</name>\n  <service>\n    <type>_ainkrad._tcp</type>\n    \
+<port>443</port>\n    <txt-record>fp={}</txt-record>\n    <txt-record>host={host}</txt-record>\n    <txt-record>api=v1</txt-record>\n  </service>\n</service-group>",
+        identity.fp
+    );
     Ok(())
 }
 
