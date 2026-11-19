@@ -132,6 +132,7 @@ mod scheduler_sessions;
 mod scoped;
 mod scopes;
 mod secret_kinds;
+mod secret_reveal;
 mod secrets;
 mod secrets_runners;
 mod sessions;

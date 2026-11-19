@@ -60,6 +60,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/devices", "admin"),
     ("DELETE", "/api/v1/devices/{id}", "admin"),
     ("GET", "/api/v1/audit", "admin"),
+    ("GET", "/api/v1/audit/stats", "admin"),
+    ("GET", "/api/v1/ops/history", "admin"),
     // The Core machine (host-helper plan §4): all `admin`; see DESTRUCTIVE for the step-up ones.
     ("GET", "/api/v1/system/host", "admin"),
     ("GET", "/api/v1/core/health", "read"),
@@ -216,6 +218,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PUT", "/api/v1/secrets/{id}", "admin"),
     ("DELETE", "/api/v1/secrets/{id}", "admin"),
     ("POST", "/api/v1/secrets/{id}/leases", "admin"),
+    // Showing a value or exporting all of them (D-4): `admin`, destructive (a live step-up).
+    ("POST", "/api/v1/secrets/{id}/reveal", "admin"),
+    ("POST", "/api/v1/secrets/export", "admin"),
     ("POST", "/api/v1/secret-leases/redeem", "runner"),
     ("GET", "/api/v1/secret-groups", "admin"),
     ("POST", "/api/v1/secret-groups", "admin"),
@@ -308,6 +313,9 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/api/v1/secrets/{id}"),
     ("DELETE", "/api/v1/secrets/{id}"),
     ("POST", "/api/v1/secrets/{id}/leases"),
+    // A shown or exported value leaves the Core to a screen or a file (D-4).
+    ("POST", "/api/v1/secrets/{id}/reveal"),
+    ("POST", "/api/v1/secrets/export"),
     ("POST", "/api/v1/secret-groups"),
     ("PUT", "/api/v1/secret-groups/{id}"),
     ("DELETE", "/api/v1/secret-groups/{id}"),

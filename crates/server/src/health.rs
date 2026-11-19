@@ -29,6 +29,7 @@ use sqlx::SqlitePool;
 
 use crate::store::{self, audit, events, settings};
 
+pub mod history;
 pub mod metrics;
 
 /// A condition must hold, or stop holding, this long before it is a transition.
@@ -223,6 +224,7 @@ pub struct Health {
     /// Responses by class: 2xx, 3xx, 4xx, 5xx, other.
     requests: [AtomicU64; 5],
     state: Mutex<State>,
+    history: history::History,
     host: tokio::sync::Mutex<Option<(Instant, std::sync::Arc<HostSnapshot>)>>,
 }
 
@@ -248,6 +250,11 @@ impl Health {
 
     pub fn request_counts(&self) -> [u64; 5] {
         std::array::from_fn(|i| self.requests[i].load(Ordering::Relaxed))
+    }
+
+    /// The last day of readings, one a minute (the Ops charts).
+    pub fn history(&self) -> &history::History {
+        &self.history
     }
 
     pub fn db_path(&self) -> Option<&Path> {
@@ -298,7 +305,12 @@ impl Health {
         if !due {
             return Ok(vec![]);
         }
-        self.tick_with(pool, now, &Readings::gather(db).await).await
+        let readings = Readings::gather(db).await;
+        let (rss, _) = metrics::process().await;
+        let used = readings.disk_free_pct().map(|f| 100 - f);
+        self.history
+            .record(now, history::cpu_secs().await, rss, used);
+        self.tick_with(pool, now, &readings).await
     }
 
     /// A pass over `readings` at `now`: the transitions it made, each already written.
