@@ -260,9 +260,35 @@ pub async fn create(
     )
     .await
     .map_err(err)?;
+    // A preset's model list is read in the background (E7-3), through a runner when one is ready;
+    // `GET /accounts/{id}/models` has it, and `checkAccount` reads it again.
+    if prov::presets().iter().any(|p| p.id == a.provider) {
+        let (app, me, id) = (app.clone(), me.clone(), a.id);
+        tokio::spawn(async move {
+            crate::agents::gateway::test::fetch_models(&app, &me, id).await;
+        });
+    }
     let mut d = AccountDetail::from(a);
     (d.pool, d.chain) = (Some(pool), chain);
     Ok(Json(d))
+}
+
+#[utoipa::path(get, path = "/api/v1/accounts/{id}/models", operation_id = "listAccountModels",
+    tag = "accounts", params(("id" = String, Path, description = "The account's id")),
+    responses((status = 200, description = "The model ids the provider listed for the account \
+        when its key was added or checked (a preset's list is read through a runner's gateway). \
+        Empty until one was read; ids only, no price. 404 for no such account", body = AccountModels)))]
+pub async fn list_models(
+    State(app): State<App>,
+    Path(id): Path<String>,
+) -> ApiResult<AccountModels> {
+    let id = num(&id, "account")?;
+    acc::get(&app.pool, id).await.map_err(err)?;
+    let (models, at) = crate::store::account_models::get(&app.pool, id).await?;
+    Ok(Json(AccountModels {
+        models,
+        fetched_at: opt_ts(at.as_deref()),
+    }))
 }
 
 #[utoipa::path(put, path = "/api/v1/accounts/{id}/secret", operation_id = "replaceAccountSecret",
@@ -396,6 +422,7 @@ pub async fn test_account(
             result: t.result,
             latency_ms: t.latency_ms,
             runner: t.runner,
+            models: t.models.and_then(|n| u32::try_from(n).ok()),
         })),
         Err(Failed::Gone) => Err(ApiError::not_found("no such account")),
         Err(Failed::Soon(why)) => Err(ApiError::new(
@@ -448,11 +475,13 @@ pub async fn check_account(
                 result: t.result,
                 latency_ms: Some(t.latency_ms),
                 runner: Some(t.runner).filter(|r| !r.is_empty()),
+                models: t.models.and_then(|n| u32::try_from(n).ok()),
             }),
             Err(key::Failed::NoRunner) => Ok(AccountChecked {
                 result: "no_runner".to_owned(),
                 latency_ms: None,
                 runner: None,
+                models: None,
             }),
             Err(key::Failed::Gone) => Err(ApiError::not_found("no such account")),
             Err(key::Failed::Soon(why)) => Err(soon(why)),
@@ -470,6 +499,7 @@ pub async fn check_account(
             result: c.result,
             latency_ms: Some(c.latency_ms),
             runner: Some(c.runner).filter(|r| !r.is_empty()),
+            models: None,
         },
         Err(plan::Failed::NotPlan) => key_test().await?,
         Err(plan::Failed::Gone) => return Err(ApiError::not_found("no such account")),

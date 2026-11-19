@@ -76,6 +76,11 @@ pub struct Definition {
     pub test_path: Option<String>,
     #[serde(default)]
     pub builtin: bool,
+    /// A preset (E7-3, D-19): a provider shipped in code where the user only pastes a key. Never a
+    /// row, so it cannot be edited or deleted; its keys are bound to the account and its frozen
+    /// host, not to a `key_prefix` ([`presets`]).
+    #[serde(default)]
+    pub preset: bool,
     #[serde(default)]
     pub version: i64,
 }
@@ -98,8 +103,61 @@ fn builtin(id: &str, name: &str, harness: &str, var: &str, url: &str, parser: &s
         key_prefix: None,
         test_path: None,
         builtin: true,
+        preset: false,
         version: 1,
     }
+}
+
+/// The presets (D-19): OpenAI-wire providers, delivered through the gateway, signed in by a pasted
+/// key. `(id, name, base URL, authenticated test path)`; the URLs and model-list paths were read
+/// from each vendor's public docs on 2026-11-19. A model list that is public (OpenRouter's)
+/// gets an authenticated path so a revoked key does not read as `ok`; the rest list models with
+/// the key, or (AIMLAPI, APInex: undocumented) declare none and answer `inconclusive` on success.
+const PRESETS: [(&str, &str, &str, Option<&str>); 7] = [
+    (
+        "openrouter",
+        "OpenRouter",
+        "https://openrouter.ai/api/v1",
+        Some("/key"),
+    ),
+    ("aimlapi", "AIMLAPI", "https://api.aimlapi.com/v1", None),
+    (
+        "groq",
+        "Groq",
+        "https://api.groq.com/openai/v1",
+        Some("/models"),
+    ),
+    (
+        "deepseek",
+        "DeepSeek",
+        "https://api.deepseek.com",
+        Some("/models"),
+    ),
+    (
+        "mistral",
+        "Mistral",
+        "https://api.mistral.ai/v1",
+        Some("/models"),
+    ),
+    ("xai", "xAI", "https://api.x.ai/v1", Some("/models")),
+    // OpenAI-compatible (chat completions, `/v1/responses`, Bearer), base URL read from its own
+    // site's bundle: https://apinex.bond serves the docs, https://api.apinex.bond/v1 the API.
+    ("apinex", "APInex", "https://api.apinex.bond/v1", None),
+];
+
+/// The preset providers, in code. No model is listed and no price invented: the model list is
+/// fetched when an account is added (`account_models`), and a model without a price runs at the
+/// flagged default price.
+pub fn presets() -> Vec<Definition> {
+    PRESETS
+        .iter()
+        .map(|(id, name, url, test)| {
+            let mut d = builtin(id, name, "codex", "OPENAI_API_KEY", url, "openai");
+            (d.builtin, d.preset) = (false, true);
+            d.test_path = test.map(str::to_owned);
+            d
+        })
+        .collect()
 }
 
 /// The built-in providers, in code.
@@ -263,6 +321,7 @@ fn row(r: SqliteRow) -> Result<Definition, sqlx::Error> {
         key_prefix: r.try_get("key_prefix")?,
         test_path: r.try_get("test_path")?,
         builtin: false,
+        preset: false,
         version: r.try_get("version")?,
     })
 }
@@ -275,12 +334,20 @@ const COLUMNS: &str = "id, name, harness, auth_var, base_url, usage_parser, deli
 pub async fn list(pool: &SqlitePool) -> Result<Vec<Definition>, sqlx::Error> {
     let sql = format!("SELECT {COLUMNS} FROM core_provider_defs ORDER BY id");
     let mut all = built_in();
+    let mut user = Vec::new();
     for r in sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?
     {
-        all.push(row(r)?);
+        user.push(row(r)?);
     }
+    // A user definition made before the presets existed keeps its id: it shadows the preset.
+    all.extend(
+        presets()
+            .into_iter()
+            .filter(|p| !user.iter().any(|u| u.id == p.id)),
+    );
+    all.extend(user);
     Ok(all)
 }
 
@@ -296,6 +363,10 @@ pub async fn get_in(conn: &mut SqliteConnection, id: &str) -> Result<Definition,
         .await?
     {
         Some(r) => Ok(row(r)?),
+        None if presets().iter().any(|p| p.id == id) => Ok(presets()
+            .into_iter()
+            .find(|p| p.id == id)
+            .expect("just found")),
         None => Err(Error::Refused {
             code: "not_found",
             message: "no such provider".to_owned(),
@@ -404,6 +475,19 @@ pub async fn create(
         .bind(&d.id)
         .fetch_one(&mut *tx)
         .await?;
+    // Accounts of a preset hold keys bound to its frozen host with no key shape: a definition
+    // taking its id over would re-read them under another rule.
+    let preset_used: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM core_accounts WHERE provider = ?")
+            .bind(&d.id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if preset_used > 0 && presets().iter().any(|p| p.id == d.id) {
+        return Err(Error::Refused {
+            code: "conflict",
+            message: "that id is a preset provider that accounts use".to_owned(),
+        });
+    }
     if taken > 0 {
         return Err(Error::Refused {
             code: "conflict",
@@ -430,6 +514,9 @@ pub async fn replace(
     }
     let mut tx = super::begin_write(pool).await?;
     let old = get_in(&mut tx, &d.id).await?;
+    if old.preset {
+        return bad("a preset provider cannot be edited");
+    }
     let mut d = d.clone();
     (d.builtin, d.version) = (false, old.version + 1);
     if d.wire.is_empty() {
@@ -473,6 +560,9 @@ pub async fn delete(
     }
     let mut tx = super::begin_write(pool).await?;
     let old = get_in(&mut tx, id).await?;
+    if old.preset {
+        return bad("a preset provider cannot be deleted");
+    }
     let used: i64 = sqlx::query_scalar("SELECT count(*) FROM core_accounts WHERE provider = ?")
         .bind(id)
         .fetch_one(&mut *tx)

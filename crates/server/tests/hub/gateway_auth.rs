@@ -29,6 +29,7 @@ async fn test_answered(w: &mut W, result: UpstreamStatus) {
                 let tested = GatewayTested {
                     result,
                     latency_ms: 5,
+                    models: Vec::new(),
                 };
                 w.fake
                     .send(stream, Body::Result(Reply::GatewayTest(tested)))
