@@ -109,7 +109,7 @@ pc_checks() { # pc_checks "443 80": 0 when all is well; else 1 with PC_WHAT (wha
 pc_urlb() { # stdin -> base64url without padding
   openssl base64 -A | tr '+/' '-_' | tr -d '='
 }
-pc_probe_call() { # pc_probe_call PORTS OUTFILE: POST /v1/probe to the sign-in service, signed AINKRAD-SVC-V1 with a throw-away ES256 key; 0 on a 2xx
+pc_probe_call() { # pc_probe_call PORTS OUTFILE [CURL-FLAG, e.g. -4 so the answer is this machine's IPv4]: POST /v1/probe to the sign-in service, signed AINKRAD-SVC-V1 with a throw-away ES256 key; 0 on a 2xx
   command -v openssl >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 || return 1
   _d=$(mktemp -d) || return 1
   _body="{\"ports\":[$(printf '%s' "$1" | tr ' ' ',')]}"
@@ -130,7 +130,8 @@ pc_probe_call() { # pc_probe_call PORTS OUTFILE: POST /v1/probe to the sign-in s
   # shellcheck disable=SC2059 # the octal escape is the format: a raw byte for the signature file
   while [ -n "$_hex" ]; do _x=${_hex%"${_hex#??}"}; _hex=${_hex#??}; printf "\\$(printf %03o "0x$_x")" >>"$_d/sig.raw"; done
   _sig=$(pc_urlb <"$_d/sig.raw")
-  curl -fsS --max-time 15 -X POST "${AINKRAD_SIGNIN_URL:-https://signin.ainkrad.io}/v1/probe" \
+  # shellcheck disable=SC2086 # $3 is one optional curl flag
+  curl ${3:-} -fsS --max-time 15 -X POST "${AINKRAD_SIGNIN_URL:-https://signin.ainkrad.io}/v1/probe" \
     -H 'Content-Type: application/json' -H "Ainkrad-Core: $_fp" -H "Ainkrad-Key: $(pc_urlb <"$_d/spki")" -H 'Ainkrad-Alg: ES256' \
     -H "Ainkrad-Timestamp: $_ts" -H "Ainkrad-Nonce: $_nonce" -H "Ainkrad-Signature: $_sig" \
     --data-binary "@$_d/body" -o "$2" 2>/dev/null
@@ -194,7 +195,7 @@ pc_dns_probe() { # pc_dns_probe NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when
 }
 pc_pub_probe() { # pc_pub_probe OUTFILE: this machine's public IPv4 from Ainkrad's outside check (signin.ainkrad.io, the call the port probe makes), no third party; empty when it cannot run
   _po=$(mktemp) || { : >"$1"; return 0; }
-  if pc_probe_call 443 "$_po" 2>/dev/null; then sed -n 's/.*"ip" *: *"\([0-9.]*\)".*/\1/p' "$_po" | head -n1 >"$1"; else : >"$1"; fi
+  if pc_probe_call 443 "$_po" -4 2>/dev/null; then sed -n 's/.*"ip" *: *"\([0-9.]*\)".*/\1/p' "$_po" | head -n1 >"$1"; else : >"$1"; fi
   rm -f "$_po"
 }
 pc_dns() { # pc_dns NAME: the A record is this machine's public address and any AAAA record is on it; else the red card (blocking)
