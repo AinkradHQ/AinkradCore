@@ -56,6 +56,11 @@ pub struct ProviderAccount {
     /// limit as advice when it is false.
     #[schema(required = false)]
     pub models_enforced: bool,
+    /// A plain-language limit of removing this account, e.g. an Antigravity login that stays in the
+    /// runner's keyring. Absent when removal clears everything.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub wipe_note: Option<String>,
 }
 
 /// An account's health counters, as the scheduler keeps them.
@@ -185,6 +190,9 @@ impl From<acc::Account> for ProviderAccount {
             usage: None,
             runner: None,
             models_enforced,
+            wipe_note: (a.provider == "agy-sub").then(|| {
+                "Removing this account cannot clear its login from the runner's keyring. Sign out in Antigravity on that runner.".to_owned()
+            }),
         }
     }
 }
