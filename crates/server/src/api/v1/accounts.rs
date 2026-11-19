@@ -169,13 +169,14 @@ async fn month_spend(
 #[utoipa::path(get, path = "/api/v1/accounts", operation_id = "listAccounts", tag = "accounts",
     responses((status = 200, description = "Every account: its key's last four characters, \
         never the key, its secret's name or its runner scope; with its `live` session count and \
-        `health`, `month_spend_usd_micros` and `month_limit_usd_micros` (`admin` devices only)", body = Vec<ProviderAccount>)))]
+        `health`, `month_spend_usd_micros`, `month_limit_usd_micros` and `usage` (the usage meter) (`admin` devices only)", body = Vec<ProviderAccount>)))]
 pub async fn list(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
 ) -> ApiResult<Vec<ProviderAccount>> {
     let status = statuses_for(&app, &me).await?;
     let spend = month_spend(&app, &me).await?;
+    let meters = meter::standings(&app, &me).await?;
     Ok(Json(
         acc::list(&app.pool)
             .await?
@@ -185,6 +186,7 @@ pub async fn list(
                 ProviderAccount::from(a)
                     .with_status(st)
                     .with_spend(spend.as_ref())
+                    .with_meter(meters.as_ref())
             })
             .collect(),
     ))
@@ -205,10 +207,12 @@ pub async fn get(
     let status = statuses_for(&app, &me).await?;
     let st = status.get(&a.id);
     let spend = month_spend(&app, &me).await?;
+    let meters = meter::standings(&app, &me).await?;
     Ok(Json(
         ProviderAccount::from(a)
             .with_status(st)
-            .with_spend(spend.as_ref()),
+            .with_spend(spend.as_ref())
+            .with_meter(meters.as_ref()),
     ))
 }
 
@@ -495,9 +499,11 @@ pub async fn delete(
 }
 
 mod logins;
+mod meter;
 mod pools;
 mod types;
 
 pub use logins::*;
+pub use meter::AccountMeter;
 pub use pools::*;
 pub use types::*;

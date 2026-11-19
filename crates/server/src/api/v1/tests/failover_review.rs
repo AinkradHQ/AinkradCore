@@ -254,6 +254,7 @@ async fn a_denied_top_up_names_its_budget_and_the_run_moves_skipping_that_pool()
     // The pool's budget now leaves less than one turn needs.
     let subject = chain[0].pool.to_string();
     let b = NewBudget {
+        message_cap: None,
         kind: "pool",
         subject: &subject,
         company: None,
@@ -337,6 +338,7 @@ async fn a_denied_top_up_names_its_budget_and_the_run_moves_skipping_that_pool()
 async fn budget_small(w: &super::allocator::W, pool: i64) {
     let subject = pool.to_string();
     let b = NewBudget {
+        message_cap: None,
         kind: "pool",
         subject: &subject,
         company: None,

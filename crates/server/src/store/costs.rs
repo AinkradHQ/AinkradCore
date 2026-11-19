@@ -298,6 +298,7 @@ pub async fn record_priced_in(
         c.session,
         tokens,
         cost.unwrap_or(0),
+        1,
         c.occurred_at,
     )
     .await?;
@@ -425,7 +426,7 @@ pub async fn correct_in(
     .bind(id)
     .execute(&mut *conn)
     .await?;
-    guard::apply_in(conn, new, &o.session, 0, delta, &o.occurred_at).await?;
+    guard::apply_in(conn, new, &o.session, 0, delta, 0, &o.occurred_at).await?;
     let guard = guard::check_in(conn, new, &o.occurred_at, now).await?;
     let r = sqlx::query(concat!(
         "SELECT ",
