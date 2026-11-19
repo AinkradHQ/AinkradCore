@@ -404,8 +404,8 @@ async fn the_test_route_needs_admin_and_a_runner_and_is_limited_to_one_a_minute(
         (st, b["code"].as_str()),
         (StatusCode::FORBIDDEN, Some("forbidden_scope"))
     );
-    // It is not destructive: an admin who never stepped up gets past the gate (and the session
-    // limits, which raise what a session may spend, need the step-up: `accounts_api`).
+    // It is not destructive: an admin who never stepped up gets past the gate (as does
+    // every other account write: `accounts_api`).
     let plain = plain_admin(&fx).await;
     let (st, b) = call(&fx, &plain, Method::POST, &uri, Value::Null).await;
     assert_eq!(

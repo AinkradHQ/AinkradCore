@@ -117,10 +117,10 @@ fn spawn_daemon_with(
     stop
 }
 
-fn elevate(core: &Core, dev: &TestDevice) {
-    let sid = dev.session.lock().unwrap().clone().unwrap();
-    let until = ainkrad_core_server::scheduler::Clock::unix(&*core.app.clock) + 300;
-    assert!(core.app.auth.elevate(&sid, &dev.id, until));
+/// The app unlock (E1): held an hour ahead, so no heartbeat is needed.
+fn unlock(core: &Core, dev: &TestDevice) {
+    let until = ainkrad_core_server::scheduler::Clock::unix(&*core.app.clock) + 3600;
+    core.app.auth.unlock(&dev.id, until);
 }
 
 impl Fx {
@@ -148,7 +148,7 @@ impl Fx {
         };
         for _ in 0..500 {
             if fx.core.app.hub.online(&fx.runner) {
-                elevate(&fx.core, &fx.owner);
+                unlock(&fx.core, &fx.owner);
                 return fx;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -156,11 +156,11 @@ impl Fx {
         panic!("the runner did not come online");
     }
 
-    /// A client device with the terminal scope, elevated unless `stepped_up` is false.
+    /// A client device with the terminal scope, unlocked unless `stepped_up` is false.
     async fn device(&self, stepped_up: bool) -> TestDevice {
         let d = self.core.device("device", &["read", "terminal"]).await;
         if stepped_up {
-            elevate(&self.core, &d);
+            unlock(&self.core, &d);
         }
         d
     }
@@ -437,7 +437,7 @@ async fn signals_do_not_leak_streams_and_signal_and_close_are_gated() {
     );
     assert_eq!(fx.count("SELECT count(*) FROM audit_events WHERE action='terminal.signalled' AND details LIKE '%WINCH%'").await, 100);
 
-    // Another device: the terminal does not exist for it. No step-up: refused at the gate.
+    // Another device: the terminal does not exist for it. No unlock: refused at the gate.
     let other = fx.device(true).await;
     let cold = fx.device(false).await;
     for (m, u) in [
@@ -452,16 +452,16 @@ async fn signals_do_not_leak_streams_and_signal_and_close_are_gated() {
         );
         let (s, b) = fx.call(&cold, m, u, body).await;
         assert!(
-            s == 403 && b["code"] == "step_up_required",
-            "{m} without step-up: {s} {b}"
+            s == 403 && b["code"] == "unlock_required",
+            "{m} without the unlock: {s} {b}"
         );
     }
-    // N21: INT, TSTP and CONT pass the step-up check (the cold device then meets the ownership 404).
+    // N21: INT, TSTP and CONT pass the unlock check (the cold device then meets the ownership 404).
     for sg in ["INT", "TSTP", "CONT"] {
         let (s, b) = fx
             .call(&cold, "POST", &sig, Some(json!({"signal": sg})))
             .await;
-        assert_eq!(s, 404, "{sg} without step-up: {s} {b}");
+        assert_eq!(s, 404, "{sg} without the unlock: {s} {b}");
     }
     assert_eq!(
         fx.status(o, &id).await,

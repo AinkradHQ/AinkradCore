@@ -421,6 +421,30 @@ pub async fn lease(
     }))
 }
 
+/// A secret's value, shown to the person who asked. No `Debug`.
+#[derive(Serialize, ToSchema)]
+pub struct RevealedSecret {
+    #[schema(value_type = String)]
+    pub value: Zeroizing<String>,
+}
+
+#[utoipa::path(post, path = "/api/v1/secrets/{id}/reveal", operation_id = "revealSecret",
+    tag = "secrets",
+    params(("id" = String, Path, description = "The secret's name")),
+    responses((status = 200, description = "The plain value, for the app's Reveal (a fresh \
+        step-up, audited as `secret.revealed`). 404 no such secret, 409 `secrets_disabled` or \
+        `secrets_unavailable`, 400 for a provider account's key", body = RevealedSecret)))]
+pub async fn reveal(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(n): Path<String>,
+) -> ApiResult<RevealedSecret> {
+    let n = name(&n)?;
+    not_project(&app, Some(n), None).await?;
+    let value = store::reveal(&app.pool, sealer(&app)?, n, &me.device.id, BY).await?;
+    Ok(Json(RevealedSecret { value }))
+}
+
 #[utoipa::path(post, path = "/api/v1/secret-leases/redeem", operation_id = "redeemSecretLease",
     tag = "secrets",
     request_body = RedeemLease,

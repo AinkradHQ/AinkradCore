@@ -59,6 +59,7 @@ async fn fx_with(on: bool) -> Fx {
     let admin = enroll(&app, "admin", &["admin", "read"]).await;
     let session = admin.session.lock().unwrap().clone().unwrap();
     app.auth.elevate(&session, &admin.id, clock.unix() + 3600);
+    app.auth.unlock(&admin.id, clock.unix() + 3600);
     Fx { app, admin, dir }
 }
 
@@ -153,7 +154,7 @@ async fn count(fx: &Fx, table: &str) -> i64 {
 }
 
 #[tokio::test]
-async fn scopes_and_step_up_follow_the_modules_tables() {
+async fn scopes_follow_the_modules_tables_and_a_delete_needs_no_step_up() {
     let fx = fx().await;
     let reader = enroll(&fx.app, "reader", &["read"]).await;
     let laptop = enroll(&fx.app, "laptop", &["admin"]).await; // admin, not elevated
@@ -182,15 +183,8 @@ async fn scopes_and_step_up_follow_the_modules_tables() {
     .await;
     assert_eq!(s, StatusCode::OK, "a plain change needs no step-up: {b}");
     let (s, b) = call(&fx, &laptop, Method::DELETE, &path, None).await;
-    assert_eq!(
-        (s, &b["code"]),
-        (StatusCode::FORBIDDEN, &json!("step_up_required"))
-    );
-    assert_eq!(count(&fx, "leyline_hosts").await, 1);
-    assert_eq!(
-        call(&fx, &fx.admin, Method::DELETE, &path, None).await.0,
-        StatusCode::OK
-    );
+    assert_eq!(s, StatusCode::OK, "a delete needs no step-up: {b}");
+    assert_eq!(count(&fx, "leyline_hosts").await, 0);
     assert_eq!(
         call(&fx, &fx.admin, Method::DELETE, &path, None).await.0,
         StatusCode::NOT_FOUND
@@ -684,10 +678,7 @@ fn the_contract_marks_scope_and_step_up_and_carries_no_key_material_routes() {
         p["/modules/leyline/v1/hosts"]["post"]["x-ainkrad-scope"],
         "admin"
     );
-    assert_eq!(
-        p["/modules/leyline/v1/hosts/{host}"]["delete"]["x-ainkrad-destructive"],
-        true
-    );
+    assert!(p["/modules/leyline/v1/hosts/{host}"]["delete"]["x-ainkrad-destructive"].is_null());
     assert!(p["/modules/leyline/v1/hosts/{host}"]["patch"]["x-ainkrad-destructive"].is_null());
 }
 

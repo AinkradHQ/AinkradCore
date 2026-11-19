@@ -115,6 +115,7 @@ async fn fx() -> Fx {
     let admin = enroll(&app, "admin", "device", &scopes).await;
     let session = admin.session.lock().unwrap().clone().unwrap();
     app.auth.elevate(&session, &admin.id, clock.unix() + 3600);
+    app.auth.unlock(&admin.id, clock.unix() + 3600);
     let laptop = enroll(&app, "laptop", "device", &scopes).await;
     let runner = enroll(&app, "runner-1", "runner", &["runner"]).await;
     Fx {
@@ -377,7 +378,7 @@ async fn a_terminal_goes_through_the_gate_with_a_lease_and_the_pinned_keys() {
         .await,
         format!("person:{}", fx.admin.id)
     );
-    // A terminal needs the step-up, like the Core's own.
+    // A terminal needs the app unlock, not a step-up.
     let (s, b) = call(
         &fx,
         &fx.laptop,
@@ -388,7 +389,7 @@ async fn a_terminal_goes_through_the_gate_with_a_lease_and_the_pinned_keys() {
     .await;
     assert_eq!(
         (s, &b["code"]),
-        (StatusCode::FORBIDDEN, &json!("step_up_required"))
+        (StatusCode::FORBIDDEN, &json!("unlock_required"))
     );
 }
 
@@ -606,7 +607,7 @@ async fn a_changed_key_alerts_and_only_a_stepped_up_replace_pins_it() {
         .await,
         "seen"
     );
-    // The old pin stays the pin: trust cannot add to it, and replace needs the step-up.
+    // The old pin stays the pin: trust cannot add to it; replace is a plain write.
     let trust = format!("/hosts/{h}/host-keys/trust");
     let (s, b) = call(
         &fx,
@@ -624,18 +625,6 @@ async fn a_changed_key_alerts_and_only_a_stepped_up_replace_pins_it() {
     let (s, b) = call(
         &fx,
         &fx.laptop,
-        Method::POST,
-        &replace,
-        Some(json!({"fingerprint": fp('N')})),
-    )
-    .await;
-    assert_eq!(
-        (s, &b["code"]),
-        (StatusCode::FORBIDDEN, &json!("step_up_required"))
-    );
-    let (s, b) = call(
-        &fx,
-        &fx.admin,
         Method::POST,
         &replace,
         Some(json!({"fingerprint": fp('N')})),

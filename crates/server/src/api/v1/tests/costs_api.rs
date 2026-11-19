@@ -1,5 +1,5 @@
 //! The cost ledger routes (KAN-449): the price list is `read`; the ledger and the usage report are `admin`
-//! (no step-up) and show no key, secret name or runner; a price and a limit are `admin` plus a step-up; nothing writes the ledger over HTTP.
+//! (no step-up) and show no key, secret name or runner; a price and a limit are `admin`; nothing writes the ledger over HTTP.
 
 use axum::http::{Method, StatusCode};
 use serde_json::{Value, json};
@@ -167,7 +167,7 @@ async fn a_phone_reads_prices_only_and_the_ledger_and_usage_need_admin_and_name_
 }
 
 #[tokio::test]
-async fn a_price_and_a_limit_need_admin_and_a_step_up() {
+async fn a_price_and_a_limit_need_admin_and_no_step_up() {
     let (fx, vm, s) = setup().await;
     let a = make(&fx, &s, "main", V1, std::slice::from_ref(&vm.id)).await;
     let phone = fx.enroll("phone", &["read"]).await;
@@ -203,13 +203,10 @@ async fn a_price_and_a_limit_need_admin_and_a_step_up() {
             (StatusCode::FORBIDDEN, Some("forbidden_scope")),
             "{m} {uri}: {b}"
         );
-        let (st, b) = call(&fx, &plain, m.clone(), uri, body.clone()).await;
-        assert_eq!(
-            (st, b["code"].as_str()),
-            (StatusCode::FORBIDDEN, Some("step_up_required")),
-            "{m} {uri}: {b}"
-        );
     }
+    // An admin needs no step-up: its scope is enough, so the route answers.
+    let (st, b) = call(&fx, &plain, writes[2].0.clone(), &writes[2].1, Value::Null).await;
+    assert_ne!(st, StatusCode::FORBIDDEN, "{b}");
     let n: i64 = sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM core_prices) + (SELECT count(*) FROM core_account_limits)",
     )

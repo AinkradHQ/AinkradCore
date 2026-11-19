@@ -124,6 +124,7 @@ async fn a_running_sub_agent_is_stopped_alone_and_audited() {
     let sid = dev.session.lock().unwrap().clone().unwrap();
     let until_s = ainkrad_core_server::scheduler::Clock::unix(&*core.app.clock) + 300;
     assert!(core.app.auth.elevate(&sid, &dev.id, until_s));
+    core.app.auth.unlock(&dev.id, until_s + 3300);
     let path = format!("/api/v1/agent-sessions/{}/subagents/{CALL}/stop", s.id);
     let (status, got) = http(&core, &dev, &path).await;
     assert_eq!(status, 200, "{got}");

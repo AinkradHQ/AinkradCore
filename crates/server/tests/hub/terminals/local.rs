@@ -82,14 +82,14 @@ async fn the_core_grants_the_app_types_locally_and_the_core_records_it() {
     // The Core is the authority: no step-up, no grant; and a device without the scope, none.
     let cold = fx.device(false).await;
     let (s, _) = fx.call(&cold, "POST", &uri, None).await;
-    assert_eq!(s, 403, "no step-up");
+    assert_eq!(s, 403, "not unlocked");
     assert_eq!(
         fx.count("SELECT count(*) FROM audit_events WHERE action='terminal.attached'")
             .await,
         0
     );
     let reader = fx.core.device("device", &["read"]).await;
-    elevate(&fx.core, &reader);
+    unlock(&fx.core, &reader);
     assert_eq!(
         fx.call(&reader, "POST", &uri, None).await.0,
         403,

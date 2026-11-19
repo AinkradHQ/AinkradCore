@@ -249,6 +249,8 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/me", get(me::me))
         .route("/api/v1/auth/step-up/challenge", post(stepup::challenge))
         .route("/api/v1/auth/step-up", post(stepup::step_up))
+        .route("/api/v1/auth/unlock/beat", post(stepup::beat))
+        .route("/api/v1/auth/unlock/end", post(stepup::end))
         .route("/api/v1/auth/lockouts", get(lockouts::list))
         .route("/api/v1/auth/lockouts/clear", post(lockouts::clear))
         .route("/api/v1/settings", get(settings::list_server))
@@ -492,6 +494,7 @@ pub fn router(app: App) -> Router {
             put(secrets::rotate).delete(secrets::delete),
         )
         .route("/api/v1/secrets/{id}/leases", post(secrets::lease))
+        .route("/api/v1/secrets/{id}/reveal", post(secrets::reveal))
         .route("/api/v1/secret-leases/redeem", post(secrets::redeem))
         .route(
             "/api/v1/secret-groups",

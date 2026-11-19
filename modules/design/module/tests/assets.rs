@@ -429,19 +429,6 @@ async fn tags_search_delete_and_the_ref_count() {
         .execute(&fx.app.pool)
         .await
         .unwrap();
-    let laptop = enroll(&fx.app, "laptop", &["admin"]).await;
-    let (s, v, _, _) = send(
-        &fx,
-        &laptop,
-        Method::DELETE,
-        &format!("/assets/{sb}"),
-        vec![],
-    )
-    .await;
-    assert_eq!(
-        (s, &v["code"]),
-        (StatusCode::FORBIDDEN, &json!("step_up_required"))
-    );
     let (_, c) = call(
         &fx,
         Method::POST,
@@ -702,10 +689,7 @@ async fn scopes_audit_and_the_contract() {
         )]))
         .unwrap();
     let p = &spec["paths"];
-    assert_eq!(
-        p["/modules/design/v1/assets/{sha}"]["delete"]["x-ainkrad-destructive"],
-        true
-    );
+    assert!(p["/modules/design/v1/assets/{sha}"]["delete"]["x-ainkrad-destructive"].is_null());
     assert_eq!(
         p["/modules/design/v1/assets"]["post"]["x-ainkrad-scope"],
         "admin"
