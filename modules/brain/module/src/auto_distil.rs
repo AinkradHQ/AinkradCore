@@ -4,6 +4,7 @@
 //! Security model (this is a cost and DoS surface, so the whole policy is here):
 //! - Only the Core's own event log starts a trigger. No route, no AI op and no session text can ask
 //!   for one: an AI session can at most cause its own end, and that is bounded by the caps below.
+//! - The dreaming sweep (`threshold`) is the one uncapped trigger (D-26); the caps below bound the rest.
 //! - Caps are counted from `brain_distils` rows of the last 24 hours, so a restart or a crash cannot
 //!   reset them: `brain_room_policy.daily_distils` per room and `GLOBAL_DAILY` across rooms. A trigger over
 //!   a cap is dropped and audited (`brain.distil.capped`), never turned into a failed distil.
@@ -45,12 +46,10 @@ const EVERY_SECS: u64 = 30;
 /// Idle debounce: a session's end is acted on this long after it happened, so a burst of ends in
 /// one room (and the sync that collects them) settles into one distil.
 pub(crate) const IDLE_SECS: i64 = 45;
-/// Import threshold (a Q value): this many undistilled sources in a room ...
-const THRESHOLD_SOURCES: i64 = 40;
-/// ... or the oldest undistilled source this old.
-const THRESHOLD_AGE_SECS: i64 = 6 * 3600;
-/// How often the rooms are scanned for the threshold.
-const SCAN_EVERY_SECS: i64 = 300;
+/// How often the rooms are swept for undistilled sources (the dreaming sweep, E9-1). Short on
+/// purpose: an import of thousands of sources is distilled batch after batch, so the next batch
+/// must not wait minutes for the sweep.
+const SCAN_EVERY_SECS: i64 = 60;
 /// Automatic and manual distils across all rooms per rolling 24 hours.
 const GLOBAL_DAILY: i64 = 100;
 /// A room whose distil failed is left alone this long (a Q value).
@@ -177,7 +176,11 @@ pub(crate) async fn queue(
     .await?;
     // Mid-session distils (B5-02) may use at most half the room's day: the rest is kept for session ends.
     let mid_cap = cap / 2;
-    let over = if in_room >= cap {
+    // The dreaming sweep (`threshold`, D-26) is uncapped: the import and every new source are
+    // distilled once, whatever the day's count. Every other trigger keeps its caps.
+    let over = if trigger == "threshold" {
+        None
+    } else if in_room >= cap {
         Some(("room_cap", cap))
     } else if MID_SESSION.contains(&trigger) && mid_room >= mid_cap {
         Some(("room_cap", mid_cap))
@@ -401,20 +404,19 @@ async fn save_cursor(app: &App, seq: i64) -> Result<(), sqlx::Error> {
     .map(drop)
 }
 
-/// Import threshold: queue a distil for each room with enough, or old enough, undistilled sources.
+/// The dreaming sweep (E9-1, D-26): queue a distil for every room that has any undistilled source,
+/// uncapped, so an import is distilled to the end and later only the new sources are.
 async fn threshold(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError> {
     if now - b.inner.auto_scan.load(Ordering::SeqCst) < SCAN_EVERY_SECS {
         return Ok(0);
     }
     b.inner.auto_scan.store(now, Ordering::SeqCst);
-    let old = iso_of_unix(now - THRESHOLD_AGE_SECS);
     let mut queued = 0;
     for room in active_rooms(app).await? {
-        let Some((n, oldest, _)) = stats(app, b, &room, "").await else {
+        let Some((n, _, _)) = stats(app, b, &room, "").await else {
             continue;
         };
-        let due = n >= THRESHOLD_SOURCES || oldest.is_some_and(|o| o <= old);
-        if due && queue(app, &room, "threshold", None, n, now).await? == Queued::Yes {
+        if n > 0 && queue(app, &room, "threshold", None, n, now).await? == Queued::Yes {
             queued += 1;
         }
     }
@@ -432,9 +434,11 @@ pub(crate) async fn step(app: &App, b: &Brain, now: i64) -> Result<u32, ApiError
     }
     // The threshold scan has its own path: a failure of the event reader never sits in front of it.
     let from_events = ended(app, b, now).await;
-    let from_scan = threshold(app, b, now).await;
+    // The sweep goes last: a trigger with its own reason (a session end, a checkpoint) queues first and
+    // the sweep joins its open distil.
     let from_checkpoints = crate::checkpoint::step(app, b, now).await;
-    Ok(from_events? + from_scan? + from_checkpoints?)
+    let from_scan = threshold(app, b, now).await;
+    Ok(from_events? + from_checkpoints? + from_scan?)
 }
 
 struct AutoJob(Brain);
