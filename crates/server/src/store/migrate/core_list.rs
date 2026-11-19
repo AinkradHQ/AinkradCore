@@ -263,4 +263,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0043_terminal_sandbox_e6.up.sql"),
         down: include_str!("../../../migrations/0043_terminal_sandbox_e6.down.sql"),
     },
+    Migration {
+        version: 44,
+        name: "pairing_bundled_e6",
+        up: include_str!("../../../migrations/0044_pairing_bundled_e6.up.sql"),
+        down: include_str!("../../../migrations/0044_pairing_bundled_e6.down.sql"),
+    },
 ];

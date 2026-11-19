@@ -88,6 +88,11 @@ pub enum ToHost {
     },
     /// A fresh `snapshot` now (the client fell behind).
     Snapshot,
+    /// The last `lines` non-empty rows of the screen as plain text, answered with `tail`. Not on
+    /// the local socket. An older host ignores it.
+    Tail {
+        lines: u16,
+    },
     /// Hang up: HUP, then TERM, then KILL, `grace_ms` apart.
     Close {
         grace_ms: u64,
@@ -130,6 +135,10 @@ pub enum FromHost {
     Snapshot {
         seq: u64,
         data: String,
+    },
+    /// The answer to `tail`: plain-text rows, oldest first.
+    Tail {
+        lines: Vec<String>,
     },
     Exit {
         exit: Exit,

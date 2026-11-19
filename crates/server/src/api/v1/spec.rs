@@ -91,6 +91,7 @@ use super::{
         terminals::get,
         terminals::close,
         terminals::signal,
+        terminals::tail,
         terminals::attach,
         terminals::grant,
         terminals::release,

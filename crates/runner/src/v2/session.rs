@@ -555,7 +555,7 @@ impl Session {
             Command::SshAgentLoad(_) | Command::SshAgentDrop(_) => {
                 self.start_ssh_agent(stream, command)
             }
-            Command::PtyOpen(_) | Command::PtyAttach(_) | Command::PtyClose(_) => {
+            Command::PtyOpen(_) | Command::PtyAttach(_) | Command::PtyClose(_) | Command::PtyTail(_) => {
                 self.start_pty(stream, command, h)
             }
             Command::DesignRender(_)
@@ -645,6 +645,17 @@ impl Session {
         let ssh = self.ssh.clone();
         let (cancel_tx, cancel_rx) = oneshot::channel();
         h.cancel = Some(cancel_tx);
+        if let Command::PtyTail(req) = command {
+            tokio::spawn(async move {
+                let body = match pty.tail(&req.terminal, req.lines).await {
+                    Ok(t) => Body::Result(Reply::PtyTail(t)),
+                    Err(e) => Body::Error(e),
+                };
+                drop(cancel_rx);
+                let _ = done.send((stream, body));
+            });
+            return None;
+        }
         if let Command::PtyClose(req) = command {
             tokio::spawn(async move {
                 let body = match pty.close(&req.terminal).await {

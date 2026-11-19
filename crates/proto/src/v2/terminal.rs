@@ -23,6 +23,8 @@ pub const DRIVER_PTY: &str = "pty";
 pub const OP_PTY_OPEN: &str = "pty.open";
 pub const OP_PTY_ATTACH: &str = "pty.attach";
 pub const OP_PTY_CLOSE: &str = "pty.close";
+/// `pty.tail`: the last rows of a terminal's screen as text; read-only, no attach.
+pub const OP_PTY_TAIL: &str = "pty.tail";
 
 /// The largest `rows` and `cols` a terminal takes.
 pub const MAX_DIM: u16 = 1000;
@@ -150,6 +152,19 @@ pub struct PtyAttach {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PtyClose {
     pub terminal: String,
+}
+
+/// `pty.tail`: the last `lines` (1 to 20) non-empty rows of the terminal's screen, as plain text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PtyTail {
+    pub terminal: String,
+    pub lines: u16,
+}
+
+/// The answer to [`PtyTail`]: rows oldest first, each at most 400 characters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct TerminalTail {
+    pub lines: Vec<String>,
 }
 
 /// A terminal's size in cells; `control` `resize` carries one.

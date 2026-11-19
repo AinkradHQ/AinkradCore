@@ -1,0 +1,1 @@
+ALTER TABLE core_pairings ADD COLUMN bundled INTEGER NOT NULL DEFAULT 0 CHECK (bundled IN (0, 1));

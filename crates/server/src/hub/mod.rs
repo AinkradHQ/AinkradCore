@@ -457,6 +457,13 @@ impl Hub {
         Elevated(())
     }
 
+    /// The capability of a terminal's read-only screen preview (`pty.tail`): the caller owns the
+    /// terminal and holds the `terminal` scope; it attaches nothing and sends no input, so it needs
+    /// no step-up. It reaches only `pty.tail`.
+    pub(crate) fn tail_elevation(&self) -> Elevated {
+        Elevated(())
+    }
+
     /// Re-open a monitor stream for a terminal the Core already persisted (after a restart).
     /// It is called only from handlers that passed the terminal gate and only for a row that
     /// exists; it cannot start a new shell (`pty.attach` reaches a running host only).
