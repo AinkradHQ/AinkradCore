@@ -653,7 +653,23 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     # and the firewall step follow it: yes installs avahi-daemon, writes the service file and, on the iptables path, opens
     # UDP 5353 to the mDNS multicast groups. The ufw path is left alone (Ubuntu's before.rules already accept mDNS).
     _ip=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1)
-    case ${AINKRAD_MDNS:-} in yes | no) ;; *) case $_ip in 10.* | 192.168.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].*) AINKRAD_MDNS=yes ;; *) AINKRAD_MDNS=no ;; esac ;; esac
+    # A cloud VM often has a private address too, so the vendor (DMI) counts first, then a public address that differs from
+    # the local one (NAT: could be a cloud host or a home router) is asked about, default no; without a terminal it is no.
+    _vend=$(cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/chassis_asset_tag /sys/class/dmi/id/product_name 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    case ${AINKRAD_MDNS:-} in yes | no) ;; *)
+      AINKRAD_MDNS=no
+      case $_vend in *oracle* | *microsoft* | *amazon* | *google* | *digitalocean* | *hetzner*) ;; *)
+        case $_ip in 10.* | 192.168.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].*)
+          _pub=$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || true)
+          if [ -z "$_pub" ] || [ "$_pub" = "$_ip" ]; then AINKRAD_MDNS=yes
+          elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
+            printf 'Advertise this Core on your local network so the Mac app can find it (mDNS)? Only say y on a home or office machine, not a cloud server. [y/N] ' >/dev/tty
+            read -r _a </dev/tty || _a=''
+            case $_a in [yY]*) AINKRAD_MDNS=yes ;; esac
+          fi ;;
+        esac ;;
+      esac ;;
+    esac
     export AINKRAD_MDNS
     [ "$AINKRAD_MDNS" != yes ] || pkgs="$pkgs avahi-daemon"
     # Firewall tooling only when hardening was asked for. iptables-persistent clashes with ufw: with ufw installed nothing is

@@ -194,7 +194,7 @@ fw_family() { # IPTABLES-COMMAND PORTS
     # mDNS (the app finds this Core on the LAN): queries to the multicast group only, so nothing else on UDP 5353 is reachable.
     # Only when get.sh decided to advertise (a private-address host). The ufw path adds nothing: Ubuntu's own before.rules
     # already accept mDNS, and a failing `ufw allow` here (IPV6=no) must never stop `default deny` and `enable` from running.
-    if [ "${AINKRAD_MDNS:-no}" = yes ]; then
+    if [ -e /etc/avahi/services/ainkrad-core.service ] || [ "${AINKRAD_MDNS:-no}" = yes ]; then
       if [ "$ipt" = ip6tables ]; then "$ipt" -A AINKRAD_NEW -p udp --dport 5353 -d ff02::fb -j ACCEPT || return 1
       else "$ipt" -A AINKRAD_NEW -p udp --dport 5353 -d 224.0.0.251 -j ACCEPT || return 1; fi
     fi
