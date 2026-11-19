@@ -192,7 +192,9 @@ fw_family() { # IPTABLES-COMMAND PORTS
     done
     for port in 80 443; do "$ipt" -A AINKRAD_NEW -p tcp -m state --state NEW --dport "$port" -j ACCEPT || return 1; done
     # mDNS (the app finds this Core on the LAN): queries to the multicast group only, so nothing else on UDP 5353 is reachable.
-    if [ "${AINKRAD_MDNS:-yes}" != no ]; then
+    # Only when get.sh decided to advertise (a private-address host). The ufw path adds nothing: Ubuntu's own before.rules
+    # already accept mDNS, and a failing `ufw allow` here (IPV6=no) must never stop `default deny` and `enable` from running.
+    if [ "${AINKRAD_MDNS:-no}" = yes ]; then
       if [ "$ipt" = ip6tables ]; then "$ipt" -A AINKRAD_NEW -p udp --dport 5353 -d ff02::fb -j ACCEPT || return 1
       else "$ipt" -A AINKRAD_NEW -p udp --dport 5353 -d 224.0.0.251 -j ACCEPT || return 1; fi
     fi
@@ -229,7 +231,6 @@ apply_firewall() {
       else ufw allow "$sp"/tcp >/dev/null; fi
     done
     ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
-    if [ "${AINKRAD_MDNS:-yes}" != no ]; then ufw allow in proto udp to 224.0.0.251 port 5353 >/dev/null; ufw allow in proto udp to ff02::fb port 5353 >/dev/null; fi
     ufw default deny incoming >/dev/null
     ufw --force enable >/dev/null
     state "firewall=ufw"

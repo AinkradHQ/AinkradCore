@@ -124,16 +124,17 @@ async fn personal_room(app: &App) -> Result<(String, bool), ApiError> {
 }
 
 /// Writes `items` into the room file as the person's accepted preferences and retires the rest, in one
-/// transaction. Returns `(saved, removed)`; an answer that is already there word for word is neither.
+/// transaction. Returns `(saved, removed, bodies)`: an answer that is already there word for word is neither saved nor
+/// in `bodies`, which holds the redacted text of what was written (for the search vectors).
 pub(crate) async fn write(
     pool: &SqlitePool,
     by: &str,
     items: &[ProfileItem],
     now: &str,
-) -> Result<(i64, i64), sqlx::Error> {
+) -> Result<(i64, i64, Vec<String>), sqlx::Error> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let redactor = Redactor::new();
-    let (mut saved, mut kept) = (0, vec![]);
+    let (mut saved, mut kept, mut bodies) = (0, vec![], vec![]);
     for it in items {
         let id = format!("{PREFIX}{}", it.key);
         let body = redactor.text(it.body.trim());
@@ -163,6 +164,7 @@ pub(crate) async fn write(
                 .await?;
                 log_op(&mut tx, "record.edited", &id, now).await?;
                 saved += 1;
+                bodies.push(body.clone());
             }
             None => {
                 sqlx::query(
@@ -182,6 +184,7 @@ pub(crate) async fn write(
                 .await?;
                 log_op(&mut tx, "record.accepted", &id, now).await?;
                 saved += 1;
+                bodies.push(body.clone());
             }
         }
         kept.push(id);
@@ -204,7 +207,7 @@ pub(crate) async fn write(
         removed += 1;
     }
     tx.commit().await?;
-    Ok((saved, removed))
+    Ok((saved, removed, bodies))
 }
 
 #[utoipa::path(put, path = "/me/profile", operation_id = "brainPutMeProfile", tag = "brain",
@@ -224,15 +227,10 @@ pub(crate) async fn put_profile(
         .map_err(|e| code(500, "room_unavailable", e.to_string()))?;
     let done = write(&pool, &me.device.id, &req.items, &app.clock.now()).await;
     pool.close().await;
-    let (saved, removed) = done?;
-    if saved + removed > 0 {
-        let texts: Vec<(Option<String>, String)> = req
-            .items
-            .iter()
-            .map(|i| (None, i.body.trim().to_owned()))
-            .collect();
-        b.queue_record_vectors(&texts);
-    }
+    let (saved, removed, bodies) = done?;
+    // Only what changed, and the redacted text that was stored, never the raw request.
+    let texts: Vec<(Option<String>, String)> = bodies.into_iter().map(|b| (None, b)).collect();
+    b.queue_record_vectors(&texts);
     // Counts only: what the person said stays in the room file.
     let mut ctl = begin_write(&app.pool).await?;
     record(
@@ -295,7 +293,7 @@ mod tests {
             item("role", "Builds software and runs a small team."),
             item("tone", "Wants short, direct answers."),
         ];
-        assert_eq!(write(&p, "dev-1", &first, "2026-11-19T10:00:00Z").await.unwrap(), (2, 0));
+        assert_eq!(write(&p, "dev-1", &first, "2026-11-19T10:00:00Z").await.unwrap().0, 2);
         let on_card: Vec<String> = me_card::candidates(&p)
             .await
             .unwrap()
@@ -306,9 +304,9 @@ mod tests {
         assert!(on_card.iter().any(|b| b.starts_with("Wants short")));
 
         // The same answers again change nothing; a changed one is edited; a missing one is retired.
-        assert_eq!(write(&p, "dev-1", &first, "2026-11-19T11:00:00Z").await.unwrap(), (0, 0));
+        assert_eq!(write(&p, "dev-1", &first, "2026-11-19T11:00:00Z").await.unwrap(), (0, 0, vec![]));
         let second = [item("role", "Designs interfaces.")];
-        assert_eq!(write(&p, "dev-1", &second, "2026-11-19T12:00:00Z").await.unwrap(), (1, 1));
+        assert_eq!(write(&p, "dev-1", &second, "2026-11-19T12:00:00Z").await.unwrap(), (1, 1, vec!["Designs interfaces.".to_owned()]));
         let on_card: Vec<String> = me_card::candidates(&p)
             .await
             .unwrap()

@@ -648,8 +648,14 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     fi
 
     pkgs='ca-certificates curl minisign bubblewrap qrencode openssl iproute2 git unzip jq ripgrep build-essential xz-utils zsh' persist=''
-    # Avahi lets the Mac app find this Core on the same network (AINKRAD_MDNS=no leaves it out and the firewall closed to it).
-    case ${AINKRAD_MDNS:-yes} in no) ;; *) pkgs="$pkgs avahi-daemon" ;; esac
+    # Avahi lets the Mac app find this Core on the same network. On by default only on a host with a private (home or office)
+    # address; a public server is not advertised. AINKRAD_MDNS=yes|no overrides. The decision is exported, so the installer
+    # and the firewall step follow it: yes installs avahi-daemon, writes the service file and, on the iptables path, opens
+    # UDP 5353 to the mDNS multicast groups. The ufw path is left alone (Ubuntu's before.rules already accept mDNS).
+    _ip=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1)
+    case ${AINKRAD_MDNS:-} in yes | no) ;; *) case $_ip in 10.* | 192.168.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].*) AINKRAD_MDNS=yes ;; *) AINKRAD_MDNS=no ;; esac ;; esac
+    export AINKRAD_MDNS
+    [ "$AINKRAD_MDNS" != yes ] || pkgs="$pkgs avahi-daemon"
     # Firewall tooling only when hardening was asked for. iptables-persistent clashes with ufw: with ufw installed nothing is
     # added that could remove it; APT::Get::Remove=false makes apt refuse any removal instead of doing it.
     if [ "$harden" = 1 ]; then pkgs="$pkgs iptables"; dpkg -s ufw >/dev/null 2>&1 || persist=iptables-persistent; fi
