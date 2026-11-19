@@ -73,6 +73,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     // A backup now and the backup schedule (E2-6): `admin`; a start is no danger, it is the unit the timer starts.
     ("POST", "/api/v1/system/backup", "admin"),
     ("GET", "/api/v1/system/backups", "admin"),
+    // How many local backups are kept: reading is `admin`; the write is in DESTRUCTIVE (D-4).
+    ("GET", "/api/v1/system/backups/retention", "admin"),
+    ("PUT", "/api/v1/system/backups/retention", "admin"),
     ("GET", "/api/v1/system/logs/core", "admin"),
     ("GET", "/api/v1/system/logs/helper", "admin"),
     ("GET", "/api/v1/system/logs/runner", "admin"),
@@ -290,6 +293,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     // The Core machine: a restart drops every session, and the runner and backup logs can hold
     // values no redactor recognises (D4). The Core and helper logs are not here.
     ("POST", "/api/v1/system/restart"),
+    // Retention decides how much history survives a loss (D-4): it writes the Core's config.
+    ("PUT", "/api/v1/system/backups/retention"),
     // A runner's policy decides what runs on that machine, and a tool install runs a root-side installer there.
     ("PUT", "/api/v1/runners/{id}/policy"),
     ("POST", "/api/v1/runners/{id}/tools"),

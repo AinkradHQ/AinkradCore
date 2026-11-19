@@ -50,8 +50,9 @@ impl Code {
 }
 
 /// Class A actions are the ones slice 1 runs: the worst a misuse does is restart a service, start
-/// the backup unit (fixed argv, the unit the timer starts anyway, rate limited; E2-6) or read
-/// redacted logs and the backup schedule. Class B changes what runs as root or what data exists (it needs a device
+/// the backup unit (fixed argv, the unit the timer starts anyway, rate limited; E2-6), read
+/// redacted logs and the backup schedule, or set how many local backups are kept (one integer in
+/// 1..=60 written to the one `backup_keep_local` line of the Core's config; no path, no text). Class B changes what runs as root or what data exists (it needs a device
 /// grant the Core cannot forge, a later slice); every class B name is refused here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Class {
@@ -68,6 +69,7 @@ pub const REGISTRY: &[(&str, Class)] = &[
     ("restart_runner", Class::A),
     ("backup_now", Class::A),
     ("backup_info", Class::A),
+    ("backup_keep", Class::A),
     ("runner_policy", Class::B),
     ("install_tool", Class::B),
     ("update", Class::B),
@@ -116,7 +118,12 @@ pub enum Action {
     BackupNow,
     /// The backup timer's schedule, the last run and the backups on disk (a read).
     BackupInfo,
+    /// Sets `backup_keep_local` in the Core's config to this many (1 to [`KEEP_MAX`]).
+    BackupKeep(u32),
 }
+
+/// The most local backups `backup_keep` may keep (the list `backup_info` shows is this long).
+pub const KEEP_MAX: u32 = 60;
 
 impl Action {
     pub fn name(&self) -> &'static str {
@@ -127,6 +134,7 @@ impl Action {
             Action::RestartRunner => "restart_runner",
             Action::BackupNow => "backup_now",
             Action::BackupInfo => "backup_info",
+            Action::BackupKeep(_) => "backup_keep",
         }
     }
 
@@ -134,7 +142,7 @@ impl Action {
     pub fn mutating(&self) -> bool {
         matches!(
             self,
-            Action::RestartCore | Action::RestartRunner | Action::BackupNow
+            Action::RestartCore | Action::RestartRunner | Action::BackupNow | Action::BackupKeep(_)
         )
     }
 }
@@ -171,6 +179,12 @@ struct LogsParams {
     unit: Unit,
     lines: Option<i64>,
     before: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeepParams {
+    keep: i64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -278,6 +292,15 @@ pub fn parse(line: &[u8]) -> Result<Request, Refusal> {
         "restart_runner" if no_params => Action::RestartRunner,
         "backup_now" if no_params => Action::BackupNow,
         "backup_info" if no_params => Action::BackupInfo,
+        "backup_keep" => {
+            let Ok(p) = serde_json::from_value::<KeepParams>(params) else {
+                return Err(refusal);
+            };
+            if !(1..=i64::from(KEEP_MAX)).contains(&p.keep) {
+                return Err(refusal);
+            }
+            Action::BackupKeep(p.keep as u32)
+        }
         "logs" => {
             let Ok(p) = serde_json::from_value::<LogsParams>(params) else {
                 return Err(refusal);

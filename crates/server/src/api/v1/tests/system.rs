@@ -49,12 +49,14 @@ fn sample(action: &str) -> Value {
         "backup_info" => json!({
             "installed": true,
             "timer": {"active": "active", "calendar": "*-*-* 22:00:00",
-                      "next": "Fri 2026-11-20 22:00:00 UTC", "last": ""},
+                      "next": "@1795298400", "last": ""},
             "run": {"active": "inactive", "result": "success",
                     "started": "Thu 2026-11-19 22:00:01 UTC",
                     "finished": "Thu 2026-11-19 22:03:10 UTC", "exit_status": 0},
             "history": [{"at": 1_795_100_000u64, "bytes": 2_100_000u64}],
+            "retention": 14,
         }),
+        "backup_keep" => json!({"keep": 30}),
         _ => json!({"accepted": true}),
     }
 }
@@ -159,8 +161,8 @@ async fn fast(mut fx: Fx) -> Fx {
     fx
 }
 
-/// The contract: all the routes are `admin`; only the restart and the runner and backup logs are
-/// destructive (D4).
+/// The contract: all the routes are `admin`; only the restart, the runner and backup logs and the
+/// backup retention write are destructive (D4, D-4).
 #[tokio::test]
 async fn the_contract_declares_admin_everywhere_and_step_up_only_where_d4_says() {
     let spec: Value = serde_json::from_str(&super::super::spec::json()).unwrap();
@@ -180,6 +182,7 @@ async fn the_contract_declares_admin_everywhere_and_step_up_only_where_d4_says()
     assert_eq!(
         destructive,
         [
+            "/api/v1/system/backups/retention",
             "/api/v1/system/logs/backup",
             "/api/v1/system/logs/runner",
             "/api/v1/system/restart"
@@ -191,7 +194,10 @@ async fn the_contract_declares_admin_everywhere_and_step_up_only_where_d4_says()
         .keys()
         .filter(|p| p.starts_with("/api/v1/system/"))
         .count();
-    assert_eq!(n, 8, "six, and the backup start and the backup schedule");
+    assert_eq!(
+        n, 9,
+        "six, the backup start and schedule, and the retention"
+    );
 }
 
 /// Only `admin` gets in: read, agent, terminal and runner devices get 403 on every route, and
@@ -806,8 +812,74 @@ async fn the_backup_schedule_is_read_through_the_helper() {
     assert!(b["next_at"].is_string(), "{b}");
     assert_eq!(b["last_run"]["result"], "success");
     assert_eq!(b["history"][0]["bytes"], 2_100_000);
+    assert_eq!(b["keep"], 14);
     // A reader may not see it.
     let phone = fx.enroll("phone", &["read"]).await;
     let (s, _) = get(&fx, &phone, "/api/v1/system/backups").await;
     assert_eq!(s, StatusCode::FORBIDDEN);
+}
+
+/// The retention: read through `backup_info`, written through `backup_keep` with one integer,
+/// audited before and after, a step-up for the write, and a bad body never reaches the helper.
+#[tokio::test]
+async fn the_backup_retention_is_read_and_written_through_the_helper() {
+    let mut fx = fast(fx().await).await;
+    let seen = fake(&mut fx, Mode::Ok).await;
+    let (s, b) = get(&fx, &fx.dev, "/api/v1/system/backups/retention").await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(calls(&seen)[0]["action"], "backup_info");
+    assert_eq!(
+        (&b["helper"], &b["keep"], &b["min"], &b["max"]),
+        (&json!("present"), &json!(14), &json!(1), &json!(60))
+    );
+    let put = |fx: &Fx, dev: &TestDevice, body: Value| {
+        send(
+            &fx.app,
+            req(
+                Method::PUT,
+                "/api/v1/system/backups/retention",
+                Some(dev),
+                Some(body),
+            ),
+        )
+    };
+    for bad in [
+        json!({}),
+        json!({"keep": 0}),
+        json!({"keep": 61}),
+        json!({"keep": -3}),
+        json!({"keep": "7"}),
+        json!({"keep": 7, "path": "/etc"}),
+    ] {
+        let (s, _) = put(&fx, &fx.dev, bad.clone()).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    assert_eq!(calls(&seen).len(), 1, "no bad body reached the helper");
+    let (s, b) = put(&fx, &fx.dev, json!({"keep": 30})).await;
+    assert_eq!(s, StatusCode::OK, "{b}");
+    assert_eq!(b["keep"], 30);
+    let call = calls(&seen).remove(1);
+    assert_eq!(
+        (call["action"].as_str(), &call["params"]),
+        (Some("backup_keep"), &json!({"keep": 30}))
+    );
+    let before = rows(&fx, "host.backup_retention_requested").await;
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].1["keep"], 30);
+    assert_eq!(call["actor"]["audit_seq"], before[0].0);
+    assert_eq!(
+        rows(&fx, "host.action_result").await[0].1["code"],
+        "accepted"
+    );
+    // Without a step-up it is refused before the helper; a reader never gets in.
+    let cold = plain(&fx, "cold", &ALL, true).await;
+    let (s, b) = put(&fx, &cold, json!({"keep": 5})).await;
+    assert_eq!(
+        (s, b["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("step_up_required"))
+    );
+    let phone = fx.enroll("phone", &["read"]).await;
+    let (s, _) = put(&fx, &phone, json!({"keep": 5})).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+    assert_eq!(calls(&seen).len(), 2);
 }

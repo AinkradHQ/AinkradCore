@@ -161,13 +161,27 @@ pub(crate) fn unit_with(
     name: &str,
     props: &'static str,
 ) -> Option<BTreeMap<String, String>> {
-    let args = [
+    unit_ts(ctx, name, props, false)
+}
+
+/// [`unit_with`], and with `unix` every timestamp prints as `@<unix seconds>` (systemd's
+/// `--timestamp=unix`), so a reader needs no clock zone to read it. An unset one prints empty.
+pub(crate) fn unit_ts(
+    ctx: &Ctx,
+    name: &str,
+    props: &'static str,
+    unix: bool,
+) -> Option<BTreeMap<String, String>> {
+    let mut args = vec![
         "--no-ask-password".to_owned(),
         "show".to_owned(),
         "-p".to_owned(),
         props.to_owned(),
         name.to_owned(),
     ];
+    if unix {
+        args.insert(2, "--timestamp=unix".to_owned());
+    }
     let out = ctx.exec.run(SYSTEMCTL, &args, 16 * 1024).ok()?;
     out.ok.then_some(())?;
     Some(

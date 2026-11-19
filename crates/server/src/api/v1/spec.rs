@@ -83,6 +83,8 @@ use super::{
         system::restart,
         system_backup::start,
         system_backup::backups,
+        system_backup::retention,
+        system_backup::set_retention,
         system::logs_core,
         system::logs_helper,
         system::logs_runner,

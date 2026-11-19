@@ -358,3 +358,39 @@ fn backup_info_lists_the_age_files_newest_first_and_a_read_is_not_logged() {
     assert_eq!(r["history"][0]["bytes"], 3);
     assert!(!fx.log().contains("backup_info"), "{}", fx.log());
 }
+
+#[test]
+fn backup_keep_rewrites_only_the_keep_line_and_backup_info_reads_it() {
+    let fx = Fx::new();
+    fx.fake.load("ainkrad-backup.service");
+    let config = fx.dir.path().join("config.toml");
+    assert_eq!(
+        fx.code("backup_keep", r#"{"keep":10}"#),
+        "not_installed",
+        "no config, nothing written"
+    );
+    std::fs::write(
+        &config,
+        "home = \"/x\"\nbackup_keep_local = 7\nmodules = []\n",
+    )
+    .unwrap();
+    assert_eq!(fx.call("backup_info", "{}")["result"]["retention"], 7);
+    let v = fx.call("backup_keep", r#"{"keep":10}"#);
+    assert_eq!(v["result"]["keep"], 10, "{v}");
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        "home = \"/x\"\nbackup_keep_local = 10\nmodules = []\n"
+    );
+    assert!(!fx.dir.path().join("config.toml.keep.tmp").exists());
+    assert_eq!(fx.call("backup_info", "{}")["result"]["retention"], 10);
+    assert!(fx.log().contains(" accepted backup_keep "), "{}", fx.log());
+    assert!(fx.log().contains("keep=10"), "{}", fx.log());
+    assert_eq!(fx.fake.restarts(), 0, "no unit was touched");
+    // Out of range is refused before anything is read or written.
+    assert_eq!(fx.code("backup_keep", r#"{"keep":0}"#), "bad_request");
+    assert_eq!(fx.code("backup_keep", r#"{"keep":61}"#), "bad_request");
+    // A link in the config's place is never followed.
+    std::fs::remove_file(&config).unwrap();
+    std::os::unix::fs::symlink("/etc/hostname", &config).unwrap();
+    assert_eq!(fx.code("backup_keep", r#"{"keep":5}"#), "failed");
+}

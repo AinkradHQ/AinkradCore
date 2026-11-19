@@ -21,6 +21,8 @@ fn the_class_a_actions_round_trip() {
         assert_eq!((r.id.as_str(), r.action), (ID, want));
         assert_eq!(r.actor.audit_seq, 7);
     }
+    let r = parse(req("backup_keep", r#"{"keep":14}"#).as_bytes()).unwrap();
+    assert_eq!(r.action, Action::BackupKeep(14));
     let r = parse(req("logs", r#"{"unit":"core"}"#).as_bytes()).unwrap();
     assert_eq!(
         r.action,
@@ -198,5 +200,26 @@ fn the_parser_survives_random_and_mutated_input() {
             }
         }
         let _ = parse(&buf);
+    }
+}
+
+#[test]
+fn backup_keep_takes_one_integer_in_range_and_nothing_else() {
+    for p in [
+        "{}",
+        r#"{"keep":0}"#,
+        r#"{"keep":61}"#,
+        r#"{"keep":-1}"#,
+        r#"{"keep":"7"}"#,
+        r#"{"keep":7,"path":"/etc"}"#,
+    ] {
+        let r = parse(req("backup_keep", p).as_bytes()).unwrap_err();
+        assert_eq!(r.code, Code::BadRequest, "{p}");
+    }
+    for keep in [1, 60] {
+        let p = format!(r#"{{"keep":{keep}}}"#);
+        let r = parse(req("backup_keep", &p).as_bytes()).unwrap();
+        assert_eq!(r.action, Action::BackupKeep(keep));
+        assert!(r.action.mutating());
     }
 }

@@ -53,8 +53,8 @@ mod projects_github;
 mod runner_control;
 mod runners;
 pub mod scopes;
-mod secret_groups;
 mod secret_export;
+mod secret_groups;
 mod secrets;
 pub mod session;
 mod settings;
@@ -256,6 +256,10 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/system/restart", post(system::restart))
         .route("/api/v1/system/backup", post(system_backup::start))
         .route("/api/v1/system/backups", get(system_backup::backups))
+        .route(
+            "/api/v1/system/backups/retention",
+            get(system_backup::retention).put(system_backup::set_retention),
+        )
         .route("/api/v1/system/logs/core", get(system::logs_core))
         .route("/api/v1/system/logs/helper", get(system::logs_helper))
         .route("/api/v1/system/logs/runner", get(system::logs_runner))
