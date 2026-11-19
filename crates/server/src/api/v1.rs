@@ -30,11 +30,13 @@ mod agents;
 pub use agents::create as create_agent_for_tests;
 mod accounts;
 mod ai_order;
+mod activity;
 mod audit;
 mod budgets;
 mod chains;
 mod connections;
 mod corehealth;
+mod coreprefs;
 mod costs;
 mod deprecation;
 mod devices;
@@ -52,6 +54,7 @@ mod projects_github;
 mod runner_control;
 mod runners;
 pub mod scopes;
+mod secret_export;
 mod secret_groups;
 mod secrets;
 pub mod session;
@@ -61,6 +64,7 @@ mod stepup;
 /// The 403 a route that needs a step-up answers a session without one (a module's own check).
 pub use stepup::required as step_up_required;
 mod system;
+mod system_backup;
 mod terminals;
 pub mod ticket;
 mod trace;
@@ -215,6 +219,8 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/events/latest", get(events::latest))
         .route("/api/v1/ws-ticket", post(ticket::issue))
         .route("/api/v1/audit", get(audit::list))
+        .route("/api/v1/audit/stats", get(activity::audit_stats))
+        .route("/api/v1/ops/history", get(activity::ops_history))
         .route("/api/v1/metrics", get(crate::health::metrics::get))
         .route("/api/v1/runners", get(runners::list))
         .route("/api/v1/runners/{id}", get(runners::get))
@@ -248,7 +254,19 @@ pub fn router(app: App) -> Router {
         )
         .route("/api/v1/system/host", get(system::host))
         .route("/api/v1/core/health", get(corehealth::get))
+        .route(
+            "/api/v1/core/prefs",
+            get(coreprefs::get).put(coreprefs::put),
+        )
+        .route("/api/v1/core/storage", get(coreprefs::storage))
+        .route("/api/v1/core/update/check", post(coreprefs::check_update))
         .route("/api/v1/system/restart", post(system::restart))
+        .route("/api/v1/system/backup", post(system_backup::start))
+        .route("/api/v1/system/backups", get(system_backup::backups))
+        .route(
+            "/api/v1/system/backups/retention",
+            get(system_backup::retention).put(system_backup::set_retention),
+        )
         .route("/api/v1/system/logs/core", get(system::logs_core))
         .route("/api/v1/system/logs/helper", get(system::logs_helper))
         .route("/api/v1/system/logs/runner", get(system::logs_runner))
@@ -443,6 +461,10 @@ pub fn router(app: App) -> Router {
         )
         .route("/api/v1/projects/{id}/archive", post(projects::archive))
         .route("/api/v1/projects/{id}/unarchive", post(projects::unarchive))
+        .route(
+            "/api/v1/projects/defaults",
+            get(projects::defaults).put(projects::set_defaults),
+        )
         .route("/api/v1/projects/{id}/repos", post(projects::add_repo))
         .route(
             "/api/v1/projects/{id}/repos/{repo}",
@@ -579,6 +601,7 @@ pub fn router(app: App) -> Router {
         )
         .route("/api/v1/secrets/{id}/leases", post(secrets::lease))
         .route("/api/v1/secrets/{id}/reveal", post(secrets::reveal))
+        .route("/api/v1/secrets/export", post(secret_export::export))
         .route("/api/v1/secret-leases/redeem", post(secrets::redeem))
         .route(
             "/api/v1/secret-groups",

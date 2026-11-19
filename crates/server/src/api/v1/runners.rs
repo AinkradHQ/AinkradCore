@@ -365,7 +365,7 @@ fn extra(
 
 /// A runner device that may connect: approved and not revoked (a pending, rejected or expired
 /// claimant is not a runner yet).
-fn listed(d: &gov::Device) -> bool {
+pub(super) fn listed(d: &gov::Device) -> bool {
     d.kind == "runner" && d.usable()
 }
 

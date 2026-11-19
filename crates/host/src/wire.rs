@@ -49,8 +49,10 @@ impl Code {
     }
 }
 
-/// Class A actions are the ones slice 1 runs: the worst a misuse does is restart a service or
-/// read redacted logs. Class B changes what runs as root or what data exists (it needs a device
+/// Class A actions are the ones slice 1 runs: the worst a misuse does is restart a service, start
+/// the backup unit (fixed argv, the unit the timer starts anyway, rate limited; E2-6), read
+/// redacted logs and the backup schedule and retention (reads). The retention is written by the
+/// Core itself, not here. Class B changes what runs as root or what data exists (it needs a device
 /// grant the Core cannot forge, a later slice); every class B name is refused here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Class {
@@ -65,6 +67,8 @@ pub const REGISTRY: &[(&str, Class)] = &[
     ("logs", Class::A),
     ("restart_core", Class::A),
     ("restart_runner", Class::A),
+    ("backup_now", Class::A),
+    ("backup_info", Class::A),
     ("runner_policy", Class::B),
     ("install_tool", Class::B),
     ("update", Class::B),
@@ -109,6 +113,10 @@ pub enum Action {
     Logs(Logs),
     RestartCore,
     RestartRunner,
+    /// Starts `ainkrad-backup.service` once, now (the same unit the timer starts).
+    BackupNow,
+    /// The backup timer's schedule, the last run and the backups on disk (a read).
+    BackupInfo,
 }
 
 impl Action {
@@ -118,12 +126,17 @@ impl Action {
             Action::Logs(_) => "logs",
             Action::RestartCore => "restart_core",
             Action::RestartRunner => "restart_runner",
+            Action::BackupNow => "backup_now",
+            Action::BackupInfo => "backup_info",
         }
     }
 
     /// Mutating actions take the lock, the limits, the dedupe and the log; reads do none of it.
     pub fn mutating(&self) -> bool {
-        matches!(self, Action::RestartCore | Action::RestartRunner)
+        matches!(
+            self,
+            Action::RestartCore | Action::RestartRunner | Action::BackupNow
+        )
     }
 }
 
@@ -264,6 +277,8 @@ pub fn parse(line: &[u8]) -> Result<Request, Refusal> {
         "status" if no_params => Action::Status,
         "restart_core" if no_params => Action::RestartCore,
         "restart_runner" if no_params => Action::RestartRunner,
+        "backup_now" if no_params => Action::BackupNow,
+        "backup_info" if no_params => Action::BackupInfo,
         "logs" => {
             let Ok(p) = serde_json::from_value::<LogsParams>(params) else {
                 return Err(refusal);

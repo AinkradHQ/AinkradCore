@@ -175,6 +175,8 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "device.last_admin_refused",
     "device.revoked",
     "host.action_result",
+    "host.backup_requested",
+    "host.backup_retention_requested",
     "host.helper_refused",
     "host.logs_read",
     "host.restart_requested",
@@ -227,6 +229,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "terminal.signalled",
     "secret.created",
     "secret.deleted",
+    "secret.exported",
     "secret.leased",
     "secret.master_rotated",
     "secret.redeemed",
@@ -239,6 +242,9 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "secret_group.updated",
     "setting.reset",
     "setting.set",
+    "core.prefs_changed",
+    "project.defaults_changed",
+    "project.unarchived",
 ];
 
 /// Whether `name` is dotted lowercase with at least `segments` segments.

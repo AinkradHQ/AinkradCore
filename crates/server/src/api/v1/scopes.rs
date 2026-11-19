@@ -62,10 +62,22 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/devices", "admin"),
     ("DELETE", "/api/v1/devices/{id}", "admin"),
     ("GET", "/api/v1/audit", "admin"),
+    ("GET", "/api/v1/audit/stats", "admin"),
+    ("GET", "/api/v1/ops/history", "admin"),
     // The Core machine (host-helper plan §4): all `admin`; see DESTRUCTIVE for the step-up ones.
     ("GET", "/api/v1/system/host", "admin"),
     ("GET", "/api/v1/core/health", "read"),
+    ("GET", "/api/v1/core/prefs", "read"),
+    ("PUT", "/api/v1/core/prefs", "admin"),
+    ("GET", "/api/v1/core/storage", "admin"),
+    ("POST", "/api/v1/core/update/check", "admin"),
     ("POST", "/api/v1/system/restart", "admin"),
+    // A backup now and the backup schedule (E2-6): `admin`; a start is no danger, it is the unit the timer starts.
+    ("POST", "/api/v1/system/backup", "admin"),
+    ("GET", "/api/v1/system/backups", "admin"),
+    // How many local backups are kept: reading is `admin`; the write is in DESTRUCTIVE (D-4).
+    ("GET", "/api/v1/system/backups/retention", "admin"),
+    ("PUT", "/api/v1/system/backups/retention", "admin"),
     ("GET", "/api/v1/system/logs/core", "admin"),
     ("GET", "/api/v1/system/logs/helper", "admin"),
     ("GET", "/api/v1/system/logs/runner", "admin"),
@@ -186,6 +198,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PATCH", "/api/v1/projects/{id}", "admin"),
     ("POST", "/api/v1/projects/{id}/archive", "admin"),
     ("POST", "/api/v1/projects/{id}/unarchive", "admin"),
+    ("GET", "/api/v1/projects/defaults", "read"),
+    ("PUT", "/api/v1/projects/defaults", "admin"),
     ("POST", "/api/v1/projects/{id}/repos", "admin"),
     ("DELETE", "/api/v1/projects/{id}/repos/{repo}", "admin"),
     (
@@ -287,6 +301,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("DELETE", "/api/v1/secrets/{id}", "admin"),
     ("POST", "/api/v1/secrets/{id}/leases", "admin"),
     ("POST", "/api/v1/secrets/{id}/reveal", "admin"),
+    // Exporting every value (D-4): `admin`, destructive (a live step-up).
+    ("POST", "/api/v1/secrets/export", "admin"),
     ("POST", "/api/v1/secret-leases/redeem", "runner"),
     ("GET", "/api/v1/secret-groups", "admin"),
     ("POST", "/api/v1/secret-groups", "admin"),
@@ -368,11 +384,15 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     // The Core machine: a restart drops every session, and the runner and backup logs can hold
     // values no redactor recognises (D4). The Core and helper logs are not here.
     ("POST", "/api/v1/system/restart"),
+    // Retention decides how much history survives a loss (D-4): it writes the Core's config.
+    ("PUT", "/api/v1/system/backups/retention"),
     ("GET", "/api/v1/system/logs/runner"),
     ("GET", "/api/v1/system/logs/backup"),
     // A lease or a reveal is how a secret's value leaves the Core.
     ("POST", "/api/v1/secrets/{id}/reveal"),
     ("POST", "/api/v1/secrets/{id}/leases"),
+    // An exported value leaves the Core to a file (D-4).
+    ("POST", "/api/v1/secrets/export"),
     ("POST", "/api/v1/secret-groups/{id}/leases"),
 ];
 

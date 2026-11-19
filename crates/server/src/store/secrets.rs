@@ -48,6 +48,9 @@ use zeroize::Zeroizing;
 use super::settings::value_in;
 use crate::ops::secretbox::SecretBox;
 
+mod export;
+pub use export::{Exported, export_all};
+
 /// How a runner hands a secret to a session (E2-07.2).
 pub const DELIVERY: [&str; 3] = ["env", "file", "askpass"];
 

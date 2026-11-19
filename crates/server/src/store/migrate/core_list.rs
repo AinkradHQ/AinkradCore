@@ -347,6 +347,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0057_e7_account_soft_delete.up.sql"),
         down: include_str!("../../../migrations/0057_e7_account_soft_delete.down.sql"),
     },
+    Migration {
+        version: 58,
+        name: "project_idle_never_e24",
+        up: include_str!("../../../migrations/0058_project_idle_never_e24.up.sql"),
+        down: include_str!("../../../migrations/0058_project_idle_never_e24.down.sql"),
+    },
 ];
 
 #[cfg(test)]

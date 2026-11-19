@@ -32,10 +32,10 @@ use crate::module::Module;
 use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
-    accounts, agents, ai_order, audit, budgets, chains, connections, corehealth, costs, devices,
-    events, handshake, lockouts, me, pair, pairing, passkey, projects, projects_github,
-    runner_control, runners, secret_groups, secrets, session, settings, stepup, system, terminals,
-    ticket, types, websession,
+    accounts, activity, agents, ai_order, audit, budgets, chains, connections, corehealth, coreprefs,
+    costs, devices, events, handshake, lockouts, me, pair, pairing, passkey, projects,
+    projects_github, runner_control, runners, secret_export, secret_groups, secrets, session,
+    settings, stepup, system, system_backup, terminals, ticket, types, websession,
 };
 
 #[derive(OpenApi)]
@@ -73,9 +73,19 @@ use super::{
         pairing::reject,
         me::me,
         audit::list,
+        activity::audit_stats,
+        activity::ops_history,
         system::host,
         corehealth::get,
+        coreprefs::get,
+        coreprefs::put,
+        coreprefs::storage,
+        coreprefs::check_update,
         system::restart,
+        system_backup::start,
+        system_backup::backups,
+        system_backup::retention,
+        system_backup::set_retention,
         system::logs_core,
         system::logs_helper,
         system::logs_runner,
@@ -168,6 +178,8 @@ use super::{
         projects::update,
         projects::archive,
         projects::unarchive,
+        projects::defaults,
+        projects::set_defaults,
         projects::add_repo,
         projects::remove_repo,
         projects::set_primary,
@@ -218,6 +230,7 @@ use super::{
         secrets::lease,
         secrets::reveal,
         secrets::redeem,
+        secret_export::export,
         secret_groups::list,
         secret_groups::create,
         secret_groups::update,
