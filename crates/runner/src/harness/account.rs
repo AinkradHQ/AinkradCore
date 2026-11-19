@@ -17,18 +17,27 @@ pub(super) struct Credential {
     pub value: String,
 }
 
+/// The home key of `job`'s runner-bound account (`bound/<key>`), if it has one.
+pub(super) fn bound_key(job: &Job) -> Option<&str> {
+    job.account
+        .as_ref()?
+        .config_dir
+        .strip_prefix(ainkrad_proto::v2::BOUND_HOME_DIR)
+        .and_then(|r| r.strip_prefix('/'))
+        .filter(|k| ainkrad_proto::v2::bound_key_ok(k))
+}
+
 impl HarnessExecutor {
     /// The harness config dir `job` works with: its account's, or this runner's own.
     pub(super) fn config_dir(&self, job: &Job) -> Result<PathBuf, String> {
-        // A runner-bound account's own home (E7-4): its login lives there and nowhere else, so an
-        // isolated session uses it too, not a per-session dir. Only a home a sign-in made.
-        if let Some(a) = job.account.as_ref().filter(|a| {
-            a.config_dir
-                .strip_prefix(ainkrad_proto::v2::BOUND_HOME_DIR)
-                .and_then(|r| r.strip_prefix('/'))
-                .is_some_and(ainkrad_proto::v2::bound_key_ok)
-        }) {
-            let dir = self.config_root.join(&a.config_dir);
+        // A runner-bound account's own home (E7-4): its login lives there and nowhere else. This
+        // is the home itself (the source of the credential), never a session's working dir: a
+        // session gets a per-session copy (`bound_session`). Only a home a sign-in made.
+        if let Some(key) = bound_key(job) {
+            let dir = self
+                .config_root
+                .join(ainkrad_proto::v2::BOUND_HOME_DIR)
+                .join(key);
             return match dir.is_dir() {
                 true => Ok(dir),
                 false => Err("the account's sign-in is not on this runner".to_owned()),

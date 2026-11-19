@@ -189,6 +189,7 @@ printf 'ok\r\n'
         pinned: vec!["9.9.9".to_owned()],
     }];
     cfg.homes = t.file("homes");
+    cfg.sandbox = false; // the stand-in script is under a temp dir the sandbox hides
     cfg.grace = Duration::from_millis(100);
     cfg.enter_delay = Duration::from_millis(20);
     Arc::new(LoginDriver::new(cfg).unwrap())
@@ -403,4 +404,134 @@ fn a_wipe_deletes_only_a_plain_home_under_the_homes_dir_and_never_follows_a_syml
         assert!(wipe_home(&homes, bad).is_err(), "{bad}");
     }
     assert!(outside.exists());
+}
+
+fn agy_start(id: &str, key: &str) -> LoginStart {
+    LoginStart {
+        harness: "agy".to_owned(),
+        ..start(id, key)
+    }
+}
+
+#[tokio::test]
+async fn an_antigravity_sign_in_takes_only_menu_numbers_and_codes_never_free_text() {
+    let t = Tmp::new();
+    let d = agy_driver(&t, "Successfully signed in as someone@example.test");
+    d.start(agy_start("l_1", "lg_1")).await.unwrap();
+    for bad in [
+        "hello",
+        "rm -rf /",
+        "a b",
+        "123",
+        "x",
+        "ls",
+        "4/0 TEST-code",
+        "12345678\n",
+        &"a".repeat(257),
+    ] {
+        let r = d
+            .input(LoginInput {
+                login_id: "l_1".into(),
+                text: bad.into(),
+            })
+            .await;
+        let refused = match r {
+            Ok(r) => r.error.is_some(),
+            Err(_) => true,
+        };
+        assert!(refused, "{bad:?} must be refused");
+    }
+    for ok in ["1", "12", "4/0TESTONLY-code", "abcd_EFGH-1234"] {
+        assert!(ainkrad_proto::v2::agy_input_ok(ok), "{ok}");
+    }
+    d.cancel(LoginCancel {
+        login_id: "l_1".into(),
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_second_antigravity_home_is_refused_until_the_first_is_wiped_and_the_wipe_says_the_keyring_stays()
+ {
+    let t = Tmp::new();
+    let d = agy_driver(&t, "Successfully signed in as someone@example.test");
+    d.start(agy_start("l_1", "lg_1")).await.unwrap();
+    d.input(LoginInput {
+        login_id: "l_1".into(),
+        text: "4/0TESTONLY-code".into(),
+    })
+    .await
+    .unwrap();
+    assert!(d.wait(wait("l_1")).await.unwrap().done);
+    // The home exists: another agy sign-in (a different home key) is refused.
+    let e = d.start(agy_start("l_2", "lg_2")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Busy);
+    assert!(!t.file("homes").join("lg_2").exists());
+    // Removing the account wipes the home; the keyring cannot be cleared, and the answer says so.
+    let r = d
+        .wipe(ainkrad_proto::v2::LoginWipe {
+            home: "lg_1".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert!(r.done);
+    assert_eq!(r.error.as_deref(), Some("keyring_not_cleared"));
+    assert!(!t.file("homes").join("lg_1").exists());
+    // Another agy sign-in may now start.
+    d.start(agy_start("l_3", "lg_3")).await.unwrap();
+    d.cancel(LoginCancel {
+        login_id: "l_3".into(),
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn wiping_a_codex_home_reports_no_keyring_note() {
+    let t = Tmp::new();
+    let d = driver(&t, "exit 0");
+    std::fs::create_dir_all(t.file("homes").join("lg_9")).unwrap();
+    let r = d
+        .wipe(ainkrad_proto::v2::LoginWipe {
+            home: "lg_9".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert_eq!((r.done, r.error), (true, None));
+}
+
+#[test]
+fn the_antigravity_sign_in_is_wrapped_by_the_sandbox_never_run_bare() {
+    let t = Tmp::new();
+    let scratch = t.file("scratch");
+    for d in ["home", "tmp"] {
+        std::fs::create_dir_all(scratch.join(d)).unwrap();
+    }
+    let home = t.file("homes").join("lg_1");
+    std::fs::create_dir_all(&home).unwrap();
+    let (program, args) = super::agy::sandboxed(
+        std::path::Path::new("/bin/sh"),
+        &["-c".to_owned(), "true".to_owned()],
+        &scratch,
+        &home,
+        &t.file("homes"),
+    );
+    // The sandbox's own launcher, or the fail-closed path that cannot start: never the program itself.
+    assert_ne!(program, PathBuf::from("/bin/sh"));
+    let name = program.display().to_string();
+    assert!(
+        [
+            "/usr/bin/sandbox-exec",
+            "/usr/bin/bwrap",
+            "/nonexistent/ainkrad-sandbox-refused"
+        ]
+        .contains(&name.as_str()),
+        "{name}"
+    );
+    if name != "/nonexistent/ainkrad-sandbox-refused" {
+        // Writes only to the account's own home and the scratch, as the profile says.
+        let joined = args.join(" ");
+        assert!(joined.contains(&home.display().to_string()), "{joined}");
+    }
 }

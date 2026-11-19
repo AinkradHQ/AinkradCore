@@ -455,6 +455,17 @@ pub async fn input(
     if text.len() > LOGIN_INPUT_MAX || text.chars().any(char::is_control) {
         return refused("bad_request", "a line is up to 512 printable characters");
     }
+    // The Antigravity terminal is an agent: only a menu number or a code, never free text (the
+    // runner checks again). Audited by length only.
+    if l.provider == "agy-sub" && !ainkrad_proto::v2::agy_input_ok(&text) {
+        return refused(
+            "bad_request",
+            "an Antigravity sign-in takes a menu number or a code, not text",
+        );
+    }
+    if let Err(e) = logins::audit_input(&app.pool, BY, &l, text.len()).await {
+        tracing::warn!(error = %e, "auditing a sign-in line");
+    }
     let cmd = Command::LoginInput(LoginInput {
         login_id: l.id.clone(),
         text: text.to_string(),
@@ -549,7 +560,19 @@ async fn run_wait(app: App, l: Login) {
 
 /// The account of a finished runner-bound login: a marker in the broker, scoped to the one runner,
 /// and the record of the runner and home. Then the login is `done`.
-async fn store_bound(app: &App, l: &Login) {
+pub(crate) async fn store_bound(app: &App, l: &Login) {
+    // The runner's CLI finished, so its home holds a credential. Any ending but a stored account
+    // (cancelled or expired meanwhile, no key, a refusal, a database error) owes that home a wipe,
+    // kept until the runner confirms (`core_account_wipes`), so nothing is left behind.
+    if !store_bound_inner(app, l).await
+        && let Err(e) = accounts::owe_wipe(&app.pool, &l.runner, &l.id, &app.clock.now()).await
+    {
+        tracing::warn!(error = %e, "recording a runner wipe");
+    }
+}
+
+/// Whether the account was stored (and the login is `done`).
+async fn store_bound_inner(app: &App, l: &Login) -> bool {
     let moved = logins::step(
         &app.pool,
         &l.id,
@@ -561,10 +584,11 @@ async fn store_bound(app: &App, l: &Login) {
     )
     .await;
     if !matches!(moved, Ok(Some(_))) {
-        return; // cancelled or expired meanwhile
+        return false; // cancelled or expired meanwhile
     }
     let Some(sealer) = app.secrets.as_deref() else {
-        return fail(app, l, "this Core has no master key loaded").await;
+        fail(app, l, "this Core has no master key loaded").await;
+        return false;
     };
     let marker = accounts::bound_marker(&l.id);
     let new = accounts::NewAccount {
@@ -598,6 +622,7 @@ async fn store_bound(app: &App, l: &Login) {
                 account_id: Some(a.id),
                 ..Change::default()
             };
+            // The account exists: its home is in use whatever this step answers.
             let _ = logins::step(
                 &app.pool,
                 &l.id,
@@ -608,9 +633,16 @@ async fn store_bound(app: &App, l: &Login) {
                 now(app),
             )
             .await;
+            true
         }
-        Err(Error::Refused { message, .. }) => fail(app, l, &message).await,
-        Err(Error::Db(_)) => fail(app, l, "the Core could not store the account").await,
+        Err(Error::Refused { message, .. }) => {
+            fail(app, l, &message).await;
+            false
+        }
+        Err(Error::Db(_)) => {
+            fail(app, l, "the Core could not store the account").await;
+            false
+        }
     }
 }
 

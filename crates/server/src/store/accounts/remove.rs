@@ -203,6 +203,46 @@ pub async fn pending_wipes(
         .collect())
 }
 
+/// A login that finished on `runner` but never became an account: its home `home` is owed a wipe,
+/// so nothing is left behind there. Idempotent.
+pub async fn owe_wipe(
+    pool: &SqlitePool,
+    runner: &str,
+    home: &str,
+    now: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT OR IGNORE INTO core_account_wipes (runner, home, created_at) VALUES (?, ?, ?)",
+    )
+    .bind(runner)
+    .bind(home)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map(drop)
+}
+
+/// The runner wiped an Antigravity home but its login also lives in the runner user's OS keyring,
+/// which cannot be cleared per account: audited `account.wipe_note` and an event
+/// `account.wipe.note` the app shows in plain words. No credential, only where.
+pub async fn note_keyring_left(pool: &SqlitePool, runner: &str, home: &str) -> Result<(), Error> {
+    let message = "The Antigravity sign-in's files were deleted, but its login may still be kept in that computer's keychain. Remove it there if you want it gone.";
+    let details = json!({"runner": runner, "home": home, "note": "keyring_not_cleared"});
+    let mut tx = super::super::begin_write(pool).await?;
+    let e = ainkrad_core::audit::NewAuditEvent {
+        actor: AuditActor::System,
+        action: "account.wipe_note".to_owned(),
+        entity: None,
+        details: details.to_string(),
+    };
+    super::super::audit::append(&mut tx, &e).await?;
+    let mut payload = details;
+    payload["message"] = json!(message);
+    super::super::events::append(&mut tx, "account.wipe.note", &payload).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// The runner wiped it (or there is nothing to wipe): forget the row.
 pub async fn wipe_done(pool: &SqlitePool, id: i64) -> Result<(), sqlx::Error> {
     sqlx::query("DELETE FROM core_account_wipes WHERE id = ?")

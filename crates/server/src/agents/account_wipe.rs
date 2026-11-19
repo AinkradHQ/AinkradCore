@@ -47,7 +47,8 @@ async fn send_wipes(app: &App) {
     }
 }
 
-/// Whether the runner confirmed the wipe of `home`.
+/// Whether the runner confirmed the wipe of `home`. `done` with the note `keyring_not_cleared` is a
+/// wipe (the files are gone) whose keyring entry could not be cleared: recorded for the app to show.
 async fn asked(app: &App, runner: &str, home: &str) -> bool {
     let cmd = Command::LoginWipe(LoginWipe {
         home: home.to_owned(),
@@ -55,11 +56,25 @@ async fn asked(app: &App, runner: &str, home: &str) -> bool {
     let Ok(sent) = app.hub.dispatch_login(runner, cmd) else {
         return false;
     };
-    matches!(
-        tokio::time::timeout(Duration::from_secs(10), sent.outcome()).await,
-        Ok(Ok(Body::Result(Reply::LoginResult(r)))) if r.done && r.error.is_none()
-    )
+    let Ok(Ok(Body::Result(Reply::LoginResult(r)))) =
+        tokio::time::timeout(Duration::from_secs(10), sent.outcome()).await
+    else {
+        return false;
+    };
+    match (r.done, r.error.as_deref()) {
+        (true, None) => true,
+        (true, Some(KEYRING_NOT_CLEARED)) => {
+            if let Err(e) = accounts::note_keyring_left(&app.pool, runner, home).await {
+                tracing::warn!(error = %e, "recording a keyring note");
+            }
+            true
+        }
+        _ => false,
+    }
 }
+
+/// What a runner's wipe answers in `error` beside `done` when a keyring entry stays.
+const KEYRING_NOT_CLEARED: &str = "keyring_not_cleared";
 
 /// `sweep` every [`EVERY`] until the Core stops; the first pass at once, so a row left past its
 /// window by the last run is wiped at start.
