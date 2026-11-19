@@ -132,3 +132,18 @@ async fn a_gateway_grant_refuses_a_switched_off_model_and_leaves_it_out_of_the_a
     let e = crate::agents::gateway::grant(&g.fx.app, &named).await.err();
     assert!(format!("{e:?}").contains("switched off"), "{e:?}");
 }
+
+#[tokio::test]
+async fn an_api_key_account_enforces_a_switched_off_model_and_a_login_does_not() {
+    use crate::api::v1::accounts::ProviderAccount;
+    let (fx, _vm, s) = setup().await;
+    let mut a = make(&fx, &s, "claude-main", V1, &[]).await;
+    let shown = |a: &crate::store::accounts::Account| {
+        serde_json::to_value(ProviderAccount::from(a.clone())).unwrap()["models_enforced"].clone()
+    };
+    // The gateway grants an API key's session only the models left on.
+    assert_eq!(shown(&a), true);
+    // A subscription's harness talks to its provider itself: the limit is advice, and says so.
+    a.provider = "claude-sub".to_owned();
+    assert_eq!(shown(&a), false);
+}
