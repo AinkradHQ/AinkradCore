@@ -22,7 +22,11 @@ use ainkrad_proto::v2::{
 
 use super::{AgentDriver, holds_slot, no_session, refuse, valid_session};
 
-type Base = HashMap<String, (u64, i128)>;
+type Base = HashMap<String, (u64, i64)>;
+
+/// Where the baseline and the final copies live: `<dir>/<session>/`.
+const BASE_FILE: &str = "docs-base.json";
+const FINAL_DIR: &str = "docs-final";
 
 fn hex(bytes: &[u8]) -> String {
     ring::digest::digest(&ring::digest::SHA256, bytes)
@@ -34,7 +38,7 @@ fn hex(bytes: &[u8]) -> String {
 
 /// Every `.md` file under `root` that `valid_doc_path` accepts, as (relative path, size, mtime ns), without
 /// following a symlink. Bounded by depth and by the number of entries looked at.
-fn walk(root: &Path) -> Vec<(String, u64, i128)> {
+fn walk(root: &Path) -> Vec<(String, u64, i64)> {
     let mut out = Vec::new();
     let mut seen = 0usize;
     let mut stack = vec![(root.to_path_buf(), String::new(), 0usize)];
@@ -71,7 +75,7 @@ fn walk(root: &Path) -> Vec<(String, u64, i128)> {
                     .modified()
                     .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map_or(0, |d| i128::try_from(d.as_nanos()).unwrap_or(0));
+                    .map_or(0, |d| i64::try_from(d.as_nanos()).unwrap_or(0));
                 out.push((path, meta.len(), ns));
             }
         }
@@ -160,10 +164,53 @@ impl AgentDriver {
         })
         .await
         .unwrap_or_default();
+        let file = self.config.dir.join(session).join(BASE_FILE);
+        if let Ok(bytes) = serde_json::to_vec(&base) {
+            let _ = std::fs::write(&file, bytes);
+        }
         self.docs_base
             .lock()
             .unwrap()
             .insert(session.to_owned(), base);
+    }
+
+    /// The session's baseline: in memory, else the file a start saved (a runner restart).
+    fn docs_baseline(&self, session: &str) -> Option<Base> {
+        if let Some(b) = self.docs_base.lock().unwrap().get(session) {
+            return Some(b.clone());
+        }
+        let bytes = std::fs::read(self.config.dir.join(session).join(BASE_FILE)).ok()?;
+        let base: Base = serde_json::from_slice(&bytes).ok()?;
+        self.docs_base
+            .lock()
+            .unwrap()
+            .insert(session.to_owned(), base.clone());
+        Some(base)
+    }
+
+    /// Before the session's folder is removed: copies the `.md` files it made or changed to
+    /// `<dir>/<session>/docs-final/`, where `agent.docs` serves them read-only after the end.
+    pub(super) async fn keep_final_docs(&self, session: &str, folder: Option<PathBuf>) {
+        let (Some(folder), Some(base)) = (folder, self.docs_baseline(session)) else {
+            return;
+        };
+        let out = self.config.dir.join(session).join(FINAL_DIR);
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = std::fs::remove_dir_all(&out);
+            for (path, size, ns) in walk(&folder) {
+                if base.get(&path) == Some(&(size, ns)) || size > DOC_MAX_BYTES as u64 {
+                    continue;
+                }
+                let to = out.join(&path);
+                if let Some(parent) = to.parent()
+                    && std::fs::create_dir_all(parent).is_ok()
+                {
+                    // `folder/path` came from `walk`: a plain file, not a symlink.
+                    let _ = std::fs::copy(folder.join(&path), &to);
+                }
+            }
+        })
+        .await;
     }
 
     pub async fn docs(&self, req: AgentDocs) -> Result<DocsReply, StreamError> {
@@ -171,18 +218,35 @@ impl AgentDriver {
         if !valid_session(&req.session) {
             return Err(bad("a session as_…"));
         }
-        let folder = {
+        let live = {
             let all = self.sessions.lock().unwrap();
             let live = all.get(&req.session).ok_or_else(no_session)?;
-            if !holds_slot(live.meta.state) {
-                return Err(bad("the session is not running"));
-            }
-            live.meta.folder.clone()
+            holds_slot(live.meta.state).then(|| live.meta.folder.clone())
         };
-        let folder = PathBuf::from(folder.ok_or_else(|| bad("the session has no folder yet"))?);
+        // A running session serves its folder; an ended one, the copies kept at its end (read-only).
+        let (folder, ended) = match live {
+            Some(f) => (
+                PathBuf::from(f.ok_or_else(|| bad("the session has no folder yet"))?),
+                false,
+            ),
+            None => {
+                let kept = self.config.dir.join(&req.session).join(FINAL_DIR);
+                if !kept.is_dir() {
+                    return Err(bad(ainkrad_proto::v2::DOCS_NO_FINAL));
+                }
+                (kept, true)
+            }
+        };
+        if ended && req.action == DocsAction::Write {
+            return Err(bad("the session has ended"));
+        }
         match req.action {
             DocsAction::List => {
-                let Some(base) = self.docs_base.lock().unwrap().get(&req.session).cloned() else {
+                let base = if ended {
+                    Base::new()
+                } else if let Some(b) = self.docs_baseline(&req.session) {
+                    b
+                } else {
                     return Ok(DocsReply::default());
                 };
                 tokio::task::spawn_blocking(move || {
@@ -298,5 +362,13 @@ mod tests {
         );
         assert_eq!(write_text(&f, "two", Some(&sha)).unwrap(), hex(b"two"));
         assert_eq!(read_text(&f).unwrap().0, "two");
+    }
+
+    #[test]
+    fn a_baseline_survives_a_restart_as_json() {
+        let mut b = Base::new();
+        b.insert("docs/a.md".to_owned(), (12, 1_700_000_000_123_456_789));
+        let back: Base = serde_json::from_slice(&serde_json::to_vec(&b).unwrap()).unwrap();
+        assert_eq!(back, b);
     }
 }

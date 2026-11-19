@@ -335,9 +335,9 @@ pub struct AgentDriver {
     changed: Notify,
     next_run: Mutex<i64>,
     /// Per session, the `.md` files its folder held when its harness started (size, mtime in ns), so
-    /// `agent.docs` lists only what the session made or changed. Not persisted: after a runner restart a
-    /// session lists nothing until its next start (ponytail: persist it if restarts mid-session matter).
-    docs_base: Mutex<HashMap<String, HashMap<String, (u64, i128)>>>,
+    /// `agent.docs` lists only what the session made or changed. Also saved in the session's dir
+    /// (`docs-base.json`), so a runner restart keeps it.
+    docs_base: Mutex<HashMap<String, HashMap<String, (u64, i64)>>>,
     /// Harness name to version, as probed at start; reported to the Core as `RunnerFacts.tools`.
     versions: BTreeMap<String, String>,
 }
@@ -814,6 +814,9 @@ impl AgentDriver {
             self.report(&session, r);
         }
         self.harness.session_env(run, None);
+        // The folder goes next: keep what the session wrote for a last import (`agent.docs` serves it).
+        self.keep_final_docs(&session, self.harness.work_dir(&job))
+            .await;
         self.harness.cleanup_agent_workspace(&session, run).await;
         drop(delivered);
         self.end(&session, outcome);

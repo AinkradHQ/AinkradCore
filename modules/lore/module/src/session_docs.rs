@@ -15,8 +15,8 @@
 //! Both sides changed (a person saved while the session rewrote the file): the person wins. The file's text is
 //! kept as a `conflict` version of the note, then the note is written over the file.
 //!
-//! ponytail: a session's last few seconds before it ends are not imported (its folder goes with it); the
-//! job interval is the ceiling. A final pull at the end of the session would close that.
+//! At the end of a session the runner keeps the files it made or changed; the job imports those once more
+//! (`lore_session_final` marks it done), so the last seconds are not lost.
 
 use std::time::Duration;
 
@@ -25,7 +25,7 @@ use ainkrad_core_server::api::v1::ApiResult;
 use ainkrad_core_server::jobs::{Done, JobHandler, Run};
 use ainkrad_core_server::store::begin_write;
 use ainkrad_proto::v2::{
-    AgentDocs, Body, Command, DocFile, DocsAction, DocsReply, OP_AGENT_DOCS, Reply,
+    AgentDocs, Body, Command, DOCS_NO_FINAL, DocFile, DocsAction, DocsReply, OP_AGENT_DOCS, Reply,
 };
 use axum::Json;
 use axum::extract::State;
@@ -233,11 +233,22 @@ async fn read(app: &App, s: &Sess, path: &str) -> Result<(String, String), Strin
     Ok((text, r.sha256.ok_or("no sha-256")?))
 }
 
+async fn mark_final(app: &App, session: &str) {
+    let _ = sqlx::query("INSERT OR IGNORE INTO lore_session_final (session) VALUES (?)")
+        .bind(session)
+        .execute(&app.pool)
+        .await;
+}
+
 /// One pass over the running sessions. Returns the notes written.
 pub(crate) async fn pass(app: &App) -> Result<usize, String> {
+    // Running sessions, and sessions that ended in the last day whose kept files are not imported yet.
     let rows = sqlx::query(
-        "SELECT id, runner, project_id FROM core_agent_sessions WHERE state = 'running' \
-         ORDER BY updated_at DESC LIMIT ?",
+        "SELECT id, runner, project_id, state FROM core_agent_sessions \
+         WHERE state = 'running' \
+            OR (state = 'ended' AND ended_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day') \
+                AND id NOT IN (SELECT session FROM lore_session_final)) \
+         ORDER BY (state = 'running') DESC, updated_at DESC LIMIT ?",
     )
     .bind(SESSIONS_MAX)
     .fetch_all(&app.pool)
@@ -250,20 +261,33 @@ pub(crate) async fn pass(app: &App) -> Result<usize, String> {
             runner: r.try_get("runner").map_err(|e| e.to_string())?,
             project: r.try_get("project_id").map_err(|e| e.to_string())?,
         };
-        // A runner that is away or does not serve documents is skipped quietly.
-        let Ok(list) = call(app, &s.runner, req(&s.id, DocsAction::List, None)).await else {
-            continue;
+        let ended = r.try_get::<String, _>("state").map_err(|e| e.to_string())? == "ended";
+        // A runner that is away or does not serve documents is skipped quietly (an ended session is asked again).
+        let list = match call(app, &s.runner, req(&s.id, DocsAction::List, None)).await {
+            Ok(l) => l,
+            Err(e) if ended && e == DOCS_NO_FINAL => {
+                mark_final(app, &s.id).await;
+                continue;
+            }
+            Err(_) => continue,
         };
+        let mut clean = true;
         for f in &list.files {
             match sync_file(app, &s, f).await {
                 Ok(true) => n += 1,
                 Ok(false) => {}
-                Err(e) => tracing::debug!(
-                    session = s.id,
-                    error = e,
-                    "a session document was not synced"
-                ),
+                Err(e) => {
+                    clean = false;
+                    tracing::debug!(
+                        session = s.id,
+                        error = e,
+                        "a session document was not synced"
+                    );
+                }
             }
+        }
+        if ended && clean {
+            mark_final(app, &s.id).await;
         }
     }
     Ok(n)

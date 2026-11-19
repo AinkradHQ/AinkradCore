@@ -11,3 +11,6 @@ CREATE TABLE lore_session_docs (
     UNIQUE (session, path)
 );
 CREATE INDEX lore_session_docs_session ON lore_session_docs (session);
+
+-- A session that has ended and whose last files were imported: the job stops asking about it.
+CREATE TABLE lore_session_final (session TEXT PRIMARY KEY) WITHOUT ROWID;
