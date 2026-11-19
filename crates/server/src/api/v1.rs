@@ -414,6 +414,7 @@ pub fn router(app: App) -> Router {
             post(projects_github::create),
         )
         .route("/api/v1/projects/{id}/archive", post(projects::archive))
+        .route("/api/v1/projects/{id}/unarchive", post(projects::unarchive))
         .route("/api/v1/projects/{id}/repos", post(projects::add_repo))
         .route(
             "/api/v1/projects/{id}/repos/{repo}",

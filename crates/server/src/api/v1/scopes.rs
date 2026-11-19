@@ -174,6 +174,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/projects/{id}", "read"),
     ("PATCH", "/api/v1/projects/{id}", "admin"),
     ("POST", "/api/v1/projects/{id}/archive", "admin"),
+    ("POST", "/api/v1/projects/{id}/unarchive", "admin"),
     ("POST", "/api/v1/projects/{id}/repos", "admin"),
     ("DELETE", "/api/v1/projects/{id}/repos/{repo}", "admin"),
     (
@@ -347,6 +348,7 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/projects/from-github"),
     ("PATCH", "/api/v1/projects/{id}"),
     ("POST", "/api/v1/projects/{id}/archive"),
+    ("POST", "/api/v1/projects/{id}/unarchive"),
     ("POST", "/api/v1/projects/{id}/repos"),
     ("DELETE", "/api/v1/projects/{id}/repos/{repo}"),
     ("POST", "/api/v1/projects/{id}/repos/{repo}/primary"),

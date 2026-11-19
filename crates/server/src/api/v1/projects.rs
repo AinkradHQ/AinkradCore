@@ -333,6 +333,21 @@ pub async fn archive(
     Ok(Json(info(&app, p).await?))
 }
 
+#[utoipa::path(post, path = "/api/v1/projects/{id}/unarchive", operation_id = "unarchiveProject",
+    tag = "projects", params(("id" = String, Path, description = "The project's id")),
+    responses((status = 200, description = "Back to `active` (the undo of an archive; audited \
+        and emitted as `project.updated`). 404 for no such project; 409 `conflict` when it is \
+        not archived", body = ProjectInfo)))]
+pub async fn unarchive(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<ProjectInfo> {
+    let now = app.clock.now();
+    let p = store::unarchive(&app.pool, num(&id, "project")?, who(&me, &now)).await?;
+    Ok(Json(info(&app, p).await?))
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct NewProjectRepo {
     /// The folder name: 1-100 of `[A-Za-z0-9._-]`, not starting with `.` or `-`.

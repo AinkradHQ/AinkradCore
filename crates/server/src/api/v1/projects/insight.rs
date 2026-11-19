@@ -171,7 +171,7 @@ pub struct Change {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ProjectChanges {
-    /// Commit authors, and `AI sessions` for the sessions, by count, most first.
+    /// Commit authors and session titles (`AI sessions` when untitled), by count, most first.
     pub by_author: Vec<AuthorCount>,
     /// Newest first, at most 50.
     pub recent: Vec<Change>,
@@ -207,8 +207,8 @@ pub fn tally(mut all: Vec<(String, String, String, i64)>, max: usize) -> Project
 #[utoipa::path(get, path = "/api/v1/projects/{id}/changes", operation_id = "getProjectChanges",
     tag = "projects", params(("id" = String, Path, description = "The project's id")),
     responses((status = 200, description = "Who changed what in the last 7 days: commits on any \
-        branch of the Core's copies, plus the project's AI sessions (as `AI sessions`; their \
-        file edits are not itemised). 404 for no such project", body = ProjectChanges)))]
+        branch of the Core's copies, plus each file an AI session edited (`who` is the session's \
+        title, `kind` `session`, one entry per session and file), newest first. 404 for no such project", body = ProjectChanges)))]
 pub async fn changes(State(app): State<App>, Path(id): Path<String>) -> ApiResult<ProjectChanges> {
     let project = num(&id, "project")?;
     let mut conn = app.pool.acquire().await?;
@@ -229,14 +229,15 @@ pub async fn changes(State(app): State<App>, Path(id): Path<String>) -> ApiResul
             }
         }
     }
-    let now = app.clock.now();
-    for (title, at) in usage_store::recent_sessions(&app.pool, project, &now)
+    // Each file a session edited: who is the session's title ("AI sessions" when it has none).
+    let since = app.clock.unix().saturating_sub(7 * 86_400) * 1000;
+    for (_, title, at_ms, path) in usage_store::recent_edits(&app.pool, project, since)
         .await
         .map_err(ApiError::from)?
     {
-        let at = unix_secs(&at).unwrap_or(0);
-        let summary = title.unwrap_or_else(|| "AI session".to_owned());
-        all.push(("AI sessions".to_owned(), "session".to_owned(), summary, at));
+        let who = title.unwrap_or_else(|| "AI sessions".to_owned());
+        let summary = format!("Edited {}", usage_store::short_path(&path));
+        all.push((who, "session".to_owned(), summary, at_ms / 1000));
     }
     Ok(Json(tally(all, 50)))
 }
