@@ -43,6 +43,12 @@ pub struct ProviderAccount {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
     pub usage: Option<AccountMeter>,
+    /// The runner device a runner-bound subscription (Codex, OpenCode, Antigravity) signed in on:
+    /// its sessions run only there. Absent for any other account. An `admin` device only; a device
+    /// id is not a secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub runner: Option<String>,
 }
 
 /// An account's health counters, as the scheduler keeps them.
@@ -169,6 +175,7 @@ impl From<acc::Account> for ProviderAccount {
             month_spend_usd_micros: None,
             month_limit_usd_micros: None,
             usage: None,
+            runner: None,
         }
     }
 }
