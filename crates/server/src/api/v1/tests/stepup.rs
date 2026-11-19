@@ -319,7 +319,11 @@ async fn every_destructive_operation_needs_a_live_elevation() {
         );
         let r = send(&fx.app, req(m.parse().unwrap(), &uri, Some(&mac), body)).await;
         assert_ne!(r.1["code"], json!("step_up_required"), "{m} {uri}: {r:?}");
-        assert_ne!(r.1["code"], json!("forbidden_scope"), "{m} {uri}: {r:?}");
+        // The bundled attestation also answers 403 from its handler, to a device that is not the
+        // Mac app which enrolled the runner (E6): the step-up gate is behind us all the same.
+        if !uri.ends_with("/bundled") {
+            assert_ne!(r.1["code"], json!("forbidden_scope"), "{m} {uri}: {r:?}");
+        }
     }
 }
 
