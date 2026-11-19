@@ -591,6 +591,7 @@ uninstall() {
     "$UNITS/ainkrad-backup.timer" "$UNITS/ainkrad-backup.timer.d" "$UNITS/ainkrad-backup.service.d" "$UNITS/ainkrad-core.service.d" "$UNITS/ainkrad-runner.service.d" "$UNITS/ainkrad-runner-tools.socket" "$UNITS/ainkrad-runner-tools@.service"
   run systemctl daemon-reload
   run systemctl reset-failed 2>/dev/null || true
+  run rm -f /etc/avahi/services/ainkrad-core.service # the LAN advertisement (guided_announce)
   run rm -f "$BIN/ainkrad-core-server" "$BIN/ainkradctl" "$BIN/ainkrad-runner" "$BIN/ainkrad-ptyhost" "$BIN/ainkrad-core-citadel"
   if [ "$PURGE" = 1 ]; then
     name=$(env_get AINKRAD_HOSTNAME); name=${name:-purge}

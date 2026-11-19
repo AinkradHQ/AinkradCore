@@ -7,9 +7,11 @@
 //!    salted with the code, ChaCha20-Poly1305) and only the app can open it. The rendezvous is
 //!    also never told the code, only `id = SHA-256(code)`, so it cannot forge a message either.
 //!    A rendezvous that lies can only drop or delay a message; the app then falls back to paste.
-//!  - Someone who read the command (code and key) could leave a link for THEIR Core first. That
-//!    is why the app shows the Core's address and fingerprint and waits for the person to press
-//!    Connect, and why a code works once and for 15 minutes.
+//!  - Someone who read the command (code and key) could leave a link for THEIR Core first. The
+//!    app shows the Core's FULL fingerprint and waits for the person to press Connect (no Return
+//!    shortcut), the installer prints this Core's fingerprint to compare, a code works once and
+//!    for 15 minutes, and when the rendezvous answers 409 (someone got there first) this command
+//!    exits 4 and the installer says not to press Connect.
 //!  - The nonce is fixed (zero) because every message has its own ephemeral key, so a key is never
 //!    used twice.
 
@@ -46,6 +48,30 @@ fn derive(shared: &[u8], code: &[u8], epk: &[u8], app_pub: &[u8]) -> [u8; 32] {
     key
 }
 
+/// The sealing step alone, from the X25519 shared secret: HKDF (salt = code, info = context || epk || app key), then
+/// ChaCha20-Poly1305 with a zero nonce and the context as AAD. Split out so a pinned vector can fix both languages.
+pub(crate) fn seal_with(
+    shared: &[u8],
+    epk: &[u8],
+    code: &[u8],
+    app_pub: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, String> {
+    let key = derive(shared, code, epk, app_pub);
+    let sealing = aead::LessSafeKey::new(
+        aead::UnboundKey::new(&aead::CHACHA20_POLY1305, &key).map_err(|_| "cipher")?,
+    );
+    let mut buf = plaintext.to_vec();
+    sealing
+        .seal_in_place_append_tag(
+            aead::Nonce::assume_unique_for_key([0u8; 12]),
+            aead::Aad::from(CONTEXT),
+            &mut buf,
+        )
+        .map_err(|_| "could not seal")?;
+    Ok(buf)
+}
+
 /// `(ephemeral public key, ciphertext with its tag)`.
 pub(crate) fn seal(
     code: &[u8],
@@ -61,20 +87,11 @@ pub(crate) fn seal(
         .as_ref()
         .to_vec();
     let peer = agreement::UnparsedPublicKey::new(&agreement::X25519, app_pub);
-    let key = agreement::agree_ephemeral(eph, &peer, |shared| derive(shared, code, &epk, app_pub))
+    // ring refuses a low-order or invalid peer key (all-zero shared secret) as an error here.
+    let shared = agreement::agree_ephemeral(eph, &peer, |s| s.to_vec())
         .map_err(|_| "the app's key is not a valid key")?;
-    let sealing = aead::LessSafeKey::new(
-        aead::UnboundKey::new(&aead::CHACHA20_POLY1305, &key).map_err(|_| "cipher")?,
-    );
-    let mut buf = plaintext.to_vec();
-    sealing
-        .seal_in_place_append_tag(
-            aead::Nonce::assume_unique_for_key([0u8; 12]),
-            aead::Aad::from(CONTEXT),
-            &mut buf,
-        )
-        .map_err(|_| "could not seal")?;
-    Ok((epk, buf))
+    let ct = seal_with(&shared, &epk, code, app_pub, plaintext)?;
+    Ok((epk, ct))
 }
 
 /// `<code, 16 bytes>.<app public key, 32 bytes>`, both base64url.
@@ -95,7 +112,8 @@ pub(crate) fn id_of(code: &[u8]) -> String {
 }
 
 /// `ainkrad-core-server rendezvous-post <https base url>`, the link on stdin and `<code>.<app key>` in
-/// `AINKRAD_RENDEZVOUS` (the environment, so the code is never in `ps`).
+/// `AINKRAD_RENDEZVOUS` (the environment, not argv, so it is not in the process list). Exits with 4 when the rendezvous
+/// says the code was answered already (409): another Core got there first, and the installer says so loudly.
 pub async fn post(base: &str) -> Result_ {
     let spec = std::env::var("AINKRAD_RENDEZVOUS").map_err(|_| "AINKRAD_RENDEZVOUS is not set")?;
     let (code, app_pub) = parse_spec(&spec)?;
@@ -123,6 +141,10 @@ pub async fn post(base: &str) -> Result_ {
         .json(&serde_json::json!({"epk": B64.encode(&epk), "ct": B64.encode(&ct)}))
         .send()
         .await?;
+    if res.status().as_u16() == 409 {
+        eprintln!("someone else already answered this setup code");
+        std::process::exit(4);
+    }
     if res.status().as_u16() == 204 {
         Ok(())
     } else {
@@ -186,6 +208,31 @@ mod tests {
         let (epk4, mut ct4) = seal(&code, &app4_pub, link).unwrap();
         ct4[0] ^= 1;
         assert!(open(app4, &app4_pub, &code, &epk4, &ct4).is_none());
+    }
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// The same vector is opened by `RendezvousTests` in the app: both sides must agree on these bytes.
+    #[test]
+    fn the_pinned_vector_is_what_the_app_opens() {
+        let d = |s: &str| B64.decode(s).unwrap();
+        let ct = seal_with(
+            &hex("4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742"),
+            &d("hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo"),
+            &[7u8; 16],
+            &d("3p7bfXt9wbTTW2HC7OQ1Nz-DQ8hbeGdNrfx-FG-IK08"),
+            b"ainkrad://connect?host=core.example.com&fp=FP&secret=S",
+        )
+        .unwrap();
+        assert_eq!(
+            B64.encode(ct),
+            "rBL1S5cKm3hdu54gCEaoH51O343FmiVAKIZp0hurr2NGiMlq9YW-qXbI7lhtVvKrn3askCu1qcmh8FhkA5PS2e4c_rqnPQ"
+        );
     }
 
     #[test]
