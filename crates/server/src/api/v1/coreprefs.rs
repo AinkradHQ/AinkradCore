@@ -138,10 +138,7 @@ pub async fn get(State(app): State<App>) -> ApiResult<CorePrefs> {
     responses((status = 200, description = "Changed (audited as `core.prefs_changed`); the \
         preferences now. 400 for a name that is empty, over 64 characters or has control \
         characters, or an hour outside 0 to 23. Needs `admin`", body = CorePrefs)))]
-pub async fn put(
-    State(app): State<App>,
-    Json(body): Json<SetCorePrefs>,
-) -> ApiResult<CorePrefs> {
+pub async fn put(State(app): State<App>, Json(body): Json<SetCorePrefs>) -> ApiResult<CorePrefs> {
     let name = body.name.as_deref().map(clean_name).transpose()?;
     if body.update_hour.is_some_and(|h| !(0..24).contains(&h)) {
         return Err(ApiError::bad_request("the update hour is 0 to 23"));

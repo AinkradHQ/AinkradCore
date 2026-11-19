@@ -22,13 +22,20 @@ async fn prefs_start_at_their_defaults_and_keep_what_is_set() {
     assert_eq!(first["update_hour"], 3);
     assert!(first["name"].is_null());
 
-    let (s, got) = put(&fx, json!({"name": "  Studio server ", "crash_reports": true})).await;
+    let (s, got) = put(
+        &fx,
+        json!({"name": "  Studio server ", "crash_reports": true}),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK, "{got}");
     assert_eq!(got["name"], "Studio server");
     assert_eq!(got["crash_reports"], true);
     // A field left out stays as it was.
     let (_, got) = put(&fx, json!({"update_hour": 5})).await;
-    assert_eq!((got["name"].as_str(), got["update_hour"].as_i64()), (Some("Studio server"), Some(5)));
+    assert_eq!(
+        (got["name"].as_str(), got["update_hour"].as_i64()),
+        (Some("Studio server"), Some(5))
+    );
     assert_eq!(fx.ok("/api/v1/core/prefs").await["crash_reports"], true);
 }
 
@@ -53,11 +60,20 @@ async fn only_an_admin_changes_prefs_and_a_change_is_audited() {
     let phone = fx.enroll("phone", &["read"]).await;
     let (s, _) = send(
         &fx.app,
-        req(Method::PUT, "/api/v1/core/prefs", Some(&phone), Some(json!({"name": "x"}))),
+        req(
+            Method::PUT,
+            "/api/v1/core/prefs",
+            Some(&phone),
+            Some(json!({"name": "x"})),
+        ),
     )
     .await;
     assert_eq!(s, StatusCode::FORBIDDEN);
-    let (s, _) = send(&fx.app, req(Method::GET, "/api/v1/core/prefs", Some(&phone), None)).await;
+    let (s, _) = send(
+        &fx.app,
+        req(Method::GET, "/api/v1/core/prefs", Some(&phone), None),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
     put(&fx, json!({"name": "Studio"})).await;
     let audit = fx.ok("/api/v1/audit").await.to_string();
@@ -69,7 +85,12 @@ async fn an_update_check_records_that_it_ran_and_says_there_is_no_feed() {
     let fx = fx().await;
     let (s, got) = send(
         &fx.app,
-        req(Method::POST, "/api/v1/core/update/check", Some(&fx.dev), None),
+        req(
+            Method::POST,
+            "/api/v1/core/update/check",
+            Some(&fx.dev),
+            None,
+        ),
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{got}");
@@ -83,5 +104,8 @@ async fn an_update_check_records_that_it_ran_and_says_there_is_no_feed() {
 async fn storage_answers_for_an_admin() {
     let fx = fx().await;
     let got = fx.ok("/api/v1/core/storage").await;
-    assert!(got["backups_count"].is_u64() || got["backups_count"].is_null(), "{got}");
+    assert!(
+        got["backups_count"].is_u64() || got["backups_count"].is_null(),
+        "{got}"
+    );
 }
