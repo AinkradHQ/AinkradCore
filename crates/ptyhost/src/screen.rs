@@ -18,6 +18,10 @@ pub trait Screen: Send {
     fn resize(&mut self, size: Size);
     /// Bytes a fresh terminal view replays to show the screen as it is now.
     fn snapshot(&self) -> Vec<u8>;
+    /// The last `n` non-empty visible rows as plain text (a preview); none for a stand-in.
+    fn tail(&self, _n: usize) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// The E2-04 screen implementation used by the detached host.  The host keeps its transport
@@ -55,6 +59,10 @@ impl Screen for Terminal {
 
     fn snapshot(&self) -> Vec<u8> {
         self.inner.snapshot(0).bytes
+    }
+
+    fn tail(&self, n: usize) -> Vec<String> {
+        self.inner.tail(n)
     }
 }
 

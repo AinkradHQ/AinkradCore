@@ -556,6 +556,12 @@ pub fn probe(net: &Net) -> Result<(), String> {
     }
 }
 
+mod private;
+pub use private::*;
+
+#[cfg(test)]
+mod private_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -606,3 +606,37 @@ async fn another_device_cannot_read_a_terminal_by_id() {
     .await;
     assert_eq!(response.0, StatusCode::NOT_FOUND, "{response:?}");
 }
+
+/// The startup cleanup closes only terminals with no recorded mode: an SSH terminal (`ssh`) and
+/// every sandboxed one survive it.
+#[tokio::test]
+async fn the_upgrade_cleanup_leaves_ssh_and_sandboxed_terminals_alone() {
+    let fx = fx().await;
+    for (id, sandbox) in [
+        ("t_old", None),
+        ("t_ssh", Some("ssh")),
+        ("t_home", Some("home")),
+        ("t_real", Some("real")),
+    ] {
+        sqlx::query(
+            "INSERT INTO core_terminals
+             (user_id,id,runner,status,rows,cols,output_seq,opened_by,created_at,last_activity,sandbox)
+             VALUES (1,?,?,'running',24,80,0,?,?,?,?)",
+        )
+        .bind(id)
+        .bind(&fx.dev.id)
+        .bind(&fx.dev.id)
+        .bind(NOW)
+        .bind(fx.clock.unix())
+        .bind(sandbox)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    }
+    let ids: Vec<String> = crate::api::v1::terminals::unsandboxed(&fx.app.pool)
+        .await
+        .into_iter()
+        .map(|r| r.0)
+        .collect();
+    assert_eq!(ids, ["t_old"]);
+}
