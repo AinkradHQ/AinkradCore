@@ -2,8 +2,8 @@
 //! the Core itself, once the semantic step is done (or off). Nothing is asked; the person can undo.
 //!
 //! Policy, all of it here:
-//! - Only a `full` run is auto-accepted. An incremental run already routes into known rooms
-//!   (`sync::route_known`) and leaves anything new in review.
+//! - Every run in review is looked at: a new room of a later (incremental) run is accepted too. A run stays
+//!   in review while Unsorted holds items, which are re-filed into the closest room as the model finds it.
 //! - Unsorted, a room that mixes two employers and a merged room are never accepted by this step:
 //!   they stay `proposed`, exactly as when a person leaves them out.
 //! - The step waits while the local model's suggestions are `pending`.
@@ -28,13 +28,46 @@ use crate::{Brain, code, record};
 
 const EVERY_SECS: u64 = 30;
 
-/// Accepts and imports every sortable room of each full run in review. Returns the rooms made.
+/// Files what waits in Unsorted into the rooms the local model found closest (E9-5: Unsorted is a quiet
+/// bucket that keeps re-sorting). A hint already passed the model's strength and margin. A room of this
+/// run takes the item as it is; a committed room gets a proposal of its name, which `route_known` then
+/// commits into it. Returns the items moved.
+async fn resort_unsorted(
+    app: &App,
+    b: &Brain,
+    run: &str,
+    st: &sqlx::SqlitePool,
+) -> Result<usize, ApiError> {
+    let hints = crate::suggest::ready_closest(app, b, st, run).await?;
+    let mut moved = 0;
+    let mut to_known: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for h in hints {
+        if h.in_review {
+            moved += sqlx::query("UPDATE items SET proposal = ? WHERE item_id = ? AND proposal = ?")
+                .bind(&h.room_id)
+                .bind(&h.item_id)
+                .bind(UNSORTED)
+                .execute(st)
+                .await?
+                .rows_affected() as usize;
+        } else {
+            to_known.entry(h.room_name).or_default().push(h.item_id);
+        }
+    }
+    for (name, ids) in to_known {
+        crate::review::split_into(st, UNSORTED, &ids, Some(&name)).await?;
+        moved += ids.len();
+    }
+    Ok(moved)
+}
+
+/// Accepts and imports every sortable room of each run in review, and re-sorts Unsorted. Returns the rooms made.
 pub(crate) async fn step(app: &App, b: &Brain) -> Result<usize, ApiError> {
     if b.key(app).await.is_err() {
         return Ok(0);
     }
     let runs: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM brain_import_runs WHERE state = 'review' AND kind = 'full' ORDER BY id",
+        "SELECT id FROM brain_import_runs WHERE state = 'review' ORDER BY id",
     )
     .fetch_all(&app.pool)
     .await?;
@@ -50,6 +83,7 @@ pub(crate) async fn step(app: &App, b: &Brain) -> Result<usize, ApiError> {
             st.close().await;
             continue;
         }
+        let moved = resort_unsorted(app, b, &run, &st).await?;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM proposals WHERE state = 'proposed' ORDER BY id")
             .fetch_all(&st)
             .await?;
@@ -61,9 +95,19 @@ pub(crate) async fn step(app: &App, b: &Brain) -> Result<usize, ApiError> {
                     .await?;
             }
         }
-        let out = crate::commit::commit_accepted(app, b, &run, st).await?;
-        if !out.rooms.is_empty() {
-            let rooms: Vec<&str> = out.rooms.iter().map(|r| r.room.as_str()).collect();
+        let out = crate::commit::commit_accepted(app, b, &run, st, true).await?;
+        if out.rooms.is_empty() && moved == 0 {
+            continue;
+        }
+        // Undo only covers rooms this step made, never a room that took re-sorted items.
+        let rooms: Vec<&str> = out
+            .rooms
+            .iter()
+            .filter(|r| r.created)
+            .map(|r| r.room.as_str())
+            .collect();
+        made += rooms.len();
+        if !rooms.is_empty() {
             let mut tx = begin_write(&app.pool).await?;
             record(
                 &mut tx,
@@ -73,7 +117,6 @@ pub(crate) async fn step(app: &App, b: &Brain) -> Result<usize, ApiError> {
             )
             .await?;
             tx.commit().await?;
-            made += out.rooms.len();
         }
     }
     Ok(made)
