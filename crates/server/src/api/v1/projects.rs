@@ -5,6 +5,7 @@
 //! read-only here; the mirror scheduler writes it (P3-01). Every remote goes through
 //! `repo_url_problem` here and again in the store, so no credential or odd scheme gets in.
 
+pub mod insight;
 pub mod run_configs;
 pub mod run_logs;
 pub mod run_spec;
@@ -107,6 +108,12 @@ pub struct ProjectInfo {
     /// Where it prefers to run: `auto`, `this_mac` or `home_server`.
     #[schema(required = false)]
     pub runner: String,
+    /// Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
+    #[schema(required = false)]
+    pub fetch_interval_minutes: i64,
+    /// The run environment a Run button uses by default; one of the project's.
+    #[schema(required = false)]
+    pub default_environment: Option<String>,
     /// The primary repo first, then by name.
     pub repos: Vec<ProjectRepo>,
     /// The linked Brain room; null when the Brain is off or the project has none.
@@ -151,6 +158,8 @@ pub(super) async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError>
         cpu_limit: p.cpu_limit,
         mem_limit_mb: p.mem_limit_mb,
         runner: p.runner_pref.clone(),
+        fetch_interval_minutes: p.fetch_interval_minutes,
+        default_environment: p.default_environment.clone(),
         repos,
         room,
         created_at: ts(&p.created_at),
@@ -272,6 +281,12 @@ pub struct UpdateProject {
     pub mem_limit_mb: Option<i64>,
     /// Where it prefers to run: `auto`, `this_mac` or `home_server`.
     pub runner: Option<String>,
+    /// Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
+    #[schema(required = false)]
+    pub fetch_interval_minutes: Option<i64>,
+    /// One of the project's run environments; an empty string clears it.
+    #[schema(required = false)]
+    pub default_environment: Option<String>,
 }
 
 #[utoipa::path(patch, path = "/api/v1/projects/{id}", operation_id = "updateProject",
@@ -296,6 +311,8 @@ pub async fn update(
         cpu_limit: b.cpu_limit,
         mem_limit_mb: b.mem_limit_mb,
         runner: b.runner.as_deref(),
+        fetch_interval_minutes: b.fetch_interval_minutes,
+        default_environment: b.default_environment.as_deref(),
     };
     let p = store::change(&app.pool, num(&id, "project")?, &c, who(&me, &now)).await?;
     Ok(Json(info(&app, p).await?))

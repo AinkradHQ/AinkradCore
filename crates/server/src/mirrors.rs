@@ -61,7 +61,7 @@ use crate::ops::secretbox::SecretBox;
 use crate::store::connections::{resolve, secret};
 use crate::store::projects as store;
 
-/// How often every active project's repos are fetched.
+/// How often a project's repos are fetched unless it picks another interval.
 pub const INTERVAL: Duration = Duration::from_secs(15 * 60);
 
 /// The file in a mirror naming the project and remote it was made from (`key`).
@@ -94,9 +94,11 @@ pub struct Mirrors {
     leases: Mutex<HashMap<(String, i64), (i64, String)>>,
 }
 
+mod insight;
 mod lease;
 mod read;
 mod serve;
+pub use insight::{CodeInfo, Commit};
 #[cfg(test)]
 pub(crate) use lease::grant_now;
 pub use lease::{LEASE_SECS, for_session, release_run, release_session, servable};
@@ -845,12 +847,39 @@ pub async fn start(app: &App, repo: i64) {
     });
 }
 
+/// Whether a project's automatic fetch is due: its interval in minutes (0: only when asked) has
+/// passed since `last`, or it was never fetched here.
+pub fn due(
+    interval_minutes: i64,
+    last: Option<tokio::time::Instant>,
+    now: tokio::time::Instant,
+) -> bool {
+    let wait = Duration::from_secs(u64::try_from(interval_minutes).unwrap_or(0) * 60);
+    interval_minutes > 0 && last.is_none_or(|l| now.duration_since(l) >= wait)
+}
+
 /// Every active project's repos, one after the other (the Core machine is small).
 pub async fn sweep(app: &App) {
+    sweep_due(app, None).await;
+}
+
+/// The sweep, honouring each project's `fetch_interval_minutes` when `last` (when each project was
+/// last swept) is given; without it every project is fetched.
+async fn sweep_due(
+    app: &App,
+    mut last: Option<&mut std::collections::HashMap<i64, tokio::time::Instant>>,
+) {
     let Ok(projects) = store::list(&app.pool, false).await else {
         return;
     };
+    let now = tokio::time::Instant::now();
     for p in projects {
+        if let Some(l) = last.as_deref_mut() {
+            if !due(p.fetch_interval_minutes, l.get(&p.id).copied(), now) {
+                continue;
+            }
+            l.insert(p.id, now);
+        }
         let Ok(mut conn) = app.pool.acquire().await else {
             return;
         };
@@ -863,15 +892,17 @@ pub async fn sweep(app: &App) {
     }
 }
 
-/// Fetches everything after a short wait, then every [`INTERVAL`], until the Core stops.
+/// Looks once a minute, after a short wait, and fetches each project whose own interval has
+/// passed (default [`INTERVAL`]), until the Core stops.
 pub async fn sweep_loop(app: App) {
     let mut closing = app.closing.subscribe();
     let start = tokio::time::Instant::now() + Duration::from_secs(30);
-    let mut tick = tokio::time::interval_at(start, INTERVAL);
+    let mut tick = tokio::time::interval_at(start, Duration::from_secs(60));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last = std::collections::HashMap::new();
     loop {
         tokio::select! {
-            _ = tick.tick() => sweep(&app).await,
+            _ = tick.tick() => sweep_due(&app, Some(&mut last)).await,
             () = crate::api::stopping(&mut closing) => return,
         }
     }
@@ -879,3 +910,20 @@ pub async fn sweep_loop(app: App) {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod due_tests {
+    use super::due;
+    use tokio::time::{Duration, Instant};
+
+    #[test]
+    fn a_project_is_due_after_its_own_interval_and_never_at_zero() {
+        let t0 = Instant::now();
+        let later = |m| t0 + Duration::from_secs(m * 60);
+        assert!(due(15, None, t0));
+        assert!(!due(15, Some(t0), later(14)));
+        assert!(due(15, Some(t0), later(15)));
+        assert!(due(10, Some(t0), later(10)));
+        assert!(!due(0, None, later(1000)));
+    }
+}
