@@ -258,12 +258,14 @@ pub(crate) struct ListQuery {
     state: Option<String>,
     kind: Option<String>,
     project: Option<String>,
+    tag: Option<String>,
 }
 
 #[utoipa::path(get, path = "/notes", operation_id = "loreListNotes", tag = "lore",
     params(("state" = Option<String>, Query, description = "`active` (default), `trashed` or `all`"),
            ("kind" = Option<String>, Query, description = "`note` or `daily`"),
-           ("project" = Option<String>, Query, description = "Only notes of this project id")),
+           ("project" = Option<String>, Query, description = "Only notes of this project id"),
+           ("tag" = Option<String>, Query, description = "Only notes with this tag (no #)")),
     responses((status = 200, description = "Notes, newest change first, without their text (at most 500)", body = Vec<NoteSummary>)))]
 pub(crate) async fn list(
     State(app): State<App>,
@@ -283,15 +285,45 @@ pub(crate) async fn list(
          WHERE (?1 = 'all' OR (?1 = 'active' AND trashed_at IS NULL) \
                 OR (?1 = 'trashed' AND trashed_at IS NOT NULL)) \
            AND (?2 IS NULL OR kind = ?2) AND (?3 IS NULL OR project = ?3) \
+           AND (?5 IS NULL OR id IN (SELECT note FROM lore_tags WHERE tag = ?5)) \
          ORDER BY updated_at DESC, id LIMIT ?4",
     )
     .bind(state)
     .bind(q.kind)
     .bind(q.project)
     .bind(LIST_MAX)
+    .bind(q.tag)
     .fetch_all(&app.pool)
     .await?;
     Ok(Json(rows.iter().map(summary).collect::<Result<_, _>>()?))
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct TagCount {
+    pub tag: String,
+    /// Live notes carrying it.
+    pub count: i64,
+}
+
+#[utoipa::path(get, path = "/tags", operation_id = "loreTags", tag = "lore",
+    responses((status = 200, description = "Every tag of a live note with how many notes carry it, most used first (at most 200)", body = Vec<TagCount>)))]
+pub(crate) async fn tags(State(app): State<App>) -> ApiResult<Vec<TagCount>> {
+    let rows = sqlx::query(
+        "SELECT lower(t.tag) AS tag, count(*) AS n FROM lore_tags t JOIN lore_notes n ON n.id = t.note \
+         WHERE n.trashed_at IS NULL GROUP BY lower(t.tag) ORDER BY n DESC, tag LIMIT 200",
+    )
+    .fetch_all(&app.pool)
+    .await?;
+    let out = rows
+        .iter()
+        .map(|r| {
+            Ok(TagCount {
+                tag: r.try_get("tag")?,
+                count: r.try_get("n")?,
+            })
+        })
+        .collect::<Result<_, sqlx::Error>>()?;
+    Ok(Json(out))
 }
 
 #[derive(Deserialize, ToSchema)]
