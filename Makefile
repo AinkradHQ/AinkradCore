@@ -101,7 +101,7 @@ run: ; mkdir -p state && $(CARGO) run -p ainkrad-core-server -- serve state/core
 # (linux-x86_64 runs under emulation and is slow). `release-repro` builds twice from nothing and compares hashes.
 release-dry: ; scripts/release/dry.sh
 release-repro: ; scripts/release/repro.sh
-release-test: ; scripts/release/test-install.sh
+release-test: ; scripts/release/test-install.sh && scripts/release/test-update.sh
 # Fuzzing (E1-17.2): its own workspace in fuzz/, nightly only, so `make build` never needs it.
 fuzz-smoke: ; scripts/fuzz/run.sh $${FUZZ_SECS:-30}
 audit-fuzz: ; $(CARGO) deny --manifest-path fuzz/Cargo.toml --config fuzz/deny.toml check

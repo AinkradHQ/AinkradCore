@@ -154,6 +154,11 @@ pub struct GatewayTest {
     /// authenticates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub test_path: Option<String>,
+    /// Also read the provider's model list (the wire's own, `GET <base>/models` on the OpenAI
+    /// wire) and send back its ids in [`GatewayTested::models`]. A preset's add flow asks for it;
+    /// a runner that predates it ignores it and sends none.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub want_models: bool,
 }
 
 /// The outcome class of an upstream request or test: a status class only, never provider text.
@@ -173,11 +178,17 @@ pub enum UpstreamStatus {
     Unknown,
 }
 
-/// Runner to Core: the status class and latency of a [`GatewayTest`]; never a body.
+/// Runner to Core: the status class and latency of a [`GatewayTest`], and the model ids it asked
+/// for; never any other part of a body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GatewayTested {
     pub result: UpstreamStatus,
     pub latency_ms: u64,
+    /// The model ids the provider listed, when [`GatewayTest::want_models`] asked and the list was
+    /// read in full: ids only (bounded), never any other part of the body. Provider text: the
+    /// Core filters each id before it keeps one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
 }
 
 /// What a [`GatewayReport`] says.
@@ -289,7 +300,9 @@ const KEY_CLASSES: [(&str, &str, &str); 6] = [
     ("sk-admin-", "openai", "api.openai.com"),
 ];
 
-/// A user definition's key shape: the provider, its declared `key_prefix` and its frozen host.
+/// A user definition's key shape: the provider, its declared `key_prefix` and its frozen host. An
+/// empty `prefix` is a preset (D-19): the key has no shape of its own and is bound to the account's
+/// provider and frozen host instead ([`key_host_problem`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserKeyHost<'a> {
     pub provider: &'a str,
@@ -307,6 +320,24 @@ pub fn key_host_problem(
     host: &str,
     user: &[UserKeyHost],
 ) -> Option<&'static str> {
+    // A preset's key has no shape to read a host from: it goes to the account's own frozen host
+    // and nowhere else. It may not look like another provider's key (a built-in class, or a
+    // user definition's declared prefix): that key belongs to its own provider.
+    if let Some(p) = user
+        .iter()
+        .find(|u| u.prefix.is_empty() && u.provider == provider)
+    {
+        let foreign = KEY_CLASSES.iter().any(|c| value.starts_with(c.0))
+            || user
+                .iter()
+                .any(|u| !u.prefix.is_empty() && value.starts_with(u.prefix));
+        if foreign {
+            return Some("the key belongs to another provider");
+        }
+        return (!host.eq_ignore_ascii_case(p.host))
+            .then_some("the key may not be sent to that host");
+    }
+    let user: Vec<&UserKeyHost> = user.iter().filter(|u| !u.prefix.is_empty()).collect();
     let (want_provider, want_host) = match KEY_CLASSES.iter().find(|c| value.starts_with(c.0)) {
         Some(c) => (c.1, c.2),
         None => match user

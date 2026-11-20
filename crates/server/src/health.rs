@@ -29,6 +29,8 @@ use sqlx::SqlitePool;
 
 use crate::store::{self, audit, events, settings};
 
+pub mod history;
+pub mod hoststats;
 pub mod metrics;
 
 /// A condition must hold, or stop holding, this long before it is a transition.
@@ -47,6 +49,8 @@ pub const HOST_CACHE_SECS: u64 = 5;
 pub struct HostSnapshot {
     pub rss_bytes: Option<u64>,
     pub open_fds: Option<u64>,
+    /// The host's `(used, total)` memory in bytes (Linux only).
+    pub ram: Option<(u64, u64)>,
     pub readings: Readings,
 }
 
@@ -223,6 +227,7 @@ pub struct Health {
     /// Responses by class: 2xx, 3xx, 4xx, 5xx, other.
     requests: [AtomicU64; 5],
     state: Mutex<State>,
+    history: history::History,
     host: tokio::sync::Mutex<Option<(Instant, std::sync::Arc<HostSnapshot>)>>,
 }
 
@@ -250,6 +255,11 @@ impl Health {
         std::array::from_fn(|i| self.requests[i].load(Ordering::Relaxed))
     }
 
+    /// The last day of readings, one a minute (the Ops charts).
+    pub fn history(&self) -> &history::History {
+        &self.history
+    }
+
     pub fn db_path(&self) -> Option<&Path> {
         self.db.as_deref()
     }
@@ -274,6 +284,7 @@ impl Health {
         let snap = std::sync::Arc::new(HostSnapshot {
             rss_bytes,
             open_fds,
+            ram: hoststats::memory(),
             readings,
         });
         *cache = Some((Instant::now(), std::sync::Arc::clone(&snap)));
@@ -298,7 +309,22 @@ impl Health {
         if !due {
             return Ok(vec![]);
         }
-        self.tick_with(pool, now, &Readings::gather(db).await).await
+        let readings = Readings::gather(db).await;
+        let (rss, _) = metrics::process().await;
+        let used = readings.disk_free_pct().map(|f| 100 - f);
+        let (free, total) = (readings.disk_free_bytes, readings.disk_total_bytes);
+        self.history.record(
+            now,
+            history::Reading {
+                cpu_secs: history::cpu_secs().await,
+                memory_bytes: rss,
+                disk_used_pct: used,
+                host_jiffies: hoststats::cpu_jiffies(),
+                ram: hoststats::memory(),
+                disk: free.zip(total).map(|(f, t)| (t.saturating_sub(f), t)),
+            },
+        );
+        self.tick_with(pool, now, &readings).await
     }
 
     /// A pass over `readings` at `now`: the transitions it made, each already written.

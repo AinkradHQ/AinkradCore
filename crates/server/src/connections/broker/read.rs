@@ -14,7 +14,8 @@ use super::fail::{Fail, of_store, refuse};
 use super::gate::Busy;
 use super::prepare::prepare;
 use super::{Broker, Env, run};
-use crate::store::connections::resolve::{self, Context};
+use crate::store::connections::resolve::{self, Context, Resolved};
+use crate::store::connections::{self as connection};
 
 /// Why a read did not return data: a plain code and a fixed sentence, as a tool call's refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +46,35 @@ impl Broker {
         op: &str,
         args: &Value,
     ) -> Result<Value, ReadError> {
+        self.read_on(env, user, device, op, args, None).await
+    }
+
+    /// Runs the read operation `op` on connection `connection` itself, for an admin choosing what
+    /// to let AI reach (the Connections picker): it is asked before any grant exists, so no grant
+    /// is looked up and the call is unlimited. The connection must be the workspace's, of the
+    /// operation's kind and not turned off; a write operation is still never run.
+    pub async fn pick(
+        &self,
+        env: &Env<'_>,
+        user: i64,
+        device: &str,
+        connection: i64,
+        op: &str,
+        args: &Value,
+    ) -> Result<Value, ReadError> {
+        self.read_on(env, user, device, op, args, Some(connection))
+            .await
+    }
+
+    async fn read_on(
+        &self,
+        env: &Env<'_>,
+        user: i64,
+        device: &str,
+        op: &str,
+        args: &Value,
+        only: Option<i64>,
+    ) -> Result<Value, ReadError> {
         let (kind, cap, write) = op
             .split_once('.')
             .and_then(|(kind, _)| self.reg.get(kind))
@@ -56,7 +86,9 @@ impl Broker {
         if write {
             return Err(refuse("not_a_read", "only a read operation may be run here").into());
         }
-        let out = self.read_in(env, user, device, op, args, kind, cap).await;
+        let out = self
+            .read_in(env, user, device, op, args, (kind, cap), only)
+            .await;
         let (result, code) = match &out {
             Ok(_) => ("ok", None),
             Err((f, _)) => (f.result, Some(f.code.as_str())),
@@ -83,8 +115,8 @@ impl Broker {
         device: &str,
         op: &str,
         args: &Value,
-        kind: &'static str,
-        cap: &'static str,
+        (kind, cap): (&'static str, &'static str),
+        only: Option<i64>,
     ) -> Result<(Value, i64), (Fail, Option<i64>)> {
         let fail = |f: Fail| (f, None);
         if serde_json::to_string(args).map_or(usize::MAX, |s| s.len()) > MAX_ARGS_BYTES {
@@ -104,15 +136,18 @@ impl Broker {
         }
         let prep = prepare(kind, op, args).map_err(fail)?;
         let resource = prep.resource.as_ref().map(|(k, v)| (*k, v.as_str()));
-        let r = resolve::resolve(
-            env.pool,
-            &self.reg,
-            kind,
-            &ctx(user, cap, op, resource),
-            env.now,
-        )
-        .await
-        .map_err(|e| fail(of_store(e)))?;
+        let r = match only {
+            Some(id) => managed(env, user, id, kind).await.map_err(fail)?,
+            None => resolve::resolve(
+                env.pool,
+                &self.reg,
+                kind,
+                &ctx(user, cap, op, resource),
+                env.now,
+            )
+            .await
+            .map_err(|e| fail(of_store(e)))?,
+        };
         let id = r.connection.id;
         let hourly = self
             .reg
@@ -170,6 +205,25 @@ impl Broker {
             Err(f) => Err((f, Some(id))),
         }
     }
+}
+
+/// The connection an admin manages, as a call's resolution with no grant and no limit.
+async fn managed(env: &Env<'_>, user: i64, id: i64, kind: &str) -> Result<Resolved, Fail> {
+    let c = connection::get(env.pool, user, id)
+        .await
+        .map_err(of_store)?;
+    if c.kind != kind {
+        return Err(refuse("wrong_kind", "that connection is not of this kind"));
+    }
+    if c.disabled {
+        return Err(refuse("disabled", "that connection is turned off"));
+    }
+    Ok(Resolved {
+        connection: c,
+        via: "manage",
+        grant: 0,
+        limits: Default::default(),
+    })
 }
 
 fn ctx<'a>(

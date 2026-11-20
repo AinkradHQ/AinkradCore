@@ -9,7 +9,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use ainkrad_proto::v2::{GatewayAuth, GatewayTest, GatewayTested, Wire};
+use ainkrad_proto::v2::{GatewayAuth, GatewayTest, GatewayTested, UpstreamStatus, Wire};
 use zeroize::Zeroizing;
 
 use super::dial::{DialError, Dialer};
@@ -18,6 +18,27 @@ use crate::v2::agent::secrets::Redeem;
 
 /// The most of the reply read: the class comes from the status and an error's `type`.
 const MAX_REPLY: usize = status::PROBE_BYTES;
+
+/// The most of a model list read (OpenRouter's is a few hundred kilobytes).
+const MAX_LIST_BYTES: usize = 4 * 1024 * 1024;
+/// The most model ids sent back.
+const MAX_IDS: usize = 512;
+
+/// The ids of an OpenAI-style model list (`{"data":[{"id":..}]}`): ids only, nothing else of the
+/// body goes back to the Core. Anything else (a truncated or foreign body) is no list.
+fn model_ids(body: &[u8]) -> Vec<String> {
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+    v.get("data")
+        .and_then(|d| d.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m.get("id")?.as_str())
+        .take(MAX_IDS)
+        .map(str::to_owned)
+        .collect()
+}
 
 /// The model-list path of a wire, under the upstream's base path.
 fn list_path(wire: Wire, base: &str) -> String {
@@ -85,9 +106,25 @@ pub async fn run(
             e => status::of_dial(e),
         },
     };
+    let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    // The wire's own model list, after a request that said the key works (an unauthenticated list
+    // proves nothing, but a failed one lists nothing either): the same key, the same host.
+    let mut models = Vec::new();
+    if req.want_models && result == UpstreamStatus::Ok {
+        let path = list_path(up.wire, &up.base_path);
+        if let Ok(reply) = dialer
+            .request(&up.host, "GET", &path, &headers, b"", MAX_LIST_BYTES)
+            .await
+            && reply.status == 200
+            && !reply.truncated
+        {
+            models = model_ids(&reply.body);
+        }
+    }
     Ok(GatewayTested {
         result,
-        latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        latency_ms,
+        models,
     })
 }
 
@@ -109,7 +146,16 @@ mod tests {
                 auth: wire.auth(),
             },
             test_path: path.map(str::to_owned),
+            want_models: false,
         }
+    }
+
+    #[test]
+    fn only_the_ids_of_an_openai_model_list_are_read() {
+        let body = br#"{"object":"list","data":[{"id":"a/b","secret":"x"},{"id":7},{"id":"c"}]}"#;
+        assert_eq!(super::model_ids(body), ["a/b", "c"]);
+        assert!(super::model_ids(b"<html>").is_empty());
+        assert!(super::model_ids(br#"{"data":"no"}"#).is_empty());
     }
 
     #[test]

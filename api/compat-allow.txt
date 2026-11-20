@@ -45,8 +45,6 @@ runner.schema.json: const changed at /$defs/Reply/oneOf/#/$defs/RunInfo/properti
 # route; the unlock session gates them instead (security-cleared). Delete once the baseline carries the new shape.
 modules/brain/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/cap/put/x-ainkrad-destructive
 modules/brain/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/delete/x-ainkrad-destructive
-modules/brain/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}/delete/x-ainkrad-destructive
-modules/brain/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/put/x-ainkrad-destructive
 modules/brain/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/secret/put/x-ainkrad-destructive
 modules/brain/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/session-limits/put/x-ainkrad-destructive
 modules/brain/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/state/put/x-ainkrad-destructive
@@ -130,8 +128,6 @@ modules/brain/api/openapi.core.json: removed /paths//modules/brain/v1/rooms/{roo
 modules/brain/api/openapi.core.json: removed /paths//modules/brain/v1/rules/{id}/patch/x-ainkrad-destructive
 modules/citadel/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/cap/put/x-ainkrad-destructive
 modules/citadel/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/delete/x-ainkrad-destructive
-modules/citadel/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}/delete/x-ainkrad-destructive
-modules/citadel/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/put/x-ainkrad-destructive
 modules/citadel/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/secret/put/x-ainkrad-destructive
 modules/citadel/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/session-limits/put/x-ainkrad-destructive
 modules/citadel/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/state/put/x-ainkrad-destructive
@@ -209,8 +205,6 @@ modules/citadel/api/openapi.core.json: removed /paths//api/v1/terminals/{id}/ws/
 modules/citadel/api/openapi.core.json: removed /paths//api/v1/terminals/post/x-ainkrad-destructive
 modules/design/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/cap/put/x-ainkrad-destructive
 modules/design/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/delete/x-ainkrad-destructive
-modules/design/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}/delete/x-ainkrad-destructive
-modules/design/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/put/x-ainkrad-destructive
 modules/design/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/secret/put/x-ainkrad-destructive
 modules/design/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/session-limits/put/x-ainkrad-destructive
 modules/design/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/state/put/x-ainkrad-destructive
@@ -291,8 +285,6 @@ modules/design/api/openapi.core.json: removed /paths//modules/design/v1/collecti
 modules/design/api/openapi.core.json: removed /paths//modules/design/v1/docs/{doc}/archive/post/x-ainkrad-destructive
 modules/leyline/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/cap/put/x-ainkrad-destructive
 modules/leyline/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/delete/x-ainkrad-destructive
-modules/leyline/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}/delete/x-ainkrad-destructive
-modules/leyline/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/put/x-ainkrad-destructive
 modules/leyline/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/secret/put/x-ainkrad-destructive
 modules/leyline/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/session-limits/put/x-ainkrad-destructive
 modules/leyline/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/state/put/x-ainkrad-destructive
@@ -379,8 +371,6 @@ modules/leyline/api/openapi.core.json: removed /paths//modules/leyline/v1/keys/i
 modules/leyline/api/openapi.core.json: removed /paths//modules/leyline/v1/sessions/{session}/recording/resume/post/x-ainkrad-destructive
 modules/lore/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/cap/put/x-ainkrad-destructive
 modules/lore/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/delete/x-ainkrad-destructive
-modules/lore/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}/delete/x-ainkrad-destructive
-modules/lore/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/put/x-ainkrad-destructive
 modules/lore/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/secret/put/x-ainkrad-destructive
 modules/lore/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/session-limits/put/x-ainkrad-destructive
 modules/lore/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/state/put/x-ainkrad-destructive
@@ -458,8 +448,6 @@ modules/lore/api/openapi.core.json: removed /paths//api/v1/terminals/{id}/ws/get
 modules/lore/api/openapi.core.json: removed /paths//api/v1/terminals/post/x-ainkrad-destructive
 openapi.json: removed /paths//api/v1/accounts/{id}/cap/put/x-ainkrad-destructive
 openapi.json: removed /paths//api/v1/accounts/{id}/delete/x-ainkrad-destructive
-openapi.json: removed /paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}/delete/x-ainkrad-destructive
-openapi.json: removed /paths//api/v1/accounts/{id}/limits/put/x-ainkrad-destructive
 openapi.json: removed /paths//api/v1/accounts/{id}/secret/put/x-ainkrad-destructive
 openapi.json: removed /paths//api/v1/accounts/{id}/session-limits/put/x-ainkrad-destructive
 openapi.json: removed /paths//api/v1/accounts/{id}/state/put/x-ainkrad-destructive
@@ -541,3 +529,55 @@ openapi.json: removed /paths//api/v1/terminals/post/x-ainkrad-destructive
 # reads the shifted tail as one removed variant each. Delete once the baseline carries them.
 runner.schema.json: variant #46 removed at /$defs/Command/oneOf
 runner.schema.json: variant #44 removed at /$defs/Reply/oneOf
+
+
+# E7 (accounts): per-account limits are removed in favour of the new account model (D-27); the old limit routes, their
+# schemas and the usage fields go with them. Delete once the baseline carries the new shape.
+openapi.json: removed /components/schemas/AccountSpend/properties/limits
+openapi.json: removed /components/schemas/AccountSpend/properties/max_utilisation_bps
+openapi.json: removed /components/schemas/LimitCleared
+openapi.json: removed /components/schemas/LimitSet
+openapi.json: removed /components/schemas/LimitStanding
+openapi.json: removed /components/schemas/SetLimit
+openapi.json: removed /paths//api/v1/accounts/{id}/limits
+openapi.json: removed /paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}
+modules/brain/api/openapi.core.json: removed /components/schemas/AccountSpend/properties/limits
+modules/brain/api/openapi.core.json: removed /components/schemas/AccountSpend/properties/max_utilisation_bps
+modules/brain/api/openapi.core.json: removed /components/schemas/LimitCleared
+modules/brain/api/openapi.core.json: removed /components/schemas/LimitSet
+modules/brain/api/openapi.core.json: removed /components/schemas/LimitStanding
+modules/brain/api/openapi.core.json: removed /components/schemas/SetLimit
+modules/brain/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits
+modules/brain/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}
+modules/citadel/api/openapi.core.json: removed /components/schemas/AccountSpend/properties/limits
+modules/citadel/api/openapi.core.json: removed /components/schemas/AccountSpend/properties/max_utilisation_bps
+modules/citadel/api/openapi.core.json: removed /components/schemas/LimitCleared
+modules/citadel/api/openapi.core.json: removed /components/schemas/LimitSet
+modules/citadel/api/openapi.core.json: removed /components/schemas/LimitStanding
+modules/citadel/api/openapi.core.json: removed /components/schemas/SetLimit
+modules/citadel/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits
+modules/citadel/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}
+modules/design/api/openapi.core.json: removed /components/schemas/AccountSpend/properties/limits
+modules/design/api/openapi.core.json: removed /components/schemas/AccountSpend/properties/max_utilisation_bps
+modules/design/api/openapi.core.json: removed /components/schemas/LimitCleared
+modules/design/api/openapi.core.json: removed /components/schemas/LimitSet
+modules/design/api/openapi.core.json: removed /components/schemas/LimitStanding
+modules/design/api/openapi.core.json: removed /components/schemas/SetLimit
+modules/design/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits
+modules/design/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}
+modules/leyline/api/openapi.core.json: removed /components/schemas/AccountSpend/properties/limits
+modules/leyline/api/openapi.core.json: removed /components/schemas/AccountSpend/properties/max_utilisation_bps
+modules/leyline/api/openapi.core.json: removed /components/schemas/LimitCleared
+modules/leyline/api/openapi.core.json: removed /components/schemas/LimitSet
+modules/leyline/api/openapi.core.json: removed /components/schemas/LimitStanding
+modules/leyline/api/openapi.core.json: removed /components/schemas/SetLimit
+modules/leyline/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits
+modules/leyline/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}
+modules/lore/api/openapi.core.json: removed /components/schemas/AccountSpend/properties/limits
+modules/lore/api/openapi.core.json: removed /components/schemas/AccountSpend/properties/max_utilisation_bps
+modules/lore/api/openapi.core.json: removed /components/schemas/LimitCleared
+modules/lore/api/openapi.core.json: removed /components/schemas/LimitSet
+modules/lore/api/openapi.core.json: removed /components/schemas/LimitStanding
+modules/lore/api/openapi.core.json: removed /components/schemas/SetLimit
+modules/lore/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits
+modules/lore/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}

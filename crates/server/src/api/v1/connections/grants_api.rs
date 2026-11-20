@@ -105,7 +105,10 @@ pub async fn revoke_grant(
     store::get(&app.pool, user, id).await?;
     let now = app.clock.now();
     match grants::revoke(&app.pool, id, (&kind, &grantee), who(&me, user, &now)).await? {
-        true => Ok(Json(AccountsDeleted { deleted: true })),
+        true => Ok(Json(AccountsDeleted {
+            deleted: true,
+            undo_until: None,
+        })),
         false => Err(ApiError::not_found("no such grant")),
     }
 }
@@ -175,7 +178,10 @@ pub async fn clear_default(
     let user = workspace(&app, &me).await?;
     let now = app.clock.now();
     match bindings::clear(&app.pool, &kind, ("workspace", ""), who(&me, user, &now)).await? {
-        true => Ok(Json(AccountsDeleted { deleted: true })),
+        true => Ok(Json(AccountsDeleted {
+            deleted: true,
+            undo_until: None,
+        })),
         false => Err(ApiError::not_found("that kind has no default")),
     }
 }

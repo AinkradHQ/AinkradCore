@@ -334,6 +334,7 @@ async fn neg_a_soft_budget_never_skips_a_pool_and_a_hard_one_does() {
     for (e, hard_stop) in [(&hard, true), (&soft, false)] {
         let subject = e.pool.to_string();
         let b = NewBudget {
+            message_cap: None,
             kind: "pool",
             subject: &subject,
             company: None,

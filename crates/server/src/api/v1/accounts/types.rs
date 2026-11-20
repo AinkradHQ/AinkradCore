@@ -38,6 +38,29 @@ pub struct ProviderAccount {
     pub month_spend_usd_micros: Option<i64>,
     /// The account's monthly dollar budget cap, when one is set; absent when it has none.
     pub month_limit_usd_micros: Option<i64>,
+    /// The row's usage meter: how much of its plan or budget is used and whether it can take work
+    /// now. Only the reads say it, and only to an `admin` device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub usage: Option<AccountMeter>,
+    /// The runner device a runner-bound subscription (Codex, OpenCode, Antigravity) signed in on:
+    /// its sessions run only there. Absent for any other account. An `admin` device only; a device
+    /// id is not a secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub runner: Option<String>,
+    /// Whether a model the person switched off for this account is refused in its sessions: true for
+    /// an API-key account (its gateway grants only the models left on), false for a subscription or
+    /// runner-bound login, where the harness talks to its provider itself and the Core only skips the
+    /// account when a session asks for a switched-off model at its start. The app shows the
+    /// limit as advice when it is false.
+    #[schema(required = false)]
+    pub models_enforced: bool,
+    /// A plain-language limit of removing this account, e.g. an Antigravity login that stays in the
+    /// runner's keyring. Absent when removal clears everything.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub wipe_note: Option<String>,
 }
 
 /// An account's health counters, as the scheduler keeps them.
@@ -136,6 +159,8 @@ impl ProviderAccount {
 
 impl From<acc::Account> for ProviderAccount {
     fn from(a: acc::Account) -> Self {
+        let models_enforced = !crate::store::account_keys::subscription_provider(&a.provider);
+        let agy_sub = a.provider == "agy-sub";
         Self {
             id: a.id,
             provider: a.provider,
@@ -163,6 +188,12 @@ impl From<acc::Account> for ProviderAccount {
             health: None,
             month_spend_usd_micros: None,
             month_limit_usd_micros: None,
+            usage: None,
+            runner: None,
+            models_enforced,
+            wipe_note: agy_sub.then(|| {
+                "Removing this account cannot clear its login from the runner's keyring. Sign out in Antigravity on that runner.".to_owned()
+            }),
         }
     }
 }
@@ -268,6 +299,10 @@ pub struct AccountTested {
     pub latency_ms: u64,
     /// The runner device that made the request (empty when `result` is `inconclusive`).
     pub runner: String,
+    /// A preset: how many model ids the provider listed (E7-3); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub models: Option<u32>,
 }
 
 /// What `POST /accounts/{id}/check` answers.
@@ -281,11 +316,24 @@ pub struct AccountChecked {
     pub latency_ms: Option<u64>,
     /// The runner device that made the check; absent when none was asked.
     pub runner: Option<String>,
+    /// A preset: how many model ids the provider listed (E7-3); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub models: Option<u32>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AccountsDeleted {
     pub deleted: bool,
+    /// Only for `deleteAccount`: when its Undo window ends (RFC 3339, UTC).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub undo_until: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AccountRestored {
+    pub restored: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -336,6 +384,11 @@ pub struct Provider {
     /// Read-only: built-ins cannot be edited.
     #[serde(default)]
     pub builtin: bool,
+    /// A preset provider (OpenRouter, Groq, ...): shipped in code, read-only, the user only
+    /// pastes a key. Its keys are bound to the account and its frozen host, not to a prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub preset: Option<bool>,
     #[serde(default)]
     pub version: i64,
 }
@@ -365,6 +418,7 @@ impl From<Definition> for Provider {
                 .collect(),
             priced_at: d.priced_at,
             builtin: d.builtin,
+            preset: Some(d.preset).filter(|p| *p),
             version: d.version,
         }
     }
@@ -395,6 +449,7 @@ impl From<Provider> for Definition {
                 .collect(),
             priced_at: p.priced_at,
             builtin: false,
+            preset: false,
             version: 0,
         }
     }

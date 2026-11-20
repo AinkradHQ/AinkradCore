@@ -103,6 +103,22 @@ namespace Ainkrad.Client.Api
         /// 
         /// </summary>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <returns>SecretsExport</returns>
+        SecretsExport ExportSecrets();
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <returns>ApiResponse of SecretsExport</returns>
+        ApiResponse<SecretsExport> ExportSecretsWithHttpInfo();
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="id">The secret&#39;s name</param>
         /// <param name="newLease"></param>
         /// <returns>LeaseGrant</returns>
@@ -348,6 +364,27 @@ namespace Ainkrad.Client.Api
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse (SecretGroupDeleted)</returns>
         System.Threading.Tasks.Task<ApiResponse<SecretGroupDeleted>> DeleteSecretGroupWithHttpInfoAsync(string id, System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of SecretsExport</returns>
+        System.Threading.Tasks.Task<SecretsExport> ExportSecretsAsync(System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (SecretsExport)</returns>
+        System.Threading.Tasks.Task<ApiResponse<SecretsExport>> ExportSecretsWithHttpInfoAsync(System.Threading.CancellationToken cancellationToken = default);
         /// <summary>
         /// 
         /// </summary>
@@ -1247,6 +1284,117 @@ namespace Ainkrad.Client.Api
             if (this.ExceptionFactory != null)
             {
                 Exception _exception = this.ExceptionFactory("DeleteSecretGroup", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <returns>SecretsExport</returns>
+        public SecretsExport ExportSecrets()
+        {
+            Ainkrad.Client.Client.ApiResponse<SecretsExport> localVarResponse = ExportSecretsWithHttpInfo();
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <returns>ApiResponse of SecretsExport</returns>
+        public Ainkrad.Client.Client.ApiResponse<SecretsExport> ExportSecretsWithHttpInfo()
+        {
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Post<SecretsExport>("/api/v1/secrets/export", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("ExportSecrets", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of SecretsExport</returns>
+        public async System.Threading.Tasks.Task<SecretsExport> ExportSecretsAsync(System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<SecretsExport> localVarResponse = await ExportSecretsWithHttpInfoAsync(cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (SecretsExport)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<SecretsExport>> ExportSecretsWithHttpInfoAsync(System.Threading.CancellationToken cancellationToken = default)
+        {
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.PostAsync<SecretsExport>("/api/v1/secrets/export", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("ExportSecrets", localVarResponse);
                 if (_exception != null) throw _exception;
             }
 

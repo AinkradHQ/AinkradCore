@@ -261,6 +261,25 @@ async fn each_start_and_stop_is_one_audit_row_with_its_origin() {
 }
 
 #[tokio::test]
+async fn a_project_set_to_never_stop_for_idleness_keeps_running() {
+    let fx = fx().await;
+    let (link, p) = (Fake::new(), project(&fx, "shop").await);
+    *link.seen.lock().unwrap() = Some(Presence {
+        online: true,
+        last_seen: fx.app.clock.unix(),
+    });
+    sqlx::query("UPDATE core_projects SET idle_never = 1 WHERE id = ?")
+        .bind(p)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let id = start(&fx, &link, p).await.unwrap();
+    fx.clock.advance(24 * 3600);
+    runs::sweep(&fx.app, &link).await;
+    assert_eq!(run(&fx, &id).await.state, "running");
+}
+
+#[tokio::test]
 async fn the_idle_stop_fires_after_idle_minutes_on_a_faked_clock() {
     let fx = fx().await;
     let (link, p) = (Fake::new(), project(&fx, "shop").await);

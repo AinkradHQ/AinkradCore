@@ -68,7 +68,10 @@ fn lists_cap(r: &RunnerState) -> bool {
 /// Checks plan account `id` on behalf of `caller`.
 pub async fn run(app: &App, caller: &Caller, id: i64) -> Result<Checked, Failed> {
     let a = accounts::get(&app.pool, id).await.map_err(from_store)?;
-    if !account_keys::subscription_provider(&a.provider) {
+    // The check is one `claude -p` run with the leased token: a runner-bound account has neither.
+    if !account_keys::subscription_provider(&a.provider)
+        || ainkrad_proto::v2::bound_harness(&a.provider).is_some()
+    {
         return Err(Failed::NotPlan);
     }
     if account_keys::tested_within(&app.pool, id, &app.clock.now(), EVERY_SECS).await? {

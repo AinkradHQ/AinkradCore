@@ -10,6 +10,7 @@ mod attachments;
 use ainkrad_core_server::agents::AgentsConfig;
 mod account_placement;
 mod allocator;
+mod bound_login;
 mod chains;
 mod connection_tools;
 mod creator_revoked;

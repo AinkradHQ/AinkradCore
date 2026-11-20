@@ -25,7 +25,7 @@ use utoipa::ToSchema;
 use crate::claim::{self, check_chain};
 use crate::distil::{AGENT, answer_of, canon, distilled_by, pick_runner, session_policy};
 use crate::overview_write::{self as w, Overview};
-use crate::policy::{self, APPROVED_CLOUD, Policy};
+use crate::policy::{self, Policy};
 use crate::{Brain, code, record};
 
 /// The job is a cheap check when nothing is queued (it records no audit row), so it runs often: a
@@ -258,7 +258,8 @@ async fn blocked(
     p: &Policy,
     by: &str,
 ) -> Result<Option<(&'static str, String)>, ApiError> {
-    if !APPROVED_CLOUD.iter().any(|c| p.allows(c)) {
+    // D-27: any account may serve a room, so ask about two cloud providers as stand-ins.
+    if !["anthropic", "claude-sub"].iter().any(|c| p.allows(c)) {
         return Ok(Some((
             "cloud_off",
             format!("room {} does not allow a cloud model", p.name),
@@ -565,7 +566,7 @@ async fn launch(app: &App, b: &Brain, room: &str, attempt: i64, by: &str) -> Res
         chain: None,
         agent: Some(AGENT),
     };
-    let s = ch::create_session(&app.pool, &new, None, None, req, BY, &now)
+    let s = ch::create_session_ordered(&app.pool, &new, None, None, req, true, BY, &now)
         .await
         .map_err(ApiError::from)?;
     agents::authorize_module_session(app, &s.id);

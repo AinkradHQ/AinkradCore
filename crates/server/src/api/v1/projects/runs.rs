@@ -49,8 +49,9 @@ pub struct ProjectRun {
     pub environment: Option<String>,
 }
 
-fn view(r: Run, idle_minutes: i64) -> ProjectRun {
-    let due = runs::idle_due(&r, idle_minutes);
+/// `idle` is the project's idle stop in minutes, `None` when it never stops for idleness.
+fn view(r: Run, idle: Option<i64>) -> ProjectRun {
+    let due = idle.and_then(|m| runs::idle_due(&r, m));
     ProjectRun {
         id: r.id,
         spec_version: r.spec_version,
@@ -71,7 +72,7 @@ fn view(r: Run, idle_minutes: i64) -> ProjectRun {
 async fn shown(app: &App, r: Run) -> Result<ProjectRun, ApiError> {
     let mut conn = app.pool.acquire().await?;
     let p = projects_store::get(&mut conn, r.project_id).await?;
-    Ok(view(r, p.idle_minutes))
+    Ok(view(r, (!p.idle_never).then_some(p.idle_minutes)))
 }
 
 /// `runner_error` (the runner refused or did not answer) is a 502; the rest as the broker maps it.
@@ -122,7 +123,8 @@ async fn start_opts(
     let pending = runs::begin_start_with(app, &*link, id, opts, who(me, &now))
         .await
         .map_err(err)?;
-    let out = view(pending.run.clone(), pending.project.idle_minutes);
+    let idle = (!pending.project.idle_never).then_some(pending.project.idle_minutes);
+    let out = view(pending.run.clone(), idle);
     let proof = app.hub.admin_elevation(me);
     // A task local does not cross a spawn: carry the request's origin to the run's last audit row.
     let (app, o) = (app.clone(), origin::current());
@@ -263,6 +265,8 @@ pub async fn history(
     drop(conn);
     let all = store::recent(&app.pool, id, q.limit.unwrap_or(20).clamp(1, 100)).await?;
     Ok(Json(
-        all.into_iter().map(|r| view(r, p.idle_minutes)).collect(),
+        all.into_iter()
+            .map(|r| view(r, (!p.idle_never).then_some(p.idle_minutes)))
+            .collect(),
     ))
 }

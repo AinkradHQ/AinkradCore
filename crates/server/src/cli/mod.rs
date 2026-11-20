@@ -924,6 +924,11 @@ async fn serve(
     ));
     tokio::spawn(ainkrad_core_server::mirrors::sweep_loop(app.clone()));
     tokio::spawn(ainkrad_core_server::runs::sweep_loop(app.clone()));
+    // A removed account is wiped for real when its Undo window ends, and at once on a stop below.
+    tokio::spawn(ainkrad_core_server::agents::account_wipe::sweep_loop(
+        app.clone(),
+    ));
+    tokio::spawn(ainkrad_core_server::runner_update::sweep_loop(app.clone()));
     for m in modules.iter() {
         m.attach(&app);
     }
@@ -957,6 +962,7 @@ async fn serve(
     }
     let (closing, pool) = (Arc::clone(&app.closing), app.pool.clone());
     let hub = Arc::clone(&app.hub);
+    let wiping = app.clone();
     let server = gateway.serve(router(app), Arc::clone(&closing), gateway::SHUTDOWN_GRACE);
     tokio::pin!(server);
     tokio::select! {
@@ -969,6 +975,9 @@ async fn serve(
             server.await?;
         }
     }
+    // Removed accounts do not outlive the Core: wiped now (their Undo window ends with it), while the
+    // runners are still connected to be asked to delete a bound login.
+    ainkrad_core_server::agents::account_wipe::sweep(&wiping, true).await;
     // Upgraded sockets outlive the server's drain: let each runner connection write its
     // `runner.disconnected` before the pool closes.
     hub.drained(std::time::Duration::from_secs(5)).await;

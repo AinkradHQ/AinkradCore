@@ -1,8 +1,8 @@
 //! S8, chain validation fuzz: random entry lists, written and rewritten for two users, against an
 //! oracle written from the design (§4.1) and not from the code. A list is accepted exactly when it has
-//! 1 to 4 entries, no pool twice, only the chain user's pools, and at most one subscription. After
+//! 1 to 16 entries, no pool twice, and only the chain user's pools. After
 //! every write, whatever was accepted or refused, every stored chain holds the rules (never an
-//! invalid chain, never across users, never two subscriptions), and a refused rewrite left the old list.
+//! invalid chain, never across users, several subscriptions are allowed), and a refused rewrite left the old list.
 //!
 //! The seed is in every message; `NEG_SEED=<n>` replays one seed.
 
@@ -19,9 +19,8 @@ async fn sweep(fx: &Fx, ctx: &str) {
             .unwrap();
     for c in ch::list(&fx.app.pool).await.unwrap() {
         let n = c.entries.len();
-        assert!((1..=4).contains(&n), "a chain of {n} entries, {ctx}");
+        assert!((1..=16).contains(&n), "a chain of {n} entries, {ctx}");
         let mut seen = Vec::new();
-        let mut subs = 0;
         for e in &c.entries {
             assert!(!seen.contains(&e.pool), "a pool twice in {}, {ctx}", c.name);
             seen.push(e.pool);
@@ -34,9 +33,7 @@ async fn sweep(fx: &Fx, ctx: &str) {
                 "a chain names another user's pool, {ctx}"
             );
             assert_eq!(&e.provider, provider, "{ctx}");
-            subs += i32::from(provider == "claude-sub");
         }
-        assert!(subs <= 1, "two subscriptions in {}, {ctx}", c.name);
     }
 }
 
@@ -93,10 +90,9 @@ async fn neg_random_entry_lists_never_make_an_invalid_chain_or_cross_users() {
             distinct.sort_unstable();
             distinct.dedup();
             let valid_for = |owner: i64| {
-                (1..=4).contains(&list.len())
+                (1..=16).contains(&list.len())
                     && distinct.len() == list.len()
                     && list.iter().all(|id| kind(id).1 == owner)
-                    && list.iter().filter(|id| kind(id).2).count() <= 1
             };
             let update = !chains.is_empty() && rng.below(2) == 0;
             let got = if update {

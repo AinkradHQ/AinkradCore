@@ -26,14 +26,19 @@ pub enum Decision {
 }
 
 /// The budget a gateway stop names, as the Core wrote it with the stop (`<kind>:<subject>`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BudgetStop {
     Account(i64),
     Pool(i64),
+    /// A provider id (`anthropic`, `claude-sub`): every account of it is out of budget.
+    Provider(String),
 }
 
 pub fn budget_stop(code: &str) -> Option<BudgetStop> {
     let (kind, subject) = code.split_once(':')?;
+    if kind == "provider" {
+        return Some(BudgetStop::Provider(subject.to_owned()));
+    }
     let subject: i64 = subject.parse().ok()?;
     match kind {
         "account" => Some(BudgetStop::Account(subject)),

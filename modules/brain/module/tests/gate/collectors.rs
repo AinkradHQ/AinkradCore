@@ -42,7 +42,7 @@ impl Fetch for Fake {
                      "created_at": "2026-11-10T10:00:00Z", "updated_at": "2026-11-11T10:00:00Z",
                      "html_url": "https://github.com/acme/app/pull/12"}]),
                 "github.list_pr_reviews" => json!([
-                    {"user": {"login": "bashar"}, "state": "APPROVED", "body": "Looks right."}]),
+                    {"user": {"login": "sam"}, "state": "APPROVED", "body": "Looks right."}]),
                 _ => json!([]),
             })
         })
@@ -182,7 +182,7 @@ async fn github_pull_requests_carry_their_reviews_and_the_org() {
         all.contains("acme/app#12") && all.contains("State: merged"),
         "{all}"
     );
-    assert!(all.contains("bashar (APPROVED): Looks right."));
+    assert!(all.contains("sam (APPROVED): Looks right."));
     // A read of the same page again finds nothing past the cursor, and no write was ever asked.
     assert_eq!(sync(&fx, "github").await["idle"], "nothing_new");
     let ops: Vec<String> = fake

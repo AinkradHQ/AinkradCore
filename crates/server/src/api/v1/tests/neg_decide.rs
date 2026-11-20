@@ -84,7 +84,8 @@ fn neg_the_decision_never_moves_on_a_core_end_a_lost_runner_or_a_forged_name() {
                 None,
                 Some(fo::BudgetStop::Pool(3)),
                 Some(fo::BudgetStop::Account(4)),
-            ][pick(&mut rng, 3)];
+            ][pick(&mut rng, 3)]
+            .clone();
             v.gateway = pick(&mut rng, 2) == 0;
             v.module = pick(&mut rng, 5) == 0;
             v.chain = (pick(&mut rng, 6) != 0).then(Vec::new);

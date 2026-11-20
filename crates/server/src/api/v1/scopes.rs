@@ -62,10 +62,24 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/devices", "admin"),
     ("DELETE", "/api/v1/devices/{id}", "admin"),
     ("GET", "/api/v1/audit", "admin"),
+    ("GET", "/api/v1/audit/stats", "admin"),
+    ("GET", "/api/v1/ops/history", "admin"),
     // The Core machine (host-helper plan §4): all `admin`; see DESTRUCTIVE for the step-up ones.
     ("GET", "/api/v1/system/host", "admin"),
     ("GET", "/api/v1/core/health", "read"),
+    ("GET", "/api/v1/core/prefs", "read"),
+    ("PUT", "/api/v1/core/prefs", "admin"),
+    ("GET", "/api/v1/core/storage", "admin"),
+    ("POST", "/api/v1/core/update/check", "admin"),
     ("POST", "/api/v1/system/restart", "admin"),
+    // A backup now and the backup schedule (E2-6): `admin`; a start is no danger, it is the unit the timer starts.
+    ("POST", "/api/v1/system/backup", "admin"),
+    ("GET", "/api/v1/system/backups", "admin"),
+    // How many local backups are kept: reading is `admin`; the write is in DESTRUCTIVE (D-4).
+    ("GET", "/api/v1/system/backups/retention", "admin"),
+    ("PUT", "/api/v1/system/backups/retention", "admin"),
+    ("GET", "/api/v1/system/update", "admin"),
+    ("POST", "/api/v1/system/update", "admin"),
     ("GET", "/api/v1/system/logs/core", "admin"),
     ("GET", "/api/v1/system/logs/helper", "admin"),
     ("GET", "/api/v1/system/logs/runner", "admin"),
@@ -91,6 +105,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/runners/{id}/noop", "agent"),
     ("PUT", "/api/v1/runners/{id}/policy", "admin"),
     ("POST", "/api/v1/runners/{id}/tools", "admin"),
+    ("POST", "/api/v1/runners/{id}/update", "admin"),
     ("GET", "/api/v1/runners/{id}/tools/operations/{op}", "read"),
     ("GET", "/api/v1/accounts", "read"),
     // Before `/accounts/{id}`: the first template that fits a path decides, and `usage` fits `{id}`.
@@ -98,8 +113,12 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/accounts/logins", "admin"),
     ("GET", "/api/v1/accounts/logins/{id}", "admin"),
     ("POST", "/api/v1/accounts/logins/{id}/code", "admin"),
+    ("POST", "/api/v1/accounts/logins/{id}/input", "admin"),
+    ("GET", "/api/v1/accounts/logins/{id}/screen", "admin"),
     ("DELETE", "/api/v1/accounts/logins/{id}", "admin"),
     ("GET", "/api/v1/accounts/{id}", "read"),
+    ("GET", "/api/v1/accounts/{id}/models", "read"),
+    ("PUT", "/api/v1/accounts/{id}/models/{model}", "admin"),
     ("GET", "/api/v1/accounts/providers", "read"),
     ("POST", "/api/v1/accounts", "admin"),
     ("PUT", "/api/v1/accounts/{id}/secret", "admin"),
@@ -109,6 +128,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/accounts/{id}/test", "admin"),
     ("POST", "/api/v1/accounts/{id}/check", "admin"),
     ("DELETE", "/api/v1/accounts/{id}", "admin"),
+    ("POST", "/api/v1/accounts/{id}/restore", "admin"),
     ("POST", "/api/v1/accounts/providers", "admin"),
     ("PUT", "/api/v1/accounts/providers/{id}", "admin"),
     ("DELETE", "/api/v1/accounts/providers/{id}", "admin"),
@@ -121,6 +141,11 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/bindings", "read"),
     ("PUT", "/api/v1/bindings", "admin"),
     ("DELETE", "/api/v1/bindings/{agent}/{provider}", "admin"),
+    // The AI order (E7-1): reading says which accounts a run may walk, so it is `admin` too.
+    ("GET", "/api/v1/ai-order", "admin"),
+    ("PUT", "/api/v1/ai-order", "admin"),
+    ("PUT", "/api/v1/ai-order/agents/{agent}", "admin"),
+    ("DELETE", "/api/v1/ai-order/agents/{agent}", "admin"),
     // Fallback chains (S7): reading says which accounts a run may walk, so it is `admin` too.
     ("GET", "/api/v1/chains", "admin"),
     ("POST", "/api/v1/chains", "admin"),
@@ -146,6 +171,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PUT", "/api/v1/connections/{id}/credential", "admin"),
     ("POST", "/api/v1/connections/{id}/test", "admin"),
     ("GET", "/api/v1/connections/{id}/activity", "admin"),
+    ("GET", "/api/v1/connections/{id}/resources", "admin"),
     ("GET", "/api/v1/connections/{id}/grants", "admin"),
     ("PUT", "/api/v1/connections/{id}/grants", "admin"),
     (
@@ -158,12 +184,6 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("DELETE", "/api/v1/connection-defaults/{kind}", "admin"),
     ("GET", "/api/v1/connection-apps/{kind}", "admin"),
     ("PUT", "/api/v1/connection-apps/{kind}", "admin"),
-    ("PUT", "/api/v1/accounts/{id}/limits", "admin"),
-    (
-        "DELETE",
-        "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
-        "admin",
-    ),
     ("GET", "/api/v1/costs", "admin"),
     ("GET", "/api/v1/costs/series", "admin"),
     ("GET", "/api/v1/prices", "read"),
@@ -181,6 +201,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PATCH", "/api/v1/projects/{id}", "admin"),
     ("POST", "/api/v1/projects/{id}/archive", "admin"),
     ("POST", "/api/v1/projects/{id}/unarchive", "admin"),
+    ("GET", "/api/v1/projects/defaults", "read"),
+    ("PUT", "/api/v1/projects/defaults", "admin"),
     ("POST", "/api/v1/projects/{id}/repos", "admin"),
     ("DELETE", "/api/v1/projects/{id}/repos/{repo}", "admin"),
     (
@@ -282,6 +304,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("DELETE", "/api/v1/secrets/{id}", "admin"),
     ("POST", "/api/v1/secrets/{id}/leases", "admin"),
     ("POST", "/api/v1/secrets/{id}/reveal", "admin"),
+    // Exporting every value (D-4): `admin`, destructive (a live step-up).
+    ("POST", "/api/v1/secrets/export", "admin"),
     ("POST", "/api/v1/secret-leases/redeem", "runner"),
     ("GET", "/api/v1/secret-groups", "admin"),
     ("POST", "/api/v1/secret-groups", "admin"),
@@ -363,11 +387,19 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     // The Core machine: a restart drops every session, and the runner and backup logs can hold
     // values no redactor recognises (D4). The Core and helper logs are not here.
     ("POST", "/api/v1/system/restart"),
+    // Retention decides how much history survives a loss (D-4): it writes the Core's config.
+    ("PUT", "/api/v1/system/backups/retention"),
+    // Replaces the Core's own programs (signed releases only) and restarts it: a step-up, like a restart.
+    ("POST", "/api/v1/system/update"),
+    // Replaces the programs a runner runs on its host (signed releases only), like a tool install.
+    ("POST", "/api/v1/runners/{id}/update"),
     ("GET", "/api/v1/system/logs/runner"),
     ("GET", "/api/v1/system/logs/backup"),
     // A lease or a reveal is how a secret's value leaves the Core.
     ("POST", "/api/v1/secrets/{id}/reveal"),
     ("POST", "/api/v1/secrets/{id}/leases"),
+    // An exported value leaves the Core to a file (D-4).
+    ("POST", "/api/v1/secrets/export"),
     ("POST", "/api/v1/secret-groups/{id}/leases"),
 ];
 

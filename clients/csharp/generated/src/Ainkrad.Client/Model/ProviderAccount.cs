@@ -50,15 +50,19 @@ namespace Ainkrad.Client.Model
         /// <param name="lastUsedAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
         /// <param name="live">Sessions that hold a slot of its cap now (&#x60;starting&#x60;, &#x60;running&#x60;, &#x60;interrupted&#x60;). Only the reads (&#x60;listAccounts&#x60;, &#x60;getAccount&#x60;) say it..</param>
         /// <param name="maskedTail">The key&#39;s last four characters; empty for a key too short to show any. (required).</param>
+        /// <param name="modelsEnforced">Whether a model the person switched off for this account is refused in its sessions: true for an API-key account (its gateway grants only the models left on), false for a subscription or runner-bound login, where the harness talks to its provider itself and the Core only skips the account when a session asks for a switched-off model at its start. The app shows the limit as advice when it is false..</param>
         /// <param name="monthLimitUsdMicros">The account&#39;s monthly dollar budget cap, when one is set; absent when it has none..</param>
         /// <param name="monthSpendUsdMicros">What the account cost this calendar month (UTC), in millionths of a US dollar, from the cost ledger. Only the reads say it, and only to an &#x60;admin&#x60; device..</param>
         /// <param name="provider">&#x60;anthropic&#x60;, &#x60;openai&#x60;, &#x60;google&#x60; or a user definition&#39;s id. (required).</param>
+        /// <param name="runner">The runner device a runner-bound subscription (Codex, OpenCode, Antigravity) signed in on: its sessions run only there. Absent for any other account. An &#x60;admin&#x60; device only; a device id is not a secret..</param>
         /// <param name="sessionLimits">What one session may spend through this account; absent when only the budgets limit it..</param>
         /// <param name="state">&#x60;active&#x60;, &#x60;cooling&#x60;, &#x60;limited&#x60;, &#x60;unhealthy&#x60; or &#x60;disabled&#x60;. (required).</param>
         /// <param name="stateReason">stateReason.</param>
         /// <param name="stateUntil">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
         /// <param name="updatedAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4). (required).</param>
-        public ProviderAccount(string baseUrl = default, long cap = default, DateTime createdAt = default, AccountHealth health = default, long id = default, string label = default, LastTest lastTest = default, DateTime lastUsedAt = default, long? live = default, string maskedTail = default, long? monthLimitUsdMicros = default, long? monthSpendUsdMicros = default, string provider = default, SessionLimits sessionLimits = default, string state = default, string stateReason = default, DateTime stateUntil = default, DateTime updatedAt = default)
+        /// <param name="usage">The row&#39;s usage meter: how much of its plan or budget is used and whether it can take work now. Only the reads say it, and only to an &#x60;admin&#x60; device..</param>
+        /// <param name="wipeNote">A plain-language limit of removing this account, e.g. an Antigravity login that stays in the runner&#39;s keyring. Absent when removal clears everything..</param>
+        public ProviderAccount(string baseUrl = default, long cap = default, DateTime createdAt = default, AccountHealth health = default, long id = default, string label = default, LastTest lastTest = default, DateTime lastUsedAt = default, long? live = default, string maskedTail = default, bool modelsEnforced = default, long? monthLimitUsdMicros = default, long? monthSpendUsdMicros = default, string provider = default, string runner = default, SessionLimits sessionLimits = default, string state = default, string stateReason = default, DateTime stateUntil = default, DateTime updatedAt = default, AccountMeter usage = default, string wipeNote = default)
         {
             // to ensure "baseUrl" is required (not null)
             if (baseUrl == null)
@@ -98,11 +102,15 @@ namespace Ainkrad.Client.Model
             this.LastTest = lastTest;
             this.LastUsedAt = lastUsedAt;
             this.Live = live;
+            this.ModelsEnforced = modelsEnforced;
             this.MonthLimitUsdMicros = monthLimitUsdMicros;
             this.MonthSpendUsdMicros = monthSpendUsdMicros;
+            this.Runner = runner;
             this.SessionLimits = sessionLimits;
             this.StateReason = stateReason;
             this.StateUntil = stateUntil;
+            this.Usage = usage;
+            this.WipeNote = wipeNote;
         }
 
         /// <summary>
@@ -174,6 +182,13 @@ namespace Ainkrad.Client.Model
         public string MaskedTail { get; set; }
 
         /// <summary>
+        /// Whether a model the person switched off for this account is refused in its sessions: true for an API-key account (its gateway grants only the models left on), false for a subscription or runner-bound login, where the harness talks to its provider itself and the Core only skips the account when a session asks for a switched-off model at its start. The app shows the limit as advice when it is false.
+        /// </summary>
+        /// <value>Whether a model the person switched off for this account is refused in its sessions: true for an API-key account (its gateway grants only the models left on), false for a subscription or runner-bound login, where the harness talks to its provider itself and the Core only skips the account when a session asks for a switched-off model at its start. The app shows the limit as advice when it is false.</value>
+        [DataMember(Name = "models_enforced", EmitDefaultValue = true)]
+        public bool ModelsEnforced { get; set; }
+
+        /// <summary>
         /// The account&#39;s monthly dollar budget cap, when one is set; absent when it has none.
         /// </summary>
         /// <value>The account&#39;s monthly dollar budget cap, when one is set; absent when it has none.</value>
@@ -193,6 +208,13 @@ namespace Ainkrad.Client.Model
         /// <value>&#x60;anthropic&#x60;, &#x60;openai&#x60;, &#x60;google&#x60; or a user definition&#39;s id.</value>
         [DataMember(Name = "provider", IsRequired = true, EmitDefaultValue = true)]
         public string Provider { get; set; }
+
+        /// <summary>
+        /// The runner device a runner-bound subscription (Codex, OpenCode, Antigravity) signed in on: its sessions run only there. Absent for any other account. An &#x60;admin&#x60; device only; a device id is not a secret.
+        /// </summary>
+        /// <value>The runner device a runner-bound subscription (Codex, OpenCode, Antigravity) signed in on: its sessions run only there. Absent for any other account. An &#x60;admin&#x60; device only; a device id is not a secret.</value>
+        [DataMember(Name = "runner", EmitDefaultValue = true)]
+        public string Runner { get; set; }
 
         /// <summary>
         /// What one session may spend through this account; absent when only the budgets limit it.
@@ -229,6 +251,20 @@ namespace Ainkrad.Client.Model
         public DateTime UpdatedAt { get; set; }
 
         /// <summary>
+        /// The row&#39;s usage meter: how much of its plan or budget is used and whether it can take work now. Only the reads say it, and only to an &#x60;admin&#x60; device.
+        /// </summary>
+        /// <value>The row&#39;s usage meter: how much of its plan or budget is used and whether it can take work now. Only the reads say it, and only to an &#x60;admin&#x60; device.</value>
+        [DataMember(Name = "usage", EmitDefaultValue = false)]
+        public AccountMeter Usage { get; set; }
+
+        /// <summary>
+        /// A plain-language limit of removing this account, e.g. an Antigravity login that stays in the runner&#39;s keyring. Absent when removal clears everything.
+        /// </summary>
+        /// <value>A plain-language limit of removing this account, e.g. an Antigravity login that stays in the runner&#39;s keyring. Absent when removal clears everything.</value>
+        [DataMember(Name = "wipe_note", EmitDefaultValue = true)]
+        public string WipeNote { get; set; }
+
+        /// <summary>
         /// Returns the string presentation of the object
         /// </summary>
         /// <returns>String presentation of the object</returns>
@@ -246,14 +282,18 @@ namespace Ainkrad.Client.Model
             sb.Append("  LastUsedAt: ").Append(LastUsedAt).Append("\n");
             sb.Append("  Live: ").Append(Live).Append("\n");
             sb.Append("  MaskedTail: ").Append(MaskedTail).Append("\n");
+            sb.Append("  ModelsEnforced: ").Append(ModelsEnforced).Append("\n");
             sb.Append("  MonthLimitUsdMicros: ").Append(MonthLimitUsdMicros).Append("\n");
             sb.Append("  MonthSpendUsdMicros: ").Append(MonthSpendUsdMicros).Append("\n");
             sb.Append("  Provider: ").Append(Provider).Append("\n");
+            sb.Append("  Runner: ").Append(Runner).Append("\n");
             sb.Append("  SessionLimits: ").Append(SessionLimits).Append("\n");
             sb.Append("  State: ").Append(State).Append("\n");
             sb.Append("  StateReason: ").Append(StateReason).Append("\n");
             sb.Append("  StateUntil: ").Append(StateUntil).Append("\n");
             sb.Append("  UpdatedAt: ").Append(UpdatedAt).Append("\n");
+            sb.Append("  Usage: ").Append(Usage).Append("\n");
+            sb.Append("  WipeNote: ").Append(WipeNote).Append("\n");
             sb.Append("}\n");
             return sb.ToString();
         }

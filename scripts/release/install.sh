@@ -11,10 +11,10 @@
 #    sums, then those two are installed the same way. ainkrad-ptyhost sits beside ainkrad-runner, where the runner looks for it. Needs `minisign` (brew/apt install minisign).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-from= prefix=${HOME}/.local pub=${AINKRAD_RELEASE_PUBKEY:-$here/ainkrad-release.pub} target= only=
+from= prefix=${HOME}/.local pub=${AINKRAD_RELEASE_PUBKEY:-$here/ainkrad-release.pub} target= only= part=
 while [ $# -gt 0 ]; do case $1 in
   --from) from=$2; shift 2 ;; --prefix) prefix=$2; shift 2 ;; --pubkey) pub=$2; shift 2 ;;
-  --target) target=$2; shift 2 ;; --verify-only) only=$2; shift 2 ;; *) echo "unknown option $1" >&2; exit 2 ;;
+  --target) target=$2; shift 2 ;; --only) part=$2; shift 2 ;; --verify-only) only=$2; shift 2 ;; *) echo "unknown option $1" >&2; exit 2 ;;
 esac; done
 die() { echo "install: REFUSED: $*" >&2; exit 1; }
 [ -n "$from" ] || die "--from is required"
@@ -40,9 +40,17 @@ verify() {  # verify NAME: fetch it and hold it to its signed checksum
   fetch "$1"
   [ "$(sha "$tmp/$1")" = "$(awk -v n="$1" '$2 == n { print $1 }' "$tmp/SHA256SUMS")" ] || die "$1 does not match its signed checksum"
 }
-order="ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost"; mkdir "$tmp/z"
+# --only core|runner (E12): a mode installs only its own programs, so a Core update never swaps the runner under a running task.
+case $part in
+  '') order="ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost" ;;
+  core) order="ainkrad-core-server ainkradctl" ;;
+  runner) order="ainkrad-runner ainkrad-ptyhost" ;;
+  *) die "--only is core or runner" ;;
+esac
+mkdir "$tmp/z"
 if [ -z "$names" ]; then
   # Zip mode: only the two named members are taken out (no path from the archive is ever used).
+  [ "$part" != core ] || die "a macOS target has no Core programs"
   order="ainkrad-runner ainkrad-ptyhost"
   verify "$zipname"
   command -v unzip >/dev/null || die "unzip is not installed"
@@ -53,7 +61,7 @@ else
   for b in $order; do
     echo "$names" | grep -qx "$b-[0-9].*-$target" || die "the signed sums have no $b for $target"
   done
-  for n in $names; do verify "$n"; done
+  for b in $order; do verify "$(echo "$names" | grep -x "$b-[0-9].*-$target" | head -1)"; done
   for b in $order; do cp "$tmp/$(echo "$names" | grep -x "$b-[0-9].*-$target" | head -1)" "$tmp/z/$b"; done
 fi
 bindir=$prefix/bin

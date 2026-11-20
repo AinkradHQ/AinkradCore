@@ -23,6 +23,12 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/accounts/logins/{id}/code`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/logins/{id}/code/post(sendAccountLoginCode)`.
     func sendAccountLoginCode(_ input: Operations.SendAccountLoginCode.Input) async throws -> Operations.SendAccountLoginCode.Output
+    /// - Remark: HTTP `POST /api/v1/accounts/logins/{id}/input`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/logins/{id}/input/post(sendAccountLoginInput)`.
+    func sendAccountLoginInput(_ input: Operations.SendAccountLoginInput.Input) async throws -> Operations.SendAccountLoginInput.Output
+    /// - Remark: HTTP `GET /api/v1/accounts/logins/{id}/screen`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/logins/{id}/screen/get(getAccountLoginScreen)`.
+    func getAccountLoginScreen(_ input: Operations.GetAccountLoginScreen.Input) async throws -> Operations.GetAccountLoginScreen.Output
     /// - Remark: HTTP `GET /api/v1/accounts/providers`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/providers/get(listProviders)`.
     func listProviders(_ input: Operations.ListProviders.Input) async throws -> Operations.ListProviders.Output
@@ -50,12 +56,15 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/accounts/{id}/check`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/check/post(checkAccount)`.
     func checkAccount(_ input: Operations.CheckAccount.Input) async throws -> Operations.CheckAccount.Output
-    /// - Remark: HTTP `PUT /api/v1/accounts/{id}/limits`.
-    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/limits/put(setAccountLimit)`.
-    func setAccountLimit(_ input: Operations.SetAccountLimit.Input) async throws -> Operations.SetAccountLimit.Output
-    /// - Remark: HTTP `DELETE /api/v1/accounts/{id}/limits/{unit}/{window_secs}`.
-    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}/delete(clearAccountLimit)`.
-    func clearAccountLimit(_ input: Operations.ClearAccountLimit.Input) async throws -> Operations.ClearAccountLimit.Output
+    /// - Remark: HTTP `GET /api/v1/accounts/{id}/models`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/models/get(listAccountModels)`.
+    func listAccountModels(_ input: Operations.ListAccountModels.Input) async throws -> Operations.ListAccountModels.Output
+    /// - Remark: HTTP `PUT /api/v1/accounts/{id}/models/{model}`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/models/{model}/put(setAccountModelAllowed)`.
+    func setAccountModelAllowed(_ input: Operations.SetAccountModelAllowed.Input) async throws -> Operations.SetAccountModelAllowed.Output
+    /// - Remark: HTTP `POST /api/v1/accounts/{id}/restore`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/restore/post(restoreAccount)`.
+    func restoreAccount(_ input: Operations.RestoreAccount.Input) async throws -> Operations.RestoreAccount.Output
     /// - Remark: HTTP `PUT /api/v1/accounts/{id}/secret`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/secret/put(replaceAccountSecret)`.
     func replaceAccountSecret(_ input: Operations.ReplaceAccountSecret.Input) async throws -> Operations.ReplaceAccountSecret.Output
@@ -125,9 +134,24 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/agent-sessions/{id}/wake`.
     /// - Remark: Generated from `#/paths//api/v1/agent-sessions/{id}/wake/post(wakeAgentSession)`.
     func wakeAgentSession(_ input: Operations.WakeAgentSession.Input) async throws -> Operations.WakeAgentSession.Output
+    /// - Remark: HTTP `GET /api/v1/ai-order`.
+    /// - Remark: Generated from `#/paths//api/v1/ai-order/get(getAiOrder)`.
+    func getAiOrder(_ input: Operations.GetAiOrder.Input) async throws -> Operations.GetAiOrder.Output
+    /// - Remark: HTTP `PUT /api/v1/ai-order`.
+    /// - Remark: Generated from `#/paths//api/v1/ai-order/put(setAiOrder)`.
+    func setAiOrder(_ input: Operations.SetAiOrder.Input) async throws -> Operations.SetAiOrder.Output
+    /// - Remark: HTTP `PUT /api/v1/ai-order/agents/{agent}`.
+    /// - Remark: Generated from `#/paths//api/v1/ai-order/agents/{agent}/put(setAgentAiOrder)`.
+    func setAgentAiOrder(_ input: Operations.SetAgentAiOrder.Input) async throws -> Operations.SetAgentAiOrder.Output
+    /// - Remark: HTTP `DELETE /api/v1/ai-order/agents/{agent}`.
+    /// - Remark: Generated from `#/paths//api/v1/ai-order/agents/{agent}/delete(clearAgentAiOrder)`.
+    func clearAgentAiOrder(_ input: Operations.ClearAgentAiOrder.Input) async throws -> Operations.ClearAgentAiOrder.Output
     /// - Remark: HTTP `GET /api/v1/audit`.
     /// - Remark: Generated from `#/paths//api/v1/audit/get(listAudit)`.
     func listAudit(_ input: Operations.ListAudit.Input) async throws -> Operations.ListAudit.Output
+    /// - Remark: HTTP `GET /api/v1/audit/stats`.
+    /// - Remark: Generated from `#/paths//api/v1/audit/stats/get(getAuditStats)`.
+    func getAuditStats(_ input: Operations.GetAuditStats.Input) async throws -> Operations.GetAuditStats.Output
     /// - Remark: HTTP `GET /api/v1/auth/lockouts`.
     /// - Remark: Generated from `#/paths//api/v1/auth/lockouts/get(listLockouts)`.
     func listLockouts(_ input: Operations.ListLockouts.Input) async throws -> Operations.ListLockouts.Output
@@ -175,6 +199,7 @@ public protocol APIProtocol: Sendable {
     func listChains(_ input: Operations.ListChains.Input) async throws -> Operations.ListChains.Output
     /// - Remark: HTTP `POST /api/v1/chains`.
     /// - Remark: Generated from `#/paths//api/v1/chains/post(createChain)`.
+    @available(*, deprecated)
     func createChain(_ input: Operations.CreateChain.Input) async throws -> Operations.CreateChain.Output
     /// - Remark: HTTP `GET /api/v1/chains/bindings`.
     /// - Remark: Generated from `#/paths//api/v1/chains/bindings/get(listChainBindings)`.
@@ -190,12 +215,15 @@ public protocol APIProtocol: Sendable {
     func getChain(_ input: Operations.GetChain.Input) async throws -> Operations.GetChain.Output
     /// - Remark: HTTP `PUT /api/v1/chains/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/chains/{id}/put(replaceChain)`.
+    @available(*, deprecated)
     func replaceChain(_ input: Operations.ReplaceChain.Input) async throws -> Operations.ReplaceChain.Output
     /// - Remark: HTTP `DELETE /api/v1/chains/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/chains/{id}/delete(deleteChain)`.
+    @available(*, deprecated)
     func deleteChain(_ input: Operations.DeleteChain.Input) async throws -> Operations.DeleteChain.Output
     /// - Remark: HTTP `PUT /api/v1/chains/{id}/default`.
     /// - Remark: Generated from `#/paths//api/v1/chains/{id}/default/put(setDefaultChain)`.
+    @available(*, deprecated)
     func setDefaultChain(_ input: Operations.SetDefaultChain.Input) async throws -> Operations.SetDefaultChain.Output
     /// - Remark: HTTP `GET /api/v1/connection-apps/{kind}`.
     /// - Remark: Generated from `#/paths//api/v1/connection-apps/{kind}/get(getConnectionApp)`.
@@ -260,12 +288,27 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /api/v1/connections/{id}/grants/{grantee_kind}/{grantee}`.
     /// - Remark: Generated from `#/paths//api/v1/connections/{id}/grants/{grantee_kind}/{grantee}/delete(revokeConnectionGrant)`.
     func revokeConnectionGrant(_ input: Operations.RevokeConnectionGrant.Input) async throws -> Operations.RevokeConnectionGrant.Output
+    /// - Remark: HTTP `GET /api/v1/connections/{id}/resources`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/resources/get(listConnectionResources)`.
+    func listConnectionResources(_ input: Operations.ListConnectionResources.Input) async throws -> Operations.ListConnectionResources.Output
     /// - Remark: HTTP `POST /api/v1/connections/{id}/test`.
     /// - Remark: Generated from `#/paths//api/v1/connections/{id}/test/post(testConnection)`.
     func testConnection(_ input: Operations.TestConnection.Input) async throws -> Operations.TestConnection.Output
     /// - Remark: HTTP `GET /api/v1/core/health`.
     /// - Remark: Generated from `#/paths//api/v1/core/health/get(getCoreHealth)`.
     func getCoreHealth(_ input: Operations.GetCoreHealth.Input) async throws -> Operations.GetCoreHealth.Output
+    /// - Remark: HTTP `GET /api/v1/core/prefs`.
+    /// - Remark: Generated from `#/paths//api/v1/core/prefs/get(getCorePrefs)`.
+    func getCorePrefs(_ input: Operations.GetCorePrefs.Input) async throws -> Operations.GetCorePrefs.Output
+    /// - Remark: HTTP `PUT /api/v1/core/prefs`.
+    /// - Remark: Generated from `#/paths//api/v1/core/prefs/put(setCorePrefs)`.
+    func setCorePrefs(_ input: Operations.SetCorePrefs.Input) async throws -> Operations.SetCorePrefs.Output
+    /// - Remark: HTTP `GET /api/v1/core/storage`.
+    /// - Remark: Generated from `#/paths//api/v1/core/storage/get(getCoreStorage)`.
+    func getCoreStorage(_ input: Operations.GetCoreStorage.Input) async throws -> Operations.GetCoreStorage.Output
+    /// - Remark: HTTP `POST /api/v1/core/update/check`.
+    /// - Remark: Generated from `#/paths//api/v1/core/update/check/post(checkCoreUpdate)`.
+    func checkCoreUpdate(_ input: Operations.CheckCoreUpdate.Input) async throws -> Operations.CheckCoreUpdate.Output
     /// - Remark: HTTP `GET /api/v1/costs`.
     /// - Remark: Generated from `#/paths//api/v1/costs/get(listCosts)`.
     func listCosts(_ input: Operations.ListCosts.Input) async throws -> Operations.ListCosts.Output
@@ -304,6 +347,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/metrics`.
     /// - Remark: Generated from `#/paths//api/v1/metrics/get(getMetrics)`.
     func getMetrics(_ input: Operations.GetMetrics.Input) async throws -> Operations.GetMetrics.Output
+    /// - Remark: HTTP `GET /api/v1/ops/history`.
+    /// - Remark: Generated from `#/paths//api/v1/ops/history/get(getOpsHistory)`.
+    func getOpsHistory(_ input: Operations.GetOpsHistory.Input) async throws -> Operations.GetOpsHistory.Output
     /// - Remark: HTTP `POST /api/v1/pairings`.
     /// - Remark: Generated from `#/paths//api/v1/pairings/post(createPairing)`.
     func createPairing(_ input: Operations.CreatePairing.Input) async throws -> Operations.CreatePairing.Output
@@ -324,18 +370,23 @@ public protocol APIProtocol: Sendable {
     func listPools(_ input: Operations.ListPools.Input) async throws -> Operations.ListPools.Output
     /// - Remark: HTTP `POST /api/v1/pools`.
     /// - Remark: Generated from `#/paths//api/v1/pools/post(createPool)`.
+    @available(*, deprecated)
     func createPool(_ input: Operations.CreatePool.Input) async throws -> Operations.CreatePool.Output
     /// - Remark: HTTP `DELETE /api/v1/pools/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/pools/{id}/delete(deletePool)`.
+    @available(*, deprecated)
     func deletePool(_ input: Operations.DeletePool.Input) async throws -> Operations.DeletePool.Output
     /// - Remark: HTTP `PUT /api/v1/pools/{id}/default`.
     /// - Remark: Generated from `#/paths//api/v1/pools/{id}/default/put(setDefaultPool)`.
+    @available(*, deprecated)
     func setDefaultPool(_ input: Operations.SetDefaultPool.Input) async throws -> Operations.SetDefaultPool.Output
     /// - Remark: HTTP `PUT /api/v1/pools/{id}/members/{account}`.
     /// - Remark: Generated from `#/paths//api/v1/pools/{id}/members/{account}/put(addPoolMember)`.
+    @available(*, deprecated)
     func addPoolMember(_ input: Operations.AddPoolMember.Input) async throws -> Operations.AddPoolMember.Output
     /// - Remark: HTTP `DELETE /api/v1/pools/{id}/members/{account}`.
     /// - Remark: Generated from `#/paths//api/v1/pools/{id}/members/{account}/delete(removePoolMember)`.
+    @available(*, deprecated)
     func removePoolMember(_ input: Operations.RemovePoolMember.Input) async throws -> Operations.RemovePoolMember.Output
     /// - Remark: HTTP `GET /api/v1/prices`.
     /// - Remark: Generated from `#/paths//api/v1/prices/get(listPrices)`.
@@ -349,6 +400,12 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/projects`.
     /// - Remark: Generated from `#/paths//api/v1/projects/post(createProject)`.
     func createProject(_ input: Operations.CreateProject.Input) async throws -> Operations.CreateProject.Output
+    /// - Remark: HTTP `GET /api/v1/projects/defaults`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/defaults/get(getProjectDefaults)`.
+    func getProjectDefaults(_ input: Operations.GetProjectDefaults.Input) async throws -> Operations.GetProjectDefaults.Output
+    /// - Remark: HTTP `PUT /api/v1/projects/defaults`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/defaults/put(setProjectDefaults)`.
+    func setProjectDefaults(_ input: Operations.SetProjectDefaults.Input) async throws -> Operations.SetProjectDefaults.Output
     /// - Remark: HTTP `POST /api/v1/projects/from-github`.
     /// - Remark: Generated from `#/paths//api/v1/projects/from-github/post(createProjectFromGithub)`.
     func createProjectFromGithub(_ input: Operations.CreateProjectFromGithub.Input) async throws -> Operations.CreateProjectFromGithub.Output
@@ -529,6 +586,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/runners/{id}/tools/operations/{op}`.
     /// - Remark: Generated from `#/paths//api/v1/runners/{id}/tools/operations/{op}/get(getRunnerToolOperation)`.
     func getRunnerToolOperation(_ input: Operations.GetRunnerToolOperation.Input) async throws -> Operations.GetRunnerToolOperation.Output
+    /// - Remark: HTTP `POST /api/v1/runners/{id}/update`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/update/post(updateRunner)`.
+    func updateRunner(_ input: Operations.UpdateRunner.Input) async throws -> Operations.UpdateRunner.Output
     /// - Remark: HTTP `GET /api/v1/secret-groups`.
     /// - Remark: Generated from `#/paths//api/v1/secret-groups/get(listSecretGroups)`.
     func listSecretGroups(_ input: Operations.ListSecretGroups.Input) async throws -> Operations.ListSecretGroups.Output
@@ -553,6 +613,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/secrets`.
     /// - Remark: Generated from `#/paths//api/v1/secrets/post(createSecret)`.
     func createSecret(_ input: Operations.CreateSecret.Input) async throws -> Operations.CreateSecret.Output
+    /// - Remark: HTTP `POST /api/v1/secrets/export`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/export/post(exportSecrets)`.
+    func exportSecrets(_ input: Operations.ExportSecrets.Input) async throws -> Operations.ExportSecrets.Output
     /// - Remark: HTTP `PUT /api/v1/secrets/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/secrets/{id}/put(rotateSecret)`.
     func rotateSecret(_ input: Operations.RotateSecret.Input) async throws -> Operations.RotateSecret.Output
@@ -583,6 +646,18 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/settings/{scope}/{key}/history`.
     /// - Remark: Generated from `#/paths//api/v1/settings/{scope}/{key}/history/get(settingHistory)`.
     func settingHistory(_ input: Operations.SettingHistory.Input) async throws -> Operations.SettingHistory.Output
+    /// - Remark: HTTP `POST /api/v1/system/backup`.
+    /// - Remark: Generated from `#/paths//api/v1/system/backup/post(startBackup)`.
+    func startBackup(_ input: Operations.StartBackup.Input) async throws -> Operations.StartBackup.Output
+    /// - Remark: HTTP `GET /api/v1/system/backups`.
+    /// - Remark: Generated from `#/paths//api/v1/system/backups/get(getBackups)`.
+    func getBackups(_ input: Operations.GetBackups.Input) async throws -> Operations.GetBackups.Output
+    /// - Remark: HTTP `GET /api/v1/system/backups/retention`.
+    /// - Remark: Generated from `#/paths//api/v1/system/backups/retention/get(getBackupRetention)`.
+    func getBackupRetention(_ input: Operations.GetBackupRetention.Input) async throws -> Operations.GetBackupRetention.Output
+    /// - Remark: HTTP `PUT /api/v1/system/backups/retention`.
+    /// - Remark: Generated from `#/paths//api/v1/system/backups/retention/put(setBackupRetention)`.
+    func setBackupRetention(_ input: Operations.SetBackupRetention.Input) async throws -> Operations.SetBackupRetention.Output
     /// - Remark: HTTP `GET /api/v1/system/host`.
     /// - Remark: Generated from `#/paths//api/v1/system/host/get(getHostStatus)`.
     func getHostStatus(_ input: Operations.GetHostStatus.Input) async throws -> Operations.GetHostStatus.Output
@@ -601,6 +676,12 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/system/restart`.
     /// - Remark: Generated from `#/paths//api/v1/system/restart/post(restartHostService)`.
     func restartHostService(_ input: Operations.RestartHostService.Input) async throws -> Operations.RestartHostService.Output
+    /// - Remark: HTTP `GET /api/v1/system/update`.
+    /// - Remark: Generated from `#/paths//api/v1/system/update/get(getCoreUpdate)`.
+    func getCoreUpdate(_ input: Operations.GetCoreUpdate.Input) async throws -> Operations.GetCoreUpdate.Output
+    /// - Remark: HTTP `POST /api/v1/system/update`.
+    /// - Remark: Generated from `#/paths//api/v1/system/update/post(startCoreUpdate)`.
+    func startCoreUpdate(_ input: Operations.StartCoreUpdate.Input) async throws -> Operations.StartCoreUpdate.Output
     /// - Remark: HTTP `GET /api/v1/terminals`.
     /// - Remark: Generated from `#/paths//api/v1/terminals/get(listTerminals)`.
     func listTerminals(_ input: Operations.ListTerminals.Input) async throws -> Operations.ListTerminals.Output
@@ -727,6 +808,30 @@ extension APIProtocol {
             body: body
         ))
     }
+    /// - Remark: HTTP `POST /api/v1/accounts/logins/{id}/input`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/logins/{id}/input/post(sendAccountLoginInput)`.
+    public func sendAccountLoginInput(
+        path: Operations.SendAccountLoginInput.Input.Path,
+        headers: Operations.SendAccountLoginInput.Input.Headers = .init(),
+        body: Operations.SendAccountLoginInput.Input.Body
+    ) async throws -> Operations.SendAccountLoginInput.Output {
+        try await sendAccountLoginInput(Operations.SendAccountLoginInput.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/accounts/logins/{id}/screen`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/logins/{id}/screen/get(getAccountLoginScreen)`.
+    public func getAccountLoginScreen(
+        path: Operations.GetAccountLoginScreen.Input.Path,
+        headers: Operations.GetAccountLoginScreen.Input.Headers = .init()
+    ) async throws -> Operations.GetAccountLoginScreen.Output {
+        try await getAccountLoginScreen(Operations.GetAccountLoginScreen.Input(
+            path: path,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `GET /api/v1/accounts/providers`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/providers/get(listProviders)`.
     public func listProviders(headers: Operations.ListProviders.Input.Headers = .init()) async throws -> Operations.ListProviders.Output {
@@ -818,26 +923,37 @@ extension APIProtocol {
             headers: headers
         ))
     }
-    /// - Remark: HTTP `PUT /api/v1/accounts/{id}/limits`.
-    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/limits/put(setAccountLimit)`.
-    public func setAccountLimit(
-        path: Operations.SetAccountLimit.Input.Path,
-        headers: Operations.SetAccountLimit.Input.Headers = .init(),
-        body: Operations.SetAccountLimit.Input.Body
-    ) async throws -> Operations.SetAccountLimit.Output {
-        try await setAccountLimit(Operations.SetAccountLimit.Input(
+    /// - Remark: HTTP `GET /api/v1/accounts/{id}/models`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/models/get(listAccountModels)`.
+    public func listAccountModels(
+        path: Operations.ListAccountModels.Input.Path,
+        headers: Operations.ListAccountModels.Input.Headers = .init()
+    ) async throws -> Operations.ListAccountModels.Output {
+        try await listAccountModels(Operations.ListAccountModels.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/accounts/{id}/models/{model}`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/models/{model}/put(setAccountModelAllowed)`.
+    public func setAccountModelAllowed(
+        path: Operations.SetAccountModelAllowed.Input.Path,
+        headers: Operations.SetAccountModelAllowed.Input.Headers = .init(),
+        body: Operations.SetAccountModelAllowed.Input.Body
+    ) async throws -> Operations.SetAccountModelAllowed.Output {
+        try await setAccountModelAllowed(Operations.SetAccountModelAllowed.Input(
             path: path,
             headers: headers,
             body: body
         ))
     }
-    /// - Remark: HTTP `DELETE /api/v1/accounts/{id}/limits/{unit}/{window_secs}`.
-    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/limits/{unit}/{window_secs}/delete(clearAccountLimit)`.
-    public func clearAccountLimit(
-        path: Operations.ClearAccountLimit.Input.Path,
-        headers: Operations.ClearAccountLimit.Input.Headers = .init()
-    ) async throws -> Operations.ClearAccountLimit.Output {
-        try await clearAccountLimit(Operations.ClearAccountLimit.Input(
+    /// - Remark: HTTP `POST /api/v1/accounts/{id}/restore`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/restore/post(restoreAccount)`.
+    public func restoreAccount(
+        path: Operations.RestoreAccount.Input.Path,
+        headers: Operations.RestoreAccount.Input.Headers = .init()
+    ) async throws -> Operations.RestoreAccount.Output {
+        try await restoreAccount(Operations.RestoreAccount.Input(
             path: path,
             headers: headers
         ))
@@ -1121,6 +1237,46 @@ extension APIProtocol {
             body: body
         ))
     }
+    /// - Remark: HTTP `GET /api/v1/ai-order`.
+    /// - Remark: Generated from `#/paths//api/v1/ai-order/get(getAiOrder)`.
+    public func getAiOrder(headers: Operations.GetAiOrder.Input.Headers = .init()) async throws -> Operations.GetAiOrder.Output {
+        try await getAiOrder(Operations.GetAiOrder.Input(headers: headers))
+    }
+    /// - Remark: HTTP `PUT /api/v1/ai-order`.
+    /// - Remark: Generated from `#/paths//api/v1/ai-order/put(setAiOrder)`.
+    public func setAiOrder(
+        headers: Operations.SetAiOrder.Input.Headers = .init(),
+        body: Operations.SetAiOrder.Input.Body
+    ) async throws -> Operations.SetAiOrder.Output {
+        try await setAiOrder(Operations.SetAiOrder.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/ai-order/agents/{agent}`.
+    /// - Remark: Generated from `#/paths//api/v1/ai-order/agents/{agent}/put(setAgentAiOrder)`.
+    public func setAgentAiOrder(
+        path: Operations.SetAgentAiOrder.Input.Path,
+        headers: Operations.SetAgentAiOrder.Input.Headers = .init(),
+        body: Operations.SetAgentAiOrder.Input.Body
+    ) async throws -> Operations.SetAgentAiOrder.Output {
+        try await setAgentAiOrder(Operations.SetAgentAiOrder.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/ai-order/agents/{agent}`.
+    /// - Remark: Generated from `#/paths//api/v1/ai-order/agents/{agent}/delete(clearAgentAiOrder)`.
+    public func clearAgentAiOrder(
+        path: Operations.ClearAgentAiOrder.Input.Path,
+        headers: Operations.ClearAgentAiOrder.Input.Headers = .init()
+    ) async throws -> Operations.ClearAgentAiOrder.Output {
+        try await clearAgentAiOrder(Operations.ClearAgentAiOrder.Input(
+            path: path,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `GET /api/v1/audit`.
     /// - Remark: Generated from `#/paths//api/v1/audit/get(listAudit)`.
     public func listAudit(
@@ -1128,6 +1284,17 @@ extension APIProtocol {
         headers: Operations.ListAudit.Input.Headers = .init()
     ) async throws -> Operations.ListAudit.Output {
         try await listAudit(Operations.ListAudit.Input(
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/audit/stats`.
+    /// - Remark: Generated from `#/paths//api/v1/audit/stats/get(getAuditStats)`.
+    public func getAuditStats(
+        query: Operations.GetAuditStats.Input.Query = .init(),
+        headers: Operations.GetAuditStats.Input.Headers = .init()
+    ) async throws -> Operations.GetAuditStats.Output {
+        try await getAuditStats(Operations.GetAuditStats.Input(
             query: query,
             headers: headers
         ))
@@ -1257,6 +1424,7 @@ extension APIProtocol {
     }
     /// - Remark: HTTP `POST /api/v1/chains`.
     /// - Remark: Generated from `#/paths//api/v1/chains/post(createChain)`.
+    @available(*, deprecated)
     public func createChain(
         headers: Operations.CreateChain.Input.Headers = .init(),
         body: Operations.CreateChain.Input.Body
@@ -1308,6 +1476,7 @@ extension APIProtocol {
     }
     /// - Remark: HTTP `PUT /api/v1/chains/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/chains/{id}/put(replaceChain)`.
+    @available(*, deprecated)
     public func replaceChain(
         path: Operations.ReplaceChain.Input.Path,
         headers: Operations.ReplaceChain.Input.Headers = .init(),
@@ -1321,6 +1490,7 @@ extension APIProtocol {
     }
     /// - Remark: HTTP `DELETE /api/v1/chains/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/chains/{id}/delete(deleteChain)`.
+    @available(*, deprecated)
     public func deleteChain(
         path: Operations.DeleteChain.Input.Path,
         headers: Operations.DeleteChain.Input.Headers = .init()
@@ -1332,6 +1502,7 @@ extension APIProtocol {
     }
     /// - Remark: HTTP `PUT /api/v1/chains/{id}/default`.
     /// - Remark: Generated from `#/paths//api/v1/chains/{id}/default/put(setDefaultChain)`.
+    @available(*, deprecated)
     public func setDefaultChain(
         path: Operations.SetDefaultChain.Input.Path,
         headers: Operations.SetDefaultChain.Input.Headers = .init()
@@ -1576,6 +1747,19 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// - Remark: HTTP `GET /api/v1/connections/{id}/resources`.
+    /// - Remark: Generated from `#/paths//api/v1/connections/{id}/resources/get(listConnectionResources)`.
+    public func listConnectionResources(
+        path: Operations.ListConnectionResources.Input.Path,
+        query: Operations.ListConnectionResources.Input.Query = .init(),
+        headers: Operations.ListConnectionResources.Input.Headers = .init()
+    ) async throws -> Operations.ListConnectionResources.Output {
+        try await listConnectionResources(Operations.ListConnectionResources.Input(
+            path: path,
+            query: query,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `POST /api/v1/connections/{id}/test`.
     /// - Remark: Generated from `#/paths//api/v1/connections/{id}/test/post(testConnection)`.
     public func testConnection(
@@ -1591,6 +1775,32 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//api/v1/core/health/get(getCoreHealth)`.
     public func getCoreHealth(headers: Operations.GetCoreHealth.Input.Headers = .init()) async throws -> Operations.GetCoreHealth.Output {
         try await getCoreHealth(Operations.GetCoreHealth.Input(headers: headers))
+    }
+    /// - Remark: HTTP `GET /api/v1/core/prefs`.
+    /// - Remark: Generated from `#/paths//api/v1/core/prefs/get(getCorePrefs)`.
+    public func getCorePrefs(headers: Operations.GetCorePrefs.Input.Headers = .init()) async throws -> Operations.GetCorePrefs.Output {
+        try await getCorePrefs(Operations.GetCorePrefs.Input(headers: headers))
+    }
+    /// - Remark: HTTP `PUT /api/v1/core/prefs`.
+    /// - Remark: Generated from `#/paths//api/v1/core/prefs/put(setCorePrefs)`.
+    public func setCorePrefs(
+        headers: Operations.SetCorePrefs.Input.Headers = .init(),
+        body: Operations.SetCorePrefs.Input.Body
+    ) async throws -> Operations.SetCorePrefs.Output {
+        try await setCorePrefs(Operations.SetCorePrefs.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/core/storage`.
+    /// - Remark: Generated from `#/paths//api/v1/core/storage/get(getCoreStorage)`.
+    public func getCoreStorage(headers: Operations.GetCoreStorage.Input.Headers = .init()) async throws -> Operations.GetCoreStorage.Output {
+        try await getCoreStorage(Operations.GetCoreStorage.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /api/v1/core/update/check`.
+    /// - Remark: Generated from `#/paths//api/v1/core/update/check/post(checkCoreUpdate)`.
+    public func checkCoreUpdate(headers: Operations.CheckCoreUpdate.Input.Headers = .init()) async throws -> Operations.CheckCoreUpdate.Output {
+        try await checkCoreUpdate(Operations.CheckCoreUpdate.Input(headers: headers))
     }
     /// - Remark: HTTP `GET /api/v1/costs`.
     /// - Remark: Generated from `#/paths//api/v1/costs/get(listCosts)`.
@@ -1700,6 +1910,17 @@ extension APIProtocol {
     public func getMetrics(headers: Operations.GetMetrics.Input.Headers = .init()) async throws -> Operations.GetMetrics.Output {
         try await getMetrics(Operations.GetMetrics.Input(headers: headers))
     }
+    /// - Remark: HTTP `GET /api/v1/ops/history`.
+    /// - Remark: Generated from `#/paths//api/v1/ops/history/get(getOpsHistory)`.
+    public func getOpsHistory(
+        query: Operations.GetOpsHistory.Input.Query = .init(),
+        headers: Operations.GetOpsHistory.Input.Headers = .init()
+    ) async throws -> Operations.GetOpsHistory.Output {
+        try await getOpsHistory(Operations.GetOpsHistory.Input(
+            query: query,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `POST /api/v1/pairings`.
     /// - Remark: Generated from `#/paths//api/v1/pairings/post(createPairing)`.
     public func createPairing(
@@ -1764,6 +1985,7 @@ extension APIProtocol {
     }
     /// - Remark: HTTP `POST /api/v1/pools`.
     /// - Remark: Generated from `#/paths//api/v1/pools/post(createPool)`.
+    @available(*, deprecated)
     public func createPool(
         headers: Operations.CreatePool.Input.Headers = .init(),
         body: Operations.CreatePool.Input.Body
@@ -1775,6 +1997,7 @@ extension APIProtocol {
     }
     /// - Remark: HTTP `DELETE /api/v1/pools/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/pools/{id}/delete(deletePool)`.
+    @available(*, deprecated)
     public func deletePool(
         path: Operations.DeletePool.Input.Path,
         headers: Operations.DeletePool.Input.Headers = .init()
@@ -1786,6 +2009,7 @@ extension APIProtocol {
     }
     /// - Remark: HTTP `PUT /api/v1/pools/{id}/default`.
     /// - Remark: Generated from `#/paths//api/v1/pools/{id}/default/put(setDefaultPool)`.
+    @available(*, deprecated)
     public func setDefaultPool(
         path: Operations.SetDefaultPool.Input.Path,
         headers: Operations.SetDefaultPool.Input.Headers = .init()
@@ -1797,6 +2021,7 @@ extension APIProtocol {
     }
     /// - Remark: HTTP `PUT /api/v1/pools/{id}/members/{account}`.
     /// - Remark: Generated from `#/paths//api/v1/pools/{id}/members/{account}/put(addPoolMember)`.
+    @available(*, deprecated)
     public func addPoolMember(
         path: Operations.AddPoolMember.Input.Path,
         headers: Operations.AddPoolMember.Input.Headers = .init()
@@ -1808,6 +2033,7 @@ extension APIProtocol {
     }
     /// - Remark: HTTP `DELETE /api/v1/pools/{id}/members/{account}`.
     /// - Remark: Generated from `#/paths//api/v1/pools/{id}/members/{account}/delete(removePoolMember)`.
+    @available(*, deprecated)
     public func removePoolMember(
         path: Operations.RemovePoolMember.Input.Path,
         headers: Operations.RemovePoolMember.Input.Headers = .init()
@@ -1851,6 +2077,22 @@ extension APIProtocol {
         body: Operations.CreateProject.Input.Body
     ) async throws -> Operations.CreateProject.Output {
         try await createProject(Operations.CreateProject.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/projects/defaults`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/defaults/get(getProjectDefaults)`.
+    public func getProjectDefaults(headers: Operations.GetProjectDefaults.Input.Headers = .init()) async throws -> Operations.GetProjectDefaults.Output {
+        try await getProjectDefaults(Operations.GetProjectDefaults.Input(headers: headers))
+    }
+    /// - Remark: HTTP `PUT /api/v1/projects/defaults`.
+    /// - Remark: Generated from `#/paths//api/v1/projects/defaults/put(setProjectDefaults)`.
+    public func setProjectDefaults(
+        headers: Operations.SetProjectDefaults.Input.Headers = .init(),
+        body: Operations.SetProjectDefaults.Input.Body
+    ) async throws -> Operations.SetProjectDefaults.Output {
+        try await setProjectDefaults(Operations.SetProjectDefaults.Input(
             headers: headers,
             body: body
         ))
@@ -2535,6 +2777,17 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// - Remark: HTTP `POST /api/v1/runners/{id}/update`.
+    /// - Remark: Generated from `#/paths//api/v1/runners/{id}/update/post(updateRunner)`.
+    public func updateRunner(
+        path: Operations.UpdateRunner.Input.Path,
+        headers: Operations.UpdateRunner.Input.Headers = .init()
+    ) async throws -> Operations.UpdateRunner.Output {
+        try await updateRunner(Operations.UpdateRunner.Input(
+            path: path,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `GET /api/v1/secret-groups`.
     /// - Remark: Generated from `#/paths//api/v1/secret-groups/get(listSecretGroups)`.
     public func listSecretGroups(headers: Operations.ListSecretGroups.Input.Headers = .init()) async throws -> Operations.ListSecretGroups.Output {
@@ -2614,6 +2867,11 @@ extension APIProtocol {
             headers: headers,
             body: body
         ))
+    }
+    /// - Remark: HTTP `POST /api/v1/secrets/export`.
+    /// - Remark: Generated from `#/paths//api/v1/secrets/export/post(exportSecrets)`.
+    public func exportSecrets(headers: Operations.ExportSecrets.Input.Headers = .init()) async throws -> Operations.ExportSecrets.Output {
+        try await exportSecrets(Operations.ExportSecrets.Input(headers: headers))
     }
     /// - Remark: HTTP `PUT /api/v1/secrets/{id}`.
     /// - Remark: Generated from `#/paths//api/v1/secrets/{id}/put(rotateSecret)`.
@@ -2725,6 +2983,32 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// - Remark: HTTP `POST /api/v1/system/backup`.
+    /// - Remark: Generated from `#/paths//api/v1/system/backup/post(startBackup)`.
+    public func startBackup(headers: Operations.StartBackup.Input.Headers = .init()) async throws -> Operations.StartBackup.Output {
+        try await startBackup(Operations.StartBackup.Input(headers: headers))
+    }
+    /// - Remark: HTTP `GET /api/v1/system/backups`.
+    /// - Remark: Generated from `#/paths//api/v1/system/backups/get(getBackups)`.
+    public func getBackups(headers: Operations.GetBackups.Input.Headers = .init()) async throws -> Operations.GetBackups.Output {
+        try await getBackups(Operations.GetBackups.Input(headers: headers))
+    }
+    /// - Remark: HTTP `GET /api/v1/system/backups/retention`.
+    /// - Remark: Generated from `#/paths//api/v1/system/backups/retention/get(getBackupRetention)`.
+    public func getBackupRetention(headers: Operations.GetBackupRetention.Input.Headers = .init()) async throws -> Operations.GetBackupRetention.Output {
+        try await getBackupRetention(Operations.GetBackupRetention.Input(headers: headers))
+    }
+    /// - Remark: HTTP `PUT /api/v1/system/backups/retention`.
+    /// - Remark: Generated from `#/paths//api/v1/system/backups/retention/put(setBackupRetention)`.
+    public func setBackupRetention(
+        headers: Operations.SetBackupRetention.Input.Headers = .init(),
+        body: Operations.SetBackupRetention.Input.Body
+    ) async throws -> Operations.SetBackupRetention.Output {
+        try await setBackupRetention(Operations.SetBackupRetention.Input(
+            headers: headers,
+            body: body
+        ))
+    }
     /// - Remark: HTTP `GET /api/v1/system/host`.
     /// - Remark: Generated from `#/paths//api/v1/system/host/get(getHostStatus)`.
     public func getHostStatus(headers: Operations.GetHostStatus.Input.Headers = .init()) async throws -> Operations.GetHostStatus.Output {
@@ -2784,6 +3068,16 @@ extension APIProtocol {
             headers: headers,
             body: body
         ))
+    }
+    /// - Remark: HTTP `GET /api/v1/system/update`.
+    /// - Remark: Generated from `#/paths//api/v1/system/update/get(getCoreUpdate)`.
+    public func getCoreUpdate(headers: Operations.GetCoreUpdate.Input.Headers = .init()) async throws -> Operations.GetCoreUpdate.Output {
+        try await getCoreUpdate(Operations.GetCoreUpdate.Input(headers: headers))
+    }
+    /// - Remark: HTTP `POST /api/v1/system/update`.
+    /// - Remark: Generated from `#/paths//api/v1/system/update/post(startCoreUpdate)`.
+    public func startCoreUpdate(headers: Operations.StartCoreUpdate.Input.Headers = .init()) async throws -> Operations.StartCoreUpdate.Output {
+        try await startCoreUpdate(Operations.StartCoreUpdate.Input(headers: headers))
     }
     /// - Remark: HTTP `GET /api/v1/terminals`.
     /// - Remark: Generated from `#/paths//api/v1/terminals/get(listTerminals)`.

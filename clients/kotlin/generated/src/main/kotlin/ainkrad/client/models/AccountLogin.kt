@@ -32,6 +32,7 @@ import kotlinx.serialization.Contextual
  * @param state `starting`, `open_url` (open `url`, then send the code), `waiting_code` (the code is with the runner), `storing`, `done` (see `account_id`), `failed` (see `reason`) or `cancelled`.
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param accountId The new account, once `done`.
+ * @param code The one-time device code to type on that page (`codex-sub`), from `open_url` on. Not a credential. Absent for a sign-in with no device code. A runner-bound sign-in takes no `/code`: it goes `open_url` then `storing` then `done` by itself once the user finishes.
  * @param reason Why it `failed` or was `cancelled`; provider text passes the redactor.
  * @param url The sign-in URL, from `open_url` on.
  */
@@ -71,6 +72,10 @@ data class AccountLogin (
     /* The new account, once `done`. */
     @SerialName(value = "account_id")
     val accountId: kotlin.Long? = null,
+
+    /* The one-time device code to type on that page (`codex-sub`), from `open_url` on. Not a credential. Absent for a sign-in with no device code. A runner-bound sign-in takes no `/code`: it goes `open_url` then `storing` then `done` by itself once the user finishes. */
+    @SerialName(value = "code")
+    val code: kotlin.String? = null,
 
     /* Why it `failed` or was `cancelled`; provider text passes the redactor. */
     @SerialName(value = "reason")

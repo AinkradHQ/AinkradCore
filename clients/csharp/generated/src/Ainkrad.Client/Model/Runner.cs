@@ -66,8 +66,10 @@ namespace Ainkrad.Client.Model
         /// <param name="toolInstall">The AI tool install under way on its host, or the last one, as the runner reports it in its heartbeats (D-22). Absent until a runner of this version reports..</param>
         /// <param name="tools">Tools it found on its host, name to version (&#x60;claude&#x60; to &#x60;2.1.318&#x60;, &#x60;git&#x60;, &#x60;node&#x60;, &#x60;python&#x60;, &#x60;go&#x60;, &#x60;rust&#x60;, &#x60;docker&#x60;, &#x60;codex&#x60;); a tool that is not installed is not listed..</param>
         /// <param name="updateAvailable">This Core&#39;s own version is newer than the runner&#39;s &#x60;version&#x60;. Absent until it connected..</param>
+        /// <param name="updateRequired">E12-5: the runner is older than the oldest this Core works with (&#x60;GET /core/health&#x60; &#x60;min_runner&#x60;), so the app asks to update it before relying on it. Absent until it connected..</param>
+        /// <param name="updating">E12-4: asked to update in the last 15 minutes (it restarts and reconnects on the new version). Absent when not..</param>
         /// <param name="varVersion">Its &#x60;ainkrad-runner&#x60; version, once connected..</param>
-        public Runner(RunnerAccounts accounts = default, string arch = default, bool? builtIn = default, int? capacity = default, DateTime connectedSince = default, bool? degraded = default, List<RunnerDriver> drivers = default, string home = default, RunnerHostLoad hostLoad = default, string id = default, RunnerIsolation isolation = default, string lastError = default, DateTime lastSeen = default, int? load = default, string name = default, bool? online = default, string os = default, string osPretty = default, List<string> ownLogins = default, RunnerPolicyBody policy = default, RunnerRunsAs runsAs = default, string sandbox = default, RunnerSlots slots = default, RunnerToolInstall toolInstall = default, Dictionary<string, string> tools = default, bool? updateAvailable = default, string varVersion = default)
+        public Runner(RunnerAccounts accounts = default, string arch = default, bool? builtIn = default, int? capacity = default, DateTime connectedSince = default, bool? degraded = default, List<RunnerDriver> drivers = default, string home = default, RunnerHostLoad hostLoad = default, string id = default, RunnerIsolation isolation = default, string lastError = default, DateTime lastSeen = default, int? load = default, string name = default, bool? online = default, string os = default, string osPretty = default, List<string> ownLogins = default, RunnerPolicyBody policy = default, RunnerRunsAs runsAs = default, string sandbox = default, RunnerSlots slots = default, RunnerToolInstall toolInstall = default, Dictionary<string, string> tools = default, bool? updateAvailable = default, bool? updateRequired = default, bool? updating = default, string varVersion = default)
         {
             // to ensure "id" is required (not null)
             if (id == null)
@@ -105,6 +107,8 @@ namespace Ainkrad.Client.Model
             this.ToolInstall = toolInstall;
             this.Tools = tools;
             this.UpdateAvailable = updateAvailable;
+            this.UpdateRequired = updateRequired;
+            this.Updating = updating;
             this.VarVersion = varVersion;
         }
 
@@ -290,6 +294,20 @@ namespace Ainkrad.Client.Model
         public bool? UpdateAvailable { get; set; }
 
         /// <summary>
+        /// E12-5: the runner is older than the oldest this Core works with (&#x60;GET /core/health&#x60; &#x60;min_runner&#x60;), so the app asks to update it before relying on it. Absent until it connected.
+        /// </summary>
+        /// <value>E12-5: the runner is older than the oldest this Core works with (&#x60;GET /core/health&#x60; &#x60;min_runner&#x60;), so the app asks to update it before relying on it. Absent until it connected.</value>
+        [DataMember(Name = "update_required", EmitDefaultValue = true)]
+        public bool? UpdateRequired { get; set; }
+
+        /// <summary>
+        /// E12-4: asked to update in the last 15 minutes (it restarts and reconnects on the new version). Absent when not.
+        /// </summary>
+        /// <value>E12-4: asked to update in the last 15 minutes (it restarts and reconnects on the new version). Absent when not.</value>
+        [DataMember(Name = "updating", EmitDefaultValue = true)]
+        public bool? Updating { get; set; }
+
+        /// <summary>
         /// Its &#x60;ainkrad-runner&#x60; version, once connected.
         /// </summary>
         /// <value>Its &#x60;ainkrad-runner&#x60; version, once connected.</value>
@@ -330,6 +348,8 @@ namespace Ainkrad.Client.Model
             sb.Append("  ToolInstall: ").Append(ToolInstall).Append("\n");
             sb.Append("  Tools: ").Append(Tools).Append("\n");
             sb.Append("  UpdateAvailable: ").Append(UpdateAvailable).Append("\n");
+            sb.Append("  UpdateRequired: ").Append(UpdateRequired).Append("\n");
+            sb.Append("  Updating: ").Append(Updating).Append("\n");
             sb.Append("  VarVersion: ").Append(VarVersion).Append("\n");
             sb.Append("}\n");
             return sb.ToString();

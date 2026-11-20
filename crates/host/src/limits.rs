@@ -25,6 +25,10 @@ pub const SKEW: u64 = 60;
 pub fn policy(action: &str) -> (u64, u64, usize) {
     match action {
         "restart_core" => (60, 600, 3),
+        // A backup is heavy: one at a time is the unit's own rule; at most four an hour.
+        "backup_now" => (60, 3600, 4),
+        // One update at most every 5 minutes, 3 an hour: a retry loop cannot hammer the release server.
+        "update" => (300, 3600, 3),
         _ => (0, 600, 6),
     }
 }
