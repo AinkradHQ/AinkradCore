@@ -1,1 +1,2 @@
 POST /modules/leyline/v1/hosts/{host}/runner the response property 'session' became optional for the status '200'
+POST /api/v1/agent-sessions the 'runner' request property type/format changed from 'string'/'' to 'string, null'/''

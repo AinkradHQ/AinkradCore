@@ -541,3 +541,18 @@ openapi.json: removed /paths//api/v1/terminals/post/x-ainkrad-destructive
 # reads the shifted tail as one removed variant each. Delete once the baseline carries them.
 runner.schema.json: variant #46 removed at /$defs/Command/oneOf
 runner.schema.json: variant #44 removed at /$defs/Reply/oneOf
+
+# E15 (F0): `NewAgentSession.runner` is deprecated and optional (the Core places every session), so it is no
+# longer required and accepts null. Only a request is widened: an older client that sends a runner still parses.
+openapi.json: /components/schemas/NewAgentSession/properties/runner/type changed shape
+openapi.json: removed /components/schemas/NewAgentSession/required
+modules/brain/api/openapi.core.json: /components/schemas/NewAgentSession/properties/runner/type changed shape
+modules/brain/api/openapi.core.json: removed /components/schemas/NewAgentSession/required
+modules/citadel/api/openapi.core.json: /components/schemas/NewAgentSession/properties/runner/type changed shape
+modules/citadel/api/openapi.core.json: removed /components/schemas/NewAgentSession/required
+modules/design/api/openapi.core.json: /components/schemas/NewAgentSession/properties/runner/type changed shape
+modules/design/api/openapi.core.json: removed /components/schemas/NewAgentSession/required
+modules/leyline/api/openapi.core.json: /components/schemas/NewAgentSession/properties/runner/type changed shape
+modules/leyline/api/openapi.core.json: removed /components/schemas/NewAgentSession/required
+modules/lore/api/openapi.core.json: /components/schemas/NewAgentSession/properties/runner/type changed shape
+modules/lore/api/openapi.core.json: removed /components/schemas/NewAgentSession/required
