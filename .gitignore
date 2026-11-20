@@ -14,3 +14,5 @@ target/
 /modules/design/ffi/fuzz/corpus/
 /modules/lore/model/fuzz/artifacts/
 /modules/lore/model/fuzz/corpus/
+__pycache__/
+*.pyc

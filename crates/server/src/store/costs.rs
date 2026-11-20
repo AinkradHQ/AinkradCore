@@ -298,6 +298,7 @@ pub async fn record_priced_in(
         c.session,
         tokens,
         cost.unwrap_or(0),
+        1,
         c.occurred_at,
     )
     .await?;
@@ -344,6 +345,15 @@ async fn add_subjects(
         sqlx::query(
             "INSERT INTO core_cost_subjects (event_id, kind, subject_id) \
              SELECT ?1, 'pool', CAST(pool_id AS TEXT) FROM core_pool_members WHERE account_id = ?2",
+        )
+        .bind(id)
+        .bind(a)
+        .execute(&mut *conn)
+        .await?;
+        // The account's provider counts it too (a provider's budget spans every account of it).
+        sqlx::query(
+            "INSERT OR IGNORE INTO core_cost_subjects (event_id, kind, subject_id) \
+             SELECT ?1, 'provider', provider FROM core_accounts WHERE id = ?2",
         )
         .bind(id)
         .bind(a)
@@ -425,7 +435,7 @@ pub async fn correct_in(
     .bind(id)
     .execute(&mut *conn)
     .await?;
-    guard::apply_in(conn, new, &o.session, 0, delta, &o.occurred_at).await?;
+    guard::apply_in(conn, new, &o.session, 0, delta, 0, &o.occurred_at).await?;
     let guard = guard::check_in(conn, new, &o.occurred_at, now).await?;
     let r = sqlx::query(concat!(
         "SELECT ",

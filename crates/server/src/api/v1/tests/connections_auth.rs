@@ -193,6 +193,7 @@ async fn the_contract_marks_every_route_with_its_scope_and_whether_it_is_destruc
         ("get", "/api/v1/connections", "read", false),
         ("get", "/api/v1/connections/{id}", "read", false),
         ("post", "/api/v1/connections/{id}/test", "admin", false),
+        ("get", "/api/v1/connections/{id}/resources", "admin", false),
     ]
     .map(|(m, t, s, d)| (m.to_owned(), t, s, d))
     .to_vec();

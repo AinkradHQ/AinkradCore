@@ -48,6 +48,56 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
         ),
         (
             "PUT",
+            "/api/v1/core/prefs",
+            "the update schedule and notice prefs only; installing an update is its own danger route",
+        ),
+        (
+            "POST",
+            "/api/v1/accounts/logins/{id}/input",
+            "a menu number or a code typed into one sign-in; free text is refused, and the login stays on its runner",
+        ),
+        (
+            "PUT",
+            "/api/v1/accounts/{id}/models/{model}",
+            "switches one model on or off for one account: a limit, never a grant",
+        ),
+        (
+            "POST",
+            "/api/v1/accounts/{id}/restore",
+            "brings a deleted account back within its window; nothing new is granted",
+        ),
+        (
+            "PUT",
+            "/api/v1/ai-order",
+            "the order accounts are tried in: a preference, not a grant",
+        ),
+        (
+            "PUT",
+            "/api/v1/ai-order/agents/{agent}",
+            "one agent's order of accounts: a preference, not a grant",
+        ),
+        (
+            "DELETE",
+            "/api/v1/ai-order/agents/{agent}",
+            "drops one agent's own order: a preference, not a grant",
+        ),
+        (
+            "PUT",
+            "/api/v1/projects/defaults",
+            "limits for new projects (CPU, memory, idle stop): a normal project setting",
+        ),
+        (
+            "POST",
+            "/api/v1/system/backup",
+            "starts the unit the backup timer starts, with no input; audited and held back for a minute",
+        ),
+        (
+            "POST",
+            "/api/v1/core/update/check",
+            "asks the release feed whether a newer version exists and changes nothing",
+        ),
+        (
+            "PUT",
             "/api/v1/settings/{scope}/{key}",
             "a setting that is not `auth.*` (those are danger by key, in the handler)",
         ),
@@ -268,16 +318,6 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
         ),
         (
             "PUT",
-            "/api/v1/accounts/{id}/limits",
-            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
-        ),
-        (
-            "DELETE",
-            "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
-            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
-        ),
-        (
-            "PUT",
             "/api/v1/budgets",
             "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
         ),
@@ -438,6 +478,46 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
         ),
         (
             "POST",
+            "/api/v1/system/backup",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/accounts/logins/{id}/input",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/accounts/{id}/models/{model}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/accounts/{id}/restore",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/ai-order",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/ai-order/agents/{agent}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/ai-order/agents/{agent}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/projects/defaults",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
             "/api/v1/projects/{id}/run-configs",
             "E11: a configuration is data until a run starts, and starting one needs the app unlock",
         ),
@@ -527,6 +607,11 @@ fn the_danger_list_is_the_d4_list() {
         ("POST", "/api/v1/secrets/{id}/reveal"),
         ("POST", "/api/v1/secrets/{id}/leases"),
         ("POST", "/api/v1/secret-groups/{id}/leases"),
+        // E7/E8/E12: the retention write, a Core update, a runner update and an export of secret values.
+        ("PUT", "/api/v1/system/backups/retention"),
+        ("POST", "/api/v1/system/update"),
+        ("POST", "/api/v1/runners/{id}/update"),
+        ("POST", "/api/v1/secrets/export"),
     ];
     want.sort();
     assert_eq!(have, want);
@@ -592,6 +677,18 @@ fn every_destructive_route_is_a_declared_route() {
         assert!(
             declared(m, t).is_some(),
             "{m} {t} is destructive but not in ROUTES"
+        );
+    }
+}
+
+#[test]
+fn no_route_is_listed_twice() {
+    for (i, r) in ROUTES.iter().enumerate() {
+        assert!(
+            !ROUTES[..i].iter().any(|o| (o.0, o.1) == (r.0, r.1)),
+            "{} {} is listed twice",
+            r.0,
+            r.1
         );
     }
 }

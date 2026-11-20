@@ -322,16 +322,16 @@ pub fn fstatat(dir: BorrowedFd<'_>, name: &str) -> io::Result<Stat> {
     if r != 0 {
         return Err(io::Error::last_os_error());
     }
-    let kind = match u32::from(st.st_mode) & u32::from(libc::S_IFMT) {
-        m if m == u32::from(libc::S_IFREG) => Kind::File,
-        m if m == u32::from(libc::S_IFDIR) => Kind::Dir,
-        m if m == u32::from(libc::S_IFLNK) => Kind::Symlink,
+    let kind = match bits(st.st_mode) & bits(libc::S_IFMT) {
+        m if m == bits(libc::S_IFREG) => Kind::File,
+        m if m == bits(libc::S_IFDIR) => Kind::Dir,
+        m if m == bits(libc::S_IFLNK) => Kind::Symlink,
         _ => Kind::Other,
     };
     Ok(Stat {
         kind,
         size: u64::try_from(st.st_size).unwrap_or(0),
-        mode: u32::from(st.st_mode) & 0o7777,
+        mode: bits(st.st_mode) & 0o7777,
         mtime_ns: (st.st_mtime as i64)
             .saturating_mul(1_000_000_000)
             .saturating_add(st.st_mtime_nsec as i64),
@@ -354,11 +354,24 @@ pub fn list_dir(dir: BorrowedFd<'_>) -> io::Result<Vec<OsString>> {
     // start at the top.
     unsafe { libc::rewinddir(stream) };
     let mut names = Vec::new();
-    loop {
+    let failed = loop {
+        // readdir(3) returns NULL both at the end and on an error; only errno tells them apart, so
+        // it is cleared first (E15 security review L9: a partial listing read as "deleted").
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+        // SAFETY: __error(3) returns this thread's errno slot, always valid to write.
+        unsafe {
+            *libc::__error() = 0
+        };
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+        // SAFETY: __errno_location(3) returns this thread's errno slot, always valid to write.
+        unsafe {
+            *libc::__errno_location() = 0
+        };
         // SAFETY: readdir(3) on our open stream; the entry is read before the next call.
         let entry = unsafe { libc::readdir(stream) };
         if entry.is_null() {
-            break;
+            let e = io::Error::last_os_error();
+            break (e.raw_os_error() != Some(0)).then_some(e);
         }
         // SAFETY: a non-null entry's `d_name` is a NUL-terminated string valid until the next
         // readdir or closedir.
@@ -367,10 +380,19 @@ pub fn list_dir(dir: BorrowedFd<'_>) -> io::Result<Vec<OsString>> {
         if name != "." && name != ".." {
             names.push(name.to_owned());
         }
-    }
+    };
     // SAFETY: closedir(3) on the stream we opened, once; it closes the descriptor too.
     unsafe { libc::closedir(stream) };
-    Ok(names)
+    match failed {
+        Some(e) => Err(e),
+        None => Ok(names),
+    }
+}
+
+/// A `mode_t` as `u32`: it is `u16` on macOS and already `u32` on Linux.
+#[allow(clippy::useless_conversion)]
+fn bits(m: libc::mode_t) -> u32 {
+    u32::from(m)
 }
 
 #[cfg(test)]

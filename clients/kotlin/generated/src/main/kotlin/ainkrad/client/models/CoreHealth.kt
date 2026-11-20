@@ -15,6 +15,7 @@
 
 package ainkrad.client.models
 
+import ainkrad.client.models.Fleet
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -27,8 +28,18 @@ import kotlinx.serialization.Contextual
  * @param version The server's crate version.
  * @param certDaysLeft Whole days until then; negative once it has ended.
  * @param certNotAfter RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param diskTotalBytes Size of the data disk in bytes.
+ * @param diskUsedBytes The data disk in use, in bytes.
+ * @param diskUsedPct Share of the data disk in use, 0 to 100, when the host says.
+ * @param fleet The runners at a glance.
+ * @param hostCpuPct The whole host's CPU, 0 to 100, over the last minute (a Linux Core only).
  * @param lastBackupAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param lastBackupBytes That backup's size in bytes.
+ * @param memoryBytes Resident memory of the Core process in bytes (the top bar's Core menu).
+ * @param minApp E12-5: the oldest app this Core works with. An app below it tells the person to update the app.
+ * @param minRunner E12-5: the oldest runner this Core works with (`GET /runners` marks older ones `update_required`).
+ * @param ramTotalBytes 
+ * @param ramUsedBytes The host's memory in use and in total, in bytes (a Linux Core only).
  */
 @Serializable
 
@@ -50,13 +61,52 @@ data class CoreHealth (
     @Contextual @SerialName(value = "cert_not_after")
     val certNotAfter: java.time.OffsetDateTime? = null,
 
+    /* Size of the data disk in bytes. */
+    @SerialName(value = "disk_total_bytes")
+    val diskTotalBytes: kotlin.Long? = null,
+
+    /* The data disk in use, in bytes. */
+    @SerialName(value = "disk_used_bytes")
+    val diskUsedBytes: kotlin.Long? = null,
+
+    /* Share of the data disk in use, 0 to 100, when the host says. */
+    @SerialName(value = "disk_used_pct")
+    val diskUsedPct: kotlin.Long? = null,
+
+    /* The runners at a glance. */
+    @SerialName(value = "fleet")
+    val fleet: Fleet? = null,
+
+    /* The whole host's CPU, 0 to 100, over the last minute (a Linux Core only). */
+    @SerialName(value = "host_cpu_pct")
+    val hostCpuPct: kotlin.Double? = null,
+
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "last_backup_at")
     val lastBackupAt: java.time.OffsetDateTime? = null,
 
     /* That backup's size in bytes. */
     @SerialName(value = "last_backup_bytes")
-    val lastBackupBytes: kotlin.Long? = null
+    val lastBackupBytes: kotlin.Long? = null,
+
+    /* Resident memory of the Core process in bytes (the top bar's Core menu). */
+    @SerialName(value = "memory_bytes")
+    val memoryBytes: kotlin.Long? = null,
+
+    /* E12-5: the oldest app this Core works with. An app below it tells the person to update the app. */
+    @SerialName(value = "min_app")
+    val minApp: kotlin.String? = null,
+
+    /* E12-5: the oldest runner this Core works with (`GET /runners` marks older ones `update_required`). */
+    @SerialName(value = "min_runner")
+    val minRunner: kotlin.String? = null,
+
+    @SerialName(value = "ram_total_bytes")
+    val ramTotalBytes: kotlin.Long? = null,
+
+    /* The host's memory in use and in total, in bytes (a Linux Core only). */
+    @SerialName(value = "ram_used_bytes")
+    val ramUsedBytes: kotlin.Long? = null
 
 ) {
 

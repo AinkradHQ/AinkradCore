@@ -71,6 +71,7 @@ async fn a_repeated_pick_gives_the_same_account_and_a_rolled_back_one_leaves_not
     let pool_entry = w.keys("main", &[a.id, b.id]).await;
     let subject = pool_entry.pool.to_string();
     let budget = budgets::NewBudget {
+        message_cap: None,
         kind: "pool",
         subject: &subject,
         company: None,

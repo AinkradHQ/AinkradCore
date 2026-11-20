@@ -5,6 +5,8 @@
 
 use std::path::{Path, PathBuf};
 
+use ainkrad_proto::v2::synctree::Rules;
+
 pub const MIN_FREE_PCT: u8 = 10;
 pub const MAX_TOTAL_BYTES: u64 = 20 * 1024 * 1024 * 1024;
 
@@ -136,17 +138,23 @@ pub fn to_evict(held: &[Held], free: Option<u8>, keep: i64) -> Vec<i64> {
 }
 
 /// Clears what one origin's jobs could leave for another's (E15 security review M5). A cache and
-/// its job home are shared by every job of a project, and what the sync leaves out (the build
-/// folders, the home's package caches and tool config) persists between jobs. When this job's
-/// `origin` (the session, terminal or person that asked, from the Core) is not the last job's,
-/// the home goes and so do the build folders in `tree` (`None`: the canonical workspace, which is
-/// never cleared), so one session's job never runs what another planted. The marker sits beside
-/// the home, outside every sandbox.
+/// its job home are shared by every job of a project, and what the sync never writes (the build
+/// folders, `.git`, secret-named files such as `.npmrc`, the project's own `exclude`s, the home's
+/// package caches and tool config) persists between jobs. When this job's `origin` (the session,
+/// terminal or person that asked, from the Core) is not the last job's, the home goes and so does
+/// every path in `tree` that `rules` keep out of a sync IN (`None`: the canonical workspace, which
+/// is never cleared). What the sync wrote stays: the Core's sync just made it the asking session's
+/// tree (the tree hash check), so one session's job never runs what another planted. The Core
+/// runs one job per cache at a time (`heavy::run`), so nothing of another origin's is running. The
+/// marker sits beside the home, outside every sandbox.
 ///
-/// ponytail: only the built-in build folders are cleared, not a project's own `exclude`s; and a
-/// job still running for the previous origin loses its build folders. Key the cache by origin if
-/// either matters.
-pub fn fresh_for_origin(home: &Path, tree: Option<&Path>, origin: &str) -> std::io::Result<()> {
+/// ponytail: the origin `u` (a person's own `POST /jobs`) is one origin for every person; key it by
+/// user when a Core has more than one.
+pub fn fresh_for_origin(
+    home: &Path,
+    tree: Option<(&Path, &Rules)>,
+    origin: &str,
+) -> std::io::Result<()> {
     let marker = home.with_extension("origin");
     if std::fs::read_to_string(&marker).is_ok_and(|o| o == origin) {
         return Ok(());
@@ -155,8 +163,11 @@ pub fn fresh_for_origin(home: &Path, tree: Option<&Path>, origin: &str) -> std::
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
         _ => {}
     }
-    if let Some(tree) = tree {
-        remove_build_dirs(tree)?;
+    if let Some((tree, rules)) = tree {
+        match remove_unsynced(tree, "", rules) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
     }
     if let Some(up) = marker.parent() {
         std::fs::create_dir_all(up)?;
@@ -164,26 +175,42 @@ pub fn fresh_for_origin(home: &Path, tree: Option<&Path>, origin: &str) -> std::
     std::fs::write(&marker, origin)
 }
 
-/// Removes every build folder under `dir`; links are never followed.
-fn remove_build_dirs(dir: &Path) -> std::io::Result<()> {
-    let rd = match std::fs::read_dir(dir) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        other => other?,
-    };
-    for e in rd {
+/// Removes everything under `dir` (the tree path `rel`) that a sync IN never writes; links are
+/// never followed. A folder nothing inside of can be synced goes whole.
+fn remove_unsynced(dir: &Path, rel: &str, rules: &Rules) -> std::io::Result<()> {
+    use ainkrad_proto::v2::synctree::{BUILD_DIRS, check_path, has_git};
+    for e in std::fs::read_dir(dir)? {
         let e = e?;
-        if !e.file_type()?.is_dir() {
+        let path = e.path();
+        let Some(name) = e.file_name().to_str().map(str::to_owned) else {
+            remove_any(&path, e.file_type()?.is_dir())?;
             continue;
-        }
-        let name = e.file_name();
-        let name = name.to_string_lossy();
-        if ainkrad_proto::v2::synctree::BUILD_DIRS.contains(&name.as_ref()) {
-            std::fs::remove_dir_all(e.path())?;
-        } else if !name.eq_ignore_ascii_case(".git") {
-            remove_build_dirs(&e.path())?;
+        };
+        let r = if rel.is_empty() {
+            name.clone()
+        } else {
+            format!("{rel}/{name}")
+        };
+        let is_dir = e.file_type()?.is_dir();
+        let whole = check_path(&r).is_err()
+            || has_git(&name)
+            || (is_dir && BUILD_DIRS.contains(&name.as_str()) && !rules.enters_build_dirs(false));
+        if whole {
+            remove_any(&path, is_dir)?;
+        } else if is_dir {
+            remove_unsynced(&path, &r, rules)?;
+        } else if rules.sync_in(&r).is_some() {
+            std::fs::remove_file(&path)?;
         }
     }
     Ok(())
+}
+
+fn remove_any(path: &Path, is_dir: bool) -> std::io::Result<()> {
+    match is_dir {
+        true => std::fs::remove_dir_all(path),
+        false => std::fs::remove_file(path),
+    }
 }
 
 #[cfg(test)]
@@ -191,32 +218,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_new_origin_finds_no_home_or_build_folder_the_last_one_left() {
-        // M5: session A plants `target/` and `~/.cargo/config.toml`; session B's job must not see them.
+    fn a_new_origin_finds_nothing_the_sync_did_not_write() {
+        // M5: session A plants `target/`, `~/.cargo/config.toml`, a `.npmrc`, an excluded file and
+        // a `.git` hook; session B's job must not see them, but keeps every synced file.
         let base = std::env::temp_dir().join(format!("ainkrad-origin-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let (home, tree) = (base.join(".home/4"), base.join("4"));
+        let rules = Rules {
+            exclude: vec!["local/**".into()],
+            ..Rules::default()
+        };
         let planted = [
             home.join(".cargo/config.toml"),
             tree.join("target/debug/build.sh"),
             tree.join("web/node_modules/.bin/x"),
+            tree.join("web/.npmrc"),
+            tree.join(".envrc"),
+            tree.join("local/run.sh"),
+            tree.join(".git/hooks/pre-commit"),
         ];
-        let kept = tree.join("src/main.rs");
+        let kept = [tree.join("src/main.rs"), tree.join("web/package.json")];
         let plant = || {
-            for p in planted.iter().chain([&kept]) {
+            for p in planted.iter().chain(&kept) {
                 std::fs::create_dir_all(p.parent().unwrap()).unwrap();
                 std::fs::write(p, "x").unwrap();
             }
         };
+        let t = Some((tree.as_path(), &rules));
         plant();
-        fresh_for_origin(&home, Some(&tree), "s:as_a").unwrap();
-        assert!(planted.iter().all(|p| !p.exists()) && kept.exists());
+        fresh_for_origin(&home, t, "s:as_a").unwrap();
+        let left: Vec<_> = planted.iter().filter(|p| p.exists()).collect();
+        assert!(left.is_empty(), "{left:?}");
+        assert!(kept.iter().all(|p| p.exists()));
         plant();
         // The same origin keeps its warm folders.
-        fresh_for_origin(&home, Some(&tree), "s:as_a").unwrap();
+        fresh_for_origin(&home, t, "s:as_a").unwrap();
         assert!(planted.iter().all(|p| p.exists()));
-        fresh_for_origin(&home, Some(&tree), "s:as_b").unwrap();
-        assert!(planted.iter().all(|p| !p.exists()) && kept.exists());
+        fresh_for_origin(&home, t, "s:as_b").unwrap();
+        assert!(planted.iter().all(|p| !p.exists()) && kept.iter().all(|p| p.exists()));
         let _ = std::fs::remove_dir_all(&base);
     }
 

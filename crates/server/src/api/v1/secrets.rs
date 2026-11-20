@@ -1,7 +1,7 @@
 //! The secrets broker v0 (E2-07, `store::secrets`): store, list, rotate and delete secrets
-//! (scope `admin`; every write needs a step-up), grant a runner a lease (`admin`, step-up: it is
-//! the only way a value leaves the Core, the spec §8 "reveal"), and the runner's redemption
-//! (scope `runner`, the lease's own runner only). No route returns a value to a client.
+//! (scope `admin`; every write needs a step-up), grant a runner a lease (`admin`, step-up) and the
+//! runner's redemption (scope `runner`, the lease's own runner only). A value reaches a person
+//! only through `secret_export` (a fresh step-up) and `reveal` (E1); this file's routes return none.
 //!
 //! Bodies are parsed here, not by axum's `Json`: a serde error can quote the input, and the
 //! input may be the value. A malformed body gets one fixed message.

@@ -248,6 +248,29 @@ impl Auth {
         }
     }
 
+    /// Records that `session` just proved a step-up at `now` (after [`Auth::elevate`]).
+    pub fn mark_fresh(&self, session: &str, device: &str, now: i64) {
+        if let Some(s) = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get_mut(session)
+            .filter(|s| s.device == device)
+        {
+            s.elevated_at = Some(now);
+        }
+    }
+
+    /// Whether `session` proved a step-up within `max_age` seconds; the proof is spent either
+    /// way, so one Touch ID covers one such request.
+    pub fn take_fresh(&self, session: &str, device: &str, now: i64, max_age: i64) -> bool {
+        let mut all = self.sessions.lock().unwrap();
+        all.get_mut(session)
+            .filter(|s| s.device == device)
+            .and_then(|s| s.elevated_at.take())
+            .is_some_and(|at| now - at <= max_age)
+    }
+
     /// Elevates `session` of `device` until `until`, replacing any elevation it had (a new one
     /// never stacks). `false` when the session is gone.
     pub fn elevate(&self, session: &str, device: &str, until: i64) -> bool {

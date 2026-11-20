@@ -23,7 +23,7 @@ enum Class {
 }
 use Class::*;
 
-const ROUTES: [(&str, &str, Class); 22] = [
+const ROUTES: [(&str, &str, Class); 23] = [
     ("get", "/api/v1/connection-kinds", Kinds),
     ("get", "/api/v1/connections", List),
     ("post", "/api/v1/connections", Create),
@@ -33,6 +33,7 @@ const ROUTES: [(&str, &str, Class); 22] = [
     ("post", "/api/v1/connections/{id}/test", ById),
     ("put", "/api/v1/connections/{id}/credential", ById),
     ("get", "/api/v1/connections/{id}/activity", ById),
+    ("get", "/api/v1/connections/{id}/resources", ById),
     ("get", "/api/v1/connections/{id}/grants", ById),
     ("put", "/api/v1/connections/{id}/grants", ById),
     (

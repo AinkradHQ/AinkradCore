@@ -22,6 +22,7 @@ pub(super) struct Cand {
 pub(super) struct Tally {
     used: u32,
     other_user: u32,
+    model_off: u32,
     not_leasable: u32,
     cooling: u32,
     unavailable: u32,
@@ -37,6 +38,7 @@ impl Tally {
         let parts = [
             (self.used, "already used by this run"),
             (self.other_user, "of another user or provider"),
+            (self.model_off, "with the model switched off"),
             (self.not_leasable, "not leasable to this runner"),
             (self.cooling, "cooling or limited"),
             (self.unavailable, "disabled, held or unhealthy"),
@@ -118,6 +120,8 @@ pub(super) async fn of_entry(
     let sql = format!(
         "SELECT a.id, a.user_id, a.provider, a.secret_name, a.state, a.state_reason, \
          a.state_until, a.cap, a.last_used_at, a.plan_limit, m.position AS seat, \
+         EXISTS (SELECT 1 FROM core_account_model_denied d \
+                 WHERE d.account_id = a.id AND d.model = ?4) AS model_off, \
          EXISTS (SELECT 1 FROM core_secrets s, json_each(s.runners) j \
                  WHERE s.name = a.secret_name AND j.value = ?2) AS leasable, \
          (SELECT count(*) FROM core_agent_sessions x WHERE x.account_id = a.id AND x.id != ?3 \
@@ -130,6 +134,7 @@ pub(super) async fn of_entry(
         .bind(e.pool)
         .bind(ask.runner)
         .bind(ask.session)
+        .bind(e.model.as_deref())
         .fetch_all(&mut *conn)
         .await?;
     let mut out = Found {
@@ -154,6 +159,9 @@ pub(super) async fn of_entry(
             || r.try_get::<String, _>("provider")? != e.provider
         {
             t.other_user += 1;
+        } else if r.try_get::<i64, _>("model_off")? != 0 {
+            // Switched off for this account: skipped even inside a shared pool. It is no reason to wait.
+            t.model_off += 1;
         } else if r.try_get::<i64, _>("leasable")? == 0 {
             t.not_leasable += 1;
         } else if state != "active" {

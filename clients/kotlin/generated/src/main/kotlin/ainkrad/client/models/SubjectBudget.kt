@@ -29,18 +29,21 @@ import kotlinx.serialization.Contextual
  * @param held Tokens held by sessions that reserved them and have not spent them yet.
  * @param heldUsd 
  * @param id 
- * @param kind `account`, `pool`, `agent`, `company`, `department`, `project`, `sprint` or `issue`.
- * @param period `day`, `week` (from Monday), `month` or `total`.
+ * @param kind `account`, `pool`, `provider`, `agent`, `company`, `department`, `project`, `sprint` or `issue`.
+ * @param period `hour5` (fixed 5-hour UTC buckets from the Unix epoch), `day`, `week` (from Monday), `month` or `total`.
  * @param periodKey The period this standing is for: `2026-10-22`, a week's Monday, `2026-10` or `total`.
  * @param raised Tokens added for the period by approved overruns.
  * @param raisedUsd 
  * @param spent 
- * @param subject The subject's id: an account or pool id, or the owning module's opaque id.
- * @param tokenCap Tokens per period; 0 with a dollar cap is a dollars-only budget.
+ * @param subject The subject's id: an account or pool id, a provider id (`anthropic`, `openrouter`, `claude-sub`), or the owning module's opaque id.
+ * @param tokenCap Tokens per period; 0 with a dollar or message cap is a budget with no token limit.
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param usdSpent 
  * @param warnAtPercent 
  * @param company The owner's company binding (a company budget's is its subject).
+ * @param messageCap Messages per period (one cost event is one message); absent is no message limit.
+ * @param messages Messages counted in this period.
+ * @param periodEndsAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param usdCapMicros Millionths of a dollar per period.
  */
 @Serializable
@@ -69,11 +72,11 @@ data class SubjectBudget (
     @SerialName(value = "id")
     val id: kotlin.Long,
 
-    /* `account`, `pool`, `agent`, `company`, `department`, `project`, `sprint` or `issue`. */
+    /* `account`, `pool`, `provider`, `agent`, `company`, `department`, `project`, `sprint` or `issue`. */
     @SerialName(value = "kind")
     val kind: kotlin.String,
 
-    /* `day`, `week` (from Monday), `month` or `total`. */
+    /* `hour5` (fixed 5-hour UTC buckets from the Unix epoch), `day`, `week` (from Monday), `month` or `total`. */
     @SerialName(value = "period")
     val period: kotlin.String,
 
@@ -91,11 +94,11 @@ data class SubjectBudget (
     @SerialName(value = "spent")
     val spent: kotlin.Long,
 
-    /* The subject's id: an account or pool id, or the owning module's opaque id. */
+    /* The subject's id: an account or pool id, a provider id (`anthropic`, `openrouter`, `claude-sub`), or the owning module's opaque id. */
     @SerialName(value = "subject")
     val subject: kotlin.String,
 
-    /* Tokens per period; 0 with a dollar cap is a dollars-only budget. */
+    /* Tokens per period; 0 with a dollar or message cap is a budget with no token limit. */
     @SerialName(value = "token_cap")
     val tokenCap: kotlin.Long,
 
@@ -112,6 +115,18 @@ data class SubjectBudget (
     /* The owner's company binding (a company budget's is its subject). */
     @SerialName(value = "company")
     val company: kotlin.String? = null,
+
+    /* Messages per period (one cost event is one message); absent is no message limit. */
+    @SerialName(value = "message_cap")
+    val messageCap: kotlin.Long? = null,
+
+    /* Messages counted in this period. */
+    @SerialName(value = "messages")
+    val messages: kotlin.Long? = null,
+
+    /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
+    @Contextual @SerialName(value = "period_ends_at")
+    val periodEndsAt: java.time.OffsetDateTime? = null,
 
     /* Millionths of a dollar per period. */
     @SerialName(value = "usd_cap_micros")

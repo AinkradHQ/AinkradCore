@@ -26,6 +26,8 @@ import kotlinx.serialization.Contextual
  * @param argv 
  * @param cwdRel A wire path relative to the session or project folder (the runner maps the shim's `cwd`).
  * @param env 
+ * @param hosts A `filtered` sandbox's allowed host names; a job sent elsewhere gets them cut to the registry list.
+ * @param network The sandbox's own network: `allow`, `deny` or `filtered` (E15 H2). Absent or unknown is `deny`: the command runs where it was typed.
  * @param project 
  * @param session The AI session (`as_…`) whose sandbox the shim ran in.
  * @param terminal The Core terminal it ran in.
@@ -44,6 +46,14 @@ data class RunnerNewJob (
 
     @SerialName(value = "env")
     val env: kotlin.collections.Map<kotlin.String, kotlin.String>? = null,
+
+    /* A `filtered` sandbox's allowed host names; a job sent elsewhere gets them cut to the registry list. */
+    @SerialName(value = "hosts")
+    val hosts: kotlin.collections.List<kotlin.String>? = null,
+
+    /* The sandbox's own network: `allow`, `deny` or `filtered` (E15 H2). Absent or unknown is `deny`: the command runs where it was typed. */
+    @SerialName(value = "network")
+    val network: kotlin.String? = null,
 
     @SerialName(value = "project")
     val project: kotlin.Long? = null,

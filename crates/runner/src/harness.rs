@@ -559,6 +559,7 @@ impl Executor for HarnessExecutor {
 }
 
 mod account;
+mod bound_session;
 mod cli;
 mod files;
 mod inbox;

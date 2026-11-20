@@ -327,14 +327,11 @@ pub(super) async fn place_new(
     draws_account: bool,
 ) -> Result<Placed, ApiError> {
     let views = crate::hardware::view::views(app).await?;
-    // M9: a pinned session goes only to a runner that is online and neither paused nor degraded.
+    // M9: a pinned session never goes to a paused or degraded runner. An offline one is pinned as
+    // before: the request is checked first (a 400/403 is never hidden behind a 409), and the session
+    // then waits `starting` while its runner is away, as `createAgentSession` documents.
     let pin = |r: &str| match place::pin_refusal(&views, r) {
-        None => Ok(place::pinned(r)),
-        Some("offline") => Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "runner_offline",
-            "that runner is not connected",
-        )),
+        None | Some("offline") => Ok(place::pinned(r)),
         Some(why) => Err(ApiError::new(
             StatusCode::CONFLICT,
             "runner_paused",

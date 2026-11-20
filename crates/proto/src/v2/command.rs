@@ -122,6 +122,19 @@ pub enum Command {
     AgentRevert(super::AgentRevert),
     #[serde(rename = "agent.write")]
     AgentWrite(super::AgentWrite),
+    /// (After every older op.) Wait for a runner-bound sign-in to finish (E7-4).
+    #[serde(rename = "login.wait")]
+    LoginWait(super::LoginWait),
+    #[serde(rename = "login.input")]
+    LoginInput(super::LoginInput),
+    #[serde(rename = "login.screen")]
+    LoginScreen(super::LoginScreenReq),
+    /// (After every older op.) Wipe a removed runner-bound account's home (E7 closeout).
+    #[serde(rename = "login.wipe")]
+    LoginWipe(super::LoginWipe),
+    /// E12-4 (after every older op: the schema-compat gate tells variants by position).
+    #[serde(rename = "runner.update")]
+    RunnerUpdate(super::RunnerUpdate),
     // E15 (protocol 2.1), after every older op.
     #[serde(rename = "job.run")]
     JobRun(super::JobRun),
@@ -169,6 +182,10 @@ impl Command {
             Self::LoginStart(_) => super::OP_LOGIN_START,
             Self::LoginCode(_) => super::OP_LOGIN_CODE,
             Self::LoginCancel(_) => super::OP_LOGIN_CANCEL,
+            Self::LoginWait(_) => super::OP_LOGIN_WAIT,
+            Self::LoginInput(_) => super::OP_LOGIN_INPUT,
+            Self::LoginScreen(_) => super::OP_LOGIN_SCREEN,
+            Self::LoginWipe(_) => super::OP_LOGIN_WIPE,
             Self::RunnerPolicy(_) => super::OP_RUNNER_POLICY,
             Self::ToolsInstall(_) => super::OP_TOOLS_INSTALL,
             Self::ToolsStatus(_) => super::OP_TOOLS_STATUS,
@@ -197,6 +214,7 @@ impl Command {
             Self::AgentFiles(_) => super::OP_AGENT_FILES,
             Self::AgentRevert(_) => super::OP_AGENT_REVERT,
             Self::AgentWrite(_) => super::OP_AGENT_WRITE,
+            Self::RunnerUpdate(_) => super::OP_RUNNER_UPDATE,
             Self::JobRun(_) => super::OP_JOB_RUN,
             Self::SyncManifest(_) => super::OP_SYNC_MANIFEST,
             Self::SyncPush(_) => super::OP_SYNC_PUSH,
@@ -359,6 +377,12 @@ pub enum Reply {
     AgentRevert(super::AgentReverted),
     #[serde(rename = "agent.write")]
     AgentWrite(super::AgentWritten),
+    /// The answer to `login.screen`.
+    #[serde(rename = "login.screen")]
+    LoginScreen(super::LoginScreen),
+    /// The answer to `runner.update` (E12-4).
+    #[serde(rename = "runner.update")]
+    RunnerUpdate(super::RunnerUpdateAccepted),
     // E15 (protocol 2.1), after every older op.
     #[serde(rename = "job.run")]
     JobRun(super::JobDone),

@@ -29,6 +29,10 @@
 //! runner does not set `RLIMIT_CORE` (no safe std call, and `unsafe` is forbidden outside
 //! `crates/sys`): run it with core dumps off (`LimitCORE=0`, `ulimit -c 0`).
 
+mod agy;
+mod bound;
+#[cfg(test)]
+mod bound_tests;
 #[cfg(test)]
 mod hardening_tests;
 mod parse;
@@ -103,12 +107,18 @@ pub struct LoginConfig {
     pub answer_timeout: Duration,
     /// Versions accepted (tests add a stand-in's).
     pub pinned: Vec<String>,
+    /// The harnesses this runner can sign in to bound to itself (E7-4/5/5b).
+    pub bound: Vec<bound::BoundCli>,
+    /// `<config root>/bound`: one account home per runner-bound sign-in.
+    pub homes: PathBuf,
+    /// Whether an Antigravity sign-in runs inside the session sandbox. Always true outside a test
+    /// (a stand-in script under a temp dir is not readable from inside it).
+    pub sandbox: bool,
 }
 
 impl LoginConfig {
     pub fn new(root: PathBuf, program: PathBuf) -> Self {
         Self {
-            root,
             program,
             args: Vec::new(),
             timeout: LOGIN_TIMEOUT,
@@ -117,6 +127,10 @@ impl LoginConfig {
             enter_delay: ENTER_DELAY,
             answer_timeout: ANSWER_TIMEOUT,
             pinned: PINNED.iter().map(|v| (*v).to_owned()).collect(),
+            bound: Vec::new(),
+            homes: bound::homes_of(&root),
+            sandbox: true,
+            root,
         }
     }
 }
@@ -133,6 +147,36 @@ fn find_claude() -> Option<PathBuf> {
         })
 }
 
+/// The vendor CLIs on PATH that a runner-bound sign-in can drive, at the versions the harness
+/// adapters were written against.
+fn bound_clis() -> Vec<bound::BoundCli> {
+    let find = |name: &str| {
+        use std::os::unix::fs::PermissionsExt;
+        std::env::split_paths(&std::env::var_os("PATH")?)
+            .map(|d| d.join(name))
+            .find(|p| {
+                p.is_absolute()
+                    && std::fs::metadata(p)
+                        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            })
+    };
+    [
+        ("codex", ainkrad_harness::codex::VERSION),
+        ("opencode", ainkrad_harness::opencode::VERSION),
+        ("agy", ainkrad_harness::agy::VERSION),
+    ]
+    .into_iter()
+    .filter_map(|(harness, version)| {
+        Some(bound::BoundCli {
+            harness,
+            program: find(harness)?,
+            args: Vec::new(),
+            pinned: vec![version.to_owned()],
+        })
+    })
+    .collect()
+}
+
 /// Removes every sign-in scratch dir an earlier runner left (`<state>/logins`). The runner does
 /// this at start whatever else is enabled: a crash can leave a scratch HOME behind.
 pub fn sweep(state: &Path) {
@@ -144,11 +188,16 @@ pub fn sweep(state: &Path) {
 /// each time the runner connects, and `login.start` checks it again, because `claude` updates
 /// itself.
 pub async fn detect(state: &Path) -> Option<Arc<LoginDriver>> {
-    let Some(program) = find_claude() else {
-        tracing::info!("sign-in is not offered: no claude on PATH");
+    let claude = find_claude();
+    let bound = bound_clis();
+    if claude.is_none() && bound.is_empty() {
+        tracing::info!("sign-in is not offered: no claude, codex or opencode on PATH");
         return None;
-    };
-    let driver = match LoginDriver::new(LoginConfig::new(state.join("logins"), program)) {
+    }
+    // An empty program makes the claude sign-in report "could not be started": it is not offered.
+    let mut cfg = LoginConfig::new(state.join("logins"), claude.unwrap_or_default());
+    cfg.bound = bound;
+    let driver = match LoginDriver::new(cfg) {
         Ok(d) => Arc::new(d),
         Err(e) => {
             tracing::warn!("sign-in is not offered: {e}");
@@ -175,10 +224,28 @@ pub async fn advertise(
         .push(ainkrad_proto::v2::CAP_SUBSCRIPTION_ENV.to_owned());
     info.commands
         .push(ainkrad_proto::v2::CAP_PLAN_CHECK.to_owned());
+    // The runner starts a session in a bound account's own home (E7-4).
+    info.commands
+        .push(ainkrad_proto::v2::CAP_BOUND_HOME.to_owned());
     if let Some(l) = login {
-        match l.supported().await {
-            Ok(_) => info.commands.push(CAP_LOGIN.to_owned()),
-            Err(why) => tracing::warn!("sign-in is not offered: {why}"),
+        // The runner can delete a removed account's home (`login.wipe`).
+        info.commands
+            .push(ainkrad_proto::v2::CAP_LOGIN_WIPE.to_owned());
+        if !l.cfg.program.as_os_str().is_empty() {
+            match l.supported().await {
+                Ok(_) => info.commands.push(CAP_LOGIN.to_owned()),
+                Err(why) => tracing::warn!("sign-in is not offered: {why}"),
+            }
+        }
+        for cli in &l.cfg.bound {
+            match l.bound_supported(cli.harness).await {
+                Ok(_) => info.commands.push(format!(
+                    "{}{}",
+                    ainkrad_proto::v2::CAP_LOGIN_BOUND,
+                    cli.harness
+                )),
+                Err(why) => tracing::warn!("{} sign-in is not offered: {why}", cli.harness),
+            }
         }
     }
     Some(info)
@@ -204,6 +271,10 @@ pub fn dispatch(
             Command::LoginStart(req) => login.start(req).await.map(Reply::LoginUrl),
             Command::LoginCode(req) => login.code(req).await.map(Reply::LoginResult),
             Command::LoginCancel(req) => login.cancel(req).await.map(Reply::LoginResult),
+            Command::LoginWait(req) => login.wait(req).await.map(Reply::LoginResult),
+            Command::LoginInput(req) => login.input(req).await.map(Reply::LoginResult),
+            Command::LoginScreen(req) => login.screen(req).await.map(Reply::LoginScreen),
+            Command::LoginWipe(req) => login.wipe(req).await.map(Reply::LoginResult),
             _ => return,
         };
         let body = match answer {
@@ -217,6 +288,12 @@ pub fn dispatch(
 
 enum Msg {
     Code(Zeroizing<String>, oneshot::Sender<LoginResult>),
+    /// Runner-bound sign-in: answer when it ends.
+    Wait(oneshot::Sender<LoginResult>),
+    /// Guided sign-in: one typed line, acknowledged once it was written.
+    Input(Zeroizing<String>, oneshot::Sender<LoginResult>),
+    /// Guided sign-in: the redacted screen now.
+    Screen(oneshot::Sender<ainkrad_proto::v2::LoginScreen>),
     Cancel(oneshot::Sender<()>),
 }
 
@@ -252,6 +329,7 @@ fn result(id: &str, error: Option<&str>) -> LoginResult {
         login_id: id.to_owned(),
         token: None,
         error: error.map(str::to_owned),
+        done: false,
     }
 }
 
@@ -327,6 +405,7 @@ impl LoginDriver {
     /// A driver over `cfg`; sign-ins an earlier runner left behind are removed now.
     pub fn new(mut cfg: LoginConfig) -> std::io::Result<Self> {
         cfg.root = std::path::absolute(&cfg.root)?;
+        cfg.homes = std::path::absolute(&cfg.homes)?;
         let _ = std::fs::remove_dir_all(&cfg.root);
         private_dir(&cfg.root)?;
         Ok(Self {
@@ -374,6 +453,9 @@ impl LoginDriver {
 
     /// `login.start`.
     pub async fn start(self: &Arc<Self>, req: LoginStart) -> Result<LoginUrl, StreamError> {
+        if let (true, Some(key)) = (id_ok(&req.login_id), req.home.clone()) {
+            return self.start_bound(req, key).await;
+        }
         if !id_ok(&req.login_id) || req.harness != "claude" {
             return Err(err(
                 ErrorCode::InvalidArgs,

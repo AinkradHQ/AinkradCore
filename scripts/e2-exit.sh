@@ -119,6 +119,9 @@ while :; do
 done
 EOF
   chmod 755 "$W/bin/claude"
+  # The other AI tools the runner keeps current (D-22): present, so it installs none and does not
+  # restart itself mid-rig (nothing here would bring it back).
+  for t in codex opencode agy; do printf '#!/bin/sh\necho 0.0.0\n' >"$W/bin/$t"; chmod 755 "$W/bin/$t"; done
   # The stand-in's own login, where the runner looks for claude's (its config dir under the state dir): the runner
   # reports it in its hello, so the Core does not refuse a plain session as no_account.
   mkdir -p "$RSTATE/agents-config/claude" && echo '{}' >"$RSTATE/agents-config/claude/.credentials.json"

@@ -136,7 +136,7 @@ async fn no_account_column_or_audit_row_holds_the_value() {
             "account.created",
             "account.secret_replaced",
             "account.state_set",
-            "account.deleted"
+            "account.wiped"
         ]
     );
     let cols: Vec<String> =
@@ -284,7 +284,7 @@ async fn input_is_validated_at_the_boundary() {
         }
     };
     assert_eq!(
-        code(mk("openrouter", "a", vec![], None).await),
+        code(mk("nonesuch", "a", vec![], None).await), // openrouter is a preset since E7
         "bad_request"
     );
     assert_eq!(

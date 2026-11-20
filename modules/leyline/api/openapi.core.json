@@ -84,6 +84,15 @@
               "null"
             ]
           },
+          "models": {
+            "description": "A preset: how many model ids the provider listed (E7-3); absent otherwise.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "result": {
             "description": "`ok`, or why not. A Claude plan: `token_expired`, `limit_reached`, `no_runner` (none that\nmay hold the token is online), `runner_outdated`, `runner_busy`, `runner_failed`,\n`egress_not_proven`, `sandbox_unavailable`, `unreachable`, `timeout` or `failed`. An\nAPI-key account: the key test's class (`ok`, `auth_failed`, ...) or `no_runner`.",
             "type": "string"
@@ -183,6 +192,13 @@
               "null"
             ]
           },
+          "code": {
+            "description": "The one-time device code to type on that page (`codex-sub`), from `open_url` on. Not a\ncredential. Absent for a sign-in with no device code. A runner-bound sign-in takes no\n`/code`: it goes `open_url` then `storing` then `done` by itself once the user finishes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "created_at": {
             "$ref": "#/components/schemas/Timestamp"
           },
@@ -237,6 +253,130 @@
         ],
         "type": "object"
       },
+      "AccountMeter": {
+        "description": "One row's meter: `fraction` of the most binding limit, in words of `used` of `limit` per `window`.",
+        "properties": {
+          "fraction": {
+            "description": "Used over the limit, 0 to 1 (1 at or past it), of the most used limit; absent when the\naccount has no limit and no plan snapshot.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "limit": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "resets_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When that window starts over; absent for `total`."
+          },
+          "source": {
+            "description": "Where the number comes from: `plan` (the harness's snapshot) or `budget`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`ready`; `limit_hit` (a limit or quota stops it until `state_until`); or `unavailable`\n(cooling after errors, unhealthy or disabled: see the account's `state_reason`).",
+            "type": "string"
+          },
+          "state_until": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When a `limit_hit` account is usable again; absent when unknown (a `total` budget)."
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "used": {
+            "description": "With `limit` and `unit`: `38` of `100` `percent`; `12000000` of `50000000` `usd_micros`;\n`60` of `900` `messages`; or `tokens`.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "window": {
+            "description": "`five_hours`, `day`, `week`, `month` or `total`; a plan window the Core does not know keeps\nthe harness's own name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "AccountModelRow": {
+        "description": "One model of an account.",
+        "properties": {
+          "allowed": {
+            "description": "Absent switch means allowed: `false` only when someone switched it off.",
+            "type": "boolean"
+          },
+          "input_per_mtok_micro": {
+            "description": "List price per million input tokens, in millionths of a dollar; absent when the model has\nno price (it then runs at the flagged default price).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "model": {
+            "description": "Exactly as the provider names it.",
+            "type": "string"
+          },
+          "output_per_mtok_micro": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "model",
+          "allowed"
+        ],
+        "type": "object"
+      },
+      "AccountModels": {
+        "description": "What `GET /accounts/{id}/models` answers: the model ids the provider listed for the account.",
+        "properties": {
+          "fetched_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the list was read; absent when none was."
+          },
+          "items": {
+            "description": "Every model the account can name with its price and switch: the listed ids, the provider's\npriced ones and any switched off. Absent when there is none.",
+            "items": {
+              "$ref": "#/components/schemas/AccountModelRow"
+            },
+            "type": "array"
+          },
+          "models": {
+            "description": "Exactly as the provider names them; empty until a list was read (a preset's add or check\nthrough a runner). No price: an unpriced model runs at the flagged default price.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "models"
+        ],
+        "type": "object"
+      },
       "AccountPlanLimit": {
         "description": "A subscription's plan-limit snapshot.",
         "properties": {
@@ -283,6 +423,17 @@
         ],
         "type": "object"
       },
+      "AccountRestored": {
+        "properties": {
+          "restored": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "restored"
+        ],
+        "type": "object"
+      },
       "AccountSpend": {
         "description": "One account's usage. No key, secret name, delivery or runner: it is for a `read` device.",
         "properties": {
@@ -299,17 +450,6 @@
           "five_hours": {
             "$ref": "#/components/schemas/UsageWindow"
           },
-          "limits": {
-            "items": {
-              "$ref": "#/components/schemas/LimitStanding"
-            },
-            "type": "array"
-          },
-          "max_utilisation_bps": {
-            "description": "The highest used/cap of any limit, in basis points (10000 is at the cap).",
-            "format": "int64",
-            "type": "integer"
-          },
           "recent_drops": {
             "description": "Provider drops in the last hour.",
             "format": "int64",
@@ -323,8 +463,6 @@
           "account_id",
           "five_hours",
           "seven_days",
-          "limits",
-          "max_utilisation_bps",
           "recent_drops",
           "by_company"
         ],
@@ -337,6 +475,15 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "models": {
+            "description": "A preset: how many model ids the provider listed (E7-3); absent otherwise.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "result": {
             "description": "As [`LastTest::result`], or `inconclusive`: the provider's model list needs no key and its\ndefinition declares no `test_path`, so nothing was sent and nothing is known of the key.",
@@ -358,6 +505,13 @@
         "properties": {
           "deleted": {
             "type": "boolean"
+          },
+          "undo_until": {
+            "description": "Only for `deleteAccount`: when its Undo window ends (RFC 3339, UTC).",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -656,6 +810,25 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "AgentOrder": {
+        "description": "An agent's own order.",
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OrderItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "agent",
+          "items"
+        ],
         "type": "object"
       },
       "AgentSecret": {
@@ -1154,6 +1327,29 @@
         },
         "type": "object"
       },
+      "AiOrder": {
+        "description": "The default order and the per-agent overrides.",
+        "properties": {
+          "items": {
+            "description": "Empty until the first account is added.",
+            "items": {
+              "$ref": "#/components/schemas/OrderItem"
+            },
+            "type": "array"
+          },
+          "overrides": {
+            "items": {
+              "$ref": "#/components/schemas/AgentOrder"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "overrides"
+        ],
+        "type": "object"
+      },
       "AiRunRequest": {
         "properties": {
           "host": {
@@ -1236,6 +1432,47 @@
         ],
         "type": "object"
       },
+      "AuditDay": {
+        "description": "One day of the audit log.",
+        "properties": {
+          "date": {
+            "description": "`YYYY-MM-DD` in the client's offset.",
+            "type": "string"
+          },
+          "hours": {
+            "description": "Rows per hour of that day, 24 numbers.",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "kinds": {
+            "description": "Rows per kind (every kind, zero included).",
+            "items": {
+              "$ref": "#/components/schemas/KindCount"
+            },
+            "type": "array"
+          },
+          "needs_attention": {
+            "description": "Rows that need a look: failures, refusals, lockouts, raised alarms.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "total": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "date",
+          "hours",
+          "total",
+          "kinds",
+          "needs_attention"
+        ],
+        "type": "object"
+      },
       "AuditEntry": {
         "description": "One audited change.",
         "properties": {
@@ -1301,10 +1538,13 @@
           "account.login_cancelled",
           "account.login_failed",
           "account.login_started",
+          "account.model_allowed_set",
+          "account.restored",
           "account.secret_replaced",
           "account.session_limits_set",
           "account.state_set",
           "account.tested",
+          "account.wiped",
           "agent.approval_auto",
           "agent.approval_rule_added",
           "agent.approval_rule_removed",
@@ -1362,6 +1602,7 @@
           "connection.unbound",
           "connection.updated",
           "connection.used",
+          "core.prefs_changed",
           "decision.asked",
           "device.enrolled",
           "device.last_admin_refused",
@@ -1371,9 +1612,12 @@
           "hardware.paused",
           "hardware.resumed",
           "host.action_result",
+          "host.backup_requested",
+          "host.backup_retention_requested",
           "host.helper_refused",
           "host.logs_read",
           "host.restart_requested",
+          "host.update_requested",
           "identity.rotation.announced",
           "identity.rotation.started",
           "identity.rotation.switched",
@@ -1433,6 +1677,7 @@
           "price.set",
           "project.archived",
           "project.created",
+          "project.defaults_changed",
           "project.repo_added",
           "project.repo_primary_set",
           "project.repo_removed",
@@ -1440,6 +1685,7 @@
           "project.run_started",
           "project.run_stopped",
           "project.spec_saved",
+          "project.unarchived",
           "project.updated",
           "provider.created",
           "provider.deleted",
@@ -1449,8 +1695,10 @@
           "runner.policy_set",
           "runner.refused",
           "runner.tool_install",
+          "runner.update_requested",
           "secret.created",
           "secret.deleted",
+          "secret.exported",
           "secret.leased",
           "secret.master_rotated",
           "secret.redeemed",
@@ -1493,6 +1741,21 @@
         ],
         "type": "object"
       },
+      "AuditStats": {
+        "description": "The audit log counted, newest day first.",
+        "properties": {
+          "days": {
+            "items": {
+              "$ref": "#/components/schemas/AuditDay"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "days"
+        ],
+        "type": "object"
+      },
       "AuthorCount": {
         "properties": {
           "count": {
@@ -1506,6 +1769,158 @@
         "required": [
           "who",
           "count"
+        ],
+        "type": "object"
+      },
+      "BackupFile": {
+        "description": "One backup on the host's disk.",
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "at",
+          "bytes"
+        ],
+        "type": "object"
+      },
+      "BackupRetention": {
+        "description": "How many local backups the Core keeps.",
+        "properties": {
+          "helper": {
+            "description": "`present` (the host helper answered), `absent` (not installed here) or `error`.",
+            "type": "string"
+          },
+          "keep": {
+            "description": "The backups kept in the Core's backups folder; older ones are removed after each backup.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max": {
+            "description": "The most `PUT` accepts.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "min": {
+            "description": "The fewest `PUT` accepts.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "helper",
+          "min",
+          "max"
+        ],
+        "type": "object"
+      },
+      "BackupRun": {
+        "description": "The newest run of the backup unit, as systemd says.",
+        "properties": {
+          "finished_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "result": {
+            "description": "`success`, or what systemd calls the failure (`exit-code`, `timeout`…).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "running": {
+            "description": "Whether a backup is running now.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "started_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "type": "object"
+      },
+      "BackupStarted": {
+        "properties": {
+          "request_id": {
+            "description": "The id the start is audited under (`host.backup_requested`, `host.action_result`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "BackupStatus": {
+        "description": "The backup schedule and history of the Core machine.",
+        "properties": {
+          "helper": {
+            "description": "`present` (the host helper answered), `absent` (not installed here) or `error`.",
+            "type": "string"
+          },
+          "history": {
+            "description": "The backups on disk, newest first, at most 60.",
+            "items": {
+              "$ref": "#/components/schemas/BackupFile"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "installed": {
+            "description": "The backup unit is installed.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "keep": {
+            "description": "How many local backups the Core keeps (`PUT /system/backups/retention` changes it).",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_run": {
+            "$ref": "#/components/schemas/BackupRun"
+          },
+          "next_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the timer fires next, in any clock zone of the host (the helper asks systemd for unix\ntime); absent when the timer is not armed."
+          },
+          "schedule": {
+            "description": "The timer's `OnCalendar` expression (`daily`, `*-*-* 22:00:00`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "timer_active": {
+            "description": "Whether the timer is armed.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "helper"
         ],
         "type": "object"
       },
@@ -1607,7 +2022,7 @@
         "type": "object"
       },
       "Chain": {
-        "description": "An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first\nentry that has one to give.",
+        "description": "An ordered fallback chain of 1 to 16 pools. Deprecated with the pool routes: the AI order (`/api/v1/ai-order`) replaces it. A new session draws an account from the first\nentry that has one to give.",
         "properties": {
           "created_at": {
             "$ref": "#/components/schemas/Timestamp"
@@ -2463,6 +2878,60 @@
         ],
         "type": "object"
       },
+      "ConnectionResource": {
+        "description": "One thing on a connection a grant's limit can name, for the picker (step \"Which repositories\").",
+        "properties": {
+          "detail": {
+            "description": "A short second line: who or what it is (a project key, \"14 people\", the team).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "What a grant's limit names: `owner/name`, a project or team key, a Slack channel id, a Teams\n`team/channel` key. Send it back as it is.",
+            "type": "string"
+          },
+          "name": {
+            "description": "What the person reads.",
+            "type": "string"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When it last changed, when the service says (a GitHub repository's last push)."
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "ConnectionResources": {
+        "description": "The things a connection can reach, as the service lists them now.",
+        "properties": {
+          "key": {
+            "description": "The kind's limit key the ids belong to (`repos`, `projects`, `teams`, `channels`).",
+            "type": "string"
+          },
+          "resources": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectionResource"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "The service has more than was read: type in the search to narrow it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "resources",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "ConnectionUse": {
         "description": "A use of a connection, from its audit rows: no payload.",
         "properties": {
@@ -2535,12 +3004,90 @@
             "$ref": "#/components/schemas/Timestamp",
             "description": "When the public certificate ends."
           },
+          "disk_total_bytes": {
+            "description": "Size of the data disk in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "disk_used_bytes": {
+            "description": "The data disk in use, in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "disk_used_pct": {
+            "description": "Share of the data disk in use, 0 to 100, when the host says.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "fleet": {
+            "$ref": "#/components/schemas/Fleet",
+            "description": "The runners at a glance."
+          },
+          "host_cpu_pct": {
+            "description": "The whole host's CPU, 0 to 100, over the last minute (a Linux Core only).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "last_backup_at": {
             "$ref": "#/components/schemas/Timestamp",
             "description": "When the newest backup (`<home>/backups/*.age`) was written."
           },
           "last_backup_bytes": {
             "description": "That backup's size in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "memory_bytes": {
+            "description": "Resident memory of the Core process in bytes (the top bar's Core menu).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "min_app": {
+            "description": "E12-5: the oldest app this Core works with. An app below it tells the person to update the app.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "min_runner": {
+            "description": "E12-5: the oldest runner this Core works with (`GET /runners` marks older ones `update_required`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ram_total_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ram_used_bytes": {
+            "description": "The host's memory in use and in total, in bytes (a Linux Core only).",
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -2563,6 +3110,113 @@
           "version",
           "uptime_secs"
         ],
+        "type": "object"
+      },
+      "CorePrefs": {
+        "description": "What this Core is called and how it treats crash reports and updates.",
+        "properties": {
+          "auto_update": {
+            "description": "Whether the Core, runners and app update by themselves. On until turned off.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "crash_reports": {
+            "description": "Whether anonymous crash reports may be sent. Off until turned on.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "How this Core shows up on devices; absent until one is set.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "update_checked_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When \"check now\" last ran."
+          },
+          "update_hour": {
+            "description": "The hour, 0 to 23, an automatic update installs at.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "CoreStorage": {
+        "description": "How much disk each kind of data uses, in bytes. A part the Core cannot measure is absent.",
+        "properties": {
+          "backups_bytes": {
+            "description": "Backup archives (`backups/`).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "backups_count": {
+            "description": "How many backup files there are.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "database_bytes": {
+            "description": "The database and its journal; it holds notes, Brain memory, projects' records and the audit log.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "disk_total_bytes": {
+            "description": "Size of the data disk in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "disk_used_pct": {
+            "description": "Share of the data disk in use, 0 to 100.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "other_bytes": {
+            "description": "Everything else under the Core's home.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "projects_bytes": {
+            "description": "The Core's copies of project repositories (`mirrors/`).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "CostEvent": {
@@ -3215,6 +3869,40 @@
         ],
         "type": "object"
       },
+      "ExportedSecret": {
+        "description": "One secret of an export. No `Debug`.",
+        "properties": {
+          "file_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "type": "object"
+      },
       "FileList": {
         "properties": {
           "count": {
@@ -3252,6 +3940,39 @@
         "required": [
           "text",
           "bytes"
+        ],
+        "type": "object"
+      },
+      "Fleet": {
+        "description": "How many runners are working, idle and offline.",
+        "properties": {
+          "idle": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "offline": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runners": {
+            "items": {
+              "$ref": "#/components/schemas/FleetRunner"
+            },
+            "type": "array"
+          },
+          "working": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "working",
+          "idle",
+          "offline",
+          "runners"
         ],
         "type": "object"
       },
@@ -3305,6 +4026,32 @@
         },
         "required": [
           "command"
+        ],
+        "type": "object"
+      },
+      "FleetRunner": {
+        "description": "One runner of the fleet.",
+        "properties": {
+          "busy_pct": {
+            "description": "Commands in flight over what it takes at once, 0 to 100.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "description": "`working` (online, commands in flight), `idle` (online, none) or `offline`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "state"
         ],
         "type": "object"
       },
@@ -4847,6 +5594,13 @@
           "name": {
             "type": "string"
           },
+          "summary": {
+            "description": "One plain sentence under the title, for the \"What may your assistant do\" step.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "title": {
             "description": "A plain label.",
             "type": "string"
@@ -4860,6 +5614,24 @@
           "title",
           "class",
           "write"
+        ],
+        "type": "object"
+      },
+      "KindCount": {
+        "description": "Rows of one kind.",
+        "properties": {
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "kind": {
+            "description": "`sessions`, `terminals`, `devices`, `secrets`, `updates` or `other`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "count"
         ],
         "type": "object"
       },
@@ -4989,87 +5761,6 @@
         ],
         "type": "object"
       },
-      "LimitCleared": {
-        "properties": {
-          "cleared": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "cleared"
-        ],
-        "type": "object"
-      },
-      "LimitSet": {
-        "properties": {
-          "account_id": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "cap": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "unit": {
-            "type": "string"
-          },
-          "warn_percent": {
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "window_secs": {
-            "format": "int64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "account_id",
-          "unit",
-          "window_secs",
-          "cap"
-        ],
-        "type": "object"
-      },
-      "LimitStanding": {
-        "description": "A limit and how much of it is used.",
-        "properties": {
-          "cap": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "exhausted": {
-            "type": "boolean"
-          },
-          "unit": {
-            "description": "`tokens` or `messages`.",
-            "type": "string"
-          },
-          "used": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "warn_percent": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "window_secs": {
-            "format": "int64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "unit",
-          "window_secs",
-          "cap",
-          "used",
-          "warn_percent",
-          "exhausted"
-        ],
-        "type": "object"
-      },
       "LocalTerminalGrant": {
         "description": "What the app needs to reach the host: present `grant` on `socket`.",
         "properties": {
@@ -5187,6 +5878,50 @@
         },
         "required": [
           "code"
+        ],
+        "type": "object"
+      },
+      "LoginInputBody": {
+        "additionalProperties": false,
+        "description": "One line the user typed into a guided sign-in. No `Debug`: it may be a pasted code.",
+        "properties": {
+          "text": {
+            "description": "Up to 512 printable characters, sent to the runner with Enter and dropped.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "LoginScreenView": {
+        "description": "What a guided sign-in shows now. Text only, redacted; nothing here is a credential.",
+        "properties": {
+          "code": {
+            "description": "The device code, once it printed one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lines": {
+            "description": "The last lines the sign-in's CLI printed.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "url": {
+            "description": "The sign-in page, once it printed one (https on the provider's own hosts).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "lines"
         ],
         "type": "object"
       },
@@ -5438,7 +6173,7 @@
         "type": "object"
       },
       "NewChain": {
-        "description": "A chain to write: `[a-z][a-z0-9._-]{0,63}` and 1 to 4 entries, at most one of them a\nsubscription. For an edit this replaces the name and the whole list.",
+        "description": "A chain to write: `[a-z][a-z0-9._-]{0,63}` and 1 to 16 entries. For an edit this replaces the name and the whole list.",
         "properties": {
           "entries": {
             "items": {
@@ -5871,11 +6606,11 @@
             "type": "string"
           },
           "provider": {
-            "description": "A subscription provider: `claude-sub`.",
+            "description": "A subscription provider: `claude-sub` (a pasted approval code), or the runner-bound\n`codex-sub` (a device code; the login stays on that runner and no token comes back).",
             "type": "string"
           },
           "runner": {
-            "description": "A runner device id; absent, the best ready runner that has the provider's harness.",
+            "description": "A runner device id; absent, the best ready runner that has the provider's harness. A\nrunner-bound provider keeps the login on the runner it runs on: the account is pinned to it.",
             "type": [
               "string",
               "null"
@@ -5885,6 +6620,41 @@
         "required": [
           "provider",
           "label"
+        ],
+        "type": "object"
+      },
+      "NewOrder": {
+        "description": "A whole order to write: 1 to 16 accounts, none twice.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NewOrderItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "NewOrderItem": {
+        "description": "An account to write into an order.",
+        "properties": {
+          "account": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "model": {
+            "description": "A valid model id; an API-key account's must be priced. Absent, the harness's default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "account"
         ],
         "type": "object"
       },
@@ -6311,6 +7081,135 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "OpsHistory": {
+        "description": "The Core's readings, oldest first, one a minute. Kept in memory: a restart empties it.",
+        "properties": {
+          "interval_secs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/OpsSample"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "interval_secs",
+          "samples"
+        ],
+        "type": "object"
+      },
+      "OpsSample": {
+        "description": "One minute of the Core's readings.",
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "cpu_pct": {
+            "description": "The Core process's CPU, as a percent of one core; absent for the first sample after a start.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "disk_total_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "disk_used_bytes": {
+            "description": "The data disk in use and in total, in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "disk_used_pct": {
+            "description": "Share of the data disk in use, 0 to 100.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "host_cpu_pct": {
+            "description": "The whole host's CPU, 0 to 100 (a Linux Core only).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "memory_bytes": {
+            "description": "The Core process's resident memory in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ram_total_bytes": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ram_used_bytes": {
+            "description": "The host's memory in use and in total, in bytes (a Linux Core only).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "at"
+        ],
+        "type": "object"
+      },
+      "OrderItem": {
+        "description": "One account of an order.",
+        "properties": {
+          "account": {
+            "description": "The account's id.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "harness": {
+            "description": "`claude`, `codex` or `agy`.",
+            "type": "string"
+          },
+          "model": {
+            "description": "The model to run; absent, the harness's default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "account",
+          "provider",
+          "harness"
+        ],
         "type": "object"
       },
       "Page_Event": {
@@ -6744,6 +7643,37 @@
         ],
         "type": "object"
       },
+      "ProjectDefaults": {
+        "description": "What a run gets unless a project says otherwise: the Settings page's Projects > Options.",
+        "properties": {
+          "cpu_limit": {
+            "description": "CPUs a run may use; 2 until set.",
+            "format": "double",
+            "type": "number"
+          },
+          "idle_minutes": {
+            "description": "Idle stop in minutes; 30 until set.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "idle_never": {
+            "description": "Whether the idle stop is off.",
+            "type": "boolean"
+          },
+          "mem_limit_mb": {
+            "description": "Memory a run may use in MB; 4096 until set.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cpu_limit",
+          "mem_limit_mb",
+          "idle_minutes",
+          "idle_never"
+        ],
+        "type": "object"
+      },
       "ProjectHost": {
         "description": "A host attached to a project.",
         "properties": {
@@ -6800,6 +7730,13 @@
           "idle_minutes": {
             "format": "int64",
             "type": "integer"
+          },
+          "idle_never": {
+            "description": "The idle stop is off: the run keeps going while nobody visits.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "mem_limit_mb": {
             "format": "int64",
@@ -7140,6 +8077,13 @@
           "name": {
             "type": "string"
           },
+          "preset": {
+            "description": "A preset provider (OpenRouter, Groq, ...): shipped in code, read-only, the user only\npastes a key. Its keys are bound to the account and its frozen host, not to a prefix.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "priced_at": {
             "description": "When the models' list prices were read.",
             "type": [
@@ -7227,6 +8171,10 @@
             "description": "The key's last four characters; empty for a key too short to show any.",
             "type": "string"
           },
+          "models_enforced": {
+            "description": "Whether a model the person switched off for this account is refused in its sessions: true for\nan API-key account (its gateway grants only the models left on), false for a subscription or\nrunner-bound login, where the harness talks to its provider itself and the Core only skips the\naccount when a session asks for a switched-off model at its start. The app shows the\nlimit as advice when it is false.",
+            "type": "boolean"
+          },
           "month_limit_usd_micros": {
             "description": "The account's monthly dollar budget cap, when one is set; absent when it has none.",
             "format": "int64",
@@ -7247,6 +8195,13 @@
             "description": "`anthropic`, `openai`, `google` or a user definition's id.",
             "type": "string"
           },
+          "runner": {
+            "description": "The runner device a runner-bound subscription (Codex, OpenCode, Antigravity) signed in on:\nits sessions run only there. Absent for any other account. An `admin` device only; a device\nid is not a secret.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "session_limits": {
             "$ref": "#/components/schemas/SessionLimits",
             "description": "What one session may spend through this account; absent when only the budgets limit it."
@@ -7266,6 +8221,17 @@
           },
           "updated_at": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/AccountMeter",
+            "description": "The row's usage meter: how much of its plan or budget is used and whether it can take work\nnow. Only the reads say it, and only to an `admin` device."
+          },
+          "wipe_note": {
+            "description": "A plain-language limit of removing this account, e.g. an Antigravity login that stays in the\nrunner's keyring. Absent when removal clears everything.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -8301,6 +9267,20 @@
               "null"
             ]
           },
+          "update_required": {
+            "description": "E12-5: the runner is older than the oldest this Core works with (`GET /core/health` `min_runner`), so the app asks\nto update it before relying on it. Absent until it connected.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "updating": {
+            "description": "E12-4: asked to update in the last 15 minutes (it restarts and reconnects on the new version). Absent when not.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "version": {
             "description": "Its `ainkrad-runner` version, once connected.",
             "type": [
@@ -8522,6 +9502,23 @@
             },
             "type": [
               "object",
+              "null"
+            ]
+          },
+          "hosts": {
+            "description": "A `filtered` sandbox's allowed host names; a job sent elsewhere gets them cut to the\nregistry list.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "network": {
+            "description": "The sandbox's own network: `allow`, `deny` or `filtered` (E15 H2). Absent or unknown is\n`deny`: the command runs where it was typed.",
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -8883,6 +9880,26 @@
           "key_id",
           "created_at",
           "updated_at"
+        ],
+        "type": "object"
+      },
+      "SecretsExport": {
+        "description": "Every secret the Secrets screen lists, with its value. No `Debug`.",
+        "properties": {
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExportedSecret"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "count",
+          "items"
         ],
         "type": "object"
       },
@@ -9292,6 +10309,38 @@
         ],
         "type": "object"
       },
+      "SetCorePrefs": {
+        "additionalProperties": false,
+        "description": "The preferences to change; a field left out stays as it is.",
+        "properties": {
+          "auto_update": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "crash_reports": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "update_hour": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "SetDefaultConnection": {
         "properties": {
           "connection": {
@@ -9304,34 +10353,16 @@
         ],
         "type": "object"
       },
-      "SetLimit": {
+      "SetModelAllowed": {
+        "additionalProperties": false,
+        "description": "Switches a model on or off for one account.",
         "properties": {
-          "cap": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "unit": {
-            "description": "`tokens` or `messages`.",
-            "type": "string"
-          },
-          "warn_percent": {
-            "description": "Warn at this percent of the cap (1 to 100); default 80.",
-            "format": "int64",
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "window_secs": {
-            "description": "1 to 31622400 seconds.",
-            "format": "int64",
-            "type": "integer"
+          "allowed": {
+            "type": "boolean"
           }
         },
         "required": [
-          "unit",
-          "window_secs",
-          "cap"
+          "allowed"
         ],
         "type": "object"
       },
@@ -9369,6 +10400,40 @@
           "cache_per_mtok_micro",
           "priced_at"
         ],
+        "type": "object"
+      },
+      "SetProjectDefaults": {
+        "additionalProperties": false,
+        "description": "The defaults to change; a field left out stays. Saving also sets every project.",
+        "properties": {
+          "cpu_limit": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "idle_minutes": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "idle_never": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "mem_limit_mb": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "SetProjectSecret": {
@@ -9409,6 +10474,20 @@
         },
         "required": [
           "value"
+        ],
+        "type": "object"
+      },
+      "SetRetention": {
+        "additionalProperties": false,
+        "properties": {
+          "keep": {
+            "description": "1 to 60.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "keep"
         ],
         "type": "object"
       },
@@ -9505,6 +10584,14 @@
           "kind": {
             "type": "string"
           },
+          "message_cap": {
+            "description": "Messages per period, 1 or more; a request or turn is one message.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "period": {
             "type": "string"
           },
@@ -9512,6 +10599,7 @@
             "type": "string"
           },
           "token_cap": {
+            "description": "Default 0: with no token cap a dollar or message cap is needed.",
             "format": "int64",
             "type": "integer"
           },
@@ -9534,8 +10622,7 @@
         "required": [
           "kind",
           "subject",
-          "period",
-          "token_cap"
+          "period"
         ],
         "type": "object"
       },
@@ -9800,12 +10887,32 @@
             "type": "integer"
           },
           "kind": {
-            "description": "`account`, `pool`, `agent`, `company`, `department`, `project`, `sprint` or `issue`.",
+            "description": "`account`, `pool`, `provider`, `agent`, `company`, `department`, `project`, `sprint` or `issue`.",
             "type": "string"
           },
+          "message_cap": {
+            "description": "Messages per period (one cost event is one message); absent is no message limit.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "messages": {
+            "description": "Messages counted in this period.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "period": {
-            "description": "`day`, `week` (from Monday), `month` or `total`.",
+            "description": "`hour5` (fixed 5-hour UTC buckets from the Unix epoch), `day`, `week` (from Monday), `month` or\n`total`.",
             "type": "string"
+          },
+          "period_ends_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When this period ends and the counters start again; absent for `total`. The standing was\nread at the time the route answered."
           },
           "period_key": {
             "description": "The period this standing is for: `2026-10-22`, a week's Monday, `2026-10` or `total`.",
@@ -9825,11 +10932,11 @@
             "type": "integer"
           },
           "subject": {
-            "description": "The subject's id: an account or pool id, or the owning module's opaque id.",
+            "description": "The subject's id: an account or pool id, a provider id (`anthropic`, `openrouter`, `claude-sub`), or the owning module's opaque id.",
             "type": "string"
           },
           "token_cap": {
-            "description": "Tokens per period; 0 with a dollar cap is a dollars-only budget.",
+            "description": "Tokens per period; 0 with a dollar or message cap is a budget with no token limit.",
             "format": "int64",
             "type": "integer"
           },
@@ -10087,6 +11194,36 @@
         },
         "type": "object"
       },
+      "UpdateCheck": {
+        "description": "What the update check found.",
+        "properties": {
+          "checked_at": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the check ran."
+          },
+          "current_version": {
+            "description": "The version this Core runs.",
+            "type": "string"
+          },
+          "latest_version": {
+            "description": "A newer version, when a feed says so.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`feed_unavailable`: no release feed is set up on this Core yet, so nothing was compared.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "checked_at",
+          "current_version",
+          "status"
+        ],
+        "type": "object"
+      },
       "UpdateConnection": {
         "description": "What to change about a connection; at least one field.",
         "properties": {
@@ -10110,6 +11247,29 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "UpdateEvent": {
+        "properties": {
+          "at": {
+            "description": "Unix seconds.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "step": {
+            "description": "`snapshot`, `install`, `health` or `done`.",
+            "type": "string"
+          },
+          "text": {
+            "description": "A fixed sentence from the updater.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "step",
+          "text"
+        ],
         "type": "object"
       },
       "UpdateProject": {
@@ -10155,6 +11315,13 @@
             "format": "int64",
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "idle_never": {
+            "description": "Turn the idle stop off (true) or back on (false).",
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -10208,6 +11375,65 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "UpdateStatus": {
+        "properties": {
+          "available": {
+            "description": "A newer version the updater found, when there is one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current": {
+            "description": "What runs now (this process's version).",
+            "type": "string"
+          },
+          "error": {
+            "description": "A short code (`health_failed`, `install_failed`, `bad_signature`, ...) when the last run did not finish.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/UpdateEvent"
+            },
+            "type": "array"
+          },
+          "progress": {
+            "description": "0 to 1 while an update runs.",
+            "format": "double",
+            "type": "number"
+          },
+          "state": {
+            "description": "`idle`, `snapshot`, `install`, `health`, `done`, `rolled_back` or `failed`.",
+            "type": "string"
+          },
+          "to": {
+            "description": "The version being installed, or the last one tried.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "description": "Unix seconds of the last write.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "current",
+          "state",
+          "progress",
+          "events"
+        ],
         "type": "object"
       },
       "UsageByCompany": {
@@ -10424,7 +11650,7 @@
                 }
               }
             },
-            "description": "Every account: its key's last four characters, never the key, its secret's name or its runner scope; with its `live` session count and `health`, `month_spend_usd_micros` and `month_limit_usd_micros` (`admin` devices only)"
+            "description": "Every account: its key's last four characters, never the key, its secret's name or its runner scope; with its `live` session count and `health`, `month_spend_usd_micros`, `month_limit_usd_micros` and `usage` (the usage meter) (`admin` devices only)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -10723,6 +11949,122 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/api/v1/accounts/logins/{id}/input": {
+      "post": {
+        "operationId": "sendAccountLoginInput",
+        "parameters": [
+          {
+            "description": "The sign-in's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountLogin"
+                }
+              }
+            },
+            "description": "One line went to the guided sign-in's terminal on its runner (once, never stored or logged). Only for a provider whose sign-in is guided (`opencode-sub`); 409 `login_state` unless the sign-in is `open_url`; 400 for a line that is not printable text; 409 `runner_failed`. No step-up beyond the one that started it"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/accounts/logins/{id}/screen": {
+      "get": {
+        "operationId": "getAccountLoginScreen",
+        "parameters": [
+          {
+            "description": "The sign-in's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginScreenView"
+                }
+              }
+            },
+            "description": "The redacted screen of a guided sign-in, read from its runner now. Only the device that started it; 409 `login_state` unless `open_url`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/accounts/providers": {
       "get": {
         "operationId": "listProviders",
@@ -10947,7 +12289,7 @@
                 }
               }
             },
-            "description": "Needs `admin`. Every account's tokens, messages and dollars over the last five hours and seven days, its limits with their use, and its recent drops. Events that carry only a `legacy_account_id` (Citadel's old account id) are not counted here until the account port lands"
+            "description": "Needs `admin`. Every account's tokens, messages and dollars over the last five hours and seven days, and its recent drops. Events that carry only a `legacy_account_id` (Citadel's old account id) are not counted here until the account port lands"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -11000,7 +12342,7 @@
                 }
               }
             },
-            "description": "Deleted with its key, its leases and its pool seats (audited as `account.deleted`)"
+            "description": "Removed with an Undo window (audited as `account.deleted`): at once it is gone from every list, out of its pool seats and the AI order, takes no new session and holds no lease. `undo_until` is when `POST /accounts/{id}/restore` stops working; after it the key, the row, the seats, the budgets and a runner-bound login on its runner are wiped for good (audited as `account.wiped`)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -11197,14 +12539,76 @@
         "x-ainkrad-scope": "admin"
       }
     },
-    "/api/v1/accounts/{id}/limits": {
-      "put": {
-        "operationId": "setAccountLimit",
+    "/api/v1/accounts/{id}/models": {
+      "get": {
+        "operationId": "listAccountModels",
         "parameters": [
           {
             "description": "The account's id",
             "in": "path",
             "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountModels"
+                }
+              }
+            },
+            "description": "The model ids the provider listed for the account when its key was added or checked (a preset's list is read through a runner's gateway), and in `items` each model with its list price where there is one and whether it is allowed. 404 for no such account"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/accounts/{id}/models/{model}": {
+      "put": {
+        "operationId": "setAccountModelAllowed",
+        "parameters": [
+          {
+            "description": "The account's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The model id",
+            "in": "path",
+            "name": "model",
             "required": true,
             "schema": {
               "type": "string"
@@ -11215,7 +12619,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SetLimit"
+                "$ref": "#/components/schemas/SetModelAllowed"
               }
             }
           },
@@ -11226,11 +12630,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LimitSet"
+                  "$ref": "#/components/schemas/AccountModels"
                 }
               }
             },
-            "description": "The limit set or changed (audited as `account.limit_set`); 404 for no such account"
+            "description": "Allows or switches off the model for the account (audited as `account.model_allowed_set`); a chain, the AI order and a gateway grant refuse a switched-off model. Needs a step-up. 404 for no such account"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -11255,14 +12659,14 @@
           }
         },
         "tags": [
-          "costs"
+          "accounts"
         ],
         "x-ainkrad-scope": "admin"
       }
     },
-    "/api/v1/accounts/{id}/limits/{unit}/{window_secs}": {
-      "delete": {
-        "operationId": "clearAccountLimit",
+    "/api/v1/accounts/{id}/restore": {
+      "post": {
+        "operationId": "restoreAccount",
         "parameters": [
           {
             "description": "The account's id",
@@ -11272,25 +12676,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "description": "`tokens` or `messages`",
-            "in": "path",
-            "name": "unit",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The limit's window",
-            "in": "path",
-            "name": "window_secs",
-            "required": true,
-            "schema": {
-              "format": "int64",
-              "type": "integer"
-            }
           }
         ],
         "responses": {
@@ -11298,11 +12683,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LimitCleared"
+                  "$ref": "#/components/schemas/AccountRestored"
                 }
               }
             },
-            "description": "Cleared (audited as `account.limit_cleared`); `cleared` is false when there was no such limit; 404 for no such account"
+            "description": "Undoes a delete within its window (audited as `account.restored`): its state and its pool seats come back. 404 for an account that is not removed or whose window has ended"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -11327,7 +12712,7 @@
           }
         },
         "tags": [
-          "costs"
+          "accounts"
         ],
         "x-ainkrad-scope": "admin"
       }
@@ -12728,6 +14113,212 @@
         "x-ainkrad-scope": "agent"
       }
     },
+    "/api/v1/ai-order": {
+      "get": {
+        "operationId": "getAiOrder",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiOrder"
+                }
+              }
+            },
+            "description": "The caller's user's AI order and per-agent overrides"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "setAiOrder",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiOrder"
+                }
+              }
+            },
+            "description": "The order replaced as a whole (audited as `chain.created` or `chain.updated`); a run already walking it keeps its snapshot. 400 for 0 or more than 16 accounts, an account twice, a harness a chain does not run or an unpriced API-key model; 404 for no such account"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/ai-order/agents/{agent}": {
+      "delete": {
+        "operationId": "clearAgentAiOrder",
+        "parameters": [
+          {
+            "description": "The agent's id",
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountsDeleted"
+                }
+              }
+            },
+            "description": "The agent walks the default order again (audited as `chain.unbound`); 404 when it had no override"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "setAgentAiOrder",
+        "parameters": [
+          {
+            "description": "The agent's id",
+            "in": "path",
+            "name": "agent",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiOrder"
+                }
+              }
+            },
+            "description": "The agent's own order; its sessions walk it instead of the default one. The refusals of `setAiOrder`; 400 for a bad agent id"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/audit": {
       "get": {
         "operationId": "listAudit",
@@ -12809,6 +14400,71 @@
               }
             },
             "description": "Audit rows, newest first. A `target` id that is not a `d_…` device id or a number, or an unknown `actor` or `origin`, is a 400"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "events"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/audit/stats": {
+      "get": {
+        "operationId": "getAuditStats",
+        "parameters": [
+          {
+            "description": "How many days, today included, 1 to 14 (default 7).",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The client's offset from UTC in minutes (`-300`, `120`), so hours and days fall where the\nperson lives; default 0.",
+            "in": "query",
+            "name": "tz_offset_mins",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditStats"
+                }
+              }
+            },
+            "description": "Audit rows counted per hour, per day and per kind for the last `days` days in the client's time zone, newest day first. Needs `admin`"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -13371,7 +15027,7 @@
                 }
               }
             },
-            "description": "Created, or its caps changed (audited as `budget.created` or `budget.set`), with the period's spend counted from the ledger. 404 for an account or pool that does not exist; 400 for a bad kind, subject, period or cap"
+            "description": "Created, or its caps changed (audited as `budget.created` or `budget.set`), with the period's spend counted from the ledger. 404 for an account, pool or provider that does not exist; 400 for a bad kind, subject, period or cap"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -13562,6 +15218,7 @@
         "x-ainkrad-scope": "admin"
       },
       "post": {
+        "deprecated": true,
         "operationId": "createChain",
         "requestBody": {
           "content": {
@@ -13582,7 +15239,7 @@
                 }
               }
             },
-            "description": "Stored for the caller's user (audited as `chain.created`). 400 for a bad name, 1 to 4 entries, a pool twice, another user's pool, a pool that is not a `claude`, `codex` or `agy` one, an unpriced API-key model, or two subscriptions; 404 for no such pool; 409 `conflict` (the name is taken) or `limit_reached`"
+            "description": "Stored for the caller's user (audited as `chain.created`). 400 for a bad name, 1 to 16 entries, a pool twice, another user's pool, a pool that is not a `claude`, `codex` or `agy` one, or an unpriced API-key model; 404 for no such pool; 409 `conflict` (the name is taken) or `limit_reached`"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -13609,7 +15266,8 @@
         "tags": [
           "chains"
         ],
-        "x-ainkrad-scope": "admin"
+        "x-ainkrad-scope": "admin",
+        "x-ainkrad-sunset": "Wed, 19 May 2027 00:00:00 GMT"
       }
     },
     "/api/v1/chains/bindings": {
@@ -13773,6 +15431,7 @@
     },
     "/api/v1/chains/{id}": {
       "delete": {
+        "deprecated": true,
         "operationId": "deleteChain",
         "parameters": [
           {
@@ -13821,7 +15480,8 @@
         "tags": [
           "chains"
         ],
-        "x-ainkrad-scope": "admin"
+        "x-ainkrad-scope": "admin",
+        "x-ainkrad-sunset": "Wed, 19 May 2027 00:00:00 GMT"
       },
       "get": {
         "operationId": "getChain",
@@ -13875,6 +15535,7 @@
         "x-ainkrad-scope": "admin"
       },
       "put": {
+        "deprecated": true,
         "operationId": "replaceChain",
         "parameters": [
           {
@@ -13933,11 +15594,13 @@
         "tags": [
           "chains"
         ],
-        "x-ainkrad-scope": "admin"
+        "x-ainkrad-scope": "admin",
+        "x-ainkrad-sunset": "Wed, 19 May 2027 00:00:00 GMT"
       }
     },
     "/api/v1/chains/{id}/default": {
       "put": {
+        "deprecated": true,
         "operationId": "setDefaultChain",
         "parameters": [
           {
@@ -13986,7 +15649,8 @@
         "tags": [
           "chains"
         ],
-        "x-ainkrad-scope": "admin"
+        "x-ainkrad-scope": "admin",
+        "x-ainkrad-sunset": "Wed, 19 May 2027 00:00:00 GMT"
       }
     },
     "/api/v1/connection-apps/{kind}": {
@@ -15187,6 +16851,68 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/api/v1/connections/{id}/resources": {
+      "get": {
+        "operationId": "listConnectionResources",
+        "parameters": [
+          {
+            "description": "The connection's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Case-insensitive text in the name or id.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionResources"
+                }
+              }
+            },
+            "description": "The repositories (GitHub), projects (Jira), teams (Linear) or channels (Slack, Teams) the connection's sign-in can see, newest or by name, at most 200, filtered by `q`. Each `id` is what a grant's limit takes. 404 for another workspace's connection, 409 when it is turned off or connections are off, 429 when the service or the connection's budget says slow down, 502 when the service could not be reached"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "connections"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/connections/{id}/test": {
       "post": {
         "operationId": "testConnection",
@@ -15280,6 +17006,182 @@
           "system"
         ],
         "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/core/prefs": {
+      "get": {
+        "operationId": "getCorePrefs",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorePrefs"
+                }
+              }
+            },
+            "description": "The Core's name, crash-report choice and update choice. Needs `read`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "put": {
+        "operationId": "setCorePrefs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCorePrefs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorePrefs"
+                }
+              }
+            },
+            "description": "Changed (audited as `core.prefs_changed`); the preferences now. 400 for a name that is empty, over 64 characters or has control characters, or an hour outside 0 to 23. Needs `admin`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/core/storage": {
+      "get": {
+        "operationId": "getCoreStorage",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreStorage"
+                }
+              }
+            },
+            "description": "Disk use by kind of data under the Core's home, and the data disk's size and fill. Walks the home's files, so it is for a person opening the page, not for polling. Needs `admin`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/core/update/check": {
+      "post": {
+        "operationId": "checkCoreUpdate",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateCheck"
+                }
+              }
+            },
+            "description": "Records that a check ran. Until a release feed exists (E12) the status is `feed_unavailable` and no version is compared. Needs `admin`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-scope": "admin"
       }
     },
     "/api/v1/costs": {
@@ -16499,6 +18401,61 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/api/v1/ops/history": {
+      "get": {
+        "operationId": "getOpsHistory",
+        "parameters": [
+          {
+            "description": "How many hours back, 1 to 24 (default 24).",
+            "in": "query",
+            "name": "hours",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpsHistory"
+                }
+              }
+            },
+            "description": "The Core's CPU, memory and disk readings for the last `hours` (at most 24), one per minute, oldest first. In memory: a restart starts the series again. Needs `admin`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "ops"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/pairings": {
       "post": {
         "operationId": "createPairing",
@@ -16821,6 +18778,7 @@
         "x-ainkrad-scope": "read"
       },
       "post": {
+        "deprecated": true,
         "operationId": "createPool",
         "requestBody": {
           "content": {
@@ -16868,11 +18826,13 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-scope": "admin"
+        "x-ainkrad-scope": "admin",
+        "x-ainkrad-sunset": "Wed, 19 May 2027 00:00:00 GMT"
       }
     },
     "/api/v1/pools/{id}": {
       "delete": {
+        "deprecated": true,
         "operationId": "deletePool",
         "parameters": [
           {
@@ -16921,11 +18881,13 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-scope": "admin"
+        "x-ainkrad-scope": "admin",
+        "x-ainkrad-sunset": "Wed, 19 May 2027 00:00:00 GMT"
       }
     },
     "/api/v1/pools/{id}/default": {
       "put": {
+        "deprecated": true,
         "operationId": "setDefaultPool",
         "parameters": [
           {
@@ -16974,11 +18936,13 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-scope": "admin"
+        "x-ainkrad-scope": "admin",
+        "x-ainkrad-sunset": "Wed, 19 May 2027 00:00:00 GMT"
       }
     },
     "/api/v1/pools/{id}/members/{account}": {
       "delete": {
+        "deprecated": true,
         "operationId": "removePoolMember",
         "parameters": [
           {
@@ -17036,9 +19000,11 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-scope": "admin"
+        "x-ainkrad-scope": "admin",
+        "x-ainkrad-sunset": "Wed, 19 May 2027 00:00:00 GMT"
       },
       "put": {
+        "deprecated": true,
         "operationId": "addPoolMember",
         "parameters": [
           {
@@ -17096,7 +19062,8 @@
         "tags": [
           "accounts"
         ],
-        "x-ainkrad-scope": "admin"
+        "x-ainkrad-scope": "admin",
+        "x-ainkrad-sunset": "Wed, 19 May 2027 00:00:00 GMT"
       }
     },
     "/api/v1/prices": {
@@ -17271,6 +19238,98 @@
               }
             },
             "description": "Created as a manual project (audited and emitted as `project.created`). 400 `bad_request` for a bad or reserved slug or a bad name; 409 `conflict` when the slug is taken"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/defaults": {
+      "get": {
+        "operationId": "getProjectDefaults",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectDefaults"
+                }
+              }
+            },
+            "description": "The limits new projects start with. Needs `read`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "put": {
+        "operationId": "setProjectDefaults",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetProjectDefaults"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectDefaults"
+                }
+              }
+            },
+            "description": "Saved and applied to every project (audited as `project.defaults_changed`); the defaults now. A run already going keeps the limits it started with. 400 for a value out of range: CPUs 0.1 to 16, memory 64 to 32768 MB, idle stop 5 to 1440 minutes. Needs `admin`"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -21157,6 +23216,53 @@
         "x-ainkrad-scope": "read"
       }
     },
+    "/api/v1/runners/{id}/update": {
+      "post": {
+        "operationId": "updateRunner",
+        "parameters": [
+          {
+            "description": "The runner's device id, `d_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The runner was asked to update to this Core's version (audited as `runner.update_requested`). Its root-side updater verifies the signed release, swaps the programs and restarts the runner; `GET /runners` shows `updating` until it is back on the new version, and rolls back by itself when it does not stay up. Linux runners set up by the installer only: a Mac runner updates with the app. 409 `runner_offline`, `unsupported_command`; 503 `runner_busy`; 504 `runner_lost`. Needs `admin` and a step-up"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "runners"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/secret-groups": {
       "get": {
         "operationId": "listSecretGroups",
@@ -21574,6 +23680,49 @@
         "tags": [
           "secrets"
         ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/secrets/export": {
+      "post": {
+        "operationId": "exportSecrets",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretsExport"
+                }
+              }
+            },
+            "description": "Every secret the Secrets screen lists with its value, for a file the owner saves (audited once as `secret.exported` with the count; needs a step-up proved in the last 30 s, spent by the call; `Cache-Control: no-store`). Provider-account keys, a module's own secrets and file secrets are not in it. 409 `secrets_disabled`; 429 `rate_limited`; 503 `secrets_unavailable`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "secrets"
+        ],
+        "x-ainkrad-destructive": true,
         "x-ainkrad-scope": "admin"
       }
     },
@@ -22167,6 +24316,183 @@
         "x-ainkrad-scope": "read"
       }
     },
+    "/api/v1/system/backup": {
+      "post": {
+        "operationId": "startBackup",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupStarted"
+                }
+              }
+            },
+            "description": "A backup is started now (audited first as `host.backup_requested`, then `host.action_result`). It runs on its own; read `getBackups` for its end. Needs `admin`. 409 `not_installed` (no backup unit); 429 with `Retry-After` (the helper's limits: a minute between two, four an hour); 503 `host_helper_unavailable`, `host_helper_busy` or `host_state_unavailable`; 504 `host_helper_timeout`; 502 `host_helper_failed`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/system/backups": {
+      "get": {
+        "operationId": "getBackups",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupStatus"
+                }
+              }
+            },
+            "description": "The backup schedule, the last run and the backups on disk, from the host helper. `helper` says whether it answered (`absent`: not installed here; `error`: stopped, busy or failing); the rest is then missing. Needs `admin`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/system/backups/retention": {
+      "get": {
+        "operationId": "getBackupRetention",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupRetention"
+                }
+              }
+            },
+            "description": "How many local backups the Core keeps, from the host helper (`helper` is `absent` or `error` when it did not answer; `keep` is then missing). Needs `admin`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "setBackupRetention",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetRetention"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupRetention"
+                }
+              }
+            },
+            "description": "The Core now keeps this many local backups (audited first as `host.backup_retention_requested`, then `host.action_result`); the Core writes it into its own config and the next backup applies it. Needs `admin` and a step-up. 400 for a body other than `{\"keep\": 1..60}`; 409 `not_installed` (no config)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/system/host": {
       "get": {
         "operationId": "getHostStatus",
@@ -22486,6 +24812,89 @@
               }
             },
             "description": "The restart is accepted (audited first as `host.restart_requested`, then `host.action_result`). A Core restart answers before the Core goes down; clients reconnect. A 429 or any failure holds the same restart back for a while (`Retry-After` on a 429). Do not retry a 504 on your own: a retry is a new request the helper cannot tell from the first. Needs `admin` and a step-up. 400 for a body other than `{\"target\": \"core\" | \"runner\"}`; 409 `not_installed` (no local runner); 429 with `Retry-After` (the helper's limits); 503 `host_helper_unavailable`, `host_helper_busy` or `host_state_unavailable`; 504 `host_helper_timeout`; 502 `host_helper_failed`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/system/update": {
+      "get": {
+        "operationId": "getCoreUpdate",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateStatus"
+                }
+              }
+            },
+            "description": "Where the Core's self-update stands: what runs, whether a newer signed version is available, and the steps of the last run (snapshot, install, health, done or rolled back). Read from the updater's status file. Needs `admin`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "system"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "post": {
+        "operationId": "startCoreUpdate",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Restarted"
+                }
+              }
+            },
+            "description": "The update was started (audited first as `host.update_requested`). Progress is `GET /system/update`; Core restarts for a few seconds. The updater takes its own snapshot, installs only what the pinned release key signed, health-checks and rolls back by itself. Needs `admin` and a fresh step-up. 429 `Retry-After` (at most one per 5 minutes); 503 `host_helper_unavailable` (no helper on this host); 504 `host_helper_timeout`"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

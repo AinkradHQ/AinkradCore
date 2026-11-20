@@ -11,6 +11,7 @@ pub async fn list_pools(State(app): State<App>) -> ApiResult<Vec<Pool>> {
         pl::list(&app.pool)
             .await?
             .into_iter()
+            .filter(|p| !p.hidden)
             .map(Into::into)
             .collect(),
     ))
@@ -49,7 +50,10 @@ pub async fn delete_pool(
     pl::delete(&app.pool, num(&id, "pool")?, &me.device.id, BY)
         .await
         .map_err(err)?;
-    Ok(Json(AccountsDeleted { deleted: true }))
+    Ok(Json(AccountsDeleted {
+        deleted: true,
+        undo_until: None,
+    }))
 }
 
 #[utoipa::path(put, path = "/api/v1/pools/{id}/members/{account}", operation_id = "addPoolMember",
@@ -177,5 +181,8 @@ pub async fn unbind(
     pl::unbind(&app.pool, &agent, &provider, &me.device.id, BY)
         .await
         .map_err(err)?;
-    Ok(Json(AccountsDeleted { deleted: true }))
+    Ok(Json(AccountsDeleted {
+        deleted: true,
+        undo_until: None,
+    }))
 }

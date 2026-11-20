@@ -43,11 +43,9 @@ namespace Ainkrad.Client.Model
         /// <param name="accountId">accountId (required).</param>
         /// <param name="byCompany">byCompany (required).</param>
         /// <param name="fiveHours">fiveHours (required).</param>
-        /// <param name="limits">limits (required).</param>
-        /// <param name="maxUtilisationBps">The highest used/cap of any limit, in basis points (10000 is at the cap). (required).</param>
         /// <param name="recentDrops">Provider drops in the last hour. (required).</param>
         /// <param name="sevenDays">sevenDays (required).</param>
-        public AccountSpend(long accountId = default, List<UsageByCompany> byCompany = default, UsageWindow fiveHours = default, List<LimitStanding> limits = default, long maxUtilisationBps = default, long recentDrops = default, UsageWindow sevenDays = default)
+        public AccountSpend(long accountId = default, List<UsageByCompany> byCompany = default, UsageWindow fiveHours = default, long recentDrops = default, UsageWindow sevenDays = default)
         {
             this.AccountId = accountId;
             // to ensure "byCompany" is required (not null)
@@ -62,13 +60,6 @@ namespace Ainkrad.Client.Model
                 throw new ArgumentNullException("fiveHours is a required property for AccountSpend and cannot be null");
             }
             this.FiveHours = fiveHours;
-            // to ensure "limits" is required (not null)
-            if (limits == null)
-            {
-                throw new ArgumentNullException("limits is a required property for AccountSpend and cannot be null");
-            }
-            this.Limits = limits;
-            this.MaxUtilisationBps = maxUtilisationBps;
             this.RecentDrops = recentDrops;
             // to ensure "sevenDays" is required (not null)
             if (sevenDays == null)
@@ -97,19 +88,6 @@ namespace Ainkrad.Client.Model
         public UsageWindow FiveHours { get; set; }
 
         /// <summary>
-        /// Gets or Sets Limits
-        /// </summary>
-        [DataMember(Name = "limits", IsRequired = true, EmitDefaultValue = true)]
-        public List<LimitStanding> Limits { get; set; }
-
-        /// <summary>
-        /// The highest used/cap of any limit, in basis points (10000 is at the cap).
-        /// </summary>
-        /// <value>The highest used/cap of any limit, in basis points (10000 is at the cap).</value>
-        [DataMember(Name = "max_utilisation_bps", IsRequired = true, EmitDefaultValue = true)]
-        public long MaxUtilisationBps { get; set; }
-
-        /// <summary>
         /// Provider drops in the last hour.
         /// </summary>
         /// <value>Provider drops in the last hour.</value>
@@ -133,8 +111,6 @@ namespace Ainkrad.Client.Model
             sb.Append("  AccountId: ").Append(AccountId).Append("\n");
             sb.Append("  ByCompany: ").Append(ByCompany).Append("\n");
             sb.Append("  FiveHours: ").Append(FiveHours).Append("\n");
-            sb.Append("  Limits: ").Append(Limits).Append("\n");
-            sb.Append("  MaxUtilisationBps: ").Append(MaxUtilisationBps).Append("\n");
             sb.Append("  RecentDrops: ").Append(RecentDrops).Append("\n");
             sb.Append("  SevenDays: ").Append(SevenDays).Append("\n");
             sb.Append("}\n");

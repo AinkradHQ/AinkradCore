@@ -26,6 +26,7 @@ import kotlinx.serialization.Contextual
  * @param latencyMs 
  * @param result As [`LastTest::result`], or `inconclusive`: the provider's model list needs no key and its definition declares no `test_path`, so nothing was sent and nothing is known of the key.
  * @param runner The runner device that made the request (empty when `result` is `inconclusive`).
+ * @param models A preset: how many model ids the provider listed (E7-3); absent otherwise.
  */
 @Serializable
 
@@ -40,7 +41,11 @@ data class AccountTested (
 
     /* The runner device that made the request (empty when `result` is `inconclusive`). */
     @SerialName(value = "runner")
-    val runner: kotlin.String
+    val runner: kotlin.String,
+
+    /* A preset: how many model ids the provider listed (E7-3); absent otherwise. */
+    @SerialName(value = "models")
+    val models: kotlin.Int? = null
 
 ) {
 

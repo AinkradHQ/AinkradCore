@@ -1,4 +1,4 @@
-//! "Same project as": the person says a room is another project's (`dvxmotive` is `AutomotiveAi`).
+//! "Same project as": the person says a room is another project's (`harborauto` is `HarborMotors`).
 //! The answer merges the two in the run's proposal now and is kept (`<brain dir>/aliases.db`,
 //! encrypted with the brain key like every other Brain file), so every later discovery and re-sort
 //! files the one as the other and the employer guard counts them as one employer. Each run keeps a
@@ -206,21 +206,21 @@ mod tests {
     #[test]
     fn the_list_stays_one_hop_and_has_no_loops() {
         let mut a = Aliases::new();
-        set(&mut a, "dvxmotive", "AutomotiveAi");
-        set(&mut a, "Old Name", "dvxmotive");
-        assert_eq!(a["oldname"], "AutomotiveAi", "to what dvxmotive is");
-        set(&mut a, "AutomotiveAi", "Motors");
+        set(&mut a, "harborauto", "HarborMotors");
+        set(&mut a, "Old Name", "harborauto");
+        assert_eq!(a["oldname"], "HarborMotors", "to what harborauto is");
+        set(&mut a, "HarborMotors", "Motors");
         assert_eq!(
-            (a["dvxmotive"].as_str(), a["oldname"].as_str()),
+            (a["harborauto"].as_str(), a["oldname"].as_str()),
             ("Motors", "Motors")
         );
         assert!(!a.contains_key("motors"));
-        set(&mut a, "Motors", "AutomotiveAi");
+        set(&mut a, "Motors", "HarborMotors");
         assert!(
-            !a.contains_key("automotiveai"),
+            !a.contains_key("harbormotors"),
             "the other way round replaces it"
         );
-        assert_eq!(a["motors"], "AutomotiveAi");
-        assert_eq!(a["dvxmotive"], "AutomotiveAi");
+        assert_eq!(a["motors"], "HarborMotors");
+        assert_eq!(a["harborauto"], "HarborMotors");
     }
 }

@@ -47,6 +47,26 @@ namespace Ainkrad.Client.Api
         /// 
         /// </summary>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">How many days, today included, 1 to 14 (default 7). (optional)</param>
+        /// <param name="tzOffsetMins">The client&#39;s offset from UTC in minutes (&#x60;-300&#x60;, &#x60;120&#x60;), so hours and days fall where the person lives; default 0. (optional)</param>
+        /// <returns>AuditStats</returns>
+        AuditStats GetAuditStats(int? days = default, int? tzOffsetMins = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">How many days, today included, 1 to 14 (default 7). (optional)</param>
+        /// <param name="tzOffsetMins">The client&#39;s offset from UTC in minutes (&#x60;-300&#x60;, &#x60;120&#x60;), so hours and days fall where the person lives; default 0. (optional)</param>
+        /// <returns>ApiResponse of AuditStats</returns>
+        ApiResponse<AuditStats> GetAuditStatsWithHttpInfo(int? days = default, int? tzOffsetMins = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <returns>LatestEvent</returns>
         LatestEvent LatestEvent();
 
@@ -159,6 +179,31 @@ namespace Ainkrad.Client.Api
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse (WsTicket)</returns>
         System.Threading.Tasks.Task<ApiResponse<WsTicket>> CreateWsTicketWithHttpInfoAsync(System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">How many days, today included, 1 to 14 (default 7). (optional)</param>
+        /// <param name="tzOffsetMins">The client&#39;s offset from UTC in minutes (&#x60;-300&#x60;, &#x60;120&#x60;), so hours and days fall where the person lives; default 0. (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of AuditStats</returns>
+        System.Threading.Tasks.Task<AuditStats> GetAuditStatsAsync(int? days = default, int? tzOffsetMins = default, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">How many days, today included, 1 to 14 (default 7). (optional)</param>
+        /// <param name="tzOffsetMins">The client&#39;s offset from UTC in minutes (&#x60;-300&#x60;, &#x60;120&#x60;), so hours and days fall where the person lives; default 0. (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (AuditStats)</returns>
+        System.Threading.Tasks.Task<ApiResponse<AuditStats>> GetAuditStatsWithHttpInfoAsync(int? days = default, int? tzOffsetMins = default, System.Threading.CancellationToken cancellationToken = default);
         /// <summary>
         /// 
         /// </summary>
@@ -583,6 +628,141 @@ namespace Ainkrad.Client.Api
             if (this.ExceptionFactory != null)
             {
                 Exception _exception = this.ExceptionFactory("CreateWsTicket", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">How many days, today included, 1 to 14 (default 7). (optional)</param>
+        /// <param name="tzOffsetMins">The client&#39;s offset from UTC in minutes (&#x60;-300&#x60;, &#x60;120&#x60;), so hours and days fall where the person lives; default 0. (optional)</param>
+        /// <returns>AuditStats</returns>
+        public AuditStats GetAuditStats(int? days = default, int? tzOffsetMins = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<AuditStats> localVarResponse = GetAuditStatsWithHttpInfo(days, tzOffsetMins);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">How many days, today included, 1 to 14 (default 7). (optional)</param>
+        /// <param name="tzOffsetMins">The client&#39;s offset from UTC in minutes (&#x60;-300&#x60;, &#x60;120&#x60;), so hours and days fall where the person lives; default 0. (optional)</param>
+        /// <returns>ApiResponse of AuditStats</returns>
+        public Ainkrad.Client.Client.ApiResponse<AuditStats> GetAuditStatsWithHttpInfo(int? days = default, int? tzOffsetMins = default)
+        {
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            if (days != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "days", days));
+            }
+            if (tzOffsetMins != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "tz_offset_mins", tzOffsetMins));
+            }
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Get<AuditStats>("/api/v1/audit/stats", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("GetAuditStats", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">How many days, today included, 1 to 14 (default 7). (optional)</param>
+        /// <param name="tzOffsetMins">The client&#39;s offset from UTC in minutes (&#x60;-300&#x60;, &#x60;120&#x60;), so hours and days fall where the person lives; default 0. (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of AuditStats</returns>
+        public async System.Threading.Tasks.Task<AuditStats> GetAuditStatsAsync(int? days = default, int? tzOffsetMins = default, System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<AuditStats> localVarResponse = await GetAuditStatsWithHttpInfoAsync(days, tzOffsetMins, cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">How many days, today included, 1 to 14 (default 7). (optional)</param>
+        /// <param name="tzOffsetMins">The client&#39;s offset from UTC in minutes (&#x60;-300&#x60;, &#x60;120&#x60;), so hours and days fall where the person lives; default 0. (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (AuditStats)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<AuditStats>> GetAuditStatsWithHttpInfoAsync(int? days = default, int? tzOffsetMins = default, System.Threading.CancellationToken cancellationToken = default)
+        {
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            if (days != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "days", days));
+            }
+            if (tzOffsetMins != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "tz_offset_mins", tzOffsetMins));
+            }
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.GetAsync<AuditStats>("/api/v1/audit/stats", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("GetAuditStats", localVarResponse);
                 if (_exception != null) throw _exception;
             }
 

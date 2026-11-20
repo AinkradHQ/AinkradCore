@@ -117,6 +117,7 @@ pub(super) async fn to_open_url(w: &mut W, label: &str) -> logins::Login {
             Body::Result(Reply::LoginUrl(LoginUrl {
                 login_id: l.id.clone(),
                 url: "https://claude.ai/oauth/authorize?state=TESTONLY".to_owned(),
+                code: None,
             })),
         )
         .await;
@@ -178,6 +179,7 @@ async fn a_sign_in_runs_from_the_url_to_a_stored_account_and_no_token_leaks() {
                 login_id: l.id.clone(),
                 token: Some(TOKEN.to_owned()),
                 error: None,
+                done: false,
             })),
         )
         .await;
@@ -250,6 +252,7 @@ async fn the_state_machine_refuses_out_of_order_and_foreign_requests() {
             Body::Result(Reply::LoginUrl(LoginUrl {
                 login_id: l.id.clone(),
                 url: "https://claude.ai/oauth/authorize".to_owned(),
+                code: None,
             })),
         )
         .await;
@@ -332,6 +335,7 @@ async fn a_runner_error_fails_the_login_with_redacted_text() {
                 login_id: l.id.clone(),
                 token: None,
                 error: Some(format!("the code was wrong ({TOKEN})")),
+                done: false,
             })),
         )
         .await;

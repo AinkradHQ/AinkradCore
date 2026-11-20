@@ -29,11 +29,14 @@ mod agents;
 #[cfg(feature = "test-support")]
 pub use agents::create as create_agent_for_tests;
 mod accounts;
+mod activity;
+mod ai_order;
 mod audit;
 mod budgets;
 mod chains;
 mod connections;
 mod corehealth;
+mod coreprefs;
 mod costs;
 mod deprecation;
 mod devices;
@@ -53,6 +56,7 @@ mod projects_github;
 mod runner_control;
 mod runners;
 pub mod scopes;
+mod secret_export;
 mod secret_groups;
 mod secrets;
 pub mod session;
@@ -62,6 +66,7 @@ mod stepup;
 /// The 403 a route that needs a step-up answers a session without one (a module's own check).
 pub use stepup::required as step_up_required;
 mod system;
+mod system_backup;
 mod terminals;
 pub mod ticket;
 mod trace;
@@ -220,6 +225,8 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/events/latest", get(events::latest))
         .route("/api/v1/ws-ticket", post(ticket::issue))
         .route("/api/v1/audit", get(audit::list))
+        .route("/api/v1/audit/stats", get(activity::audit_stats))
+        .route("/api/v1/ops/history", get(activity::ops_history))
         .route("/api/v1/metrics", get(crate::health::metrics::get))
         .route("/api/v1/hardware", get(hardware::list))
         .route("/api/v1/hardware/pool", get(hardware::pool))
@@ -247,6 +254,10 @@ pub fn router(app: App) -> Router {
             post(runner_control::install_tool),
         )
         .route(
+            "/api/v1/runners/{id}/update",
+            post(runner_control::update_runner),
+        )
+        .route(
             "/api/v1/runners/{id}/tools/operations/{op}",
             get(runner_control::get_operation),
         )
@@ -267,7 +278,23 @@ pub fn router(app: App) -> Router {
         )
         .route("/api/v1/system/host", get(system::host))
         .route("/api/v1/core/health", get(corehealth::get))
+        .route(
+            "/api/v1/core/prefs",
+            get(coreprefs::get).put(coreprefs::put),
+        )
+        .route("/api/v1/core/storage", get(coreprefs::storage))
+        .route("/api/v1/core/update/check", post(coreprefs::check_update))
         .route("/api/v1/system/restart", post(system::restart))
+        .route("/api/v1/system/backup", post(system_backup::start))
+        .route("/api/v1/system/backups", get(system_backup::backups))
+        .route(
+            "/api/v1/system/backups/retention",
+            get(system_backup::retention).put(system_backup::set_retention),
+        )
+        .route(
+            "/api/v1/system/update",
+            get(system::update_status).post(system::update_now),
+        )
         .route("/api/v1/system/logs/core", get(system::logs_core))
         .route("/api/v1/system/logs/helper", get(system::logs_helper))
         .route("/api/v1/system/logs/runner", get(system::logs_runner))
@@ -296,11 +323,6 @@ pub fn router(app: App) -> Router {
             get(accounts::list).post(accounts::create),
         )
         .route("/api/v1/accounts/usage", get(costs::accounts_usage))
-        .route("/api/v1/accounts/{id}/limits", put(costs::set_limit))
-        .route(
-            "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
-            delete(costs::clear_limit),
-        )
         .route("/api/v1/costs", get(costs::list))
         .route("/api/v1/costs/series", get(costs::series))
         .route("/api/v1/budgets", get(budgets::list).put(budgets::set))
@@ -328,9 +350,18 @@ pub fn router(app: App) -> Router {
             post(accounts::send_login_code),
         )
         .route(
+            "/api/v1/accounts/logins/{id}/input",
+            post(accounts::send_login_input),
+        )
+        .route(
+            "/api/v1/accounts/logins/{id}/screen",
+            get(accounts::get_login_screen),
+        )
+        .route(
             "/api/v1/accounts/{id}",
             get(accounts::get).delete(accounts::delete),
         )
+        .route("/api/v1/accounts/{id}/restore", post(accounts::restore))
         .route(
             "/api/v1/accounts/{id}/secret",
             put(accounts::replace_secret),
@@ -340,6 +371,11 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/accounts/{id}/session-limits",
             put(accounts::set_session_limits),
+        )
+        .route("/api/v1/accounts/{id}/models", get(accounts::list_models))
+        .route(
+            "/api/v1/accounts/{id}/models/{model}",
+            put(accounts::set_model_allowed),
         )
         .route("/api/v1/accounts/{id}/test", post(accounts::test_account))
         .route("/api/v1/accounts/{id}/check", post(accounts::check_account))
@@ -360,6 +396,11 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/bindings/{agent}/{provider}",
             delete(accounts::unbind),
+        )
+        .route("/api/v1/ai-order", get(ai_order::get).put(ai_order::set))
+        .route(
+            "/api/v1/ai-order/agents/{agent}",
+            put(ai_order::set_agent).delete(ai_order::clear_agent),
         )
         .route("/api/v1/chains", get(chains::list).post(chains::create))
         .route("/api/v1/chains/bindings", get(chains::list_bindings))
@@ -409,6 +450,10 @@ pub fn router(app: App) -> Router {
             get(connections::activity),
         )
         .route(
+            "/api/v1/connections/{id}/resources",
+            get(connections::resources::list),
+        )
+        .route(
             "/api/v1/connections/{id}/grants",
             get(connections::grants_api::list_grants).put(connections::grants_api::set_grant),
         )
@@ -444,6 +489,10 @@ pub fn router(app: App) -> Router {
         )
         .route("/api/v1/projects/{id}/archive", post(projects::archive))
         .route("/api/v1/projects/{id}/unarchive", post(projects::unarchive))
+        .route(
+            "/api/v1/projects/defaults",
+            get(projects::defaults).put(projects::set_defaults),
+        )
         .route("/api/v1/projects/{id}/repos", post(projects::add_repo))
         .route(
             "/api/v1/projects/{id}/repos/{repo}",
@@ -580,6 +629,7 @@ pub fn router(app: App) -> Router {
         )
         .route("/api/v1/secrets/{id}/leases", post(secrets::lease))
         .route("/api/v1/secrets/{id}/reveal", post(secrets::reveal))
+        .route("/api/v1/secrets/export", post(secret_export::export))
         .route("/api/v1/secret-leases/redeem", post(secrets::redeem))
         .route(
             "/api/v1/secret-groups",
@@ -656,6 +706,9 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/agent-sessions/{id}/wake", post(agents::wake))
         // Modules sit inside the same gate: they never authenticate for themselves.
         .merge(crate::module::mount(&app.modules))
+        // A body that does not fit its type (an unknown field, a wrong type) is axum's plain-text 422;
+        // the API answers it as every other bad input: a JSON 400 `bad_request`.
+        .route_layer(middleware::from_fn(json_body_refusal))
         // `Deprecation`/`Sunset` on deprecated routes (`deprecation`).
         .route_layer(middleware::from_fn(|r, n| {
             deprecation::headers(deprecation::DEPRECATED, r, n)
@@ -666,6 +719,24 @@ pub fn router(app: App) -> Router {
             trace::audit_refusals,
         ))
         .with_state(app)
+}
+
+/// Turns the extractor's plain-text 422 into a JSON 400 (a handler's own JSON 422, such as
+/// `could_not_draft`, passes through).
+async fn json_body_refusal(req: axum::extract::Request, next: middleware::Next) -> Response {
+    let res = next.run(req).await;
+    let plain = res
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .is_some_and(|v| v.as_bytes().starts_with(b"text/plain"));
+    if res.status() != StatusCode::UNPROCESSABLE_ENTITY || !plain {
+        return res;
+    }
+    let why = axum::body::to_bytes(res.into_body(), 4096)
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
+    ApiError::bad_request(why).into_response()
 }
 
 #[cfg(test)]

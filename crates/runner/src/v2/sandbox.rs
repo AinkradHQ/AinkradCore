@@ -17,8 +17,10 @@ const DEFAULT_PROCESSES: u32 = 64;
 /// secrets (`holds`) defaults to `deny`: an agent that can read a secret can send it anywhere
 /// the sandbox reaches. Explicit `allow` for such a session is refused on Linux, where
 /// bubblewrap would share the host network (cloud metadata, LAN, loopback) with no filter;
-/// macOS Seatbelt limits egress to TCP 443, DNS and loopback. Without secrets the default is
-/// `allow` on macOS; on Linux it is `deny` too, unless an admin sets `allow` for a stage-1 host.
+/// macOS Seatbelt limits egress to TCP 443, DNS and loopback. Without secrets the default (unset)
+/// is `filtered` on every platform when the egress filter is proven, else `deny`: never `allow`,
+/// which on macOS left loopback open (E15 follow-up to #473). `allow` is an admin's explicit
+/// choice for a stage-1 host.
 ///
 /// `filtered` (E8a-01; Linux, and macOS since N16) is the enforceable middle: the sandbox has no network interface and
 /// reaches only the destinations the runner's egress policy lists, through a proxy outside it.
@@ -36,10 +38,11 @@ fn network_for(
             egress filter passed its start-up check"
             .into()),
         (None, true) | (Some("deny"), _) => Ok("deny"),
-        // Linux has no egress filter: even a run holding only its MCP token gets no host
-        // network by default (the MCP route is bridged in, see `mcp_bridge`).
-        (None, false) if linux => Ok("deny"),
-        (None, false) | (Some("allow"), false) => Ok("allow"),
+        // Unset: the filter where it is proven, else no network; never the host network. Even a
+        // run holding only its MCP token is covered (the MCP route is bridged in, `mcp_bridge`).
+        (None, false) if ready => Ok("filtered"),
+        (None, false) => Ok("deny"),
+        (Some("allow"), false) => Ok("allow"),
         (Some("allow"), true) if !linux => Ok("allow"),
         (Some("allow"), true) => Err("this host cannot filter egress for an agent network: a \
             session that holds secrets runs with AINKRAD_AGENT_NETWORK=deny or filtered"
@@ -416,7 +419,8 @@ mod tests {
         assert!(network_for(Some("allow"), true, true, false).is_err());
         assert_eq!(network_for(Some("allow"), true, false, false), Ok("allow"));
         assert_eq!(network_for(None, false, true, false), Ok("deny"));
-        assert_eq!(network_for(None, false, false, false), Ok("allow"));
+        // Unset never means the host network, on macOS either (loopback was open).
+        assert_eq!(network_for(None, false, false, false), Ok("deny"));
         assert_eq!(network_for(Some("allow"), false, true, false), Ok("allow"));
         assert!(network_for(Some("lan"), false, false, false).is_err());
     }
@@ -437,9 +441,26 @@ mod tests {
             assert!(network_for(Some("filtered"), holds, true, false).is_err());
             assert!(network_for(Some("filtered"), holds, false, false).is_err());
         }
-        // The default stays `deny` even on a proven runner: filtered is an explicit choice.
+        // Unset on a proven runner: `filtered` on every platform; a session holding secrets
+        // stays `deny`.
         assert_eq!(network_for(None, true, true, true), Ok("deny"));
-        assert_eq!(network_for(None, false, true, true), Ok("deny"));
+        assert_eq!(network_for(None, true, false, true), Ok("deny"));
+        assert_eq!(network_for(None, false, true, true), Ok("filtered"));
+        assert_eq!(network_for(None, false, false, true), Ok("filtered"));
+    }
+
+    /// The 0.10 decision: every runner the installers set up runs agent sessions `filtered` (no
+    /// host loopback, see the harness's profile tests); `allow` stays a by-hand stage-1 choice.
+    #[test]
+    fn the_installed_runners_default_agent_sessions_to_filtered() {
+        let plist = include_str!("../../../../deploy/launchd/io.ainkrad.runner.plist");
+        assert!(
+            plist.contains("<key>AINKRAD_AGENT_NETWORK</key>\n\t\t<string>filtered</string>"),
+            "the macOS runner plist"
+        );
+        let linux = include_str!("../../../../deploy/install-linux.sh");
+        assert!(linux.contains("printf 'AINKRAD_AGENT_NETWORK=filtered\\n"));
+        assert!(!plist.contains("<string>allow</string>") && !linux.contains("NETWORK=allow"));
     }
 
     #[test]

@@ -41,9 +41,10 @@ namespace Ainkrad.Client.Model
         /// Initializes a new instance of the <see cref="AccountTested" /> class.
         /// </summary>
         /// <param name="latencyMs">latencyMs (required).</param>
+        /// <param name="models">A preset: how many model ids the provider listed (E7-3); absent otherwise..</param>
         /// <param name="result">As [&#x60;LastTest::result&#x60;], or &#x60;inconclusive&#x60;: the provider&#39;s model list needs no key and its definition declares no &#x60;test_path&#x60;, so nothing was sent and nothing is known of the key. (required).</param>
         /// <param name="runner">The runner device that made the request (empty when &#x60;result&#x60; is &#x60;inconclusive&#x60;). (required).</param>
-        public AccountTested(long latencyMs = default, string result = default, string runner = default)
+        public AccountTested(long latencyMs = default, int? models = default, string result = default, string runner = default)
         {
             this.LatencyMs = latencyMs;
             // to ensure "result" is required (not null)
@@ -58,6 +59,7 @@ namespace Ainkrad.Client.Model
                 throw new ArgumentNullException("runner is a required property for AccountTested and cannot be null");
             }
             this.Runner = runner;
+            this.Models = models;
         }
 
         /// <summary>
@@ -65,6 +67,13 @@ namespace Ainkrad.Client.Model
         /// </summary>
         [DataMember(Name = "latency_ms", IsRequired = true, EmitDefaultValue = true)]
         public long LatencyMs { get; set; }
+
+        /// <summary>
+        /// A preset: how many model ids the provider listed (E7-3); absent otherwise.
+        /// </summary>
+        /// <value>A preset: how many model ids the provider listed (E7-3); absent otherwise.</value>
+        [DataMember(Name = "models", EmitDefaultValue = true)]
+        public int? Models { get; set; }
 
         /// <summary>
         /// As [&#x60;LastTest::result&#x60;], or &#x60;inconclusive&#x60;: the provider&#39;s model list needs no key and its definition declares no &#x60;test_path&#x60;, so nothing was sent and nothing is known of the key.
@@ -89,6 +98,7 @@ namespace Ainkrad.Client.Model
             StringBuilder sb = new StringBuilder();
             sb.Append("class AccountTested {\n");
             sb.Append("  LatencyMs: ").Append(LatencyMs).Append("\n");
+            sb.Append("  Models: ").Append(Models).Append("\n");
             sb.Append("  Result: ").Append(Result).Append("\n");
             sb.Append("  Runner: ").Append(Runner).Append("\n");
             sb.Append("}\n");
@@ -115,6 +125,12 @@ namespace Ainkrad.Client.Model
             if (this.LatencyMs < (long)0)
             {
                 yield return new ValidationResult("Invalid value for LatencyMs, must be a value greater than or equal to 0.", new [] { "LatencyMs" });
+            }
+
+            // Models (int?) minimum
+            if (this.Models < (int?)0)
+            {
+                yield return new ValidationResult("Invalid value for Models, must be a value greater than or equal to 0.", new [] { "Models" });
             }
 
             yield break;
