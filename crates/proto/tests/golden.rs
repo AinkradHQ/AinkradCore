@@ -580,6 +580,7 @@ fn v2_agent_frames_are_pinned() {
             gateway: None,
             epoch: 0,
             live: false,
+            folder: None,
         })),
     );
     // A policy with every isolation field set (E8a-08); the frame above pins the unchanged shape.
@@ -613,6 +614,7 @@ fn v2_agent_frames_are_pinned() {
             gateway: None,
             epoch: 0,
             live: false,
+            folder: None,
         })),
     );
     v2(
@@ -857,6 +859,7 @@ fn v2_agent_frames_are_pinned() {
             })),
             epoch: 0,
             live: false,
+            folder: None,
         })),
     );
     v2(

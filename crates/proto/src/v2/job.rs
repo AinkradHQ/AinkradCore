@@ -160,6 +160,9 @@ pub enum ShimFrame {
         signal: Option<String>,
         duration_ms: u64,
     },
+    /// Endpoint to shim (and `POST /runner/jobs` 201 streams): the job's state changed
+    /// (`queued`, `syncing`, `running`, the API's `JobState`).
+    State { state: String },
     /// A frame from a newer peer: ignored. Never sent.
     #[serde(other)]
     Unknown,

@@ -468,7 +468,7 @@ pub struct RunnerHello {
     /// Its capacity when the hello was sent (E15-1), beside `load`. Absent from a runner that
     /// predates 2.1: the Core then treats it as plain session hardware ("update runner").
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capacity: Option<Capacity>,
+    pub capacity: Option<Box<Capacity>>,
 }
 
 /// Resume by `seq` (E1-11.4): how many of the peer's frames one side received on a stream.

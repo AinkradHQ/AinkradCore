@@ -305,6 +305,9 @@ impl Session {
                 avg1: l.avg1,
                 cores: l.cores,
             }),
+            capacity: tokio::task::spawn_blocking(super::capacity::capacity)
+                .await
+                .ok(),
             ..RunnerHello::default()
         };
         let (welcome, core_spki) = handshake(&mut sink, &mut source, link, hello).await?;
@@ -388,7 +391,9 @@ impl Session {
                                 }),
                                 isolation: self.agent.as_ref().map(|a| a.isolation()),
                                 report: super::aitools::report(),
-                                capacity: None,
+                                capacity: tokio::task::spawn_blocking(super::capacity::capacity)
+                                    .await
+                                    .ok(),
                             }),
                         ),
                     )
