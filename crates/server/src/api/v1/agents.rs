@@ -383,7 +383,7 @@ pub async fn create(
     Extension(me): Extension<Caller>,
     body: Bytes,
 ) -> ApiResult<AgentSession> {
-    let b: NewAgentSession = parse(&body)?;
+    let mut b: NewAgentSession = parse(&body)?;
     let secrets: Vec<SessionSecret> = b
         .secrets
         .unwrap_or_default()
@@ -402,8 +402,8 @@ pub async fn create(
             ));
         }
     }
-    let draws_account = b.chain.is_some() || b.agent.is_some();
-    let placed = sched::place_new(
+    let mut draws_account = b.chain.is_some() || b.agent.is_some();
+    let mut placed = sched::place_new(
         &app,
         b.runner.as_deref(),
         &b.harness,
@@ -412,6 +412,30 @@ pub async fn create(
         draws_account,
     )
     .await?;
+    // Naming no chain and no agent, with no account of its own: the default chain serves it.
+    let admin = me.device.scopes.iter().any(|scope| scope == "admin");
+    if !draws_account
+        && let Some(id) = sched::default_chain(
+            &app,
+            &me.device.id,
+            admin,
+            &placed.device,
+            &b.harness,
+            &secrets,
+        )
+        .await?
+    {
+        (b.chain, b.harness, b.model, draws_account) = (Some(id), String::new(), None, true);
+        placed = sched::place_new(
+            &app,
+            b.runner.as_deref(),
+            &b.harness,
+            b.policy.as_ref(),
+            &secrets,
+            draws_account,
+        )
+        .await?;
+    }
     let runner = placed.device.clone();
     let mut policy = b.policy.unwrap_or_else(|| {
         serde_json::to_value(ainkrad_proto::runner::Policy::default()).expect("a policy serializes")
@@ -443,7 +467,6 @@ pub async fn create(
     // sandboxed: the Core adds the floor instead of refusing a client that left it out.
     let policy =
         agents::with_account_floor(policy, draws_account || agents::holds_account(&secrets));
-    let admin = me.device.scopes.iter().any(|scope| scope == "admin");
     // A project's session: the Core builds the workspace; a client may not name a mirror itself.
     // Its launch fetches the project's repos with the project's connection (the owner's token),
     // which `POST /projects/{id}/repos/{repo}/fetch` does under `admin`: so this needs `admin`

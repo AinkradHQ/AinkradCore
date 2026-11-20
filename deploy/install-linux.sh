@@ -9,7 +9,7 @@
 #            and the read-only Ainkrad shell profile (deploy/shell) in /usr/local/share/ainkrad/shell: every terminal
 #            then starts `zsh -l` with that profile, the same on every runner. Without zsh the runner starts the login shell.
 # --agents   offer agent sessions (--enable-agents) with the egress filter on: sessions reach only api.anthropic.com
-#            (AINKRAD_AGENT_NETWORK=filtered, AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com in runner.env). Needs the harness
+#            (AINKRAD_AGENT_NETWORK=filtered, AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com in runner.env; --pty adds the terminals' AINKRAD_TERMINAL_EGRESS_HOSTS). Needs the harness
 #            (claude) on PATH. Off unless asked.
 # --ca       a PEM the runner trusts instead of the system roots (a test Core's CA only).
 # --pair     pair as the service user now (waits for the approver; compare the SAS it prints), then start.
@@ -302,10 +302,14 @@ if [ -n "$ws_root" ]; then
   printf '+ write %s/workspace.conf\n' "$dropin"
   if [ "$dry" = 0 ]; then printf '# Written by deploy/install-linux.sh --workspace-root: the Core'"'"'s canonical workspace, shared through group ainkrad-ws.\n[Service]\nSupplementaryGroups=ainkrad-ws\nUMask=0007\nReadWritePaths=%s\n' "$ws_root" >"$dropin/workspace.conf"; fi
 else run rm -f "$dropin/workspace.conf"; fi
-printf '+ write %s: RUNNER_ARGS=%s%s\n' "$envfile" "$args" "$([ "$agents" = 0 ] || echo ' (+ AINKRAD_AGENT_NETWORK=filtered, AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com)')"
+# The terminals' egress hosts: the runner's built-in default (crates/runner/src/egress/policy.rs default_hosts), written
+# explicitly so an admin can edit it. The AI sessions keep their own AINKRAD_AGENT_EGRESS_HOSTS.
+term_hosts=github.com,codeload.github.com,objects.githubusercontent.com,api.github.com,gitlab.com,bitbucket.org,crates.io,static.crates.io,registry.npmjs.org,pypi.org,files.pythonhosted.org,proxy.golang.org,rubygems.org,index.rubygems.org,repo1.maven.org,repo.maven.apache.org
+printf '+ write %s: RUNNER_ARGS=%s%s\n' "$envfile" "$args" "$([ "$agents" = 0 ] || echo ' (+ AINKRAD_AGENT_NETWORK=filtered, AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com)')$([ "$pty" = 0 ] || echo " (+ AINKRAD_TERMINAL_EGRESS_HOSTS=$term_hosts)")"
 if [ "$dry" = 0 ]; then
   printf '# Written by deploy/install-linux.sh. exec.run is off unless --enable-exec is added here.\nRUNNER_ARGS=%s\n' "$args" >"$envfile"
   [ "$agents" = 0 ] || printf 'AINKRAD_AGENT_NETWORK=filtered\nAINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com\n' >>"$envfile"
+  [ "$pty" = 0 ] || printf 'AINKRAD_TERMINAL_EGRESS_HOSTS=%s\n' "$term_hosts" >>"$envfile"
   chmod 0640 "$envfile"; [ -n "$prefix" ] || chown root:ainkrad-runner "$envfile"
 fi
 runner_demote_kill

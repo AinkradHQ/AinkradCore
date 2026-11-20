@@ -217,6 +217,38 @@ const FORGES: [&str; 9] = [
     "visualstudio.com",
 ];
 
+/// The host names a Core terminal reaches when `AINKRAD_TERMINAL_EGRESS_HOSTS` is unset: the git
+/// forges and the package registries (with the job registry list). The installers write the same
+/// list. Reserved, loopback and private ranges stay denied whatever is listed.
+pub fn default_hosts() -> String {
+    const FORGE_HOSTS: [&str; 6] = [
+        "github.com",
+        "codeload.github.com",
+        "objects.githubusercontent.com",
+        "api.github.com",
+        "gitlab.com",
+        "bitbucket.org",
+    ];
+    const MORE_REGISTRIES: [&str; 4] = [
+        "rubygems.org",
+        "index.rubygems.org",
+        "repo1.maven.org",
+        "repo.maven.apache.org",
+    ];
+    FORGE_HOSTS
+        .iter()
+        .chain(ainkrad_proto::v2::JOB_REGISTRY_HOSTS.iter())
+        .chain(MORE_REGISTRIES.iter())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// `set` (the env value, `None` when unset), or [`default_hosts`].
+fn hosts_or_default(set: Option<String>) -> String {
+    set.unwrap_or_else(default_hosts)
+}
+
 #[derive(Clone, Debug)]
 pub struct Policy {
     cidrs: Vec<Cidr>,
@@ -279,12 +311,24 @@ impl Policy {
         Ok(parsed)
     }
 
-    /// The runner's own policy (`AINKRAD_AGENT_EGRESS_*`).
+    /// The runner's own policy for AI sessions (`AINKRAD_AGENT_EGRESS_*`).
     pub fn from_env() -> Result<Policy, String> {
         let get = |k: &str| std::env::var(k).unwrap_or_default();
         Policy::parse(
             &get("AINKRAD_AGENT_EGRESS_ALLOW"),
             &get("AINKRAD_AGENT_EGRESS_HOSTS"),
+            &get("AINKRAD_AGENT_EGRESS_PORTS"),
+        )
+    }
+
+    /// The policy of the Core's terminals: the agents' CIDRs and ports, but their own host list,
+    /// `AINKRAD_TERMINAL_EGRESS_HOSTS`, which is [`default_hosts`] when unset (a set one, even
+    /// empty, is the admin's and replaces it). The AI sessions' list never reaches a terminal.
+    pub fn terminal_from_env() -> Result<Policy, String> {
+        let get = |k: &str| std::env::var(k).unwrap_or_default();
+        Policy::parse(
+            &get("AINKRAD_AGENT_EGRESS_ALLOW"),
+            &hosts_or_default(std::env::var("AINKRAD_TERMINAL_EGRESS_HOSTS").ok()),
             &get("AINKRAD_AGENT_EGRESS_PORTS"),
         )
     }

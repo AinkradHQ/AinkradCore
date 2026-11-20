@@ -607,6 +607,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             tls.clone(),
             agent_capacity,
             share_history,
+            super::hwsource::workspace_root(),
         )
     }) {
         None => None,
@@ -739,13 +740,13 @@ async fn gateway_selftest(agents: &std::path::Path) -> Result<(), String> {
     crate::gateway::selftest(agents, &exe).await
 }
 
-/// The egress proxy of `--terminal-network=filtered` (KAN-416): the policy of the agent sessions
-/// (`AINKRAD_AGENT_EGRESS_*`), proven by the same start-up check, on a socket in `dir` (0700) that
+/// The egress proxy of `--terminal-network=filtered` (KAN-416): `Policy::terminal_from_env` (the
+/// terminals' own host list, the agents' CIDRs and ports), proven by the same start-up check, on a socket in `dir` (0700) that
 /// the shells get bound in. A socket left by an earlier runner is replaced.
 async fn terminal_proxy(dir: &std::path::Path) -> Result<crate::egress::Proxy, String> {
     use std::os::unix::fs::DirBuilderExt;
-    let policy =
-        crate::egress::Policy::from_env()?.with_host_addresses(crate::egress::host_addresses()?);
+    let policy = crate::egress::Policy::terminal_from_env()?
+        .with_host_addresses(crate::egress::host_addresses()?);
     let exe =
         std::env::current_exe().map_err(|_| "cannot find the runner executable".to_owned())?;
     crate::egress::selftest(&policy, &exe)
@@ -777,6 +778,7 @@ async fn agents(
     tls: Option<Arc<rustls::ClientConfig>>,
     capacity: u32,
     share_history: bool,
+    workspace_root: Option<PathBuf>,
 ) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
     super::aitools::set_home(work.clone());
@@ -824,6 +826,7 @@ async fn agents(
     }
     let mut config = super::agent::AgentConfig::new(state.join("agents"), secrets.clone());
     config.capacity = capacity;
+    config.workspace_root = workspace_root;
     if share_history {
         config.history_read = true;
         config.history_root = Some(home.join(".claude").join("projects"));

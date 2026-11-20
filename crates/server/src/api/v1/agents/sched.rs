@@ -288,6 +288,17 @@ pub(super) fn own_login(app: &App, runner: &str, harness: &str) -> bool {
 }
 
 pub(in crate::api::v1) fn no_account(new: &NewSession<'_>, own_login: bool) -> Option<ApiError> {
+    needs_account(new.harness, new.secrets, own_login).then(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "no_account",
+            "No account can serve this agent. Add an account and make its pool the default.",
+        )
+    })
+}
+
+/// Whether a plain session of `harness` with `secrets` would have no account to sign in with.
+fn needs_account(harness: &str, secrets: &[SessionSecret], own_login: bool) -> bool {
     const OWN: [&str; 6] = [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY",
@@ -296,18 +307,38 @@ pub(in crate::api::v1) fn no_account(new: &NewSession<'_>, own_login: bool) -> O
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
     ];
-    let needs = matches!(new.harness, "claude" | "codex" | "agy");
-    let holds = new
-        .secrets
+    let needs = matches!(harness, "claude" | "codex" | "agy");
+    let holds = secrets
         .iter()
         .any(|s| s.name.starts_with(ACCOUNT_PREFIX) || OWN.contains(&s.var.as_str()));
-    (needs && !holds && !own_login).then(|| {
-        ApiError::new(
-            StatusCode::CONFLICT,
-            "no_account",
-            "No account can serve this agent. Add an account and make its pool the default.",
-        )
-    })
+    needs && !holds && !own_login
+}
+
+/// The default chain a request naming no chain and no agent gets (e2e round 1: a fresh Core's
+/// first session): the default of `device`'s user, when the request names no harness or would be
+/// refused `no_account` on `runner`. Only for an admin device (a chain session is admin-only) and
+/// never beside an `acct.*` secret (a pinned account).
+pub(in crate::api::v1) async fn default_chain(
+    app: &App,
+    device: &str,
+    admin: bool,
+    runner: &str,
+    harness: &str,
+    secrets: &[SessionSecret],
+) -> Result<Option<i64>, ApiError> {
+    let pinned = secrets.iter().any(|s| s.name.starts_with(ACCOUNT_PREFIX));
+    let wants =
+        harness.is_empty() || needs_account(harness, secrets, own_login(app, runner, harness));
+    if !admin || pinned || !wants {
+        return Ok(None);
+    }
+    let user = ch::user_of(&app.pool, device).await?;
+    Ok(
+        sqlx::query_scalar("SELECT id FROM core_chains WHERE user_id = ? AND is_default = 1")
+            .bind(user)
+            .fetch_optional(&app.pool)
+            .await?,
+    )
 }
 
 /// Harnesses whose login lives on one runner (codex-sub, Antigravity): a session of one stays there.

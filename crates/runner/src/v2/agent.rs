@@ -99,6 +99,46 @@ pub struct AgentConfig {
     /// Where the claude harness keeps its sessions (`~/.claude/projects`); the one folder
     /// `history.read` may read.
     pub history_root: Option<PathBuf>,
+    /// `--workspace-root`: the Core host's built-in runner, whose sessions work in the folder the
+    /// Core names (`AgentStart::folder`) beneath it.
+    pub workspace_root: Option<PathBuf>,
+}
+
+/// `folder` (an `AgentStart::folder`) when it is `session`'s own place beneath `root`:
+/// `<root>/u/<n>/s/<session>` or `<root>/p/<n>/s/<session>`, nothing else.
+pub(crate) fn session_folder(
+    root: &std::path::Path,
+    folder: &str,
+    session: &str,
+) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let bad = || {
+        format!(
+            "the session folder is not this session's place under {}",
+            root.display()
+        )
+    };
+    let path = std::path::Path::new(folder);
+    let rest = path.strip_prefix(root).map_err(|_| bad())?;
+    let parts: Vec<&str> = rest
+        .components()
+        .map(|c| match c {
+            Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect::<Option<_>>()
+        .ok_or_else(bad)?;
+    match parts.as_slice() {
+        [kind, n, "s", id]
+            if matches!(*kind, "u" | "p")
+                && !n.is_empty()
+                && n.bytes().all(|b| b.is_ascii_digit())
+                && *id == session =>
+        {
+            Ok(path.to_path_buf())
+        }
+        _ => Err(bad()),
+    }
 }
 
 /// `slots` for `harness`, cut to one where its runs share state. agy reads its MCP config
@@ -126,6 +166,7 @@ impl AgentConfig {
             plan_limit: true,
             history_read: false,
             history_root: None,
+            workspace_root: None,
         }
     }
 }
@@ -205,6 +246,7 @@ trait Harness: Send + Sync {
     fn discard_agent_workspaces(&self, name: &str, prefix: bool, keep: &[String]);
     fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream);
     fn set_job_shims(&self, socks: Arc<super::jobsock::JobSocks>, bin: PathBuf);
+    fn set_session_folder(&self, session: &str, folder: Option<PathBuf>);
     fn work_dir(&self, job: &Job) -> Option<PathBuf>;
 }
 
@@ -257,6 +299,9 @@ impl<E: Executor> Harness for E {
     }
     fn set_job_shims(&self, socks: Arc<super::jobsock::JobSocks>, bin: PathBuf) {
         Executor::set_job_shims(self, socks, bin);
+    }
+    fn set_session_folder(&self, session: &str, folder: Option<PathBuf>) {
+        Executor::set_session_folder(self, session, folder);
     }
     fn work_dir(&self, job: &Job) -> Option<PathBuf> {
         Executor::work_dir(self, job)
@@ -594,6 +639,15 @@ impl AgentDriver {
                 "this runner offers no slot for that harness",
             ));
         }
+        // The Core's built-in runner works in the session's place in the canonical workspace. A
+        // runner with no workspace root keeps picking its own folder.
+        let folder = match (&req.folder, &self.config.workspace_root) {
+            (Some(f), Some(root)) => Some(
+                session_folder(root, f, &req.session)
+                    .map_err(|why| refuse(ErrorCode::InvalidArgs, why))?,
+            ),
+            _ => None,
+        };
         let mut all = self.sessions.lock().unwrap();
         // A resent start is answered; an interrupted session is started again; one that ended is
         // started again only by a newer resume (a wake), so a resent resume never runs it twice.
@@ -668,6 +722,7 @@ impl AgentDriver {
         live.meta.epoch = req.epoch;
         live.run = run;
         save_meta(&self.config, &req.session, &live.meta);
+        self.harness.set_session_folder(&req.session, folder);
         let me = Arc::clone(self);
         let session = req.session.clone();
         let task = tokio::spawn(async move { me.work(req, run, resumed).await });
