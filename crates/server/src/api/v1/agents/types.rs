@@ -231,8 +231,10 @@ pub struct AgentSecret {
 /// A session to start. No `Debug`: the prompt is the caller's.
 #[derive(Deserialize, ToSchema)]
 pub struct NewAgentSession {
-    /// Deprecated (E15): the Core places every session. Absent: the Core's built-in runner (until
-    /// E15-1 places by load, after which a given runner is ignored).
+    /// Deprecated and ignored (E15): the Core places every session (on itself, or on a runner
+    /// when it is full). Kept so an older client still parses. The one exception: a session of a
+    /// runner-bound login (`codex` or `agy` using the login its runner reports, with no account)
+    /// stays on the runner it names.
     #[serde(default)]
     #[schema(required = false, deprecated)]
     pub runner: Option<String>,

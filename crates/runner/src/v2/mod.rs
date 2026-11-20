@@ -26,6 +26,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 pub mod agent;
 mod aitools;
+pub mod capacity;
 pub mod cli;
 pub mod client;
 pub mod control;
