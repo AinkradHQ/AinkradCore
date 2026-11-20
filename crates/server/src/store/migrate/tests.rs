@@ -155,7 +155,12 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (55, "e7_provider_limits"),
             (56, "e7_retire_account_limits"),
             (57, "e7_account_soft_delete"),
-            (58, "project_idle_never_e24")
+            (58, "project_idle_never_e24"),
+            (59, "hardware"),
+            (60, "ws_path_run_kind"),
+            (61, "decisions"),
+            (62, "hw_cache_prepared"),
+            (63, "hw_first_capacity")
         ]
     );
     let sum: Vec<u8> =
@@ -419,7 +424,14 @@ fn the_schema_diff_flags_objects_outside_the_prefix() {
 /// the platform's schema and a module's, so a module table is held to it too.
 #[tokio::test]
 async fn user_owned_tables_carry_user_id() {
-    const NOT_USER_OWNED: [&str; 22] = [
+    const NOT_USER_OWNED: [&str; 26] = [
+        // Each describes a device (hardware), or a device's cache of a project, which carry their own user.
+        "core_hardware_prefs",
+        "core_hw_cache",
+        // Each belongs to a project, which carries its own user.
+        "core_cmd_history",
+        // Keyed by a hash of redacted text: scores, no text and no owner (E15-0).
+        "core_decision_cache",
         // Each describes a project, which carries its own user.
         "core_project_repos",
         "core_project_mirrors",

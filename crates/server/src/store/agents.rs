@@ -587,7 +587,15 @@ pub async fn apply_quiet(
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    // E15-2: a built-in runner's folder that is its place in the workspace is the Core's own.
+    let bound = match &ev.folder {
+        Some(f) => crate::workspace::adopt::bind_folder(&mut tx, id, f).await?,
+        None => None,
+    };
     tx.commit().await?;
+    if let Some(folder) = bound {
+        crate::workspace::adopt::baseline(id.to_owned(), folder);
+    }
     Ok(last)
 }
 
@@ -987,6 +995,20 @@ pub async fn wake_with(
 }
 
 /// Marks a just-created client session as a live conversation and gives it its title.
+/// Why the Core placed session `id` where it did (E15 `place_reason`).
+pub async fn set_place_reason(
+    pool: &SqlitePool,
+    id: &str,
+    reason: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE core_agent_sessions SET place_reason = ? WHERE id = ?")
+        .bind(reason)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map(drop)
+}
+
 pub async fn configure(
     pool: &SqlitePool,
     id: &str,

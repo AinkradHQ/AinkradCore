@@ -35,11 +35,6 @@ namespace Ainkrad.Client.Model
         /// <summary>
         /// Initializes a new instance of the <see cref="NewAgentSession" /> class.
         /// </summary>
-        [JsonConstructorAttribute]
-        protected NewAgentSession() { }
-        /// <summary>
-        /// Initializes a new instance of the <see cref="NewAgentSession" /> class.
-        /// </summary>
         /// <param name="agent">An opaque agent id (1 to 64 of &#x60;[A-Za-z0-9._:-]&#x60;): its bound chain, else the user&#39;s default chain, serves the session. Needs &#x60;admin&#x60;. With no chain either way the session runs as a plain one and names its harness..</param>
         /// <param name="chain">A fallback chain&#39;s id: the session draws its account from it, one at a time. Needs &#x60;admin&#x60;. It must not come with a harness, a model or an &#x60;acct.*&#x60; secret..</param>
         /// <param name="connectionAccess">Capability names the session may call through its connections (&#x60;read_repo&#x60;, &#x60;issues_write&#x60;, &#x60;read_issues&#x60;, ...; see &#x60;listConnectionKinds&#x60;). Needs &#x60;admin&#x60;. Absent: the default, read-class capabilities only (write is an explicit grant); an agent&#39;s session with none has no connection tools. An empty list is refused (400 &#x60;empty_allowlist&#x60;), and so are operation names and &#x60;*&#x60; (400)..</param>
@@ -51,17 +46,11 @@ namespace Ainkrad.Client.Model
         /// <param name="policy">&#x60;{\&quot;mode\&quot;: \&quot;ask\&quot; | \&quot;accept_edits\&quot; | \&quot;sandboxed\&quot;, \&quot;allow\&quot;: […]}&#x60;; default &#x60;ask&#x60;..</param>
         /// <param name="projectId">Start the session for a project (P3-02): the Core builds the workspace from the project&#39;s repos (the primary one first, each under its repo name when there are several), the runner clones them from the Core&#39;s copies, and the project&#39;s Brain room, if it has one, is claimed (the room&#39;s model policy then applies, so a session with no chain is refused 403 &#x60;claim_refused&#x60;). Excludes &#x60;workspace&#x60; (400). 404 for no such project, 409 &#x60;project_archived&#x60;, 409 &#x60;project_has_no_repos&#x60;, 400 when the caller names a mirror in &#x60;workspace&#x60;: only the Core sets one..</param>
         /// <param name="prompt">The first message. Absent or empty: the session starts with no message, like opening the CLI: its harness is up, the state is &#x60;waiting&#x60;, and the first message comes through &#x60;sendAgentMessage&#x60;. A message gives the session its &#x60;title&#x60; (its first 60 characters)..</param>
-        /// <param name="runner">The runner&#39;s device id, &#x60;d_…&#x60;. (required).</param>
+        /// <param name="runner">Deprecated and ignored (E15): the Core places every session (on itself, or on a runner when it is full). Kept so an older client still parses. The one exception: a session of a runner-bound login (&#x60;codex&#x60; or &#x60;agy&#x60; using the login its runner reports, with no account) stays on the runner it names..</param>
         /// <param name="secrets">At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC)..</param>
         /// <param name="workspace">The repo and worktree to work in (&#x60;{\&quot;repo_url\&quot;, \&quot;base_branch\&quot;, \&quot;branch\&quot;, …}&#x60;); absent, a scratch dir..</param>
         public NewAgentSession(string agent = default, long? chain = default, List<string> connectionAccess = default, string effort = default, string harness = default, bool? live = default, string model = default, bool? plan = default, Object policy = default, long? projectId = default, string prompt = default, string runner = default, List<AgentSecret> secrets = default, Object workspace = default)
         {
-            // to ensure "runner" is required (not null)
-            if (runner == null)
-            {
-                throw new ArgumentNullException("runner is a required property for NewAgentSession and cannot be null");
-            }
-            this.Runner = runner;
             this.Agent = agent;
             this.Chain = chain;
             this.ConnectionAccess = connectionAccess;
@@ -73,6 +62,7 @@ namespace Ainkrad.Client.Model
             this.Policy = policy;
             this.ProjectId = projectId;
             this.Prompt = prompt;
+            this.Runner = runner;
             this.Secrets = secrets;
             this.Workspace = workspace;
         }
@@ -155,10 +145,11 @@ namespace Ainkrad.Client.Model
         public string Prompt { get; set; }
 
         /// <summary>
-        /// The runner&#39;s device id, &#x60;d_…&#x60;.
+        /// Deprecated and ignored (E15): the Core places every session (on itself, or on a runner when it is full). Kept so an older client still parses. The one exception: a session of a runner-bound login (&#x60;codex&#x60; or &#x60;agy&#x60; using the login its runner reports, with no account) stays on the runner it names.
         /// </summary>
-        /// <value>The runner&#39;s device id, &#x60;d_…&#x60;.</value>
-        [DataMember(Name = "runner", IsRequired = true, EmitDefaultValue = true)]
+        /// <value>Deprecated and ignored (E15): the Core places every session (on itself, or on a runner when it is full). Kept so an older client still parses. The one exception: a session of a runner-bound login (&#x60;codex&#x60; or &#x60;agy&#x60; using the login its runner reports, with no account) stays on the runner it names.</value>
+        [DataMember(Name = "runner", EmitDefaultValue = true)]
+        [Obsolete]
         public string Runner { get; set; }
 
         /// <summary>

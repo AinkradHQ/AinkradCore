@@ -364,6 +364,64 @@ impl HarnessExecutor {
                 }
             }
         }
+        // Heavy jobs (E15-3): the Core's own runner gives a session's sandbox the shims and a socket
+        // of its own, bound read-only. The guard closes the socket when the run ends.
+        let mut job_guard = crate::v2::pty::JobGuard(None);
+        let mut job_shims = None;
+        let shims = self.job_shims.lock().expect("job shims").clone();
+        if let Some((socks, bin)) = shims
+            && job.workspace.is_some()
+            && job.issue.is_none()
+        {
+            // The session's own network goes with each job (E15 H2): `deny` keeps them local,
+            // `filtered` gives them no more than its allow list (without forges for an account).
+            let net = {
+                let envs = self.run_env.lock().expect("run env lock");
+                let e = envs.get(&job.run).map(Vec::as_slice).unwrap_or_default();
+                let account =
+                    ainkrad_harness::last_env(e, crate::egress::ACCOUNT_SESSION).is_some();
+                crate::v2::jobsock::Net::from_mode(
+                    ainkrad_harness::last_env(e, "AINKRAD_SANDBOX_NETWORK").map(String::as_str),
+                    || {
+                        self.egress
+                            .as_ref()
+                            .map(|p| {
+                                if account {
+                                    p.without_forges().host_names()
+                                } else {
+                                    p.host_names()
+                                }
+                            })
+                            .unwrap_or_default()
+                    },
+                )
+            };
+            let origin = crate::v2::jobsock::Origin {
+                terminal: None,
+                session: Some(job.context_ref.clone()),
+                project: None,
+                folder: Some(self.cwd(job)),
+                net,
+            };
+            match socks.open(&job.context_ref, origin).await {
+                Ok(sock) => {
+                    let rest = ainkrad_harness::last_env(&env, "PATH")
+                        .cloned()
+                        .or_else(|| std::env::var_os("PATH"))
+                        .map(|p| p.to_string_lossy().into_owned());
+                    for (k, v) in crate::v2::jobsock::shim_env(rest.as_deref(), &bin, &sock) {
+                        env.push((k, v.into()));
+                    }
+                    job_shims = Some(ainkrad_harness::JobShims {
+                        bin_dir: bin,
+                        socket: sock,
+                    });
+                    job_guard = crate::v2::pty::JobGuard(Some((socks, job.context_ref.clone())));
+                }
+                Err(e) => tracing::warn!(error = %e, "no job socket for this session"),
+            }
+        }
+        let _job_guard = job_guard;
         let default_model = HARNESSES
             .iter()
             .find(|(name, _)| *name == job.harness)
@@ -389,6 +447,7 @@ impl HarnessExecutor {
             instructions: files.instructions.clone(),
             mcp_config: files.mcp_config.clone(),
             backend: self.backend.clone(),
+            job_shims,
         };
         let reports = reports.clone();
         let _bridge = bridge; // held until the run ends

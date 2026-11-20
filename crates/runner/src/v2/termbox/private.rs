@@ -222,6 +222,9 @@ pub struct PrivateSpec<'a> {
     pub env: &'a BTreeMap<String, String>,
     /// More paths to hide (`--terminal-hide`, the launcher directories), beside [`ALWAYS_HIDDEN`].
     pub hide: &'a [PathBuf],
+    /// Heavy-job shims (E15-3): the directory of the shim links and the directory of this
+    /// terminal's job socket (`job.sock`). Both are readable and read-only; the socket connects.
+    pub jobs: Option<(&'a Path, &'a Path)>,
 }
 
 /// `program args` in a private root: `home` writable and `folder` added when given. `cwd` is the
@@ -256,7 +259,10 @@ pub fn wrap_private(p: &PrivateSpec) -> Result<Boxed, String> {
         let scratch = scratch_dir(p.base, p.user, p.terminal)?;
         env.insert("HOME".to_owned(), h(home));
         env.insert("TMPDIR".to_owned(), h(&scratch));
-        let profile = seatbelt_profile(home, folder, &scratch, net, &hidden);
+        let mut profile = seatbelt_profile(home, folder, &scratch, net, &hidden);
+        if let Some((bin, sock_dir)) = p.jobs {
+            profile.push_str(&jobs_rules(bin, sock_dir));
+        }
         let mut out = vec!["-p".to_owned(), profile, "--".to_owned()];
         // The shell's variables travel in `sandbox-exec`'s own environment, never its argv (a
         // process listing shows every argument): it is a SIP platform binary, which drops
@@ -324,6 +330,11 @@ pub fn wrap_private(p: &PrivateSpec) -> Result<Boxed, String> {
         }
         None => BOX_HOME.to_owned(),
     };
+    if let Some((bin, sock_dir)) = p.jobs {
+        for d in [bin, sock_dir] {
+            out.extend(["--ro-bind".to_owned(), h(d), h(d)]);
+        }
+    }
     for (k, v) in &env {
         out.extend(["--setenv".to_owned(), k.clone(), v.clone()]);
     }
@@ -432,62 +443,25 @@ pub fn seatbelt_profile(
     p
 }
 
-/// `env K=V…` for a command a host-view launcher starts, with the launcher itself left clean: on
-/// Linux each variable becomes a `--setenv` before `--chdir`, on macOS the program is run through
-/// `/usr/bin/env` after `--`. Returns the argv unchanged when there is nothing to set.
-pub fn inject_env(args: &mut Vec<String>, env: &BTreeMap<String, String>) {
-    // macOS: the variables stay in `sandbox-exec`'s own environment (see `wrap_private`).
-    if cfg!(target_os = "macos") || env.is_empty() {
-        return;
+/// Seatbelt rules for the heavy-job shims: read the shim directory and the socket's, and connect to
+/// `job.sock` only. Appended last, so they win over the hidden state they lie in.
+fn jobs_rules(bin: &Path, sock_dir: &Path) -> String {
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_owned());
+    let (bin, dir) = (real(bin), real(sock_dir));
+    let mut r = format!(
+        "(allow file-read* (subpath \"{}\") (subpath \"{}\"))\n(allow network-outbound (literal \"{}\"))\n",
+        quote(&bin),
+        quote(&dir),
+        quote(&dir.join("job.sock"))
+    );
+    for a in bin.ancestors().skip(1).chain(dir.ancestors().skip(1)) {
+        r.push_str(&format!(
+            "(allow file-read-metadata (literal \"{}\"))\n",
+            quote(a)
+        ));
     }
-    if let Some(at) = args.iter().position(|a| a == "--chdir") {
-        let ins: Vec<String> = env
-            .iter()
-            .flat_map(|(k, v)| ["--setenv".to_owned(), k.clone(), v.clone()])
-            .collect();
-        args.splice(at..at, ins);
-    }
+    r
 }
 
-/// Moves every `--setenv K V` of bubblewrap's argv into the bytes of a pipe, so no variable (a
-/// terminal's secret) is in the process listing: `/proc/<pid>/cmdline` is world-readable, a pipe is
-/// not. The first one is replaced by `--args 3` (bubblewrap reads its options from descriptor 3
-/// there, in order, so `--clearenv` still comes first). The bytes are NUL-terminated arguments;
-/// `None` when there is nothing to move or the launcher is not bubblewrap (macOS: `sandbox-exec`
-/// has no such option, its variables travel in its environment). The caller hands them to the host
-/// as `Spec::fd3`.
-pub fn setenv_to_fd(args: &mut Vec<String>) -> Option<Vec<u8>> {
-    if cfg!(target_os = "macos") {
-        return None;
-    }
-    // Only bubblewrap's own options: what follows the first `--` is the program and its
-    // arguments, where a `--setenv K V` is just text.
-    let end = args.iter().position(|a| a == "--").unwrap_or(args.len());
-    let first = args[..end].iter().position(|a| a == "--setenv")?;
-    let mut bytes = Vec::new();
-    let mut kept = Vec::with_capacity(args.len());
-    let mut i = 0;
-    while i < args.len() {
-        if i < end && args[i] == "--setenv" && i + 2 < end {
-            for a in &args[i..i + 3] {
-                bytes.extend_from_slice(a.as_bytes());
-                bytes.push(0);
-            }
-            if i == first {
-                kept.push("--args".to_owned());
-                kept.push("3".to_owned());
-            }
-            i += 3;
-        } else {
-            kept.push(args[i].clone());
-            i += 1;
-        }
-    }
-    *args = kept;
-    Some(bytes)
-}
-
-/// The environment a host-view launcher gets itself.
-pub fn launcher_env() -> BTreeMap<String, String> {
-    BTreeMap::from([("PATH".to_owned(), LAUNCHER_PATH.to_owned())])
-}
+mod env;
+pub use env::{inject_env, launcher_env, setenv_to_fd};

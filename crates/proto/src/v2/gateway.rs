@@ -11,9 +11,15 @@ use serde::{Deserialize, Serialize};
 
 pub const OP_AGENT_LIMIT: &str = "agent.limit";
 pub const OP_GATEWAY_TEST: &str = "gateway.test";
+/// One request through a lease for a Core service (E15-0 Decisions): sent to the built-in runner only.
+pub const OP_GATEWAY_CALL: &str = "gateway.call";
 
 /// The command an agent driver lists when its runner can run the gateway (as `egress-filter`).
 pub const CAP_GATEWAY: &str = "gateway";
+/// The command an agent driver lists when its runner takes [`OP_GATEWAY_CALL`].
+pub const CAP_GATEWAY_CALL: &str = "gateway-call";
+/// The most bytes of a `gateway.call` response body the runner returns.
+pub const MAX_GATEWAY_CALL_BYTES: usize = 1024 * 1024;
 
 /// The upstream API dialects the gateway speaks: a closed set, so the route table is code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -162,7 +168,9 @@ pub struct GatewayTest {
 }
 
 /// The outcome class of an upstream request or test: a status class only, never provider text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum UpstreamStatus {
     Ok,
@@ -174,6 +182,7 @@ pub enum UpstreamStatus {
     RefusedAddress,
     TlsFailed,
     /// A class from a newer runner. Never sent.
+    #[default]
     #[serde(other)]
     Unknown,
 }
@@ -189,6 +198,59 @@ pub struct GatewayTested {
     /// Core filters each id before it keeps one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<String>,
+}
+
+/// Core to runner (E15-0): redeem `lease`, run the same dial checks as `gateway.test`, make one
+/// `POST` of `body` to `path` under the upstream's base path, and return the response. No `Debug`.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct GatewayCall {
+    pub lease: String,
+    /// As in [`GatewayGrant`].
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_key: Option<UserKeyDef>,
+    /// Absent reads as no upstream, which the runner refuses (`invalid_args`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<Upstream>,
+    /// The request path under the upstream's base path, e.g. `/v1beta/models/x:generateContent`.
+    pub path: String,
+    /// The JSON request body, as text (already redacted by the Core).
+    pub body: String,
+    /// Absent: the runner's default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+/// The tokens a `gateway.call` used, as the upstream reported them.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(default)]
+pub struct CallUsage {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported_usd_micros: Option<u64>,
+}
+
+/// Runner to Core: the answer to `gateway.call`. `body` is the upstream's response text, at most
+/// [`MAX_GATEWAY_CALL_BYTES`] (longer is `truncated`), only for a status of `ok`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct GatewayCalled {
+    pub result: UpstreamStatus,
+    /// The HTTP status, 0 when none came back.
+    pub http_status: u16,
+    pub body: String,
+    pub truncated: bool,
+    pub usage: CallUsage,
+    pub latency_ms: u64,
+    /// Seconds the upstream asked to wait, for an overload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after: Option<u64>,
 }
 
 /// What a [`GatewayReport`] says.
@@ -276,6 +338,15 @@ impl std::fmt::Debug for GatewayGrant {
         f.debug_struct("GatewayGrant")
             .field("account", &self.account)
             .field("host", &self.upstream.host)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for GatewayCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayCall")
+            .field("host", &self.upstream.as_ref().map(|u| &u.host))
+            .field("path", &self.path)
             .finish_non_exhaustive()
     }
 }

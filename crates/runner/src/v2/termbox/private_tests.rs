@@ -31,6 +31,7 @@ fn spec<'a>(
         terminal: "t_1",
         env,
         hide: &[],
+        jobs: None,
     }
 }
 
@@ -216,8 +217,9 @@ fn the_launcher_gets_a_clean_environment_and_the_shell_gets_the_clients() {
         ("LD_PRELOAD".to_owned(), "/tmp/evil.so".to_owned()),
     ]);
     let b = wrap_private(&spec(&sbc, &home, None, &env, &[], &Net::Host)).unwrap();
-    assert_eq!(b.env, [("PATH".to_owned(), "/usr/bin:/bin".to_owned())]);
     if cfg!(target_os = "linux") {
+        // bwrap's own environment is the fixed clean one; the shell's arrives as `--setenv`.
+        assert_eq!(b.env, [("PATH".to_owned(), "/usr/bin:/bin".to_owned())]);
         let set = |k: &str, v: &str| {
             b.args
                 .windows(3)

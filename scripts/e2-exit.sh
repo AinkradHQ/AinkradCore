@@ -52,7 +52,7 @@ PASS_A=$W/pass-a PASS_B=$W/pass-b NONCE=$(openssl rand -hex 6)
 openssl rand -hex 24 >"$PASS_A"; openssl rand -hex 24 >"$PASS_B"; chmod 600 "$PASS_A" "$PASS_B"
 printf %s "$NONCE" >"$W/nonce"
 ENVCANARY=envcanary-$(openssl rand -hex 8) FILECANARY=filecanary-$(openssl rand -hex 8)
-mkdir -p "$W/canary" "$W/bin" "$W/tmp" "$W/a" "$W/b"
+mkdir -p "$W/canary" "$W/bin" "$W/tmp" "$W/a" "$W/b" "$W/ws"
 printf '%s\n' "$FILECANARY" >"$W/canary/id_e2"
 KS_A=$W/a/keystore.json KS_B=$W/b/keystore.json
 cargs() { echo --url "${3:-$URL}" --host "127.0.0.1:$PORT" --keystore "$1" --stepup-passphrase-file "$2"; }
@@ -81,7 +81,7 @@ render() { "$REND" 24 80 <"$1"; }
 
 serve() { # serve <log>
   rm -f "$SOCK"
-  "$SRV" serve --config "$HOME_DIR/config.toml" --listen "loopback:$PORT" --allow-plain-runner 2>>"$1" >/dev/null &
+  AINKRAD_WORKSPACE_ROOT="$W/ws" "$SRV" serve --config "$HOME_DIR/config.toml" --listen "loopback:$PORT" --allow-plain-runner 2>>"$1" >/dev/null &
   CORE=$!; PIDS+=("$CORE")
   wait_for 30 test -S "$SOCK" && wait_for 30 curl -fsS "$URL/healthz"
 }
@@ -89,7 +89,7 @@ RUNNER_N=0
 start_runner() {
   RUNNER_N=$((RUNNER_N + 1)); RLOG=$W/runner-$RUNNER_N.log
   env PATH="$W/bin:$PATH" TMPDIR="$W/tmp" E2_ENV_CANARY="$ENVCANARY" AINKRAD_PTYHOST="$PTYH" \
-    "$RUN" connect --state "$RSTATE" --enable-pty --enable-agents >/dev/null 2>"$RLOG" </dev/null &
+    "$RUN" connect --state "$RSTATE" --workspace-root "$W/ws" --enable-pty --enable-agents >/dev/null 2>"$RLOG" </dev/null &
   RPID=$!; PIDS+=("$RPID")
   online() { a --json runner show "$RID" | jq -e '.online == true' >/dev/null; }
   wait_for 60 online
@@ -119,6 +119,9 @@ while :; do
 done
 EOF
   chmod 755 "$W/bin/claude"
+  # The other AI tools the runner keeps current (D-22): present, so it installs none and does not
+  # restart itself mid-rig (nothing here would bring it back).
+  for t in codex opencode agy; do printf '#!/bin/sh\necho 0.0.0\n' >"$W/bin/$t"; chmod 755 "$W/bin/$t"; done
   # The stand-in's own login, where the runner looks for claude's (its config dir under the state dir): the runner
   # reports it in its hello, so the Core does not refuse a plain session as no_account.
   mkdir -p "$RSTATE/agents-config/claude" && echo '{}' >"$RSTATE/agents-config/claude/.credentials.json"
@@ -147,14 +150,13 @@ rig_up() { # Core, device A (admin) and B (terminal+agent), a runner with pty an
   wait_for 20 has_field "$W/pair-b.out" sas || { EV="B showed no SAS"; return 1; }
   a device approve "$(field "$W/add-b.out" pairing_id)" "$(field "$W/pair-b.out" sas)" >/dev/null || { EV="approving B failed"; return 1; }
   wait "$pb" || { EV="B's pairing failed"; return 1; }
-  a device add vm --kind runner >"$W/add-r.out" || { EV="runner device add failed"; return 1; }
-  "$RUN" pair "$URL" --code "$(field "$W/add-r.out" code)" --state "$RSTATE" >"$W/pair-r.out" 2>&1 </dev/null &
-  local pr=$!; PIDS+=("$pr")
-  runner_sas() { grep -E '^ +[A-Z0-9]{4}(-[A-Z0-9]{4}){3}$' "$W/pair-r.out" | tr -d ' '; }
-  wait_for 20 runner_sas || { EV="the runner showed no SAS"; return 1; }
-  a device approve "$(field "$W/add-r.out" pairing_id)" "$(runner_sas)" >/dev/null || { EV="approving the runner failed"; return 1; }
-  wait "$pr" || { EV="the runner's pairing failed"; return 1; }
-  RID=$(sed -n 's/^Paired as \(d_[A-Za-z0-9]*\) with the Core.*/\1/p' "$W/pair-r.out")
+  # Terminals open on the Core's own runner only (E15 M6, spec 9): the rig's runner is the built-in one, enrolled as
+  # the installer does it and run with the Core's workspace root.
+  # It takes the Core's https address only; the rig's Core is plain loopback, so the enrolment is pointed there after.
+  RID=$("$SRV" runner-enroll-local "$DB" "$RSTATE" "https://localhost" 2>"$W/enrol-r.err") ||
+    { EV="enrolling the built-in runner failed: $(cat "$W/enrol-r.err")"; return 1; }
+  jq --arg u "$URL" '.url = $u' "$RSTATE/enrolment.json" >"$W/enrolment.json" && cat "$W/enrolment.json" >"$RSTATE/enrolment.json" ||
+    { EV="pointing the runner at the rig's Core failed"; return 1; }
   fake_claude
   start_runner || { EV="the runner did not come online: $(tail -n3 "$RLOG")"; return 1; }
   out=$(a --json runner show "$RID")

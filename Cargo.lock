@@ -151,6 +151,7 @@ dependencies = [
  "ainkrad-sys",
  "axum",
  "base64 0.22.1",
+ "blake3",
  "futures-util",
  "getrandom 0.4.3",
  "http-body-util",
@@ -259,6 +260,7 @@ dependencies = [
 name = "ainkrad-proto"
 version = "0.9.0"
 dependencies = [
+ "blake3",
  "schemars",
  "serde",
  "serde_json",
@@ -303,6 +305,7 @@ dependencies = [
  "ainkrad-ptyhost",
  "ainkrad-sys",
  "base64 0.22.1",
+ "blake3",
  "futures-util",
  "log",
  "rand 0.10.3",
@@ -328,6 +331,7 @@ dependencies = [
 name = "ainkrad-sys"
 version = "0.9.0"
 dependencies = [
+ "ainkrad-proto",
  "libc",
 ]
 

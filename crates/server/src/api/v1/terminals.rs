@@ -1042,6 +1042,14 @@ async fn admit(
         Some(d) if d.kind == "runner" && d.usable() => d,
         _ => return Err(ApiError::not_found("no such runner")),
     };
+    // M6: the Core refuses a remote runner itself, whatever that runner's own flags say.
+    if !crate::hardware::view::hosts_terminals(&app.pool, &runner.id).await? {
+        return Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "terminal_target_removed",
+            "terminals open on the Core or This Mac only",
+        ));
+    }
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM core_terminals WHERE runner=? AND status IN ('created','running')",
     )
@@ -1098,6 +1106,7 @@ async fn open(
                 ssh: spec.ssh,
                 sandbox: spec.sandbox.clone().filter(|s| s != "ssh"),
                 sandbox_user: spec.sandbox_user,
+                purpose: None,
             }),
             app.hub.terminal_elevation(me),
         )
@@ -1630,7 +1639,7 @@ async fn send(s: &mut WebSocket, f: Frame, cap: Duration) -> Result<(), ()> {
         .map_err(|_| ())?
         .map_err(|_| ())
 }
-async fn close_socket(s: &mut WebSocket, code: u16, reason: &str, cap: Duration) {
+pub(super) async fn close_socket(s: &mut WebSocket, code: u16, reason: &str, cap: Duration) {
     let close = s.send(Message::Close(Some(CloseFrame {
         code,
         reason: reason.into(),

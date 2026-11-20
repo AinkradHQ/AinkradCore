@@ -71,6 +71,7 @@ mod core_prefs;
 mod costs_api;
 mod costs_store;
 mod devices;
+mod e15_security;
 mod events;
 mod failover;
 mod failover_more;

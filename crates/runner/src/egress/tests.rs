@@ -496,3 +496,14 @@ fn the_sandbox_env_names_the_socket_the_forwarder_and_the_port() {
     assert_eq!(env[2].1, "47832");
     assert_eq!(EGRESS_PORT, crate::mcp_bridge::FORWARD_PORT + 1);
 }
+
+#[test]
+fn a_jobs_policy_keeps_only_the_hosts_its_session_allows() {
+    // E15 H2: a job from a `filtered` session gets the registry list cut to that session's own.
+    let reg = Policy::parse("", "crates.io,pypi.org,registry.npmjs.org", "443").unwrap();
+    let cut = reg.only_hosts(&["pypi.org".to_owned(), "github.com".to_owned()]);
+    assert!(cut.host_listed("pypi.org"));
+    assert!(!cut.host_listed("crates.io") && !cut.host_listed("github.com"));
+    assert_eq!(cut.host_names(), ["pypi.org"]);
+    assert_eq!(reg.only_hosts(&[]).counts(), (0, 0, 1));
+}

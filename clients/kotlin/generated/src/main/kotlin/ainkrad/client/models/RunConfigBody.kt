@@ -24,6 +24,7 @@ import kotlinx.serialization.Contextual
  * 
  *
  * @param command Required to create.
+ * @param kind `service` or `task`.
  * @param name Required to create.
  * @param port 0 clears it.
  * @param restart 
@@ -38,6 +39,10 @@ data class RunConfigBody (
     /* Required to create. */
     @SerialName(value = "command")
     val command: kotlin.String? = null,
+
+    /* `service` or `task`. */
+    @SerialName(value = "kind")
+    val kind: kotlin.String? = null,
 
     /* Required to create. */
     @SerialName(value = "name")

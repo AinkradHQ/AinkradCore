@@ -9,6 +9,7 @@ pub mod insight;
 pub mod run_configs;
 pub mod run_logs;
 pub mod run_spec;
+mod run_task;
 pub mod runs;
 pub mod secrets;
 

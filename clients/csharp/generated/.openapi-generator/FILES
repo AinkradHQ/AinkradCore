@@ -15,6 +15,8 @@ src/Ainkrad.Client/Api/CostsApi.cs
 src/Ainkrad.Client/Api/DevicesApi.cs
 src/Ainkrad.Client/Api/EventsApi.cs
 src/Ainkrad.Client/Api/HandshakeApi.cs
+src/Ainkrad.Client/Api/HardwareApi.cs
+src/Ainkrad.Client/Api/JobsApi.cs
 src/Ainkrad.Client/Api/OpsApi.cs
 src/Ainkrad.Client/Api/PairingApi.cs
 src/Ainkrad.Client/Api/ProjectsApi.cs
@@ -145,6 +147,13 @@ src/Ainkrad.Client/Model/GroupLeaseGrant.cs
 src/Ainkrad.Client/Model/Handshake.cs
 src/Ainkrad.Client/Model/HandshakeBody.cs
 src/Ainkrad.Client/Model/HandshakeProof.cs
+src/Ainkrad.Client/Model/Hardware.cs
+src/Ainkrad.Client/Model/HardwareBattery.cs
+src/Ainkrad.Client/Model/HardwareGate.cs
+src/Ainkrad.Client/Model/HardwareJob.cs
+src/Ainkrad.Client/Model/HardwareKind.cs
+src/Ainkrad.Client/Model/HardwarePause.cs
+src/Ainkrad.Client/Model/HardwarePool.cs
 src/Ainkrad.Client/Model/Health.cs
 src/Ainkrad.Client/Model/HostBinary.cs
 src/Ainkrad.Client/Model/HostStatus.cs
@@ -155,6 +164,12 @@ src/Ainkrad.Client/Model/ImportSkipped.cs
 src/Ainkrad.Client/Model/ImportedEnv.cs
 src/Ainkrad.Client/Model/InstallToolBody.cs
 src/Ainkrad.Client/Model/InviteCreated.cs
+src/Ainkrad.Client/Model/Job.cs
+src/Ainkrad.Client/Model/JobLocal.cs
+src/Ainkrad.Client/Model/JobPlaceReason.cs
+src/Ainkrad.Client/Model/JobSignal.cs
+src/Ainkrad.Client/Model/JobState.cs
+src/Ainkrad.Client/Model/JobTier.cs
 src/Ainkrad.Client/Model/KindAuthMethod.cs
 src/Ainkrad.Client/Model/KindCapability.cs
 src/Ainkrad.Client/Model/KindCount.cs
@@ -184,6 +199,7 @@ src/Ainkrad.Client/Model/NewConnectionCredential.cs
 src/Ainkrad.Client/Model/NewGithubProject.cs
 src/Ainkrad.Client/Model/NewGroupLease.cs
 src/Ainkrad.Client/Model/NewInviteBody.cs
+src/Ainkrad.Client/Model/NewJob.cs
 src/Ainkrad.Client/Model/NewLease.cs
 src/Ainkrad.Client/Model/NewLogin.cs
 src/Ainkrad.Client/Model/NewOrder.cs
@@ -256,6 +272,8 @@ src/Ainkrad.Client/Model/RunnerAccounts.cs
 src/Ainkrad.Client/Model/RunnerDriver.cs
 src/Ainkrad.Client/Model/RunnerHostLoad.cs
 src/Ainkrad.Client/Model/RunnerIsolation.cs
+src/Ainkrad.Client/Model/RunnerJobReport.cs
+src/Ainkrad.Client/Model/RunnerNewJob.cs
 src/Ainkrad.Client/Model/RunnerPolicyBody.cs
 src/Ainkrad.Client/Model/RunnerRunsAs.cs
 src/Ainkrad.Client/Model/RunnerSlots.cs

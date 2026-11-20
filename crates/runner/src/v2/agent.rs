@@ -204,6 +204,7 @@ trait Harness: Send + Sync {
     fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()>;
     fn discard_agent_workspaces(&self, name: &str, prefix: bool, keep: &[String]);
     fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream);
+    fn set_job_shims(&self, socks: Arc<super::jobsock::JobSocks>, bin: PathBuf);
     fn work_dir(&self, job: &Job) -> Option<PathBuf>;
 }
 
@@ -253,6 +254,9 @@ impl<E: Executor> Harness for E {
     }
     fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream) {
         Executor::set_mirror_upstream(self, up);
+    }
+    fn set_job_shims(&self, socks: Arc<super::jobsock::JobSocks>, bin: PathBuf) {
+        Executor::set_job_shims(self, socks, bin);
     }
     fn work_dir(&self, job: &Job) -> Option<PathBuf> {
         Executor::work_dir(self, job)
@@ -401,6 +405,12 @@ impl AgentDriver {
         self
     }
 
+    /// The Core's own runner: sessions get the heavy-job shims (`jobsock`).
+    pub fn with_job_shims(self, socks: Arc<super::jobsock::JobSocks>, bin: PathBuf) -> Self {
+        self.harness.set_job_shims(socks, bin);
+        self
+    }
+
     /// A project run's checkouts (P5-05): cloned from the Core's copies exactly as a session's are
     /// (leased by the Core to this runner, through the loopback relay), under a session id of the
     /// run's own. `Err` is why they could not be made.
@@ -460,6 +470,13 @@ impl AgentDriver {
                     self.config
                         .plan_limit
                         .then_some(&ainkrad_proto::v2::CAP_PLAN_LIMIT),
+                )
+                // E15-0: a runner that can serve the gateway also takes `gateway.call`.
+                .chain(
+                    self.sandbox
+                        .capabilities()
+                        .contains(&CAP_GATEWAY)
+                        .then_some(&ainkrad_proto::v2::CAP_GATEWAY_CALL),
                 )
                 .chain(
                     (self.config.history_read && self.config.history_root.is_some())

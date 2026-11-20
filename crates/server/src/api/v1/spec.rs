@@ -33,9 +33,10 @@ use crate::store::kinds::{PLATFORM_AUDIT_ACTIONS, PLATFORM_EVENT_KINDS};
 
 use super::{
     accounts, activity, agents, ai_order, audit, budgets, chains, connections, corehealth,
-    coreprefs, costs, devices, events, handshake, lockouts, me, pair, pairing, passkey, projects,
-    projects_github, runner_control, runners, secret_export, secret_groups, secrets, session,
-    settings, stepup, system, system_backup, terminals, ticket, types, websession,
+    coreprefs, costs, devices, events, handshake, hardware, jobs, lockouts, me, pair, pairing,
+    passkey, projects, projects_github, runner_control, runners, secret_export, secret_groups,
+    secrets, session, settings, stepup, system, system_backup, terminals, ticket, types,
+    websession,
 };
 
 #[derive(OpenApi)]
@@ -93,6 +94,19 @@ use super::{
         system::logs_runner,
         system::logs_backup,
         crate::health::metrics::get,
+        hardware::list,
+        hardware::pool,
+        hardware::pause,
+        hardware::pause_all,
+        jobs::create,
+        jobs::list,
+        jobs::get,
+        jobs::stream,
+        jobs::signal,
+        jobs::cancel,
+        jobs::runner_create,
+        jobs::runner_signal,
+        jobs::runner_report,
         runners::list,
         runners::get,
         runners::noop,

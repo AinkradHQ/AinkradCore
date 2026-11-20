@@ -41,6 +41,7 @@ fn open_ssh(target: ainkrad_proto::v2::SshHop) -> Body {
         }),
         sandbox: None,
         sandbox_user: None,
+        purpose: None,
     }))
 }
 

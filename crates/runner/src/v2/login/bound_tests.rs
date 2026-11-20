@@ -328,7 +328,10 @@ sleep 30
         args: vec![],
         pinned: vec!["9.9.9".to_owned()],
     }];
-    cfg.homes = t.file("homes");
+    // The real path: macOS's temp dir is behind the /var -> /private/var link, and the sandbox
+    // grants a home by the path it resolves to.
+    std::fs::create_dir_all(t.file("homes")).unwrap();
+    cfg.homes = t.file("homes").canonicalize().unwrap();
     cfg.grace = Duration::from_millis(100);
     cfg.enter_delay = Duration::from_millis(20);
     Arc::new(LoginDriver::new(cfg).unwrap())
@@ -355,7 +358,7 @@ async fn an_antigravity_sign_in_ends_when_the_cli_says_it_is_signed_in_and_keeps
     .unwrap();
     let r = d.wait(wait("l_1")).await.unwrap();
     assert!(r.done, "{:?}", r.error);
-    let home = t.file("homes").join("lg_1");
+    let home = t.file("homes").canonicalize().unwrap().join("lg_1");
     assert_eq!(
         std::fs::read_to_string(home.join("home-used")).unwrap(),
         home.display().to_string()

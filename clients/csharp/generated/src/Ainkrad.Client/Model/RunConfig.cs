@@ -43,6 +43,7 @@ namespace Ainkrad.Client.Model
         /// <param name="command">Run in the service&#39;s shell. (required).</param>
         /// <param name="createdAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4). (required).</param>
         /// <param name="id">id (required).</param>
+        /// <param name="kind">&#x60;service&#x60; (a container that keeps running) or &#x60;task&#x60; (runs as a heavy job on the hardware &#x60;place_job&#x60; picks, with the environment&#39;s variables as leased env). Absent: &#x60;service&#x60;..</param>
         /// <param name="name">name (required).</param>
         /// <param name="port">port.</param>
         /// <param name="restart">Come back after a crash: the Core restarts it after 2 s, 4 s, ... up to 60 s, at most 5 times in 10 minutes, then gives up (event &#x60;project.run_gave_up&#x60;). A run a person stopped does not restart. (required).</param>
@@ -50,7 +51,7 @@ namespace Ainkrad.Client.Model
         /// <param name="service">The service of the run spec it is laid over; none lets the Core pick (the first that mounts a repo)..</param>
         /// <param name="updatedAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4). (required).</param>
         /// <param name="workdir">A folder in the service&#39;s repo checkout (&#x60;./app&#x60;), or an absolute path in the container. (required).</param>
-        public RunConfig(string command = default, DateTime createdAt = default, long id = default, string name = default, long? port = default, bool restart = default, string runner = default, string service = default, DateTime updatedAt = default, string workdir = default)
+        public RunConfig(string command = default, DateTime createdAt = default, long id = default, string kind = default, string name = default, long? port = default, bool restart = default, string runner = default, string service = default, DateTime updatedAt = default, string workdir = default)
         {
             // to ensure "command" is required (not null)
             if (command == null)
@@ -80,6 +81,7 @@ namespace Ainkrad.Client.Model
                 throw new ArgumentNullException("workdir is a required property for RunConfig and cannot be null");
             }
             this.Workdir = workdir;
+            this.Kind = kind;
             this.Port = port;
             this.Service = service;
         }
@@ -103,6 +105,13 @@ namespace Ainkrad.Client.Model
         /// </summary>
         [DataMember(Name = "id", IsRequired = true, EmitDefaultValue = true)]
         public long Id { get; set; }
+
+        /// <summary>
+        /// &#x60;service&#x60; (a container that keeps running) or &#x60;task&#x60; (runs as a heavy job on the hardware &#x60;place_job&#x60; picks, with the environment&#39;s variables as leased env). Absent: &#x60;service&#x60;.
+        /// </summary>
+        /// <value>&#x60;service&#x60; (a container that keeps running) or &#x60;task&#x60; (runs as a heavy job on the hardware &#x60;place_job&#x60; picks, with the environment&#39;s variables as leased env). Absent: &#x60;service&#x60;.</value>
+        [DataMember(Name = "kind", EmitDefaultValue = true)]
+        public string Kind { get; set; }
 
         /// <summary>
         /// Gets or Sets Name
@@ -162,6 +171,7 @@ namespace Ainkrad.Client.Model
             sb.Append("  Command: ").Append(Command).Append("\n");
             sb.Append("  CreatedAt: ").Append(CreatedAt).Append("\n");
             sb.Append("  Id: ").Append(Id).Append("\n");
+            sb.Append("  Kind: ").Append(Kind).Append("\n");
             sb.Append("  Name: ").Append(Name).Append("\n");
             sb.Append("  Port: ").Append(Port).Append("\n");
             sb.Append("  Restart: ").Append(Restart).Append("\n");

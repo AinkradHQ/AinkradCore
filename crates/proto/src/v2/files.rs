@@ -174,9 +174,79 @@ pub fn folder_relative(folder: &str, path: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
+/// The most bytes of one wire path component, of a whole wire path, and the most components.
+pub const WIRE_COMPONENT_MAX: usize = 255;
+pub const WIRE_PATH_MAX: usize = 4096;
+pub const WIRE_DEPTH_MAX: usize = 64;
+
+/// Why `path` is not a wire path (E15 §4.3), or `None` when it is: relative UTF-8 with `/`
+/// separators; no empty, `.` or `..` component; no NUL or `\`; each component at most
+/// [`WIRE_COMPONENT_MAX`] bytes, at most [`WIRE_DEPTH_MAX`] of them and [`WIRE_PATH_MAX`] bytes in
+/// all; and no `.git` component (matched without case: on a case-insensitive disk `.GIT` is
+/// `.git`). The one check for `sync.*`, `job.run` and the workspace file routes, at both ends.
+pub fn wire_path_problem(path: &str) -> Option<&'static str> {
+    if path.is_empty() {
+        return Some("the path is empty");
+    }
+    if path.len() > WIRE_PATH_MAX {
+        return Some("the path is too long");
+    }
+    if path.contains('\0') || path.contains('\\') {
+        return Some("the path holds a NUL or a backslash");
+    }
+    if path.starts_with('/') {
+        return Some("the path is absolute");
+    }
+    let mut depth = 0;
+    for c in path.split('/') {
+        depth += 1;
+        match c {
+            "" => return Some("the path has an empty component"),
+            "." | ".." => return Some("the path has a . or .. component"),
+            c if c.len() > WIRE_COMPONENT_MAX => return Some("a path component is too long"),
+            c if c.eq_ignore_ascii_case(".git") => return Some("the path is inside .git"),
+            _ => {}
+        }
+    }
+    (depth > WIRE_DEPTH_MAX).then_some("the path is too deep")
+}
+
 #[cfg(test)]
 mod tests {
     use super::folder_relative as rel;
+    use super::wire_path_problem as wire;
+
+    #[test]
+    fn wire_paths_are_relative_clean_and_never_git() {
+        for ok in ["a", "a/b.rs", "src/.gitignore", ".github/x", "a/.git-keep"] {
+            assert_eq!(wire(ok), None, "{ok}");
+        }
+        for bad in [
+            "",
+            "/a",
+            "a/",
+            "a//b",
+            "./a",
+            "a/./b",
+            "../a",
+            "a/..",
+            "a\0b",
+            "a\\b",
+            ".git",
+            "a/.git/config",
+            ".GIT/hooks/x",
+        ] {
+            assert!(wire(bad).is_some(), "{bad:?}");
+        }
+        assert!(wire(&"x".repeat(256)).is_some());
+        assert_eq!(wire(&"x".repeat(255)), None);
+        assert!(wire(&vec!["a"; 65].join("/")).is_some());
+        assert_eq!(wire(&vec!["a"; 64].join("/")), None);
+        assert!(
+            wire(&vec!["x".repeat(200); 21].join("/")).is_some(),
+            "over 4096 bytes"
+        );
+    }
 
     #[test]
     fn paths_are_cleaned_and_never_leave_the_folder() {

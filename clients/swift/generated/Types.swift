@@ -341,6 +341,36 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /api/v1/events/ws`.
     /// - Remark: Generated from `#/paths//api/v1/events/ws/get(streamEvents)`.
     func streamEvents(_ input: Operations.StreamEvents.Input) async throws -> Operations.StreamEvents.Output
+    /// - Remark: HTTP `GET /api/v1/hardware`.
+    /// - Remark: Generated from `#/paths//api/v1/hardware/get(listHardware)`.
+    func listHardware(_ input: Operations.ListHardware.Input) async throws -> Operations.ListHardware.Output
+    /// - Remark: HTTP `PUT /api/v1/hardware/pause`.
+    /// - Remark: Generated from `#/paths//api/v1/hardware/pause/put(pauseAllHardware)`.
+    func pauseAllHardware(_ input: Operations.PauseAllHardware.Input) async throws -> Operations.PauseAllHardware.Output
+    /// - Remark: HTTP `GET /api/v1/hardware/pool`.
+    /// - Remark: Generated from `#/paths//api/v1/hardware/pool/get(getHardwarePool)`.
+    func getHardwarePool(_ input: Operations.GetHardwarePool.Input) async throws -> Operations.GetHardwarePool.Output
+    /// - Remark: HTTP `PUT /api/v1/hardware/{id}/pause`.
+    /// - Remark: Generated from `#/paths//api/v1/hardware/{id}/pause/put(pauseHardware)`.
+    func pauseHardware(_ input: Operations.PauseHardware.Input) async throws -> Operations.PauseHardware.Output
+    /// - Remark: HTTP `GET /api/v1/jobs`.
+    /// - Remark: Generated from `#/paths//api/v1/jobs/get(listJobs)`.
+    func listJobs(_ input: Operations.ListJobs.Input) async throws -> Operations.ListJobs.Output
+    /// - Remark: HTTP `POST /api/v1/jobs`.
+    /// - Remark: Generated from `#/paths//api/v1/jobs/post(createJob)`.
+    func createJob(_ input: Operations.CreateJob.Input) async throws -> Operations.CreateJob.Output
+    /// - Remark: HTTP `GET /api/v1/jobs/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/jobs/{id}/get(getJob)`.
+    func getJob(_ input: Operations.GetJob.Input) async throws -> Operations.GetJob.Output
+    /// - Remark: HTTP `DELETE /api/v1/jobs/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/jobs/{id}/delete(cancelJob)`.
+    func cancelJob(_ input: Operations.CancelJob.Input) async throws -> Operations.CancelJob.Output
+    /// - Remark: HTTP `POST /api/v1/jobs/{id}/signal`.
+    /// - Remark: Generated from `#/paths//api/v1/jobs/{id}/signal/post(signalJob)`.
+    func signalJob(_ input: Operations.SignalJob.Input) async throws -> Operations.SignalJob.Output
+    /// - Remark: HTTP `GET /api/v1/jobs/{id}/stream`.
+    /// - Remark: Generated from `#/paths//api/v1/jobs/{id}/stream/get(streamJob)`.
+    func streamJob(_ input: Operations.StreamJob.Input) async throws -> Operations.StreamJob.Output
     /// - Remark: HTTP `GET /api/v1/me`.
     /// - Remark: Generated from `#/paths//api/v1/me/get(getMe)`.
     func getMe(_ input: Operations.GetMe.Input) async throws -> Operations.GetMe.Output
@@ -565,6 +595,15 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `PUT /api/v1/push-token/kinds`.
     /// - Remark: Generated from `#/paths//api/v1/push-token/kinds/put(setPushKinds)`.
     func setPushKinds(_ input: Operations.SetPushKinds.Input) async throws -> Operations.SetPushKinds.Output
+    /// - Remark: HTTP `POST /api/v1/runner/jobs`.
+    /// - Remark: Generated from `#/paths//api/v1/runner/jobs/post(runnerCreateJob)`.
+    func runnerCreateJob(_ input: Operations.RunnerCreateJob.Input) async throws -> Operations.RunnerCreateJob.Output
+    /// - Remark: HTTP `POST /api/v1/runner/jobs/report`.
+    /// - Remark: Generated from `#/paths//api/v1/runner/jobs/report/post(runnerReportJob)`.
+    func runnerReportJob(_ input: Operations.RunnerReportJob.Input) async throws -> Operations.RunnerReportJob.Output
+    /// - Remark: HTTP `POST /api/v1/runner/jobs/{job}/signal`.
+    /// - Remark: Generated from `#/paths//api/v1/runner/jobs/{job}/signal/post(runnerSignalJob)`.
+    func runnerSignalJob(_ input: Operations.RunnerSignalJob.Input) async throws -> Operations.RunnerSignalJob.Output
     /// - Remark: HTTP `GET /api/v1/runners`.
     /// - Remark: Generated from `#/paths//api/v1/runners/get(listRunners)`.
     func listRunners(_ input: Operations.ListRunners.Input) async throws -> Operations.ListRunners.Output
@@ -1900,6 +1939,108 @@ extension APIProtocol {
     public func streamEvents(headers: Operations.StreamEvents.Input.Headers = .init()) async throws -> Operations.StreamEvents.Output {
         try await streamEvents(Operations.StreamEvents.Input(headers: headers))
     }
+    /// - Remark: HTTP `GET /api/v1/hardware`.
+    /// - Remark: Generated from `#/paths//api/v1/hardware/get(listHardware)`.
+    public func listHardware(headers: Operations.ListHardware.Input.Headers = .init()) async throws -> Operations.ListHardware.Output {
+        try await listHardware(Operations.ListHardware.Input(headers: headers))
+    }
+    /// - Remark: HTTP `PUT /api/v1/hardware/pause`.
+    /// - Remark: Generated from `#/paths//api/v1/hardware/pause/put(pauseAllHardware)`.
+    public func pauseAllHardware(
+        headers: Operations.PauseAllHardware.Input.Headers = .init(),
+        body: Operations.PauseAllHardware.Input.Body
+    ) async throws -> Operations.PauseAllHardware.Output {
+        try await pauseAllHardware(Operations.PauseAllHardware.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/hardware/pool`.
+    /// - Remark: Generated from `#/paths//api/v1/hardware/pool/get(getHardwarePool)`.
+    public func getHardwarePool(headers: Operations.GetHardwarePool.Input.Headers = .init()) async throws -> Operations.GetHardwarePool.Output {
+        try await getHardwarePool(Operations.GetHardwarePool.Input(headers: headers))
+    }
+    /// - Remark: HTTP `PUT /api/v1/hardware/{id}/pause`.
+    /// - Remark: Generated from `#/paths//api/v1/hardware/{id}/pause/put(pauseHardware)`.
+    public func pauseHardware(
+        path: Operations.PauseHardware.Input.Path,
+        headers: Operations.PauseHardware.Input.Headers = .init(),
+        body: Operations.PauseHardware.Input.Body
+    ) async throws -> Operations.PauseHardware.Output {
+        try await pauseHardware(Operations.PauseHardware.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/jobs`.
+    /// - Remark: Generated from `#/paths//api/v1/jobs/get(listJobs)`.
+    public func listJobs(
+        query: Operations.ListJobs.Input.Query = .init(),
+        headers: Operations.ListJobs.Input.Headers = .init()
+    ) async throws -> Operations.ListJobs.Output {
+        try await listJobs(Operations.ListJobs.Input(
+            query: query,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/jobs`.
+    /// - Remark: Generated from `#/paths//api/v1/jobs/post(createJob)`.
+    public func createJob(
+        headers: Operations.CreateJob.Input.Headers = .init(),
+        body: Operations.CreateJob.Input.Body
+    ) async throws -> Operations.CreateJob.Output {
+        try await createJob(Operations.CreateJob.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/jobs/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/jobs/{id}/get(getJob)`.
+    public func getJob(
+        path: Operations.GetJob.Input.Path,
+        headers: Operations.GetJob.Input.Headers = .init()
+    ) async throws -> Operations.GetJob.Output {
+        try await getJob(Operations.GetJob.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `DELETE /api/v1/jobs/{id}`.
+    /// - Remark: Generated from `#/paths//api/v1/jobs/{id}/delete(cancelJob)`.
+    public func cancelJob(
+        path: Operations.CancelJob.Input.Path,
+        headers: Operations.CancelJob.Input.Headers = .init()
+    ) async throws -> Operations.CancelJob.Output {
+        try await cancelJob(Operations.CancelJob.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/jobs/{id}/signal`.
+    /// - Remark: Generated from `#/paths//api/v1/jobs/{id}/signal/post(signalJob)`.
+    public func signalJob(
+        path: Operations.SignalJob.Input.Path,
+        headers: Operations.SignalJob.Input.Headers = .init(),
+        body: Operations.SignalJob.Input.Body
+    ) async throws -> Operations.SignalJob.Output {
+        try await signalJob(Operations.SignalJob.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/jobs/{id}/stream`.
+    /// - Remark: Generated from `#/paths//api/v1/jobs/{id}/stream/get(streamJob)`.
+    public func streamJob(
+        path: Operations.StreamJob.Input.Path,
+        headers: Operations.StreamJob.Input.Headers = .init()
+    ) async throws -> Operations.StreamJob.Output {
+        try await streamJob(Operations.StreamJob.Input(
+            path: path,
+            headers: headers
+        ))
+    }
     /// - Remark: HTTP `GET /api/v1/me`.
     /// - Remark: Generated from `#/paths//api/v1/me/get(getMe)`.
     public func getMe(headers: Operations.GetMe.Input.Headers = .init()) async throws -> Operations.GetMe.Output {
@@ -2698,6 +2839,41 @@ extension APIProtocol {
         body: Operations.SetPushKinds.Input.Body
     ) async throws -> Operations.SetPushKinds.Output {
         try await setPushKinds(Operations.SetPushKinds.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/runner/jobs`.
+    /// - Remark: Generated from `#/paths//api/v1/runner/jobs/post(runnerCreateJob)`.
+    public func runnerCreateJob(
+        headers: Operations.RunnerCreateJob.Input.Headers = .init(),
+        body: Operations.RunnerCreateJob.Input.Body
+    ) async throws -> Operations.RunnerCreateJob.Output {
+        try await runnerCreateJob(Operations.RunnerCreateJob.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/runner/jobs/report`.
+    /// - Remark: Generated from `#/paths//api/v1/runner/jobs/report/post(runnerReportJob)`.
+    public func runnerReportJob(
+        headers: Operations.RunnerReportJob.Input.Headers = .init(),
+        body: Operations.RunnerReportJob.Input.Body
+    ) async throws -> Operations.RunnerReportJob.Output {
+        try await runnerReportJob(Operations.RunnerReportJob.Input(
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/runner/jobs/{job}/signal`.
+    /// - Remark: Generated from `#/paths//api/v1/runner/jobs/{job}/signal/post(runnerSignalJob)`.
+    public func runnerSignalJob(
+        path: Operations.RunnerSignalJob.Input.Path,
+        headers: Operations.RunnerSignalJob.Input.Headers = .init(),
+        body: Operations.RunnerSignalJob.Input.Body
+    ) async throws -> Operations.RunnerSignalJob.Output {
+        try await runnerSignalJob(Operations.RunnerSignalJob.Input(
+            path: path,
             headers: headers,
             body: body
         ))

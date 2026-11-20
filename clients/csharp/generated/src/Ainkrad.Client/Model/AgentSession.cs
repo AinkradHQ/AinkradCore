@@ -65,6 +65,8 @@ namespace Ainkrad.Client.Model
         /// <param name="live">A live conversation (&#x60;createAgentSession&#x60;&#39;s &#x60;live&#x60;): the state is &#x60;waiting&#x60; between answers..</param>
         /// <param name="model">model.</param>
         /// <param name="outcome">Once over: &#x60;{\&quot;kind\&quot;: \&quot;succeeded\&quot; | \&quot;failed\&quot; | \&quot;cancelled\&quot; | \&quot;token_cap\&quot; | \&quot;stalled\&quot; | \&quot;lost\&quot;, \&quot;reason\&quot;: …}&#x60;..</param>
+        /// <param name="placeReason">Why the Core placed it where it runs (E15): &#x60;core&#x60;, &#x60;overflow&#x60; (the Core was full) or &#x60;pinned&#x60; (a runner-bound login); absent for a session placed before E15..</param>
+        /// <param name="placedOn">The name of the machine it runs on (&#x60;runner&#x60; is its id), for \&quot;Ran on X\&quot;..</param>
         /// <param name="plan">Plan mode: the harness reads and plans, edits nothing (Claude Code&#39;s &#x60;plan&#x60;)..</param>
         /// <param name="policy">Its permission mode now: &#x60;ask&#x60;, &#x60;accept_edits&#x60; or &#x60;sandboxed&#x60; (the create&#39;s &#x60;policy.mode&#x60;, or the latest &#x60;setAgentSessionMode&#x60;)..</param>
         /// <param name="projectId">The project it was started for (&#x60;createAgentSession&#x60; with &#x60;project_id&#x60;): its workspace is that project&#39;s repos, cloned from the Core&#39;s copies. Absent for any other session..</param>
@@ -83,7 +85,7 @@ namespace Ainkrad.Client.Model
         /// <param name="usage">usage.</param>
         /// <param name="waiting">Set while a chain session waits for an account: it stays &#x60;starting&#x60; until &#x60;until&#x60;, or until &#x60;scheduler.wait_max_secs&#x60; ends the run..</param>
         /// <param name="workspace">The repo and worktree it works in, as the create sent it (&#x60;{\&quot;repo\&quot;, \&quot;base\&quot;, \&quot;branch\&quot;, …}&#x60;); absent for a scratch dir..</param>
-        public AgentSession(long? account = default, string agent = default, long? attempt = default, bool? canSetEffort = default, bool? canStopSubagents = default, List<ChainEntry> chain = default, long? chainId = default, long? chainPos = default, DateTime createdAt = default, string createdBy = default, string effort = default, DateTime endedAt = default, string failedOverTo = default, string failoverClass = default, string failoverOf = default, string folder = default, string harness = default, string harnessSession = default, string id = default, DateTime idleSince = default, long? index = default, long lastSeq = default, bool? live = default, string model = default, Object outcome = default, bool? plan = default, string policy = default, long? projectId = default, long? repicked = default, long? resumes = default, string run = default, string runner = default, List<string> secrets = default, List<long> skipPools = default, string state = default, string title = default, bool? turnCostApproximate = default, long? turnCostUsdMicros = default, DateTime updatedAt = default, string upstreamClass = default, AgentUsage usage = default, AgentWaiting waiting = default, Object workspace = default)
+        public AgentSession(long? account = default, string agent = default, long? attempt = default, bool? canSetEffort = default, bool? canStopSubagents = default, List<ChainEntry> chain = default, long? chainId = default, long? chainPos = default, DateTime createdAt = default, string createdBy = default, string effort = default, DateTime endedAt = default, string failedOverTo = default, string failoverClass = default, string failoverOf = default, string folder = default, string harness = default, string harnessSession = default, string id = default, DateTime idleSince = default, long? index = default, long lastSeq = default, bool? live = default, string model = default, Object outcome = default, string placeReason = default, string placedOn = default, bool? plan = default, string policy = default, long? projectId = default, long? repicked = default, long? resumes = default, string run = default, string runner = default, List<string> secrets = default, List<long> skipPools = default, string state = default, string title = default, bool? turnCostApproximate = default, long? turnCostUsdMicros = default, DateTime updatedAt = default, string upstreamClass = default, AgentUsage usage = default, AgentWaiting waiting = default, Object workspace = default)
         {
             this.CreatedAt = createdAt;
             // to ensure "createdBy" is required (not null)
@@ -138,6 +140,8 @@ namespace Ainkrad.Client.Model
             this.Live = live;
             this.Model = model;
             this.Outcome = outcome;
+            this.PlaceReason = placeReason;
+            this.PlacedOn = placedOn;
             this.Plan = plan;
             this.Policy = policy;
             this.ProjectId = projectId;
@@ -328,6 +332,20 @@ namespace Ainkrad.Client.Model
         public Object Outcome { get; set; }
 
         /// <summary>
+        /// Why the Core placed it where it runs (E15): &#x60;core&#x60;, &#x60;overflow&#x60; (the Core was full) or &#x60;pinned&#x60; (a runner-bound login); absent for a session placed before E15.
+        /// </summary>
+        /// <value>Why the Core placed it where it runs (E15): &#x60;core&#x60;, &#x60;overflow&#x60; (the Core was full) or &#x60;pinned&#x60; (a runner-bound login); absent for a session placed before E15.</value>
+        [DataMember(Name = "place_reason", EmitDefaultValue = true)]
+        public string PlaceReason { get; set; }
+
+        /// <summary>
+        /// The name of the machine it runs on (&#x60;runner&#x60; is its id), for \&quot;Ran on X\&quot;.
+        /// </summary>
+        /// <value>The name of the machine it runs on (&#x60;runner&#x60; is its id), for \&quot;Ran on X\&quot;.</value>
+        [DataMember(Name = "placed_on", EmitDefaultValue = true)]
+        public string PlacedOn { get; set; }
+
+        /// <summary>
         /// Plan mode: the harness reads and plans, edits nothing (Claude Code&#39;s &#x60;plan&#x60;).
         /// </summary>
         /// <value>Plan mode: the harness reads and plans, edits nothing (Claude Code&#39;s &#x60;plan&#x60;).</value>
@@ -485,6 +503,8 @@ namespace Ainkrad.Client.Model
             sb.Append("  Live: ").Append(Live).Append("\n");
             sb.Append("  Model: ").Append(Model).Append("\n");
             sb.Append("  Outcome: ").Append(Outcome).Append("\n");
+            sb.Append("  PlaceReason: ").Append(PlaceReason).Append("\n");
+            sb.Append("  PlacedOn: ").Append(PlacedOn).Append("\n");
             sb.Append("  Plan: ").Append(Plan).Append("\n");
             sb.Append("  Policy: ").Append(Policy).Append("\n");
             sb.Append("  ProjectId: ").Append(ProjectId).Append("\n");

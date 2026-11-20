@@ -37,7 +37,7 @@ case $bin$state in *[!A-Za-z0-9_./-]*) die "the install folder has a character t
 
 via_systemd() {
   command -v systemctl >/dev/null || return 1
-  [ -n "${XDG_RUNTIME_DIR:-}" ] || { [ -d "/run/user/$(id -u)" ] && export XDG_RUNTIME_DIR=/run/user/$(id -u); }
+  [ -n "${XDG_RUNTIME_DIR:-}" ] || { [ -d "/run/user/$(id -u)" ] && XDG_RUNTIME_DIR="/run/user/$(id -u)" && export XDG_RUNTIME_DIR; }
   systemctl --user show-environment >/dev/null 2>&1 || return 1
   local unit=$HOME/.config/systemd/user
   mkdir -p "$unit"

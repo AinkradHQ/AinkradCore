@@ -38,6 +38,8 @@ pub struct Config {
     pub service: Option<String>,
     pub port: Option<i64>,
     pub restart: bool,
+    /// `service` (the default: a long-running container, `run.start`) or `task` (a heavy job, E15-3).
+    pub kind: String,
     pub position: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -54,6 +56,8 @@ pub struct Input {
     /// `Some(0)` clears the port.
     pub port: Option<i64>,
     pub restart: Option<bool>,
+    /// `service` or `task`.
+    pub kind: Option<String>,
 }
 
 /// A variable of one configuration in one environment: exactly one of the two is set.
@@ -93,7 +97,7 @@ fn refused<T>(code: &'static str, message: impl Into<String>) -> Result<T, Error
 }
 
 const COLS: &str = "id, project_id, name, command, workdir, runner, service, port, restart, \
-                    position, created_at, updated_at";
+                    kind, position, created_at, updated_at";
 
 fn config(r: &SqliteRow) -> Result<Config, sqlx::Error> {
     Ok(Config {
@@ -106,6 +110,7 @@ fn config(r: &SqliteRow) -> Result<Config, sqlx::Error> {
         service: r.try_get("service")?,
         port: r.try_get("port")?,
         restart: r.try_get::<i64, _>("restart")? != 0,
+        kind: r.try_get("kind")?,
         position: r.try_get("position")?,
         created_at: r.try_get("created_at")?,
         updated_at: r.try_get("updated_at")?,
@@ -426,6 +431,11 @@ fn check(i: &Input) -> Result<(), Error> {
     {
         return refused("bad_request", "not a service name");
     }
+    if let Some(k) = &i.kind
+        && !matches!(k.as_str(), "service" | "task")
+    {
+        return refused("bad_request", "a kind is `service` or `task`");
+    }
     if let Some(p) = i.port
         && !(0..=65535).contains(&p)
     {
@@ -461,7 +471,7 @@ pub async fn create(
     }
     let made = sqlx::query(
         "INSERT INTO core_run_configs (project_id, name, command, workdir, runner, service, port, \
-         restart, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         restart, kind, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(project)
     .bind(name)
@@ -471,6 +481,7 @@ pub async fn create(
     .bind(i.service.as_deref().filter(|s| !s.is_empty()))
     .bind(i.port.filter(|p| *p > 0))
     .bind(i64::from(i.restart.unwrap_or(false)))
+    .bind(i.kind.as_deref().unwrap_or("service"))
     .bind(n)
     .bind(who.now)
     .bind(who.now)
@@ -509,7 +520,7 @@ pub async fn update(
     let mut tx = super::begin_write(pool).await?;
     let done = sqlx::query(
         "UPDATE core_run_configs SET name = ?, command = ?, workdir = ?, runner = ?, service = ?, \
-         port = ?, restart = ?, updated_at = ? WHERE id = ? AND project_id = ?",
+         port = ?, restart = ?, kind = ?, updated_at = ? WHERE id = ? AND project_id = ?",
     )
     .bind(i.name.as_deref().unwrap_or(&was.name))
     .bind(i.command.as_deref().unwrap_or(&was.command))
@@ -524,6 +535,7 @@ pub async fn update(
         None => was.port,
     })
     .bind(i64::from(i.restart.unwrap_or(was.restart)))
+    .bind(i.kind.as_deref().unwrap_or(&was.kind))
     .bind(who.now)
     .bind(id)
     .bind(project)
@@ -603,6 +615,7 @@ pub async fn duplicate(
             service: was.service,
             port: was.port,
             restart: Some(was.restart),
+            kind: Some(was.kind),
         },
         who,
     )

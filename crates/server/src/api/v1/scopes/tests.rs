@@ -38,6 +38,16 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
     const PLAIN: &[(&str, &str, &str)] = &[
         (
             "PUT",
+            "/api/v1/hardware/pause",
+            "E15: a pause only withholds new work from a machine; running work finishes",
+        ),
+        (
+            "PUT",
+            "/api/v1/hardware/{id}/pause",
+            "E15: a pause only withholds new work from a machine; running work finishes",
+        ),
+        (
+            "PUT",
             "/api/v1/core/prefs",
             "the update schedule and notice prefs only; installing an update is its own danger route",
         ),
@@ -637,6 +647,8 @@ fn code_running_routes_need_the_unlock_and_are_not_danger() {
     }
     let m = |s: &str| Method::from_bytes(s.as_bytes()).unwrap();
     assert!(needs_unlock(&m("POST"), "/api/v1/terminals", &[]));
+    // M4: a job's live output needs the unlock, as a terminal's does.
+    assert!(needs_unlock(&m("GET"), "/api/v1/jobs/j_abc/stream", &[]));
     assert!(needs_unlock(&m("POST"), "/api/v1/agent-sessions", &[]));
     assert!(!needs_unlock(&m("GET"), "/api/v1/terminals", &[]));
     assert!(!needs_unlock(&m("POST"), "/api/v1/accounts", &[]));

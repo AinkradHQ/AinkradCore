@@ -113,6 +113,13 @@ pub(crate) fn profile(spec: &Spec, program: &OsStr) -> String {
             quote(&dir)
         ));
     }
+    // Heavy-job toolchains (E15-4): readable and executable, native libraries included.
+    for dir in extra_ro(spec) {
+        s.push_str(&format!(
+            "(allow file-read* file-map-executable (subpath \"{}\"))\n",
+            quote(&dir)
+        ));
+    }
     // Path resolution stats each ancestor of a grant: that reveals names, never data.
     let mut ancestors: Vec<PathBuf> = writable(spec)
         .into_iter()
@@ -304,6 +311,18 @@ fn managed_dir(file: &Path) -> Option<PathBuf> {
     }
 }
 
+/// `AINKRAD_SANDBOX_RO`: absolute existing directories (colon-separated) the sandbox may read and
+/// run from, read-only: the runner's heavy-job toolchains (E15-4). Nothing else of the state.
+fn extra_ro(spec: &Spec) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for p in std::env::split_paths(env(spec, "AINKRAD_SANDBOX_RO")) {
+        if p.is_absolute() && p.parent().is_some() && p.is_dir() && !dirs.contains(&p) {
+            dirs.push(p);
+        }
+    }
+    dirs
+}
+
 fn program_dirs(program: &OsStr, spec: &Spec) -> Vec<PathBuf> {
     let path = Path::new(program);
     let found = if path.is_absolute() {
@@ -324,7 +343,7 @@ fn program_dirs(program: &OsStr, spec: &Spec) -> Vec<PathBuf> {
         None
     };
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let mut dirs = Vec::new();
+    let mut dirs = extra_ro(spec);
     for file in found
         .into_iter()
         .flat_map(|f| [f.canonicalize().ok(), Some(f)])
@@ -563,6 +582,20 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         }
         // The session's connection tools socket (C4b), whatever the network mode.
         tools::apply(&mut c, spec, &mut bound)?;
+        // The heavy-job shims (E15-3): their links and the session's own socket directory,
+        // read-only; connecting to the socket needs no write access.
+        if let Some(j) = &spec.job_shims {
+            let dir = j.socket.parent().filter(|d| d.is_absolute());
+            let (Some(dir), true) = (dir, j.bin_dir.is_absolute()) else {
+                return Err(io::Error::other("the job shims slot needs absolute paths"));
+            };
+            for d in [j.bin_dir.as_path(), dir] {
+                if !d.is_dir() {
+                    return Err(io::Error::other("the job shims slot needs its directories"));
+                }
+                c.arg("--ro-bind").arg(d).arg(d);
+            }
+        }
         c.args(["--remount-ro", "/dev", "--remount-ro", "/"])
             .arg("--chdir")
             .arg(&spec.cwd)

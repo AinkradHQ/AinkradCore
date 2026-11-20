@@ -25,11 +25,20 @@ use super::{
 };
 use crate::agents;
 use crate::api::App;
+use crate::workspace::adopt;
+use crate::workspace::fs::{Plan, Tree, TreeExt};
+use crate::workspace::sync::SyncError;
+use crate::workspace::watch::{self, WatchState};
 use ainkrad_proto::v2::{
     AgentFiles, AgentRevert, AgentWrite, Body, Command, MAX_REVERT_BYTES, MAX_WRITE_BYTES,
     OP_AGENT_FILES, OP_AGENT_REVERT, OP_AGENT_WRITE, Reply, RevertEdit, RevertResult,
     folder_relative,
 };
+use std::path::PathBuf;
+use std::sync::Arc;
+
+mod write;
+pub use write::*;
 
 fn unsupported(session_runner_old: &str) -> ApiError {
     ApiError::new(
@@ -100,6 +109,75 @@ fn wrong_op() -> ApiError {
     )
 }
 
+/// Where a session's files are: in the Core's workspace (`ws_path`, E15-2), or still only on its
+/// runner (a legacy session, served by the old runner ops until 0.11).
+enum Home {
+    Ws {
+        root: PathBuf,
+        /// An overflow session: its runner's folder is the writer, so a write goes there first.
+        overflow: Option<Arc<WatchState>>,
+        is_overflow: bool,
+    },
+    Runner,
+}
+
+async fn home(app: &App, s: &Session) -> Result<Home, ApiError> {
+    let Some(root) = adopt::ws_path(&app.pool, &s.id).await? else {
+        return Ok(Home::Runner);
+    };
+    let is_overflow = adopt::is_overflow(&app.pool, &s.id).await?;
+    let overflow = app.hub.sync.watches.get(&s.id).filter(|w| w.is_live());
+    Ok(Home::Ws {
+        root,
+        overflow,
+        is_overflow,
+    })
+}
+
+/// A workspace I/O error as an API answer.
+fn io_refusal(e: std::io::Error) -> ApiError {
+    use std::io::ErrorKind::{InvalidInput, NotFound};
+    match e.kind() {
+        InvalidInput => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bad_path",
+            "a plain file inside the session's folder",
+        ),
+        NotFound => ApiError::new(
+            StatusCode::CONFLICT,
+            "session_folder_gone",
+            "that is not in the session's folder",
+        ),
+        _ => ApiError::new(
+            StatusCode::CONFLICT,
+            "workspace_refused",
+            format!("not done: {e}"),
+        ),
+    }
+}
+
+/// A sync failure as an API answer: a stale base is the 409 `conflict` of spec 4.6.
+fn sync_refusal(e: SyncError) -> ApiError {
+    let (status, code) = match e.code {
+        "conflict" => (StatusCode::CONFLICT, "conflict"),
+        "path_refused" => (StatusCode::BAD_REQUEST, "bad_path"),
+        "runner_offline" | "runner_timeout" | "runner_busy" => {
+            (StatusCode::CONFLICT, "runner_offline")
+        }
+        _ => (StatusCode::BAD_GATEWAY, "runner_failed"),
+    };
+    ApiError::new(status, code, e.why)
+}
+
+/// An overflow session writes through its runner; when that stream is down the write waits (409).
+fn overflow_down() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "runner_offline",
+        "the session runs on a runner that is not syncing now: try again in a moment",
+    )
+}
+
 #[utoipa::path(get, path = "/api/v1/agent-sessions/{id}/files",
     operation_id = "listAgentSessionFiles", tag = "agents",
     params(("id" = String, Path, description = "The session's id, `as_…`"), FolderQuery),
@@ -125,6 +203,27 @@ pub async fn list(
             "forbidden_scope",
             "a module's session folder requires the admin scope",
         ));
+    }
+    if let Home::Ws { root, .. } = home(&app, &s).await? {
+        // E15-2: the Core lists its own copy of the folder; no runner is asked.
+        let dir = relative(&root.to_string_lossy(), q.dir.as_deref().unwrap_or(""))?;
+        if guarded(&dir) {
+            return Err(ApiError::bad_request("not under .git"));
+        }
+        let tree = Tree::open(&root).map_err(io_refusal)?;
+        let (entries, truncated) = tree.list_folder(&dir).map_err(io_refusal)?;
+        return Ok(Json(AgentFolderListing {
+            dir,
+            truncated,
+            entries: entries
+                .into_iter()
+                .map(|e| AgentFolderEntry {
+                    name: e.name,
+                    dir: e.dir,
+                    size: e.size,
+                })
+                .collect(),
+        }));
     }
     let folder = session_folder(s.workspace.is_some(), &s.state, s.folder.as_deref())?;
     let dir = relative(&folder, q.dir.as_deref().unwrap_or(""))?;
@@ -216,6 +315,58 @@ pub async fn revert(
     let b: AgentFileRevert = parse(&body)?;
     not_a_modules(&s)?;
     owns_secrets(&s, &me)?;
+    if let Home::Ws {
+        root,
+        overflow,
+        is_overflow,
+    } = home(&app, &s).await?
+    {
+        let rel = relative(&root.to_string_lossy(), &b.path)?;
+        if rel.is_empty() || guarded(&rel) {
+            return Err(ApiError::bad_request(
+                "name a file of the folder, not under .git",
+            ));
+        }
+        // The recorded edits name the paths the harness saw: its own folder as the runner reported it.
+        let seen = s
+            .folder
+            .clone()
+            .unwrap_or_else(|| root.to_string_lossy().into_owned());
+        let entries = store::file_edits(&app.pool, &s.id).await?;
+        let (edits, truncated) = edits_of(&entries, &seen, &rel);
+        let tree = Tree::open(&root).map_err(io_refusal)?;
+        let plan = tree
+            .plan_revert(&root, &rel, &edits, truncated)
+            .map_err(io_refusal)?;
+        let result = match (plan, overflow) {
+            (Plan::Refused(r), _) => r,
+            (plan, None) if is_overflow => {
+                let _ = plan;
+                return Err(overflow_down());
+            }
+            (Plan::Write(bytes, r), None) => {
+                tree.write(&rel, &bytes, None).map_err(io_refusal)?;
+                r
+            }
+            (Plan::Delete, None) => {
+                tree.remove(&rel).map_err(io_refusal)?;
+                RevertResult::Deleted
+            }
+            (Plan::Write(bytes, r), Some(w)) => {
+                watch::write_through(&app.hub, &w, &rel, &bytes, None)
+                    .await
+                    .map_err(sync_refusal)?;
+                r
+            }
+            (Plan::Delete, Some(w)) => {
+                watch::delete_through(&app.hub, &w, &rel)
+                    .await
+                    .map_err(sync_refusal)?;
+                RevertResult::Deleted
+            }
+        };
+        return finish_revert(&app, &me, &s, &id, &rel, result).await;
+    }
     let folder = session_folder(s.workspace.is_some(), &s.state, s.folder.as_deref())?;
     let rel = relative(&folder, &b.path)?;
     if rel.is_empty() || guarded(&rel) {
@@ -237,7 +388,20 @@ pub async fn revert(
     let Reply::AgentRevert(done) = call(&app, &s, cmd, Some(&me)).await? else {
         return Err(wrong_op());
     };
-    match done.result {
+    finish_revert(&app, &me, &s, &id, &rel, done.result).await
+}
+
+/// The answer to a revert, whoever did it: a refusal for what changed nothing, else the audit row
+/// and the session.
+async fn finish_revert(
+    app: &App,
+    me: &Caller,
+    s: &Session,
+    id: &str,
+    rel: &str,
+    result: RevertResult,
+) -> ApiResult<AgentSession> {
+    match result {
         RevertResult::Reverted | RevertResult::Deleted | RevertResult::Restored => {}
         RevertResult::Conflict => {
             return Err(session_files_refusal(
@@ -253,64 +417,10 @@ pub async fn revert(
         }
         RevertResult::Unknown => return Err(wrong_op()),
     }
-    let details = json!({"path": rel, "result": done.result});
+    let details = json!({"path": rel, "result": result});
     let action = "agent.file_reverted";
-    store::action(&app.pool, &s, BY, action, None, details, &me.device.id).await?;
-    shown(&app, &me, &id).await
-}
-
-#[utoipa::path(post, path = "/api/v1/agent-sessions/{id}/files/write",
-    operation_id = "writeAgentFile", tag = "agents",
-    params(("id" = String, Path, description = "The session's id, `as_…`")),
-    request_body = AgentFileWrite,
-    responses((status = 200, description = "Writes `content` (at most 256 KiB) to the file `path` \
-        of the session's folder on its runner, creating the folders on the way inside it \
-        (audited as `agent.file_written`, the path and size, never the text). A symbolic link on \
-        the way, `..` or a path outside the folder is refused, and so is anything under `.git`. \
-        400 `bad_path`; 413 `file_too_large`; 409 `session_folder_unknown`, \
-        `session_folder_gone`, `unsupported_command` (a runner too old), `module_owned`", body = AgentSession)))]
-pub async fn write(
-    State(app): State<App>,
-    Extension(me): Extension<Caller>,
-    Path(id): Path<String>,
-    body: Bytes,
-) -> ApiResult<AgentSession> {
-    let s = one(&app, &me, &id).await?;
-    let b: AgentFileWrite = parse(&body)?;
-    not_a_modules(&s)?;
-    owns_secrets(&s, &me)?;
-    if b.content.len() > MAX_WRITE_BYTES {
-        return Err(ApiError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "file_too_large",
-            "a file written here is at most 256 KiB",
-        ));
-    }
-    let folder = session_folder(s.workspace.is_some(), &s.state, s.folder.as_deref())?;
-    let rel = relative(&folder, &b.path)?;
-    if rel.is_empty() || guarded(&rel) {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "bad_path",
-            "name a file of the folder, not under .git",
-        ));
-    }
-    if !agents::offers(&app, &s.runner, OP_AGENT_WRITE) {
-        return Err(unsupported("write a file"));
-    }
-    let bytes = b.content.len();
-    let cmd = Command::AgentWrite(AgentWrite {
-        session: s.id.clone(),
-        path: rel.clone(),
-        content: b.content,
-    });
-    let Reply::AgentWrite(_) = call(&app, &s, cmd, Some(&me)).await? else {
-        return Err(wrong_op());
-    };
-    let details = json!({"path": rel, "bytes": bytes});
-    let action = "agent.file_written";
-    store::action(&app.pool, &s, BY, action, None, details, &me.device.id).await?;
-    shown(&app, &me, &id).await
+    store::action(&app.pool, s, BY, action, None, details, &me.device.id).await?;
+    shown(app, me, id).await
 }
 
 #[cfg(test)]

@@ -337,6 +337,7 @@ impl Fake {
             load: self.load,
             isolation: self.isolation.clone(),
             facts: self.facts.clone(),
+            capacity: None,
         };
         self.send(CONTROL_STREAM, Body::Control(Control::Hello(hello)))
             .await;
@@ -369,6 +370,7 @@ impl Fake {
                 load,
                 isolation: None,
                 report: None,
+                capacity: None,
             }),
         )
         .await;

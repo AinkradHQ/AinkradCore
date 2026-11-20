@@ -43,6 +43,8 @@ mod devices;
 pub mod events;
 pub mod gate;
 pub mod handshake;
+mod hardware;
+mod jobs;
 mod lockouts;
 mod me;
 mod mirrors;
@@ -110,6 +112,8 @@ pub const QUERY: &[&str] = &[
     "service",
     // GET /costs/series
     "days",
+    // GET /jobs (E15)
+    "state",
 ];
 
 /// A page of a list: the cursor to continue after (its meaning is per route) and how many.
@@ -224,6 +228,20 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/audit/stats", get(activity::audit_stats))
         .route("/api/v1/ops/history", get(activity::ops_history))
         .route("/api/v1/metrics", get(crate::health::metrics::get))
+        .route("/api/v1/hardware", get(hardware::list))
+        .route("/api/v1/hardware/pool", get(hardware::pool))
+        .route("/api/v1/hardware/pause", put(hardware::pause_all))
+        .route("/api/v1/hardware/{id}/pause", put(hardware::pause))
+        .route("/api/v1/jobs", post(jobs::create).get(jobs::list))
+        .route("/api/v1/jobs/{id}", get(jobs::get).delete(jobs::cancel))
+        .route("/api/v1/jobs/{id}/stream", get(jobs::stream))
+        .route("/api/v1/jobs/{id}/signal", post(jobs::signal))
+        .route("/api/v1/runner/jobs", post(jobs::runner_create))
+        .route("/api/v1/runner/jobs/report", post(jobs::runner_report))
+        .route(
+            "/api/v1/runner/jobs/{job}/signal",
+            post(jobs::runner_signal),
+        )
         .route("/api/v1/runners", get(runners::list))
         .route("/api/v1/runners/{id}", get(runners::get))
         .route("/api/v1/runners/{id}/noop", post(runners::noop))

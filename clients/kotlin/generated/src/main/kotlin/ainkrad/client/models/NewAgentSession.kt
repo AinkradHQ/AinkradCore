@@ -24,7 +24,6 @@ import kotlinx.serialization.Contextual
 /**
  * A session to start. No `Debug`: the prompt is the caller's.
  *
- * @param runner The runner's device id, `d_…`.
  * @param agent An opaque agent id (1 to 64 of `[A-Za-z0-9._:-]`): its bound chain, else the user's default chain, serves the session. Needs `admin`. With no chain either way the session runs as a plain one and names its harness.
  * @param chain A fallback chain's id: the session draws its account from it, one at a time. Needs `admin`. It must not come with a harness, a model or an `acct.*` secret.
  * @param connectionAccess Capability names the session may call through its connections (`read_repo`, `issues_write`, `read_issues`, ...; see `listConnectionKinds`). Needs `admin`. Absent: the default, read-class capabilities only (write is an explicit grant); an agent's session with none has no connection tools. An empty list is refused (400 `empty_allowlist`), and so are operation names and `*` (400).
@@ -36,16 +35,13 @@ import kotlinx.serialization.Contextual
  * @param policy `{\"mode\": \"ask\" | \"accept_edits\" | \"sandboxed\", \"allow\": […]}`; default `ask`.
  * @param projectId Start the session for a project (P3-02): the Core builds the workspace from the project's repos (the primary one first, each under its repo name when there are several), the runner clones them from the Core's copies, and the project's Brain room, if it has one, is claimed (the room's model policy then applies, so a session with no chain is refused 403 `claim_refused`). Excludes `workspace` (400). 404 for no such project, 409 `project_archived`, 409 `project_has_no_repos`, 400 when the caller names a mirror in `workspace`: only the Core sets one.
  * @param prompt The first message. Absent or empty: the session starts with no message, like opening the CLI: its harness is up, the state is `waiting`, and the first message comes through `sendAgentMessage`. A message gives the session its `title` (its first 60 characters).
+ * @param runner Deprecated and ignored (E15): the Core places every session (on itself, or on a runner when it is full). Kept so an older client still parses. The one exception: a session of a runner-bound login (`codex` or `agy` using the login its runner reports, with no account) stays on the runner it names.
  * @param secrets At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
  * @param workspace The repo and worktree to work in (`{\"repo_url\", \"base_branch\", \"branch\", …}`); absent, a scratch dir.
  */
 @Serializable
 
 data class NewAgentSession (
-
-    /* The runner's device id, `d_…`. */
-    @SerialName(value = "runner")
-    val runner: kotlin.String,
 
     /* An opaque agent id (1 to 64 of `[A-Za-z0-9._:-]`): its bound chain, else the user's default chain, serves the session. Needs `admin`. With no chain either way the session runs as a plain one and names its harness. */
     @SerialName(value = "agent")
@@ -90,6 +86,11 @@ data class NewAgentSession (
     /* The first message. Absent or empty: the session starts with no message, like opening the CLI: its harness is up, the state is `waiting`, and the first message comes through `sendAgentMessage`. A message gives the session its `title` (its first 60 characters). */
     @SerialName(value = "prompt")
     val prompt: kotlin.String? = null,
+
+    /* Deprecated and ignored (E15): the Core places every session (on itself, or on a runner when it is full). Kept so an older client still parses. The one exception: a session of a runner-bound login (`codex` or `agy` using the login its runner reports, with no account) stays on the runner it names. */
+    @SerialName(value = "runner")
+    @Deprecated(message = "This property is deprecated.")
+    val runner: kotlin.String? = null,
 
     /* At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC). */
     @SerialName(value = "secrets")

@@ -242,6 +242,7 @@ async fn a_forged_advertisement_is_caught_by_the_runner_itself() {
         gateway: None,
         epoch: 0,
         live: false,
+        folder: None,
         home: None,
     };
     start.policy.min_isolation = Some(Isolation::Microvm);

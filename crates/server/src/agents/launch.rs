@@ -132,6 +132,7 @@ fn start_command(
         },
         live: s.conversation,
         instructions,
+        folder: None,
         home,
     }))
 }
@@ -329,22 +330,19 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
     }
     let wait = app.agents.config.answer;
     let proof = app.agents.elevated.lock().unwrap().get(&s.id).copied();
-    match ask(
-        app,
-        &s.runner,
-        start_command(
-            s,
-            secrets.clone(),
-            leased.gateway.clone(),
-            instructions,
-            leased.home.clone(),
-            resume,
-        )?,
-        wait,
-        proof,
-    )
-    .await
-    {
+    let mut start = start_command(
+        s,
+        secrets.clone(),
+        leased.gateway.clone(),
+        instructions,
+        leased.home.clone(),
+        resume,
+    )?;
+    // E15-2: a session on the built-in runner works in the canonical workspace.
+    if let Command::AgentStart(a) = &mut start {
+        a.folder = crate::workspace::adopt::core_folder(&app.pool, &s.id, &s.runner).await?;
+    }
+    match ask(app, &s.runner, start, wait, proof).await {
         Ok(ev) => {
             app.agents.leases.lock().unwrap().remove(&s.id);
             let why = if resume { "resumed" } else { "started" };

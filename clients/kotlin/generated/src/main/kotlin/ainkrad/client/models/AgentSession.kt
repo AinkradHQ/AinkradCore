@@ -54,6 +54,8 @@ import kotlinx.serialization.Contextual
  * @param live A live conversation (`createAgentSession`'s `live`): the state is `waiting` between answers.
  * @param model 
  * @param outcome Once over: `{\"kind\": \"succeeded\" | \"failed\" | \"cancelled\" | \"token_cap\" | \"stalled\" | \"lost\", \"reason\": …}`.
+ * @param placeReason Why the Core placed it where it runs (E15): `core`, `overflow` (the Core was full) or `pinned` (a runner-bound login); absent for a session placed before E15.
+ * @param placedOn The name of the machine it runs on (`runner` is its id), for \"Ran on X\".
  * @param plan Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`).
  * @param policy Its permission mode now: `ask`, `accept_edits` or `sandboxed` (the create's `policy.mode`, or the latest `setAgentSessionMode`).
  * @param projectId The project it was started for (`createAgentSession` with `project_id`): its workspace is that project's repos, cloned from the Core's copies. Absent for any other session.
@@ -182,6 +184,14 @@ data class AgentSession (
     /* Once over: `{\"kind\": \"succeeded\" | \"failed\" | \"cancelled\" | \"token_cap\" | \"stalled\" | \"lost\", \"reason\": …}`. */
     @Contextual @SerialName(value = "outcome")
     val outcome: kotlin.Any? = null,
+
+    /* Why the Core placed it where it runs (E15): `core`, `overflow` (the Core was full) or `pinned` (a runner-bound login); absent for a session placed before E15. */
+    @SerialName(value = "place_reason")
+    val placeReason: kotlin.String? = null,
+
+    /* The name of the machine it runs on (`runner` is its id), for \"Ran on X\". */
+    @SerialName(value = "placed_on")
+    val placedOn: kotlin.String? = null,
 
     /* Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`). */
     @SerialName(value = "plan")

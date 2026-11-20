@@ -23,6 +23,8 @@ const PATHS: &[(&str, How)] = &[
     ("api/v1/coreprefs.rs", How::Request),
     ("api/v1/devices.rs", How::Request),
     ("api/v1/gate.rs", How::Request),
+    // Hardware pause and resume (E15-1), inside the admin's request.
+    ("api/v1/hardware.rs", How::Request),
     ("api/v1/runner_control.rs", How::Request),
     ("api/v1/runners.rs", How::Request),
     ("api/v1/secrets.rs", How::Request),
@@ -33,6 +35,8 @@ const PATHS: &[(&str, How)] = &[
     ("api/v1/trace.rs", How::Request),
     ("auth/identity.rs", How::Background),
     ("cli/admin/bootstrap.rs", How::Background),
+    // A Decisions provider call (E15-0), under the origin of the request or job that asked.
+    ("decisions/provider.rs", How::Ambient),
     ("health.rs", How::Background),
     ("hub/connect.rs", How::Background),
     ("jobs/store.rs", How::Explicit),

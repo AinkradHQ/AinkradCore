@@ -1358,6 +1358,7 @@ mod pty {
             ssh: None,
             sandbox: None,
             sandbox_user: None,
+            purpose: None,
         }))
     }
 

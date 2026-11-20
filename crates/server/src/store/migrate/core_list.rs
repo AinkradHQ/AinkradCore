@@ -353,6 +353,36 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0058_project_idle_never_e24.up.sql"),
         down: include_str!("../../../migrations/0058_project_idle_never_e24.down.sql"),
     },
+    Migration {
+        version: 59,
+        name: "hardware",
+        up: include_str!("../../../migrations/0059_hardware.up.sql"),
+        down: include_str!("../../../migrations/0059_hardware.down.sql"),
+    },
+    Migration {
+        version: 60,
+        name: "ws_path_run_kind",
+        up: include_str!("../../../migrations/0060_ws_path_run_kind.up.sql"),
+        down: include_str!("../../../migrations/0060_ws_path_run_kind.down.sql"),
+    },
+    Migration {
+        version: 61,
+        name: "decisions",
+        up: include_str!("../../../migrations/0061_decisions.up.sql"),
+        down: include_str!("../../../migrations/0061_decisions.down.sql"),
+    },
+    Migration {
+        version: 62,
+        name: "hw_cache_prepared",
+        up: include_str!("../../../migrations/0062_hw_cache_prepared.up.sql"),
+        down: include_str!("../../../migrations/0062_hw_cache_prepared.down.sql"),
+    },
+    Migration {
+        version: 63,
+        name: "hw_first_capacity",
+        up: include_str!("../../../migrations/0063_hw_first_capacity.up.sql"),
+        down: include_str!("../../../migrations/0063_hw_first_capacity.down.sql"),
+    },
 ];
 
 #[cfg(test)]

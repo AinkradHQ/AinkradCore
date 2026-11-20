@@ -382,6 +382,7 @@ fn v2_terminal_frames_are_pinned() {
             ssh: None,
             sandbox: None,
             sandbox_user: None,
+            purpose: None,
         })),
     );
     t(
@@ -579,6 +580,7 @@ fn v2_agent_frames_are_pinned() {
             gateway: None,
             epoch: 0,
             live: false,
+            folder: None,
             home: None,
         })),
     );
@@ -613,6 +615,7 @@ fn v2_agent_frames_are_pinned() {
             gateway: None,
             epoch: 0,
             live: false,
+            folder: None,
             home: None,
         })),
     );
@@ -858,6 +861,7 @@ fn v2_agent_frames_are_pinned() {
             })),
             epoch: 0,
             live: false,
+            folder: None,
             home: None,
         })),
     );

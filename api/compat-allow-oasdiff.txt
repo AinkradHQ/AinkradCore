@@ -1,4 +1,5 @@
 POST /modules/leyline/v1/hosts/{host}/runner the response property 'session' became optional for the status '200'
+POST /api/v1/agent-sessions the 'runner' request property type/format changed from 'string'/'' to 'string, null'/''
 GET /api/v1/accounts/usage removed the required property '/items/limits' from the response with the '200' status
 GET /api/v1/accounts/usage removed the required property '/items/max_utilisation_bps' from the response with the '200' status
 PUT /api/v1/accounts/{id}/limits api path removed without deprecation

@@ -8,6 +8,11 @@
 
 use std::io;
 
+mod beneath;
+pub mod git;
+pub mod tree;
+pub use beneath::*;
+
 /// Every `unsafe` block in this crate, by function: what it calls and why it holds.
 pub const INVENTORY: &[(&str, &str)] = &[
     ("setsid", "libc::setsid: no arguments, no memory"),
@@ -61,8 +66,48 @@ pub const INVENTORY: &[(&str, &str)] = &[
         "pre_exec closure: one write(2) of a static one-byte buffer to a descriptor we own",
     ),
     (
+        "catch_signals",
+        "libc::sigaction installing a handler that does one write(2) of a one-byte buffer to a pipe we own",
+    ),
+    (
         "die_with_parent",
         "pre_exec closure: prctl(PR_SET_PDEATHSIG) and getppid, integer arguments only",
+    ),
+    (
+        "openat_nofollow",
+        "libc::openat on a borrowed descriptor and a NUL-terminated single component, O_NOFOLLOW forced",
+    ),
+    (
+        "openat2_beneath",
+        "raw openat2 syscall with RESOLVE_BENEATH|NO_SYMLINKS|NO_MAGICLINKS and an open_how we own",
+    ),
+    (
+        "mkdirat",
+        "libc::mkdirat on a borrowed descriptor and one component",
+    ),
+    (
+        "renameat",
+        "libc::renameat on two borrowed descriptors and two single components",
+    ),
+    (
+        "unlinkat",
+        "libc::unlinkat on a borrowed descriptor and one component",
+    ),
+    (
+        "symlinkat",
+        "libc::symlinkat with two NUL-terminated strings and a borrowed descriptor",
+    ),
+    (
+        "readlinkat",
+        "libc::readlinkat into a buffer we own, on a borrowed descriptor",
+    ),
+    (
+        "fstatat",
+        "libc::fstatat(AT_SYMLINK_NOFOLLOW) into a zeroed stat we own",
+    ),
+    (
+        "list_dir",
+        "fdopendir on a duplicated descriptor we own, readdir/closedir on that stream only",
     ),
 ];
 
@@ -539,6 +584,46 @@ pub fn reap(pid: u32) -> io::Result<bool> {
     }
 }
 
+/// The descriptor [`catch_signals`]'s handler writes to; -1 before it is called.
+static SIGNAL_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+#[allow(unsafe_code)]
+extern "C" fn on_signal(sig: libc::c_int) {
+    let fd = SIGNAL_FD.load(std::sync::atomic::Ordering::Relaxed);
+    let byte = sig as u8;
+    // SAFETY: write(2) of one byte from a stack buffer to a descriptor that stays open for the
+    // life of the process; async-signal-safe, and a failed write loses one signal at worst.
+    unsafe {
+        libc::write(fd, (&raw const byte).cast(), 1);
+    }
+}
+
+/// Catches `signals` instead of dying: each arrival writes its number as one byte to the pipe
+/// whose read end is returned. For the job shim, which forwards them. One call per process
+/// (a second replaces the pipe); the signals' default action is gone until the process exits.
+#[allow(unsafe_code)]
+pub fn catch_signals(signals: &[i32]) -> io::Result<std::io::PipeReader> {
+    use std::os::fd::IntoRawFd;
+    let (rd, wr) = std::io::pipe()?;
+    // Kept open for good: the handler may run at any time.
+    SIGNAL_FD.store(wr.into_raw_fd(), std::sync::atomic::Ordering::Relaxed);
+    for &sig in signals {
+        // SAFETY: a zeroed sigaction we own, then a handler that only calls write(2);
+        // SA_RESTART keeps the caller's blocking reads from failing with EINTR.
+        let r = unsafe {
+            let mut act: libc::sigaction = std::mem::zeroed();
+            act.sa_sigaction = on_signal as extern "C" fn(libc::c_int) as usize;
+            act.sa_flags = libc::SA_RESTART;
+            libc::sigemptyset(&raw mut act.sa_mask);
+            libc::sigaction(sig, &raw const act, std::ptr::null_mut())
+        };
+        if r != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(rd)
+}
+
 /// The number of a signal named without `SIG` (`"TERM"`), if it is one we deliver.
 pub fn signal_number(name: &str) -> Option<i32> {
     Some(match name {
@@ -573,7 +658,7 @@ mod tests {
     /// The unsafe inventory (E2-09.1's rule from the start): one entry per block.
     #[test]
     fn every_unsafe_block_is_in_the_inventory() {
-        let src = include_str!("lib.rs");
+        let src = concat!(include_str!("lib.rs"), include_str!("beneath.rs"));
         let blocks = src.matches(concat!("unsafe", " {")).count();
         let any = src.matches(concat!("unsafe", "{")).count()
             + src.matches(concat!("unsafe", " fn")).count()
@@ -611,6 +696,16 @@ mod tests {
         .join()
         .unwrap();
         assert_eq!(child.wait().unwrap().signal(), Some(libc::SIGKILL));
+    }
+
+    #[test]
+    fn a_caught_signal_arrives_as_a_byte() {
+        use std::io::Read;
+        let mut rd = catch_signals(&[libc::SIGUSR2]).unwrap();
+        kill_pid(std::process::id(), libc::SIGUSR2).unwrap();
+        let mut b = [0u8; 1];
+        rd.read_exact(&mut b).unwrap();
+        assert_eq!(i32::from(b[0]), libc::SIGUSR2);
     }
 
     #[test]
