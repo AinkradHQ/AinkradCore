@@ -248,7 +248,8 @@ async fn enabled(conn: &mut SqliteConnection) -> Result<i64, Error> {
     match setting(conn, Key::SecretsMode).await? {
         0 => refused(
             "secrets_disabled",
-            "the secrets broker is off (secrets.mode 0, gate G-SEC)",
+            "the secrets broker is off: secrets.mode is 0; set it to 1 (`ainkradctl setting set \
+             secrets.mode 1`, or the AI accounts step of setup) to store keys",
         ),
         mode => Ok(mode),
     }
@@ -327,13 +328,43 @@ async fn check_value(
         {
             Ok(true)
         }
-        _ => refused(
-            "real_secret_refused",
-            "the value contains a recognised credential shape and is not, as a whole, one key \
-             of this provider's own shape. A provider's own key needs secrets.provider_accounts; \
-             every other real secret waits for gate G-SEC (secrets.mode 2)",
-        ),
+        _ => {
+            let accounts = setting(conn, Key::SecretsProviderAccounts).await?;
+            refused("real_secret_refused", refusal_words(mode, accounts))
+        }
     }
+}
+
+/// What a refused real value is told: the settings as they are and the one that lets a provider's
+/// own key in (the app's AI-accounts setup step sets it).
+fn refusal_words(mode: i64, provider_accounts: i64) -> String {
+    let fix = match provider_accounts {
+        1 => "this value is not, as a whole, one key of this provider's own shape".to_owned(),
+        n => format!(
+            "secrets.provider_accounts is {n}: set it to 1 (`ainkradctl setting set secrets.provider_accounts 1`, \
+             or the AI accounts step of setup) to add a provider's own key"
+        ),
+    };
+    format!(
+        "the value contains a recognised credential shape and secrets.mode is {mode}; {fix}. \
+         Every other real secret waits for gate G-SEC (secrets.mode 2)"
+    )
+}
+
+#[cfg(test)]
+#[test]
+fn a_refused_real_key_names_the_setting_that_lets_it_in() {
+    let off = refusal_words(1, 0);
+    assert!(
+        off.contains("secrets.mode is 1")
+            && off.contains("secrets.provider_accounts is 0: set it to 1"),
+        "{off}"
+    );
+    let on = refusal_words(1, 1);
+    assert!(
+        on.contains("not, as a whole, one key") && !on.contains("set it to 1"),
+        "{on}"
+    );
 }
 
 /// The scope, checked: each an active runner device, no repeats.
