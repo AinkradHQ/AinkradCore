@@ -661,7 +661,7 @@ impl PtyDriver {
                     .flatten(),
                 // The shell's own network (E15 H2): its jobs never get more.
                 net: super::jobsock::Net::from_mode(Some(self.config.private_net.name()), || {
-                    crate::egress::Policy::from_env()
+                    crate::egress::Policy::terminal_from_env()
                         .map(|p| p.host_names())
                         .unwrap_or_default()
                 }),

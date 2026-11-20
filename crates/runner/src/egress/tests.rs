@@ -507,3 +507,32 @@ fn a_jobs_policy_keeps_only_the_hosts_its_session_allows() {
     assert_eq!(cut.host_names(), ["pypi.org"]);
     assert_eq!(reg.only_hosts(&[]).counts(), (0, 0, 1));
 }
+
+#[test]
+fn an_unset_host_list_is_the_default_and_a_set_one_replaces_it() {
+    let p = Policy::parse("", &hosts_or_default(None), "").unwrap();
+    for h in [
+        "github.com",
+        "codeload.github.com",
+        "objects.githubusercontent.com",
+        "api.github.com",
+        "gitlab.com",
+        "bitbucket.org",
+        "registry.npmjs.org",
+        "crates.io",
+        "pypi.org",
+        "proxy.golang.org",
+        "rubygems.org",
+        "repo1.maven.org",
+    ] {
+        assert!(p.host_listed(h), "{h} missing from the default");
+    }
+    // Loopback, private and metadata space stay denied with the default list.
+    for a in ["127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.169.254"] {
+        assert!(p.check_ip(ip(a), true).is_err(), "{a} allowed");
+    }
+    let admin = Policy::parse("", &hosts_or_default(Some("example.com".into())), "").unwrap();
+    assert!(admin.host_listed("example.com") && !admin.host_listed("github.com"));
+    let none = Policy::parse("", &hosts_or_default(Some(String::new())), "").unwrap();
+    assert!(!none.host_listed("github.com"));
+}
