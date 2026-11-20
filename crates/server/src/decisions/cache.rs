@@ -5,7 +5,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePool;
 
 use crate::scheduler::iso_of_unix;
@@ -14,14 +13,14 @@ use crate::store;
 /// A cache key.
 pub type Key = [u8; 32];
 
-fn field(h: &mut Sha256, bytes: &[u8]) {
+fn field(h: &mut blake3::Hasher, bytes: &[u8]) {
     // Length-prefixed, so ("ab", "c") and ("a", "bc") hash apart.
-    h.update((bytes.len() as u64).to_be_bytes());
+    h.update(&(bytes.len() as u64).to_be_bytes());
     h.update(bytes);
 }
 
-fn map(h: &mut Sha256, m: &BTreeMap<String, String>) {
-    h.update((m.len() as u64).to_be_bytes());
+fn map(h: &mut blake3::Hasher, m: &BTreeMap<String, String>) {
+    h.update(&(m.len() as u64).to_be_bytes());
     for (k, v) in m {
         field(h, k.as_bytes());
         field(h, v.as_bytes());
@@ -30,14 +29,13 @@ fn map(h: &mut Sha256, m: &BTreeMap<String, String>) {
 
 /// The hash of the shared (already redacted) context: one per request, part of every key.
 pub fn context_hash(context: &BTreeMap<String, String>) -> Key {
-    let mut h = Sha256::new();
+    let mut h = blake3::Hasher::new();
     map(&mut h, context);
-    h.finalize().into()
+    *h.finalize().as_bytes()
 }
 
 /// The key of one question: consumer, provider, options, redacted text, redacted facts and the
-/// context hash. (Spec §2.3 says blake3; SHA-256 is the same shape from a dependency the server
-/// already has. `core_decision_cache.key` is only a 32-byte blob.)
+/// context hash, as blake3 (spec §2.3; `core_decision_cache.key` is a 32-byte blob).
 pub fn key(
     consumer: &str,
     provider: &str,
@@ -46,17 +44,17 @@ pub fn key(
     facts: &BTreeMap<String, String>,
     context: &Key,
 ) -> Key {
-    let mut h = Sha256::new();
+    let mut h = blake3::Hasher::new();
     field(&mut h, consumer.as_bytes());
     field(&mut h, provider.as_bytes());
-    h.update((options.len() as u64).to_be_bytes());
+    h.update(&(options.len() as u64).to_be_bytes());
     for o in options {
         field(&mut h, o.as_bytes());
     }
     field(&mut h, text.as_bytes());
     map(&mut h, facts);
     h.update(context);
-    h.finalize().into()
+    *h.finalize().as_bytes()
 }
 
 /// The live rows among `keys`, as `(option, score)` pairs in the order they were stored.

@@ -14,15 +14,16 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use utoipa::{IntoParams, ToSchema};
 
 use super::types::{Timestamp, opt_ts, ts};
 use super::{ApiError, ApiResult, Caller};
 use crate::api::App;
-use crate::heavy::decide::{Decision, Deps, decide as heavy_decide};
-use crate::heavy::run::{self, Start, Started};
-use crate::heavy::{history, rules};
+use crate::heavy::history;
+use crate::heavy::run;
+
+mod answer;
+use answer::{Asked, answer, built_in};
 
 /// Why the Core put a job where it did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -165,10 +166,10 @@ pub async fn create(State(app): State<App>, Json(req): Json<NewJob>) -> Response
     responses((status = 200, description = "Jobs, newest first. Needs `read`", body = Vec<Job>)))]
 pub async fn list(State(app): State<App>, Query(q): Query<JobsQuery>) -> ApiResult<Vec<Job>> {
     let limit = i64::from(q.limit.unwrap_or(50).clamp(1, 200));
-    let rows: Vec<Row> = sqlx::query_as(&format!(
+    let rows: Vec<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "{SELECT} WHERE (?1 IS NULL OR j.project_id = ?1) AND (?2 IS NULL OR j.session_id = ?2) \
          AND (?3 IS NULL OR j.state = ?3) ORDER BY j.created_at DESC, j.id DESC LIMIT ?4"
-    ))
+    )))
     .bind(q.project)
     .bind(q.session)
     .bind(q.state)
@@ -182,7 +183,7 @@ pub async fn list(State(app): State<App>, Query(q): Query<JobsQuery>) -> ApiResu
     params(("id" = String, Path, description = "`j_…`")),
     responses((status = 200, description = "One job. Needs `read`", body = Job)))]
 pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<Job> {
-    let row: Option<Row> = sqlx::query_as(&format!("{SELECT} WHERE j.id = ?"))
+    let row: Option<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!("{SELECT} WHERE j.id = ?")))
         .bind(&id)
         .fetch_optional(&app.pool)
         .await?;
@@ -194,21 +195,58 @@ pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<Jo
     params(("id" = String, Path, description = "`j_…`")),
     responses((status = 101, description = "Job WebSocket: `out`, `state` and `exit` frames, \
         replaying up to 4 MiB")))]
-pub async fn stream(Path(id): Path<String>, ws: axum::extract::WebSocketUpgrade) -> Response {
+pub async fn stream(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    ws: axum::extract::WebSocketUpgrade,
+) -> Response {
+    // As a terminal's stream (KAN-417): subscribed first, then checked, so a revoke from here on
+    // closes the socket and one before it refuses the upgrade.
+    let revoked = crate::auth::until_revoked(
+        app.live.devices(&app.pool, app.stream.backstop),
+        app.auth.subscribe(),
+        me.device.id.clone(),
+    );
+    match crate::auth::device_now(&app.pool, &me.device.id, Some(&me.device.scopes)).await {
+        crate::auth::DeviceNow::Usable => {}
+        crate::auth::DeviceNow::Gone => return super::gate::auth_failed().into_response(),
+        crate::auth::DeviceNow::Unknown => return super::events::unavailable().into_response(),
+    }
     let Some(live) = run::get(&id) else {
         return ApiError::not_found("no such live job (its frames are kept five minutes)")
             .into_response();
     };
+    // A send to a client that stopped reading is bounded, so the revoke is polled again within it.
+    let cap = app
+        .hub
+        .config
+        .send_timeout
+        .min(std::time::Duration::from_secs(4));
     ws.on_upgrade(move |mut socket| async move {
         use axum::extract::ws::Message;
+        tokio::pin!(revoked);
         let mut lines = std::pin::pin!(run::lines(live, Vec::new()));
-        while let Some(l) = lines.next().await {
-            let text = l.trim_end().to_owned();
-            if socket.send(Message::Text(text.into())).await.is_err() {
-                return;
+        loop {
+            tokio::select! {
+                biased;
+                () = &mut revoked => {
+                    super::terminals::close_socket(&mut socket, 4001, "revoked", cap).await;
+                    return;
+                }
+                l = lines.next() => match l {
+                    Some(l) => {
+                        let text = l.trim_end().to_owned();
+                        let sent = tokio::time::timeout(cap, socket.send(Message::Text(text.into())));
+                        if !matches!(sent.await, Ok(Ok(()))) {
+                            return;
+                        }
+                    }
+                    None => break,
+                },
             }
         }
-        let _ = socket.close().await;
+        let _ = tokio::time::timeout(cap, socket.send(Message::Close(None))).await;
     })
 }
 
@@ -348,165 +386,6 @@ pub async fn runner_report(
         }
     }
     StatusCode::NO_CONTENT.into_response()
-}
-
-/// What a request to run a command asks.
-struct Asked {
-    project: Option<i64>,
-    session: Option<String>,
-    terminal: Option<String>,
-    argv: Vec<String>,
-    cwd_rel: String,
-    env: BTreeMap<String, String>,
-    tty: bool,
-}
-
-fn local(reason: &str, report: bool) -> Response {
-    Json(JobLocal {
-        verdict: "local".to_owned(),
-        reason: reason.to_owned(),
-        report,
-    })
-    .into_response()
-}
-
-/// Only the Core's own runner (the one the installer enrolled) may call the runner routes.
-async fn built_in(app: &App, caller: &Caller) -> Result<(), ApiError> {
-    let found: Option<String> = sqlx::query_scalar(
-        "SELECT device_id FROM core_pairings WHERE kind = 'runner' AND sas = ? AND device_id = ?",
-    )
-    .bind(crate::store::gov::LOCAL_ENROL_SAS)
-    .bind(&caller.device.id)
-    .fetch_optional(&app.pool)
-    .await?;
-    found.map(|_| ()).ok_or_else(|| {
-        ApiError::new(
-            StatusCode::FORBIDDEN,
-            "not_built_in",
-            "only the Core's own runner may call this",
-        )
-    })
-}
-
-/// Tiers 0 to 3 for one request. Placing and running a heavy job is `heavy/run.rs` (step 2).
-async fn answer(app: &App, a: Asked, from_runner: bool) -> Result<Response, ApiError> {
-    if a.argv.is_empty() || a.argv.len() > 256 || a.argv[0].is_empty() {
-        return Err(ApiError::bad_request(
-            "argv is one to 256 words, the first a program",
-        ));
-    }
-    if !a.cwd_rel.is_empty() && ainkrad_proto::v2::wire_path_problem(&a.cwd_rel).is_some() {
-        return Ok(local("bad_cwd", false));
-    }
-    // A session's commands belong to the project the session is in.
-    let project = match (a.project, &a.session) {
-        (None, Some(session)) => sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT project_id FROM core_agent_sessions WHERE id = ?",
-        )
-        .bind(session)
-        .fetch_optional(&app.pool)
-        .await?
-        .flatten(),
-        (p, _) => p,
-    };
-    let a = Asked { project, ..a };
-    let ws = crate::heavy::workspace();
-    let (rules, dir) = match a.project {
-        Some(p) => {
-            let toml = tokio::fs::read_to_string(ws.jobs_toml(p))
-                .await
-                .unwrap_or_default();
-            let base = ws
-                .project_meta(p)
-                .parent()
-                .map(std::path::Path::to_path_buf);
-            (
-                rules::parse_project(&toml),
-                base.map(|b| b.join(&a.cwd_rel)),
-            )
-        }
-        None => (Vec::new(), None),
-    };
-    // The Decisions service, over the hub. The model must be this sure (a percent setting) before a
-    // command it was asked about leaves the Core.
-    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let decider = crate::decisions::Service::for_app(app, ws.root(), home.as_deref());
-    let min = crate::store::settings::value(
-        &app.pool,
-        ainkrad_core::settings::Key::DecisionsHeavyJobMinConfidence,
-        ainkrad_core::settings::Scope::Server,
-    )
-    .await
-    .unwrap_or(70);
-    let deps = Deps {
-        pool: &app.pool,
-        decide: &decider,
-        user: ainkrad_core::ids::UserId(1),
-        min_confidence: min as f32 / 100.0,
-    };
-    let dir = dir.unwrap_or_default();
-    Ok(
-        match heavy_decide(&deps, a.project, &a.argv, a.tty, &rules, &dir).await {
-            Decision::Interactive => {
-                return Err(ApiError::new(
-                    StatusCode::CONFLICT,
-                    "interactive",
-                    "a terminal user is waiting on this command: run it where it was typed",
-                ));
-            }
-            Decision::Local { reason, report } => local(reason, report),
-            Decision::Heavy { row, tier } => {
-                let Some(project) = a.project else {
-                    return Ok(local("no_project", false));
-                };
-                let env = a
-                    .env
-                    .into_iter()
-                    .filter(|(k, _)| crate::heavy::ENV_ALLOW.contains(&k.as_str()))
-                    .collect();
-                let start = Start {
-                    project,
-                    session: a.session,
-                    terminal: a.terminal,
-                    run_config: None,
-                    argv: a.argv,
-                    cwd_rel: a.cwd_rel,
-                    env,
-                    row,
-                    tier: tier.as_str(),
-                };
-                match run::start(app, start).await? {
-                    Started::Local(why) => local(&why, true),
-                    Started::Job { id, device_name } if from_runner => ndjson(&id, &device_name),
-                    Started::Job { id, .. } => {
-                        let row: Row = sqlx::query_as(&format!("{SELECT} WHERE j.id = ?"))
-                            .bind(&id)
-                            .fetch_one(&app.pool)
-                            .await?;
-                        (StatusCode::CREATED, Json(Job::from(row))).into_response()
-                    }
-                }
-            }
-        },
-    )
-}
-
-/// The 201 answer of `POST /runner/jobs`: the verdict line, then the job's frames, one JSON object
-/// a line, until its `exit` (or its end with none: the shim then runs the command itself).
-fn ndjson(id: &str, device_name: &str) -> Response {
-    let Some(live) = run::get(id) else {
-        return local("job_gone", false);
-    };
-    let verdict = json!({"verdict": "remote", "job": id, "device_name": device_name});
-    let lines = run::lines(live, vec![format!("{verdict}\n")]);
-    let body = axum::body::Body::from_stream(
-        lines.map(|l| Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(l))),
-    );
-    Response::builder()
-        .status(StatusCode::CREATED)
-        .header("content-type", "application/x-ndjson")
-        .body(body)
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 /// `core_hw_jobs` joined with the device's name, as `Job` reads it.

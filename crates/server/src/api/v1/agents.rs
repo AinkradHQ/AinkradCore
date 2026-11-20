@@ -384,20 +384,6 @@ pub async fn create(
     body: Bytes,
 ) -> ApiResult<AgentSession> {
     let b: NewAgentSession = parse(&body)?;
-    // E15: `runner` is deprecated; absent, the built-in runner (E15-1 places by load).
-    let runner = match b.runner.clone() {
-        Some(r) => r,
-        None => sqlx::query_scalar::<_, String>(
-            "SELECT device_id FROM core_pairings WHERE kind = 'runner' AND sas = ? \
-             AND device_id IS NOT NULL LIMIT 1",
-        )
-        .bind(crate::store::gov::LOCAL_ENROL_SAS)
-        .fetch_optional(&app.pool)
-        .await?
-        .ok_or_else(|| {
-            ApiError::bad_request("no runner given and the Core has no built-in runner")
-        })?,
-    };
     let secrets: Vec<SessionSecret> = b
         .secrets
         .unwrap_or_default()

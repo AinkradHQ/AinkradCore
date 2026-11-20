@@ -47,6 +47,11 @@ pub struct ProjectRun {
     /// The environment it ran in.
     #[schema(required = false)]
     pub environment: Option<String>,
+    /// A `task` configuration's heavy job (`j_…`, E15-3): follow it with `/jobs/{id}`. Absent for a
+    /// service run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub job: Option<String>,
 }
 
 fn view(r: Run, idle_minutes: i64) -> ProjectRun {
@@ -65,6 +70,7 @@ fn view(r: Run, idle_minutes: i64) -> ProjectRun {
         idle_stop_at: opt_ts(due.as_deref()),
         config_id: r.config_id,
         environment: r.environment,
+        job: None,
     }
 }
 

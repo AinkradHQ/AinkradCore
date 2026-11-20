@@ -2,8 +2,10 @@
 //! other hardware. `rules` and `history` are tiers 1 and 2, `decide` ties the tiers together and
 //! asks the Decisions service for tier 3.
 
+pub mod cache;
 pub mod decide;
 pub mod history;
+mod live;
 pub mod rules;
 
 pub mod run;

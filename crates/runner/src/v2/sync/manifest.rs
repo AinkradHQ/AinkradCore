@@ -1,94 +1,21 @@
 //! Manifests of a cache folder (E15-4, the runner end of spec §4.5): entries by wire path, the tree
 //! hash both ends compare, and the scan that builds them under the Core's rules.
 //!
-//! **The tree hash fold is E15-2's** (`server/src/workspace/manifest.rs`); this is a copy, and
-//! `tests::the_fold_is_the_documented_one` rebuilds it from the spec's words to catch drift. blake3
-//! over `ainkrad-tree-v1\n`, then each entry in ascending path-byte order: `u32 LE path length,
-//! path, kind byte (0 file, 1 symlink), exec byte, u64 LE size, 32-byte file hash, u32 LE link
-//! length, link`. A file's hash is blake3 of its content; a symlink's is blake3 of its target text.
+//! The tree hash fold, the file hashes, `link_ok` and the rules are shared with the Core
+//! (`ainkrad_proto::v2::synctree`, which documents the fold).
 
 use std::collections::BTreeMap;
 use std::io::{self, Read as _};
 
-use ainkrad_proto::v2::{CHUNK_BYTES, Entry, EntryKind, Hash, MAX_FILE_BYTES, TreeHash};
+use ainkrad_proto::v2::{Entry, EntryKind, Hash, MAX_FILE_BYTES};
 use ainkrad_sys::Kind;
 use serde::{Deserialize, Serialize};
 
-use super::rules::{BUILD_DIRS, Rules, has_git};
-use super::tree::{MAX_DEPTH, Tree, check_path};
+use ainkrad_proto::v2::WIRE_DEPTH_MAX as MAX_DEPTH;
+use ainkrad_proto::v2::synctree::{BUILD_DIRS, Rules, check_path, has_git};
+use ainkrad_sys::tree::Tree;
 
-pub type Entries = BTreeMap<String, Entry>;
-
-/// blake3 of a reader's content, its size, and each [`CHUNK_BYTES`] chunk's hash.
-pub fn hash_reader(mut r: impl io::Read) -> io::Result<(Hash, u64, Vec<Hash>)> {
-    let mut whole = blake3::Hasher::new();
-    let mut chunks = Vec::new();
-    let mut size = 0u64;
-    let mut buf = vec![0u8; CHUNK_BYTES as usize];
-    loop {
-        let mut n = 0;
-        while n < buf.len() {
-            let got = r.read(&mut buf[n..])?;
-            if got == 0 {
-                break;
-            }
-            n += got;
-        }
-        if n == 0 {
-            break;
-        }
-        whole.update(&buf[..n]);
-        chunks.push(Hash(*blake3::hash(&buf[..n]).as_bytes()));
-        size += n as u64;
-        if n < buf.len() {
-            break;
-        }
-    }
-    Ok((Hash(*whole.finalize().as_bytes()), size, chunks))
-}
-
-pub fn tree_hash(entries: &Entries) -> TreeHash {
-    let mut h = blake3::Hasher::new();
-    h.update(b"ainkrad-tree-v1\n");
-    for (path, e) in entries {
-        h.update(&(path.len() as u32).to_le_bytes());
-        h.update(path.as_bytes());
-        h.update(&[u8::from(e.kind == EntryKind::Symlink), u8::from(e.exec)]);
-        h.update(&e.size.to_le_bytes());
-        h.update(&e.hash.0);
-        let link = e.link.as_deref().unwrap_or("");
-        h.update(&(link.len() as u32).to_le_bytes());
-        h.update(link.as_bytes());
-    }
-    TreeHash(*h.finalize().as_bytes())
-}
-
-/// Whether the relative symlink `target` of the link at `path` stays inside the project: not
-/// absolute, never above the root at any step, and not through `.git`.
-pub fn link_ok(path: &str, target: &str) -> bool {
-    if target.is_empty()
-        || target.starts_with('/')
-        || target.contains('\0')
-        || target.contains('\\')
-    {
-        return false;
-    }
-    let mut depth = path.split('/').count() as i64 - 1;
-    for part in target.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                depth -= 1;
-                if depth < 0 {
-                    return false;
-                }
-            }
-            p if p.eq_ignore_ascii_case(".git") => return false,
-            _ => depth += 1,
-        }
-    }
-    true
-}
+pub use ainkrad_proto::v2::synctree::{Entries, hash_reader, link_ok, tree_hash};
 
 /// What the runner remembers about a file it hashed: `(mtime ns, size, inode)` and its entry, so an
 /// unchanged file is not read again (spec §4.5: index path to mtime, size, ino, hash).
@@ -159,11 +86,11 @@ fn walk(
                 walk(tree, rules, out, memo, now_ns, &rel, depth + 1, res, seen)?;
             }
             Kind::File | Kind::Symlink => {
-                if !(if out {
-                    rules.sync_out(&rel)
-                } else {
-                    rules.sync_in(&rel)
-                }) {
+                let skip = match out {
+                    true => rules.sync_out(&rel),
+                    false => rules.sync_in(&rel),
+                };
+                if skip.is_some() {
                     continue;
                 }
                 if st.kind == Kind::Symlink {
@@ -293,52 +220,6 @@ mod tests {
             hash: Hash(*blake3::hash(body).as_bytes()),
             ..Entry::default()
         }
-    }
-
-    #[test]
-    fn the_fold_is_the_documented_one() {
-        let mut m = Entries::new();
-        for e in [file("b.txt", b"two", false), file("a/x.sh", b"one", true)] {
-            m.insert(e.path.clone(), e);
-        }
-        // Written out from the spec's words, in ascending path-byte order: `a/x.sh` then `b.txt`.
-        let mut h = blake3::Hasher::new();
-        h.update(b"ainkrad-tree-v1\n");
-        for (p, body, exec) in [("a/x.sh", &b"one"[..], 1u8), ("b.txt", &b"two"[..], 0u8)] {
-            h.update(&(p.len() as u32).to_le_bytes());
-            h.update(p.as_bytes());
-            h.update(&[0u8, exec]);
-            h.update(&(body.len() as u64).to_le_bytes());
-            h.update(blake3::hash(body).as_bytes());
-            h.update(&0u32.to_le_bytes());
-        }
-        assert_eq!(tree_hash(&m).0, *h.finalize().as_bytes());
-        let empty = blake3::hash(b"ainkrad-tree-v1\n");
-        assert_eq!(tree_hash(&Entries::new()).0, *empty.as_bytes());
-    }
-
-    #[test]
-    fn chunks_are_one_mebibyte_and_the_last_may_be_short() {
-        let data = vec![7u8; CHUNK_BYTES as usize + 5];
-        let (whole, size, chunks) = hash_reader(&data[..]).unwrap();
-        assert_eq!(size, data.len() as u64);
-        assert_eq!(chunks.len(), 2);
-        assert_eq!(whole.0, *blake3::hash(&data).as_bytes());
-        assert_eq!(
-            chunks[1].0,
-            *blake3::hash(&data[CHUNK_BYTES as usize..]).as_bytes()
-        );
-        assert!(hash_reader(&b""[..]).unwrap().2.is_empty());
-    }
-
-    #[test]
-    fn links_stay_inside_the_project() {
-        assert!(link_ok("a/b", "c"));
-        assert!(link_ok("a/b", "../c"));
-        assert!(!link_ok("a/b", "../../c"));
-        assert!(!link_ok("a", "/etc/passwd"));
-        assert!(!link_ok("a", "x/.git/hooks"));
-        assert!(!link_ok("a", ""));
     }
 
     #[test]

@@ -61,6 +61,7 @@ mod ssh;
 mod ssh_agent;
 mod subscription;
 mod sync;
+pub mod synctree;
 mod terminal;
 mod tools;
 pub use agent::*;

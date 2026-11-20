@@ -11,7 +11,6 @@ use std::collections::BTreeMap;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
-use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -191,10 +190,9 @@ fn pool_of(machines: &[Machine]) -> HardwarePool {
         .iter()
         .any(|m| m.view.kind == HwKind::Core && m.paused_until.is_some());
     HardwarePool {
-        load_pct: if slots == 0 {
-            0
-        } else {
-            u8::try_from((jobs * 100 / slots).min(100)).unwrap_or(100)
+        load_pct: match (jobs * 100).checked_div(slots) {
+            None => 0,
+            Some(p) => u8::try_from(p.min(100)).unwrap_or(100),
         },
         jobs,
         sessions: machines.iter().map(|m| m.view.sessions).sum(),
@@ -299,7 +297,7 @@ pub async fn pause(
         }
         Some(_) => {}
     }
-    set_pause(&app, &[id.clone()], until.as_deref()).await?;
+    set_pause(&app, std::slice::from_ref(&id), until.as_deref()).await?;
     let seq = crate::store::gov::get_device(&app.pool, &id)
         .await?
         .map_or(0, |d| d.seq);

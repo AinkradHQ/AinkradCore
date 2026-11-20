@@ -36,15 +36,17 @@ namespace Ainkrad.Client.Model
         /// Initializes a new instance of the <see cref="RunConfigBody" /> class.
         /// </summary>
         /// <param name="command">Required to create..</param>
+        /// <param name="kind">&#x60;service&#x60; or &#x60;task&#x60;..</param>
         /// <param name="name">Required to create..</param>
         /// <param name="port">0 clears it..</param>
         /// <param name="restart">restart.</param>
         /// <param name="runner">runner.</param>
         /// <param name="service">Empty clears it..</param>
         /// <param name="workdir">workdir.</param>
-        public RunConfigBody(string command = default, string name = default, long? port = default, bool? restart = default, string runner = default, string service = default, string workdir = default)
+        public RunConfigBody(string command = default, string kind = default, string name = default, long? port = default, bool? restart = default, string runner = default, string service = default, string workdir = default)
         {
             this.Command = command;
+            this.Kind = kind;
             this.Name = name;
             this.Port = port;
             this.Restart = restart;
@@ -59,6 +61,13 @@ namespace Ainkrad.Client.Model
         /// <value>Required to create.</value>
         [DataMember(Name = "command", EmitDefaultValue = true)]
         public string Command { get; set; }
+
+        /// <summary>
+        /// &#x60;service&#x60; or &#x60;task&#x60;.
+        /// </summary>
+        /// <value>&#x60;service&#x60; or &#x60;task&#x60;.</value>
+        [DataMember(Name = "kind", EmitDefaultValue = true)]
+        public string Kind { get; set; }
 
         /// <summary>
         /// Required to create.
@@ -108,6 +117,7 @@ namespace Ainkrad.Client.Model
             StringBuilder sb = new StringBuilder();
             sb.Append("class RunConfigBody {\n");
             sb.Append("  Command: ").Append(Command).Append("\n");
+            sb.Append("  Kind: ").Append(Kind).Append("\n");
             sb.Append("  Name: ").Append(Name).Append("\n");
             sb.Append("  Port: ").Append(Port).Append("\n");
             sb.Append("  Restart: ").Append(Restart).Append("\n");

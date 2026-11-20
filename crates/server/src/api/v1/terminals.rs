@@ -1631,7 +1631,7 @@ async fn send(s: &mut WebSocket, f: Frame, cap: Duration) -> Result<(), ()> {
         .map_err(|_| ())?
         .map_err(|_| ())
 }
-async fn close_socket(s: &mut WebSocket, code: u16, reason: &str, cap: Duration) {
+pub(super) async fn close_socket(s: &mut WebSocket, code: u16, reason: &str, cap: Duration) {
     let close = s.send(Message::Close(Some(CloseFrame {
         code,
         reason: reason.into(),
