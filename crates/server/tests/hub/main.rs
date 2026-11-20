@@ -367,6 +367,7 @@ impl Fake {
             Body::Heartbeat(Heartbeat {
                 load,
                 isolation: None,
+                report: None,
             }),
         )
         .await;

@@ -73,6 +73,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/metrics", "admin"),
     ("POST", "/api/v1/pairings", "admin"),
     ("POST", "/api/v1/pairings/invites", "admin"),
+    ("POST", "/api/v1/runners/{id}/bundled", "admin"),
     ("GET", "/api/v1/pairings/{id}", "admin"),
     ("POST", "/api/v1/pairings/{id}/approve", "admin"),
     ("POST", "/api/v1/pairings/{id}/reject", "admin"),
@@ -230,6 +231,10 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/terminals/{id}/local", "terminal"),
     ("DELETE", "/api/v1/terminals/{id}/local", "terminal"),
     ("POST", "/api/v1/terminals/{id}/signal", "terminal"),
+    // A preview of a sandbox terminal's last screen rows: the terminal scope and the caller's own
+    // terminal, no per-action step-up (it attaches nothing). At integration it joins E1's
+    // `UNLOCKED` gate, so a locked Core answers `unlock_required`.
+    ("GET", "/api/v1/terminals/{id}/tail", "terminal"),
     ("DELETE", "/api/v1/terminals/{id}", "terminal"),
     ("GET", "/api/v1/agent-sessions", "agent"),
     ("POST", "/api/v1/agent-sessions", "agent"),
@@ -275,6 +280,7 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/pairings"),
     // It hands out a credential that enrols a device with no second approval.
     ("POST", "/api/v1/pairings/invites"),
+    ("POST", "/api/v1/runners/{id}/bundled"),
     ("POST", "/api/v1/pairings/{id}/approve"),
     ("POST", "/api/v1/pairings/{id}/reject"),
     ("POST", "/api/v1/auth/lockouts/clear"),
@@ -298,6 +304,8 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
 pub const UNLOCKED: &[(&str, &str)] = &[
     ("POST", "/api/v1/terminals"),
     ("GET", "/api/v1/terminals/{id}/ws"),
+    // The last lines of a terminal's screen are the terminal's output: it reads like an attach (E6).
+    ("GET", "/api/v1/terminals/{id}/tail"),
     ("POST", "/api/v1/terminals/{id}/local"),
     // The gate lets INT, TSTP and CONT through (Ctrl-C, Ctrl-Z, fg: `gate::plain_signal`).
     ("POST", "/api/v1/terminals/{id}/signal"),

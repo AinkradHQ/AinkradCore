@@ -584,6 +584,19 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/PtyTail",
+          "properties": {
+            "op": {
+              "const": "pty.tail",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "$ref": "#/$defs/AgentStart",
           "properties": {
             "op": {
@@ -2603,6 +2616,17 @@
             }
           ],
           "description": "The host's load when the heartbeat was sent; absent when the runner has no measure."
+        },
+        "report": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunnerReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its tool install, home folder and last error. Absent from a runner that predates it."
         }
       },
       "type": "object"
@@ -3495,6 +3519,20 @@
             "null"
           ]
         },
+        "sandbox": {
+          "description": "Where the shell lives (D-17): `home`, `project:<id>`, `session:<id>` or `real`; see\n[`SandboxMode`]. Absent: the runner-wide sandbox of before this field (an older Core), a\n`real` shell. Needs `sandbox_user` unless `real`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sandbox_user": {
+          "description": "The Core user whose persistent sandbox home the shell gets (`[a-z0-9_-]{1,32}`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "scrollback_budget": {
           "description": "The runner's total scrollback disk budget (E2-06.2), applied by LRU across its\nterminals; the runner clamps it. Absent: unchanged.",
           "format": "uint64",
@@ -3541,6 +3579,25 @@
       },
       "required": [
         "size"
+      ],
+      "type": "object"
+    },
+    "PtyTail": {
+      "description": "`pty.tail`: the last `lines` (1 to 20) non-empty rows of the terminal's screen, as plain text.",
+      "properties": {
+        "lines": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminal",
+        "lines"
       ],
       "type": "object"
     },
@@ -3651,6 +3708,19 @@
           "properties": {
             "op": {
               "const": "pty.close",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/TerminalTail",
+          "properties": {
+            "op": {
+              "const": "pty.tail",
               "type": "string"
             }
           },
@@ -4859,6 +4929,18 @@
     "RunnerFacts": {
       "description": "Facts a runner reports about itself in its hello (display only: the Core decides nothing by\nthem).",
       "properties": {
+        "home": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "os_pretty": {
           "description": "The system as a person names it, `Ubuntu 26.04` or `macOS 15.1`.",
           "type": [
@@ -4912,6 +4994,17 @@
             }
           ],
           "description": "What project runs can use here. Present only when every prerequisite holds (Podman, the\n`ainkrad-run` user with subuid/subgid and linger, cpu/memory/pids delegated): a Core must\nnot place a run on a runner without it, because the limits would be silently ignored."
+        },
+        "tool_install": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolInstallReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The runner's own report (latest heartbeat): see [`RunnerReport`]."
         },
         "tools": {
           "additionalProperties": {
@@ -5165,6 +5258,37 @@
       "required": [
         "sig"
       ],
+      "type": "object"
+    },
+    "RunnerReport": {
+      "description": "What a runner says about itself in every heartbeat, beyond load: its AI tool install, its\nsandbox home folder and the plain-words reason it is not fully working. The Core keeps it\nbeside the hello's facts and serves it with `GET /runners`.",
+      "properties": {
+        "home": {
+          "description": "The folder the runner's work happens in.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "install": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolInstallReport"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The install under way or the last one; absent when none ran since the runner started."
+        },
+        "last_error": {
+          "description": "The runner's last-error note (why it is up without AI tools), cleared when it starts them.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "SecretGrant": {
@@ -5978,6 +6102,21 @@
         }
       ]
     },
+    "TerminalTail": {
+      "description": "The answer to [`PtyTail`]: rows oldest first, each at most 400 characters.",
+      "properties": {
+        "lines": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "lines"
+      ],
+      "type": "object"
+    },
     "TokenCaps": {
       "description": "A run's caps, split (1.27): what the runner counts its tokens against. A run stops when\neither applies. Its tokens are counted from its events, and the caps stay exact for the\nbudgets and the issue; only `run` is weighted.",
       "properties": {
@@ -6055,6 +6194,8 @@
       "enum": [
         "claude",
         "codex",
+        "opencode",
+        "agy",
         "node",
         "git",
         "python",
@@ -6107,6 +6248,43 @@
         "id",
         "tool",
         "args"
+      ],
+      "type": "object"
+    },
+    "ToolInstallReport": {
+      "description": "How an AI tool install on a runner stands (D-22): the one under way, or the last one.",
+      "properties": {
+        "percent": {
+          "description": "0 to 100.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "description": "Why it failed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ToolOpState"
+        },
+        "step": {
+          "description": "What it is doing, a short sentence: `Downloading Claude 2.1.318`.",
+          "type": "string"
+        },
+        "tool": {
+          "description": "`claude`, `codex`, `opencode`, `agy`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "state",
+        "percent",
+        "step"
       ],
       "type": "object"
     },

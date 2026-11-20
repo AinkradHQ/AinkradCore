@@ -67,6 +67,7 @@ src/main/kotlin/ainkrad/client/models/BindChain.kt
 src/main/kotlin/ainkrad/client/models/Binding.kt
 src/main/kotlin/ainkrad/client/models/BudgetDeleted.kt
 src/main/kotlin/ainkrad/client/models/Build.kt
+src/main/kotlin/ainkrad/client/models/BundledAttested.kt
 src/main/kotlin/ainkrad/client/models/Chain.kt
 src/main/kotlin/ainkrad/client/models/ChainBinding.kt
 src/main/kotlin/ainkrad/client/models/ChainEntry.kt
@@ -200,6 +201,7 @@ src/main/kotlin/ainkrad/client/models/RunnerIsolation.kt
 src/main/kotlin/ainkrad/client/models/RunnerPolicyBody.kt
 src/main/kotlin/ainkrad/client/models/RunnerRunsAs.kt
 src/main/kotlin/ainkrad/client/models/RunnerSlots.kt
+src/main/kotlin/ainkrad/client/models/RunnerToolInstall.kt
 src/main/kotlin/ainkrad/client/models/SecretDeleted.kt
 src/main/kotlin/ainkrad/client/models/SecretGroupDeleted.kt
 src/main/kotlin/ainkrad/client/models/SecretGroupInfo.kt
@@ -232,6 +234,7 @@ src/main/kotlin/ainkrad/client/models/Terminal.kt
 src/main/kotlin/ainkrad/client/models/TerminalSignal.kt
 src/main/kotlin/ainkrad/client/models/TerminalSize.kt
 src/main/kotlin/ainkrad/client/models/TerminalStatus.kt
+src/main/kotlin/ainkrad/client/models/TerminalTailView.kt
 src/main/kotlin/ainkrad/client/models/ToolOperation.kt
 src/main/kotlin/ainkrad/client/models/UpdateConnection.kt
 src/main/kotlin/ainkrad/client/models/UpdateProject.kt

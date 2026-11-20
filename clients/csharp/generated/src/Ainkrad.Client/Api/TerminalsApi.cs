@@ -173,6 +173,26 @@ namespace Ainkrad.Client.Api
         /// <param name="terminalSignal"></param>
         /// <returns>ApiResponse of Object(void)</returns>
         ApiResponse<Object> SignalTerminalWithHttpInfo(string id, TerminalSignal terminalSignal);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id"></param>
+        /// <param name="lines">1 to 20, default 5 (optional)</param>
+        /// <returns>TerminalTailView</returns>
+        TerminalTailView TailTerminal(string id, int? lines = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id"></param>
+        /// <param name="lines">1 to 20, default 5 (optional)</param>
+        /// <returns>ApiResponse of TerminalTailView</returns>
+        ApiResponse<TerminalTailView> TailTerminalWithHttpInfo(string id, int? lines = default);
         #endregion Synchronous Operations
     }
 
@@ -368,6 +388,31 @@ namespace Ainkrad.Client.Api
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse</returns>
         System.Threading.Tasks.Task<ApiResponse<Object>> SignalTerminalWithHttpInfoAsync(string id, TerminalSignal terminalSignal, System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id"></param>
+        /// <param name="lines">1 to 20, default 5 (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of TerminalTailView</returns>
+        System.Threading.Tasks.Task<TerminalTailView> TailTerminalAsync(string id, int? lines = default, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id"></param>
+        /// <param name="lines">1 to 20, default 5 (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (TerminalTailView)</returns>
+        System.Threading.Tasks.Task<ApiResponse<TerminalTailView>> TailTerminalWithHttpInfoAsync(string id, int? lines = default, System.Threading.CancellationToken cancellationToken = default);
         #endregion Asynchronous Operations
     }
 
@@ -1585,6 +1630,143 @@ namespace Ainkrad.Client.Api
             if (this.ExceptionFactory != null)
             {
                 Exception _exception = this.ExceptionFactory("SignalTerminal", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id"></param>
+        /// <param name="lines">1 to 20, default 5 (optional)</param>
+        /// <returns>TerminalTailView</returns>
+        public TerminalTailView TailTerminal(string id, int? lines = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<TerminalTailView> localVarResponse = TailTerminalWithHttpInfo(id, lines);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id"></param>
+        /// <param name="lines">1 to 20, default 5 (optional)</param>
+        /// <returns>ApiResponse of TerminalTailView</returns>
+        public Ainkrad.Client.Client.ApiResponse<TerminalTailView> TailTerminalWithHttpInfo(string id, int? lines = default)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling TerminalsApi->TailTerminal");
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            if (lines != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "lines", lines));
+            }
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Get<TerminalTailView>("/api/v1/terminals/{id}/tail", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("TailTerminal", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id"></param>
+        /// <param name="lines">1 to 20, default 5 (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of TerminalTailView</returns>
+        public async System.Threading.Tasks.Task<TerminalTailView> TailTerminalAsync(string id, int? lines = default, System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<TerminalTailView> localVarResponse = await TailTerminalWithHttpInfoAsync(id, lines, cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id"></param>
+        /// <param name="lines">1 to 20, default 5 (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (TerminalTailView)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<TerminalTailView>> TailTerminalWithHttpInfoAsync(string id, int? lines = default, System.Threading.CancellationToken cancellationToken = default)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling TerminalsApi->TailTerminal");
+
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            if (lines != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "lines", lines));
+            }
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.GetAsync<TerminalTailView>("/api/v1/terminals/{id}/tail", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("TailTerminal", localVarResponse);
                 if (_exception != null) throw _exception;
             }
 

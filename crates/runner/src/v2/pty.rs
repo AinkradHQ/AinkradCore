@@ -70,7 +70,21 @@ pub struct PtyConfig {
     /// terminal for a session (`PtyOpen::session`) starts only in the folder recorded there.
     /// `None`: such a terminal is refused.
     pub sessions: Option<PathBuf>,
+    /// Where the private-root sandboxes keep each user's persistent home (`<state>/sandbox`).
+    /// `None`: a `PtyOpen::sandbox` other than `real` is refused.
+    pub sandbox_dir: Option<PathBuf>,
+    /// The network a private-root shell gets (M1): on Linux the runner's egress proxy
+    /// (`Net::Filtered`: its own network namespace, loopback, link-local and private ranges
+    /// refused by the proxy's policy) unless the runner is set to `none`; on macOS the host
+    /// network with `localhost` and unix sockets denied by the profile.
+    pub private_net: super::termbox::Net,
+    /// Whether this runner may open a host-view (`real`, or no `sandbox` at all) shell: only the
+    /// runner started with `--bundled`, a flag only the Mac app's LaunchAgent sets (M4).
+    pub allow_real: bool,
 }
+
+/// The `slots` key a runner that honours `PtyOpen::sandbox` advertises (D-17).
+pub const SANDBOX_FEATURE: &str = "sandbox";
 
 /// Where the runner installers put the Ainkrad shell profile.
 pub const SHELL_DIR: &str = "/usr/local/share/ainkrad/shell";
@@ -96,6 +110,9 @@ impl PtyConfig {
             net: super::termbox::Net::Host,
             shell_dir: PathBuf::from(SHELL_DIR),
             sessions: None,
+            sandbox_dir: None,
+            private_net: super::termbox::Net::Host,
+            allow_real: true,
         }
     }
 }
@@ -322,10 +339,21 @@ impl PtyDriver {
     pub fn info(&self) -> Option<DriverInfo> {
         self.config.enabled.then(|| DriverInfo {
             name: DRIVER_PTY.to_owned(),
-            commands: [OP_PTY_OPEN, OP_PTY_ATTACH, OP_PTY_CLOSE]
-                .map(str::to_owned)
-                .to_vec(),
+            commands: [
+                OP_PTY_OPEN,
+                OP_PTY_ATTACH,
+                OP_PTY_CLOSE,
+                ainkrad_proto::v2::OP_PTY_TAIL,
+            ]
+            .map(str::to_owned)
+            .to_vec(),
             capacity: self.config.capacity,
+            // Tells the Core this runner honours `PtyOpen::sandbox` (an older one would ignore
+            // the field and start a host-view shell, so the Core sends it only when this is here).
+            slots: std::collections::BTreeMap::from([(
+                SANDBOX_FEATURE.to_owned(),
+                self.config.capacity,
+            )]),
             ..DriverInfo::default()
         })
     }
@@ -421,6 +449,33 @@ impl PtyDriver {
         if req.program.as_deref() == Some("") {
             return Err(invalid("program is empty"));
         }
+        // D-17: where the shell lives. Absent (an older Core): the runner-wide host view.
+        let mode = req
+            .sandbox
+            .as_deref()
+            .map(ainkrad_proto::v2::SandboxMode::parse)
+            .transpose()
+            .map_err(|m| invalid(&m))?;
+        let private = matches!(&mode, Some(m) if *m != ainkrad_proto::v2::SandboxMode::Real);
+        if let Some(bad) = req
+            .env
+            .keys()
+            .find(|k| !ainkrad_proto::v2::valid_terminal_env(k))
+        {
+            return Err(invalid(&format!(
+                "{bad:?} cannot be set: loader, runner and reserved variables are refused"
+            )));
+        }
+        if !private && ssh.is_none() && req.ssh.is_none() && !self.config.allow_real {
+            return Err(invalid(
+                "this runner opens sandboxed terminals only: a real shell is for the runner bundled with this Mac's app",
+            ));
+        }
+        if private && (ssh.is_some() || req.ssh.is_some() || req.session.is_some()) {
+            return Err(invalid(
+                "a private-root terminal names its folder in `sandbox`, and is not an ssh terminal",
+            ));
+        }
         // A session's folder lies in the state the sandbox hides: it is let in only for a
         // terminal the Core opened for that session, in the folder this runner recorded for it.
         let reveal = match &req.session {
@@ -475,7 +530,12 @@ impl PtyDriver {
             // Only the sandbox can change a shell's network: never start one on the host's.
             return Err(invalid("a terminal network needs the terminal sandbox"));
         }
-        if self.config.hide.is_some() || self.config.user.is_some() {
+        let id = new_id().map_err(|e| err(ErrorCode::Internal, e.to_string()))?;
+        if private {
+            self.reap_scratch().await;
+            self.private_shell(mode.as_ref().expect("private"), req, &mut spec, &id)
+                .map_err(|m| invalid(&m))?;
+        } else if self.config.hide.is_some() || self.config.user.is_some() {
             // The shell the host would start by default is named here, so the wrapper can run it.
             let program = spec
                 .program
@@ -511,6 +571,13 @@ impl PtyDriver {
                 None => Ok((program.to_owned(), args.to_vec())),
             };
             let (mut launcher, mut args) = wrap(&program, &spec.args, &cwd)?;
+            if self.config.hide.is_some() {
+                // The launcher (bwrap, sandbox-exec) starts with a clean environment; the shell's
+                // variables reach it only through the launcher's own options, so a client's
+                // `LD_PRELOAD` cannot load into the launcher outside the sandbox.
+                super::termbox::inject_env(&mut args, &spec.env);
+                spec.env = super::termbox::launcher_env();
+            }
             if let Some(user) = &self.config.user {
                 if !super::termbox::valid_user(user) || !launcher.starts_with('/') {
                     return Err(invalid(
@@ -544,7 +611,6 @@ impl PtyDriver {
             spec.args = args;
             spec.cwd.get_or_insert(cwd);
         }
-        let id = new_id().map_err(|e| err(ErrorCode::Internal, e.to_string()))?;
         // The network this shell gets, recorded before it starts: the host process outlives the
         // runner, and a later runner must know what an adopted shell was given (`retire_weaker`).
         // Host mode writes nothing: no record means the host network.
@@ -569,6 +635,121 @@ impl PtyDriver {
             return Err(err(ErrorCode::SpawnFailed, m));
         }
         Ok(id)
+    }
+
+    /// Removes the scratch directories (`<home>/.tmp/<terminal>`, macOS) of terminals that are gone:
+    /// not a live host, and older than a minute (an open still starting has none yet).
+    async fn reap_scratch(&self) {
+        let Some(base) = self.config.sandbox_dir.clone() else {
+            return;
+        };
+        let live: std::collections::HashSet<String> = scan(&self.config.dir)
+            .await
+            .iter()
+            .map(|h| h.id.clone())
+            .collect();
+        let _ =
+            tokio::task::spawn_blocking(move || super::termbox::reap_scratch(&base, &live)).await;
+    }
+
+    /// Starts `spec` in a private root (D-17, `termbox::wrap_private`): the user's persistent home,
+    /// plus the session's or project's folder when `mode` names one. Fails closed.
+    fn private_shell(
+        &self,
+        mode: &ainkrad_proto::v2::SandboxMode,
+        req: &PtyOpen,
+        spec: &mut Spec,
+        id: &str,
+    ) -> Result<(), String> {
+        use super::termbox as tb;
+        use ainkrad_proto::v2::SandboxMode as M;
+        let base = self
+            .config
+            .sandbox_dir
+            .as_deref()
+            .ok_or("this runner has no sandbox directory")?;
+        if self.config.user.is_some() {
+            // The sandbox home is made by the runner's own user, and a shell run as another account
+            // could not write it; making it that account's would need root (or a sudoers rule for
+            // mkdir and chown that no installer grants). Refused, with the way out.
+            return Err(
+                "private terminals need shells that run as the runner's own user: \
+                        start the runner without --terminal-user"
+                    .to_owned(),
+            );
+        }
+        let user = req
+            .sandbox_user
+            .as_deref()
+            .ok_or("sandbox_user is required for a private-root terminal")?;
+        let home = tb::sandbox_home(base, user)?;
+        let base = base.canonicalize().map_err(|e| e.to_string())?;
+        let folder = match mode {
+            M::Home => {
+                if req.cwd.is_some() {
+                    return Err("a home terminal takes no cwd".to_owned());
+                }
+                None
+            }
+            M::Session(id) => Some(self.session_folder(id, req.cwd.as_deref())?),
+            M::Project(_) => {
+                let cwd = req
+                    .cwd
+                    .as_deref()
+                    .ok_or("a project terminal needs its cwd")?;
+                Some(PathBuf::from(cwd))
+            }
+            M::Real => unreachable!("not private"),
+        };
+        // What the folder may not hold: the runner's hidden paths, its sandbox homes, and the
+        // places a launcher lives (a project folder must not carry a path the runner starts from).
+        let mut hide: Vec<PathBuf> = self
+            .config
+            .hide
+            .iter()
+            .flatten()
+            .chain(&self.config.readonly)
+            .filter_map(|h| h.canonicalize().ok())
+            .collect();
+        hide.push(base.clone());
+        let folder = match folder {
+            Some(f) => {
+                let f = tb::check_folder(&f, &base, &hide)?;
+                let was = tb::identity(&f)?;
+                Some((f, was))
+            }
+            None => None,
+        };
+        let program = spec
+            .program
+            .take()
+            .or_else(|| spec.env.get("SHELL").cloned())
+            .unwrap_or_else(|| "/bin/sh".to_owned());
+        let program = tb::resolve(&program, spec.env.get("PATH").map(String::as_str));
+        // The shell's whole environment goes in as variables of the sandbox, never into the
+        // launcher's own environment.
+        let shell_env = std::mem::take(&mut spec.env);
+        let net = self.config.private_net.clone();
+        let b = tb::wrap_private(&tb::PrivateSpec {
+            base: &base,
+            user,
+            home: &home,
+            folder: folder.as_ref().map(|f| f.0.as_path()),
+            program: &program,
+            args: &spec.args,
+            net: &net,
+            terminal: id,
+            env: &shell_env,
+            hide: &hide,
+        })?;
+        if let Some((f, was)) = &folder {
+            tb::recheck_folder(f, *was)?;
+        }
+        spec.env = b.env.into_iter().collect();
+        spec.program = Some(b.launcher);
+        spec.args = b.args;
+        spec.cwd = Some(b.cwd);
+        Ok(())
     }
 
     /// The folder this runner recorded for `session`, when it is `cwd`; otherwise why not.
@@ -712,6 +893,40 @@ impl PtyDriver {
         Ok((info, rd, wr))
     }
 
+    /// The last `lines` rows of `terminal`'s screen as text (`pty.tail`): one short connection to
+    /// its host, nothing attached, nothing recorded. An older host never answers: `lost`.
+    pub async fn tail(
+        &self,
+        terminal: &str,
+        lines: u16,
+    ) -> Result<ainkrad_proto::v2::TerminalTail, StreamError> {
+        self.enabled()?;
+        if !(1..=20).contains(&lines) {
+            return Err(err(ErrorCode::InvalidArgs, "lines must be 1 to 20"));
+        }
+        let (_, mut rd, mut wr) = self.connect(terminal).await?;
+        let lost = |e: std::io::Error| err(ErrorCode::Internal, e.to_string());
+        wr.send(&ToHost::Tail { lines }).await.map_err(lost)?;
+        let wait = async {
+            loop {
+                match rd.recv().await {
+                    Ok(Some(FromHost::Tail { lines })) => return Some(lines),
+                    Ok(Some(_)) => {}
+                    _ => return None,
+                }
+            }
+        };
+        match tokio::time::timeout(Duration::from_secs(2), wait).await {
+            Ok(Some(lines)) => Ok(ainkrad_proto::v2::TerminalTail {
+                lines: lines
+                    .into_iter()
+                    .map(|l| l.chars().take(400).collect())
+                    .collect(),
+            }),
+            _ => Err(err(ErrorCode::Lost, "the terminal host did not answer")),
+        }
+    }
+
     /// Hangs `terminal` up and answers its exit once the host reports it.
     pub async fn close(&self, terminal: &str) -> Result<TerminalExit, StreamError> {
         self.enabled()?;
@@ -738,6 +953,7 @@ impl PtyDriver {
                         while let Ok(Some(_)) = rd.recv().await {}
                     })
                     .await;
+                    self.reap_scratch().await;
                     return Ok(exit_of(terminal, &exit));
                 }
                 Some(_) => {}

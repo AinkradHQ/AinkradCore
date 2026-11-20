@@ -848,6 +848,84 @@ mod pty {
         );
     }
 
+    /// D-17: a private-root open that is malformed or unauthorized is refused before any host
+    /// starts: a bad mode, no user, no sandbox directory, a home with a cwd, a project without
+    /// one, a folder that holds the sandbox homes, and an unknown session.
+    #[tokio::test]
+    async fn a_private_root_open_that_is_not_well_formed_is_refused() {
+        let base = tmp();
+        let terminals = base.join("state/terminals");
+        std::fs::create_dir_all(&terminals).unwrap();
+        let cfg = |dir: Option<std::path::PathBuf>| PtyConfig {
+            enabled: true,
+            capacity: 4,
+            host: base.join("no-host"),
+            hide: None,
+            sandbox_dir: dir,
+            ..PtyConfig::new(terminals.clone())
+        };
+        let driver = Arc::new(PtyDriver::new(cfg(Some(base.join("state/sandbox")))));
+        let with = |mode: &str, user: Option<&str>, cwd: Option<&str>| {
+            let mut r = open_req("true");
+            r.sandbox = Some(mode.to_owned());
+            r.sandbox_user = user.map(str::to_owned);
+            r.cwd = cwd.map(str::to_owned);
+            r
+        };
+        let state = base.join("state");
+        let state = state.to_str().unwrap();
+        let base_s = base.to_str().unwrap().to_owned();
+        for (req, why) in [
+            (with("root", Some("u"), None), "sandbox must be"),
+            (with("project:a/b", Some("u"), Some(&base_s)), "bad id"),
+            (with("home", None, None), "sandbox_user"),
+            (with("home", Some("../x"), None), "valid sandbox user"),
+            (with("home", Some("u"), Some("/")), "no cwd"),
+            (with("project:p", Some("u"), None), "needs its cwd"),
+            (with("project:p", Some("u"), Some(&base_s)), "overlaps"),
+            (with("project:p", Some("u"), Some(state)), "overlaps"),
+            (
+                with("session:as_x", Some("u"), Some("/tmp")),
+                "no such AI session",
+            ),
+        ] {
+            let e = driver.open(&req).await.unwrap_err();
+            assert!(e.message.contains(why), "{why}: {}", e.message);
+        }
+        let e = PtyDriver::new(cfg(None))
+            .open(&with("home", Some("u"), None))
+            .await
+            .unwrap_err();
+        assert!(e.message.contains("no sandbox directory"), "{}", e.message);
+        // C2: a loader variable never reaches a shell, sandboxed or not.
+        for k in [
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+            "GCONV_PATH",
+            "HOME",
+            "AINKRAD_X",
+        ] {
+            let mut r = with("home", Some("u"), None);
+            r.env.insert(k.to_owned(), "/x".to_owned());
+            let e = driver.open(&r).await.unwrap_err();
+            assert!(e.message.contains("cannot be set"), "{k}: {}", e.message);
+        }
+        // M4: only the bundled runner opens a host-view shell; a sandbox open is not that.
+        let plain = PtyDriver::new(PtyConfig {
+            allow_real: false,
+            ..cfg(None)
+        });
+        for req in [open_req("true"), with("real", None, None)] {
+            let e = plain.open(&req).await.unwrap_err();
+            assert!(
+                e.message.contains("sandboxed terminals only"),
+                "{}",
+                e.message
+            );
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// KAN-416: shells a previous runner started with a weaker network are closed when a runner
     /// requiring a stronger one starts (they would otherwise be re-adopted and attached), shells
     /// of an equal or stronger network are left, and a runner that requires only the host
@@ -1253,6 +1331,8 @@ mod pty {
             scrollback_bytes: None,
             scrollback_budget: None,
             ssh: None,
+            sandbox: None,
+            sandbox_user: None,
         }))
     }
 
@@ -1312,7 +1392,15 @@ mod pty {
         let dir = tmp();
         let (mut core, hello) = Core::start_pty(driver(&dir, true)).await;
         let pty = hello.drivers.iter().find(|d| d.name == "pty").unwrap();
-        assert_eq!(pty.commands, [OP_PTY_OPEN, OP_PTY_ATTACH, OP_PTY_CLOSE]);
+        assert_eq!(
+            pty.commands,
+            [
+                OP_PTY_OPEN,
+                OP_PTY_ATTACH,
+                OP_PTY_CLOSE,
+                ainkrad_proto::v2::OP_PTY_TAIL
+            ]
+        );
         core.send(1, open("echo UP; while read l; do echo \"got $l\"; done"))
             .await;
         let mut out = String::new();

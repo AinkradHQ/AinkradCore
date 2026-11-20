@@ -65,6 +65,8 @@ pub struct PolicyApplied {
 pub enum Tool {
     Claude,
     Codex,
+    Opencode,
+    Agy,
     Node,
     Git,
     Python,
@@ -74,9 +76,11 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 8] = [
+    pub const ALL: [Tool; 10] = [
         Tool::Claude,
         Tool::Codex,
+        Tool::Opencode,
+        Tool::Agy,
         Tool::Node,
         Tool::Git,
         Tool::Python,
@@ -89,6 +93,8 @@ impl Tool {
         match self {
             Tool::Claude => "claude",
             Tool::Codex => "codex",
+            Tool::Opencode => "opencode",
+            Tool::Agy => "agy",
             Tool::Node => "node",
             Tool::Git => "git",
             Tool::Python => "python",

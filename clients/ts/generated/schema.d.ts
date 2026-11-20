@@ -1752,6 +1752,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runners/{id}/bundled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["attestBundledRunner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runners/{id}/noop": {
         parameters: {
             query?: never;
@@ -2162,6 +2178,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["signalTerminal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/terminals/{id}/tail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["tailTerminal"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2862,6 +2894,15 @@ export interface components {
             dockerfile?: string | null;
             /** @description A repo of the project. */
             repo: string;
+        };
+        /**
+         * @description Who may be told apart as "the runner bundled in this Mac's app" (E6, L1): the pairing row of
+         *     `runner` after the Mac app, which reads that runner's own enrolment file on its local disk
+         *     (a remote runner has none there), attests it.
+         */
+        BundledAttested: {
+            bundled: boolean;
+            runner: string;
         };
         /**
          * @description An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first
@@ -4024,7 +4065,23 @@ export interface components {
                 [key: string]: string;
             } | null;
             program?: string | null;
+            /**
+             * Format: int64
+             * @description With `sandbox: real` only: start the shell in this project's folder (a cwd on the runner,
+             *     not a mount). A sandbox names its project in `sandbox` (400 otherwise).
+             */
+            project?: number | null;
             runner: string;
+            /**
+             * @description Where the shell lives (D-17): `home` (the default: a private root with the caller's
+             *     persistent sandbox home), `project:<id>` or `session:<id>` (that, plus the project's or
+             *     session's folder, which the Core resolves: no `cwd`), or `real` (the runner's host view,
+             *     allowed only to the Mac that owns a macOS runner, over that Mac's own device key). 400
+             *     `bad_request` for a bad value or a `cwd` with a private mode, 403 `real_terminal_refused`
+             *     for `real` from anyone else. 409 `runner_update_required` ("Update this runner to open
+             *     terminals") when the runner predates sandboxes: no terminal opens on it.
+             */
+            sandbox?: string | null;
             /**
              * @description Start in the folder of this AI session (`as_…`, its `AgentSession.folder`) without naming
              *     the path: the Core resolves it. The session must be on `runner`, one the caller can see (and
@@ -4521,6 +4578,8 @@ export interface components {
             degraded?: boolean | null;
             /** @description What it last advertised (empty until it first connected since the Core started). */
             drivers?: components["schemas"]["RunnerDriver"][] | null;
+            /** @description The folder its work happens in, as the runner reports it. */
+            home?: string | null;
             /** @description The host's load as its runner last reported it (E2-15.2), if it has. */
             host_load?: components["schemas"]["RunnerHostLoad"];
             /** @description The runner's device id, `d_…`. */
@@ -4530,6 +4589,8 @@ export interface components {
              *     assumed.
              */
             isolation?: components["schemas"]["RunnerIsolation"];
+            /** @description Why it is not fully working, in words: its last-error note. */
+            last_error?: string | null;
             /** @description Its last frame or request; null if never seen. */
             last_seen?: components["schemas"]["Timestamp"];
             /**
@@ -4563,6 +4624,11 @@ export interface components {
             sandbox?: string | null;
             /** @description Sessions and terminals running now, and how many it takes. */
             slots?: components["schemas"]["RunnerSlots"];
+            /**
+             * @description The AI tool install under way on its host, or the last one, as the runner reports it in
+             *     its heartbeats (D-22). Absent until a runner of this version reports.
+             */
+            tool_install?: components["schemas"]["RunnerToolInstall"];
             /**
              * @description Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`,
              *     `go`, `rust`, `docker`, `codex`); a tool that is not installed is not listed.
@@ -4678,6 +4744,16 @@ export interface components {
              * @description Terminals created or running on it.
              */
             terminals_used: number;
+        };
+        /** @description An AI tool install as a runner reports it. */
+        RunnerToolInstall: {
+            /** Format: int32 */
+            percent: number;
+            reason?: string | null;
+            /** @description `running`, `done` or `failed`. */
+            state: string;
+            step: string;
+            tool: string;
         };
         /** @description What a delete answers. */
         SecretDeleted: {
@@ -5079,6 +5155,11 @@ export interface components {
             /** @description Running with no client attached: it is closed once idle past `terminal.idle_secs`. */
             orphaned?: boolean | null;
             runner: string;
+            /**
+             * @description Where the shell lives (D-17): `home`, `project:<id>`, `session:<id>` or `real` (this Mac's
+             *     own shell). Absent: a terminal opened before sandboxes, a host-view shell.
+             */
+            sandbox?: string | null;
             /** Format: int64 */
             seq?: number | null;
             size?: components["schemas"]["TerminalSize"];
@@ -5094,6 +5175,11 @@ export interface components {
             rows: number;
         };
         TerminalStatus: ("created" | "running" | "exited" | "reaped") | string;
+        /** @description The last rows of a terminal's screen. */
+        TerminalTailView: {
+            /** @description Plain text, oldest first; empty when the terminal is not running. */
+            lines: string[];
+        };
         /**
          * Format: date-time
          * @description RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a
@@ -9696,6 +9782,35 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    attestBundledRunner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The runner is recorded as the one bundled with the calling Mac app, which alone can then be given a real shell. Only a macOS app device that minted the invite that enrolled the runner may say so (403 otherwise); the app does it only for the runner whose enrolment file it reads on its own disk. Needs `admin` and a step-up */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BundledAttested"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     runNoop: {
         parameters: {
             query?: never;
@@ -9776,7 +9891,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The install started on the runner's host (audited as `runner.tool_install`). Follow it with `runner.tool_install` events (`op`, `runner`, `tool`, `state` `running`/`done`/`failed`, `percent`, `step`, `reason`, and on `done` the `tools` the runner found) or by polling `GET /runners/{id}/tools/operations/{op}`. A tool installs one at a time per runner; the runner reports it in `tools` when done. Linux runners set up by the installer only. 400 for a tool that is not listed; 409 `install_running`, `runner_offline`, `unsupported_command`; 503 `runner_busy`. Needs `admin` and a step-up */
+            /** @description The install started on the runner's host (audited as `runner.tool_install`). Follow it with `runner.tool_install` events (`op`, `runner`, `tool`, `state` `running`/`done`/`failed`, `percent`, `step`, `reason`, and on `done` the `tools` the runner found) or by polling `GET /runners/{id}/tools/operations/{op}`. A tool installs one at a time per runner; the runner reports it in `tools` when done. The AI tools (claude, codex, opencode, agy) install into the runner's own folder on any runner; the rest need a Linux runner set up by the installer. 400 for a tool that is not listed; 409 `install_running`, `runner_offline`, `unsupported_command`; 503 `runner_busy`. Needs `admin` and a step-up */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -10767,6 +10882,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    tailTerminal: {
+        parameters: {
+            query?: {
+                /** @description 1 to 20, default 5 */
+                lines?: number;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The last rows of the screen as text, for a live preview. The terminal scope and the caller's own terminal; no step-up */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalTailView"];
+                };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];

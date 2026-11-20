@@ -331,8 +331,8 @@ pub async fn set_policy(
         `runner.tool_install`). Follow it with `runner.tool_install` events (`op`, `runner`, \
         `tool`, `state` `running`/`done`/`failed`, `percent`, `step`, `reason`, and on `done` the \
         `tools` the runner found) or by polling `GET /runners/{id}/tools/operations/{op}`. A tool \
-        installs one at a time per runner; the runner reports it in `tools` when done. Linux runners set up \
-        by the installer only. 400 for a tool that is not listed; 409 `install_running`, \
+        installs one at a time per runner; the runner reports it in `tools` when done. The AI tools (claude, codex, opencode, agy) install into the runner's own folder on any runner; the rest need a Linux runner set up \
+        by the installer. 400 for a tool that is not listed; 409 `install_running`, \
         `runner_offline`, `unsupported_command`; 503 `runner_busy`. Needs `admin` and a step-up",
         body = ToolOperation)))]
 pub async fn install_tool(
@@ -347,14 +347,19 @@ pub async fn install_tool(
         .find(|t| t.name() == b.tool)
         .ok_or_else(|| {
             ApiError::bad_request(
-                "tool must be claude, codex, node, git, python, go, rust or docker",
+                "tool must be claude, codex, opencode, agy, node, git, python, go, rust or docker",
             )
         })?;
-    if app.hub.runners().get(&id).and_then(|r| r.os.as_deref()) == Some("macos") {
+    // The AI tools install into the runner's own folder on any host (D-22); the rest need a Linux runner.
+    let ai = matches!(
+        tool,
+        Tool::Claude | Tool::Codex | Tool::Opencode | Tool::Agy
+    );
+    if !ai && app.hub.runners().get(&id).and_then(|r| r.os.as_deref()) == Some("macos") {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "unsupported_command",
-            "tools are installed on Linux runners only",
+            "git, node, python, go, rust and docker are installed on Linux runners only",
         ));
     }
     if app.tool_ops.running_on(&id) {

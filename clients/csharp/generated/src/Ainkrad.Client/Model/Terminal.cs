@@ -48,10 +48,11 @@ namespace Ainkrad.Client.Model
         /// <param name="openedBy">openedBy.</param>
         /// <param name="orphaned">Running with no client attached: it is closed once idle past &#x60;terminal.idle_secs&#x60;..</param>
         /// <param name="runner">runner (required).</param>
+        /// <param name="sandbox">Where the shell lives (D-17): &#x60;home&#x60;, &#x60;project:&lt;id&gt;&#x60;, &#x60;session:&lt;id&gt;&#x60; or &#x60;real&#x60; (this Mac&#39;s own shell). Absent: a terminal opened before sandboxes, a host-view shell..</param>
         /// <param name="seq">seq.</param>
         /// <param name="size">size.</param>
         /// <param name="status">status (required).</param>
-        public Terminal(int? attached = default, DateTime createdAt = default, int? exitCode = default, string exitSignal = default, string id = default, string openedBy = default, bool? orphaned = default, string runner = default, long? seq = default, TerminalSize size = default, TerminalStatus status = default)
+        public Terminal(int? attached = default, DateTime createdAt = default, int? exitCode = default, string exitSignal = default, string id = default, string openedBy = default, bool? orphaned = default, string runner = default, string sandbox = default, long? seq = default, TerminalSize size = default, TerminalStatus status = default)
         {
             // to ensure "id" is required (not null)
             if (id == null)
@@ -77,6 +78,7 @@ namespace Ainkrad.Client.Model
             this.ExitSignal = exitSignal;
             this.OpenedBy = openedBy;
             this.Orphaned = orphaned;
+            this.Sandbox = sandbox;
             this.Seq = seq;
             this.Size = size;
         }
@@ -132,6 +134,13 @@ namespace Ainkrad.Client.Model
         public string Runner { get; set; }
 
         /// <summary>
+        /// Where the shell lives (D-17): &#x60;home&#x60;, &#x60;project:&lt;id&gt;&#x60;, &#x60;session:&lt;id&gt;&#x60; or &#x60;real&#x60; (this Mac&#39;s own shell). Absent: a terminal opened before sandboxes, a host-view shell.
+        /// </summary>
+        /// <value>Where the shell lives (D-17): &#x60;home&#x60;, &#x60;project:&lt;id&gt;&#x60;, &#x60;session:&lt;id&gt;&#x60; or &#x60;real&#x60; (this Mac&#39;s own shell). Absent: a terminal opened before sandboxes, a host-view shell.</value>
+        [DataMember(Name = "sandbox", EmitDefaultValue = true)]
+        public string Sandbox { get; set; }
+
+        /// <summary>
         /// Gets or Sets Seq
         /// </summary>
         [DataMember(Name = "seq", EmitDefaultValue = true)]
@@ -165,6 +174,7 @@ namespace Ainkrad.Client.Model
             sb.Append("  OpenedBy: ").Append(OpenedBy).Append("\n");
             sb.Append("  Orphaned: ").Append(Orphaned).Append("\n");
             sb.Append("  Runner: ").Append(Runner).Append("\n");
+            sb.Append("  Sandbox: ").Append(Sandbox).Append("\n");
             sb.Append("  Seq: ").Append(Seq).Append("\n");
             sb.Append("  Size: ").Append(Size).Append("\n");
             sb.Append("  Status: ").Append(Status).Append("\n");

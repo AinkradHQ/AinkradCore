@@ -367,6 +367,8 @@ fn agents_enabled(args: &[&str]) -> bool {
 pub async fn connect_main(args: &[&str]) -> ExitCode {
     let run_enabled = args.contains(&"--enable-exec");
     let pty_flag = args.contains(&"--enable-pty");
+    // Set only by the Mac app's LaunchAgent: this runner may open a real (host-view) shell.
+    let bundled = args.contains(&"--bundled");
     let agents_flag = agents_enabled(args);
     // Off unless asked: the Brain may then read this runner's harness history (`history.read`).
     let share_history = args.contains(&"--share-history");
@@ -397,7 +399,11 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         .filter(|a| {
             !matches!(
                 *a,
-                "--enable-exec" | "--enable-pty" | "--enable-agents" | "--share-history"
+                "--enable-exec"
+                    | "--enable-pty"
+                    | "--enable-agents"
+                    | "--share-history"
+                    | "--bundled"
             ) && !a.starts_with("--terminal-sandbox=")
                 && !a.starts_with("--terminal-network=")
         })
@@ -424,6 +430,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         }
     };
     let state = state_dir(flag(args, "--state"));
+    super::aitools::set_prefix(state.0.join("ai-tools"));
     // The policy a Core set from the App overrides the flags for these three (see `control`).
     let policy = super::control::load(&state.0);
     let (pty_enabled, agents_enabled) =
@@ -459,7 +466,10 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         stop_signal.send_replace(true);
     });
     // Held until the runner stops: the proxy terminals reach through their socket dir.
-    let _terminal_proxy = if pty_enabled && terminal_network == "filtered" {
+    // Linux private-root terminals reach the network through it too unless the runner is set to
+    // `none`, so it also starts for the default `host` (E6 M1).
+    let private_filtered = cfg!(target_os = "linux") && terminal_network != "none";
+    let _terminal_proxy = if pty_enabled && (terminal_network == "filtered" || private_filtered) {
         match terminal_proxy(&state.0.join("terminal-egress")).await {
             Ok(p) => Some(p),
             Err(e) => {
@@ -472,6 +482,18 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     };
     if pty_enabled && !terminal_sandbox {
         let m = "terminal sandbox is OFF: a `terminal` device can read this runner's key, delivered secrets and harness logins; `terminal` scope is admin-equivalent on this host";
+        eprintln!("ainkrad-runner: WARNING: {m}");
+        tracing::warn!("{m}");
+    }
+    // Linux before 6.2, or a host that turned it back on: a shell could push keystrokes into its
+    // own controlling terminal with TIOCSTI (bwrap's --new-session would stop that but detaches the
+    // shell from its pty, so it is not used).
+    if pty_enabled
+        && cfg!(target_os = "linux")
+        && std::fs::read_to_string("/proc/sys/dev/tty/legacy_tiocsti")
+            .map_or(true, |v| v.trim() != "0")
+    {
+        let m = "dev.tty.legacy_tiocsti is not 0: set it to 0 (sysctl) so a terminal's shell cannot inject input with TIOCSTI";
         eprintln!("ainkrad-runner: WARNING: {m}");
         tracing::warn!("{m}");
     }
@@ -522,6 +544,18 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             user: terminal_user.clone(),
             net: net.clone(),
             sessions: Some(state.0.join("agents")),
+            sandbox_dir: Some(state.0.join("sandbox")),
+            private_net: if private_filtered {
+                super::termbox::Net::Filtered {
+                    dir: egress_dir.clone(),
+                    exe: std::env::current_exe().unwrap_or_default(),
+                }
+            } else if terminal_network == "none" {
+                super::termbox::Net::None
+            } else {
+                net.clone()
+            },
+            allow_real: bundled,
             ..super::PtyConfig::new(state.0.join("terminals"))
         }));
         d.spawn_budget_loop();
@@ -581,6 +615,14 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         restart: Arc::clone(&restart),
         stop,
     });
+    // Offered AI sessions mean the AI tools should be there and current (D-22): the runner is
+    // already connected, so it installs what is missing in the background and restarts once.
+    if agents_enabled {
+        let c = Arc::clone(&control);
+        tokio::spawn(super::aitools::keep_current(move || {
+            c.restart_when_idle(Duration::from_secs(2))
+        }));
+    }
     match super::daemon::from_state(&state, exec, pty, agents, Some(control), tls, stopping).await {
         Ok(()) if restart.load(std::sync::atomic::Ordering::SeqCst) => {
             eprintln!("ainkrad-runner: restarting to apply a new policy");
@@ -710,6 +752,7 @@ async fn agents(
     share_history: bool,
 ) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
+    super::aitools::set_home(work.clone());
     let mut executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
     // Every run of this driver goes through its process sandbox (`ProcessSandbox` below), which
     // refuses a run it cannot confine and marks the run's environment once it has; the executor
@@ -741,9 +784,14 @@ async fn agents(
     executor.check_roots(&home)?;
     // launchd gives a bundled runner a bare PATH and cannot name the home folder, so a tool the
     // person installed under ~/.local/bin (where Claude Code's installer puts it) is found here.
+    // The tools the runner installed itself (`aitools`, D-22) come first: they are the tested versions.
     for name in ["claude", "codex", "opencode", "agy"] {
-        let bin = home.join(".local/bin").join(name);
-        if bin.is_file() {
+        let managed = super::aitools::bin_dir().map(|d| d.join(name));
+        let local = home.join(".local/bin").join(name);
+        if let Some(bin) = managed
+            .filter(|b| b.is_file())
+            .or(local.is_file().then_some(local))
+        {
             executor.bins.entry(name.to_owned()).or_insert(bin);
         }
     }

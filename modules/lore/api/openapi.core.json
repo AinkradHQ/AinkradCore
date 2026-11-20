@@ -1437,6 +1437,22 @@
         ],
         "type": "object"
       },
+      "BundledAttested": {
+        "description": "Who may be told apart as \"the runner bundled in this Mac's app\" (E6, L1): the pairing row of\n`runner` after the Mac app, which reads that runner's own enrolment file on its local disk\n(a remote runner has none there), attests it.",
+        "properties": {
+          "bundled": {
+            "type": "boolean"
+          },
+          "runner": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runner",
+          "bundled"
+        ],
+        "type": "object"
+      },
       "Chain": {
         "description": "An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first\nentry that has one to give.",
         "properties": {
@@ -4723,8 +4739,23 @@
               "null"
             ]
           },
+          "project": {
+            "description": "With `sandbox: real` only: start the shell in this project's folder (a cwd on the runner,\nnot a mount). A sandbox names its project in `sandbox` (400 otherwise).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "runner": {
             "type": "string"
+          },
+          "sandbox": {
+            "description": "Where the shell lives (D-17): `home` (the default: a private root with the caller's\npersistent sandbox home), `project:<id>` or `session:<id>` (that, plus the project's or\nsession's folder, which the Core resolves: no `cwd`), or `real` (the runner's host view,\nallowed only to the Mac that owns a macOS runner, over that Mac's own device key). 400\n`bad_request` for a bad value or a `cwd` with a private mode, 403 `real_terminal_refused`\nfor `real` from anyone else. 409 `runner_update_required` (\"Update this runner to open\nterminals\") when the runner predates sandboxes: no terminal opens on it.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "session": {
             "description": "Start in the folder of this AI session (`as_…`, its `AgentSession.folder`) without naming\nthe path: the Core resolves it. The session must be on `runner`, one the caller can see (and\nthe caller needs the `agent` scope), and its runner must have reported its folder. Not with\n`cwd`.",
@@ -6240,6 +6271,13 @@
               "null"
             ]
           },
+          "home": {
+            "description": "The folder its work happens in, as the runner reports it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "host_load": {
             "$ref": "#/components/schemas/RunnerHostLoad",
             "description": "The host's load as its runner last reported it (E2-15.2), if it has."
@@ -6251,6 +6289,13 @@
           "isolation": {
             "$ref": "#/components/schemas/RunnerIsolation",
             "description": "The isolation it offers now (E8a-09): absent until it reports, and then no tier can be\nassumed."
+          },
+          "last_error": {
+            "description": "Why it is not fully working, in words: its last-error note.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "last_seen": {
             "$ref": "#/components/schemas/Timestamp",
@@ -6317,6 +6362,10 @@
           "slots": {
             "$ref": "#/components/schemas/RunnerSlots",
             "description": "Sessions and terminals running now, and how many it takes."
+          },
+          "tool_install": {
+            "$ref": "#/components/schemas/RunnerToolInstall",
+            "description": "The AI tool install under way on its host, or the last one, as the runner reports it in\nits heartbeats (D-22). Absent until a runner of this version reports."
           },
           "tools": {
             "additionalProperties": {
@@ -6578,6 +6627,39 @@
         "required": [
           "agents_used",
           "terminals_used"
+        ],
+        "type": "object"
+      },
+      "RunnerToolInstall": {
+        "description": "An AI tool install as a runner reports it.",
+        "properties": {
+          "percent": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`running`, `done` or `failed`.",
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool",
+          "state",
+          "percent",
+          "step"
         ],
         "type": "object"
       },
@@ -7723,6 +7805,13 @@
           "runner": {
             "type": "string"
           },
+          "sandbox": {
+            "description": "Where the shell lives (D-17): `home`, `project:<id>`, `session:<id>` or `real` (this Mac's\nown shell). Absent: a terminal opened before sandboxes, a host-view shell.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "seq": {
             "format": "int64",
             "minimum": 0,
@@ -7790,6 +7879,22 @@
             "type": "string"
           }
         ]
+      },
+      "TerminalTailView": {
+        "description": "The last rows of a terminal's screen.",
+        "properties": {
+          "lines": {
+            "description": "Plain text, oldest first; empty when the terminal is not running.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "lines"
+        ],
+        "type": "object"
       },
       "Timestamp": {
         "description": "RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a\nclient's date parser never meets a second one (E0.4).",
@@ -16167,6 +16272,59 @@
         "x-ainkrad-scope": "read"
       }
     },
+    "/api/v1/runners/{id}/bundled": {
+      "post": {
+        "operationId": "attestBundledRunner",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundledAttested"
+                }
+              }
+            },
+            "description": "The runner is recorded as the one bundled with the calling Mac app, which alone can then be given a real shell. Only a macOS app device that minted the invite that enrolled the runner may say so (403 otherwise); the app does it only for the runner whose enrolment file it reads on its own disk. Needs `admin` and a step-up"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "pairing"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/runners/{id}/noop": {
       "post": {
         "operationId": "runNoop",
@@ -16316,7 +16474,7 @@
                 }
               }
             },
-            "description": "The install started on the runner's host (audited as `runner.tool_install`). Follow it with `runner.tool_install` events (`op`, `runner`, `tool`, `state` `running`/`done`/`failed`, `percent`, `step`, `reason`, and on `done` the `tools` the runner found) or by polling `GET /runners/{id}/tools/operations/{op}`. A tool installs one at a time per runner; the runner reports it in `tools` when done. Linux runners set up by the installer only. 400 for a tool that is not listed; 409 `install_running`, `runner_offline`, `unsupported_command`; 503 `runner_busy`. Needs `admin` and a step-up"
+            "description": "The install started on the runner's host (audited as `runner.tool_install`). Follow it with `runner.tool_install` events (`op`, `runner`, `tool`, `state` `running`/`done`/`failed`, `percent`, `step`, `reason`, and on `done` the `tools` the runner found) or by polling `GET /runners/{id}/tools/operations/{op}`. A tool installs one at a time per runner; the runner reports it in `tools` when done. The AI tools (claude, codex, opencode, agy) install into the runner's own folder on any runner; the rest need a Linux runner set up by the installer. 400 for a tool that is not listed; 409 `install_running`, `runner_offline`, `unsupported_command`; 503 `runner_busy`. Needs `admin` and a step-up"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -18085,6 +18243,69 @@
         "responses": {
           "204": {
             "description": "The signal was delivered"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "terminals"
+        ],
+        "x-ainkrad-scope": "terminal"
+      }
+    },
+    "/api/v1/terminals/{id}/tail": {
+      "get": {
+        "operationId": "tailTerminal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "1 to 20, default 5",
+            "in": "query",
+            "name": "lines",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalTailView"
+                }
+              }
+            },
+            "description": "The last rows of the screen as text, for a live preview. The terminal scope and the caller's own terminal; no step-up"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

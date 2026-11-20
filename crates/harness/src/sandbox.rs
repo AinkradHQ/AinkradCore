@@ -289,6 +289,17 @@ fn mac_prelude(spec: &Spec) -> String {
 /// the directory the name resolves to and the one its symlink points into (an `nvm` or
 /// `~/.local` install). Never `/`, a home directory or its parent, which would expose
 /// `~/.ssh`.
+/// `<state>/ai-tools/<tool>` for a launcher at `<state>/ai-tools/bin/<tool>`; `None` for any other file.
+fn managed_dir(file: &Path) -> Option<PathBuf> {
+    let bin = file.parent()?;
+    let tools = bin.parent()?;
+    if bin.file_name()? == "bin" && tools.file_name()? == "ai-tools" {
+        Some(tools.join(file.file_name()?))
+    } else {
+        None
+    }
+}
+
 fn program_dirs(program: &OsStr, spec: &Spec) -> Vec<PathBuf> {
     let path = Path::new(program);
     let found = if path.is_absolute() {
@@ -315,6 +326,15 @@ fn program_dirs(program: &OsStr, spec: &Spec) -> Vec<PathBuf> {
         .flat_map(|f| [f.canonicalize().ok(), Some(f)])
         .flatten()
     {
+        // A tool the runner installed itself is `<state>/ai-tools/bin/<tool>`, a launcher that execs
+        // `<state>/ai-tools/<tool>/<version>/...`: that one tool's folder is readable (and executable),
+        // read-only, and nothing else of the state.
+        if let Some(m) = managed_dir(&file)
+            && m.is_dir()
+            && !dirs.contains(&m)
+        {
+            dirs.push(m);
+        }
         let Some(dir) = file.parent().map(Path::to_path_buf) else {
             continue;
         };

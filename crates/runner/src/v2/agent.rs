@@ -498,6 +498,12 @@ impl AgentDriver {
 
     /// Starts `req`'s session, or answers with the one it already holds (a resent start).
     pub fn start(self: &Arc<Self>, req: AgentStart) -> Result<AgentEvents, StreamError> {
+        if super::aitools::restart_pending() {
+            return Err(refuse(
+                ErrorCode::Busy,
+                "this runner is about to restart to finish an update; try again in a moment",
+            ));
+        }
         if !valid_session(&req.session) {
             return Err(refuse(ErrorCode::InvalidArgs, "a session id is as_…"));
         }

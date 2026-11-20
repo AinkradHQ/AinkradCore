@@ -26,6 +26,8 @@ pub enum Command {
     PtyAttach(super::PtyAttach),
     #[serde(rename = "pty.close")]
     PtyClose(super::PtyClose),
+    #[serde(rename = "pty.tail")]
+    PtyTail(super::PtyTail),
     #[serde(rename = "agent.start")]
     AgentStart(super::AgentStart),
     #[serde(rename = "agent.read")]
@@ -124,6 +126,7 @@ impl Command {
             Self::PtyOpen(_) => super::OP_PTY_OPEN,
             Self::PtyAttach(_) => super::OP_PTY_ATTACH,
             Self::PtyClose(_) => super::OP_PTY_CLOSE,
+            Self::PtyTail(_) => super::OP_PTY_TAIL,
             Self::AgentStart(_) => super::OP_AGENT_START,
             Self::AgentRead(_) => super::OP_AGENT_READ,
             Self::AgentSend(_) => super::OP_AGENT_SEND,
@@ -219,6 +222,8 @@ pub enum Reply {
     PtyAttach(super::TerminalExit),
     #[serde(rename = "pty.close")]
     PtyClose(super::TerminalExit),
+    #[serde(rename = "pty.tail")]
+    PtyTail(super::TerminalTail),
     /// Every `agent.*` op answers with the session's state (`agent.read` with its entries).
     #[serde(rename = "agent.start")]
     AgentStart(super::AgentEvents),

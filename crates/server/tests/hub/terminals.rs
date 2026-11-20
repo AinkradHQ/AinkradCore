@@ -83,6 +83,8 @@ fn spawn_daemon_with(
     let mut cfg = PtyConfig {
         enabled: true,
         grace: Duration::from_millis(200),
+        // D-17: a terminal with no `sandbox` is a private-root `home` shell; it needs this dir.
+        sandbox_dir: Some(dir.join("sandbox")),
         ..PtyConfig::new(dir.to_owned())
     };
     edit(&mut cfg);
@@ -201,7 +203,7 @@ impl Fx {
     }
 
     async fn create(&self, dev: &TestDevice, program: &str, args: &[&str]) -> (u16, Value) {
-        let body = json!({"runner": self.runner, "program": program, "args": args, "cwd": "/",
+        let body = json!({"runner": self.runner, "program": program, "args": args,
             "env": {"PLANTED": PLANTED}, "size": {"rows": 24, "cols": 80}});
         self.call(dev, "POST", "/api/v1/terminals", Some(body))
             .await
@@ -259,7 +261,9 @@ impl Fx {
     fn leftovers(&self) -> usize {
         let count = |d: &std::path::Path| std::fs::read_dir(d).map_or(0, |r| r.count());
         let sd = self.dir.join("scrollback");
-        count(&self.dir) - usize::from(sd.is_dir()) + count(&sd)
+        // The private-root sandbox homes (`sandbox`) persist by design: not a leftover.
+        let sb = usize::from(self.dir.join("sandbox").is_dir());
+        count(&self.dir) - usize::from(sd.is_dir()) - sb + count(&sd)
     }
 
     async fn count(&self, sql: &'static str) -> i64 {

@@ -421,7 +421,7 @@ pc_checks() { # pc_checks "443 80": 0 when all is well; else 1 with PC_WHAT (wha
 pc_urlb() { # stdin -> base64url without padding
   openssl base64 -A | tr '+/' '-_' | tr -d '='
 }
-pc_probe_call() { # pc_probe_call PORTS OUTFILE: POST /v1/probe to the sign-in service, signed AINKRAD-SVC-V1 with a throw-away ES256 key; 0 on a 2xx
+pc_probe_call() { # pc_probe_call PORTS OUTFILE [CURL-FLAG, e.g. -4 so the answer is this machine's IPv4]: POST /v1/probe to the sign-in service, signed AINKRAD-SVC-V1 with a throw-away ES256 key; 0 on a 2xx
   command -v openssl >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 || return 1
   _d=$(mktemp -d) || return 1
   _body="{\"ports\":[$(printf '%s' "$1" | tr ' ' ',')]}"
@@ -442,7 +442,8 @@ pc_probe_call() { # pc_probe_call PORTS OUTFILE: POST /v1/probe to the sign-in s
   # shellcheck disable=SC2059 # the octal escape is the format: a raw byte for the signature file
   while [ -n "$_hex" ]; do _x=${_hex%"${_hex#??}"}; _hex=${_hex#??}; printf "\\$(printf %03o "0x$_x")" >>"$_d/sig.raw"; done
   _sig=$(pc_urlb <"$_d/sig.raw")
-  curl -fsS --max-time 15 -X POST "${AINKRAD_SIGNIN_URL:-https://signin.ainkrad.io}/v1/probe" \
+  # shellcheck disable=SC2086 # $3 is one optional curl flag
+  curl ${3:-} -fsS --max-time 15 -X POST "${AINKRAD_SIGNIN_URL:-https://signin.ainkrad.io}/v1/probe" \
     -H 'Content-Type: application/json' -H "Ainkrad-Core: $_fp" -H "Ainkrad-Key: $(pc_urlb <"$_d/spki")" -H 'Ainkrad-Alg: ES256' \
     -H "Ainkrad-Timestamp: $_ts" -H "Ainkrad-Nonce: $_nonce" -H "Ainkrad-Signature: $_sig" \
     --data-binary "@$_d/body" -o "$2" 2>/dev/null
@@ -504,15 +505,22 @@ pc_dns_probe() { # pc_dns_probe NAME OUTFILE: "A ip" / "AAAA ip" lines (dig when
       getent ahostsv6 "$1" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9a-fA-F:]+$' | sort -u | sed 's/^/AAAA /' || true
     fi; } >"$2"
 }
-pc_pub_probe() { # pc_pub_probe OUTFILE: this machine's public IPv4 from a third party (api.ipify.org); never fails
-  { curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true; } >"$1"
+pc_pub_probe() { # pc_pub_probe OUTFILE: this machine's public IPv4 from Ainkrad's outside check (signin.ainkrad.io, the call the port probe makes), no third party; empty when it cannot run
+  _po=$(mktemp) || { : >"$1"; return 0; }
+  if pc_probe_call 443 "$_po" -4 2>/dev/null; then sed -n 's/.*"ip" *: *"\([0-9.]*\)".*/\1/p' "$_po" | head -n1 >"$1"; else : >"$1"; fi
+  rm -f "$_po"
 }
 pc_dns() { # pc_dns NAME: the A record is this machine's public address and any AAAA record is on it; else the red card (blocking)
   ui_logopen || { ui_warn "cannot create a log directory, so the DNS check is skipped"; return 0; }
   _f=$UI_LOGDIR/dns
-  UI_QUIET=1 ui_run "Looking up this machine's public address (a request to api.ipify.org)" pc_pub_probe "$_f.pub" || true
+  UI_QUIET=1 ui_run "Looking up this machine's public address (a request to signin.ainkrad.io)" pc_pub_probe "$_f.pub" || true
   _pub=$(tr -cd '0-9.' <"$_f.pub" 2>/dev/null | head -c 15)
   printf '%s' "$_pub" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || _pub=''
+  if [ -z "$_pub" ] && ( : </dev/tty ) 2>/dev/null; then # the outside check could not run: ask
+    printf "Could not look up this machine's public address. Type it, or press Return to skip the comparison: " >/dev/tty 2>/dev/null || true
+    read -r _pub </dev/tty 2>/dev/null || _pub=''
+    printf '%s' "$_pub" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || _pub=''
+  fi
   UI_QUIET=1 ui_run "Checking that $1 points at ${_pub:-this machine}" pc_dns_probe "$1" "$_f.dns" || true
   _a=$(sed -n 's/^A //p' "$_f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
   _aaaa=$(sed -n 's/^AAAA //p' "$_f.dns" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
@@ -550,7 +558,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   }
   rerun_cmd() { # the command the user ran, rebuilt from the variables they set, the version floor and their flags
     _env=''; _args=''
-    for _v in AINKRAD_HOSTNAME AINKRAD_ACME_EMAIL AINKRAD_ACME_ENV AINKRAD_HARDEN AINKRAD_FIREWALL AINKRAD_BACKUP_RECIPIENT AINKRAD_RELEASE_URL; do
+    for _v in AINKRAD_HOSTNAME AINKRAD_ACME_EMAIL AINKRAD_ACME_ENV AINKRAD_HARDEN AINKRAD_FIREWALL AINKRAD_MDNS AINKRAD_BACKUP_RECIPIENT AINKRAD_RELEASE_URL; do
       eval "_val=\${$_v:-}"
       if [ -n "$_val" ] && _q=$(shq "$_val"); then _env="$_env $_v=$_q"; fi
     done
@@ -599,9 +607,10 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     printf '   A piped script cannot ask you questions through sudo (the terminal is not handed to it), so it would hang at the\n   first question. Nothing was changed. Run this instead:\n\n     %s\n\n' "$UI_RERUN" >&2
     exit 2
   fi
-  runner=0 invite='' _prev=''
+  runner=0 invite='' _prev='' user=0
   for a in "$@"; do
     [ "$a" != --runner ] || runner=1
+    [ "$a" != --user ] || user=1
     [ "$_prev" != --invite ] || invite=$a
     _prev=$a
   done
@@ -616,6 +625,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
       *) die "--runner needs --invite <invite> (single use, 15 minutes): make one in the App, Add device, a runner" ;;
     esac
     case $invite in *[!A-Za-z0-9_./:-]*) die "--invite is a runner invite from the App: <host>/<fingerprint>.<secret>" ;; esac
+  elif [ "$user" = 1 ]; then die "--user is for --runner (a runner that needs no root)"
   elif [ -n "$invite" ]; then die "--invite is for --runner (an invite for a runner on this machine)"; fi
   harden=0
   case ${AINKRAD_HARDEN:-} in '' | no) ;; yes) harden=1 ;; *) die "AINKRAD_HARDEN must be yes or no (got '$AINKRAD_HARDEN')" ;; esac
@@ -628,15 +638,23 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     *) die "no build for $(uname -m) (x86_64 and arm64 only)" ;;
   esac
   if [ "${AINKRAD_GET_VERIFY_ONLY:-}" != 1 ]; then
+    if [ "$user" = 1 ]; then # a runner for this user only: no root, no apt, no firewall
+      ui_step 1 "$(ui_rname 1)" "A runner for your own user: needs Linux, curl, tar and minisign. No root, nothing system-wide."
+      [ "$(uname -s)" = Linux ] || die "this is $(uname -s); a user runner installs on Linux only"
+      [ "$(id -u)" != 0 ] || die "--user is for a normal user; as root leave it out"
+      for _t in curl tar minisign; do command -v "$_t" >/dev/null || die "$_t is needed to verify and unpack the release and is not installed (no root, so it is not installed for you)"; done
+      ui_ok "This is Linux $(uname -m) and you are not root: a user runner can be installed"
+    else
     ui_step 1 "$(ui_rname 1)" "Needs Linux with systemd, root, and Debian or Ubuntu (apt). Asks your DNS name and email, then checks port 443 and that the name points here. Nothing is installed yet."
     [ "$(uname -s)" = Linux ] || die "this is $(uname -s); Core installs on Linux only"
     [ "$(id -u)" = 0 ] || die "run it as root: sudo sh -c \"\$(curl -fsSL ...)\" (see the command printed below)"
     [ -d /run/systemd/system ] || die "systemd is not running here (a container without systemd?)"
     command -v apt-get >/dev/null || die "apt-get not found: only Debian and Ubuntu are supported by this installer"
     ui_ok "This is Linux $(uname -m) with systemd and apt, and you are root: supported"
+    fi
     # The two questions and everything this machine can tell about itself come BEFORE anything is installed (N6): a busy or
     # closed port 443, or a DNS name that does not point here, stops here, with nothing installed.
-    if [ "$runner" = 0 ]; then # a runner only dials out: it needs no port and no name
+    if [ "$runner" = 0 ] && [ "$user" = 0 ]; then # a runner only dials out: it needs no port and no name
       ui_note "The Core is served over HTTPS with a free Let's Encrypt certificate, so it needs a public DNS name that points at this machine."
       ui_note "There is no IP-only or self-signed mode yet. No name? Any free dynamic-DNS name works: create it first, then answer."
       pc_ask AINKRAD_HOSTNAME "What is the public DNS name of this Core?" "core.yourdomain.com" pc_valid_hostname
@@ -647,7 +665,38 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
       export AINKRAD_DNS_CHECKED=1 # install.sh does not look it up a second time
     fi
 
+    if [ "$user" = 0 ]; then
     pkgs='ca-certificates curl minisign bubblewrap qrencode openssl iproute2 git unzip jq ripgrep build-essential xz-utils zsh' persist=''
+    # Avahi lets the Mac app find this Core on the same network. On by default only on a host with a private (home or office)
+    # address; a public server is not advertised. AINKRAD_MDNS=yes|no overrides. The decision is exported, so the installer
+    # and the firewall step follow it: yes installs avahi-daemon, writes the service file and, on the iptables path, opens
+    # UDP 5353 to the mDNS multicast groups. The ufw path is left alone (Ubuntu's before.rules already accept mDNS).
+    _ip=$(ip -4 route get 192.0.2.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1)
+    # A cloud VM often has a private address too, so the vendor (DMI) counts first, then a public address that differs from
+    # the local one (NAT: could be a cloud host or a home router) is asked about, default no; without a terminal it is no.
+    _vend=$(cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/chassis_asset_tag /sys/class/dmi/id/product_name 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    case ${AINKRAD_MDNS:-} in yes | no) ;; *)
+      AINKRAD_MDNS=no
+      case $_vend in *oracle* | *microsoft* | *amazon* | *google* | *digitalocean* | *hetzner*) ;; *)
+        case $_ip in 10.* | 192.168.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].*)
+          # The public address comes from Ainkrad's own outside check (the one the port probe already uses), never a third party.
+          _pub=''
+          if [ -z "${AINKRAD_SKIP_PROBE:-}" ] && _o=$(mktemp); then
+            if pc_probe_call 443 "$_o" -4 2>/dev/null; then _pub=$(sed -n 's/.*"ip" *: *"\([^"]*\)".*/\1/p' "$_o" | head -n1); fi
+            rm -f "$_o"
+          fi
+          if [ -n "$_pub" ] && [ "$_pub" = "$_ip" ]; then AINKRAD_MDNS=yes
+          elif ( : </dev/tty ) 2>/dev/null; then
+            # Unsure (NAT, or the check could not run): ask.
+            printf 'Advertise this Core on your local network so the Mac app can find it (mDNS)? Only say y on a home or office machine, not a cloud server. [y/N] ' >/dev/tty 2>/dev/null || true
+            read -r _a </dev/tty 2>/dev/null || _a=''
+            case $_a in [yY]*) AINKRAD_MDNS=yes ;; esac
+          fi ;;
+        esac ;;
+      esac ;;
+    esac
+    export AINKRAD_MDNS
+    [ "$AINKRAD_MDNS" != yes ] || pkgs="$pkgs avahi-daemon"
     # Firewall tooling only when hardening was asked for. iptables-persistent clashes with ufw: with ufw installed nothing is
     # added that could remove it; APT::Get::Remove=false makes apt refuse any removal instead of doing it.
     if [ "$harden" = 1 ]; then pkgs="$pkgs iptables"; dpkg -s ufw >/dev/null 2>&1 || persist=iptables-persistent; fi
@@ -659,6 +708,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     ui_run "Installing the prerequisite packages with apt (nothing is ever removed)" apt_install ||
       die "could not install the prerequisites with apt-get (the end of its output is above)"
     command -v minisign >/dev/null || die "minisign is not available on this distribution; it is required to verify the release"
+    fi
   fi
 
   W=$(mktemp -d)
@@ -707,8 +757,9 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   UI_STATE="The programs in /usr/local/bin may be partly replaced (the install is all or none and restores the previous set when it fails, but a stop in the middle can leave it half done). Run the command again to finish."
   ui_step 4 "Install the programs" "ainkrad-core-server, ainkrad-runner, ainkradctl and ainkrad-ptyhost go to /usr/local/bin as one set (all or none)."
   # release/install.sh verifies again, with the key pinned here (never the bundle's own copy), then installs atomically.
-  ui_run "Installing the four programs to /usr/local/bin" \
-    bash "$INST/scripts/release/install.sh" --from "$W" --pubkey "$W/release.pub" --prefix /usr/local --target "$TARGET" ||
+  if [ "$user" = 1 ]; then PREFIX=$HOME/.local; else PREFIX=/usr/local; fi
+  ui_run "Installing the programs to $PREFIX/bin" \
+    bash "$INST/scripts/release/install.sh" --from "$W" --pubkey "$W/release.pub" --prefix "$PREFIX" --target "$TARGET" ||
     die "installing the programs failed (the previous set, if any, was restored)"
   UI_STATE="The Core programs are in /usr/local/bin; the guided installer did not finish."
 
@@ -718,7 +769,9 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
   export AINKRAD_FROM_GET=1 AINKRAD_STEP_BASE=0 AINKRAD_STEP_TOTAL=8 AINKRAD_T0="$UI_T0" AINKRAD_RERUN="$UI_RERUN"
   if [ "$UI_FANCY" = 1 ] && [ "$UI_LIVE" = 1 ]; then printf '\r\033[K'; export AINKRAD_UI_LIVE=1; UI_LIVE=0; fi # install.sh carries on from this progress line
   trap 'got=130' INT; trap 'got=143' TERM
-  if [ "$runner" = 1 ]; then # only a runner: no Core, no questions
+  if [ "$runner" = 1 ] && [ "$user" = 1 ]; then # a runner for this user: no root
+    AINKRAD_PAIR_INVITE=$invite bash "$INST/scripts/install/runner-user.sh" --binary "$HOME/.local/bin" </dev/null || rc=$?
+  elif [ "$runner" = 1 ]; then # only a runner: no Core, no questions
     AINKRAD_PAIR_INVITE=$invite bash "$INST/scripts/install/runner-only.sh" --binary /usr/local/bin </dev/null || rc=$?
   elif ( : </dev/tty ) 2>/dev/null; then bash "$INST/scripts/install.sh" --binary /usr/local/bin "$@" </dev/tty || rc=$?
   else bash "$INST/scripts/install.sh" --binary /usr/local/bin "$@" </dev/null || rc=$?; fi

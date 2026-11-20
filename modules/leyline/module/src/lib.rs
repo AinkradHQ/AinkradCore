@@ -27,6 +27,7 @@ mod hosts;
 mod keys;
 mod makerunner;
 mod policy;
+mod reach;
 mod ready;
 /// Terminal recording; public so `benches/relay_tap.rs` can time the relay's tap.
 pub mod record;
@@ -103,12 +104,23 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0009_direct.up.sql"),
         down: include_str!("../migrations/0009_direct.down.sql"),
     },
+    Migration {
+        version: 10,
+        name: "0010_reach",
+        up: include_str!("../migrations/0010_reach.up.sql"),
+        down: include_str!("../migrations/0010_reach.down.sql"),
+    },
 ];
 
 // D-4: only a key leaving the Core is danger (a Mac-direct lease hands one to a runner on the
-// person's machine). Opening a shell, writing a file and installing the runner run code on a host:
-// they need the app unlock and no per-action prompt. Everything else is a normal write.
-const DESTRUCTIVE: &[(&str, &str)] = &[("POST", "/hosts/{host}/direct")];
+// person's machine), and so is a reachability check (E8): it makes the Core connect to an address a
+// caller names, so it keeps its live step-up. Opening a shell, writing a file and installing the
+// runner run code on a host: they need the app unlock and no per-action prompt. Everything else is
+// a normal write.
+const DESTRUCTIVE: &[(&str, &str)] = &[
+    ("POST", "/hosts/check"),
+    ("POST", "/hosts/{host}/direct"),
+];
 const NEEDS_UNLOCK: &[(&str, &str)] = &[
     ("POST", "/hosts/{host}/terminals"),
     ("PUT", "/hosts/{host}/files/content"),
@@ -188,6 +200,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("POST", "/sessions/{session}/recording/pause", "terminal"),
     ("POST", "/sessions/{session}/recording/resume", "terminal"),
     ("POST", "/hosts/{host}/runner", "terminal"),
+    ("POST", "/hosts/check", "admin"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -203,6 +216,7 @@ pub struct Leyline;
         hosts::remove,
         hosts::groups,
         hosts::tags,
+        reach::check,
         health::read,
         files::list,
         files::read,
@@ -285,6 +299,10 @@ pub struct Leyline;
         history::HostRecording,
         history::Paused,
         makerunner::Install,
+        makerunner::InstallState,
+        reach::CheckHost,
+        reach::Checked,
+        reach::HostReach,
         health::HealthView,
         health::HealthPoint,
         files::RemoteFile,
@@ -320,6 +338,7 @@ impl Module for Leyline {
     fn routes(&self) -> Router<App> {
         Router::new()
             .route("/hosts", get(hosts::list).post(hosts::create))
+            .route("/hosts/check", post(reach::check))
             .route(
                 "/hosts/{host}",
                 get(hosts::get).patch(hosts::patch).delete(hosts::remove),
@@ -479,6 +498,7 @@ impl Module for Leyline {
 
     fn jobs(&self) -> Vec<Job> {
         let mut jobs = health::jobs();
+        jobs.extend(reach::jobs());
         jobs.extend(history::jobs());
         jobs
     }
