@@ -809,7 +809,7 @@ pub async fn sweep(app: &App, link: &dyn Link) {
                     continue;
                 };
                 let last = r.last_activity_at.as_deref().unwrap_or(&r.started_at);
-                if age(last) >= p.idle_minutes * 60 {
+                if !p.idle_never && age(last) >= p.idle_minutes * 60 {
                     let done = origin::scope(
                         idle.clone(),
                         settle_stop(app, link, r.clone(), "idle", system(&now)),

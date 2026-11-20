@@ -15,7 +15,6 @@
 
 package ainkrad.client.models
 
-import ainkrad.client.models.LimitStanding
 import ainkrad.client.models.UsageByCompany
 import ainkrad.client.models.UsageWindow
 
@@ -29,8 +28,6 @@ import kotlinx.serialization.Contextual
  * @param accountId 
  * @param byCompany 
  * @param fiveHours 
- * @param limits 
- * @param maxUtilisationBps The highest used/cap of any limit, in basis points (10000 is at the cap).
  * @param recentDrops Provider drops in the last hour.
  * @param sevenDays 
  */
@@ -46,13 +43,6 @@ data class AccountSpend (
 
     @SerialName(value = "five_hours")
     val fiveHours: UsageWindow,
-
-    @SerialName(value = "limits")
-    val limits: kotlin.collections.List<LimitStanding>,
-
-    /* The highest used/cap of any limit, in basis points (10000 is at the cap). */
-    @SerialName(value = "max_utilisation_bps")
-    val maxUtilisationBps: kotlin.Long,
 
     /* Provider drops in the last hour. */
     @SerialName(value = "recent_drops")

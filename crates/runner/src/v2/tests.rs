@@ -266,6 +266,7 @@ async fn login_ops_are_refused_where_the_runner_offers_no_sign_in() {
     let start = LoginStart {
         login_id: "l_1".to_owned(),
         harness: "claude".to_owned(),
+        home: None,
     };
     core.send(1, Body::Command(Command::LoginStart(start)))
         .await;

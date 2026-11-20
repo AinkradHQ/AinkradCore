@@ -43,12 +43,13 @@ namespace Ainkrad.Client.Model
         /// <param name="company">The owner&#39;s company binding; for a company budget it must be the subject (or absent)..</param>
         /// <param name="hardStop">Default true..</param>
         /// <param name="kind">kind (required).</param>
+        /// <param name="messageCap">Messages per period, 1 or more; a request or turn is one message..</param>
         /// <param name="period">period (required).</param>
         /// <param name="subject">subject (required).</param>
-        /// <param name="tokenCap">tokenCap (required).</param>
+        /// <param name="tokenCap">Default 0: with no token cap a dollar or message cap is needed..</param>
         /// <param name="usdCapMicros">usdCapMicros.</param>
         /// <param name="warnAtPercent">Default 80..</param>
-        public SetSubjectBudget(string company = default, bool? hardStop = default, string kind = default, string period = default, string subject = default, long tokenCap = default, long? usdCapMicros = default, long? warnAtPercent = default)
+        public SetSubjectBudget(string company = default, bool? hardStop = default, string kind = default, long? messageCap = default, string period = default, string subject = default, long tokenCap = default, long? usdCapMicros = default, long? warnAtPercent = default)
         {
             // to ensure "kind" is required (not null)
             if (kind == null)
@@ -68,9 +69,10 @@ namespace Ainkrad.Client.Model
                 throw new ArgumentNullException("subject is a required property for SetSubjectBudget and cannot be null");
             }
             this.Subject = subject;
-            this.TokenCap = tokenCap;
             this.Company = company;
             this.HardStop = hardStop;
+            this.MessageCap = messageCap;
+            this.TokenCap = tokenCap;
             this.UsdCapMicros = usdCapMicros;
             this.WarnAtPercent = warnAtPercent;
         }
@@ -96,6 +98,13 @@ namespace Ainkrad.Client.Model
         public string Kind { get; set; }
 
         /// <summary>
+        /// Messages per period, 1 or more; a request or turn is one message.
+        /// </summary>
+        /// <value>Messages per period, 1 or more; a request or turn is one message.</value>
+        [DataMember(Name = "message_cap", EmitDefaultValue = true)]
+        public long? MessageCap { get; set; }
+
+        /// <summary>
         /// Gets or Sets Period
         /// </summary>
         [DataMember(Name = "period", IsRequired = true, EmitDefaultValue = true)]
@@ -108,9 +117,10 @@ namespace Ainkrad.Client.Model
         public string Subject { get; set; }
 
         /// <summary>
-        /// Gets or Sets TokenCap
+        /// Default 0: with no token cap a dollar or message cap is needed.
         /// </summary>
-        [DataMember(Name = "token_cap", IsRequired = true, EmitDefaultValue = true)]
+        /// <value>Default 0: with no token cap a dollar or message cap is needed.</value>
+        [DataMember(Name = "token_cap", EmitDefaultValue = false)]
         public long TokenCap { get; set; }
 
         /// <summary>
@@ -137,6 +147,7 @@ namespace Ainkrad.Client.Model
             sb.Append("  Company: ").Append(Company).Append("\n");
             sb.Append("  HardStop: ").Append(HardStop).Append("\n");
             sb.Append("  Kind: ").Append(Kind).Append("\n");
+            sb.Append("  MessageCap: ").Append(MessageCap).Append("\n");
             sb.Append("  Period: ").Append(Period).Append("\n");
             sb.Append("  Subject: ").Append(Subject).Append("\n");
             sb.Append("  TokenCap: ").Append(TokenCap).Append("\n");

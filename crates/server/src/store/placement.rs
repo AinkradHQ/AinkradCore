@@ -1,5 +1,5 @@
-//! Where a new account goes (N40, N29, N35 K2): into its provider's default pool (made when
-//! missing), and that pool into the user's default chain (made when missing), so a connected
+//! Where a new account goes (N40, N29, N35 K2; E7-1): into a hidden pool of its own, and that pool
+//! onto the end of the user's AI order, the default chain (made, hidden, when missing), so a connected
 //! account serves agents at once. It runs inside the transaction that stores the account, so a
 //! half-done setup cannot remain. A subscription account is alone in its pool (the Core's rule),
 //! so it gets a pool of its own when the default one is taken.
@@ -58,14 +58,6 @@ async fn audit(
     Ok(())
 }
 
-/// The default pool's name for a provider (a pool name is lowercase).
-fn default_pool_name(provider: &str) -> &str {
-    match provider {
-        "claude-sub" => "claude-plan",
-        p => p,
-    }
-}
-
 /// Puts the just-stored `a` into a pool, the pool into a chain, and gives a key account its
 /// default monthly limit. Returns the pool id and the chain id (if any chain took it).
 pub async fn place(
@@ -79,41 +71,45 @@ pub async fn place(
     let subscription = account_keys::subscription_provider(&a.provider);
     let pool = match p.pool {
         Some(id) => explicit_pool(tx, a, p.user, id).await?,
-        None => default_pool(tx, a, p.user, subscription, by_device, actor, now).await?,
+        // E7-1: an account sits in its own hidden single-account pool, so the AI order lists it alone.
+        None => chains::order::pool_for(tx, p.user, a.id, by_device, actor, now).await?,
     };
-    let members: Vec<i64> =
-        sqlx::query_scalar("SELECT account_id FROM core_pool_members WHERE pool_id = ?")
-            .bind(pool)
-            .fetch_all(&mut *tx)
-            .await?;
-    account_keys::check_pool(tx, &members, a.id).await?;
-    if members.len() >= 64 {
-        return refused("limit_reached", "the pool is full");
-    }
-    sqlx::query(
-        "INSERT INTO core_pool_members (user_id, pool_id, account_id, position) \
-         SELECT ?, ?, ?, COALESCE(MAX(position) + 1, 0) FROM core_pool_members WHERE pool_id = ?",
-    )
-    .bind(p.user)
-    .bind(pool)
-    .bind(a.id)
-    .bind(pool)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("UPDATE core_pools SET updated_at = ? WHERE id = ?")
-        .bind(now)
+    // A hidden order pool already holds the account (`order::pool_for`); only a chosen pool takes it here.
+    if p.pool.is_some() {
+        let members: Vec<i64> =
+            sqlx::query_scalar("SELECT account_id FROM core_pool_members WHERE pool_id = ?")
+                .bind(pool)
+                .fetch_all(&mut *tx)
+                .await?;
+        account_keys::check_pool(tx, &members, a.id).await?;
+        if members.len() >= 64 {
+            return refused("limit_reached", "the pool is full");
+        }
+        sqlx::query(
+            "INSERT INTO core_pool_members (user_id, pool_id, account_id, position) \
+             SELECT ?, ?, ?, COALESCE(MAX(position) + 1, 0) FROM core_pool_members WHERE pool_id = ?",
+        )
+        .bind(p.user)
+        .bind(pool)
+        .bind(a.id)
         .bind(pool)
         .execute(&mut *tx)
         .await?;
-    audit(
-        tx,
-        actor,
-        "pool",
-        "pool.member_added",
-        pool,
-        json!({"account": a.id, "by_device": by_device}),
-    )
-    .await?;
+        sqlx::query("UPDATE core_pools SET updated_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(pool)
+            .execute(&mut *tx)
+            .await?;
+        audit(
+            tx,
+            actor,
+            "pool",
+            "pool.member_added",
+            pool,
+            json!({"account": a.id, "by_device": by_device}),
+        )
+        .await?;
+    }
     let chain = into_chain(tx, a, p, pool, by_device, actor, now).await?;
     let cap = p.monthly_usd_micros.unwrap_or(DEFAULT_MONTHLY_USD_MICROS);
     // A subscription spends plan quota, not dollars: a dollar limit would mean nothing.
@@ -164,73 +160,6 @@ async fn explicit_pool(
         },
         _ => refused("not_found", format!("no pool {id}")),
     }
-}
-
-/// The provider's default pool; made when missing. A subscription account whose default pool is
-/// taken gets a new, non-default pool.
-async fn default_pool(
-    tx: &mut SqliteConnection,
-    a: &Account,
-    user: i64,
-    subscription: bool,
-    by_device: &str,
-    actor: AuditActor,
-    now: &str,
-) -> Result<i64, Error> {
-    let existing: Option<i64> = sqlx::query_scalar(
-        "SELECT p.id FROM core_pools p WHERE p.provider = ? AND p.user_id = ? AND p.is_default = 1 \
-         AND (? = 0 OR NOT EXISTS (SELECT 1 FROM core_pool_members m WHERE m.pool_id = p.id))",
-    )
-    .bind(&a.provider)
-    .bind(user)
-    .bind(subscription)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if let Some(id) = existing {
-        return Ok(id);
-    }
-    let has_default: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM core_pools WHERE provider = ? AND is_default = 1")
-            .bind(&a.provider)
-            .fetch_one(&mut *tx)
-            .await?;
-    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_pools")
-        .fetch_one(&mut *tx)
-        .await?;
-    if n >= 64 {
-        return refused("limit_reached", "too many pools");
-    }
-    let base = default_pool_name(&a.provider);
-    let taken: i64 = sqlx::query_scalar("SELECT count(*) FROM core_pools WHERE name = ?")
-        .bind(base)
-        .fetch_one(&mut *tx)
-        .await?;
-    let name = match taken {
-        0 => base.to_owned(),
-        _ => format!("{base}-{}", a.id),
-    };
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO core_pools (user_id, name, provider, is_default, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
-    )
-    .bind(user)
-    .bind(&name)
-    .bind(&a.provider)
-    .bind(i64::from(has_default == 0))
-    .bind(now)
-    .bind(now)
-    .fetch_one(&mut *tx)
-    .await?;
-    audit(
-        tx,
-        actor,
-        "pool",
-        "pool.created",
-        id,
-        json!({"name": name, "provider": a.provider, "by_device": by_device, "default": has_default == 0}),
-    )
-    .await?;
-    Ok(id)
 }
 
 /// Appends (or inserts at `position`) the pool to the chain, making the user's default chain
@@ -303,17 +232,17 @@ async fn into_chain(
         Some(id) => (id, false),
         None => {
             let taken: i64 =
-                sqlx::query_scalar("SELECT count(*) FROM core_chains WHERE name = 'default'")
+                sqlx::query_scalar("SELECT count(*) FROM core_chains WHERE name = 'ai-order'")
                     .fetch_one(&mut *tx)
                     .await?;
             let name = if taken == 0 {
-                "default".to_owned()
+                "ai-order".to_owned()
             } else {
-                format!("default-{}", a.id)
+                format!("ai-order-{}", a.id)
             };
             let id: i64 = sqlx::query_scalar(
-                "INSERT INTO core_chains (user_id, name, is_default, created_at, updated_at) \
-                 VALUES (?, ?, 1, ?, ?) RETURNING id",
+                "INSERT INTO core_chains (user_id, name, is_default, hidden, created_at, updated_at) \
+                 VALUES (?, ?, 1, 1, ?, ?) RETURNING id",
             )
             .bind(p.user)
             .bind(name)

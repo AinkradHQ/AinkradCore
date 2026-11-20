@@ -246,6 +246,12 @@ run install -m 0644 "$HERE/systemd/ainkrad-runner.service" "$prefix/etc/systemd/
 # The root-side tool installer the App's one-click install uses: a socket only the runner's group can reach, and the unit it starts.
 run install -m 0644 "$HERE/systemd/ainkrad-runner-tools.socket" "$prefix/etc/systemd/system/ainkrad-runner-tools.socket"
 run install -m 0644 "$HERE/systemd/ainkrad-runner-tools@.service" "$prefix/etc/systemd/system/ainkrad-runner-tools@.service"
+# E12-4: the runner's self-update: the updater, install.sh and the pinned key, and the unit pair that runs them as root on request.
+run install -d -m 0755 "$prefix/usr/local/lib/ainkrad"
+for f in update.sh install.sh; do run install -m 0755 "$HERE/../scripts/release/$f" "$prefix/usr/local/lib/ainkrad/$f"; done
+run install -m 0644 "$HERE/../scripts/release/ainkrad-release.pub" "$prefix/usr/local/lib/ainkrad/ainkrad-release.pub"
+run install -m 0644 "$HERE/systemd/ainkrad-update@.service" "$prefix/etc/systemd/system/ainkrad-update@.service"
+run install -m 0644 "$HERE/systemd/ainkrad-update-runner.path" "$prefix/etc/systemd/system/ainkrad-update-runner.path"
 # runner.env: RUNNER_ARGS from these flags, replaced on every run (so a re-run without --pty turns terminals off).
 args=''
 [ "$pty" = 1 ] && args="--enable-pty"
@@ -324,6 +330,7 @@ if [ "$pty" = 1 ]; then
 fi
 if [ -z "$prefix" ]; then
   run systemctl daemon-reload
+  run systemctl enable --now ainkrad-update-runner.path
   run systemctl enable --now ainkrad-runner-tools.socket
   if [ -n "$pair" ]; then
     # Blocks until the approver confirms the SAS (or the code expires); the Core's identity is pinned here.

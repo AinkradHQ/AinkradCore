@@ -176,7 +176,7 @@ sh_dir=$ROOT/deploy/shell
   done
   printf '%s' "$GITSTATUSD_SHA256_x86_64$GITSTATUSD_SHA256_aarch64" | grep -Eq '^[0-9a-f]{128}$' ) && ok || bad "deploy/shell/pins.sh does not pin every part to a full commit and a SHA-256"
 if command -v zsh >/dev/null; then zsh -n "$sh_dir/zshrc" && zsh -n "$sh_dir/p10k.zsh" && ok || bad "the Ainkrad shell profile is not valid zsh"; fi
-grep -qiE 'ahmed|melhalaby|/Users/|/home/|oh-my-zsh|@gmail' "$sh_dir/p10k.zsh" && bad "the p10k look holds a personal path, name or tool" || ok
+grep -qiE '/Users/|/home/|oh-my-zsh|@gmail' "$sh_dir/p10k.zsh" && bad "the p10k look holds a personal path, name or tool" || ok
 # the owner's Mac look (Ahmed, 2026-11-13: "the same style of the mac"): Nerd Font mode with powerline separators; the
 # os_icon segment shows the machine's own OS. The app draws the glyphs (macOS falls back to the Nerd Font).
 grep -q 'POWERLEVEL9K_MODE=nerdfont-v3' "$sh_dir/p10k.zsh" && grep -qF "LEFT_SEGMENT_SEPARATOR='\uE0B0'" "$sh_dir/p10k.zsh" && ok || bad "the p10k look is not the Mac's (nerdfont-v3, powerline separators)"

@@ -27,6 +27,7 @@ import ainkrad.client.models.NewProjectRepo
 import ainkrad.client.models.NewRunEnv
 import ainkrad.client.models.NewRunSpec
 import ainkrad.client.models.ProjectChanges
+import ainkrad.client.models.ProjectDefaults
 import ainkrad.client.models.ProjectInfo
 import ainkrad.client.models.ProjectRun
 import ainkrad.client.models.ProjectSecretDeleted
@@ -45,6 +46,7 @@ import ainkrad.client.models.RunSpecSummary
 import ainkrad.client.models.RunSpecVersion
 import ainkrad.client.models.RunVar
 import ainkrad.client.models.RunVarValue
+import ainkrad.client.models.SetProjectDefaults
 import ainkrad.client.models.SetProjectSecret
 import ainkrad.client.models.SetRunVar
 import ainkrad.client.models.UpdateProject
@@ -644,6 +646,39 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.GET,
             "/api/v1/projects/{id}/code".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/projects/defaults
+        * 
+        * 
+         * @return ProjectDefaults
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getProjectDefaults(): HttpResponse<ProjectDefaults> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/projects/defaults",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
@@ -1356,6 +1391,39 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.PUT,
             "/api/v1/projects/{id}/spec".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * PUT /api/v1/projects/defaults
+        * 
+        * 
+         * @param setProjectDefaults  
+         * @return ProjectDefaults
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun setProjectDefaults(setProjectDefaults: SetProjectDefaults): HttpResponse<ProjectDefaults> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = setProjectDefaults
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/projects/defaults",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

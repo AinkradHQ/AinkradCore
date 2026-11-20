@@ -469,6 +469,13 @@
         "harness": {
           "type": "string"
         },
+        "home": {
+          "description": "A runner-bound account's home key (`CAP_BOUND_HOME`, E7-4): the harness runs with its\nconfig dir at `<config root>/bound/<home>`, where the account's login lives. No credential\ntravels: the runner reads its own files.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "instructions": {
           "description": "Instructions for the harness (P3-03): the approved instructions of the Brain room a\nsession of a project claimed. The runner hands them to the harness as a private file\nbeside the session, never inside the repo checkout.",
           "type": [
@@ -1535,6 +1542,74 @@
           "properties": {
             "op": {
               "const": "agent.write",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginWait",
+          "description": "(After every older op.) Wait for a runner-bound sign-in to finish (E7-4).",
+          "properties": {
+            "op": {
+              "const": "login.wait",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginInput",
+          "properties": {
+            "op": {
+              "const": "login.input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginScreenReq",
+          "properties": {
+            "op": {
+              "const": "login.screen",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginWipe",
+          "description": "(After every older op.) Wipe a removed runner-bound account's home (E7 closeout).",
+          "properties": {
+            "op": {
+              "const": "login.wipe",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RunnerUpdate",
+          "description": "E12-4 (after every older op: the schema-compat gate tells variants by position).",
+          "properties": {
+            "op": {
+              "const": "runner.update",
               "type": "string"
             }
           },
@@ -3390,6 +3465,10 @@
               "type": "null"
             }
           ]
+        },
+        "want_models": {
+          "description": "Also read the provider's model list (the wire's own, `GET <base>/models` on the OpenAI\nwire) and send back its ids in [`GatewayTested::models`]. A preset's add flow asks for it;\na runner that predates it ignores it and sends none.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -3399,12 +3478,19 @@
       "type": "object"
     },
     "GatewayTested": {
-      "description": "Runner to Core: the status class and latency of a [`GatewayTest`]; never a body.",
+      "description": "Runner to Core: the status class and latency of a [`GatewayTest`], and the model ids it asked\nfor; never any other part of a body.",
       "properties": {
         "latency_ms": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "models": {
+          "description": "The model ids the provider listed, when [`GatewayTest::want_models`] asked and the list was\nread in full: ids only (bounded), never any other part of the body. Provider text: the\nCore filters each id before it keeps one.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "result": {
           "$ref": "#/$defs/UpstreamStatus"
@@ -4007,9 +4093,29 @@
       ],
       "type": "object"
     },
+    "LoginInput": {
+      "description": "Core to runner: one line the user typed into a guided sign-in (a pasted code, or a menu choice),\nsent with Enter. A secret: no `Debug` that shows it, never stored, never logged.",
+      "properties": {
+        "login_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "login_id",
+        "text"
+      ],
+      "type": "object"
+    },
     "LoginResult": {
       "description": "Runner to Core, the answer to `login.code` and `login.cancel`: the token (once; the runner\nzeroizes its copy) or an error, never both.",
       "properties": {
+        "done": {
+          "description": "A runner-bound sign-in finished: the credential is in the account's home on the runner.",
+          "type": "boolean"
+        },
         "error": {
           "type": [
             "string",
@@ -4031,11 +4137,63 @@
       ],
       "type": "object"
     },
+    "LoginScreen": {
+      "description": "Runner to Core, the answer to `login.screen`: what the CLI shows, after the redactor and cut to\nthe last lines. Text only; nothing but a typed line ever goes back.",
+      "properties": {
+        "code": {
+          "description": "A device code the CLI printed, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lines": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "login_id": {
+          "type": "string"
+        },
+        "url": {
+          "description": "The sign-in page the CLI printed, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "login_id",
+        "lines"
+      ],
+      "type": "object"
+    },
+    "LoginScreenReq": {
+      "description": "Core to runner: the current screen of the sign-in.",
+      "properties": {
+        "login_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "login_id"
+      ],
+      "type": "object"
+    },
     "LoginStart": {
       "description": "Core to runner: begin the sign-in of `harness` (`claude`).",
       "properties": {
         "harness": {
           "type": "string"
+        },
+        "home": {
+          "description": "A runner-bound sign-in (E7-4/5/5b): the key of the account home the runner logs in to\n(`[A-Za-z0-9_-]{1,64}`, a dir of the runner's own). The credential never leaves it. Absent\nis the Claude sign-in, whose token comes back once.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "login_id": {
           "type": "string"
@@ -4050,6 +4208,13 @@
     "LoginUrl": {
       "description": "Runner to Core, the answer to `login.start`: where the user signs in.",
       "properties": {
+        "code": {
+          "description": "The one-time device code the user types on that page (Codex). Not a credential: it is\nshown to the user and is useless once the sign-in ends.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "login_id": {
           "type": "string"
         },
@@ -4060,6 +4225,31 @@
       "required": [
         "login_id",
         "url"
+      ],
+      "type": "object"
+    },
+    "LoginWait": {
+      "description": "Core to runner: wait for the runner-bound sign-in `login_id` to finish; answered by a\n`login.result` with `done` set, or an error. No code is typed and no token comes back.",
+      "properties": {
+        "login_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "login_id"
+      ],
+      "type": "object"
+    },
+    "LoginWipe": {
+      "description": "Core to runner: delete the home of a removed runner-bound account. The runner checks the key\n(`bound_key_ok`), touches only `<agents-config>/bound/<home>`, refuses a symlink there, and answers\na `login.result` with `done` set (also when there was nothing to delete), or an error. An\nAntigravity home's login also lives in the OS keyring, which cannot be cleared per account: the\nanswer is then `done` with `error = \"keyring_not_cleared\"` (the home is gone; the Core records the note).",
+      "properties": {
+        "home": {
+          "description": "The account's home key (`[A-Za-z0-9_-]{1,64}`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "home"
       ],
       "type": "object"
     },
@@ -5350,6 +5540,34 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/LoginScreen",
+          "description": "The answer to `login.screen`.",
+          "properties": {
+            "op": {
+              "const": "login.screen",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/RunnerUpdateAccepted",
+          "description": "The answer to `runner.update` (E12-4).",
+          "properties": {
+            "op": {
+              "const": "runner.update",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "$ref": "#/$defs/JobDone",
           "properties": {
             "op": {
@@ -6543,6 +6761,30 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "RunnerUpdate": {
+      "description": "Core to runner (E12-4): the Core saw a newer signed runner and this one is idle, so update. `version` is only what the\nCore expects (a plain version, checked for shape); the runner's root-side updater reads the signed manifest itself,\ninstalls only a newer signed release, restarts the runner and rolls back if it does not stay up. A Mac runner updates\nwith the app and answers `unsupported_command`.",
+      "properties": {
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version"
+      ],
+      "type": "object"
+    },
+    "RunnerUpdateAccepted": {
+      "description": "The answer to `runner.update`: the request was handed to the updater; the runner restarts a moment later and\nreconnects on the new version.",
+      "properties": {
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version"
+      ],
       "type": "object"
     },
     "SecretGrant": {

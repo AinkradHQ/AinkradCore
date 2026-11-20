@@ -50,12 +50,13 @@ namespace Ainkrad.Client.Model
         /// <param name="loginMethods">&#x60;paste&#x60;. (required).</param>
         /// <param name="models">Model ids exactly as the provider names them: the gateway compares a request&#39;s model with the ids it was granted, as they are, and resolves no alias (&#x60;-latest&#x60;). &#x60;:online&#x60; is refused. (required).</param>
         /// <param name="name">name (required).</param>
+        /// <param name="preset">A preset provider (OpenRouter, Groq, ...): shipped in code, read-only, the user only pastes a key. Its keys are bound to the account and its frozen host, not to a prefix..</param>
         /// <param name="pricedAt">When the models&#39; list prices were read..</param>
         /// <param name="testPath">The authenticated path (under the base URL, such as &#x60;/key&#x60;) of the one-shot account test, for a provider whose model list needs no key (OpenRouter&#39;s is public: a revoked key would read as &#x60;ok&#x60;). A user definition without one cannot be tested: the answer is &#x60;inconclusive&#x60;. Built-ins use their wire&#39;s own model list..</param>
         /// <param name="usageParser">usageParser (required).</param>
         /// <param name="varVersion">varVersion.</param>
         /// <param name="wire">The API dialect the gateway speaks to this provider: &#x60;anthropic-messages&#x60; (claude), &#x60;openai-responses&#x60; (codex) or &#x60;gemini-generate&#x60; (agy). Optional on write: it is its harness&#39;s own, and any other is refused..</param>
-        public Provider(string authVar = default, string baseUrl = default, bool builtin = default, List<string> delivery = default, string harness = default, string id = default, string keyPrefix = default, List<string> loginMethods = default, List<ModelPrice> models = default, string name = default, string pricedAt = default, string testPath = default, string usageParser = default, long varVersion = default, string wire = default)
+        public Provider(string authVar = default, string baseUrl = default, bool builtin = default, List<string> delivery = default, string harness = default, string id = default, string keyPrefix = default, List<string> loginMethods = default, List<ModelPrice> models = default, string name = default, bool? preset = default, string pricedAt = default, string testPath = default, string usageParser = default, long varVersion = default, string wire = default)
         {
             // to ensure "authVar" is required (not null)
             if (authVar == null)
@@ -113,6 +114,7 @@ namespace Ainkrad.Client.Model
             this.UsageParser = usageParser;
             this.Builtin = builtin;
             this.KeyPrefix = keyPrefix;
+            this.Preset = preset;
             this.PricedAt = pricedAt;
             this.TestPath = testPath;
             this.VarVersion = varVersion;
@@ -188,6 +190,13 @@ namespace Ainkrad.Client.Model
         public string Name { get; set; }
 
         /// <summary>
+        /// A preset provider (OpenRouter, Groq, ...): shipped in code, read-only, the user only pastes a key. Its keys are bound to the account and its frozen host, not to a prefix.
+        /// </summary>
+        /// <value>A preset provider (OpenRouter, Groq, ...): shipped in code, read-only, the user only pastes a key. Its keys are bound to the account and its frozen host, not to a prefix.</value>
+        [DataMember(Name = "preset", EmitDefaultValue = true)]
+        public bool? Preset { get; set; }
+
+        /// <summary>
         /// When the models&#39; list prices were read.
         /// </summary>
         /// <value>When the models&#39; list prices were read.</value>
@@ -238,6 +247,7 @@ namespace Ainkrad.Client.Model
             sb.Append("  LoginMethods: ").Append(LoginMethods).Append("\n");
             sb.Append("  Models: ").Append(Models).Append("\n");
             sb.Append("  Name: ").Append(Name).Append("\n");
+            sb.Append("  Preset: ").Append(Preset).Append("\n");
             sb.Append("  PricedAt: ").Append(PricedAt).Append("\n");
             sb.Append("  TestPath: ").Append(TestPath).Append("\n");
             sb.Append("  UsageParser: ").Append(UsageParser).Append("\n");

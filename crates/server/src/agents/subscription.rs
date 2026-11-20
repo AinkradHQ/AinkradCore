@@ -171,13 +171,30 @@ pub(super) fn account_refusal(
     runner: &RunnerState,
     secrets: &[store::SessionSecret],
 ) -> Option<String> {
-    super::account_refusal(runner).or_else(|| {
-        (secrets.iter().any(is_subscription) && !lists_cap(runner)).then(|| {
-            "a session holding a subscription account's token needs a runner that checks it \
-             before redeeming (the subscription-env command): update the runner"
-                .to_owned()
+    super::account_refusal(runner)
+        .or_else(|| {
+            (secrets.iter().any(is_subscription) && !lists_cap(runner)).then(|| {
+                "a session holding a subscription account's token needs a runner that checks it \
+                 before redeeming (the subscription-env command): update the runner"
+                    .to_owned()
+            })
         })
-    })
+        .or_else(|| {
+            let lists_home = runner
+                .drivers
+                .iter()
+                .filter(|d| d.name == AGENT_DRIVER)
+                .any(|d| {
+                    d.commands
+                        .iter()
+                        .any(|c| c == ainkrad_proto::v2::CAP_BOUND_HOME)
+                });
+            (secrets.iter().any(super::bound::is_bound) && !lists_home).then(|| {
+                "a session holding a runner-bound account needs a runner that starts it in the \
+                 account's home (the bound-home command): update the runner"
+                    .to_owned()
+            })
+        })
 }
 
 /// Sets account `id`'s state, and when a subscription account leaves `active` also kills the live
@@ -206,19 +223,21 @@ pub async fn set_state(
     Ok(a)
 }
 
-/// Deletes account `id`, and kills the live sessions holding a subscription account's token.
+/// Removes account `id` with an Undo window (`accounts::soft_delete`: gone to every reader and to the
+/// allocator at once, wiped for real when the window ends), and kills the live sessions holding a
+/// account's key or token, whatever its kind. Answers when the window ends.
 pub async fn delete(
     app: &App,
     id: i64,
     by_device: &str,
     actor: AuditActor,
-) -> Result<(), secrets::Error> {
+) -> Result<String, secrets::Error> {
     let a = accounts::get(&app.pool, id).await?;
-    accounts::delete(&app.pool, id, by_device, actor).await?;
-    if crate::store::account_keys::subscription_provider(&a.provider) {
-        stop_live(app, &a.secret_name, "the subscription account was deleted").await;
-    }
-    Ok(())
+    let until = accounts::soft_delete(&app.pool, id, by_device, actor, &app.clock.now()).await?;
+    // Every kind of account: a gateway (API-key) session also holds the key's name, and a removed
+    // account's live sessions end at the soft delete, an Undo does not resurrect them.
+    stop_live(app, &a.secret_name, "the account was deleted").await;
+    Ok(until)
 }
 
 /// Kills every live session whose secrets name `secret_name`, audited `agent.killed` with `why`. A

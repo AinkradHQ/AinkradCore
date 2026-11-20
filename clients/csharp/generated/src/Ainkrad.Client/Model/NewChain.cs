@@ -27,7 +27,7 @@ using OpenAPIDateConverter = Ainkrad.Client.Client.OpenAPIDateConverter;
 namespace Ainkrad.Client.Model
 {
     /// <summary>
-    /// A chain to write: &#x60;[a-z][a-z0-9._-]{0,63}&#x60; and 1 to 4 entries, at most one of them a subscription. For an edit this replaces the name and the whole list.
+    /// A chain to write: &#x60;[a-z][a-z0-9._-]{0,63}&#x60; and 1 to 16 entries. For an edit this replaces the name and the whole list.
     /// </summary>
     [DataContract(Name = "NewChain")]
     public partial class NewChain : IValidatableObject

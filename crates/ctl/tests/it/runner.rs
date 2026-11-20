@@ -47,6 +47,27 @@ pub fn loopback_core_at(name: &str, port: u16, public: u16) -> Core {
 }
 
 /// Pairs a real runner as `name` through ctl (`base`: an admin device); its device id.
+/// The Core's built-in runner, enrolled as the installer does (`runner-enroll-local`): its state
+/// under `<dir>/<name>`. Returns its device id.
+pub fn enroll_local_runner(core: &Core, url: &str, name: &str) -> String {
+    // It takes the Core's https address only; the rig's Core is plain loopback, so the enrolment is
+    // pointed at that one afterwards.
+    let state = core.dir.join(name);
+    let o = Command::new(server_bin())
+        .arg("runner-enroll-local")
+        .arg(&core.db)
+        .arg(&state)
+        .arg("https://localhost")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{o:?}");
+    let file = state.join("enrolment.json");
+    let mut e: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    e["url"] = Value::from(url);
+    std::fs::write(&file, serde_json::to_vec(&e).unwrap()).unwrap();
+    String::from_utf8(o.stdout).unwrap().trim().to_owned()
+}
+
 pub fn pair_runner(core: &Core, base: &[String], url: &str, name: &str) -> String {
     let o = ctl(&args(&[
         base,
@@ -284,18 +305,23 @@ fn a_revoked_runner_exits_6() {
 /// `term new <runner> sh …` (a bare name, as typed), and that shell cannot read the runner's state:
 /// the sandbox is on, not silently skipped. Unit tests open `/bin/sh` through the driver only.
 #[test]
-#[ignore = "E6: a shell now starts in a private-root home that cannot write the test's output file outside it; rewrite the probe to write under $HOME and read it back, then run it by hand"]
 fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
     // Short: the host's socket path under macOS's long temp dir must fit in sun_path.
     let (core, url) = loopback_core("pty");
     let ks = core.keystore("mac");
     bootstrap(&core, &ks);
     let a = args(&[&s(&["--keystore", &ks.display().to_string()]), &core.at()]);
-    let id = pair_runner(&core, &a, &url, "vm");
+    // Terminals open on the Core's own runner only (E15 M6, spec §9): enrolled as the installer
+    // enrols the built-in one, and run with a workspace root, as the built-in runner is.
+    let id = enroll_local_runner(&core, &url, "vm");
+    let ws = core.dir.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
     let log = std::fs::File::create(core.dir.join("vm.log")).unwrap();
     let mut runner = Reap(
         Command::new(runner_bin())
-            .args(["connect", "--enable-pty", "--state"])
+            .args(["connect", "--enable-pty", "--workspace-root"])
+            .arg(&ws)
+            .arg("--state")
             .arg(core.dir.join("vm"))
             .env("AINKRAD_PTYHOST", ptyhost_bin())
             .env("RUST_LOG", "info")
@@ -320,13 +346,22 @@ fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
     wait_online(&a, &id, true, Duration::from_secs(20));
     // Beside the runner's key, in the state dir the sandbox hides.
     std::fs::write(core.dir.join("vm/canary"), "RUNNER-STATE-CANARY-3317").unwrap();
-    let out = core.dir.join("shell.out");
+    // The shell starts in its private-root home (`<state>/sandbox/<user>`, E6), the one place it
+    // can write: the probe writes there and the test reads it back from the host side.
     let script = format!(
-        "cat {}/canary >{o} 2>&1; sleep 0 & wait && echo x >/dev/null && echo DEV-OK >>{o}; \
-         echo SHELL-DONE >>{o}",
+        "o=\"$HOME/shell.out\"; cat {}/canary >\"$o\" 2>&1; sleep 0 & wait && echo x >/dev/null && \
+         echo DEV-OK >>\"$o\"; echo SHELL-DONE >>\"$o\"",
         core.dir.join("vm").display(),
-        o = out.display()
     );
+    let homes = core.dir.join("vm/sandbox");
+    let read_out = || {
+        std::fs::read_dir(&homes)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .find_map(|h| std::fs::read_to_string(h.path().join("shell.out")).ok())
+            .unwrap_or_default()
+    };
     let log = || std::fs::read_to_string(core.dir.join("vm.log")).unwrap_or_default();
     // The CLI cannot unlock (a routine key must not), and says so plainly.
     let refused = ctl(&args(&[&a, &s(&["term", "new", &id, "sh", "-c", &script])]));
@@ -384,7 +419,7 @@ fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
     });
     let start = Instant::now();
     let seen = loop {
-        let seen = std::fs::read_to_string(&out).unwrap_or_default();
+        let seen = read_out();
         if seen.contains("SHELL-DONE") {
             break seen;
         }

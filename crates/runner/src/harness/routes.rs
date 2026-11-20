@@ -192,6 +192,7 @@ impl HarnessExecutor {
             && long_lived(&job.harness)
             && !denied
             && tools.is_none()
+            && super::account::bound_key(job).is_none()
         {
             true => format!("warm-{}-{}", job.agent, job.harness),
             false => format!("run-{}", job.run),
@@ -266,6 +267,13 @@ impl HarnessExecutor {
         if let Err(e) = std::fs::create_dir_all(&config_dir) {
             return failed(format!("{}: {e}", config_dir.display()), "account");
         }
+        // A runner-bound account's session works in a per-session copy holding only its credential
+        // (never the home itself); dropped with this entry, it takes the rotated credential back.
+        let bound = match self.bound_session(job, &config_dir) {
+            Ok(b) => b,
+            Err(why) => return failed(why, "account"),
+        };
+        let config_dir = bound.as_ref().map_or(config_dir, |b| b.dir().to_path_buf());
         let mut env_allow = self.env_allow.clone();
         // The runner's `--env` first. A variable set more than once takes its LAST value (the
         // sandbox builder and `Command::envs` both read it that way), so everything the runner

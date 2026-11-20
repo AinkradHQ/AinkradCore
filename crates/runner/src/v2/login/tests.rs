@@ -76,6 +76,7 @@ pub(super) fn start(id: &str) -> LoginStart {
     LoginStart {
         login_id: id.to_owned(),
         harness: "claude".to_owned(),
+        home: None,
     }
 }
 

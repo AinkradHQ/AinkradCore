@@ -9,11 +9,14 @@ fn req(action: &str, params: &str) -> String {
 }
 
 #[test]
-fn the_four_class_a_actions_round_trip() {
+fn the_class_a_actions_round_trip() {
     for (a, p, want) in [
         ("status", "{}", Action::Status),
         ("restart_core", "{}", Action::RestartCore),
         ("restart_runner", "{}", Action::RestartRunner),
+        ("backup_now", "{}", Action::BackupNow),
+        ("backup_info", "{}", Action::BackupInfo),
+        ("update", "{}", Action::Update),
     ] {
         let r = parse(req(a, p).as_bytes()).unwrap();
         assert_eq!((r.id.as_str(), r.action), (ID, want));
@@ -111,7 +114,7 @@ fn bad_envelopes_and_params_are_refused() {
 
 #[test]
 fn unknown_and_class_b_actions_are_unknown_action() {
-    for name in ["nope", "backup_now", "STATUS", "status ", "", "sh"] {
+    for name in ["nope", "backup_run", "STATUS", "status ", "", "sh"] {
         let r = parse(req(name, "{}").as_bytes()).unwrap_err();
         assert_eq!((r.code, r.class_b), (Code::UnknownAction, false), "{name}");
         assert_eq!(r.action, None);
@@ -196,5 +199,23 @@ fn the_parser_survives_random_and_mutated_input() {
             }
         }
         let _ = parse(&buf);
+    }
+}
+
+#[test]
+fn backup_keep_is_no_longer_a_helper_action() {
+    let r = parse(req("backup_keep", r#"{"keep":14}"#).as_bytes()).unwrap_err();
+    assert_eq!(r.code, Code::UnknownAction);
+}
+
+#[test]
+fn update_takes_no_parameters() {
+    // No version, URL or path: the updater reads the signed manifest itself.
+    for p in [
+        r#"{"version":"9"}"#,
+        r#"{"url":"https://x"}"#,
+        r#"{"path":"/x"}"#,
+    ] {
+        assert_eq!(code(&req("update", p)), Code::BadRequest, "{p}");
     }
 }

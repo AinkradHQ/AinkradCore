@@ -25,7 +25,10 @@ fn refused<T>(message: impl Into<String>) -> Result<T, Error> {
 /// created by a login, never by a pasted value.
 pub fn is_subscription(def: &Definition) -> bool {
     def.builtin
-        && def.login_methods.iter().any(|m| m == "browser_code")
+        && def
+            .login_methods
+            .iter()
+            .any(|m| super::providers::RUNNER_LOGINS.contains(&m.as_str()))
         && !def.login_methods.iter().any(|m| m == "paste")
 }
 
@@ -126,7 +129,8 @@ pub fn holds_keys_problem(def: &Definition) -> Option<&'static str> {
             "the provider is not delivered through the gateway, so its accounts hold no key",
         );
     }
-    (!def.builtin && def.key_prefix.is_none()).then_some(
+    // A preset's keys are bound to the account and its frozen host, not to a prefix (D-19).
+    (!def.builtin && !def.preset && def.key_prefix.is_none()).then_some(
         "the provider declares no key_prefix, so its keys cannot be bound to its host: set one first",
     )
 }

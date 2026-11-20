@@ -30,6 +30,8 @@ pub struct RepoSummary {
     pub default_branch: String,
     pub private: bool,
     pub description: String,
+    /// GitHub's `pushed_at`, else `updated_at`: when the repository last changed, as GitHub wrote it.
+    pub updated_at: String,
 }
 
 fn text(v: &Value, max: usize) -> String {
@@ -107,6 +109,10 @@ impl Github {
                     default_branch: text(&r["default_branch"], 255),
                     private: r["private"].as_bool().unwrap_or(false),
                     description: text(&r["description"], 200),
+                    updated_at: match text(&r["pushed_at"], 40) {
+                        p if p.is_empty() => text(&r["updated_at"], 40),
+                        p => p,
+                    },
                 })
             })
             .collect();

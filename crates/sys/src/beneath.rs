@@ -322,16 +322,16 @@ pub fn fstatat(dir: BorrowedFd<'_>, name: &str) -> io::Result<Stat> {
     if r != 0 {
         return Err(io::Error::last_os_error());
     }
-    let kind = match u32::from(st.st_mode) & u32::from(libc::S_IFMT) {
-        m if m == u32::from(libc::S_IFREG) => Kind::File,
-        m if m == u32::from(libc::S_IFDIR) => Kind::Dir,
-        m if m == u32::from(libc::S_IFLNK) => Kind::Symlink,
+    let kind = match bits(st.st_mode) & bits(libc::S_IFMT) {
+        m if m == bits(libc::S_IFREG) => Kind::File,
+        m if m == bits(libc::S_IFDIR) => Kind::Dir,
+        m if m == bits(libc::S_IFLNK) => Kind::Symlink,
         _ => Kind::Other,
     };
     Ok(Stat {
         kind,
         size: u64::try_from(st.st_size).unwrap_or(0),
-        mode: u32::from(st.st_mode) & 0o7777,
+        mode: bits(st.st_mode) & 0o7777,
         mtime_ns: (st.st_mtime as i64)
             .saturating_mul(1_000_000_000)
             .saturating_add(st.st_mtime_nsec as i64),
@@ -387,6 +387,12 @@ pub fn list_dir(dir: BorrowedFd<'_>) -> io::Result<Vec<OsString>> {
         Some(e) => Err(e),
         None => Ok(names),
     }
+}
+
+/// A `mode_t` as `u32`: it is `u16` on macOS and already `u32` on Linux.
+#[allow(clippy::useless_conversion)]
+fn bits(m: libc::mode_t) -> u32 {
+    u32::from(m)
 }
 
 #[cfg(test)]

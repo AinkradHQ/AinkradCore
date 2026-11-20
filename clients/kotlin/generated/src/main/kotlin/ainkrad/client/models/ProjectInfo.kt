@@ -40,6 +40,7 @@ import kotlinx.serialization.Contextual
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param defaultEnvironment The run environment a Run button uses by default; one of the project's.
  * @param fetchIntervalMinutes Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
+ * @param idleNever The idle stop is off: the run keeps going while nobody visits.
  * @param room The linked Brain room; null when the Brain is off or the project has none.
  * @param runner Where it prefers to run: `auto`, `this_mac` or `home_server`.
  */
@@ -100,6 +101,10 @@ data class ProjectInfo (
     /* Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked. */
     @SerialName(value = "fetch_interval_minutes")
     val fetchIntervalMinutes: kotlin.Long? = null,
+
+    /* The idle stop is off: the run keeps going while nobody visits. */
+    @SerialName(value = "idle_never")
+    val idleNever: kotlin.Boolean? = null,
 
     /* The linked Brain room; null when the Brain is off or the project has none. */
     @SerialName(value = "room")

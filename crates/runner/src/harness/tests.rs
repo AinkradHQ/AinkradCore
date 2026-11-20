@@ -387,6 +387,7 @@ async fn secrets_are_the_marked_env_values_and_the_askpass_answers() {
 }
 
 mod accounts;
+mod bound;
 mod controls;
 mod disk;
 mod drops;

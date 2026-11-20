@@ -16,6 +16,7 @@
 package ainkrad.client.apis
 
 import ainkrad.client.models.ErrorBody
+import ainkrad.client.models.OpsHistory
 
 import ainkrad.client.infrastructure.*
 import io.ktor.client.HttpClientConfig
@@ -54,6 +55,41 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.GET,
             "/api/v1/metrics",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/ops/history
+        * 
+        * 
+         * @param hours How many hours back, 1 to 24 (default 24). (optional)
+         * @return OpsHistory
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getOpsHistory(hours: kotlin.Int?): HttpResponse<OpsHistory> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+            hours?.apply { localVariableQuery["hours"] = listOf("$hours") }
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/ops/history",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

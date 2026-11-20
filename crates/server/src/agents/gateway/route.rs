@@ -51,6 +51,11 @@ pub(super) fn of(def: &Definition, base_url: &str) -> Result<Route, Refusal> {
             prefix: prefix.clone(),
             host: host_of(base_url).to_owned(),
         }),
+        // A preset: no key shape, the key is bound to the account's frozen host (empty prefix).
+        (false, None) if def.preset => Some(UserKeyDef {
+            prefix: String::new(),
+            host: host_of(base_url).to_owned(),
+        }),
         (false, None) => return Err(refuse("the provider declares no key_prefix")),
     };
     let test_path = def.test_path.clone().filter(|_| !def.builtin);
@@ -86,6 +91,12 @@ pub(in crate::agents) fn secrets_problem(
     harness: &str,
     secrets: &[crate::store::agents::SessionSecret],
 ) -> Option<&'static str> {
+    // A runner-bound account (E7-4): its own harness, alone, no gateway.
+    if let Some(why) =
+        ainkrad_proto::v2::bound_problem(harness, false, secrets.iter().map(|s| s.name.as_str()))
+    {
+        return Some(why);
+    }
     if let Some(why) = ainkrad_proto::v2::subscription_problem(
         harness,
         false,
@@ -150,6 +161,7 @@ mod tests {
             key_prefix: prefix.map(str::to_owned),
             test_path: None,
             builtin: false,
+            preset: false,
             version: 1,
         }
     }
@@ -158,7 +170,7 @@ mod tests {
     fn a_built_in_carries_no_key_shape_and_a_user_definition_its_prefix_and_frozen_host() {
         for d in built_in() {
             // A subscription's token is a leased env variable (§5): the gateway never serves it.
-            if d.id == "claude-sub" {
+            if crate::store::account_keys::is_subscription(&d) {
                 assert!(of(&d, &d.base_url).is_err());
                 continue;
             }
@@ -176,6 +188,23 @@ mod tests {
             ("sk-or-v1-", "openrouter.ai")
         );
         assert_eq!(frozen.user_key.unwrap().host, "old.example.com");
+    }
+
+    #[test]
+    fn a_preset_has_a_route_bound_to_the_accounts_frozen_host_with_no_key_shape() {
+        for d in crate::store::providers::presets() {
+            let r = of(&d, &d.base_url).expect("a preset has a route");
+            assert_eq!(r.wire, Wire::OpenaiResponses, "{}", d.id);
+            let k = r.user_key.expect("a preset's key is bound to a host");
+            assert_eq!(k.prefix, "", "{}", d.id);
+            assert_eq!(k.host, host_of(&d.base_url));
+            // Only a listed, authenticated test path says anything about the key.
+            assert_eq!(r.can_test, d.test_path.is_some(), "{}", d.id);
+        }
+        // The host is the account's frozen one, whatever the preset says today.
+        let p = &crate::store::providers::presets()[0];
+        let r = of(p, "https://frozen.example.com/v1").unwrap();
+        assert_eq!(r.user_key.unwrap().host, "frozen.example.com");
     }
 
     #[test]

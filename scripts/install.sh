@@ -374,6 +374,16 @@ start_core() {
   run systemctl daemon-reload
   local tm=ainkrad-backup.timer
   [ -n "$A_BACKUP_RECIPIENT" ] || tm='' # no age recipient (guided, no terminal): the timer would only fail every day
+  # E12-3 (D-7): the Core updates itself at night. update.sh + install.sh + the pinned key live in /usr/local/lib/ainkrad;
+  # the units start nothing until the timer fires or the host helper's `update` action asks. Opt out: systemctl disable --now ainkrad-update.timer
+  run install -d -m 0755 /usr/local/lib/ainkrad
+  run install -m 0755 "$ROOT/scripts/release/update.sh" /usr/local/lib/ainkrad/update.sh
+  run install -m 0755 "$ROOT/scripts/release/install.sh" /usr/local/lib/ainkrad/install.sh
+  run install -m 0644 "$ROOT/scripts/release/ainkrad-release.pub" /usr/local/lib/ainkrad/ainkrad-release.pub
+  run install -m 0644 "$ROOT/deploy/systemd/ainkrad-update@.service" "$UNITS/ainkrad-update@.service"
+  run install -m 0644 "$ROOT/deploy/systemd/ainkrad-update.timer" "$UNITS/ainkrad-update.timer"
+  run systemctl daemon-reload
+  run systemctl enable --now ainkrad-update.timer
   run systemctl enable ainkrad-core.service $tm
   run systemctl restart ainkrad-core.service
   [ -z "$tm" ] || run systemctl restart ainkrad-backup.timer

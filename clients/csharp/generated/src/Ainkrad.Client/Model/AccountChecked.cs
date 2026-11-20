@@ -41,9 +41,10 @@ namespace Ainkrad.Client.Model
         /// Initializes a new instance of the <see cref="AccountChecked" /> class.
         /// </summary>
         /// <param name="latencyMs">latencyMs.</param>
+        /// <param name="models">A preset: how many model ids the provider listed (E7-3); absent otherwise..</param>
         /// <param name="result">&#x60;ok&#x60;, or why not. A Claude plan: &#x60;token_expired&#x60;, &#x60;limit_reached&#x60;, &#x60;no_runner&#x60; (none that may hold the token is online), &#x60;runner_outdated&#x60;, &#x60;runner_busy&#x60;, &#x60;runner_failed&#x60;, &#x60;egress_not_proven&#x60;, &#x60;sandbox_unavailable&#x60;, &#x60;unreachable&#x60;, &#x60;timeout&#x60; or &#x60;failed&#x60;. An API-key account: the key test&#39;s class (&#x60;ok&#x60;, &#x60;auth_failed&#x60;, ...) or &#x60;no_runner&#x60;. (required).</param>
         /// <param name="runner">The runner device that made the check; absent when none was asked..</param>
-        public AccountChecked(long? latencyMs = default, string result = default, string runner = default)
+        public AccountChecked(long? latencyMs = default, int? models = default, string result = default, string runner = default)
         {
             // to ensure "result" is required (not null)
             if (result == null)
@@ -52,6 +53,7 @@ namespace Ainkrad.Client.Model
             }
             this.Result = result;
             this.LatencyMs = latencyMs;
+            this.Models = models;
             this.Runner = runner;
         }
 
@@ -60,6 +62,13 @@ namespace Ainkrad.Client.Model
         /// </summary>
         [DataMember(Name = "latency_ms", EmitDefaultValue = true)]
         public long? LatencyMs { get; set; }
+
+        /// <summary>
+        /// A preset: how many model ids the provider listed (E7-3); absent otherwise.
+        /// </summary>
+        /// <value>A preset: how many model ids the provider listed (E7-3); absent otherwise.</value>
+        [DataMember(Name = "models", EmitDefaultValue = true)]
+        public int? Models { get; set; }
 
         /// <summary>
         /// &#x60;ok&#x60;, or why not. A Claude plan: &#x60;token_expired&#x60;, &#x60;limit_reached&#x60;, &#x60;no_runner&#x60; (none that may hold the token is online), &#x60;runner_outdated&#x60;, &#x60;runner_busy&#x60;, &#x60;runner_failed&#x60;, &#x60;egress_not_proven&#x60;, &#x60;sandbox_unavailable&#x60;, &#x60;unreachable&#x60;, &#x60;timeout&#x60; or &#x60;failed&#x60;. An API-key account: the key test&#39;s class (&#x60;ok&#x60;, &#x60;auth_failed&#x60;, ...) or &#x60;no_runner&#x60;.
@@ -84,6 +93,7 @@ namespace Ainkrad.Client.Model
             StringBuilder sb = new StringBuilder();
             sb.Append("class AccountChecked {\n");
             sb.Append("  LatencyMs: ").Append(LatencyMs).Append("\n");
+            sb.Append("  Models: ").Append(Models).Append("\n");
             sb.Append("  Result: ").Append(Result).Append("\n");
             sb.Append("  Runner: ").Append(Runner).Append("\n");
             sb.Append("}\n");
@@ -110,6 +120,12 @@ namespace Ainkrad.Client.Model
             if (this.LatencyMs < (long?)0)
             {
                 yield return new ValidationResult("Invalid value for LatencyMs, must be a value greater than or equal to 0.", new [] { "LatencyMs" });
+            }
+
+            // Models (int?) minimum
+            if (this.Models < (int?)0)
+            {
+                yield return new ValidationResult("Invalid value for Models, must be a value greater than or equal to 0.", new [] { "Models" });
             }
 
             yield break;

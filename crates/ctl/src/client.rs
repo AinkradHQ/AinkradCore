@@ -358,6 +358,7 @@ impl Client {
 
     /// The app unlock with a given signer, for a test fixture: the same exchange as a step-up with
     /// `purpose: session` and the V2 message. Keeps the token it is given. The CLI never calls this.
+    #[cfg(feature = "test-support")]
     pub async fn unlock_with(
         &mut self,
         sign: impl Fn(&[u8]) -> Vec<u8>,
