@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use ainkrad_core_server::api::limit::Limiter;
+use ainkrad_core_server::api::v1::Limits;
 use ainkrad_core_server::api::{App, router};
 use ainkrad_core_server::auth::Identity;
 use ainkrad_core_server::auth::testing::TestDevice;
@@ -60,6 +62,11 @@ async fn fx_with(on: bool) -> Fx {
     let clock = Arc::new(SystemClock);
     let mut app = App::new(pool, clock.clone(), HOST.to_owned(), identity);
     app.modules = Arc::from(modules);
+    // The package tests write 200 files and more in one go: past the default per-device burst
+    // (120), the 429 would answer before the size refusal they are after.
+    app.limits = Arc::new(Limits {
+        requests: Limiter::new(100_000, 100_000.0),
+    });
     let admin = enroll(&app, "admin", &["admin", "read"]).await;
     let session = admin.session.lock().unwrap().clone().unwrap();
     app.auth.elevate(&session, &admin.id, clock.unix() + 3600);
