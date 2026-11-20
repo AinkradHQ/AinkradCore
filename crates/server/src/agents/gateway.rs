@@ -216,27 +216,6 @@ pub(super) fn module_refusal(secrets: &[store::SessionSecret]) -> Option<&'stati
         })
 }
 
-#[cfg(test)]
-mod module_refusal_tests {
-    use super::*;
-
-    fn secret(name: &str) -> store::SessionSecret {
-        store::SessionSecret {
-            name: name.to_owned(),
-            var: "X".to_owned(),
-        }
-    }
-
-    #[test]
-    fn a_module_session_is_refused_a_runner_bound_account_like_every_other_account() {
-        for name in ["acct.codex-sub.7", "acct.opencode-sub.7", "acct.agy-sub.7"] {
-            assert!(module_refusal(&[secret(name)]).is_some(), "{name}");
-        }
-        assert!(module_refusal(&[]).is_none());
-        assert!(module_refusal(&[secret("project.token")]).is_none());
-    }
-}
-
 /// What the Core does about a gateway session after each answer it stored: a stop a budget ordered,
 /// and the check of an upstream `auth_failed`. Only the logs hear of a failure: the next answer
 /// tries again.
@@ -487,4 +466,25 @@ async fn check(app: &App, s: &Session, account: i64) -> Result<(), Refusal> {
         _ => gw::tried(&app.pool, signal, &now).await?,
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod module_refusal_tests {
+    use super::*;
+
+    fn secret(name: &str) -> store::SessionSecret {
+        store::SessionSecret {
+            name: name.to_owned(),
+            var: "X".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_module_session_is_refused_a_runner_bound_account_like_every_other_account() {
+        for name in ["acct.codex-sub.7", "acct.opencode-sub.7", "acct.agy-sub.7"] {
+            assert!(module_refusal(&[secret(name)]).is_some(), "{name}");
+        }
+        assert!(module_refusal(&[]).is_none());
+        assert!(module_refusal(&[secret("project.token")]).is_none());
+    }
 }

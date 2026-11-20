@@ -222,7 +222,7 @@ mod tests {
             assert_eq!(preset_shape_problem(&r, ok), None, "{ok}");
         }
         for bad in [
-            format!("throwaway-a\nthrowaway-b"),
+            "throwaway-a\nthrowaway-b".to_owned(),
             "-----BEGIN PRIVATE KEY-----".to_owned(),
             "eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl".to_owned(),
             format!("ghp_{body}"),

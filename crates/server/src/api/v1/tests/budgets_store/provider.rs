@@ -47,7 +47,7 @@ async fn a_provider_budget_counts_all_its_accounts_and_stops_every_one_of_them()
     let made = set(&fx, &bud("provider", "anthropic", "total", 1_000_000)).await;
     assert_eq!(made.kind, "provider");
     assert!(
-        room_in(&mut *p.acquire().await.unwrap(), b.id, "s9", false, 0, NOW)
+        room_in(&mut p.acquire().await.unwrap(), b.id, "s9", false, 0, NOW)
             .await
             .unwrap()
     );
