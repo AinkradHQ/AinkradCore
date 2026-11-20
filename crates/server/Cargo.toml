@@ -18,6 +18,8 @@ ainkrad-sys = { path = "../sys" }
 # The hardened HTTP client (vetted, pinned addresses; no redirect) for the connection adapters.
 ainkrad-providers = { path = "../providers" }
 getrandom = "0.4.3"
+# Workspace sync (E15-2): file, chunk and tree hashes. Already in the lock (via iroh); no new crate.
+blake3 = "1.8.7"
 # APNs (E10.4): the .p8 key's PEM, and HTTP/2 to Apple; ES256 signing with ring, which
 # rustls already brings in.
 base64 = "0.22.1"

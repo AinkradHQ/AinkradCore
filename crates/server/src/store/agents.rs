@@ -587,7 +587,15 @@ pub async fn apply_quiet(
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    // E15-2: a built-in runner's folder that is its place in the workspace is the Core's own.
+    let bound = match &ev.folder {
+        Some(f) => crate::workspace::adopt::bind_folder(&mut tx, id, f).await?,
+        None => None,
+    };
     tx.commit().await?;
+    if let Some(folder) = bound {
+        crate::workspace::adopt::baseline(id.to_owned(), folder);
+    }
     Ok(last)
 }
 

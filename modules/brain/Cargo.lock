@@ -125,6 +125,7 @@ dependencies = [
  "ainkrad-sys",
  "axum",
  "base64 0.22.1",
+ "blake3",
  "futures-util",
  "getrandom 0.4.3",
  "http-body-util",

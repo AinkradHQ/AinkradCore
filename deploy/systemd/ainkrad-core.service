@@ -36,11 +36,14 @@ StateDirectory=ainkrad
 StateDirectoryMode=0750
 ConfigurationDirectory=ainkrad
 ConfigurationDirectoryMode=0750
-UMask=0077
+# 0007, not 0077: what the Core writes in the shared workspace (/var/lib/ainkrad-ws, group ainkrad-ws) is group-writable
+# for the built-in runner. Other users still get nothing.
+UMask=0007
+SupplementaryGroups=ainkrad-ws
 
 # --- Filesystem: read-only system, writable only in the state directory ---
 ProtectSystem=strict
-ReadWritePaths=/var/lib/ainkrad
+ReadWritePaths=/var/lib/ainkrad /var/lib/ainkrad-ws
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
