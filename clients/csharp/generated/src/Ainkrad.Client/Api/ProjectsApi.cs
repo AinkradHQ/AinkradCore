@@ -369,6 +369,22 @@ namespace Ainkrad.Client.Api
         /// 
         /// </summary>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <returns>ProjectDefaults</returns>
+        ProjectDefaults GetProjectDefaults();
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <returns>ApiResponse of ProjectDefaults</returns>
+        ApiResponse<ProjectDefaults> GetProjectDefaultsWithHttpInfo();
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="id">The project&#39;s id</param>
         /// <returns>ProjectRun</returns>
         ProjectRun GetProjectRun(string id);
@@ -769,6 +785,24 @@ namespace Ainkrad.Client.Api
         /// <param name="newRunSpec"></param>
         /// <returns>ApiResponse of RunSpecVersion</returns>
         ApiResponse<RunSpecVersion> SaveProjectSpecWithHttpInfo(string id, NewRunSpec newRunSpec);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="setProjectDefaults"></param>
+        /// <returns>ProjectDefaults</returns>
+        ProjectDefaults SetProjectDefaults(SetProjectDefaults setProjectDefaults);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="setProjectDefaults"></param>
+        /// <returns>ApiResponse of ProjectDefaults</returns>
+        ApiResponse<ProjectDefaults> SetProjectDefaultsWithHttpInfo(SetProjectDefaults setProjectDefaults);
         /// <summary>
         /// 
         /// </summary>
@@ -1458,6 +1492,27 @@ namespace Ainkrad.Client.Api
         /// 
         /// </remarks>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ProjectDefaults</returns>
+        System.Threading.Tasks.Task<ProjectDefaults> GetProjectDefaultsAsync(System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (ProjectDefaults)</returns>
+        System.Threading.Tasks.Task<ApiResponse<ProjectDefaults>> GetProjectDefaultsWithHttpInfoAsync(System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="id">The project&#39;s id</param>
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ProjectRun</returns>
@@ -1955,6 +2010,29 @@ namespace Ainkrad.Client.Api
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse (RunSpecVersion)</returns>
         System.Threading.Tasks.Task<ApiResponse<RunSpecVersion>> SaveProjectSpecWithHttpInfoAsync(string id, NewRunSpec newRunSpec, System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="setProjectDefaults"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ProjectDefaults</returns>
+        System.Threading.Tasks.Task<ProjectDefaults> SetProjectDefaultsAsync(SetProjectDefaults setProjectDefaults, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="setProjectDefaults"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (ProjectDefaults)</returns>
+        System.Threading.Tasks.Task<ApiResponse<ProjectDefaults>> SetProjectDefaultsWithHttpInfoAsync(SetProjectDefaults setProjectDefaults, System.Threading.CancellationToken cancellationToken = default);
         /// <summary>
         /// 
         /// </summary>
@@ -4841,6 +4919,117 @@ namespace Ainkrad.Client.Api
         ///  
         /// </summary>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <returns>ProjectDefaults</returns>
+        public ProjectDefaults GetProjectDefaults()
+        {
+            Ainkrad.Client.Client.ApiResponse<ProjectDefaults> localVarResponse = GetProjectDefaultsWithHttpInfo();
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <returns>ApiResponse of ProjectDefaults</returns>
+        public Ainkrad.Client.Client.ApiResponse<ProjectDefaults> GetProjectDefaultsWithHttpInfo()
+        {
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Get<ProjectDefaults>("/api/v1/projects/defaults", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("GetProjectDefaults", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ProjectDefaults</returns>
+        public async System.Threading.Tasks.Task<ProjectDefaults> GetProjectDefaultsAsync(System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<ProjectDefaults> localVarResponse = await GetProjectDefaultsWithHttpInfoAsync(cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (ProjectDefaults)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<ProjectDefaults>> GetProjectDefaultsWithHttpInfoAsync(System.Threading.CancellationToken cancellationToken = default)
+        {
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.GetAsync<ProjectDefaults>("/api/v1/projects/defaults", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("GetProjectDefaults", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="id">The project&#39;s id</param>
         /// <returns>ProjectRun</returns>
         public ProjectRun GetProjectRun(string id)
@@ -7619,6 +7808,133 @@ namespace Ainkrad.Client.Api
             if (this.ExceptionFactory != null)
             {
                 Exception _exception = this.ExceptionFactory("SaveProjectSpec", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="setProjectDefaults"></param>
+        /// <returns>ProjectDefaults</returns>
+        public ProjectDefaults SetProjectDefaults(SetProjectDefaults setProjectDefaults)
+        {
+            Ainkrad.Client.Client.ApiResponse<ProjectDefaults> localVarResponse = SetProjectDefaultsWithHttpInfo(setProjectDefaults);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="setProjectDefaults"></param>
+        /// <returns>ApiResponse of ProjectDefaults</returns>
+        public Ainkrad.Client.Client.ApiResponse<ProjectDefaults> SetProjectDefaultsWithHttpInfo(SetProjectDefaults setProjectDefaults)
+        {
+            // verify the required parameter 'setProjectDefaults' is set
+            if (setProjectDefaults == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'setProjectDefaults' when calling ProjectsApi->SetProjectDefaults");
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+                "application/json"
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.Data = setProjectDefaults;
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Put<ProjectDefaults>("/api/v1/projects/defaults", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("SetProjectDefaults", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="setProjectDefaults"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ProjectDefaults</returns>
+        public async System.Threading.Tasks.Task<ProjectDefaults> SetProjectDefaultsAsync(SetProjectDefaults setProjectDefaults, System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<ProjectDefaults> localVarResponse = await SetProjectDefaultsWithHttpInfoAsync(setProjectDefaults, cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="setProjectDefaults"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (ProjectDefaults)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<ProjectDefaults>> SetProjectDefaultsWithHttpInfoAsync(SetProjectDefaults setProjectDefaults, System.Threading.CancellationToken cancellationToken = default)
+        {
+            // verify the required parameter 'setProjectDefaults' is set
+            if (setProjectDefaults == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'setProjectDefaults' when calling ProjectsApi->SetProjectDefaults");
+
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+                "application/json"
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.Data = setProjectDefaults;
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.PutAsync<ProjectDefaults>("/api/v1/projects/defaults", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("SetProjectDefaults", localVarResponse);
                 if (_exception != null) throw _exception;
             }
 

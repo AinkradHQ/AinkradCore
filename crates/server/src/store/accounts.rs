@@ -29,7 +29,14 @@ use super::secrets::{self, Error, NewValue};
 use crate::ops::secretbox::SecretBox;
 
 mod create;
-pub use create::{create, create_by, create_placed};
+mod remove;
+mod retired_limits;
+pub use create::{bound_marker, create, create_bound, create_by, create_placed};
+pub use remove::{
+    PendingWipe, UNDO_SECS, note_keyring_left, owe_wipe, pending_wipes, restore, soft_delete,
+    wipe_done, wipe_due, wipe_one, wipe_tried,
+};
+pub use retired_limits::audit_retired as audit_retired_limits;
 
 /// The cap a new API-key account starts with.
 pub const DEFAULT_CAP: i64 = 4;
@@ -37,7 +44,15 @@ pub const DEFAULT_CAP: i64 = 4;
 pub const MAX_CAP: i64 = 64;
 /// The built-in providers (pools are of these only). An account may also name a stored user
 /// definition (`account_keys::holds_keys_problem`).
-pub const PROVIDERS: [&str; 4] = ["anthropic", "openai", "google", "claude-sub"];
+pub const PROVIDERS: [&str; 7] = [
+    "anthropic",
+    "openai",
+    "google",
+    "claude-sub",
+    "codex-sub",
+    "opencode-sub",
+    "agy-sub",
+];
 /// The states an account is in.
 pub const STATES: [&str; 5] = ["active", "cooling", "limited", "unhealthy", "disabled"];
 
@@ -76,6 +91,7 @@ pub struct Account {
 }
 
 /// An account to store. Deliberately no `Debug`: `value` is the key.
+#[derive(Clone, Copy)]
 pub struct NewAccount<'a> {
     pub provider: &'a str,
     pub label: &'a str,
@@ -168,13 +184,20 @@ pub(super) async fn audit(
     Ok(())
 }
 
+/// An account that is not removed (a removed one is waiting out its Undo window: it is gone to everyone).
 pub(super) async fn find(conn: &mut SqliteConnection, id: i64) -> Result<Account, Error> {
+    find_in(conn, id, false).await
+}
+
+/// The same, a removed account too (its restore and its wipe).
+async fn find_in(conn: &mut SqliteConnection, id: i64, removed: bool) -> Result<Account, Error> {
     let sql = format!(
         "SELECT {COLUMNS} FROM core_accounts a LEFT JOIN core_secrets s ON s.name = a.secret_name \
-         WHERE a.id = ?"
+         WHERE a.id = ? AND (? OR a.deleted_at IS NULL)"
     );
     match sqlx::query(sqlx::AssertSqlSafe(sql))
         .bind(id)
+        .bind(removed)
         .fetch_optional(&mut *conn)
         .await?
     {
@@ -192,7 +215,7 @@ pub async fn get(pool: &SqlitePool, id: i64) -> Result<Account, Error> {
 pub async fn list(pool: &SqlitePool) -> Result<Vec<Account>, sqlx::Error> {
     let sql = format!(
         "SELECT {COLUMNS} FROM core_accounts a LEFT JOIN core_secrets s ON s.name = a.secret_name \
-         ORDER BY a.id"
+         WHERE a.deleted_at IS NULL ORDER BY a.id"
     );
     sqlx::query(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
@@ -352,6 +375,14 @@ pub async fn set_cap(
     check_cap(cap)?;
     let mut tx = super::begin_write(pool).await?;
     let old = find(&mut tx, id).await?;
+    // A runner-bound login's rotating auth.json is never refreshed by two sessions at once: its
+    // cap is one session at a time, and that is the lock (the allocator holds the rest back).
+    if cap != 1 && super::bound::of(&mut tx, id).await?.is_some() {
+        return refused(
+            "bad_request",
+            "a runner-bound account runs one session at a time: its cap stays 1",
+        );
+    }
     sqlx::query("UPDATE core_accounts SET cap = ?, updated_at = ? WHERE id = ?")
         .bind(cap)
         .bind(now)
@@ -371,21 +402,62 @@ pub async fn set_cap(
     Ok(a)
 }
 
-/// Deletes the account and its key (with the key's leases).
+/// Wipes the account for real: the row, its key (with the key's leases), its seats and budgets; for a
+/// runner-bound account also a pending wipe of its login on its runner. The API removes with an Undo
+/// window first ([`soft_delete`]); this is what ends it, audited `account.wiped`.
 pub async fn delete(
     pool: &SqlitePool,
     id: i64,
     by_device: &str,
     actor: AuditActor,
 ) -> Result<(), Error> {
+    delete_gated(pool, id, by_device, actor, None)
+        .await
+        .map(drop)
+}
+
+/// [`delete`], but with `due` (`all`, the cutoff) it first re-checks, inside the delete's own
+/// transaction, that the account is still removed and its window is over (or `all`): a restore that
+/// raced the sweep's list wins, and `false` says nothing was wiped.
+pub(super) async fn delete_gated(
+    pool: &SqlitePool,
+    id: i64,
+    by_device: &str,
+    actor: AuditActor,
+    due: Option<(bool, &str)>,
+) -> Result<bool, Error> {
     let mut tx = super::begin_write(pool).await?;
-    let a = find(&mut tx, id).await?;
+    if let Some((all, cutoff)) = due {
+        let still: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM core_accounts WHERE id = ?1 AND deleted_at IS NOT NULL \
+             AND (?2 OR julianday(deleted_at) <= julianday(?3))",
+        )
+        .bind(id)
+        .bind(all)
+        .bind(cutoff)
+        .fetch_one(&mut *tx)
+        .await?;
+        if still == 0 {
+            return Ok(false);
+        }
+    }
+    let a = find_in(&mut tx, id, true).await?;
     // The seats the cascade takes with the row, so the audit trail says which pools lost it.
     let pools: Vec<i64> = sqlx::query_scalar(
         "SELECT pool_id FROM core_pool_members WHERE account_id = ? ORDER BY pool_id",
     )
     .bind(id)
     .fetch_all(&mut *tx)
+    .await?;
+    // The runner still holds the login: remember where, until it says it is wiped (the row is gone
+    // after this, and so is its `core_account_bound`).
+    sqlx::query(
+        "INSERT OR IGNORE INTO core_account_wipes (runner, home, created_at) \
+         SELECT runner, home, ? FROM core_account_bound WHERE account_id = ?",
+    )
+    .bind(&a.updated_at)
+    .bind(id)
+    .execute(&mut *tx)
     .await?;
     sqlx::query("DELETE FROM core_accounts WHERE id = ?")
         .bind(id)
@@ -401,13 +473,13 @@ pub async fn delete(
     audit(
         &mut tx,
         actor,
-        "account.deleted",
+        "account.wiped",
         id,
         json!({"provider": a.provider, "label": a.label, "pools": pools, "by_device": by_device}),
     )
     .await?;
     tx.commit().await?;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]

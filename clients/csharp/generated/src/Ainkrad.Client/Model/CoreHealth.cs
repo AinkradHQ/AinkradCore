@@ -42,11 +42,21 @@ namespace Ainkrad.Client.Model
         /// </summary>
         /// <param name="certDaysLeft">Whole days until then; negative once it has ended..</param>
         /// <param name="certNotAfter">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
+        /// <param name="diskTotalBytes">Size of the data disk in bytes..</param>
+        /// <param name="diskUsedBytes">The data disk in use, in bytes..</param>
+        /// <param name="diskUsedPct">Share of the data disk in use, 0 to 100, when the host says..</param>
+        /// <param name="fleet">The runners at a glance..</param>
+        /// <param name="hostCpuPct">The whole host&#39;s CPU, 0 to 100, over the last minute (a Linux Core only)..</param>
         /// <param name="lastBackupAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
         /// <param name="lastBackupBytes">That backup&#39;s size in bytes..</param>
+        /// <param name="memoryBytes">Resident memory of the Core process in bytes (the top bar&#39;s Core menu)..</param>
+        /// <param name="minApp">E12-5: the oldest app this Core works with. An app below it tells the person to update the app..</param>
+        /// <param name="minRunner">E12-5: the oldest runner this Core works with (&#x60;GET /runners&#x60; marks older ones &#x60;update_required&#x60;)..</param>
+        /// <param name="ramTotalBytes">ramTotalBytes.</param>
+        /// <param name="ramUsedBytes">The host&#39;s memory in use and in total, in bytes (a Linux Core only)..</param>
         /// <param name="uptimeSecs">Seconds since this Core process started. (required).</param>
         /// <param name="varVersion">The server&#39;s crate version. (required).</param>
-        public CoreHealth(long? certDaysLeft = default, DateTime certNotAfter = default, DateTime lastBackupAt = default, long? lastBackupBytes = default, long uptimeSecs = default, string varVersion = default)
+        public CoreHealth(long? certDaysLeft = default, DateTime certNotAfter = default, long? diskTotalBytes = default, long? diskUsedBytes = default, long? diskUsedPct = default, Fleet fleet = default, double? hostCpuPct = default, DateTime lastBackupAt = default, long? lastBackupBytes = default, long? memoryBytes = default, string minApp = default, string minRunner = default, long? ramTotalBytes = default, long? ramUsedBytes = default, long uptimeSecs = default, string varVersion = default)
         {
             this.UptimeSecs = uptimeSecs;
             // to ensure "varVersion" is required (not null)
@@ -57,8 +67,18 @@ namespace Ainkrad.Client.Model
             this.VarVersion = varVersion;
             this.CertDaysLeft = certDaysLeft;
             this.CertNotAfter = certNotAfter;
+            this.DiskTotalBytes = diskTotalBytes;
+            this.DiskUsedBytes = diskUsedBytes;
+            this.DiskUsedPct = diskUsedPct;
+            this.Fleet = fleet;
+            this.HostCpuPct = hostCpuPct;
             this.LastBackupAt = lastBackupAt;
             this.LastBackupBytes = lastBackupBytes;
+            this.MemoryBytes = memoryBytes;
+            this.MinApp = minApp;
+            this.MinRunner = minRunner;
+            this.RamTotalBytes = ramTotalBytes;
+            this.RamUsedBytes = ramUsedBytes;
         }
 
         /// <summary>
@@ -76,6 +96,41 @@ namespace Ainkrad.Client.Model
         public DateTime CertNotAfter { get; set; }
 
         /// <summary>
+        /// Size of the data disk in bytes.
+        /// </summary>
+        /// <value>Size of the data disk in bytes.</value>
+        [DataMember(Name = "disk_total_bytes", EmitDefaultValue = true)]
+        public long? DiskTotalBytes { get; set; }
+
+        /// <summary>
+        /// The data disk in use, in bytes.
+        /// </summary>
+        /// <value>The data disk in use, in bytes.</value>
+        [DataMember(Name = "disk_used_bytes", EmitDefaultValue = true)]
+        public long? DiskUsedBytes { get; set; }
+
+        /// <summary>
+        /// Share of the data disk in use, 0 to 100, when the host says.
+        /// </summary>
+        /// <value>Share of the data disk in use, 0 to 100, when the host says.</value>
+        [DataMember(Name = "disk_used_pct", EmitDefaultValue = true)]
+        public long? DiskUsedPct { get; set; }
+
+        /// <summary>
+        /// The runners at a glance.
+        /// </summary>
+        /// <value>The runners at a glance.</value>
+        [DataMember(Name = "fleet", EmitDefaultValue = false)]
+        public Fleet Fleet { get; set; }
+
+        /// <summary>
+        /// The whole host&#39;s CPU, 0 to 100, over the last minute (a Linux Core only).
+        /// </summary>
+        /// <value>The whole host&#39;s CPU, 0 to 100, over the last minute (a Linux Core only).</value>
+        [DataMember(Name = "host_cpu_pct", EmitDefaultValue = true)]
+        public double? HostCpuPct { get; set; }
+
+        /// <summary>
         /// RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4).
         /// </summary>
         /// <value>RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4).</value>
@@ -88,6 +143,40 @@ namespace Ainkrad.Client.Model
         /// <value>That backup&#39;s size in bytes.</value>
         [DataMember(Name = "last_backup_bytes", EmitDefaultValue = true)]
         public long? LastBackupBytes { get; set; }
+
+        /// <summary>
+        /// Resident memory of the Core process in bytes (the top bar&#39;s Core menu).
+        /// </summary>
+        /// <value>Resident memory of the Core process in bytes (the top bar&#39;s Core menu).</value>
+        [DataMember(Name = "memory_bytes", EmitDefaultValue = true)]
+        public long? MemoryBytes { get; set; }
+
+        /// <summary>
+        /// E12-5: the oldest app this Core works with. An app below it tells the person to update the app.
+        /// </summary>
+        /// <value>E12-5: the oldest app this Core works with. An app below it tells the person to update the app.</value>
+        [DataMember(Name = "min_app", EmitDefaultValue = true)]
+        public string MinApp { get; set; }
+
+        /// <summary>
+        /// E12-5: the oldest runner this Core works with (&#x60;GET /runners&#x60; marks older ones &#x60;update_required&#x60;).
+        /// </summary>
+        /// <value>E12-5: the oldest runner this Core works with (&#x60;GET /runners&#x60; marks older ones &#x60;update_required&#x60;).</value>
+        [DataMember(Name = "min_runner", EmitDefaultValue = true)]
+        public string MinRunner { get; set; }
+
+        /// <summary>
+        /// Gets or Sets RamTotalBytes
+        /// </summary>
+        [DataMember(Name = "ram_total_bytes", EmitDefaultValue = true)]
+        public long? RamTotalBytes { get; set; }
+
+        /// <summary>
+        /// The host&#39;s memory in use and in total, in bytes (a Linux Core only).
+        /// </summary>
+        /// <value>The host&#39;s memory in use and in total, in bytes (a Linux Core only).</value>
+        [DataMember(Name = "ram_used_bytes", EmitDefaultValue = true)]
+        public long? RamUsedBytes { get; set; }
 
         /// <summary>
         /// Seconds since this Core process started.
@@ -113,8 +202,18 @@ namespace Ainkrad.Client.Model
             sb.Append("class CoreHealth {\n");
             sb.Append("  CertDaysLeft: ").Append(CertDaysLeft).Append("\n");
             sb.Append("  CertNotAfter: ").Append(CertNotAfter).Append("\n");
+            sb.Append("  DiskTotalBytes: ").Append(DiskTotalBytes).Append("\n");
+            sb.Append("  DiskUsedBytes: ").Append(DiskUsedBytes).Append("\n");
+            sb.Append("  DiskUsedPct: ").Append(DiskUsedPct).Append("\n");
+            sb.Append("  Fleet: ").Append(Fleet).Append("\n");
+            sb.Append("  HostCpuPct: ").Append(HostCpuPct).Append("\n");
             sb.Append("  LastBackupAt: ").Append(LastBackupAt).Append("\n");
             sb.Append("  LastBackupBytes: ").Append(LastBackupBytes).Append("\n");
+            sb.Append("  MemoryBytes: ").Append(MemoryBytes).Append("\n");
+            sb.Append("  MinApp: ").Append(MinApp).Append("\n");
+            sb.Append("  MinRunner: ").Append(MinRunner).Append("\n");
+            sb.Append("  RamTotalBytes: ").Append(RamTotalBytes).Append("\n");
+            sb.Append("  RamUsedBytes: ").Append(RamUsedBytes).Append("\n");
             sb.Append("  UptimeSecs: ").Append(UptimeSecs).Append("\n");
             sb.Append("  VarVersion: ").Append(VarVersion).Append("\n");
             sb.Append("}\n");
@@ -137,10 +236,40 @@ namespace Ainkrad.Client.Model
         /// <returns>Validation Result</returns>
         IEnumerable<ValidationResult> IValidatableObject.Validate(ValidationContext validationContext)
         {
+            // DiskTotalBytes (long?) minimum
+            if (this.DiskTotalBytes < (long?)0)
+            {
+                yield return new ValidationResult("Invalid value for DiskTotalBytes, must be a value greater than or equal to 0.", new [] { "DiskTotalBytes" });
+            }
+
+            // DiskUsedBytes (long?) minimum
+            if (this.DiskUsedBytes < (long?)0)
+            {
+                yield return new ValidationResult("Invalid value for DiskUsedBytes, must be a value greater than or equal to 0.", new [] { "DiskUsedBytes" });
+            }
+
             // LastBackupBytes (long?) minimum
             if (this.LastBackupBytes < (long?)0)
             {
                 yield return new ValidationResult("Invalid value for LastBackupBytes, must be a value greater than or equal to 0.", new [] { "LastBackupBytes" });
+            }
+
+            // MemoryBytes (long?) minimum
+            if (this.MemoryBytes < (long?)0)
+            {
+                yield return new ValidationResult("Invalid value for MemoryBytes, must be a value greater than or equal to 0.", new [] { "MemoryBytes" });
+            }
+
+            // RamTotalBytes (long?) minimum
+            if (this.RamTotalBytes < (long?)0)
+            {
+                yield return new ValidationResult("Invalid value for RamTotalBytes, must be a value greater than or equal to 0.", new [] { "RamTotalBytes" });
+            }
+
+            // RamUsedBytes (long?) minimum
+            if (this.RamUsedBytes < (long?)0)
+            {
+                yield return new ValidationResult("Invalid value for RamUsedBytes, must be a value greater than or equal to 0.", new [] { "RamUsedBytes" });
             }
 
             // UptimeSecs (long) minimum

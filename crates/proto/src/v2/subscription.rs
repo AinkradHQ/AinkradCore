@@ -25,6 +25,86 @@ pub const CAP_SUBSCRIPTION_ENV: &str = "subscription-env";
 /// to the built-in definitions that sign in by browser code.
 pub const SUBSCRIPTION_PROVIDERS: [&str; 1] = ["claude-sub"];
 
+/// The runner-bound subscription providers (E7-4, E7-5, E7-5b) and the harness each runs. Their
+/// credential (Codex `auth.json`, OpenCode `auth.json`, Antigravity's keyring entry) rotates or is
+/// not portable, so it stays in the account's home on one runner: the Core stores a non-secret
+/// marker and the runner's id, never a token. They are deliberately not in
+/// [`SUBSCRIPTION_PROVIDERS`]: the claude token rules above stay as they are.
+pub const BOUND_PROVIDERS: [(&str, &str); 3] = [
+    ("codex-sub", "codex"),
+    ("opencode-sub", "opencode"),
+    ("agy-sub", "agy"),
+];
+/// The command an agent driver lists when its runner starts a session in an account's own home
+/// (`AgentStart::home`). The Core places a runner-bound session only on a runner that lists it.
+pub const CAP_BOUND_HOME: &str = "bound-home";
+/// Where a bound account's home is, under the runner's config root.
+pub const BOUND_HOME_DIR: &str = "bound";
+
+/// The harness a bound provider runs, or `None` for any other provider.
+pub fn bound_harness(provider: &str) -> Option<&'static str> {
+    BOUND_PROVIDERS
+        .iter()
+        .find(|(p, _)| *p == provider)
+        .map(|(_, h)| *h)
+}
+
+fn provider_of(name: &str) -> Option<&str> {
+    name.strip_prefix(ACCOUNT_PREFIX)?.split('.').next()
+}
+
+/// Whether `name` is a runner-bound account's secret (`acct.codex-sub.<id>`). By provider alone,
+/// so a malformed name counts too: fail closed.
+pub fn is_bound_secret(name: &str) -> bool {
+    name.strip_prefix(ACCOUNT_PREFIX)
+        .and_then(|rest| rest.split('.').next())
+        .is_some_and(|p| bound_harness(p).is_some())
+}
+
+/// A home key: what names an account's dir under [`BOUND_HOME_DIR`]. Plain, so it cannot escape.
+pub fn bound_key_ok(key: &str) -> bool {
+    (1..=64).contains(&key.len())
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Why a session of `harness` may not hold `names` (secret names) when one is a runner-bound
+/// account: its harness only, one such account, no gateway grant and no other provider account.
+pub fn bound_problem<'a>(
+    harness: &str,
+    has_gateway: bool,
+    names: impl IntoIterator<Item = &'a str> + Clone,
+) -> Option<&'static str> {
+    let bound: Vec<&str> = names
+        .clone()
+        .into_iter()
+        .filter(|n| is_bound_secret(n))
+        .collect();
+    if bound.is_empty() {
+        return None;
+    }
+    if bound
+        .iter()
+        .any(|n| provider_of(n).and_then(bound_harness) != Some(harness))
+    {
+        return Some("a runner-bound account goes only to its own provider's harness");
+    }
+    if bound.len() > 1 {
+        return Some("a session names at most one runner-bound account");
+    }
+    if has_gateway {
+        return Some("a runner-bound account is never served by the gateway: no gateway grant");
+    }
+    if names
+        .into_iter()
+        .any(|n| n.starts_with(ACCOUNT_PREFIX) && !is_bound_secret(n))
+    {
+        return Some("a session holding a runner-bound account may hold no other provider account");
+    }
+    None
+}
+
 /// Whether `name` is a subscription account's secret. By provider alone, so a malformed
 /// `acct.claude-sub.x` counts too: fail closed.
 pub fn is_subscription_secret(name: &str) -> bool {
@@ -119,6 +199,23 @@ mod tests {
 
     fn problem(h: &str, gw: bool, g: &[(&str, &str, Option<&str>)]) -> Option<&'static str> {
         subscription_problem(h, gw, g.iter().copied())
+    }
+
+    #[test]
+    fn a_bound_account_goes_to_its_own_harness_alone() {
+        let b = "acct.codex-sub.4";
+        assert_eq!(bound_problem("codex", false, [b]), None);
+        assert!(bound_problem("claude", false, [b]).is_some());
+        assert!(bound_problem("opencode", false, [b]).is_some());
+        assert!(bound_problem("codex", true, [b]).is_some());
+        assert!(bound_problem("codex", false, [b, "acct.codex-sub.5"]).is_some());
+        assert!(bound_problem("codex", false, [b, "acct.openai.3"]).is_some());
+        assert_eq!(bound_problem("codex", false, ["acct.openai.3"]), None);
+        assert_eq!(bound_harness("agy-sub"), Some("agy"));
+        // It is not a claude token: the claude rules do not see it.
+        assert!(!is_subscription_secret(b));
+        assert!(is_bound_secret("acct.agy-sub.x"));
+        assert!(bound_key_ok("lg_1-a") && !bound_key_ok("../x") && !bound_key_ok(""));
     }
 
     #[test]

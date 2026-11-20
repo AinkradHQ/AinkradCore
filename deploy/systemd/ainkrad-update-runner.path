@@ -1,0 +1,13 @@
+# E12-4: the runner (unprivileged) asks for its own update by creating this file when the Core sends `runner.update`.
+# The file only says "go"; nothing in it is read. ainkrad-update@runner.service (root) verifies the signed manifest itself,
+# installs only a newer signed runner, restarts the runner and rolls the binaries back if it does not stay up.
+
+[Unit]
+Description=Ainkrad runner update request
+
+[Path]
+PathExists=/var/lib/ainkrad-runner/core/update-request
+Unit=ainkrad-update@runner.service
+
+[Install]
+WantedBy=multi-user.target

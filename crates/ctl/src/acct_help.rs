@@ -26,11 +26,9 @@ pub const HELP: &str = "  account ls | show <id> | providers
       Sets an account's state by hand. `active` is \"it is fine\" (it clears the streaks); with no
       --until a cooling, limited or unhealthy state is a hold that never recovers on its own.
       Disabling a subscription account kills the live sessions holding its token.
-  account cap <id> <n>*  |  limit set <id> <tokens|messages> <window-secs> <cap>* [--warn-percent n]
-  account limit clear <id> <unit> <window-secs>*  |  session-limits <id>* [--max-tokens n]
-                                                                     [--max-usd-micros n]
-      The account's concurrency cap (0 to 64), its token/message limits per window, and what
-      one session may spend through it (a dimension left out is cleared).
+  account cap <id> <n>*  |  session-limits <id>* [--max-tokens n] [--max-usd-micros n]
+      The account's concurrency cap (0 to 64), and what one session may spend through it (a
+      dimension left out is cleared). Limits per window are budgets: `budget set account <id> ...`.
   account test <id>*  |  rm <id>*
       test makes one free request through a runner's gateway and prints the status class and
       latency (the Core paces it: one a minute, a 429 says how long). rm deletes the account with

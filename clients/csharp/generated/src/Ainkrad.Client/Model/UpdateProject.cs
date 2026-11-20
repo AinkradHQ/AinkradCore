@@ -41,11 +41,12 @@ namespace Ainkrad.Client.Model
         /// <param name="expose">expose.</param>
         /// <param name="fetchIntervalMinutes">Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked..</param>
         /// <param name="idleMinutes">Idle stop, 5 to 1440 minutes..</param>
+        /// <param name="idleNever">Turn the idle stop off (true) or back on (false)..</param>
         /// <param name="memLimitMb">Memory a run may use, 64 to 32768 MB..</param>
         /// <param name="name">name.</param>
         /// <param name="runner">Where it prefers to run: &#x60;auto&#x60;, &#x60;this_mac&#x60; or &#x60;home_server&#x60;..</param>
         /// <param name="slug">The link name (the slug); refused while the project runs or holds secrets..</param>
-        public UpdateProject(double? cpuLimit = default, string defaultEnvironment = default, string description = default, bool? expose = default, long? fetchIntervalMinutes = default, long? idleMinutes = default, long? memLimitMb = default, string name = default, string runner = default, string slug = default)
+        public UpdateProject(double? cpuLimit = default, string defaultEnvironment = default, string description = default, bool? expose = default, long? fetchIntervalMinutes = default, long? idleMinutes = default, bool? idleNever = default, long? memLimitMb = default, string name = default, string runner = default, string slug = default)
         {
             this.CpuLimit = cpuLimit;
             this.DefaultEnvironment = defaultEnvironment;
@@ -53,6 +54,7 @@ namespace Ainkrad.Client.Model
             this.Expose = expose;
             this.FetchIntervalMinutes = fetchIntervalMinutes;
             this.IdleMinutes = idleMinutes;
+            this.IdleNever = idleNever;
             this.MemLimitMb = memLimitMb;
             this.Name = name;
             this.Runner = runner;
@@ -100,6 +102,13 @@ namespace Ainkrad.Client.Model
         public long? IdleMinutes { get; set; }
 
         /// <summary>
+        /// Turn the idle stop off (true) or back on (false).
+        /// </summary>
+        /// <value>Turn the idle stop off (true) or back on (false).</value>
+        [DataMember(Name = "idle_never", EmitDefaultValue = true)]
+        public bool? IdleNever { get; set; }
+
+        /// <summary>
         /// Memory a run may use, 64 to 32768 MB.
         /// </summary>
         /// <value>Memory a run may use, 64 to 32768 MB.</value>
@@ -140,6 +149,7 @@ namespace Ainkrad.Client.Model
             sb.Append("  Expose: ").Append(Expose).Append("\n");
             sb.Append("  FetchIntervalMinutes: ").Append(FetchIntervalMinutes).Append("\n");
             sb.Append("  IdleMinutes: ").Append(IdleMinutes).Append("\n");
+            sb.Append("  IdleNever: ").Append(IdleNever).Append("\n");
             sb.Append("  MemLimitMb: ").Append(MemLimitMb).Append("\n");
             sb.Append("  Name: ").Append(Name).Append("\n");
             sb.Append("  Runner: ").Append(Runner).Append("\n");

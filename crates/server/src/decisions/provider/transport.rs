@@ -94,8 +94,9 @@ impl HubTransport {
             .ok_or(ProviderError::Unavailable)
     }
 
-    /// The first ready `google` API-key account (oldest first, the allocator's own tie-break; the
-    /// AI order of E7-1 replaces it when it lands) whose key can be leased to `runner`.
+    /// The first ready `google` API-key account in the user's AI order (E7-1) whose key can be
+    /// leased to `runner`. An account the order leaves out is never used; a user with no order yet
+    /// gets the oldest first (the allocator's own tie-break).
     async fn lease(
         &self,
         runner: &str,
@@ -104,10 +105,18 @@ impl HubTransport {
         let all = accounts::list(&self.pool)
             .await
             .map_err(|_| ProviderError::Unavailable)?;
-        for a in all
-            .into_iter()
-            .filter(|a| a.provider == "google" && a.state == "active")
-        {
+        let order = crate::store::chains::order::get(&self.pool, user.0)
+            .await
+            .map_err(|_| ProviderError::Unavailable)?;
+        let ids: Vec<i64> = order.items.iter().map(|it| it.account).collect();
+        let ready = by_ai_order(
+            all.into_iter()
+                .filter(|a| a.provider == "google" && a.state == "active")
+                .collect(),
+            |a| a.id,
+            &ids,
+        );
+        for a in ready {
             let Some(up) = upstream_of(&a.base_url) else {
                 continue;
             };
@@ -183,5 +192,30 @@ impl Transport for HubTransport {
         timeout_ms: u64,
     ) -> BoxFuture<'a, Result<Called, ProviderError>> {
         self.send(user, path, body, timeout_ms).boxed()
+    }
+}
+
+/// `items` in the AI order `order` (account ids, first is tried first), leaving out what the order
+/// does not name. An empty order (the user has none yet) keeps `items` as they are.
+fn by_ai_order<T>(items: Vec<T>, id: impl Fn(&T) -> i64, order: &[i64]) -> Vec<T> {
+    if order.is_empty() {
+        return items;
+    }
+    let mut ranked: Vec<(usize, T)> = items
+        .into_iter()
+        .filter_map(|t| order.iter().position(|o| *o == id(&t)).map(|i| (i, t)))
+        .collect();
+    ranked.sort_by_key(|(i, _)| *i);
+    ranked.into_iter().map(|(_, t)| t).collect()
+}
+
+#[cfg(test)]
+mod order_tests {
+    #[test]
+    fn the_ai_order_picks_and_leaves_out() {
+        let id = |a: &i64| *a;
+        assert_eq!(super::by_ai_order(vec![1, 2, 3], id, &[3, 1]), [3, 1]);
+        assert_eq!(super::by_ai_order(vec![1, 2, 3], id, &[]), [1, 2, 3]);
+        assert!(super::by_ai_order(vec![1, 2], id, &[9]).is_empty());
     }
 }

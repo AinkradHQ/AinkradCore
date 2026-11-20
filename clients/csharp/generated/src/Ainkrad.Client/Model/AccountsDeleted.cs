@@ -41,9 +41,11 @@ namespace Ainkrad.Client.Model
         /// Initializes a new instance of the <see cref="AccountsDeleted" /> class.
         /// </summary>
         /// <param name="deleted">deleted (required).</param>
-        public AccountsDeleted(bool deleted = default)
+        /// <param name="undoUntil">Only for &#x60;deleteAccount&#x60;: when its Undo window ends (RFC 3339, UTC)..</param>
+        public AccountsDeleted(bool deleted = default, string undoUntil = default)
         {
             this.Deleted = deleted;
+            this.UndoUntil = undoUntil;
         }
 
         /// <summary>
@@ -51,6 +53,13 @@ namespace Ainkrad.Client.Model
         /// </summary>
         [DataMember(Name = "deleted", IsRequired = true, EmitDefaultValue = true)]
         public bool Deleted { get; set; }
+
+        /// <summary>
+        /// Only for &#x60;deleteAccount&#x60;: when its Undo window ends (RFC 3339, UTC).
+        /// </summary>
+        /// <value>Only for &#x60;deleteAccount&#x60;: when its Undo window ends (RFC 3339, UTC).</value>
+        [DataMember(Name = "undo_until", EmitDefaultValue = true)]
+        public string UndoUntil { get; set; }
 
         /// <summary>
         /// Returns the string presentation of the object
@@ -61,6 +70,7 @@ namespace Ainkrad.Client.Model
             StringBuilder sb = new StringBuilder();
             sb.Append("class AccountsDeleted {\n");
             sb.Append("  Deleted: ").Append(Deleted).Append("\n");
+            sb.Append("  UndoUntil: ").Append(UndoUntil).Append("\n");
             sb.Append("}\n");
             return sb.ToString();
         }

@@ -248,6 +248,18 @@ fn offers(listed: &str, op: &str) -> bool {
         || (listed == ainkrad_proto::v2::CAP_HISTORY_READ
             && op == ainkrad_proto::v2::OP_HISTORY_READ)
         || (listed == CAP_LOGIN && matches!(op, OP_LOGIN_START | OP_LOGIN_CODE | OP_LOGIN_CANCEL))
+        // A runner-bound sign-in (E7-4): `login-bound:<harness>` brings the start, wait and cancel ops.
+        || (listed.starts_with(ainkrad_proto::v2::CAP_LOGIN_BOUND)
+            && matches!(
+                op,
+                OP_LOGIN_START
+                    | OP_LOGIN_CANCEL
+                    | ainkrad_proto::v2::OP_LOGIN_WAIT
+                    | ainkrad_proto::v2::OP_LOGIN_INPUT
+                    | ainkrad_proto::v2::OP_LOGIN_SCREEN
+            ))
+        || (listed == CAP_LOGIN && op == ainkrad_proto::v2::OP_LOGIN_WAIT)
+        || (listed == ainkrad_proto::v2::CAP_LOGIN_WIPE && op == ainkrad_proto::v2::OP_LOGIN_WIPE)
         || (listed == ainkrad_proto::v2::CAP_SYNC
             && matches!(
                 op,
@@ -656,6 +668,21 @@ impl Hub {
             RunHousekeeping::Observe(s) => Command::RunObserve(s),
         };
         self.send_command(runner, command)
+    }
+
+    /// `runner.update` (E12-4): the Core's own idle-runner updater and `POST /runners/{id}/update`. The type admits nothing
+    /// else, and the runner only drops a request file: the root-side updater installs nothing the pinned key did not sign.
+    pub(crate) fn dispatch_runner_update(
+        self: &Arc<Self>,
+        runner: &str,
+        version: &str,
+    ) -> Result<Dispatched, StreamError> {
+        self.send_command(
+            runner,
+            Command::RunnerUpdate(ainkrad_proto::v2::RunnerUpdate {
+                version: version.to_owned(),
+            }),
+        )
     }
 
     /// `port.open` (P6-01): the Host router's one command. The type admits nothing else; no elevation

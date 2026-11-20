@@ -31,6 +31,11 @@ tokio-tungstenite = "0.29.0"
 webpki-roots = "1.0.10"
 zeroize = "1.9.1"
 
+[features]
+# `Client::unlock_with`: the app unlock with a given signer, for test fixtures only.
+test-support = []
+
 [dev-dependencies]
+ainkrad-ctl = { path = ".", features = ["test-support"] }
 # A test CA for the public (TLS) listener's certificate.
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }

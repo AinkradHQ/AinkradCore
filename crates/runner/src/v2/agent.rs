@@ -544,6 +544,14 @@ impl AgentDriver {
                 "session ids starting as_run belong to project runs",
             ));
         }
+        // A runner-bound account's home key names a dir of this runner: plain, never a path.
+        if req
+            .home
+            .as_deref()
+            .is_some_and(|h| !ainkrad_proto::v2::bound_key_ok(h))
+        {
+            return Err(refuse(ErrorCode::InvalidArgs, "a home key is a plain name"));
+        }
         if req.secrets.iter().any(|s| !secrets::valid_var(&s.var)) {
             return Err(refuse(
                 ErrorCode::InvalidArgs,
@@ -686,7 +694,13 @@ impl AgentDriver {
             policy: req.policy.clone(),
             issue_key: None,
             instructions: req.instructions.clone(),
-            account: None,
+            account: req.home.as_deref().map(|h| ainkrad_proto::runner::Account {
+                id: 0,
+                label: "bound".to_owned(),
+                config_dir: format!("{}/{h}", ainkrad_proto::v2::BOUND_HOME_DIR),
+                credential_ref: None,
+                credential_env: None,
+            }),
             fallbacks: vec![],
             limits: None,
             resume_session: req.resume.clone(),

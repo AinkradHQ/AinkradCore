@@ -48,6 +48,7 @@ namespace Ainkrad.Client.Model
         /// <param name="fetchIntervalMinutes">Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked..</param>
         /// <param name="id">id (required).</param>
         /// <param name="idleMinutes">idleMinutes (required).</param>
+        /// <param name="idleNever">The idle stop is off: the run keeps going while nobody visits..</param>
         /// <param name="memLimitMb">memLimitMb (required).</param>
         /// <param name="name">name (required).</param>
         /// <param name="repos">The primary repo first, then by name. (required).</param>
@@ -57,7 +58,7 @@ namespace Ainkrad.Client.Model
         /// <param name="source">&#x60;manual&#x60; or &#x60;github&#x60;. (required).</param>
         /// <param name="state">&#x60;active&#x60; or &#x60;archived&#x60;. (required).</param>
         /// <param name="updatedAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4). (required).</param>
-        public ProjectInfo(double cpuLimit = default, DateTime createdAt = default, string defaultEnvironment = default, string description = default, bool expose = default, long fetchIntervalMinutes = default, long id = default, long idleMinutes = default, long memLimitMb = default, string name = default, List<ProjectRepo> repos = default, ProjectRoom room = default, string runner = default, string slug = default, string source = default, string state = default, DateTime updatedAt = default)
+        public ProjectInfo(double cpuLimit = default, DateTime createdAt = default, string defaultEnvironment = default, string description = default, bool expose = default, long fetchIntervalMinutes = default, long id = default, long idleMinutes = default, bool? idleNever = default, long memLimitMb = default, string name = default, List<ProjectRepo> repos = default, ProjectRoom room = default, string runner = default, string slug = default, string source = default, string state = default, DateTime updatedAt = default)
         {
             this.CpuLimit = cpuLimit;
             this.CreatedAt = createdAt;
@@ -104,6 +105,7 @@ namespace Ainkrad.Client.Model
             this.UpdatedAt = updatedAt;
             this.DefaultEnvironment = defaultEnvironment;
             this.FetchIntervalMinutes = fetchIntervalMinutes;
+            this.IdleNever = idleNever;
             this.Room = room;
             this.Runner = runner;
         }
@@ -159,6 +161,13 @@ namespace Ainkrad.Client.Model
         /// </summary>
         [DataMember(Name = "idle_minutes", IsRequired = true, EmitDefaultValue = true)]
         public long IdleMinutes { get; set; }
+
+        /// <summary>
+        /// The idle stop is off: the run keeps going while nobody visits.
+        /// </summary>
+        /// <value>The idle stop is off: the run keeps going while nobody visits.</value>
+        [DataMember(Name = "idle_never", EmitDefaultValue = true)]
+        public bool? IdleNever { get; set; }
 
         /// <summary>
         /// Gets or Sets MemLimitMb
@@ -237,6 +246,7 @@ namespace Ainkrad.Client.Model
             sb.Append("  FetchIntervalMinutes: ").Append(FetchIntervalMinutes).Append("\n");
             sb.Append("  Id: ").Append(Id).Append("\n");
             sb.Append("  IdleMinutes: ").Append(IdleMinutes).Append("\n");
+            sb.Append("  IdleNever: ").Append(IdleNever).Append("\n");
             sb.Append("  MemLimitMb: ").Append(MemLimitMb).Append("\n");
             sb.Append("  Name: ").Append(Name).Append("\n");
             sb.Append("  Repos: ").Append(Repos).Append("\n");

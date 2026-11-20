@@ -147,11 +147,20 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (47, "run_configs"),
             (48, "project_data"),
             (49, "concurrent_runs"),
-            (50, "hardware"),
-            (51, "ws_path_run_kind"),
-            (52, "decisions"),
-            (53, "hw_cache_prepared"),
-            (54, "hw_first_capacity")
+            (50, "e7_ai_order"),
+            (51, "e7_codex_sub"),
+            (52, "e7_presets"),
+            (53, "e7_limits"),
+            (54, "e7_model_allow"),
+            (55, "e7_provider_limits"),
+            (56, "e7_retire_account_limits"),
+            (57, "e7_account_soft_delete"),
+            (58, "project_idle_never_e24"),
+            (59, "hardware"),
+            (60, "ws_path_run_kind"),
+            (61, "decisions"),
+            (62, "hw_cache_prepared"),
+            (63, "hw_first_capacity")
         ]
     );
     let sum: Vec<u8> =
@@ -415,7 +424,7 @@ fn the_schema_diff_flags_objects_outside_the_prefix() {
 /// the platform's schema and a module's, so a module table is held to it too.
 #[tokio::test]
 async fn user_owned_tables_carry_user_id() {
-    const NOT_USER_OWNED: [&str; 22] = [
+    const NOT_USER_OWNED: [&str; 26] = [
         // Each describes a device (hardware), or a device's cache of a project, which carry their own user.
         "core_hardware_prefs",
         "core_hw_cache",
@@ -433,6 +442,12 @@ async fn user_owned_tables_carry_user_id() {
         "core_run_configs",
         "core_run_envs",
         "core_run_vars",
+        // Each belongs to an account (its runner-bound login, its listed and its denied models), which carries its own user.
+        "core_account_bound",
+        "core_account_models",
+        "core_account_model_denied",
+        // What a runner must still wipe for a deleted account: keyed by runner and home, no account row left to own it.
+        "core_account_wipes",
         // A registered name belongs to the platform or a module, not to a user.
         "event_kinds",
         "audit_actions",

@@ -34,6 +34,7 @@ fn tested(result: UpstreamStatus) -> Body {
     Body::Result(Reply::GatewayTest(GatewayTested {
         result,
         latency_ms: 7,
+        models: Vec::new(),
     }))
 }
 
@@ -84,6 +85,7 @@ async fn user_provider(core: &Core, runner: &str) -> accounts::Account {
         key_prefix: Some("sk-or-v1-".to_owned()),
         test_path: Some("/key".to_owned()),
         builtin: false,
+        preset: false,
         version: 0,
     };
     providers::create(&core.app.pool, &def, runner, AuditActor::System, &now)

@@ -301,32 +301,112 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 50,
-        name: "hardware",
-        up: include_str!("../../../migrations/0050_hardware.up.sql"),
-        down: include_str!("../../../migrations/0050_hardware.down.sql"),
+        name: "e7_ai_order",
+        up: include_str!("../../../migrations/0050_e7_ai_order.up.sql"),
+        down: include_str!("../../../migrations/0050_e7_ai_order.down.sql"),
     },
     Migration {
         version: 51,
-        name: "ws_path_run_kind",
-        up: include_str!("../../../migrations/0051_ws_path_run_kind.up.sql"),
-        down: include_str!("../../../migrations/0051_ws_path_run_kind.down.sql"),
+        name: "e7_codex_sub",
+        up: include_str!("../../../migrations/0051_e7_codex_sub.up.sql"),
+        down: include_str!("../../../migrations/0051_e7_codex_sub.down.sql"),
     },
     Migration {
         version: 52,
-        name: "decisions",
-        up: include_str!("../../../migrations/0052_decisions.up.sql"),
-        down: include_str!("../../../migrations/0052_decisions.down.sql"),
+        name: "e7_presets",
+        up: include_str!("../../../migrations/0052_e7_presets.up.sql"),
+        down: include_str!("../../../migrations/0052_e7_presets.down.sql"),
     },
     Migration {
         version: 53,
-        name: "hw_cache_prepared",
-        up: include_str!("../../../migrations/0053_hw_cache_prepared.up.sql"),
-        down: include_str!("../../../migrations/0053_hw_cache_prepared.down.sql"),
+        name: "e7_limits",
+        up: include_str!("../../../migrations/0053_e7_limits.up.sql"),
+        down: include_str!("../../../migrations/0053_e7_limits.down.sql"),
     },
     Migration {
         version: 54,
+        name: "e7_model_allow",
+        up: include_str!("../../../migrations/0054_e7_model_allow.up.sql"),
+        down: include_str!("../../../migrations/0054_e7_model_allow.down.sql"),
+    },
+    Migration {
+        version: 55,
+        name: "e7_provider_limits",
+        up: include_str!("../../../migrations/0055_e7_provider_limits.up.sql"),
+        down: include_str!("../../../migrations/0055_e7_provider_limits.down.sql"),
+    },
+    Migration {
+        version: 56,
+        name: "e7_retire_account_limits",
+        up: include_str!("../../../migrations/0056_e7_retire_account_limits.up.sql"),
+        down: include_str!("../../../migrations/0056_e7_retire_account_limits.down.sql"),
+    },
+    Migration {
+        version: 57,
+        name: "e7_account_soft_delete",
+        up: include_str!("../../../migrations/0057_e7_account_soft_delete.up.sql"),
+        down: include_str!("../../../migrations/0057_e7_account_soft_delete.down.sql"),
+    },
+    Migration {
+        version: 58,
+        name: "project_idle_never_e24",
+        up: include_str!("../../../migrations/0058_project_idle_never_e24.up.sql"),
+        down: include_str!("../../../migrations/0058_project_idle_never_e24.down.sql"),
+    },
+    Migration {
+        version: 59,
+        name: "hardware",
+        up: include_str!("../../../migrations/0059_hardware.up.sql"),
+        down: include_str!("../../../migrations/0059_hardware.down.sql"),
+    },
+    Migration {
+        version: 60,
+        name: "ws_path_run_kind",
+        up: include_str!("../../../migrations/0060_ws_path_run_kind.up.sql"),
+        down: include_str!("../../../migrations/0060_ws_path_run_kind.down.sql"),
+    },
+    Migration {
+        version: 61,
+        name: "decisions",
+        up: include_str!("../../../migrations/0061_decisions.up.sql"),
+        down: include_str!("../../../migrations/0061_decisions.down.sql"),
+    },
+    Migration {
+        version: 62,
+        name: "hw_cache_prepared",
+        up: include_str!("../../../migrations/0062_hw_cache_prepared.up.sql"),
+        down: include_str!("../../../migrations/0062_hw_cache_prepared.down.sql"),
+    },
+    Migration {
+        version: 63,
         name: "hw_first_capacity",
-        up: include_str!("../../../migrations/0054_hw_first_capacity.up.sql"),
-        down: include_str!("../../../migrations/0054_hw_first_capacity.down.sql"),
+        up: include_str!("../../../migrations/0063_hw_first_capacity.up.sql"),
+        down: include_str!("../../../migrations/0063_hw_first_capacity.down.sql"),
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::CORE_MIGRATIONS;
+
+    /// Every `migrations/NNNN_name.up.sql` file is registered, in order, under its own number and name.
+    #[test]
+    fn every_migration_file_is_registered() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
+        let mut files: Vec<(i64, String)> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| {
+                let n = e.unwrap().file_name().into_string().unwrap();
+                let stem = n.strip_suffix(".up.sql")?;
+                let (v, name) = stem.split_once('_')?;
+                Some((v.parse().ok()?, name.to_owned()))
+            })
+            .collect();
+        files.sort();
+        let listed: Vec<(i64, String)> = CORE_MIGRATIONS
+            .iter()
+            .map(|m| (m.version, m.name.to_owned()))
+            .collect();
+        assert_eq!(listed, files);
+    }
+}

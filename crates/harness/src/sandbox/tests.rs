@@ -132,6 +132,20 @@ fn macos_profile_has_no_blanket_network_and_no_unix_sockets() {
     // The only unix socket granted is the DNS resolver's.
     assert_eq!(text.matches("(allow network-outbound (literal").count(), 1);
     assert!(!text.contains("docker") && !text.contains("ssh-agent"));
+    // `allow` keeps the host's loopback open by design (a local dev server, Docker's API on TCP);
+    // `filtered`, the installed default, and `deny` grant no loopback but their own slot ports.
+    assert!(text.contains("(remote ip \"localhost:*\")"));
+    for mode in ["filtered", "deny"] {
+        let mut other = spec.clone();
+        other.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+        other
+            .env
+            .push(("AINKRAD_SANDBOX_NETWORK".into(), mode.into()));
+        assert!(
+            !profile(&other, OsStr::new("/bin/true")).contains("localhost:*"),
+            "{mode}"
+        );
+    }
     let _ = std::fs::remove_dir_all(root);
 }
 

@@ -16,6 +16,7 @@
 package ainkrad.client.apis
 
 import ainkrad.client.models.AuditPage
+import ainkrad.client.models.AuditStats
 import ainkrad.client.models.ErrorBody
 import ainkrad.client.models.LatestEvent
 import ainkrad.client.models.PageEvent
@@ -59,6 +60,43 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.POST,
             "/api/v1/ws-ticket",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/audit/stats
+        * 
+        * 
+         * @param days How many days, today included, 1 to 14 (default 7). (optional)
+         * @param tzOffsetMins The client&#39;s offset from UTC in minutes (&#x60;-300&#x60;, &#x60;120&#x60;), so hours and days fall where the person lives; default 0. (optional)
+         * @return AuditStats
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getAuditStats(days: kotlin.Int?, tzOffsetMins: kotlin.Int?): HttpResponse<AuditStats> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+            days?.apply { localVariableQuery["days"] = listOf("$days") }
+            tzOffsetMins?.apply { localVariableQuery["tz_offset_mins"] = listOf("$tzOffsetMins") }
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/audit/stats",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

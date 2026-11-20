@@ -112,7 +112,10 @@ pub async fn delete_provider(
     prov::delete(&app.pool, &id, &me.device.id, BY)
         .await
         .map_err(err)?;
-    Ok(Json(AccountsDeleted { deleted: true }))
+    Ok(Json(AccountsDeleted {
+        deleted: true,
+        undo_until: None,
+    }))
 }
 
 /// The accounts' load and health, for an `admin` device only: how many sessions hold an account
@@ -166,16 +169,41 @@ async fn month_spend(
 
 // ----- accounts ---------------------------------------------------------------------------
 
+/// The runner each runner-bound account signed in on (`core_account_bound`), for an `admin`
+/// device only; a runner id is not a secret.
+async fn bound_runners(
+    app: &App,
+    me: &Caller,
+) -> Result<Option<std::collections::HashMap<i64, String>>, ApiError> {
+    if !me.device.scopes.iter().any(|s| s == "admin") {
+        return Ok(None);
+    }
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT account_id, runner FROM core_account_bound")
+            .fetch_all(&app.pool)
+            .await?;
+    Ok(Some(rows.into_iter().collect()))
+}
+
+impl ProviderAccount {
+    fn with_runner(mut self, m: Option<&std::collections::HashMap<i64, String>>) -> Self {
+        self.runner = m.and_then(|m| m.get(&self.id).cloned());
+        self
+    }
+}
+
 #[utoipa::path(get, path = "/api/v1/accounts", operation_id = "listAccounts", tag = "accounts",
     responses((status = 200, description = "Every account: its key's last four characters, \
         never the key, its secret's name or its runner scope; with its `live` session count and \
-        `health`, `month_spend_usd_micros` and `month_limit_usd_micros` (`admin` devices only)", body = Vec<ProviderAccount>)))]
+        `health`, `month_spend_usd_micros`, `month_limit_usd_micros` and `usage` (the usage meter) (`admin` devices only)", body = Vec<ProviderAccount>)))]
 pub async fn list(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
 ) -> ApiResult<Vec<ProviderAccount>> {
     let status = statuses_for(&app, &me).await?;
     let spend = month_spend(&app, &me).await?;
+    let meters = meter::standings(&app, &me).await?;
+    let bound = bound_runners(&app, &me).await?;
     Ok(Json(
         acc::list(&app.pool)
             .await?
@@ -185,6 +213,8 @@ pub async fn list(
                 ProviderAccount::from(a)
                     .with_status(st)
                     .with_spend(spend.as_ref())
+                    .with_meter(meters.as_ref())
+                    .with_runner(bound.as_ref())
             })
             .collect(),
     ))
@@ -205,10 +235,14 @@ pub async fn get(
     let status = statuses_for(&app, &me).await?;
     let st = status.get(&a.id);
     let spend = month_spend(&app, &me).await?;
+    let meters = meter::standings(&app, &me).await?;
+    let bound = bound_runners(&app, &me).await?;
     Ok(Json(
         ProviderAccount::from(a)
             .with_status(st)
-            .with_spend(spend.as_ref()),
+            .with_spend(spend.as_ref())
+            .with_meter(meters.as_ref())
+            .with_runner(bound.as_ref()),
     ))
 }
 
@@ -260,6 +294,14 @@ pub async fn create(
     )
     .await
     .map_err(err)?;
+    // A preset's model list is read in the background (E7-3), through a runner when one is ready;
+    // `GET /accounts/{id}/models` has it, and `checkAccount` reads it again.
+    if prov::presets().iter().any(|p| p.id == a.provider) {
+        let (app, me, id) = (app.clone(), me.clone(), a.id);
+        tokio::spawn(async move {
+            crate::agents::gateway::test::fetch_models(&app, &me, id).await;
+        });
+    }
     let mut d = AccountDetail::from(a);
     (d.pool, d.chain) = (Some(pool), chain);
     Ok(Json(d))
@@ -396,6 +438,7 @@ pub async fn test_account(
             result: t.result,
             latency_ms: t.latency_ms,
             runner: t.runner,
+            models: t.models.and_then(|n| u32::try_from(n).ok()),
         })),
         Err(Failed::Gone) => Err(ApiError::not_found("no such account")),
         Err(Failed::Soon(why)) => Err(ApiError::new(
@@ -448,11 +491,13 @@ pub async fn check_account(
                 result: t.result,
                 latency_ms: Some(t.latency_ms),
                 runner: Some(t.runner).filter(|r| !r.is_empty()),
+                models: t.models.and_then(|n| u32::try_from(n).ok()),
             }),
             Err(key::Failed::NoRunner) => Ok(AccountChecked {
                 result: "no_runner".to_owned(),
                 latency_ms: None,
                 runner: None,
+                models: None,
             }),
             Err(key::Failed::Gone) => Err(ApiError::not_found("no such account")),
             Err(key::Failed::Soon(why)) => Err(soon(why)),
@@ -470,6 +515,7 @@ pub async fn check_account(
             result: c.result,
             latency_ms: Some(c.latency_ms),
             runner: Some(c.runner).filter(|r| !r.is_empty()),
+            models: None,
         },
         Err(plan::Failed::NotPlan) => key_test().await?,
         Err(plan::Failed::Gone) => return Err(ApiError::not_found("no such account")),
@@ -481,23 +527,56 @@ pub async fn check_account(
 
 #[utoipa::path(delete, path = "/api/v1/accounts/{id}", operation_id = "deleteAccount",
     tag = "accounts", params(("id" = String, Path, description = "The account's id")),
-    responses((status = 200, description = "Deleted with its key, its leases and its pool \
-        seats (audited as `account.deleted`)", body = AccountsDeleted)))]
+    responses((status = 200, description = "Removed with an Undo window (audited as \
+        `account.deleted`): at once it is gone from every list, out of its pool seats and the AI \
+        order, takes no new session and holds no lease. `undo_until` is when `POST \
+        /accounts/{id}/restore` stops working; after it the key, the row, the seats, the budgets and a \
+        runner-bound login on its runner are wiped for good (audited as `account.wiped`)",
+        body = AccountsDeleted)))]
 pub async fn delete(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path(id): Path<String>,
 ) -> ApiResult<AccountsDeleted> {
-    crate::agents::subscription::delete(&app, num(&id, "account")?, &me.device.id, BY)
+    let until = crate::agents::subscription::delete(&app, num(&id, "account")?, &me.device.id, BY)
         .await
         .map_err(err)?;
-    Ok(Json(AccountsDeleted { deleted: true }))
+    Ok(Json(AccountsDeleted {
+        deleted: true,
+        undo_until: Some(until),
+    }))
+}
+
+#[utoipa::path(post, path = "/api/v1/accounts/{id}/restore", operation_id = "restoreAccount",
+    tag = "accounts", params(("id" = String, Path, description = "The account's id")),
+    responses((status = 200, description = "Undoes a delete within its window (audited as \
+        `account.restored`): its state and its pool seats come back. 404 for an account that is not \
+        removed or whose window has ended", body = AccountRestored)))]
+pub async fn restore(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<AccountRestored> {
+    crate::store::accounts::restore(
+        &app.pool,
+        num(&id, "account")?,
+        &me.device.id,
+        BY,
+        &app.clock.now(),
+    )
+    .await
+    .map_err(err)?;
+    Ok(Json(AccountRestored { restored: true }))
 }
 
 mod logins;
+mod meter;
+mod models;
 mod pools;
 mod types;
 
 pub use logins::*;
+pub use meter::AccountMeter;
+pub use models::*;
 pub use pools::*;
 pub use types::*;

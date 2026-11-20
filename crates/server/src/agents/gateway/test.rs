@@ -23,6 +23,9 @@ pub struct Tested {
     pub latency_ms: u64,
     /// The runner that made the request; empty for an `inconclusive` test, which sent none.
     pub runner: String,
+    /// How many model ids a preset's provider listed and the Core kept (E7-3); `None` when none
+    /// were asked for or read.
+    pub models: Option<usize>,
 }
 
 /// Why no test was made, or why it did not answer.
@@ -116,6 +119,21 @@ async fn record(
     .map(drop)
 }
 
+/// Reads a just-added preset account's model list through a runner, best effort (E7-3: "model
+/// list fetched on add"): no rate limit and no test record, so the add flow's own `check` straight
+/// after still runs. Nothing says why it failed: with no runner the list is read by the `check`.
+pub async fn fetch_models(app: &App, caller: &Caller, id: i64) {
+    let Ok(a) = accounts::get(&app.pool, id).await else {
+        return;
+    };
+    if !app.agents.confirming.lock().unwrap().insert(id) {
+        return;
+    }
+    let mut sent_to = None;
+    let _ = once(app, caller, &a, &mut sent_to).await;
+    app.agents.confirming.lock().unwrap().remove(&id);
+}
+
 /// The test itself. `sent_to` is set once a lease was minted for a runner: from there the attempt
 /// is recorded whatever happens, and a lease the runner never redeemed is revoked.
 async fn once(
@@ -130,11 +148,13 @@ async fn once(
     let route = route::of(&def, &a.base_url).map_err(describe_refusal)?;
     // A provider whose model list needs no key (OpenRouter's) cannot say anything about the key
     // without a declared authenticated path: nothing is leased, and the answer is never `ok`.
-    if !route.can_test {
+    // A preset is still asked: its model list is read, and a refused key shows even without a path.
+    if !route.can_test && !def.preset {
         return Ok(Tested {
             result: INCONCLUSIVE.to_owned(),
             latency_ms: 0,
             runner: String::new(),
+            models: None,
         });
     }
     let upstream = upstream_of(&a.base_url, route.wire).map_err(describe_refusal)?;
@@ -171,6 +191,7 @@ async fn once(
         user_key: route.user_key,
         upstream,
         test_path: route.test_path,
+        want_models: def.preset,
     };
     let asked = async {
         let sent = app
@@ -192,11 +213,27 @@ async fn once(
         }
     };
     match answer {
-        Body::Result(Reply::GatewayTest(t)) => Ok(Tested {
-            result: class_name(t.result),
-            latency_ms: t.latency_ms,
-            runner,
-        }),
+        Body::Result(Reply::GatewayTest(t)) => {
+            let mut result = class_name(t.result);
+            // A listing that needs no key (no declared path) says nothing good of the key: a
+            // refusal is still a refusal, but a success is `inconclusive`, never `ok`.
+            if !route.can_test && t.result == UpstreamStatus::Ok {
+                result = INCONCLUSIVE.to_owned();
+            }
+            let kept = match def.preset && !t.models.is_empty() {
+                true => {
+                    let now = app.clock.now();
+                    crate::store::account_models::save(&app.pool, a.id, t.models, &now).await?
+                }
+                false => 0,
+            };
+            Ok(Tested {
+                result,
+                latency_ms: t.latency_ms,
+                runner,
+                models: Some(kept).filter(|n| *n > 0),
+            })
+        }
         _ => Err(Failed::Runner(
             "the runner answered something else".to_owned(),
         )),

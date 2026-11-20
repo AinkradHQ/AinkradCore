@@ -375,7 +375,6 @@ async fn a_local_only_room_is_invisible_to_a_cloud_chain_and_a_hidden_room_looks
     .await;
     // The session started before the policy changed: the check is now, not at claim time.
     assert!(ids(&fx, &s).await.is_empty());
-    // A chain with one cloud entry behind a good one is not enough either.
     ok(
         &fx,
         Method::PATCH,
@@ -383,8 +382,9 @@ async fn a_local_only_room_is_invisible_to_a_cloud_chain_and_a_hidden_room_looks
         Some(json!({"model": "cloud"})),
     )
     .await;
+    // E7-7: a cloud room takes any account, so a chain of several providers sees it too.
     let mixed = session(&fx, ALPHA, &["anthropic", "openai"]).await;
-    assert!(ids(&fx, &mixed).await.is_empty());
+    assert_eq!(ids(&fx, &mixed).await, std::slice::from_ref(&alpha));
     let nochain = {
         let w = ws(ALPHA);
         let policy = json!({"mode": "ask"});

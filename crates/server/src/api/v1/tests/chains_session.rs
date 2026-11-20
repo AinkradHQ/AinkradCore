@@ -465,3 +465,51 @@ async fn the_limits_count_per_user() {
         .await
         .expect("another user's count is their own");
 }
+
+#[tokio::test]
+async fn a_session_asked_for_subscription_first_walks_the_plans_first_and_the_chain_stays() {
+    let fx = setup().await;
+    let p = &fx.app.pool;
+    let (key1, sub, key2) = (
+        pool(&fx, "k1", "anthropic").await,
+        pool(&fx, "s1", "claude-sub").await,
+        pool(&fx, "k2", "openai").await,
+    );
+    let c = make(&fx, "main", &[key1, sub, key2]).await;
+    let policy = json!({"mode": "ask", "min_isolation": "process"});
+    let new = NewSession {
+        runner: &fx.dev.id,
+        harness: "",
+        model: None,
+        prompt: None,
+        workspace: None,
+        policy: &policy,
+        secrets: &[],
+        created_by: &fx.dev.id,
+    };
+    // Plain: the chain's own order. Ordered: the subscription first, the API keys in order behind it.
+    let plain = ch::create_session(p, &new, None, None, ask(Some(c.id), None), BY, NOW)
+        .await
+        .unwrap();
+    let ordered =
+        ch::create_session_ordered(p, &new, None, None, ask(Some(c.id), None), true, BY, NOW)
+            .await
+            .unwrap();
+    let mut conn = p.acquire().await.unwrap();
+    let walked = |id: &str| {
+        let (pool, id) = (fx.app.pool.clone(), id.to_owned());
+        async move {
+            let mut c = pool.acquire().await.unwrap();
+            order_of(&ch::session_chain(&mut c, &id).await.unwrap().unwrap())
+        }
+    };
+    assert_eq!(walked(&plain.id).await, [key1, sub, key2]);
+    assert_eq!(walked(&ordered.id).await, [sub, key1, key2]);
+    // The row's placeholder harness is the first entry walked (the plan's: claude).
+    assert_eq!(ordered.harness, "claude");
+    // The chain itself is not reordered.
+    assert_eq!(
+        order_of(&ch::load(&mut conn, c.id).await.unwrap()),
+        [key1, sub, key2]
+    );
+}

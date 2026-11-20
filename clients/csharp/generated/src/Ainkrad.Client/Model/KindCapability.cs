@@ -42,9 +42,10 @@ namespace Ainkrad.Client.Model
         /// </summary>
         /// <param name="varClass">&#x60;read&#x60; or &#x60;write&#x60;: a write capability is only ever granted by naming it. (required).</param>
         /// <param name="name">name (required).</param>
+        /// <param name="summary">One plain sentence under the title, for the \&quot;What may your assistant do\&quot; step..</param>
         /// <param name="title">A plain label. (required).</param>
         /// <param name="write">write (required).</param>
-        public KindCapability(string varClass = default, string name = default, string title = default, bool write = default)
+        public KindCapability(string varClass = default, string name = default, string summary = default, string title = default, bool write = default)
         {
             // to ensure "varClass" is required (not null)
             if (varClass == null)
@@ -65,6 +66,7 @@ namespace Ainkrad.Client.Model
             }
             this.Title = title;
             this.Write = write;
+            this.Summary = summary;
         }
 
         /// <summary>
@@ -79,6 +81,13 @@ namespace Ainkrad.Client.Model
         /// </summary>
         [DataMember(Name = "name", IsRequired = true, EmitDefaultValue = true)]
         public string Name { get; set; }
+
+        /// <summary>
+        /// One plain sentence under the title, for the \&quot;What may your assistant do\&quot; step.
+        /// </summary>
+        /// <value>One plain sentence under the title, for the \&quot;What may your assistant do\&quot; step.</value>
+        [DataMember(Name = "summary", EmitDefaultValue = true)]
+        public string Summary { get; set; }
 
         /// <summary>
         /// A plain label.
@@ -103,6 +112,7 @@ namespace Ainkrad.Client.Model
             sb.Append("class KindCapability {\n");
             sb.Append("  Class: ").Append(Class).Append("\n");
             sb.Append("  Name: ").Append(Name).Append("\n");
+            sb.Append("  Summary: ").Append(Summary).Append("\n");
             sb.Append("  Title: ").Append(Title).Append("\n");
             sb.Append("  Write: ").Append(Write).Append("\n");
             sb.Append("}\n");

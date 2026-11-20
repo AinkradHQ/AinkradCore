@@ -27,7 +27,7 @@ using OpenAPIDateConverter = Ainkrad.Client.Client.OpenAPIDateConverter;
 namespace Ainkrad.Client.Model
 {
     /// <summary>
-    /// An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first entry that has one to give.
+    /// An ordered fallback chain of 1 to 16 pools. Deprecated with the pool routes: the AI order (&#x60;/api/v1/ai-order&#x60;) replaces it. A new session draws an account from the first entry that has one to give.
     /// </summary>
     [DataContract(Name = "Chain")]
     public partial class Chain : IValidatableObject

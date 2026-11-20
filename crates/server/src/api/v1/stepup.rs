@@ -208,6 +208,7 @@ async fn elevate(
     if !app.auth.elevate(&me.session, &me.device.id, until) {
         return Err(failed());
     }
+    app.auth.mark_fresh(&me.session, &me.device.id, now);
     tracing::info!(device = me.device.id, until, "session elevated");
     Ok(Json(Elevation {
         elevated_until: Some(ts(&iso_of_unix(until))),
