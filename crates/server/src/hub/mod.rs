@@ -182,13 +182,16 @@ struct Runner {
 }
 
 /// Whether a driver's command `listed` offers `op`: itself, or (KAN-435) the `gateway` capability
-/// for the two ops that capability brings, `agent.limit` and `gateway.test`, or (KAN-441) the
+/// for the two ops that capability brings, `agent.limit` and `gateway.test`, `gateway-call` for
+/// `gateway.call` (E15-0), or (KAN-441) the
 /// `login` capability for the three `login.*` ops. A runner lists a capability beside the agent
 /// driver's five ops and never its ops by name, so matching the op's name alone would refuse them
 /// against every real runner.
 fn offers(listed: &str, op: &str) -> bool {
     listed == op
         || (listed == CAP_GATEWAY && matches!(op, OP_AGENT_LIMIT | OP_GATEWAY_TEST))
+        || (listed == ainkrad_proto::v2::CAP_GATEWAY_CALL
+            && op == ainkrad_proto::v2::OP_GATEWAY_CALL)
         || (listed == ainkrad_proto::v2::CAP_TOOLS && op == ainkrad_proto::v2::OP_AGENT_TOOLS)
         || (listed == ainkrad_proto::v2::CAP_PLAN_CHECK && op == ainkrad_proto::v2::OP_PLAN_CHECK)
         || (listed == ainkrad_proto::v2::CAP_HISTORY_READ

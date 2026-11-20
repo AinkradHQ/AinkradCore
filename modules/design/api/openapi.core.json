@@ -1499,6 +1499,7 @@
           "connection.unbound",
           "connection.updated",
           "connection.used",
+          "decision.asked",
           "design.approval.approved",
           "design.approval.withdrawn",
           "design.asset.changed",

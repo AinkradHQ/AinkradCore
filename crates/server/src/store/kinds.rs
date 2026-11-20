@@ -166,6 +166,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "connection.unbound",
     "connection.updated",
     "connection.used",
+    "decision.asked",
     "device.renamed",
     "device.scopes_changed",
     "device.enrolled",

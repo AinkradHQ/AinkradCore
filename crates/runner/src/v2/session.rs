@@ -593,7 +593,8 @@ impl Session {
             | Command::AgentFiles(_)
             | Command::AgentRevert(_)
             | Command::AgentWrite(_)
-            | Command::GatewayTest(_) => self.start_agent(stream, command),
+            | Command::GatewayTest(_)
+            | Command::GatewayCall(_) => self.start_agent(stream, command),
             Command::RunStart(_)
             | Command::RunStop(_)
             | Command::RunStatus(_)
@@ -636,15 +637,14 @@ impl Session {
                 self.start_control(stream, command)
             }
             // The sign-in driver's, or (an op of a newer Core) `unsupported_command`.
-            // E15 (protocol 2.1): the `job`, `sync` and `gateway-call` drivers are E15-4's and
-            // E15-0's; until then this runner advertises none of them, so none is expected.
+            // E15 (protocol 2.1): the `job` and `sync` drivers are E15-4's; until then this runner
+            // advertises none of them, so none is expected.
             Command::JobRun(_)
             | Command::SyncManifest(_)
             | Command::SyncPush(_)
             | Command::SyncPull(_)
             | Command::SyncWatch(_)
-            | Command::SyncDrop(_)
-            | Command::GatewayCall(_) => Some(Body::Error(StreamError::new(
+            | Command::SyncDrop(_) => Some(Body::Error(StreamError::new(
                 ErrorCode::UnsupportedCommand,
                 format!("{} is not offered by this runner", command.op()),
             ))),
@@ -902,6 +902,7 @@ impl Session {
                 Command::AgentLimit(req) => agent.limit(req).map(Reply::AgentLimit),
                 Command::AgentTools(req) => agent.tools(&req).await.map(Reply::AgentTools),
                 Command::GatewayTest(req) => agent.gateway_test(req).await.map(Reply::GatewayTest),
+                Command::GatewayCall(req) => agent.gateway_call(req).await.map(Reply::GatewayCall),
                 Command::PlanCheck(req) => agent.plan_check(req).await.map(Reply::PlanCheck),
                 Command::HistoryRead(req) => agent.history_read(req).await.map(Reply::HistoryRead),
                 _ => return,
