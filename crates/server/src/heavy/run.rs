@@ -147,7 +147,12 @@ fn base_of(s: &Start) -> PathBuf {
 /// Places the job. A job for the Core, started from a shim, is not a job at all (`Local`): the
 /// command already is on the Core. A task run configuration runs on the Core's own runner.
 pub async fn start(app: &App, s: Start) -> Result<Started, sqlx::Error> {
-    let views = view::views(app).await?;
+    let mut views = view::views(app).await?;
+    // M8: a job that carries secrets never goes to a plain paired runner, only to the Core or the
+    // attested This Mac (no per-runner opt-in exists yet).
+    if !s.secrets.is_empty() {
+        views.retain(|v| v.kind != ainkrad_proto::v2::HwKind::Runner);
+    }
     let placed = place_job(&views, &need_of(&s.row), &s.project.to_string());
     let on_core = matches!(
         placed.reason,
