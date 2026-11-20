@@ -141,6 +141,10 @@ pub const USAGE: &str =
   api <GET|POST|PUT|DELETE> </api/v1/...[?query]> [json-body]
       One signed request for a route with no command of its own (e.g. /api/v1/hardware,
       /api/v1/jobs); prints the answer's JSON as is. Scopes and step-up apply as usual.
+  term ... --unlock  |  api ... --unlock
+      Opens the app unlock first, for this one command (terminals and job writes need it): the
+      step-up key and its passphrase sign it, as the app does with Touch ID; the token is kept
+      in memory only. Audited as auth.unlock.
   events tail [--after <seq>] [--no-follow]
       Events after <seq> (default: from now), one JSON object per line (every kind this
       device may see, runner.connected/.disconnected/.degraded included); follows the live
@@ -312,6 +316,15 @@ impl Args {
     }
 
     /// A client for the paired device in the keystore.
+    /// `client`, unlocked first when `--unlock` is given (terminals and `api` only).
+    async fn unlocked_client(&self) -> Result<Client, Error> {
+        let mut c = self.client()?;
+        if self.on("--unlock") {
+            c.unlock().await?;
+        }
+        Ok(c)
+    }
+
     fn client(&self) -> Result<Client, Error> {
         let store = Keystore::load(&self.keystore()?).map_err(Error::Usage)?;
         let endpoint = match self.endpoint()? {
@@ -443,9 +456,9 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
                 cwd: a.value("--cwd"),
                 signal: a.value("--signal"),
             };
-            terminals::terminal(&mut a.client()?, rest, &options, json, out).await
+            terminals::terminal(&mut a.unlocked_client().await?, rest, &options, json, out).await
         }
-        ["api", rest @ ..] => api::api(&mut a.client()?, rest, out).await,
+        ["api", rest @ ..] => api::api(&mut a.unlocked_client().await?, rest, out).await,
         ["events", "tail"] => {
             let mut c = a.client()?;
             events::tail(&mut c, a.number("--after")?, !a.on("--no-follow"), out).await
