@@ -1,12 +1,9 @@
 //! The two flows built on the sync ops (E15-2, spec 4.6): [`sync_in`] before a job and
 //! [`sync_back`] after it.
 
-use std::io;
 use std::sync::Arc;
 
-use ainkrad_proto::v2::{
-    Entry, EntryKind, MAX_FILE_BYTES, MAX_SYNC_IN_BYTES, MAX_SYNC_OUT_BYTES, TreeHash,
-};
+use ainkrad_proto::v2::{Entry, EntryKind, MAX_FILE_BYTES, MAX_SYNC_IN_BYTES, MAX_SYNC_OUT_BYTES};
 
 use super::fs::Tree;
 use super::manifest::{Entries, Memo, Scan, case_collisions, diff, link_ok, scan, tree_hash};
@@ -73,6 +70,7 @@ pub async fn sync_in(
             want,
             rules,
             Vec::new(),
+            None,
             &Source::Tree(tree),
         )
         .await;
@@ -124,7 +122,7 @@ pub struct Back {
     pub bytes: u64,
 }
 
-fn same(a: Option<&Entry>, b: Option<&Entry>) -> bool {
+pub(super) fn same(a: Option<&Entry>, b: Option<&Entry>) -> bool {
     match (a, b) {
         (None, None) => true,
         (Some(a), Some(b)) => a.kind == b.kind && a.hash == b.hash && a.exec == b.exec,

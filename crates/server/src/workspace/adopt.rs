@@ -21,7 +21,6 @@ use super::paths::{DEFAULT_ROOT, SessionKey, Workspace};
 use super::rules::Rules;
 use super::watch::{self, WatchArgs};
 use crate::api::App;
-use crate::scheduler::Clock;
 use crate::store::gov;
 
 /// `place_reason` of a session that overflowed to a runner.
@@ -120,10 +119,10 @@ pub async fn tick(app: &App) -> Result<(), sqlx::Error> {
         let live = !matches!(state.as_str(), "ended" | "lost");
         let watching = app.hub.sync.watches.get(&id);
         if !live {
-            if watching.is_some() {
-                if let Err(e) = watch::finish(&app.hub, &id).await {
-                    tracing::warn!(session = %id, error = %e, "the final sync of a session failed");
-                }
+            if watching.is_some()
+                && let Err(e) = watch::finish(&app.hub, &id).await
+            {
+                tracing::warn!(session = %id, error = %e, "the final sync of a session failed");
             }
             continue;
         }

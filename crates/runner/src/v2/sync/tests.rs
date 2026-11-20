@@ -182,7 +182,7 @@ async fn a_stale_base_a_bad_chunk_and_a_wrong_want_are_refused() {
     let r = rig("refusals");
     let m = manifest(&r, 4).await;
     let a = file("a.txt", b"hello");
-    let want = tree_of(&[a.clone()]);
+    let want = tree_of(std::slice::from_ref(&a));
     let stale = TreeHash([5; 32]);
     let e = push(
         &r,
@@ -264,7 +264,7 @@ async fn a_planted_symlink_cannot_send_a_write_outside_the_cache() {
     // A job (or anyone) plants `evil -> ../../outside` inside the cache; a push through it must fail.
     std::os::unix::fs::symlink(&outside, r.d.layout().root(6).join("evil")).unwrap();
     let e = file("evil/pwned.txt", b"x");
-    let want = tree_of(&[e.clone()]);
+    let want = tree_of(std::slice::from_ref(&e));
     let cur = manifest(&r, 6).await;
     let res = push(&r, req(6, cur.tree, vec![e], vec![], want), &[b"x"]).await;
     assert!(res.is_err());
@@ -279,7 +279,13 @@ async fn per_file_bases_conflict_only_where_that_file_changed() {
     let a = file("a.txt", b"one");
     push(
         &r,
-        req(7, m.tree, vec![a.clone()], vec![], tree_of(&[a.clone()])),
+        req(
+            7,
+            m.tree,
+            vec![a.clone()],
+            vec![],
+            tree_of(std::slice::from_ref(&a)),
+        ),
         &[b"one"],
     )
     .await
@@ -354,4 +360,19 @@ async fn no_lease_is_the_same_answer_as_no_cache_and_drop_frees_the_cache() {
     assert!(d.bytes_freed >= 4);
     assert!(!r.d.layout().root(8).exists());
     assert!(r.d.caches().is_empty());
+}
+
+#[tokio::test]
+async fn a_push_naming_a_session_needs_that_sessions_watch() {
+    let r = rig("session");
+    let empty = manifest(&r, 3).await;
+    let a = file("a.txt", b"x");
+    let want = tree_of(std::slice::from_ref(&a));
+    let mut q = req(3, empty.tree, vec![a], vec![], want);
+    q.session = Some("as_other".into());
+    let err = push(&r, q.clone(), &[b"x"]).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidArgs);
+    // Holding the watch of a different session does not help either.
+    let _w = r.d.watch_lease("l_x", "as_mine");
+    assert!(push(&r, q, &[b"x"]).await.is_err());
 }

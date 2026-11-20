@@ -169,6 +169,9 @@ pub async fn manifest(
         lease: lease.to_owned(),
         rules_hash: Hash(rules.hash()),
         rules: rules.to_wire(),
+        // ponytail: no `git clone` seed; a first sync sends every file. Seed from the Core's copy
+        // when big first syncs matter.
+        seed: None,
     });
     let Reply::SyncManifest(r) = last(hub.dispatch_sync(device, cmd)?).await? else {
         return Err(wrong());
@@ -207,6 +210,7 @@ pub async fn push(
     want: TreeHash,
     rules: &Rules,
     base_files: Vec<(String, Hash)>,
+    session: Option<&str>,
     src: &Source<'_>,
 ) -> Result<TreeHash, SyncError> {
     for e in &delta.put {
@@ -221,6 +225,7 @@ pub async fn push(
         want_tree: want,
         rules: rules.to_wire(),
         base_files,
+        session: session.map(str::to_owned),
     });
     let mut d = hub.dispatch_sync(device, cmd)?;
     let mut window = SYNC_STREAM_WINDOW;
@@ -259,7 +264,7 @@ pub async fn push(
 }
 
 /// Where a pulled file goes, or `None` to receive and check it but keep nothing.
-pub type Route<'a> = dyn Fn(&Entry) -> Option<(&'a Tree, String)> + 'a;
+pub type Route<'a> = dyn Fn(&Entry) -> Option<(&'a Tree, String)> + Sync + 'a;
 
 /// Pulls the files `wanted` (kind `File`) from the runner's cache of `project`, or from the
 /// overflow session `session` when it is `Some`. Each chunk is hashed against the entry before it
@@ -386,6 +391,7 @@ mod tests {
 
     #[test]
     fn the_cores_copy_wins_unless_it_is_unchanged_or_already_equal() {
+        use super::super::flow::same;
         let e = |h: u8| Entry {
             path: "a".into(),
             hash: Hash([h; 32]),

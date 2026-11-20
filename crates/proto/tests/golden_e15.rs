@@ -202,6 +202,8 @@ fn e15_frames_are_pinned() {
                 outputs: vec!["target/release/app".to_owned()],
             },
             base_files: vec![("src/main.rs".to_owned(), Hash([1; 32]))],
+            // Absent on the wire: the golden bytes stay those of protocol 2.1 before the field.
+            session: None,
         }),
     );
     res(

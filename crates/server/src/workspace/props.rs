@@ -63,10 +63,10 @@ fn grow(root: &Path, rng: &mut Rng) {
         let parts: Vec<&str> = (0..depth).map(|_| rng.pick(NAMES)).collect();
         let rel = parts.join("/");
         let p = root.join(&rel);
-        if let Some(parent) = p.parent() {
-            if fs::create_dir_all(parent).is_err() {
-                continue;
-            }
+        if let Some(parent) = p.parent()
+            && fs::create_dir_all(parent).is_err()
+        {
+            continue;
         }
         match rng.below(6) {
             0 => {

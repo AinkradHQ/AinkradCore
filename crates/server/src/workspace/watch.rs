@@ -377,6 +377,7 @@ pub async fn write_through(
         TreeHash::default(),
         &a.rules,
         base_files,
+        Some(&a.session),
         &Source::Mem(&mem),
     )
     .await;
@@ -424,6 +425,7 @@ pub async fn delete_through(hub: &Arc<Hub>, st: &WatchState, rel: &str) -> Resul
         TreeHash::default(),
         &a.rules,
         base_files,
+        Some(&a.session),
         &Source::Mem(&none),
     )
     .await

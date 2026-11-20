@@ -199,6 +199,10 @@ pub struct SyncPush {
     /// changed (`base_mismatch`), and `base` is not checked. Empty: the whole-tree `base`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub base_files: Vec<(String, Hash)>,
+    /// The overflow session (`as_…`) whose live folder the push writes, as `sync.watch` names it.
+    /// Absent: the project's cache, or the session the lease's watch registered (older Cores).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 /// Runner to Core: the answer to `sync.push`.
