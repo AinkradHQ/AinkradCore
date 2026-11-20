@@ -65,12 +65,14 @@ pub struct SetCorePrefs {
 }
 
 async fn read(conn: &mut SqliteConnection, key: &str) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar(
+    // The column holds JSON (a CHECK): these preferences are stored as JSON strings.
+    let raw: Option<String> = sqlx::query_scalar(
         "SELECT value FROM settings WHERE key = ? AND scope_kind = 'server' AND scope_id = 0",
     )
     .bind(key)
     .fetch_optional(conn)
-    .await
+    .await?;
+    Ok(raw.and_then(|v| serde_json::from_str(&v).ok()))
 }
 
 async fn write(
@@ -88,7 +90,7 @@ async fn write(
          updated_at = excluded.updated_at",
     )
     .bind(key)
-    .bind(value)
+    .bind(json!(value).to_string())
     .bind(by_kind)
     .bind(by_id)
     .bind(now)

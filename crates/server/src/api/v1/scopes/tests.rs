@@ -43,6 +43,11 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
         ),
         (
             "POST",
+            "/api/v1/system/backup",
+            "starts the unit the backup timer starts, with no input; audited and held back for a minute",
+        ),
+        (
+            "POST",
             "/api/v1/core/update/check",
             "asks the release feed whether a newer version exists and changes nothing",
         ),
