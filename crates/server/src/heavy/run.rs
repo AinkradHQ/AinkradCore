@@ -58,6 +58,8 @@ pub struct Start {
     pub secrets: Vec<(String, String)>,
     /// The device that started it (the lease audit's `by`).
     pub by: String,
+    /// The hosts the job may reach (`JobRun::hosts`, E15 H2); `None`: the registry list.
+    pub hosts: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -380,6 +382,7 @@ async fn execute(
             .collect(),
         timeout_ms: None,
         need: need_of(&run.s.row),
+        hosts: run.s.hosts.clone(),
     };
     let mut d = match app.hub.dispatch_job(&run.device, Command::JobRun(job)) {
         Ok(d) => d,

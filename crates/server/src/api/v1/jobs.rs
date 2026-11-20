@@ -23,7 +23,7 @@ use crate::heavy::history;
 use crate::heavy::run;
 
 mod answer;
-use answer::{Asked, answer, built_in};
+use answer::{Asked, JobNet, answer, built_in};
 
 /// Why the Core put a job where it did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -155,6 +155,7 @@ pub async fn create(State(app): State<App>, Json(req): Json<NewJob>) -> Response
         cwd_rel: req.cwd_rel,
         env: req.env.unwrap_or_default(),
         tty: req.tty,
+        net: JobNet::Registry,
     };
     answer(&app, asked, false)
         .await
@@ -301,6 +302,16 @@ pub struct RunnerNewJob {
     pub env: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub tty: bool,
+    /// The sandbox's own network: `allow`, `deny` or `filtered` (E15 H2). Absent or unknown is
+    /// `deny`: the command runs where it was typed.
+    #[serde(default)]
+    #[schema(required = false)]
+    pub network: Option<String>,
+    /// A `filtered` sandbox's allowed host names; a job sent elsewhere gets them cut to the
+    /// registry list.
+    #[serde(default)]
+    #[schema(required = false)]
+    pub hosts: Option<Vec<String>>,
 }
 
 /// `POST /runner/jobs/report`: a local run the Core said to report (`JobLocal.report`).
@@ -340,6 +351,7 @@ pub async fn runner_create(
         cwd_rel: req.cwd_rel,
         env: req.env.unwrap_or_default(),
         tty: req.tty,
+        net: JobNet::of_sandbox(req.network.as_deref(), req.hosts.as_deref()),
     };
     answer(&app, asked, true)
         .await

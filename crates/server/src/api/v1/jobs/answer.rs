@@ -15,6 +15,32 @@ pub(super) struct Asked {
     pub(super) cwd_rel: String,
     pub(super) env: BTreeMap<String, String>,
     pub(super) tty: bool,
+    pub(super) net: JobNet,
+}
+
+/// The network a job placed elsewhere may have: never more than the sandbox that asked (E15 H2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum JobNet {
+    /// A user's own request: the whole registry list.
+    Registry,
+    /// The sandbox has no network: the job is not sent, it runs inside that sandbox.
+    Deny,
+    /// Only these registry hosts (a `filtered` sandbox's list cut to the registry list).
+    Hosts(Vec<String>),
+}
+
+impl JobNet {
+    /// From the runner's report of the asking sandbox. Anything but `allow` and `filtered` is
+    /// `Deny`, so an older runner that does not say keeps its sessions' jobs local.
+    pub(super) fn of_sandbox(network: Option<&str>, hosts: Option<&[String]>) -> JobNet {
+        match network {
+            Some("allow") => JobNet::Registry,
+            Some("filtered") => JobNet::Hosts(ainkrad_proto::v2::job_hosts_within(
+                hosts.unwrap_or_default(),
+            )),
+            _ => JobNet::Deny,
+        }
+    }
 }
 
 pub(super) fn local(reason: &str, report: bool) -> Response {
@@ -53,6 +79,10 @@ pub(super) async fn answer(app: &App, a: Asked, from_runner: bool) -> Result<Res
     }
     if !a.cwd_rel.is_empty() && ainkrad_proto::v2::wire_path_problem(&a.cwd_rel).is_some() {
         return Ok(local("bad_cwd", false));
+    }
+    // A sandbox with no network keeps its commands: a job elsewhere would have registry egress.
+    if a.net == JobNet::Deny {
+        return Ok(local("network_deny", false));
     }
     // A session's commands belong to the project the session is in.
     let project = match (a.project, &a.session) {
@@ -130,6 +160,10 @@ pub(super) async fn answer(app: &App, a: Asked, from_runner: bool) -> Result<Res
                     secrets: Vec::new(),
                     // No secrets: nothing is leased, so no lease names a starter.
                     by: String::new(),
+                    hosts: match a.net {
+                        JobNet::Hosts(h) => Some(h),
+                        JobNet::Registry | JobNet::Deny => None,
+                    },
                 };
                 match run::start(app, start).await? {
                     Started::Local(why) => local(&why, true),
@@ -164,4 +198,32 @@ fn ndjson(id: &str, device_name: &str) -> Response {
         .header("content-type", "application/x-ndjson")
         .body(body)
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::JobNet;
+
+    #[test]
+    fn a_job_never_gets_more_network_than_the_sandbox_that_asked() {
+        // E15 H2: `deny` (or an older runner that does not say) keeps the job local.
+        assert_eq!(JobNet::of_sandbox(None, None), JobNet::Deny);
+        assert_eq!(JobNet::of_sandbox(Some("deny"), None), JobNet::Deny);
+        assert_eq!(JobNet::of_sandbox(Some("Allow"), None), JobNet::Deny);
+        assert_eq!(JobNet::of_sandbox(Some("allow"), None), JobNet::Registry);
+        // `filtered`: the session's list cut to the registry list; a forge never survives.
+        let hosts = ["github.com", "CRATES.io", "evil.example", "pypi.org", "crates.io"]
+            .map(str::to_owned);
+        assert_eq!(
+            JobNet::of_sandbox(Some("filtered"), Some(&hosts)),
+            JobNet::Hosts(vec!["crates.io".into(), "pypi.org".into()])
+        );
+        assert_eq!(
+            JobNet::of_sandbox(Some("filtered"), None),
+            JobNet::Hosts(Vec::new())
+        );
+        assert!(!ainkrad_proto::v2::JOB_REGISTRY_HOSTS
+            .iter()
+            .any(|h| h.contains("github")));
+    }
 }

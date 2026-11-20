@@ -99,6 +99,7 @@ pub(super) async fn start(
         tier: "config",
         secrets,
         by: me.device.id.clone(),
+        hosts: None,
     };
     let now = app.clock.now();
     match run::start(app, s).await? {

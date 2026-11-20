@@ -24,7 +24,7 @@ use ainkrad_harness::Spec;
 use ainkrad_harness::exec::{ExecBackend, Launch, LocalBackend, SpawnRequest, Stdio as HStdio};
 use ainkrad_proto::redact::Redactor;
 use ainkrad_proto::v2::{
-    CAP_JOB, DriverInfo, ErrorCode, JOB_REGISTRY_HOSTS, JobDone, JobRun, MAX_SYNC_OUT_BYTES,
+    CAP_JOB, DriverInfo, ErrorCode, JOB_REGISTRY_HOSTS, job_hosts_within, JobDone, JobRun, MAX_SYNC_OUT_BYTES,
     OP_JOB_RUN, StreamError, TreeHash,
 };
 use tokio::io::AsyncReadExt;
@@ -241,7 +241,16 @@ impl JobDriver {
         }
         // The network: a proxy outside the sandbox that dials only the registry list.
         let sock = egress::socket_in(&job_dir.join("egress"));
-        let _proxy = egress::start(&sock, self.policy().await?)
+        let policy = match &req.hosts {
+            // The asking session's own list, cut to the registry list again here (E15 H2).
+            Some(hosts) => Arc::new(
+                self.policy()
+                    .await?
+                    .only_hosts(&job_hosts_within(hosts)),
+            ),
+            None => self.policy().await?,
+        };
+        let _proxy = egress::start(&sock, policy)
             .map_err(|e| internal(format!("egress proxy: {e}")))?;
         let timeout = req
             .timeout_ms

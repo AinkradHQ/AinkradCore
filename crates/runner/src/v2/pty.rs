@@ -657,6 +657,12 @@ impl PtyDriver {
                 folder: matches!(&mode, Some(M::Session(_) | M::Project(_)))
                     .then(|| req.cwd.clone().map(PathBuf::from))
                     .flatten(),
+                // The shell's own network (E15 H2): its jobs never get more.
+                net: super::jobsock::Net::from_mode(Some(self.config.private_net.name()), || {
+                    crate::egress::Policy::from_env()
+                        .map(|p| p.host_names())
+                        .unwrap_or_default()
+                }),
             };
             match j.socks.open(&id, origin).await {
                 Ok(sock) => {
