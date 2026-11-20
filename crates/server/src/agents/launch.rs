@@ -126,6 +126,7 @@ fn start_command(
         },
         live: s.conversation,
         instructions,
+        folder: None,
     }))
 }
 

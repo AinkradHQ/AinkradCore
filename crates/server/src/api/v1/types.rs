@@ -326,6 +326,12 @@
 ///    `DELETE /projects/{id}/approval-rules/{rule}` (`deleteApprovalRule`) returning `ApprovalRule {id, tool, pattern,
 ///    created_at}` (migration 43, audit `agent.approval_rule_added` / `agent.approval_rule_removed`); transcript entry
 ///    `{"type": "thinking", "text"}` (Claude only, at most 16 KiB). Run `make contract` and `make clients` at the epic's build.
+/// 95+ (pending, E15 hardware; F0 freeze, `API_MINOR` NOT bumped here): `GET /hardware` (`listHardware` -> `[Hardware]`),
+///    `GET /hardware/pool` (`getHardwarePool` -> `HardwarePool`), `PUT /hardware/{id}/pause` (`pauseHardware`) and
+///    `PUT /hardware/pause` (`pauseAllHardware`), body `HardwarePause {until?}`; `POST /jobs` (`createJob` -> 201 `Job` | 200
+///    `JobLocal` | 409 `interactive`), `GET /jobs` (`listJobs`, `project`, `session`, `state`, `limit`), `GET /jobs/{id}`
+///    (`getJob`), `GET /jobs/{id}/stream` (`streamJob`, WebSocket), `POST /jobs/{id}/signal` (`signalJob`, `JobSignal`),
+///    `DELETE /jobs/{id}` (`cancelJob`). Stubs until E15-1 and E15-3. Runner protocol 2.1: `job.run`, `sync.*`, `gateway.call`.
 pub const API_MINOR: u32 = 95;
 
 use serde::{Deserialize, Serialize};

@@ -1098,6 +1098,7 @@ async fn open(
                 ssh: spec.ssh,
                 sandbox: spec.sandbox.clone().filter(|s| s != "ssh"),
                 sandbox_user: spec.sandbox_user,
+                purpose: None,
             }),
             app.hub.terminal_elevation(me),
         )

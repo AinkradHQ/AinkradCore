@@ -1192,6 +1192,134 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/hardware": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listHardware"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hardware/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["pauseAllHardware"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hardware/pool": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getHardwarePool"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hardware/{id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["pauseHardware"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listJobs"];
+        put?: never;
+        post: operations["createJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getJob"];
+        put?: never;
+        post?: never;
+        delete: operations["cancelJob"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{id}/signal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["signalJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{id}/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["streamJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -2082,6 +2210,54 @@ export interface paths {
         get: operations["getPushKinds"];
         put: operations["setPushKinds"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["runnerCreateJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner/jobs/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["runnerReportJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner/jobs/{job}/signal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["runnerSignalJob"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3967,6 +4143,90 @@ export interface components {
             server_version?: string | null;
             supported_minors?: number[] | null;
         };
+        /** @description One machine. */
+        Hardware: {
+            /** @description `aarch64`, `x86_64`. */
+            arch?: string | null;
+            battery?: components["schemas"]["HardwareBattery"];
+            /** Format: int32 */
+            cores: number;
+            /**
+             * Format: int32
+             * @description 0 to 100, over 60 s.
+             */
+            cpu_pct: number;
+            degraded: boolean;
+            gate: components["schemas"]["HardwareGate"];
+            /** @description The runner device, `d_…`. */
+            id: string;
+            /** Format: int32 */
+            job_slots: number;
+            jobs: components["schemas"]["HardwareJob"][];
+            kind: components["schemas"]["HardwareKind"];
+            /** Format: int64 */
+            mem_free_mb: number;
+            /** Format: int64 */
+            mem_total_mb: number;
+            name: string;
+            online: boolean;
+            /** @description `linux`, `macos`. */
+            os?: string | null;
+            /** @description Paused on the Core until then; absent: not paused. */
+            paused_until?: components["schemas"]["Timestamp"];
+            /**
+             * Format: int32
+             * @description AI sessions live on it.
+             */
+            sessions: number;
+            /** @description Ready toolchains, name to version. */
+            toolchains: {
+                [key: string]: string;
+            };
+        };
+        HardwareBattery: {
+            on_battery: boolean;
+            /**
+             * Format: int32
+             * @description 0 to 100.
+             */
+            percent: number;
+        };
+        HardwareGate: ("open" | "busy" | "on_battery" | "paused" | "off") | string;
+        /** @description A job running on a machine now. */
+        HardwareJob: {
+            /** @description `j_…`. */
+            id: string;
+            /** @description What it runs, `cargo build`. */
+            label: string;
+            /**
+             * Format: int64
+             * @description The project id, absent for a job of a session with no project.
+             */
+            project?: number | null;
+            started_at: components["schemas"]["Timestamp"];
+        };
+        HardwareKind: ("core" | "mac" | "runner") | string;
+        /**
+         * @description `PUT …/pause`: until when; `null` lifts the pause, and any time in the year 2100 or later means
+         *     indefinitely.
+         */
+        HardwarePause: {
+            until?: components["schemas"]["Timestamp"];
+        };
+        /** @description The pool as a whole, for the top bar's load ring. */
+        HardwarePool: {
+            /** Format: int32 */
+            jobs: number;
+            /**
+             * Format: int32
+             * @description Running jobs over all online job slots, 0 to 100.
+             */
+            load_pct: number;
+            /** @description A pause-all is in effect. */
+            paused: boolean;
+            /** Format: int32 */
+            sessions: number;
+        };
         Health: {
             /** @description Run inside the container, one line of 1-512 characters; exit 0 is healthy. */
             cmd: string;
@@ -4050,6 +4310,61 @@ export interface components {
              */
             token?: string | null;
         };
+        /** @description One job. */
+        Job: {
+            /**
+             * Format: int32
+             * @description Files the Core kept over the machine's version (`.ainkrad/conflicts/<job>/`).
+             */
+            conflicts: number;
+            created_at: components["schemas"]["Timestamp"];
+            /** @description The device it runs on, `d_…`. */
+            device: string;
+            device_name: string;
+            /** Format: int64 */
+            duration_ms?: number | null;
+            ended_at?: components["schemas"]["Timestamp"];
+            /** Format: int32 */
+            exit_code?: number | null;
+            /** @description `j_…`. */
+            id: string;
+            /** @description What it runs, `cargo build`. */
+            label: string;
+            /** @description With `core_no_fit`: what no other machine had (`xcode`, `os macos`). */
+            missing?: string | null;
+            place_reason: components["schemas"]["JobPlaceReason"];
+            /**
+             * Format: int64
+             * @description The project id; absent for a job of a session with no project.
+             */
+            project?: number | null;
+            /** @description The AI session (`as_…`) it came from. */
+            session?: string | null;
+            started_at?: components["schemas"]["Timestamp"];
+            state: components["schemas"]["JobState"];
+            /** @description The terminal it came from. */
+            terminal?: string | null;
+            tier: components["schemas"]["JobTier"];
+        };
+        /** @description The 200 answer of `POST /jobs`: run it where you are. */
+        JobLocal: {
+            /** @description Why (`light`, `rule`, `no_hardware`, ...). */
+            reason: string;
+            /**
+             * @description Report the local run's outcome and duration (`POST /runner/jobs/report`, the shim's `done`
+             *     frame), for the command history.
+             */
+            report: boolean;
+            /** @description Always `local`. */
+            verdict: string;
+        };
+        JobPlaceReason: ("core" | "overflow" | "runner" | "this_mac" | "core_no_fit" | "pinned") | string;
+        JobSignal: {
+            /** @description `INT`, `TERM` or `KILL`. */
+            signal: string;
+        };
+        JobState: ("queued" | "syncing" | "running" | "ended" | "failed" | "cancelled" | "lost") | string;
+        JobTier: ("rule" | "history" | "decision" | "config") | string;
         /** @description One way to sign in to a kind, easiest first. */
         KindAuthMethod: {
             /** @description Shown under "Advanced", not as the first choice. */
@@ -4324,8 +4639,12 @@ export interface components {
              *     `sendAgentMessage`. A message gives the session its `title` (its first 60 characters).
              */
             prompt?: string | null;
-            /** @description The runner's device id, `d_…`. */
-            runner: string;
+            /**
+             * @deprecated
+             * @description Deprecated (E15): the Core places every session. Absent: the Core's built-in runner (until
+             *     E15-1 places by load, after which a given runner is ignored).
+             */
+            runner?: string | null;
             /** @description At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC). */
             secrets?: components["schemas"]["AgentSecret"][] | null;
             /**
@@ -4429,6 +4748,21 @@ export interface components {
              *     (this may be left out).
              */
             scopes?: string[];
+        };
+        /** @description `POST /jobs`. */
+        NewJob: {
+            argv: string[];
+            /** @description A wire path relative to the project or session folder; empty is its root. */
+            cwd_rel?: string;
+            /** @description Allow-listed variable names to values. */
+            env?: {
+                [key: string]: string;
+            } | null;
+            /** Format: int64 */
+            project?: number | null;
+            session?: string | null;
+            /** @description The caller is a terminal: an interactive command answers 409 `interactive`. */
+            tty?: boolean;
         };
         /** @description A lease to grant. */
         NewLease: {
@@ -5337,6 +5671,38 @@ export interface components {
             kvm?: string | null;
             /** @description Tiers offered now, by name: `none`, `process`, `microvm`. */
             tiers?: string[] | null;
+        };
+        /** @description `POST /runner/jobs/report`: a local run the Core said to report (`JobLocal.report`). */
+        RunnerJobReport: {
+            argv: string[];
+            /** Format: int64 */
+            duration_ms: number;
+            /** Format: int32 */
+            exit_code?: number | null;
+            /** Format: int64 */
+            project?: number | null;
+            session?: string | null;
+            signal?: string | null;
+            terminal?: string | null;
+        };
+        /**
+         * @description `POST /runner/jobs`: what the built-in runner forwards from a shim, with the origin it stamped
+         *     (the sandbox the socket belongs to, never the shim's word).
+         */
+        RunnerNewJob: {
+            argv: string[];
+            /** @description A wire path relative to the session or project folder (the runner maps the shim's `cwd`). */
+            cwd_rel?: string;
+            env?: {
+                [key: string]: string;
+            } | null;
+            /** Format: int64 */
+            project?: number | null;
+            /** @description The AI session (`as_…`) whose sandbox the shim ran in. */
+            session?: string | null;
+            /** @description The Core terminal it ran in. */
+            terminal?: string | null;
+            tty?: boolean;
         };
         /** @description What a runner offers: terminals, agents, and how many agent sessions at once. */
         RunnerPolicyBody: {
@@ -9098,6 +9464,323 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    listHardware: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every paired machine the Core places work on, with its live capacity. Needs `read` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Hardware"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    pauseAllHardware: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HardwarePause"];
+            };
+        };
+        responses: {
+            /** @description Every machine but the Core takes no new work until `until` (`null` lifts it). Needs `admin` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HardwarePool"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getHardwarePool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pool's load, jobs and sessions. Needs `read` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HardwarePool"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    pauseHardware: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The runner's device id, `d_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HardwarePause"];
+            };
+        };
+        responses: {
+            /** @description The machine takes no new jobs or overflow sessions until `until` (`null` lifts it); running work finishes. Needs `admin` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Hardware"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listJobs: {
+        parameters: {
+            query?: {
+                project?: number;
+                session?: string;
+                /** @description One `JobState`. */
+                state?: string;
+                /** @description At most this many, newest first (default 50, at most 200). */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Jobs, newest first. Needs `read` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewJob"];
+            };
+        };
+        responses: {
+            /** @description Run it locally, and why */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobLocal"];
+                };
+            };
+            /** @description The command was placed on other hardware */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description `interactive`: a tty and an interactive command run locally */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `j_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One job. Needs `read` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    cancelJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `j_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancelled: TERM, then KILL after 10 s; nothing is synced back */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    signalJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `j_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobSignal"];
+            };
+        };
+        responses: {
+            /** @description The signal was delivered to the job's process group */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    streamJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `j_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job WebSocket: `out`, `state` and `exit` frames, replaying up to 4 MiB */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     getMe: {
         parameters: {
             query?: never;
@@ -11330,6 +12013,111 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PushKinds"];
                 };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    runnerCreateJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunnerNewJob"];
+            };
+        };
+        responses: {
+            /** @description Run it locally, and why */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobLocal"];
+                };
+            };
+            /** @description Placed on other hardware: the body is an NDJSON stream (`application/x-ndjson`), one JSON object per line: the remote `ShimVerdict` line, then `state`, `out` and `exit` frames (`ShimFrame`, runner protocol) until the job ends. Only the built-in runner may call it (`runner` scope) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description `interactive` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    runnerReportJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunnerJobReport"];
+            };
+        };
+        responses: {
+            /** @description A local run's outcome, for the command history. Built-in runner only */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    runnerSignalJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description `j_…` */
+                job: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JobSignal"];
+            };
+        };
+        responses: {
+            /** @description A signal the shim forwarded; a second `INT` cancels. Built-in runner only */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];

@@ -24,7 +24,8 @@
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise),
 //!   or the scope its `Module::route_scopes` declares for that route (`module_scope`).
 //! - A `runner` device holds only `runner`, which only `POST /api/v1/secret-leases/redeem` and
-//!   the read side of the Core's repo copies (`/api/v1/mirrors/{repo}/…`, P3-01) take: it can call
+//!   the read side of the Core's repo copies (`/api/v1/mirrors/{repo}/…`, P3-01) take, and the
+//!   built-in runner's job routes (`/api/v1/runner/jobs…`, E15-3): it can call
 //!   nothing else here (the runner hub is E1-11).
 //!
 //! **Danger routes** (spec §8, E1-09.6, D-4; still named "destructive" in the contract) are
@@ -86,6 +87,23 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PUT", "/api/v1/devices/{id}/scopes", "admin"),
     ("GET", "/api/v1/auth/lockouts", "admin"),
     ("POST", "/api/v1/auth/lockouts/clear", "admin"),
+    // Hardware (E15-1): reading is `read`; a pause withholds new work, `admin`.
+    ("GET", "/api/v1/hardware", "read"),
+    ("GET", "/api/v1/hardware/pool", "read"),
+    ("PUT", "/api/v1/hardware/pause", "admin"),
+    ("PUT", "/api/v1/hardware/{id}/pause", "admin"),
+    // Heavy jobs (E15-3): reading is `read`; the rest runs or controls code, as a terminal does.
+    ("POST", "/api/v1/jobs", "terminal"),
+    ("GET", "/api/v1/jobs", "read"),
+    ("GET", "/api/v1/jobs/{id}", "read"),
+    ("GET", "/api/v1/jobs/{id}/stream", "terminal"),
+    ("POST", "/api/v1/jobs/{id}/signal", "terminal"),
+    ("DELETE", "/api/v1/jobs/{id}", "terminal"),
+    // The built-in runner forwards its shims' requests (signed as itself; the handler refuses any
+    // other runner).
+    ("POST", "/api/v1/runner/jobs", "runner"),
+    ("POST", "/api/v1/runner/jobs/report", "runner"),
+    ("POST", "/api/v1/runner/jobs/{job}/signal", "runner"),
     ("GET", "/api/v1/runners", "read"),
     ("GET", "/api/v1/runners/{id}", "read"),
     ("POST", "/api/v1/runners/{id}/noop", "agent"),
@@ -415,6 +433,10 @@ pub const UNLOCKED: &[(&str, &str)] = &[
     // A run configuration starts a container on a runner, as the project run does (E11-3).
     ("POST", "/api/v1/projects/{id}/run-configs/{config}/run"),
     ("POST", "/api/v1/projects/{id}/runs/{run}/stop"),
+    // A heavy job runs code on a runner, as a terminal does (E15-3).
+    ("POST", "/api/v1/jobs"),
+    ("POST", "/api/v1/jobs/{id}/signal"),
+    ("DELETE", "/api/v1/jobs/{id}"),
 ];
 
 /// Whether `path` fits `template` segment by segment.

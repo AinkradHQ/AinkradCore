@@ -388,6 +388,7 @@ impl Session {
                                 }),
                                 isolation: self.agent.as_ref().map(|a| a.isolation()),
                                 report: super::aitools::report(),
+                                capacity: None,
                             }),
                         ),
                     )
@@ -635,6 +636,18 @@ impl Session {
                 self.start_control(stream, command)
             }
             // The sign-in driver's, or (an op of a newer Core) `unsupported_command`.
+            // E15 (protocol 2.1): the `job`, `sync` and `gateway-call` drivers are E15-4's and
+            // E15-0's; until then this runner advertises none of them, so none is expected.
+            Command::JobRun(_)
+            | Command::SyncManifest(_)
+            | Command::SyncPush(_)
+            | Command::SyncPull(_)
+            | Command::SyncWatch(_)
+            | Command::SyncDrop(_)
+            | Command::GatewayCall(_) => Some(Body::Error(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                format!("{} is not offered by this runner", command.op()),
+            ))),
             Command::LoginStart(_)
             | Command::LoginCode(_)
             | Command::LoginCancel(_)

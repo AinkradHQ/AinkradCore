@@ -448,6 +448,13 @@
           "minimum": 0,
           "type": "integer"
         },
+        "folder": {
+          "description": "The session's folder in the canonical workspace (E15 §4.1, `workspace::paths::session_dir`),\nset only for the built-in runner started with `--workspace-root`: the harness works there,\nand the runner refuses a folder outside its workspace root (`invalid_args`). The Core checks\nthe runner's reported `meta.folder` against it. Absent: the runner picks its own folder.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "gateway": {
           "anyOf": [
             {
@@ -636,6 +643,180 @@
         "path",
         "bytes"
       ],
+      "type": "object"
+    },
+    "Arch": {
+      "description": "A CPU architecture, as Rust names it (`std::env::consts::ARCH`).",
+      "enum": [
+        "aarch64",
+        "x86_64",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "Battery": {
+      "properties": {
+        "on_battery": {
+          "default": false,
+          "type": "boolean"
+        },
+        "percent": {
+          "default": 0,
+          "description": "0 to 100.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "CacheInfo": {
+      "description": "One warm project cache on a runner.",
+      "properties": {
+        "bytes": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "project": {
+          "default": 0,
+          "description": "The project id.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "tree_hash": {
+          "$ref": "#/$defs/Hash",
+          "default": "0000000000000000000000000000000000000000000000000000000000000000",
+          "description": "The tree the cache holds now (`TreeHash`)."
+        }
+      },
+      "type": "object"
+    },
+    "CallUsage": {
+      "description": "The tokens a `gateway.call` used, as the upstream reported them.",
+      "properties": {
+        "cache_read": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cache_write": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reported_usd_micros": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Capacity": {
+      "description": "A runner's capacity now.",
+      "properties": {
+        "battery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Battery"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent on a host with no battery."
+        },
+        "caches": {
+          "description": "The warm project caches this runner holds (§4.5).",
+          "items": {
+            "$ref": "#/$defs/CacheInfo"
+          },
+          "type": "array"
+        },
+        "cores": {
+          "default": 0,
+          "description": "Logical CPUs.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cpu_pct": {
+          "default": 0,
+          "description": "CPU use, 0 to 100, averaged over 60 s.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "disk_free_mb": {
+          "default": 0,
+          "description": "Free disk under the runner's cache root.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "gate": {
+          "$ref": "#/$defs/Gate",
+          "default": "off",
+          "description": "The runner's own verdict on taking jobs (E15-4 `hwgate`)."
+        },
+        "idle_secs": {
+          "description": "Seconds since the last user input on the host (This Mac); absent where unknown.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "job_slots": {
+          "default": 0,
+          "description": "How many jobs it runs at once: default `cores / 4`, at least 1.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mem_free_mb": {
+          "default": 0,
+          "description": "Memory available to new work (\"available\", not \"free\").",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mem_total_mb": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "toolchains": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Toolchains ready for jobs, `rust`, `node`, `python`, `go`, `xcode`, `swift`, `docker` to version.",
+          "type": "object"
+        }
+      },
       "type": "object"
     },
     "Captured": {
@@ -1363,6 +1544,97 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/JobRun",
+          "properties": {
+            "op": {
+              "const": "job.run",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SyncManifest",
+          "properties": {
+            "op": {
+              "const": "sync.manifest",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SyncPush",
+          "properties": {
+            "op": {
+              "const": "sync.push",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SyncPull",
+          "properties": {
+            "op": {
+              "const": "sync.pull",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SyncWatch",
+          "properties": {
+            "op": {
+              "const": "sync.watch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SyncDrop",
+          "properties": {
+            "op": {
+              "const": "sync.drop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/GatewayCall",
+          "properties": {
+            "op": {
+              "const": "gateway.call",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer Core: answered `unsupported_command`. Never sent.",
           "properties": {
             "op": {
@@ -1537,6 +1809,20 @@
           "properties": {
             "type": {
               "const": "eof",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SyncEvent",
+          "description": "Runner to Core on a `sync.watch` stream: what changed in the session folder (E15-2).",
+          "properties": {
+            "type": {
+              "const": "sync_event",
               "type": "string"
             }
           },
@@ -2352,6 +2638,70 @@
       },
       "type": "object"
     },
+    "Entry": {
+      "description": "One file of a tree. Directories are implied by their files.",
+      "properties": {
+        "chunks": {
+          "description": "Each [`CHUNK_BYTES`] chunk's hash, in order; empty for an empty file or a symlink.",
+          "items": {
+            "$ref": "#/$defs/Hash"
+          },
+          "type": "array"
+        },
+        "exec": {
+          "default": false,
+          "type": "boolean"
+        },
+        "hash": {
+          "$ref": "#/$defs/Hash",
+          "default": "0000000000000000000000000000000000000000000000000000000000000000",
+          "description": "The whole file's hash."
+        },
+        "kind": {
+          "$ref": "#/$defs/EntryKind",
+          "default": "file"
+        },
+        "link": {
+          "description": "A symlink's relative target.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "default": "",
+          "description": "A wire path.",
+          "type": "string"
+        },
+        "size": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "EntryKind": {
+      "oneOf": [
+        {
+          "enum": [
+            "file"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "symlink",
+          "description": "A relative symlink that resolves inside the project; `Entry::link` is its target.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A kind from a newer peer: skipped. Never sent.",
+          "type": "string"
+        }
+      ]
+    },
     "ErrorCode": {
       "description": "Machine codes, snake_case like the client API's (handshake spec §14).",
       "oneOf": [
@@ -2468,6 +2818,31 @@
         {
           "const": "design_limit",
           "description": "`design.*`: the helper (or Chromium) ran out of wall clock. Load on the runner can cause it as\nmuch as the input, so it is no verdict on the file: try again later.",
+          "type": "string"
+        },
+        {
+          "const": "hash_mismatch",
+          "description": "`sync.*`: a chunk or file did not hash as listed, or the tree after a push is not `want_tree`.",
+          "type": "string"
+        },
+        {
+          "const": "base_mismatch",
+          "description": "`sync.push`: the cache is not at `base`.",
+          "type": "string"
+        },
+        {
+          "const": "path_refused",
+          "description": "`sync.*`, `job.run`: a path that is not a wire path (`wire_path_problem`), or one outside\nthe project.",
+          "type": "string"
+        },
+        {
+          "const": "outputs_too_large",
+          "description": "`job.run`: the job's sync out is over `MAX_SYNC_OUT_BYTES`.",
+          "type": "string"
+        },
+        {
+          "const": "terminal_target_removed",
+          "description": "`pty.open` to a runner that no longer opens terminals (E15-4): only the Core and This Mac\ndo, and any runner for `purpose: login`.",
           "type": "string"
         },
         {
@@ -2653,6 +3028,38 @@
         }
       ]
     },
+    "Gate": {
+      "description": "Whether a runner takes jobs now, by its own measure. The Core's pause always wins over `Open`.",
+      "oneOf": [
+        {
+          "enum": [
+            "open",
+            "on_battery"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "busy",
+          "description": "The host is in use (This Mac: not idle and CPU at or above 30%).",
+          "type": "string"
+        },
+        {
+          "const": "paused",
+          "description": "Paused on the host itself.",
+          "type": "string"
+        },
+        {
+          "const": "off",
+          "description": "Takes no jobs at all (no `job` driver, or switched off). Also what an absent gate reads as.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A gate from a newer runner: read as not open. Never sent.",
+          "type": "string"
+        }
+      ]
+    },
     "GatewayAuth": {
       "description": "The header the gateway puts the key in.",
       "oneOf": [
@@ -2672,6 +3079,111 @@
           "type": "string"
         }
       ]
+    },
+    "GatewayCall": {
+      "description": "Core to runner (E15-0): redeem `lease`, run the same dial checks as `gateway.test`, make one\n`POST` of `body` to `path` under the upstream's base path, and return the response. No `Debug`.",
+      "properties": {
+        "body": {
+          "default": "",
+          "description": "The JSON request body, as text (already redacted by the Core).",
+          "type": "string"
+        },
+        "lease": {
+          "default": "",
+          "type": "string"
+        },
+        "path": {
+          "default": "",
+          "description": "The request path under the upstream's base path, e.g. `/v1beta/models/x:generateContent`.",
+          "type": "string"
+        },
+        "provider": {
+          "default": "",
+          "description": "As in [`GatewayGrant`].",
+          "type": "string"
+        },
+        "timeout_ms": {
+          "description": "Absent: the runner's default.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "upstream": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Upstream"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Absent reads as no upstream, which the runner refuses (`invalid_args`)."
+        },
+        "user_key": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserKeyDef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "GatewayCalled": {
+      "description": "Runner to Core: the answer to `gateway.call`. `body` is the upstream's response text, at most\n[`MAX_GATEWAY_CALL_BYTES`] (longer is `truncated`), only for a status of `ok`.",
+      "properties": {
+        "body": {
+          "default": "",
+          "type": "string"
+        },
+        "http_status": {
+          "default": 0,
+          "description": "The HTTP status, 0 when none came back.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "latency_ms": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "result": {
+          "$ref": "#/$defs/UpstreamStatus",
+          "default": "unknown"
+        },
+        "retry_after": {
+          "description": "Seconds the upstream asked to wait, for an overload.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "usage": {
+          "$ref": "#/$defs/CallUsage",
+          "default": {
+            "cache_read": 0,
+            "cache_write": 0,
+            "input": 0,
+            "output": 0
+          }
+        }
+      },
+      "type": "object"
     },
     "GatewayGrant": {
       "description": "Core to runner, in `AgentStart`: the key of one account, served to the harness by the runner's\ngateway. `lease` is redeemed into the gateway's memory, never the env or a file. No `Debug`.",
@@ -2904,9 +3416,24 @@
       ],
       "type": "object"
     },
+    "Hash": {
+      "description": "A blake3 hash, lowercase hex on the wire (64 characters).",
+      "type": "string"
+    },
     "Heartbeat": {
       "description": "A runner's heartbeat: carries `load` when the runner measured one, and the isolation it\noffers now.",
       "properties": {
+        "capacity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capacity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its capacity now (E15-1). Absent from a runner that predates 2.1."
+        },
         "isolation": {
           "anyOf": [
             {
@@ -3142,6 +3669,21 @@
       ],
       "type": "object"
     },
+    "InlineFile": {
+      "description": "A small file's bytes, carried in its event.",
+      "properties": {
+        "data": {
+          "default": "",
+          "description": "Standard base64, at most [`MAX_INLINE_BYTES`] decoded.",
+          "type": "string"
+        },
+        "path": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Isolation": {
       "description": "How strongly a session is isolated from its host, weakest to strongest.",
       "oneOf": [
@@ -3181,6 +3723,163 @@
       "required": [
         "tiers"
       ],
+      "type": "object"
+    },
+    "JobDone": {
+      "description": "Runner to Core: the answer to `job.run`.",
+      "properties": {
+        "changed": {
+          "default": [],
+          "description": "Every file the job changed or created, as it is now: the Core pulls them (§4.6).",
+          "items": {
+            "$ref": "#/$defs/Entry"
+          },
+          "type": "array"
+        },
+        "deleted": {
+          "description": "Wire paths the job deleted.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "duration_ms": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exit_code": {
+          "description": "Absent when a signal ended it.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "signal": {
+          "description": "`TERM`, `KILL`, ...",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tree": {
+          "$ref": "#/$defs/TreeHash",
+          "default": "0000000000000000000000000000000000000000000000000000000000000000",
+          "description": "The cache's tree after the job."
+        }
+      },
+      "type": "object"
+    },
+    "JobNeed": {
+      "description": "What a job needs of the hardware it runs on.",
+      "properties": {
+        "arch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Arch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "os": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Os"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "toolchains": {
+          "description": "Toolchain names (`Capacity::toolchains` keys) it needs, reported or installable from pins.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "xcode": {
+          "default": false,
+          "description": "Needs Xcode: a macOS runner that reports `xcode`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "JobRun": {
+      "description": "Core to runner: run `argv` in `cwd_rel` of the cache (or workspace) of `project`.",
+      "properties": {
+        "argv": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cache": {
+          "default": "",
+          "description": "The cache the job runs in: `<work_root>/cache/<core_id>/<project_id>/`, named by the runner\nfrom `project`; this is the Core id part. Empty on the built-in runner (the workspace).",
+          "type": "string"
+        },
+        "cwd_rel": {
+          "default": "",
+          "description": "A wire path, relative to the cache root; empty is the root.",
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The child's environment, which otherwise starts empty.",
+          "type": "object"
+        },
+        "job": {
+          "default": "",
+          "description": "`j_…`.",
+          "type": "string"
+        },
+        "need": {
+          "$ref": "#/$defs/JobNeed",
+          "default": {
+            "xcode": false
+          }
+        },
+        "prepare": {
+          "description": "Run first, in the same folder (`npm ci` when the lockfile changed). Empty: nothing.",
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "project": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "secrets": {
+          "description": "Single-use leases, redeemed into the env, never written to disk; their values are redacted\nfrom the output.",
+          "items": {
+            "$ref": "#/$defs/RunSecret"
+          },
+          "type": "array"
+        },
+        "timeout_ms": {
+          "description": "Absent: the runner's default.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "Kvm": {
@@ -3385,6 +4084,15 @@
         "cache_write"
       ],
       "type": "object"
+    },
+    "Os": {
+      "description": "An operating system, as Rust names it (`std::env::consts::OS`).",
+      "enum": [
+        "linux",
+        "macos",
+        "unknown"
+      ],
+      "type": "string"
     },
     "Outcome": {
       "description": "How a run ended, as its runner saw it.",
@@ -3833,6 +4541,13 @@
         },
         "program": {
           "description": "Absent: the user's login shell.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "purpose": {
+          "description": "Why the terminal is opened (E15-4): `login` for the Accounts guided sign-in, the one\nterminal a remote runner still opens ([`PTY_PURPOSE_LOGIN`]). Absent: a plain terminal.",
           "type": [
             "string",
             "null"
@@ -4612,6 +5327,97 @@
           "properties": {
             "op": {
               "const": "agent.write",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/JobDone",
+          "properties": {
+            "op": {
+              "const": "job.run",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SyncManifestReply",
+          "properties": {
+            "op": {
+              "const": "sync.manifest",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SyncPushed",
+          "properties": {
+            "op": {
+              "const": "sync.push",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SyncPulled",
+          "properties": {
+            "op": {
+              "const": "sync.pull",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SyncWatched",
+          "properties": {
+            "op": {
+              "const": "sync.watch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/SyncDropped",
+          "properties": {
+            "op": {
+              "const": "sync.drop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/GatewayCalled",
+          "properties": {
+            "op": {
+              "const": "gateway.call",
               "type": "string"
             }
           },
@@ -5460,6 +6266,17 @@
             "string",
             "null"
           ]
+        },
+        "capacity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Capacity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Its capacity when the hello was sent (E15-1), beside `load`. Absent from a runner that\npredates 2.1: the Core then treats it as plain session hardware (\"update runner\")."
         },
         "device_id": {
           "description": "The runner device, `d_…`: the one that signed the upgrade (E1-11.3). The Core refuses a\nhello without it.",
@@ -6409,6 +7226,293 @@
       ],
       "type": "object"
     },
+    "SyncDrop": {
+      "description": "Core to runner: forget the cache of `project` (it was archived, or the session ended).",
+      "properties": {
+        "project": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SyncDropped": {
+      "description": "Runner to Core: the answer to `sync.drop`.",
+      "properties": {
+        "bytes_freed": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SyncEvent": {
+      "description": "Runner to Core on a `sync.watch` stream (a `control` body `sync_event`), at most every\n[`WATCH_INTERVAL_MS`] while something changed. A `put` entry with no `inline` is pulled.",
+      "properties": {
+        "delete": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "inline": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/InlineFile"
+          },
+          "type": "array"
+        },
+        "put": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Entry"
+          },
+          "type": "array"
+        },
+        "seq": {
+          "default": 0,
+          "description": "From 1, by one, per watch.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SyncManifest": {
+      "description": "Core to runner: the manifest of the runner's cache of `project`.",
+      "properties": {
+        "lease": {
+          "default": "",
+          "description": "`l_…`: the per (device, project, job or session) lease; without it, `not_found`.",
+          "type": "string"
+        },
+        "project": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "rules": {
+          "$ref": "#/$defs/SyncRules",
+          "default": {
+            "exclude": []
+          },
+          "description": "The rules the manifest is taken under."
+        },
+        "rules_hash": {
+          "$ref": "#/$defs/Hash",
+          "default": "0000000000000000000000000000000000000000000000000000000000000000",
+          "description": "The hash of `rules` (a runner may keep its index per rules hash)."
+        }
+      },
+      "type": "object"
+    },
+    "SyncManifestReply": {
+      "description": "Runner to Core: the answer to `sync.manifest`.",
+      "properties": {
+        "entries": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Entry"
+          },
+          "type": "array"
+        },
+        "tree": {
+          "$ref": "#/$defs/TreeHash",
+          "default": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      },
+      "type": "object"
+    },
+    "SyncPull": {
+      "description": "Core to runner: send these files' chunks (credited `output` frames), from a cache or a session\nfolder.",
+      "properties": {
+        "cache_or_session": {
+          "default": "",
+          "description": "The project's cache (empty) or an overflow session's id (`as_…`).",
+          "type": "string"
+        },
+        "lease": {
+          "default": "",
+          "description": "As in [`SyncPush`].",
+          "type": "string"
+        },
+        "paths": {
+          "default": [],
+          "description": "`(wire path, the hash the Core expects)`; a file that no longer hashes so is `hash_mismatch`.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/Hash"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "project": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SyncPulled": {
+      "description": "Runner to Core: the answer to `sync.pull`, after the last chunk.",
+      "properties": {
+        "count": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "SyncPush": {
+      "description": "Core to runner: apply a delta to the cache, then the chunk frames of `put`. Refused with\n`base_mismatch` when the cache is not at `base`, `hash_mismatch` for a chunk or file that does\nnot hash as listed, `path_refused` for a path that is not a wire path.",
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/TreeHash",
+          "default": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "base_files": {
+          "description": "A per-file base, for a person's write into an overflow session (§4.6): each `(path, the\nhash the Core last saw)`. When present the push conflicts only where one of these files\nchanged (`base_mismatch`), and `base` is not checked. Empty: the whole-tree `base`.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/Hash"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "delete": {
+          "default": [],
+          "description": "Wire paths to delete.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "lease": {
+          "default": "",
+          "type": "string"
+        },
+        "project": {
+          "default": 0,
+          "format": "int64",
+          "type": "integer"
+        },
+        "put": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Entry"
+          },
+          "type": "array"
+        },
+        "rules": {
+          "$ref": "#/$defs/SyncRules",
+          "default": {
+            "exclude": []
+          },
+          "description": "The rules `want_tree` is hashed under."
+        },
+        "want_tree": {
+          "$ref": "#/$defs/TreeHash",
+          "default": "0000000000000000000000000000000000000000000000000000000000000000",
+          "description": "The tree the cache must hold afterwards; another is `hash_mismatch`."
+        }
+      },
+      "type": "object"
+    },
+    "SyncPushed": {
+      "description": "Runner to Core: the answer to `sync.push`.",
+      "properties": {
+        "tree": {
+          "$ref": "#/$defs/TreeHash",
+          "default": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      },
+      "type": "object"
+    },
+    "SyncRules": {
+      "description": "The project's include/exclude rules (§4.4, the built-ins merged with `.ainkrad/jobs.toml\n[sync]` by the Core). Globs are gitignore-style, relative to the project root. `.git/` is\nexcluded whatever these say.",
+      "properties": {
+        "exclude": {
+          "default": [],
+          "description": "Never synced in (build output, secret-shaped files).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "include": {
+          "description": "Synced although an exclude matches (secret-shaped files the project lists, for one).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "outputs": {
+          "description": "Synced out after a job even inside an excluded dir (`target/release/app`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "SyncWatch": {
+      "description": "Core to runner: stream every change in an overflow session's folder until `close`.",
+      "properties": {
+        "lease": {
+          "default": "",
+          "type": "string"
+        },
+        "rules": {
+          "$ref": "#/$defs/SyncRules",
+          "default": {
+            "exclude": []
+          },
+          "description": "The rules the watched tree is taken under."
+        },
+        "session": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SyncWatched": {
+      "description": "Runner to Core: the last frame of `sync.watch` (after `close`).",
+      "properties": {
+        "last_seq": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "TerminalExit": {
       "description": "How a terminal's child ended: the `result` of every `pty.*` op.",
       "properties": {
@@ -6899,6 +8003,10 @@
         "body"
       ],
       "type": "object"
+    },
+    "TreeHash": {
+      "description": "The hash of a whole tree: blake3 over its sorted entries (E15-2 defines the exact fold).",
+      "type": "string"
     },
     "Upstream": {
       "description": "Where the gateway dials: from the account row's frozen `base_url`, never from the agent.",

@@ -332,7 +332,17 @@ pub struct AgentStart {
     /// beside the session, never inside the repo checkout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+    /// The session's folder in the canonical workspace (E15 §4.1, `workspace::paths::session_dir`),
+    /// set only for the built-in runner started with `--workspace-root`: the harness works there,
+    /// and the runner refuses a folder outside its workspace root (`invalid_args`). The Core checks
+    /// the runner's reported `meta.folder` against it. Absent: the runner picks its own folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
+
+/// The runner flag that makes it the Core host's built-in runner over the canonical workspace
+/// (`--workspace-root <dir>`, E15-4): `pty` and `AgentStart::folder` are served beneath it.
+pub const RUNNER_FLAG_WORKSPACE_ROOT: &str = "--workspace-root";
 
 fn is_zero(n: &u32) -> bool {
     *n == 0
