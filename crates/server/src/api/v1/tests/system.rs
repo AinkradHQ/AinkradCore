@@ -774,12 +774,13 @@ async fn a_socket_served_by_the_wrong_user_is_refused() {
 async fn a_backup_now_is_audited_and_asked_with_no_input() {
     let mut fx = fast(fx().await).await;
     let seen = fake(&mut fx, Mode::Ok).await;
-    let post = |fx: &Fx| {
+    async fn post(fx: &Fx) -> (StatusCode, Value) {
         send(
             &fx.app,
             req(Method::POST, "/api/v1/system/backup", Some(&fx.dev), None),
         )
-    };
+        .await
+    }
     let (s, b) = post(&fx).await;
     assert_eq!(s, StatusCode::ACCEPTED, "{b}");
     let call = calls(&seen).remove(0);
@@ -834,7 +835,7 @@ async fn the_backup_retention_is_read_through_the_helper_and_written_by_the_core
     );
     let config = fx.dir.join("config.toml");
     fx.app.health = std::sync::Arc::new(crate::health::Health::new(&fx.dir.join("core.db")));
-    let put = |fx: &Fx, dev: &TestDevice, body: Value| {
+    async fn put(fx: &Fx, dev: &TestDevice, body: Value) -> (StatusCode, Value) {
         send(
             &fx.app,
             req(
@@ -844,7 +845,8 @@ async fn the_backup_retention_is_read_through_the_helper_and_written_by_the_core
                 Some(body),
             ),
         )
-    };
+        .await
+    }
     // No config yet: nothing to change.
     let (s, b) = put(&fx, &fx.dev, json!({"keep": 30})).await;
     assert_eq!(

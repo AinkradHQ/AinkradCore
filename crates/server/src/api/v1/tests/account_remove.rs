@@ -16,7 +16,7 @@ fn later(secs: i64) -> String {
     iso_of_unix(unix_secs(NOW).unwrap() + secs)
 }
 
-async fn count(fx: &Fx, sql: &str) -> i64 {
+async fn count(fx: &Fx, sql: &'static str) -> i64 {
     sqlx::query_scalar(sql)
         .fetch_one(&fx.app.pool)
         .await
