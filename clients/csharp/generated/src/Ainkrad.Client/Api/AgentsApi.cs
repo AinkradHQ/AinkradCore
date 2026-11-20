@@ -109,6 +109,26 @@ namespace Ainkrad.Client.Api
         /// 
         /// </summary>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="rule">The rule&#39;s id</param>
+        /// <returns>List&lt;ApprovalRule&gt;</returns>
+        List<ApprovalRule> DeleteApprovalRule(string id, string rule);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="rule">The rule&#39;s id</param>
+        /// <returns>ApiResponse of List&lt;ApprovalRule&gt;</returns>
+        ApiResponse<List<ApprovalRule>> DeleteApprovalRuleWithHttpInfo(string id, string rule);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
         /// <returns>AgentSession</returns>
         AgentSession GetAgentSession(string id);
@@ -203,6 +223,26 @@ namespace Ainkrad.Client.Api
         /// 
         /// </summary>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="dir">A folder of the session, relative to its folder (no &#x60;..&#x60;); absent or empty, the folder itself. (optional)</param>
+        /// <returns>AgentFolderListing</returns>
+        AgentFolderListing ListAgentSessionFiles(string id, string? dir = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="dir">A folder of the session, relative to its folder (no &#x60;..&#x60;); absent or empty, the folder itself. (optional)</param>
+        /// <returns>ApiResponse of AgentFolderListing</returns>
+        ApiResponse<AgentFolderListing> ListAgentSessionFilesWithHttpInfo(string id, string? dir = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="before">Sessions with an &#x60;index&#x60; below this; absent, from the newest. (optional)</param>
         /// <param name="limit"> (optional)</param>
         /// <param name="run">Only the attempts of this run (its first attempt&#39;s id, &#x60;as_…&#x60;). (optional)</param>
@@ -225,6 +265,24 @@ namespace Ainkrad.Client.Api
         /// 
         /// </summary>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <returns>List&lt;ApprovalRule&gt;</returns>
+        List<ApprovalRule> ListApprovalRules(string id);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <returns>ApiResponse of List&lt;ApprovalRule&gt;</returns>
+        ApiResponse<List<ApprovalRule>> ListApprovalRulesWithHttpInfo(string id);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
         /// <returns>AgentSession</returns>
         AgentSession ResumeAgentSession(string id);
@@ -239,6 +297,26 @@ namespace Ainkrad.Client.Api
         /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
         /// <returns>ApiResponse of AgentSession</returns>
         ApiResponse<AgentSession> ResumeAgentSessionWithHttpInfo(string id);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileRevert"></param>
+        /// <returns>AgentSession</returns>
+        AgentSession RevertAgentFile(string id, AgentFileRevert agentFileRevert);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileRevert"></param>
+        /// <returns>ApiResponse of AgentSession</returns>
+        ApiResponse<AgentSession> RevertAgentFileWithHttpInfo(string id, AgentFileRevert agentFileRevert);
         /// <summary>
         /// 
         /// </summary>
@@ -339,6 +417,26 @@ namespace Ainkrad.Client.Api
         /// <param name="agentWakeRequest"></param>
         /// <returns>ApiResponse of AgentWake</returns>
         ApiResponse<AgentWake> WakeAgentSessionWithHttpInfo(string id, AgentWakeRequest agentWakeRequest);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileWrite"></param>
+        /// <returns>AgentSession</returns>
+        AgentSession WriteAgentFile(string id, AgentFileWrite agentFileWrite);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileWrite"></param>
+        /// <returns>ApiResponse of AgentSession</returns>
+        ApiResponse<AgentSession> WriteAgentFileWithHttpInfo(string id, AgentFileWrite agentFileWrite);
         #endregion Synchronous Operations
     }
 
@@ -446,6 +544,31 @@ namespace Ainkrad.Client.Api
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse (AgentSession)</returns>
         System.Threading.Tasks.Task<ApiResponse<AgentSession>> DecideAgentApprovalWithHttpInfoAsync(string id, string request, AgentDecision agentDecision, System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="rule">The rule&#39;s id</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of List&lt;ApprovalRule&gt;</returns>
+        System.Threading.Tasks.Task<List<ApprovalRule>> DeleteApprovalRuleAsync(string id, string rule, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="rule">The rule&#39;s id</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (List&lt;ApprovalRule&gt;)</returns>
+        System.Threading.Tasks.Task<ApiResponse<List<ApprovalRule>>> DeleteApprovalRuleWithHttpInfoAsync(string id, string rule, System.Threading.CancellationToken cancellationToken = default);
         /// <summary>
         /// 
         /// </summary>
@@ -572,6 +695,31 @@ namespace Ainkrad.Client.Api
         /// 
         /// </remarks>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="dir">A folder of the session, relative to its folder (no &#x60;..&#x60;); absent or empty, the folder itself. (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of AgentFolderListing</returns>
+        System.Threading.Tasks.Task<AgentFolderListing> ListAgentSessionFilesAsync(string id, string? dir = default, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="dir">A folder of the session, relative to its folder (no &#x60;..&#x60;); absent or empty, the folder itself. (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (AgentFolderListing)</returns>
+        System.Threading.Tasks.Task<ApiResponse<AgentFolderListing>> ListAgentSessionFilesWithHttpInfoAsync(string id, string? dir = default, System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="before">Sessions with an &#x60;index&#x60; below this; absent, from the newest. (optional)</param>
         /// <param name="limit"> (optional)</param>
         /// <param name="run">Only the attempts of this run (its first attempt&#39;s id, &#x60;as_…&#x60;). (optional)</param>
@@ -599,6 +747,29 @@ namespace Ainkrad.Client.Api
         /// 
         /// </remarks>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of List&lt;ApprovalRule&gt;</returns>
+        System.Threading.Tasks.Task<List<ApprovalRule>> ListApprovalRulesAsync(string id, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (List&lt;ApprovalRule&gt;)</returns>
+        System.Threading.Tasks.Task<ApiResponse<List<ApprovalRule>>> ListApprovalRulesWithHttpInfoAsync(string id, System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of AgentSession</returns>
@@ -615,6 +786,31 @@ namespace Ainkrad.Client.Api
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse (AgentSession)</returns>
         System.Threading.Tasks.Task<ApiResponse<AgentSession>> ResumeAgentSessionWithHttpInfoAsync(string id, System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileRevert"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of AgentSession</returns>
+        System.Threading.Tasks.Task<AgentSession> RevertAgentFileAsync(string id, AgentFileRevert agentFileRevert, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileRevert"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (AgentSession)</returns>
+        System.Threading.Tasks.Task<ApiResponse<AgentSession>> RevertAgentFileWithHttpInfoAsync(string id, AgentFileRevert agentFileRevert, System.Threading.CancellationToken cancellationToken = default);
         /// <summary>
         /// 
         /// </summary>
@@ -740,6 +936,31 @@ namespace Ainkrad.Client.Api
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse (AgentWake)</returns>
         System.Threading.Tasks.Task<ApiResponse<AgentWake>> WakeAgentSessionWithHttpInfoAsync(string id, AgentWakeRequest agentWakeRequest, System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileWrite"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of AgentSession</returns>
+        System.Threading.Tasks.Task<AgentSession> WriteAgentFileAsync(string id, AgentFileWrite agentFileWrite, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileWrite"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (AgentSession)</returns>
+        System.Threading.Tasks.Task<ApiResponse<AgentSession>> WriteAgentFileWithHttpInfoAsync(string id, AgentFileWrite agentFileWrite, System.Threading.CancellationToken cancellationToken = default);
         #endregion Asynchronous Operations
     }
 
@@ -1505,6 +1726,145 @@ namespace Ainkrad.Client.Api
         ///  
         /// </summary>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="rule">The rule&#39;s id</param>
+        /// <returns>List&lt;ApprovalRule&gt;</returns>
+        public List<ApprovalRule> DeleteApprovalRule(string id, string rule)
+        {
+            Ainkrad.Client.Client.ApiResponse<List<ApprovalRule>> localVarResponse = DeleteApprovalRuleWithHttpInfo(id, rule);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="rule">The rule&#39;s id</param>
+        /// <returns>ApiResponse of List&lt;ApprovalRule&gt;</returns>
+        public Ainkrad.Client.Client.ApiResponse<List<ApprovalRule>> DeleteApprovalRuleWithHttpInfo(string id, string rule)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling AgentsApi->DeleteApprovalRule");
+
+            // verify the required parameter 'rule' is set
+            if (rule == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'rule' when calling AgentsApi->DeleteApprovalRule");
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            localVarRequestOptions.PathParameters.Add("rule", Ainkrad.Client.Client.ClientUtils.ParameterToString(rule)); // path parameter
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Delete<List<ApprovalRule>>("/api/v1/projects/{id}/approval-rules/{rule}", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("DeleteApprovalRule", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="rule">The rule&#39;s id</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of List&lt;ApprovalRule&gt;</returns>
+        public async System.Threading.Tasks.Task<List<ApprovalRule>> DeleteApprovalRuleAsync(string id, string rule, System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<List<ApprovalRule>> localVarResponse = await DeleteApprovalRuleWithHttpInfoAsync(id, rule, cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="rule">The rule&#39;s id</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (List&lt;ApprovalRule&gt;)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<List<ApprovalRule>>> DeleteApprovalRuleWithHttpInfoAsync(string id, string rule, System.Threading.CancellationToken cancellationToken = default)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling AgentsApi->DeleteApprovalRule");
+
+            // verify the required parameter 'rule' is set
+            if (rule == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'rule' when calling AgentsApi->DeleteApprovalRule");
+
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            localVarRequestOptions.PathParameters.Add("rule", Ainkrad.Client.Client.ClientUtils.ParameterToString(rule)); // path parameter
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.DeleteAsync<List<ApprovalRule>>("/api/v1/projects/{id}/approval-rules/{rule}", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("DeleteApprovalRule", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
         /// <returns>AgentSession</returns>
         public AgentSession GetAgentSession(string id)
@@ -2154,6 +2514,143 @@ namespace Ainkrad.Client.Api
         ///  
         /// </summary>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="dir">A folder of the session, relative to its folder (no &#x60;..&#x60;); absent or empty, the folder itself. (optional)</param>
+        /// <returns>AgentFolderListing</returns>
+        public AgentFolderListing ListAgentSessionFiles(string id, string? dir = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<AgentFolderListing> localVarResponse = ListAgentSessionFilesWithHttpInfo(id, dir);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="dir">A folder of the session, relative to its folder (no &#x60;..&#x60;); absent or empty, the folder itself. (optional)</param>
+        /// <returns>ApiResponse of AgentFolderListing</returns>
+        public Ainkrad.Client.Client.ApiResponse<AgentFolderListing> ListAgentSessionFilesWithHttpInfo(string id, string? dir = default)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling AgentsApi->ListAgentSessionFiles");
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            if (dir != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "dir", dir));
+            }
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Get<AgentFolderListing>("/api/v1/agent-sessions/{id}/files", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("ListAgentSessionFiles", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="dir">A folder of the session, relative to its folder (no &#x60;..&#x60;); absent or empty, the folder itself. (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of AgentFolderListing</returns>
+        public async System.Threading.Tasks.Task<AgentFolderListing> ListAgentSessionFilesAsync(string id, string? dir = default, System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<AgentFolderListing> localVarResponse = await ListAgentSessionFilesWithHttpInfoAsync(id, dir, cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="dir">A folder of the session, relative to its folder (no &#x60;..&#x60;); absent or empty, the folder itself. (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (AgentFolderListing)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<AgentFolderListing>> ListAgentSessionFilesWithHttpInfoAsync(string id, string? dir = default, System.Threading.CancellationToken cancellationToken = default)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling AgentsApi->ListAgentSessionFiles");
+
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            if (dir != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "dir", dir));
+            }
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.GetAsync<AgentFolderListing>("/api/v1/agent-sessions/{id}/files", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("ListAgentSessionFiles", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="before">Sessions with an &#x60;index&#x60; below this; absent, from the newest. (optional)</param>
         /// <param name="limit"> (optional)</param>
         /// <param name="run">Only the attempts of this run (its first attempt&#39;s id, &#x60;as_…&#x60;). (optional)</param>
@@ -2301,6 +2798,131 @@ namespace Ainkrad.Client.Api
         ///  
         /// </summary>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <returns>List&lt;ApprovalRule&gt;</returns>
+        public List<ApprovalRule> ListApprovalRules(string id)
+        {
+            Ainkrad.Client.Client.ApiResponse<List<ApprovalRule>> localVarResponse = ListApprovalRulesWithHttpInfo(id);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <returns>ApiResponse of List&lt;ApprovalRule&gt;</returns>
+        public Ainkrad.Client.Client.ApiResponse<List<ApprovalRule>> ListApprovalRulesWithHttpInfo(string id)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling AgentsApi->ListApprovalRules");
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Get<List<ApprovalRule>>("/api/v1/projects/{id}/approval-rules", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("ListApprovalRules", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of List&lt;ApprovalRule&gt;</returns>
+        public async System.Threading.Tasks.Task<List<ApprovalRule>> ListApprovalRulesAsync(string id, System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<List<ApprovalRule>> localVarResponse = await ListApprovalRulesWithHttpInfoAsync(id, cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The project&#39;s id</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (List&lt;ApprovalRule&gt;)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<List<ApprovalRule>>> ListApprovalRulesWithHttpInfoAsync(string id, System.Threading.CancellationToken cancellationToken = default)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling AgentsApi->ListApprovalRules");
+
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.GetAsync<List<ApprovalRule>>("/api/v1/projects/{id}/approval-rules", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("ListApprovalRules", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
         /// <returns>AgentSession</returns>
         public AgentSession ResumeAgentSession(string id)
@@ -2416,6 +3038,147 @@ namespace Ainkrad.Client.Api
             if (this.ExceptionFactory != null)
             {
                 Exception _exception = this.ExceptionFactory("ResumeAgentSession", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileRevert"></param>
+        /// <returns>AgentSession</returns>
+        public AgentSession RevertAgentFile(string id, AgentFileRevert agentFileRevert)
+        {
+            Ainkrad.Client.Client.ApiResponse<AgentSession> localVarResponse = RevertAgentFileWithHttpInfo(id, agentFileRevert);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileRevert"></param>
+        /// <returns>ApiResponse of AgentSession</returns>
+        public Ainkrad.Client.Client.ApiResponse<AgentSession> RevertAgentFileWithHttpInfo(string id, AgentFileRevert agentFileRevert)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling AgentsApi->RevertAgentFile");
+
+            // verify the required parameter 'agentFileRevert' is set
+            if (agentFileRevert == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'agentFileRevert' when calling AgentsApi->RevertAgentFile");
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+                "application/json"
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            localVarRequestOptions.Data = agentFileRevert;
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Post<AgentSession>("/api/v1/agent-sessions/{id}/files/revert", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("RevertAgentFile", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileRevert"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of AgentSession</returns>
+        public async System.Threading.Tasks.Task<AgentSession> RevertAgentFileAsync(string id, AgentFileRevert agentFileRevert, System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<AgentSession> localVarResponse = await RevertAgentFileWithHttpInfoAsync(id, agentFileRevert, cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileRevert"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (AgentSession)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<AgentSession>> RevertAgentFileWithHttpInfoAsync(string id, AgentFileRevert agentFileRevert, System.Threading.CancellationToken cancellationToken = default)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling AgentsApi->RevertAgentFile");
+
+            // verify the required parameter 'agentFileRevert' is set
+            if (agentFileRevert == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'agentFileRevert' when calling AgentsApi->RevertAgentFile");
+
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+                "application/json"
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            localVarRequestOptions.Data = agentFileRevert;
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.PostAsync<AgentSession>("/api/v1/agent-sessions/{id}/files/revert", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("RevertAgentFile", localVarResponse);
                 if (_exception != null) throw _exception;
             }
 
@@ -3119,6 +3882,147 @@ namespace Ainkrad.Client.Api
             if (this.ExceptionFactory != null)
             {
                 Exception _exception = this.ExceptionFactory("WakeAgentSession", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileWrite"></param>
+        /// <returns>AgentSession</returns>
+        public AgentSession WriteAgentFile(string id, AgentFileWrite agentFileWrite)
+        {
+            Ainkrad.Client.Client.ApiResponse<AgentSession> localVarResponse = WriteAgentFileWithHttpInfo(id, agentFileWrite);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileWrite"></param>
+        /// <returns>ApiResponse of AgentSession</returns>
+        public Ainkrad.Client.Client.ApiResponse<AgentSession> WriteAgentFileWithHttpInfo(string id, AgentFileWrite agentFileWrite)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling AgentsApi->WriteAgentFile");
+
+            // verify the required parameter 'agentFileWrite' is set
+            if (agentFileWrite == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'agentFileWrite' when calling AgentsApi->WriteAgentFile");
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+                "application/json"
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            localVarRequestOptions.Data = agentFileWrite;
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Post<AgentSession>("/api/v1/agent-sessions/{id}/files/write", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("WriteAgentFile", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileWrite"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of AgentSession</returns>
+        public async System.Threading.Tasks.Task<AgentSession> WriteAgentFileAsync(string id, AgentFileWrite agentFileWrite, System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<AgentSession> localVarResponse = await WriteAgentFileWithHttpInfoAsync(id, agentFileWrite, cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The session&#39;s id, &#x60;as_…&#x60;</param>
+        /// <param name="agentFileWrite"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (AgentSession)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<AgentSession>> WriteAgentFileWithHttpInfoAsync(string id, AgentFileWrite agentFileWrite, System.Threading.CancellationToken cancellationToken = default)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling AgentsApi->WriteAgentFile");
+
+            // verify the required parameter 'agentFileWrite' is set
+            if (agentFileWrite == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'agentFileWrite' when calling AgentsApi->WriteAgentFile");
+
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+                "application/json"
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            localVarRequestOptions.Data = agentFileWrite;
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.PostAsync<AgentSession>("/api/v1/agent-sessions/{id}/files/write", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("WriteAgentFile", localVarResponse);
                 if (_exception != null) throw _exception;
             }
 

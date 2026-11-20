@@ -29,6 +29,8 @@ import kotlinx.serialization.Contextual
  * @param startedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param startedBy 
  * @param state `starting`, `running`, `stopping`, `stopped` or `failed`.
+ * @param configId The run configuration it started from, when it did (Core 0.10).
+ * @param environment The environment it ran in.
  * @param error What went wrong, for a failed run (redacted).
  * @param idleStopAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param lastActivityAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
@@ -59,6 +61,14 @@ data class ProjectRun (
     /* `starting`, `running`, `stopping`, `stopped` or `failed`. */
     @SerialName(value = "state")
     val state: kotlin.String,
+
+    /* The run configuration it started from, when it did (Core 0.10). */
+    @SerialName(value = "config_id")
+    val configId: kotlin.Long? = null,
+
+    /* The environment it ran in. */
+    @SerialName(value = "environment")
+    val environment: kotlin.String? = null,
 
     /* What went wrong, for a failed run (redacted). */
     @SerialName(value = "error")

@@ -69,6 +69,24 @@ namespace Ainkrad.Client.Api
         /// 
         /// </summary>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">Days back, today included (default 14, most 90). (optional)</param>
+        /// <returns>List&lt;DayUsage&gt;</returns>
+        List<DayUsage> CostSeries(long? days = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">Days back, today included (default 14, most 90). (optional)</param>
+        /// <returns>ApiResponse of List&lt;DayUsage&gt;</returns>
+        ApiResponse<List<DayUsage>> CostSeriesWithHttpInfo(long? days = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="session">Only this session&#39;s events. (optional)</param>
         /// <param name="account">Only this account&#39;s events. (optional)</param>
         /// <param name="limit">At most this many, newest first (default and most 100). (optional)</param>
@@ -198,6 +216,29 @@ namespace Ainkrad.Client.Api
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse (LimitCleared)</returns>
         System.Threading.Tasks.Task<ApiResponse<LimitCleared>> ClearAccountLimitWithHttpInfoAsync(string id, string unit, long windowSecs, System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">Days back, today included (default 14, most 90). (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of List&lt;DayUsage&gt;</returns>
+        System.Threading.Tasks.Task<List<DayUsage>> CostSeriesAsync(long? days = default, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">Days back, today included (default 14, most 90). (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (List&lt;DayUsage&gt;)</returns>
+        System.Threading.Tasks.Task<ApiResponse<List<DayUsage>>> CostSeriesWithHttpInfoAsync(long? days = default, System.Threading.CancellationToken cancellationToken = default);
         /// <summary>
         /// 
         /// </summary>
@@ -757,6 +798,129 @@ namespace Ainkrad.Client.Api
             if (this.ExceptionFactory != null)
             {
                 Exception _exception = this.ExceptionFactory("ClearAccountLimit", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">Days back, today included (default 14, most 90). (optional)</param>
+        /// <returns>List&lt;DayUsage&gt;</returns>
+        public List<DayUsage> CostSeries(long? days = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<List<DayUsage>> localVarResponse = CostSeriesWithHttpInfo(days);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">Days back, today included (default 14, most 90). (optional)</param>
+        /// <returns>ApiResponse of List&lt;DayUsage&gt;</returns>
+        public Ainkrad.Client.Client.ApiResponse<List<DayUsage>> CostSeriesWithHttpInfo(long? days = default)
+        {
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            if (days != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "days", days));
+            }
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Get<List<DayUsage>>("/api/v1/costs/series", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("CostSeries", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">Days back, today included (default 14, most 90). (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of List&lt;DayUsage&gt;</returns>
+        public async System.Threading.Tasks.Task<List<DayUsage>> CostSeriesAsync(long? days = default, System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<List<DayUsage>> localVarResponse = await CostSeriesWithHttpInfoAsync(days, cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="days">Days back, today included (default 14, most 90). (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (List&lt;DayUsage&gt;)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<List<DayUsage>>> CostSeriesWithHttpInfoAsync(long? days = default, System.Threading.CancellationToken cancellationToken = default)
+        {
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            if (days != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "days", days));
+            }
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.GetAsync<List<DayUsage>>("/api/v1/costs/series", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("CostSeries", localVarResponse);
                 if (_exception != null) throw _exception;
             }
 
