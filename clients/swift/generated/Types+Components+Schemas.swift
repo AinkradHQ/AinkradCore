@@ -9781,6 +9781,16 @@ extension Components {
             }
             /// - Remark: Generated from `#/components/schemas/RunnerNewJob/env`.
             public var env: Components.Schemas.RunnerNewJob.EnvPayload?
+            /// A `filtered` sandbox's allowed host names; a job sent elsewhere gets them cut to the
+            /// registry list.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerNewJob/hosts`.
+            public var hosts: [Swift.String]?
+            /// The sandbox's own network: `allow`, `deny` or `filtered` (E15 H2). Absent or unknown is
+            /// `deny`: the command runs where it was typed.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerNewJob/network`.
+            public var network: Swift.String?
             /// - Remark: Generated from `#/components/schemas/RunnerNewJob/project`.
             public var project: Swift.Int64?
             /// The AI session (`as_…`) whose sandbox the shim ran in.
@@ -9799,6 +9809,8 @@ extension Components {
             ///   - argv:
             ///   - cwdRel: A wire path relative to the session or project folder (the runner maps the shim's `cwd`).
             ///   - env:
+            ///   - hosts: A `filtered` sandbox's allowed host names; a job sent elsewhere gets them cut to the
+            ///   - network: The sandbox's own network: `allow`, `deny` or `filtered` (E15 H2). Absent or unknown is
             ///   - project:
             ///   - session: The AI session (`as_…`) whose sandbox the shim ran in.
             ///   - terminal: The Core terminal it ran in.
@@ -9807,6 +9819,8 @@ extension Components {
                 argv: [Swift.String],
                 cwdRel: Swift.String? = nil,
                 env: Components.Schemas.RunnerNewJob.EnvPayload? = nil,
+                hosts: [Swift.String]? = nil,
+                network: Swift.String? = nil,
                 project: Swift.Int64? = nil,
                 session: Swift.String? = nil,
                 terminal: Swift.String? = nil,
@@ -9815,6 +9829,8 @@ extension Components {
                 self.argv = argv
                 self.cwdRel = cwdRel
                 self.env = env
+                self.hosts = hosts
+                self.network = network
                 self.project = project
                 self.session = session
                 self.terminal = terminal
@@ -9824,6 +9840,8 @@ extension Components {
                 case argv
                 case cwdRel = "cwd_rel"
                 case env
+                case hosts
+                case network
                 case project
                 case session
                 case terminal
