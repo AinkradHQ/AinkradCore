@@ -284,7 +284,7 @@ async fn input_is_validated_at_the_boundary() {
         }
     };
     assert_eq!(
-        code(mk("openrouter", "a", vec![], None).await),
+        code(mk("nonesuch", "a", vec![], None).await), // openrouter is a preset since E7
         "bad_request"
     );
     assert_eq!(

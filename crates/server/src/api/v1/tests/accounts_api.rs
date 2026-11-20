@@ -87,6 +87,7 @@ async fn a_key_is_written_never_read_and_a_phone_sees_neither_secret_name_nor_ru
             "last_used_at",
             "live",
             "masked_tail",
+            "models_enforced",
             "month_limit_usd_micros",
             "month_spend_usd_micros",
             "provider",
@@ -394,6 +395,18 @@ async fn the_list_gives_an_admin_the_months_spend_and_limit() {
     .execute(&fx.app.pool)
     .await
     .unwrap();
+    // The meter reads the budget's counters, which the ledger's account subjects feed: the raw
+    // rows above are the ledger, so name their accounts and recount.
+    sqlx::query(
+        "INSERT INTO core_cost_subjects (event_id, kind, subject_id) \
+         SELECT id, 'account', account_id FROM core_cost_events",
+    )
+    .execute(&fx.app.pool)
+    .await
+    .unwrap();
+    crate::store::budgets::recompute(&fx.app.pool, super::super::BY)
+        .await
+        .unwrap();
     let (_, list) = call(&fx, &fx.dev, Method::GET, "/api/v1/accounts", Value::Null).await;
     let of = |id: i64| {
         list.as_array()

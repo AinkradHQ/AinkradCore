@@ -34,6 +34,8 @@ async fn an_event_counts_against_its_account_every_pool_it_was_in_and_what_the_c
         ("department", "d1"),
         ("department", "d2"),
         ("pool", pool_id.as_str()),
+        // E7: a provider budget counts every account of that provider.
+        ("provider", "anthropic"),
         ("sprint", "9"),
     ];
     assert_eq!(
