@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn edits_are_undone_newest_first_and_only_when_the_text_is_still_there() {
-        let edits = [edit("b", "B2"), edit("a", "B")];
+        let edits = [edit("B", "B2"), edit("a", "B")];
         let got = reverse(Some("x B2 y".into()), &edits, false, || None);
         assert_eq!(
             got,

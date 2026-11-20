@@ -137,7 +137,7 @@ async fn a_mode_change_is_kept_for_the_next_start_and_audited() {
         (&r.1["policy"], &r.1["plan"]),
         (&json!("ask"), &json!(true))
     );
-    let body = json!({"policy": "accept_edits", "plan": false});
+    let body = json!({"policy": "accept_edits", "plan": false, "effort": null});
     let r = call(&fx, Method::POST, &mode_uri(&s), body).await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
     assert_eq!(
@@ -159,11 +159,17 @@ async fn a_mode_change_is_kept_for_the_next_start_and_audited() {
         .map(|d| serde_json::from_str(d).unwrap())
         .collect();
     assert_eq!(audited.len(), 2);
-    assert_eq!(audited[0]["from"], json!({"policy": "ask", "plan": false}));
-    assert_eq!(audited[0]["to"], json!({"policy": "ask", "plan": true}));
+    assert_eq!(
+        audited[0]["from"],
+        json!({"policy": "ask", "plan": false, "effort": null})
+    );
+    assert_eq!(
+        audited[0]["to"],
+        json!({"policy": "ask", "plan": true, "effort": null})
+    );
     assert_eq!(
         audited[1]["to"],
-        json!({"policy": "accept_edits", "plan": false})
+        json!({"policy": "accept_edits", "plan": false, "effort": null})
     );
 }
 

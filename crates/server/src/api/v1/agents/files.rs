@@ -182,7 +182,7 @@ pub(crate) fn edits_of(entries: &[Value], folder: &str, rel: &str) -> (Vec<Rever
             });
         }
     }
-    match bytes > MAX_REVERT_BYTES {
+    match bytes >= MAX_REVERT_BYTES {
         true => (vec![], true),
         false => (edits, cut),
     }

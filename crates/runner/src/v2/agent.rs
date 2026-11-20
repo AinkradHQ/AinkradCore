@@ -338,11 +338,13 @@ pub struct AgentDriver {
     /// Per session, the `.md` files its folder held when its harness started (size, mtime in ns), so
     /// `agent.docs` lists only what the session made or changed. Also saved in the session's dir
     /// (`docs-base.json`), so a runner restart keeps it.
-    docs_base: Mutex<HashMap<String, HashMap<String, (u64, i64)>>>,
+    docs_base: Mutex<HashMap<String, DocsBase>>,
     /// Harness name to version, as probed at start; reported to the Core as `RunnerFacts.tools`.
     versions: BTreeMap<String, String>,
 }
 
+/// A session folder's .md files as (size, mtime ns), by path.
+type DocsBase = HashMap<String, (u64, i64)>;
 /// The one harness with a plan mode (Claude Code's `--permission-mode plan`).
 const PLAN_HARNESS: &str = "claude";
 const NO_PLAN: &str = "only claude has a plan mode";

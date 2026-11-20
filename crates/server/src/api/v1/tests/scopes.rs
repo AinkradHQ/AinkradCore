@@ -79,7 +79,12 @@ async fn read_and_runner_devices_are_refused_what_their_scopes_do_not_allow() {
             "read {m} {uri}: {r:?}"
         );
         let r = send(&fx.app, as_(&fx.dev)).await;
-        assert!(!refused(r.clone()), "admin {m} {uri}: {r:?}");
+        // The bundled attestation answers 403 from its handler to a device that is not the Mac app
+        // which enrolled the runner (E6).
+        assert!(
+            !refused(r.clone()) || uri.ends_with("/bundled"),
+            "admin {m} {uri}: {r:?}"
+        );
         admin_ops += usize::from(scope == "admin");
         checked += 1;
     }

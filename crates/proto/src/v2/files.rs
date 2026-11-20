@@ -154,7 +154,12 @@ pub fn folder_relative(folder: &str, path: &str) -> Option<String> {
     let rel = match path.strip_prefix('/') {
         Some(_) => {
             let root = folder.trim_end_matches('/');
-            path.strip_prefix(root)?.strip_prefix('/').unwrap_or("")
+            // The folder itself, or something under it: `/w/sibling` is not inside `/w/s`.
+            let rest = path.strip_prefix(root)?;
+            match rest {
+                "" => "",
+                r => r.strip_prefix('/')?,
+            }
         }
         None => path,
     };

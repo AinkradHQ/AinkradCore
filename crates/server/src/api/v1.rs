@@ -108,6 +108,8 @@ pub const QUERY: &[&str] = &[
     "page",
     "per_page",
     "service",
+    // GET /costs/series
+    "days",
 ];
 
 /// A page of a list: the cursor to continue after (its meaning is per route) and how many.

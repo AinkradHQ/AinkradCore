@@ -227,9 +227,13 @@ async fn the_series_sums_the_ledger_per_day_and_provider_for_an_admin_only() {
     let (fx, vm, s) = setup().await;
     let phone = fx.enroll("phone", &["read"]).await;
     let a = make(&fx, &s, "main", V1, std::slice::from_ref(&vm.id)).await;
-    for (i, (provider, tokens)) in [("anthropic", 400_000), ("anthropic", 600_000), ("openai", 5)]
-        .into_iter()
-        .enumerate()
+    for (i, (provider, tokens)) in [
+        ("anthropic", 400_000),
+        ("anthropic", 600_000),
+        ("openai", 5),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let key = format!("series{i}");
         let c = NewCost {
@@ -259,7 +263,10 @@ async fn the_series_sums_the_ledger_per_day_and_provider_for_an_admin_only() {
     let rows = b.as_array().unwrap();
     assert_eq!(rows.len(), 2, "{b}");
     assert_eq!(
-        (rows[0]["provider"].as_str(), rows[0]["total_tokens"].as_i64()),
+        (
+            rows[0]["provider"].as_str(),
+            rows[0]["total_tokens"].as_i64()
+        ),
         (Some("anthropic"), Some(1_000_000))
     );
     assert_eq!(rows[1]["provider"], "openai");
