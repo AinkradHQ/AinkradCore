@@ -261,10 +261,19 @@ pub async fn views(app: &App) -> Result<Vec<HwView>, sqlx::Error> {
     Ok(machines(app).await?.into_iter().map(|m| m.view).collect())
 }
 
-/// `["cargo","build"]` as `cargo build`, cut to 120 characters.
+/// `["cargo","build",…]` as `cargo build`: the program and one subcommand only, cut to 120
+/// characters, so a `read` device never sees a task's whole `sh -c` command (E15 L17).
 fn label_of(argv: &str) -> String {
     let words: Vec<String> = serde_json::from_str(argv).unwrap_or_default();
-    words.join(" ").chars().take(120).collect()
+    words
+        .iter()
+        .take(2)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(120)
+        .collect()
 }
 
 #[cfg(test)]
@@ -336,10 +345,11 @@ mod tests {
     }
 
     #[test]
-    fn a_label_is_the_argv_joined() {
+    fn a_label_is_the_program_and_one_subcommand() {
+        assert_eq!(label_of(r#"["cargo","build","-p","x"]"#), "cargo build");
         assert_eq!(
-            label_of(r#"["cargo","build","-p","x"]"#),
-            "cargo build -p x"
+            label_of(r#"["sh","-c","deploy --token s3cret"]"#),
+            "sh -c"
         );
         assert_eq!(label_of("nonsense"), "");
     }

@@ -134,7 +134,18 @@ pub fn heavy_by_scores(s: &Scored, min: f32) -> bool {
 
 /// Tier 3: ask the Decisions service. Any failure is `false`.
 async fn ask_model(d: &Deps<'_>, argv: &[String], facts: &Facts) -> bool {
-    let text: String = argv.join(" ").chars().take(400).collect();
+    // Whole words up to 400 characters: a cut word could be a key cut below its shape's minimum,
+    // which the redaction would no longer see (E15 L22). A dropped word is simply not sent.
+    let mut text = String::new();
+    for w in argv {
+        if text.chars().count() + w.chars().count() + 1 > 400 {
+            break;
+        }
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(w);
+    }
     let q = Question {
         key: "cmd".to_owned(),
         text,

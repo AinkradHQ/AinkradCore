@@ -224,8 +224,13 @@ pub fn check_path(rel: &str) -> Result<(), &'static str> {
     if let Some(why) = wire_path_problem(rel) {
         return Err(why);
     }
-    match rel.chars().any(char::is_control) {
-        true => Err("the path holds a control character"),
+    if rel.chars().any(char::is_control) {
+        return Err("the path holds a control character");
+    }
+    // E15 security review L2: the trees' own temp names (`ainkrad_sys::tree::TMP_PREFIX`) are
+    // hidden from listings, so a peer may not write one.
+    match rel.split('/').any(|p| p.starts_with(".ainkrad-tmp-")) {
+        true => Err("the path is a temp name"),
         false => Ok(()),
     }
 }

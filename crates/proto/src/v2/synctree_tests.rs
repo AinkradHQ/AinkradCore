@@ -176,7 +176,15 @@ fn links_stay_inside_the_project_and_paths_are_checked() {
     assert!(!link_ok("a", "../x") && !link_ok("a/b", "../../x") && !link_ok("a", "/x"));
     assert!(!link_ok("a", ".git/config") && !link_ok("a", "x/.GIT") && !link_ok("a", ""));
     assert_eq!(check_path("src/main.rs"), Ok(()));
-    for bad in ["", "/abs", "a/../b", "a\nb", ".git/config"] {
+    for bad in [
+        "",
+        "/abs",
+        "a/../b",
+        "a\nb",
+        ".git/config",
+        ".ainkrad-tmp-1-2",
+        "d/.ainkrad-tmp-x/f",
+    ] {
         assert!(check_path(bad).is_err(), "{bad:?}");
     }
 }
