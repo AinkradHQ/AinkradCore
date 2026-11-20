@@ -326,7 +326,8 @@ impl Session {
             }),
             capacity: tokio::task::spawn_blocking(super::capacity::capacity)
                 .await
-                .ok(),
+                .ok()
+                .map(Box::new),
             ..RunnerHello::default()
         };
         let (welcome, core_spki) = handshake(&mut sink, &mut source, link, hello).await?;

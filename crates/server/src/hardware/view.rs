@@ -115,7 +115,8 @@ pub async fn machines(app: &App) -> Result<Vec<Machine>, sqlx::Error> {
     .into_iter()
     .collect();
     let mut jobs: HashMap<String, Vec<LiveJob>> = HashMap::new();
-    let rows: Vec<(String, String, Option<i64>, String, Option<String>, String)> = sqlx::query_as(
+    type JobRow = (String, String, Option<i64>, String, Option<String>, String);
+    let rows: Vec<JobRow> = sqlx::query_as(
         "SELECT device_id, id, project_id, argv, started_at, created_at FROM core_hw_jobs \
          WHERE state IN ('queued', 'syncing', 'running') ORDER BY created_at",
     )

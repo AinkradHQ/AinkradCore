@@ -146,14 +146,14 @@ mod tests {
     use super::*;
     use ainkrad_proto::v2::SignalReq;
 
-    fn flow(
-        window: u64,
-    ) -> (
+    type Rig = (
         Flow,
         mpsc::UnboundedReceiver<(u64, Body)>,
         mpsc::UnboundedSender<Body>,
         oneshot::Sender<()>,
-    ) {
+    );
+
+    fn flow(window: u64) -> Rig {
         let (out, out_rx) = mpsc::unbounded_channel();
         let (in_tx, inbox) = mpsc::unbounded_channel();
         let (cancel_tx, cancel) = oneshot::channel();

@@ -664,7 +664,7 @@ impl PtyDriver {
                     spec.env
                         .extend(super::jobsock::shim_env(path.as_deref(), &j.bin, &sock));
                     job_mount = Some((j.bin.clone(), j.socks.dir_of(&id)));
-                    job_guard = JobGuard(Some((Arc::clone(&j.socks), id.clone())));
+                    job_guard.0 = Some((Arc::clone(&j.socks), id.clone()));
                 }
                 Err(e) => tracing::warn!("no job socket for terminal {id}: {e}"),
             }

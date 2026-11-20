@@ -53,7 +53,7 @@ pub fn problem(req: &JobRun) -> Option<StreamError> {
     if req.project <= 0 {
         return bad("the job names no project");
     }
-    if !req.cache.is_empty() && super::sync::safe_name(&req.cache).is_none() {
+    if !req.cache.is_empty() && crate::v2::sync::safe_name(&req.cache).is_none() {
         return bad("the cache name is not valid");
     }
     if !req.cwd_rel.is_empty()
