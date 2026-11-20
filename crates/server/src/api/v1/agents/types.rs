@@ -231,8 +231,13 @@ pub struct AgentSecret {
 /// A session to start. No `Debug`: the prompt is the caller's.
 #[derive(Deserialize, ToSchema)]
 pub struct NewAgentSession {
-    /// The runner's device id, `d_…`.
-    pub runner: String,
+    /// Deprecated and ignored (E15): the Core places every session (on itself, or on a runner
+    /// when it is full). Kept so an older client still parses. The one exception: a session of a
+    /// runner-bound login (`codex` or `agy` using the login its runner reports, with no account)
+    /// stays on the runner it names.
+    #[serde(default)]
+    #[schema(required = false, deprecated)]
+    pub runner: Option<String>,
     /// `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it
     /// (and `model`) when the session draws from a chain: the account the allocator picks sets them.
     #[serde(default)]

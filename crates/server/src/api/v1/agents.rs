@@ -393,6 +393,17 @@ pub async fn create(
             ));
         }
     }
+    let draws_account = b.chain.is_some() || b.agent.is_some();
+    let placed = sched::place_new(
+        &app,
+        b.runner.as_deref(),
+        &b.harness,
+        b.policy.as_ref(),
+        &secrets,
+        draws_account,
+    )
+    .await?;
+    let runner = placed.device.clone();
     let mut policy = b.policy.unwrap_or_else(|| {
         serde_json::to_value(ainkrad_proto::runner::Policy::default()).expect("a policy serializes")
     });
@@ -402,7 +413,7 @@ pub async fn create(
         m.insert("plan".into(), true.into());
     }
     if let Some(level) = b.effort.as_deref() {
-        effort_ok(&app, &b.runner, &b.harness, level)?;
+        effort_ok(&app, &runner, &b.harness, level)?;
         if let Some(m) = policy.as_object_mut() {
             m.insert("effort".into(), level.into());
         }
@@ -411,7 +422,7 @@ pub async fn create(
         if b.harness != PLAN_HARNESS {
             return Err(no_plan());
         }
-        if !agents::offers(&app, &b.runner, ainkrad_proto::v2::OP_AGENT_MODE) {
+        if !agents::offers(&app, &runner, ainkrad_proto::v2::OP_AGENT_MODE) {
             return Err(ApiError::new(
                 StatusCode::CONFLICT,
                 "unsupported_command",
@@ -421,7 +432,6 @@ pub async fn create(
     }
     // An account session (an `acct.*` secret, or a chain/agent the allocator draws one from) runs
     // sandboxed: the Core adds the floor instead of refusing a client that left it out.
-    let draws_account = b.chain.is_some() || b.agent.is_some();
     let policy =
         agents::with_account_floor(policy, draws_account || agents::holds_account(&secrets));
     let admin = me.device.scopes.iter().any(|scope| scope == "admin");
@@ -450,7 +460,7 @@ pub async fn create(
         }
     };
     let new = store::NewSession {
-        runner: &b.runner,
+        runner: &runner,
         harness: &b.harness,
         model: b.model.as_deref(),
         // No first message (absent or empty): the session starts waiting for one.
@@ -470,8 +480,8 @@ pub async fn create(
                 ApiError::new(StatusCode::FORBIDDEN, "forbidden_scope", why)
             }
         })?;
-        agents::admit_holding(&app, &b.runner, &b.harness, &policy, &secrets).await?;
-        if let Some(e) = sched::no_account(&new, sched::own_login(&app, &b.runner, &b.harness)) {
+        agents::admit_holding(&app, &runner, &b.harness, &policy, &secrets).await?;
+        if let Some(e) = sched::no_account(&new, sched::own_login(&app, &runner, &b.harness)) {
             return Err(e);
         }
         store::create(&app.pool, &new, BY, &app.clock.now()).await?
@@ -486,6 +496,7 @@ pub async fn create(
         }
         None => s,
     };
+    store::set_place_reason(&app.pool, &s.id, &placed.reason.as_str()).await?;
     // A live conversation, where the runner offers it; titled by its first message.
     let live = b.live.unwrap_or(true) && agents::offers_live(&app, &s.runner);
     let title = s.prompt.as_deref().and_then(store::title_of);

@@ -29,13 +29,13 @@
 //! - **Health** ([`Hub::runners`]): online, degraded (silent past two heartbeats), last seen,
 //!   drivers, capacity and load, for the API (`api::v1::runners`) and the `runner.*` events.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, CAP_GATEWAY, CAP_LOGIN, Close, Command, Control, Credit, DriverInfo, ErrorCode,
+    Body, CAP_GATEWAY, CAP_LOGIN, Capacity, Close, Command, Control, Credit, DriverInfo, ErrorCode,
     FEATURE_PTY_SSH, Frame, Heartbeat, HostLoad, IsolationCaps, OP_AGENT_LIMIT, OP_AGENT_READ,
     OP_GATEWAY_TEST, OP_LOGIN_CANCEL, OP_LOGIN_CODE, OP_LOGIN_START, OP_PTY_ATTACH, OP_PTY_OPEN,
     RunnerHello, STREAM_WINDOW, StreamError, StreamState,
@@ -179,6 +179,50 @@ struct Runner {
     load: Option<HostLoad>,
     /// Unix seconds of the latest connection.
     since: i64,
+    /// What it last reported (hello or heartbeat); `None` from a runner before protocol 2.1.
+    capacity: Option<Capacity>,
+    /// (unix seconds, cpu %, free RAM %) of its last [`SAMPLES`] capacity reports.
+    samples: VecDeque<(i64, u8, u8)>,
+}
+
+/// Capacity reports kept per runner.
+const SAMPLES: usize = 8;
+/// The span `sustained_full` looks at, and the fewest reports that make a span.
+const FULL_WINDOW: i64 = 60;
+const FULL_MIN_SAMPLES: usize = 3;
+
+/// `capacity` as a sample at `now`: (cpu %, free RAM %).
+fn sample_of(c: &Capacity) -> (u8, u8) {
+    let free = if c.mem_total_mb == 0 {
+        100
+    } else {
+        u8::try_from((c.mem_free_mb.saturating_mul(100) / c.mem_total_mb).min(100)).unwrap_or(100)
+    };
+    (c.cpu_pct, free)
+}
+
+/// Whether every sample of the last 60 s shows cpu above 85 or free RAM below 15%, over at least
+/// three samples (one spike is not a full host).
+pub(crate) fn sustained_full(samples: &VecDeque<(i64, u8, u8)>, now: i64) -> bool {
+    let recent: Vec<_> = samples
+        .iter()
+        .filter(|s| now - s.0 <= FULL_WINDOW)
+        .collect();
+    recent.len() >= FULL_MIN_SAMPLES && recent.iter().all(|s| s.1 > 85 || s.2 < 15)
+}
+
+/// A runner as hardware sees it (`Hub::hardware`). Sessions and jobs live in the Core's tables;
+/// `hardware::view` adds them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HwState {
+    pub device: String,
+    pub name: String,
+    pub online: bool,
+    pub degraded: bool,
+    pub os: Option<String>,
+    pub arch: Option<String>,
+    pub capacity: Option<Capacity>,
+    pub sustained_full: bool,
 }
 
 /// Whether a driver's command `listed` offers `op`: itself, or (KAN-435) the `gateway` capability
@@ -329,6 +373,9 @@ pub struct Hub {
     live: tokio::sync::watch::Sender<usize>,
     /// The one [`SshAgentLine`] was handed out.
     ssh_agent_taken: AtomicBool,
+    /// Devices whose hardware view changed since the last flush (`hardware::changed_loop`).
+    hw_dirty: Mutex<HashSet<String>>,
+    hw_notify: Notify,
 }
 
 /// The only way to send `ssh.agent.load` / `ssh.agent.drop` (Leyline Mac-direct). It has no public
@@ -456,7 +503,48 @@ impl Hub {
             streams: AtomicU64::new(1),
             live: tokio::sync::watch::Sender::new(0),
             ssh_agent_taken: AtomicBool::new(false),
+            hw_dirty: Mutex::default(),
+            hw_notify: Notify::new(),
         }
+    }
+
+    /// Marks `device`'s hardware view changed.
+    pub(crate) fn hw_touch(&self, device: &str) {
+        self.hw_dirty.lock().unwrap().insert(device.to_owned());
+        self.hw_notify.notify_one();
+    }
+
+    /// Waits for a hardware change.
+    pub async fn hw_changed(&self) {
+        self.hw_notify.notified().await;
+    }
+
+    /// The devices changed since the last call.
+    pub fn hw_take(&self) -> Vec<String> {
+        let mut d: Vec<_> = self.hw_dirty.lock().unwrap().drain().collect();
+        d.sort();
+        d
+    }
+
+    /// Every runner that connected since the Core started, as hardware.
+    pub fn hardware(&self) -> Vec<HwState> {
+        let now = unix_now();
+        let all = self.runners.lock().unwrap();
+        let mut out: Vec<_> = all
+            .iter()
+            .map(|(id, r)| HwState {
+                device: id.clone(),
+                name: r.name.clone(),
+                online: r.conn.is_some(),
+                degraded: r.conn.is_some() && r.degraded,
+                os: r.hello.os.clone(),
+                arch: r.hello.arch.clone(),
+                capacity: r.capacity.clone(),
+                sustained_full: r.conn.is_some() && sustained_full(&r.samples, now),
+            })
+            .collect();
+        out.sort_by(|a, b| a.device.cmp(&b.device));
+        out
     }
 
     /// Held by a runner connection task for its whole life.
@@ -916,6 +1004,8 @@ impl Hub {
             degraded: false,
             load: None,
             since: now,
+            capacity: None,
+            samples: VecDeque::new(),
         });
         if let Some(old) = r.conn.take() {
             old.replaced.notify_one();
@@ -965,11 +1055,18 @@ impl Hub {
         streams.sort_by_key(|s| s.stream_id);
         r.name = name.to_owned();
         r.load = hello.load;
+        r.capacity = hello.capacity.clone();
+        r.samples.clear();
+        if let Some(c) = &r.capacity {
+            let (cpu, free) = sample_of(c);
+            r.samples.push_back((now, cpu, free));
+        }
         r.hello = hello;
         r.epoch += 1;
         r.last_seen = now;
         r.since = now;
         r.degraded = false;
+        self.hw_touch(device);
         r.conn = Some(Conn {
             generation,
             out,
@@ -990,6 +1087,7 @@ impl Hub {
         }
         r.conn = None;
         r.last_seen = now;
+        self.hw_touch(device);
         if revoked {
             r.lose_all();
         }
@@ -1018,7 +1116,11 @@ impl Hub {
         };
         r.last_seen = r.last_seen.max(now);
         let turned = degraded && !r.degraded;
+        let flipped = degraded != r.degraded;
         r.degraded = degraded;
+        if flipped {
+            self.hw_touch(device);
+        }
         turned
     }
 
@@ -1028,6 +1130,15 @@ impl Hub {
         let Some(r) = all.get_mut(device) else { return };
         if let Some(load) = heartbeat.load {
             r.load = Some(load);
+        }
+        if let Some(c) = heartbeat.capacity {
+            let (cpu, free) = sample_of(&c);
+            r.samples.push_back((unix_now(), cpu, free));
+            while r.samples.len() > SAMPLES {
+                r.samples.pop_front();
+            }
+            r.capacity = Some(c);
+            self.hw_touch(device);
         }
         // The runner's latest word on what it offers replaces its hello's: a tier that went away
         // is gone from the next placement (E8a-09).
@@ -1230,5 +1341,90 @@ mod report_tests {
                 .unwrap()
                 .contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
         );
+    }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
+}
+
+#[cfg(test)]
+mod hardware_tests {
+    use super::*;
+
+    fn q(v: &[(i64, u8, u8)]) -> VecDeque<(i64, u8, u8)> {
+        v.iter().copied().collect()
+    }
+
+    #[test]
+    fn sustained_full_needs_every_recent_sample_full() {
+        let full = q(&[(100, 90, 50), (115, 95, 50), (130, 40, 10), (145, 99, 99)]);
+        assert!(sustained_full(&full, 150));
+        // One calm sample inside the minute breaks it.
+        let calm = q(&[(100, 90, 50), (115, 30, 50), (130, 90, 50), (145, 99, 99)]);
+        assert!(!sustained_full(&calm, 150));
+        // Samples older than a minute are ignored.
+        let old = q(&[(10, 5, 90), (100, 90, 50), (115, 95, 50), (130, 40, 10)]);
+        assert!(sustained_full(&old, 150));
+        // Too few samples: one spike is not a full host.
+        assert!(!sustained_full(&q(&[(145, 99, 5)]), 150));
+        assert!(!sustained_full(&q(&[]), 150));
+        // 85 and 15 are the edges: not above, not below.
+        assert!(!sustained_full(
+            &q(&[(100, 85, 15), (115, 85, 15), (130, 85, 15)]),
+            150
+        ));
+    }
+
+    #[test]
+    fn a_sample_is_cpu_and_free_ram_percent() {
+        let c = Capacity {
+            cpu_pct: 70,
+            mem_total_mb: 1000,
+            mem_free_mb: 125,
+            ..Capacity::default()
+        };
+        assert_eq!(sample_of(&c), (70, 12));
+        assert_eq!(sample_of(&Capacity::default()), (0, 100));
+    }
+
+    #[test]
+    fn hardware_lists_a_runner_with_its_capacity_and_marks_it_changed() {
+        let hub = Hub::new(HubConfig::default());
+        let hello = RunnerHello {
+            capacity: Some(Capacity {
+                cores: 8,
+                cpu_pct: 10,
+                job_slots: 2,
+                ..Capacity::default()
+            }),
+            os: Some("linux".into()),
+            ..RunnerHello::default()
+        };
+        let _rx = hub.fake_runner("d_a", hello);
+        let hw = hub.hardware();
+        assert_eq!(hw.len(), 1);
+        assert!(hw[0].online && !hw[0].sustained_full);
+        assert_eq!(hw[0].capacity.as_ref().map(|c| c.cores), Some(8));
+        assert_eq!(
+            hub.hw_take(),
+            vec!["d_a".to_owned()],
+            "a connection is a change"
+        );
+        hub.load(
+            "d_a",
+            Heartbeat {
+                capacity: Some(Capacity {
+                    cores: 8,
+                    cpu_pct: 50,
+                    ..Capacity::default()
+                }),
+                ..Heartbeat::default()
+            },
+        );
+        assert_eq!(hub.hw_take(), vec!["d_a".to_owned()]);
+        assert!(hub.hw_take().is_empty());
     }
 }
