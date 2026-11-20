@@ -197,10 +197,13 @@ const FULL_MIN_SAMPLES: usize = 3;
 
 /// `capacity` as a sample at `now`: (cpu %, free RAM %).
 fn sample_of(c: &Capacity) -> (u8, u8) {
-    let free = if c.mem_total_mb == 0 {
-        100
-    } else {
-        u8::try_from((c.mem_free_mb.saturating_mul(100) / c.mem_total_mb).min(100)).unwrap_or(100)
+    let free = match c
+        .mem_free_mb
+        .saturating_mul(100)
+        .checked_div(c.mem_total_mb)
+    {
+        None => 100,
+        Some(p) => u8::try_from(p.min(100)).unwrap_or(100),
     };
     (c.cpu_pct, free)
 }
@@ -1133,7 +1136,7 @@ impl Hub {
         streams.sort_by_key(|s| s.stream_id);
         r.name = name.to_owned();
         r.load = hello.load;
-        r.capacity = hello.capacity.clone();
+        r.capacity = hello.capacity.as_deref().cloned();
         r.samples.clear();
         if let Some(c) = &r.capacity {
             let (cpu, free) = sample_of(c);
@@ -1477,12 +1480,12 @@ mod hardware_tests {
     fn hardware_lists_a_runner_with_its_capacity_and_marks_it_changed() {
         let hub = Hub::new(HubConfig::default());
         let hello = RunnerHello {
-            capacity: Some(Capacity {
+            capacity: Some(Box::new(Capacity {
                 cores: 8,
                 cpu_pct: 10,
                 job_slots: 2,
                 ..Capacity::default()
-            }),
+            })),
             os: Some("linux".into()),
             ..RunnerHello::default()
         };

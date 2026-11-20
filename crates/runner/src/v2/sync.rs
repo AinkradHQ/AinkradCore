@@ -8,8 +8,8 @@
 //! - **Ops:** `sync.manifest` and `sync.drop` here; `sync.push`, `sync.pull` and `sync.watch` in
 //!   `ops`. Bytes travel as credited `output` frames (`flow`), every chunk hashed on arrival.
 //! - **Path safety:** every wire path is checked (`wire_path_problem` plus control characters), and
-//!   every open, write and removal happens beneath the cache's root descriptor (`tree`), never by
-//!   path: the same `ainkrad_sys` wrappers as the Core's `workspace::fs` (E15-2).
+//!   every open, write and removal happens beneath the cache's root descriptor
+//!   (`ainkrad_sys::tree`, the same `Tree` as the Core's workspace), never by path.
 //! - **Leases:** an op without a lease is refused as if the cache did not exist. A watch registers its
 //!   lease; a push under that lease writes to the watched session's folder (spec §4.6).
 //! - Jobs use [`SyncDriver::snapshot`] before and after they run (`job`).
@@ -18,11 +18,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ainkrad_proto::runner::Workspace;
 use ainkrad_proto::v2::{
     CAP_SYNC, CacheInfo, Command, DriverInfo, ErrorCode, OP_SYNC_DROP, OP_SYNC_MANIFEST,
-    OP_SYNC_PULL, OP_SYNC_PUSH, OP_SYNC_WATCH, Reply, RunClone, StreamError, SyncDropped,
-    SyncManifest, SyncManifestReply, SyncRules, TreeHash,
+    OP_SYNC_PULL, OP_SYNC_PUSH, OP_SYNC_WATCH, Reply, StreamError, SyncDropped, SyncManifest,
+    SyncManifestReply, SyncRules, TreeHash,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedMutexGuard, Semaphore};
@@ -32,14 +31,13 @@ use super::flow::Flow;
 mod cache;
 mod manifest;
 mod ops;
-mod rules;
-mod tree;
+mod seed;
 
+use ainkrad_proto::v2::synctree::Rules;
+use ainkrad_sys::tree::Tree;
 pub(super) use cache::safe_core_id as safe_name;
 use cache::{Held, Layout};
 use manifest::{Entries, Memo, Scan, scan, tree_hash};
-use rules::Rules;
-use tree::Tree;
 
 /// What the runner keeps of a project's cache between ops and restarts.
 #[derive(Default, Serialize, Deserialize)]
@@ -113,10 +111,7 @@ impl SyncDriver {
             clones: None,
             infos: Mutex::default(),
         })
-        .map(|d| {
-            d.load_infos();
-            d
-        })
+        .inspect(|d| d.load_infos())
     }
 
     /// The warm caches an earlier run left, read once at start.
@@ -317,69 +312,6 @@ impl SyncDriver {
         freed
     }
 
-    /// Clones the Core's copy of the repo into the cache at its `base`, `.git` included, when the
-    /// cache has none. A cache that already holds files only takes the `.git` folder.
-    async fn seed(
-        &self,
-        root: &Path,
-        clone: &RunClone,
-        project: i64,
-        st: &mut State,
-    ) -> Result<(), StreamError> {
-        if root.join(".git").exists() {
-            return Ok(());
-        }
-        let agents = self
-            .clones
-            .as_ref()
-            .ok_or_else(|| invalid("this runner cannot clone from the Core"))?;
-        let ws = Workspace {
-            repo: clone.remote.clone(),
-            base: clone.base.clone(),
-            branch: clone.base.clone(),
-            push: false,
-            name: String::new(),
-            also: Vec::new(),
-            expected_head: None,
-            mirror: Some(clone.mirror),
-        };
-        if let Some(why) = ws.problem() {
-            return Err(invalid(why));
-        }
-        let session = format!("as_seed{project}");
-        let moved = async {
-            let dir = agents.run_workspace(&session, &ws).await?;
-            let empty = std::fs::read_dir(root)
-                .map_err(|e| e.to_string())?
-                .next()
-                .is_none();
-            if empty {
-                std::fs::remove_dir(root).map_err(|e| e.to_string())?;
-                relocate(&dir, root).await
-            } else {
-                relocate(&dir.join(".git"), &root.join(".git")).await
-            }
-        }
-        .await;
-        agents.discard_run_workspace(&session);
-        moved.map_err(|e| {
-            StreamError::new(ErrorCode::Internal, format!("seeding the cache: {e}"))
-        })?;
-        let head = tokio::process::Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(["rev-parse", "HEAD"])
-            .env_clear()
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .await
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
-        st.saved.head = head;
-        Ok(())
-    }
-
     async fn manifest(&self, req: SyncManifest) -> Result<SyncManifestReply, StreamError> {
         Self::check(req.project, &req.lease)?;
         let key = Key::Project(req.project);
@@ -418,7 +350,7 @@ impl SyncDriver {
         let rules = Rules::from_wire(&st.saved.rules);
         let inn: Entries = out
             .iter()
-            .filter(|(p, _)| rules.sync_in(p))
+            .filter(|(p, _)| rules.sync_in(p).is_none())
             .map(|(p, e)| (p.clone(), e.clone()))
             .collect();
         let tree = tree_hash(&inn);
@@ -465,24 +397,6 @@ impl SyncDriver {
             )),
         }
     }
-}
-
-/// Moves `src` to the absent `dst`; across filesystems (the agent work root is a temp folder) by copy.
-async fn relocate(src: &Path, dst: &Path) -> Result<(), String> {
-    if std::fs::rename(src, dst).is_ok() {
-        return Ok(());
-    }
-    let copied = tokio::process::Command::new("cp")
-        .arg("-a")
-        .arg(src)
-        .arg(dst)
-        .status()
-        .await
-        .map_err(|e| e.to_string())?;
-    copied
-        .success()
-        .then_some(())
-        .ok_or_else(|| "copying the clone failed".to_owned())
 }
 
 /// What a job's cache holds now.

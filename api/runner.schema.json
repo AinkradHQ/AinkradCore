@@ -7307,6 +7307,17 @@
           "$ref": "#/$defs/Hash",
           "default": "0000000000000000000000000000000000000000000000000000000000000000",
           "description": "The hash of `rules` (a runner may keep its index per rules hash)."
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunClone"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "F0-bis (E15-4): seed an empty cache with `git clone` from the Core's copy of the project's\nrepo before the manifest is taken (spec §4.4). The Core serves the copy only while it holds a\nlease for this runner. Absent: the cache is not seeded (or already is)."
         }
       },
       "type": "object"
@@ -7433,6 +7444,13 @@
             "exclude": []
           },
           "description": "The rules `want_tree` is hashed under."
+        },
+        "session": {
+          "description": "The overflow session (`as_…`) whose live folder the push writes, as `sync.watch` names it.\nAbsent: the project's cache, or the session the lease's watch registered (older Cores).",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "want_tree": {
           "$ref": "#/$defs/TreeHash",

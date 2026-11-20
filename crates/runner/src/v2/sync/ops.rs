@@ -16,9 +16,10 @@ use ainkrad_proto::v2::{
 use base64::Engine as _;
 
 use super::manifest::{self, Entries, tree_hash};
-use super::tree::{Tree, check_path};
 use super::{Key, SyncDriver, invalid};
 use crate::v2::flow::{Flow, Stop};
+use ainkrad_proto::v2::synctree::check_path;
+use ainkrad_sys::tree::Tree;
 
 fn err(code: ErrorCode, why: impl Into<String>) -> StreamError {
     StreamError::new(code, why)
@@ -99,6 +100,13 @@ pub(super) async fn push(
         }
     }
     let key = d.target(req.project, &req.lease);
+    // A push that names a session must hold that session's watch lease: the name never widens
+    // what the lease reaches.
+    if let Some(s) = &req.session
+        && !matches!(&key, Key::Session(w) if w == s)
+    {
+        return Err(invalid("no such session"));
+    }
     let root = d.root_of(&key)?;
     if !root.is_dir() {
         return Err(invalid("no such cache"));
@@ -165,7 +173,7 @@ pub(super) async fn push(
                 format!("{} did not hash as listed", e.path),
             ));
         }
-        staged.commit(e.exec).map_err(io)?;
+        staged.commit(Some(e.exec)).map_err(io)?;
     }
     let after = d.scan(&mut st, &root, false).await?.entries;
     let got = tree_hash(&after);

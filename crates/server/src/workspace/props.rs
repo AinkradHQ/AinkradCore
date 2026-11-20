@@ -62,11 +62,20 @@ fn grow(root: &Path, rng: &mut Rng) {
         let depth = 1 + rng.below(3);
         let parts: Vec<&str> = (0..depth).map(|_| rng.pick(NAMES)).collect();
         let rel = parts.join("/");
+        // Never through a link this tree already holds: a write or a folder made through one
+        // would land outside `root` (or block on whatever it names).
+        let through_link = (1..=parts.len()).any(|n| {
+            fs::symlink_metadata(root.join(parts[..n].join("/")))
+                .is_ok_and(|m| m.file_type().is_symlink())
+        });
+        if through_link {
+            continue;
+        }
         let p = root.join(&rel);
-        if let Some(parent) = p.parent() {
-            if fs::create_dir_all(parent).is_err() {
-                continue;
-            }
+        if let Some(parent) = p.parent()
+            && fs::create_dir_all(parent).is_err()
+        {
+            continue;
         }
         match rng.below(6) {
             0 => {
@@ -119,7 +128,7 @@ fn receive(src: &Tree, dst: &Tree, from: &Entries, to: &Entries) {
 fn a_round_trip_reproduces_any_tree_and_a_second_pass_changes_nothing() {
     let rules = Rules::default();
     for seed in 1..=25u64 {
-        let mut rng = Rng(seed * 0x9E37_79B9_7F4A_7C15);
+        let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let (a, b) = (temp(&format!("a{seed}")), temp(&format!("b{seed}")));
         let mut have = Entries::new();
         for round in 0..3 {

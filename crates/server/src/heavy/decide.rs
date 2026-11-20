@@ -99,6 +99,16 @@ pub fn facts_of(dir: &Path) -> Facts {
     f
 }
 
+/// The facts of the command's own folder `cwd_rel` under the project `root`, else (a folder that
+/// says nothing, or a `cwd_rel` that is not a plain relative path) of the project root.
+pub fn facts_in(root: &Path, cwd_rel: &str) -> Facts {
+    let ok = !cwd_rel.is_empty() && ainkrad_proto::v2::synctree::check_path(cwd_rel).is_ok();
+    match ok.then(|| facts_of(&root.join(cwd_rel))) {
+        Some(f) if f != Facts::default() => f,
+        _ => facts_of(root),
+    }
+}
+
 const HEAVY_SAFE: &str = "heavy_safe";
 const HEAVY_UNSAFE: &str = "heavy_unsafe";
 const LIGHT: &str = "light";
@@ -158,7 +168,8 @@ pub async fn decide(
     argv: &[String],
     tty: bool,
     project_rules: &[ProjectRule],
-    dir: &Path,
+    root: &Path,
+    cwd_rel: &str,
 ) -> Decision {
     match rules::decide(argv, tty, project_rules) {
         Verdict::Interactive(_) => return Decision::Interactive,
@@ -207,7 +218,7 @@ pub async fn decide(
             };
         }
     }
-    if ask_model(d, argv, &facts_of(dir)).await {
+    if ask_model(d, argv, &facts_in(root, cwd_rel)).await {
         heavy(Tier::Decision)
     } else {
         Decision::Local {
@@ -299,17 +310,17 @@ mod tests {
         };
         // Tier 0 and 1 never touch the database or the model.
         assert_eq!(
-            decide(&d, Some(1), &argv("cargo run"), true, &[], &dir).await,
+            decide(&d, Some(1), &argv("cargo run"), true, &[], &dir, "").await,
             Decision::Interactive
         );
         let Decision::Heavy { tier, row } =
-            decide(&d, Some(1), &argv("cargo test"), false, &[], &dir).await
+            decide(&d, Some(1), &argv("cargo test"), false, &[], &dir, "").await
         else {
             panic!()
         };
         assert_eq!((tier, row.need), (Tier::Rule, vec!["rust".to_owned()]));
         assert_eq!(
-            decide(&d, Some(1), &argv("npm ci"), false, &[], &dir).await,
+            decide(&d, Some(1), &argv("npm ci"), false, &[], &dir, "").await,
             Decision::Local {
                 reason: "light",
                 report: false
@@ -317,7 +328,7 @@ mod tests {
         );
         // No project: nothing to sync, so no model call either.
         assert_eq!(
-            decide(&d, None, &argv("./weird"), false, &[], &dir).await,
+            decide(&d, None, &argv("./weird"), false, &[], &dir, "").await,
             Decision::Local {
                 reason: "no_project",
                 report: false
@@ -325,7 +336,7 @@ mod tests {
         );
         // A database that cannot be read holds nothing back.
         assert_eq!(
-            decide(&d, Some(1), &argv("./weird"), false, &[], &dir).await,
+            decide(&d, Some(1), &argv("./weird"), false, &[], &dir, "").await,
             Decision::Local {
                 reason: "history_unavailable",
                 report: false
@@ -343,6 +354,14 @@ mod tests {
         let f = facts_of(&dir);
         assert_eq!(f.languages, ["rust", "node"]);
         assert_eq!(f.lockfiles, ["Cargo.lock"]);
+        // A subfolder's own facts win; one that says nothing, or a path out, falls back to the root.
+        std::fs::create_dir_all(dir.join("web")).unwrap();
+        std::fs::create_dir_all(dir.join("docs")).unwrap();
+        std::fs::write(dir.join("web/package.json"), "").unwrap();
+        assert_eq!(facts_in(&dir, "web").languages, ["node"]);
+        assert_eq!(facts_in(&dir, "docs"), f);
+        assert_eq!(facts_in(&dir, "../x"), f);
+        assert_eq!(facts_in(&dir, ""), f);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

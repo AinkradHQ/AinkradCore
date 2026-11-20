@@ -973,6 +973,15 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/outcome`.
             public var outcome: OpenAPIRuntime.OpenAPIObjectContainer?
+            /// Why the Core placed it where it runs (E15): `core`, `overflow` (the Core was full) or
+            /// `pinned` (a runner-bound login); absent for a session placed before E15.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/place_reason`.
+            public var placeReason: Swift.String?
+            /// The name of the machine it runs on (`runner` is its id), for "Ran on X".
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentSession/placed_on`.
+            public var placedOn: Swift.String?
             /// Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`).
             ///
             /// - Remark: Generated from `#/components/schemas/AgentSession/plan`.
@@ -1082,6 +1091,8 @@ extension Components {
             ///   - live: A live conversation (`createAgentSession`'s `live`): the state is `waiting` between answers.
             ///   - model:
             ///   - outcome: Once over: `{"kind": "succeeded" | "failed" | "cancelled" | "token_cap" | "stalled" |
+            ///   - placeReason: Why the Core placed it where it runs (E15): `core`, `overflow` (the Core was full) or
+            ///   - placedOn: The name of the machine it runs on (`runner` is its id), for "Ran on X".
             ///   - plan: Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`).
             ///   - policy: Its permission mode now: `ask`, `accept_edits` or `sandboxed` (the create's `policy.mode`,
             ///   - projectId: The project it was started for (`createAgentSession` with `project_id`): its workspace is
@@ -1126,6 +1137,8 @@ extension Components {
                 live: Swift.Bool? = nil,
                 model: Swift.String? = nil,
                 outcome: OpenAPIRuntime.OpenAPIObjectContainer? = nil,
+                placeReason: Swift.String? = nil,
+                placedOn: Swift.String? = nil,
                 plan: Swift.Bool? = nil,
                 policy: Swift.String? = nil,
                 projectId: Swift.Int64? = nil,
@@ -1170,6 +1183,8 @@ extension Components {
                 self.live = live
                 self.model = model
                 self.outcome = outcome
+                self.placeReason = placeReason
+                self.placedOn = placedOn
                 self.plan = plan
                 self.policy = policy
                 self.projectId = projectId
@@ -1215,6 +1230,8 @@ extension Components {
                 case live
                 case model
                 case outcome
+                case placeReason = "place_reason"
+                case placedOn = "placed_on"
                 case plan
                 case policy
                 case projectId = "project_id"
@@ -5919,8 +5936,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/prompt`.
             public var prompt: Swift.String?
-            /// Deprecated (E15): the Core places every session. Absent: the Core's built-in runner (until
-            /// E15-1 places by load, after which a given runner is ignored).
+            /// Deprecated and ignored (E15): the Core places every session (on itself, or on a runner
+            /// when it is full). Kept so an older client still parses. The one exception: a session of a
+            /// runner-bound login (`codex` or `agy` using the login its runner reports, with no account)
+            /// stays on the runner it names.
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/runner`.
             @available(*, deprecated)
@@ -5948,7 +5967,7 @@ extension Components {
             ///   - policy: `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
             ///   - projectId: Start the session for a project (P3-02): the Core builds the workspace from the project's
             ///   - prompt: The first message. Absent or empty: the session starts with no message, like opening the
-            ///   - runner: Deprecated (E15): the Core places every session. Absent: the Core's built-in runner (until
+            ///   - runner: Deprecated and ignored (E15): the Core places every session (on itself, or on a runner
             ///   - secrets: At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
             ///   - workspace: The repo and worktree to work in (`{"repo_url", "base_branch", "branch", …}`); absent, a
             public init(
@@ -7837,6 +7856,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ProjectRun/idle_stop_at`.
             public var idleStopAt: Components.Schemas.Timestamp?
+            /// A `task` configuration's heavy job (`j_…`, E15-3): follow it with `/jobs/{id}`. Absent for a
+            /// service run.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProjectRun/job`.
+            public var job: Swift.String?
             /// - Remark: Generated from `#/components/schemas/ProjectRun/last_activity_at`.
             public var lastActivityAt: Components.Schemas.Timestamp?
             /// The runner it is placed on.
@@ -7868,6 +7892,7 @@ extension Components {
             ///   - error: What went wrong, for a failed run (redacted).
             ///   - id:
             ///   - idleStopAt: When the idle stop is due, for a running run.
+            ///   - job: A `task` configuration's heavy job (`j_…`, E15-3): follow it with `/jobs/{id}`. Absent for a
             ///   - lastActivityAt:
             ///   - runner: The runner it is placed on.
             ///   - specVersion:
@@ -7882,6 +7907,7 @@ extension Components {
                 error: Swift.String? = nil,
                 id: Swift.String,
                 idleStopAt: Components.Schemas.Timestamp? = nil,
+                job: Swift.String? = nil,
                 lastActivityAt: Components.Schemas.Timestamp? = nil,
                 runner: Swift.String,
                 specVersion: Swift.Int64,
@@ -7896,6 +7922,7 @@ extension Components {
                 self.error = error
                 self.id = id
                 self.idleStopAt = idleStopAt
+                self.job = job
                 self.lastActivityAt = lastActivityAt
                 self.runner = runner
                 self.specVersion = specVersion
@@ -7911,6 +7938,7 @@ extension Components {
                 case error
                 case id
                 case idleStopAt = "idle_stop_at"
+                case job
                 case lastActivityAt = "last_activity_at"
                 case runner
                 case specVersion = "spec_version"
@@ -8688,6 +8716,11 @@ extension Components {
             public var createdAt: Components.Schemas.Timestamp
             /// - Remark: Generated from `#/components/schemas/RunConfig/id`.
             public var id: Swift.Int64
+            /// `service` (a container that keeps running) or `task` (runs as a heavy job on the hardware
+            /// `place_job` picks, with the environment's variables as leased env). Absent: `service`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunConfig/kind`.
+            public var kind: Swift.String?
             /// - Remark: Generated from `#/components/schemas/RunConfig/name`.
             public var name: Swift.String
             /// - Remark: Generated from `#/components/schemas/RunConfig/port`.
@@ -8719,6 +8752,7 @@ extension Components {
             ///   - command: Run in the service's shell.
             ///   - createdAt:
             ///   - id:
+            ///   - kind: `service` (a container that keeps running) or `task` (runs as a heavy job on the hardware
             ///   - name:
             ///   - port:
             ///   - restart: Come back after a crash: the Core restarts it after 2 s, 4 s, ... up to 60 s, at most 5
@@ -8730,6 +8764,7 @@ extension Components {
                 command: Swift.String,
                 createdAt: Components.Schemas.Timestamp,
                 id: Swift.Int64,
+                kind: Swift.String? = nil,
                 name: Swift.String,
                 port: Swift.Int64? = nil,
                 restart: Swift.Bool,
@@ -8741,6 +8776,7 @@ extension Components {
                 self.command = command
                 self.createdAt = createdAt
                 self.id = id
+                self.kind = kind
                 self.name = name
                 self.port = port
                 self.restart = restart
@@ -8753,6 +8789,7 @@ extension Components {
                 case command
                 case createdAt = "created_at"
                 case id
+                case kind
                 case name
                 case port
                 case restart
@@ -8768,6 +8805,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/RunConfigBody/command`.
             public var command: Swift.String?
+            /// `service` or `task`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunConfigBody/kind`.
+            public var kind: Swift.String?
             /// Required to create.
             ///
             /// - Remark: Generated from `#/components/schemas/RunConfigBody/name`.
@@ -8790,6 +8831,7 @@ extension Components {
             ///
             /// - Parameters:
             ///   - command: Required to create.
+            ///   - kind: `service` or `task`.
             ///   - name: Required to create.
             ///   - port: 0 clears it.
             ///   - restart:
@@ -8798,6 +8840,7 @@ extension Components {
             ///   - workdir:
             public init(
                 command: Swift.String? = nil,
+                kind: Swift.String? = nil,
                 name: Swift.String? = nil,
                 port: Swift.Int64? = nil,
                 restart: Swift.Bool? = nil,
@@ -8806,6 +8849,7 @@ extension Components {
                 workdir: Swift.String? = nil
             ) {
                 self.command = command
+                self.kind = kind
                 self.name = name
                 self.port = port
                 self.restart = restart
@@ -8815,6 +8859,7 @@ extension Components {
             }
             public enum CodingKeys: String, CodingKey {
                 case command
+                case kind
                 case name
                 case port
                 case restart

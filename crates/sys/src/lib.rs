@@ -9,6 +9,7 @@
 use std::io;
 
 mod beneath;
+pub mod tree;
 pub use beneath::*;
 
 /// Every `unsafe` block in this crate, by function: what it calls and why it holds.

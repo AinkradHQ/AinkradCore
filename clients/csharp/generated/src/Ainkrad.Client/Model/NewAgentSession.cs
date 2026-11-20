@@ -46,7 +46,7 @@ namespace Ainkrad.Client.Model
         /// <param name="policy">&#x60;{\&quot;mode\&quot;: \&quot;ask\&quot; | \&quot;accept_edits\&quot; | \&quot;sandboxed\&quot;, \&quot;allow\&quot;: […]}&#x60;; default &#x60;ask&#x60;..</param>
         /// <param name="projectId">Start the session for a project (P3-02): the Core builds the workspace from the project&#39;s repos (the primary one first, each under its repo name when there are several), the runner clones them from the Core&#39;s copies, and the project&#39;s Brain room, if it has one, is claimed (the room&#39;s model policy then applies, so a session with no chain is refused 403 &#x60;claim_refused&#x60;). Excludes &#x60;workspace&#x60; (400). 404 for no such project, 409 &#x60;project_archived&#x60;, 409 &#x60;project_has_no_repos&#x60;, 400 when the caller names a mirror in &#x60;workspace&#x60;: only the Core sets one..</param>
         /// <param name="prompt">The first message. Absent or empty: the session starts with no message, like opening the CLI: its harness is up, the state is &#x60;waiting&#x60;, and the first message comes through &#x60;sendAgentMessage&#x60;. A message gives the session its &#x60;title&#x60; (its first 60 characters)..</param>
-        /// <param name="runner">Deprecated (E15): the Core places every session. Absent: the Core&#39;s built-in runner (until E15-1 places by load, after which a given runner is ignored)..</param>
+        /// <param name="runner">Deprecated and ignored (E15): the Core places every session (on itself, or on a runner when it is full). Kept so an older client still parses. The one exception: a session of a runner-bound login (&#x60;codex&#x60; or &#x60;agy&#x60; using the login its runner reports, with no account) stays on the runner it names..</param>
         /// <param name="secrets">At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC)..</param>
         /// <param name="workspace">The repo and worktree to work in (&#x60;{\&quot;repo_url\&quot;, \&quot;base_branch\&quot;, \&quot;branch\&quot;, …}&#x60;); absent, a scratch dir..</param>
         public NewAgentSession(string agent = default, long? chain = default, List<string> connectionAccess = default, string effort = default, string harness = default, bool? live = default, string model = default, bool? plan = default, Object policy = default, long? projectId = default, string prompt = default, string runner = default, List<AgentSecret> secrets = default, Object workspace = default)
@@ -145,9 +145,9 @@ namespace Ainkrad.Client.Model
         public string Prompt { get; set; }
 
         /// <summary>
-        /// Deprecated (E15): the Core places every session. Absent: the Core&#39;s built-in runner (until E15-1 places by load, after which a given runner is ignored).
+        /// Deprecated and ignored (E15): the Core places every session (on itself, or on a runner when it is full). Kept so an older client still parses. The one exception: a session of a runner-bound login (&#x60;codex&#x60; or &#x60;agy&#x60; using the login its runner reports, with no account) stays on the runner it names.
         /// </summary>
-        /// <value>Deprecated (E15): the Core places every session. Absent: the Core&#39;s built-in runner (until E15-1 places by load, after which a given runner is ignored).</value>
+        /// <value>Deprecated and ignored (E15): the Core places every session (on itself, or on a runner when it is full). Kept so an older client still parses. The one exception: a session of a runner-bound login (&#x60;codex&#x60; or &#x60;agy&#x60; using the login its runner reports, with no account) stays on the runner it names.</value>
         [DataMember(Name = "runner", EmitDefaultValue = true)]
         [Obsolete]
         public string Runner { get; set; }

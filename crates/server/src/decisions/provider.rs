@@ -107,6 +107,7 @@ pub trait MeteredProvider: DecisionProvider {
 }
 
 mod transport;
+#[cfg(test)]
 use transport::upstream_of;
 pub use transport::{Called, HubTransport, Transport, class_name};
 
