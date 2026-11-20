@@ -43,6 +43,6 @@ linux-*)
     -v ainkrad-core-cargo:/usr/local/cargo/registry -v "$vol:/cache" \
     -e CARGO_TARGET_DIR=/cache/dist-$tag -e SOURCE_DATE_EPOCH -e CITADEL_GIT_SHA -e CARGO_PROFILE_DIST_STRIP \
     -e RUSTFLAGS="--remap-path-prefix=/src=. --remap-path-prefix=/usr/local/cargo=/cargo --remap-path-prefix=/usr/local/rustup=/rustup$fp16" \
-    "$image" sh -c "rustup show >/dev/null && $lcmd && for b in ainkrad-runner ainkradctl ainkrad-ptyhost; do cp /cache/dist-$tag/dist/\$b /out/$target/\$b; done && cp /cache/dist-$tag-brain/dist/ainkrad-core-brain /out/$target/ainkrad-core-server" ;;
+    "$image" sh -c "rustup show >/dev/null && $lcmd && for b in ainkrad-runner ainkradctl ainkrad-ptyhost ainkrad-job; do cp /cache/dist-$tag/dist/\$b /out/$target/\$b; done && cp /cache/dist-$tag-brain/dist/ainkrad-core-brain /out/$target/ainkrad-core-server" ;;
 *) echo "unknown target $target" >&2; exit 2 ;;
 esac
