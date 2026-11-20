@@ -354,11 +354,24 @@ pub fn list_dir(dir: BorrowedFd<'_>) -> io::Result<Vec<OsString>> {
     // start at the top.
     unsafe { libc::rewinddir(stream) };
     let mut names = Vec::new();
-    loop {
+    let failed = loop {
+        // readdir(3) returns NULL both at the end and on an error; only errno tells them apart, so
+        // it is cleared first (E15 security review L9: a partial listing read as "deleted").
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+        // SAFETY: __error(3) returns this thread's errno slot, always valid to write.
+        unsafe {
+            *libc::__error() = 0
+        };
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+        // SAFETY: __errno_location(3) returns this thread's errno slot, always valid to write.
+        unsafe {
+            *libc::__errno_location() = 0
+        };
         // SAFETY: readdir(3) on our open stream; the entry is read before the next call.
         let entry = unsafe { libc::readdir(stream) };
         if entry.is_null() {
-            break;
+            let e = io::Error::last_os_error();
+            break (e.raw_os_error() != Some(0)).then_some(e);
         }
         // SAFETY: a non-null entry's `d_name` is a NUL-terminated string valid until the next
         // readdir or closedir.
@@ -367,10 +380,13 @@ pub fn list_dir(dir: BorrowedFd<'_>) -> io::Result<Vec<OsString>> {
         if name != "." && name != ".." {
             names.push(name.to_owned());
         }
-    }
+    };
     // SAFETY: closedir(3) on the stream we opened, once; it closes the descriptor too.
     unsafe { libc::closedir(stream) };
-    Ok(names)
+    match failed {
+        Some(e) => Err(e),
+        None => Ok(names),
+    }
 }
 
 #[cfg(test)]

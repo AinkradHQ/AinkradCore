@@ -138,8 +138,13 @@ pub async fn apply_event(
     // Within one event the deletes apply before the puts (a folder that becomes a file).
     let mut refused = 0u64;
     let mut removed = Vec::new();
+    let known = st.entries();
+    // A path the folder holds under another spelling (APFS folds case and Unicode): refused, so
+    // `SRC/main.rs` or `.ENV` never replaces or removes `src/main.rs` or `.env` (E15 L1).
+    let aliased =
+        |p: &str| -> Result<bool, SyncError> { Ok(!known.contains_key(p) && tree.aliased(p)?) };
     for p in &ev.delete {
-        if check_path(p).is_err() || args.rules.sync_out(p).is_some() {
+        if check_path(p).is_err() || args.rules.sync_out(p).is_some() || aliased(p)? {
             refused += 1;
             continue;
         }
@@ -148,10 +153,10 @@ pub async fn apply_event(
     }
     let mut done: Vec<Entry> = Vec::new();
     let mut to_pull: Vec<Entry> = Vec::new();
-    let known = st.entries();
     for e in ev.put {
         let ok = check_path(&e.path).is_ok()
             && args.rules.sync_out(&e.path).is_none()
+            && !aliased(&e.path)?
             && e.size <= MAX_FILE_BYTES
             && (e.kind != EntryKind::File || ainkrad_proto::v2::file_entry_sound(&e));
         if !ok {
@@ -444,3 +449,7 @@ pub async fn delete_through(hub: &Arc<Hub>, st: &WatchState, rel: &str) -> Resul
     st.inner.lock().unwrap().entries.remove(rel);
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "watch_tests.rs"]
+mod tests;
