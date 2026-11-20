@@ -139,11 +139,7 @@ impl Action {
     pub fn mutating(&self) -> bool {
         matches!(
             self,
-            Action::RestartCore | Action::RestartRunner | Action::BackupNow
-        )
-        matches!(
-            self,
-            Action::RestartCore | Action::RestartRunner | Action::Update
+            Action::RestartCore | Action::RestartRunner | Action::BackupNow | Action::Update
         )
     }
 }
