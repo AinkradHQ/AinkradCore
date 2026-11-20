@@ -34,7 +34,7 @@ pub const HELPER_REFUSED: &str = "host.helper_refused";
 
 /// `s` cut to `max` characters, every control character (an escape sequence, a newline) but a tab
 /// replaced by `?`: text from a log or a unit goes to terminals and UIs.
-fn plain(s: &str, max: usize) -> String {
+pub(super) fn plain(s: &str, max: usize) -> String {
     s.chars()
         .take(max)
         .map(|c| if c.is_control() && c != '\t' { '?' } else { c })
