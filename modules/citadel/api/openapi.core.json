@@ -1645,6 +1645,20 @@
               "null"
             ]
           },
+          "place_reason": {
+            "description": "Why the Core placed it where it runs (E15): `core`, `overflow` (the Core was full) or\n`pinned` (a runner-bound login); absent for a session placed before E15.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "placed_on": {
+            "description": "The name of the machine it runs on (`runner` is its id), for \"Ran on X\".",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "plan": {
             "description": "Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`).",
             "type": [
@@ -2831,11 +2845,14 @@
           "connection.updated",
           "connection.used",
           "core.prefs_changed",
+          "decision.asked",
           "device.enrolled",
           "device.last_admin_refused",
           "device.renamed",
           "device.revoked",
           "device.scopes_changed",
+          "hardware.paused",
+          "hardware.resumed",
           "host.action_result",
           "host.backup_requested",
           "host.backup_retention_requested",
@@ -5851,6 +5868,10 @@
           "citadel.transcript",
           "citadel.wake",
           "connection.health",
+          "hardware.changed",
+          "job.ended",
+          "job.queued",
+          "job.started",
           "notify.delivery",
           "project.archived",
           "project.created",
@@ -5895,6 +5916,10 @@
           "citadel.transcript": "admin",
           "citadel.wake": "admin",
           "connection.health": "admin",
+          "hardware.changed": "read",
+          "job.ended": "read",
+          "job.queued": "read",
+          "job.started": "read",
           "notify.delivery": "admin",
           "project.archived": "read",
           "project.created": "read",
@@ -6364,6 +6389,239 @@
         "required": [
           "core_spki",
           "core_sig"
+        ],
+        "type": "object"
+      },
+      "Hardware": {
+        "description": "One machine.",
+        "properties": {
+          "arch": {
+            "description": "`aarch64`, `x86_64`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "battery": {
+            "$ref": "#/components/schemas/HardwareBattery"
+          },
+          "cores": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cpu_pct": {
+            "description": "0 to 100, over 60 s.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "degraded": {
+            "type": "boolean"
+          },
+          "gate": {
+            "$ref": "#/components/schemas/HardwareGate"
+          },
+          "id": {
+            "description": "The runner device, `d_…`.",
+            "type": "string"
+          },
+          "job_slots": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/HardwareJob"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/HardwareKind"
+          },
+          "mem_free_mb": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mem_total_mb": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "online": {
+            "type": "boolean"
+          },
+          "os": {
+            "description": "`linux`, `macos`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "paused_until": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "Paused on the Core until then; absent: not paused."
+          },
+          "sessions": {
+            "description": "AI sessions live on it.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "toolchains": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Ready toolchains, name to version.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "online",
+          "degraded",
+          "gate",
+          "cores",
+          "cpu_pct",
+          "mem_total_mb",
+          "mem_free_mb",
+          "toolchains",
+          "sessions",
+          "jobs",
+          "job_slots"
+        ],
+        "type": "object"
+      },
+      "HardwareBattery": {
+        "properties": {
+          "on_battery": {
+            "type": "boolean"
+          },
+          "percent": {
+            "description": "0 to 100.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "on_battery",
+          "percent"
+        ],
+        "type": "object"
+      },
+      "HardwareGate": {
+        "anyOf": [
+          {
+            "description": "Whether a machine takes jobs now, by its own measure.",
+            "enum": [
+              "open",
+              "busy",
+              "on_battery",
+              "paused",
+              "off"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "HardwareJob": {
+        "description": "A job running on a machine now.",
+        "properties": {
+          "id": {
+            "description": "`j_…`.",
+            "type": "string"
+          },
+          "label": {
+            "description": "What it runs, `cargo build`.",
+            "type": "string"
+          },
+          "project": {
+            "description": "The project id, absent for a job of a session with no project.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "started_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "started_at"
+        ],
+        "type": "object"
+      },
+      "HardwareKind": {
+        "anyOf": [
+          {
+            "description": "What a machine is.",
+            "enum": [
+              "core",
+              "mac",
+              "runner"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "HardwarePause": {
+        "description": "`PUT …/pause`: until when; `null` lifts the pause, and any time in the year 2100 or later means\nindefinitely.",
+        "properties": {
+          "until": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "type": "object"
+      },
+      "HardwarePool": {
+        "description": "The pool as a whole, for the top bar's load ring.",
+        "properties": {
+          "jobs": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "load_pct": {
+            "description": "Running jobs over all online job slots, 0 to 100.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "paused": {
+            "description": "A pause-all is in effect.",
+            "type": "boolean"
+          },
+          "sessions": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "load_pct",
+          "jobs",
+          "sessions",
+          "paused"
         ],
         "type": "object"
       },
@@ -6920,6 +7178,196 @@
           "lead_secs"
         ],
         "type": "object"
+      },
+      "Job": {
+        "description": "One job.",
+        "properties": {
+          "conflicts": {
+            "description": "Files the Core kept over the machine's version (`.ainkrad/conflicts/<job>/`).",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "device": {
+            "description": "The device it runs on, `d_…`.",
+            "type": "string"
+          },
+          "device_name": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ended_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "exit_code": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "`j_…`.",
+            "type": "string"
+          },
+          "label": {
+            "description": "What it runs, `cargo build`.",
+            "type": "string"
+          },
+          "missing": {
+            "description": "With `core_no_fit`: what no other machine had (`xcode`, `os macos`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "place_reason": {
+            "$ref": "#/components/schemas/JobPlaceReason"
+          },
+          "project": {
+            "description": "The project id; absent for a job of a session with no project.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session": {
+            "description": "The AI session (`as_…`) it came from.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "state": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "terminal": {
+            "description": "The terminal it came from.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier": {
+            "$ref": "#/components/schemas/JobTier"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "device",
+          "device_name",
+          "place_reason",
+          "tier",
+          "state",
+          "conflicts",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "JobLocal": {
+        "description": "The 200 answer of `POST /jobs`: run it where you are.",
+        "properties": {
+          "reason": {
+            "description": "Why (`light`, `rule`, `no_hardware`, ...).",
+            "type": "string"
+          },
+          "report": {
+            "description": "Report the local run's outcome and duration (`POST /runner/jobs/report`, the shim's `done`\nframe), for the command history.",
+            "type": "boolean"
+          },
+          "verdict": {
+            "description": "Always `local`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reason",
+          "report"
+        ],
+        "type": "object"
+      },
+      "JobPlaceReason": {
+        "anyOf": [
+          {
+            "description": "Why the Core put a job where it did.",
+            "enum": [
+              "core",
+              "overflow",
+              "runner",
+              "this_mac",
+              "core_no_fit",
+              "pinned"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "JobSignal": {
+        "properties": {
+          "signal": {
+            "description": "`INT`, `TERM` or `KILL`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signal"
+        ],
+        "type": "object"
+      },
+      "JobState": {
+        "anyOf": [
+          {
+            "enum": [
+              "queued",
+              "syncing",
+              "running",
+              "ended",
+              "failed",
+              "cancelled",
+              "lost"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "JobTier": {
+        "anyOf": [
+          {
+            "description": "Which step of the decision made the command heavy.",
+            "enum": [
+              "rule",
+              "history",
+              "decision",
+              "config"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
       },
       "KindAuthMethod": {
         "description": "One way to sign in to a kind, easiest first.",
@@ -8009,8 +8457,12 @@
             ]
           },
           "runner": {
-            "description": "The runner's device id, `d_…`.",
-            "type": "string"
+            "deprecated": true,
+            "description": "Deprecated and ignored (E15): the Core places every session (on itself, or on a runner\nwhen it is full). Kept so an older client still parses. The one exception: a session of a\nrunner-bound login (`codex` or `agy` using the login its runner reports, with no account)\nstays on the runner it names.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "secrets": {
             "description": "At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).",
@@ -8030,9 +8482,6 @@
             ]
           }
         },
-        "required": [
-          "runner"
-        ],
         "type": "object"
       },
       "NewBinding": {
@@ -8438,6 +8887,55 @@
         },
         "required": [
           "title"
+        ],
+        "type": "object"
+      },
+      "NewJob": {
+        "description": "`POST /jobs`.",
+        "properties": {
+          "argv": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cwd_rel": {
+            "description": "A wire path relative to the project or session folder; empty is its root.",
+            "type": "string"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Allow-listed variable names to values.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "project": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tty": {
+            "description": "The caller is a terminal: an interactive command answers 409 `interactive`.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "argv"
         ],
         "type": "object"
       },
@@ -10948,6 +11446,13 @@
             "$ref": "#/components/schemas/Timestamp",
             "description": "When the idle stop is due, for a running run."
           },
+          "job": {
+            "description": "A `task` configuration's heavy job (`j_…`, E15-3): follow it with `/jobs/{id}`. Absent for a\nservice run.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "last_activity_at": {
             "$ref": "#/components/schemas/Timestamp"
           },
@@ -12443,6 +12948,13 @@
             "format": "int64",
             "type": "integer"
           },
+          "kind": {
+            "description": "`service` (a container that keeps running) or `task` (runs as a heavy job on the hardware\n`place_job` picks, with the environment's variables as leased env). Absent: `service`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -12492,6 +13004,13 @@
         "properties": {
           "command": {
             "description": "Required to create.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`service` or `task`.",
             "type": [
               "string",
               "null"
@@ -13273,6 +13792,131 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "RunnerJobReport": {
+        "description": "`POST /runner/jobs/report`: a local run the Core said to report (`JobLocal.report`).",
+        "properties": {
+          "argv": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "duration_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "exit_code": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "project": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "terminal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "argv",
+          "duration_ms"
+        ],
+        "type": "object"
+      },
+      "RunnerNewJob": {
+        "description": "`POST /runner/jobs`: what the built-in runner forwards from a shim, with the origin it stamped\n(the sandbox the socket belongs to, never the shim's word).",
+        "properties": {
+          "argv": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cwd_rel": {
+            "description": "A wire path relative to the session or project folder (the runner maps the shim's `cwd`).",
+            "type": "string"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "hosts": {
+            "description": "A `filtered` sandbox's allowed host names; a job sent elsewhere gets them cut to the\nregistry list.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "network": {
+            "description": "The sandbox's own network: `allow`, `deny` or `filtered` (E15 H2). Absent or unknown is\n`deny`: the command runs where it was typed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session": {
+            "description": "The AI session (`as_…`) whose sandbox the shim ran in.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "terminal": {
+            "description": "The Core terminal it ran in.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tty": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "argv"
+        ],
         "type": "object"
       },
       "RunnerPolicyBody": {
@@ -22688,6 +23332,551 @@
         "x-citadel-frame": "#/components/schemas/Event"
       }
     },
+    "/api/v1/hardware": {
+      "get": {
+        "operationId": "listHardware",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Hardware"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every paired machine the Core places work on, with its live capacity. Needs `read`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "hardware"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/hardware/pause": {
+      "put": {
+        "operationId": "pauseAllHardware",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HardwarePause"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HardwarePool"
+                }
+              }
+            },
+            "description": "Every machine but the Core takes no new work until `until` (`null` lifts it). Needs `admin`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "hardware"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/hardware/pool": {
+      "get": {
+        "operationId": "getHardwarePool",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HardwarePool"
+                }
+              }
+            },
+            "description": "The pool's load, jobs and sessions. Needs `read`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "hardware"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/hardware/{id}/pause": {
+      "put": {
+        "operationId": "pauseHardware",
+        "parameters": [
+          {
+            "description": "The runner's device id, `d_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HardwarePause"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Hardware"
+                }
+              }
+            },
+            "description": "The machine takes no new jobs or overflow sessions until `until` (`null` lifts it); running work finishes. 400 for the Core host or a past `until`, 404 for no such machine. Needs `admin`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "hardware"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/jobs": {
+      "get": {
+        "operationId": "listJobs",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One `JobState`.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many, newest first (default 50, at most 200).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Job"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Jobs, newest first. Needs `read`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "post": {
+        "operationId": "createJob",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewJob"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobLocal"
+                }
+              }
+            },
+            "description": "Run it locally, and why"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "The command was placed on other hardware"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "`interactive`: a tty and an interactive command run locally"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-ainkrad-scope": "terminal"
+      }
+    },
+    "/api/v1/jobs/{id}": {
+      "delete": {
+        "operationId": "cancelJob",
+        "parameters": [
+          {
+            "description": "`j_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Cancelled: TERM, then KILL after 10 s; nothing is synced back"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-ainkrad-scope": "terminal"
+      },
+      "get": {
+        "operationId": "getJob",
+        "parameters": [
+          {
+            "description": "`j_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "One job. Needs `read`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/jobs/{id}/signal": {
+      "post": {
+        "operationId": "signalJob",
+        "parameters": [
+          {
+            "description": "`j_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobSignal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The signal was delivered to the job's process group"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-ainkrad-scope": "terminal"
+      }
+    },
+    "/api/v1/jobs/{id}/stream": {
+      "get": {
+        "operationId": "streamJob",
+        "parameters": [
+          {
+            "description": "`j_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Job WebSocket: `out`, `state` and `exit` frames, replaying up to 4 MiB"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-ainkrad-scope": "terminal"
+      }
+    },
     "/api/v1/me": {
       "get": {
         "operationId": "getMe",
@@ -25472,7 +26661,7 @@
                 }
               }
             },
-            "description": "The run, `starting` (as `startProjectRun`), with the configuration and environment laid over the spec: its command, folder and port, and the environment's variables (a Secret link is leased to the runner as `${secret:NAME}`, never sent as a value). The configuration's runner is used when it is online. 409 `conflict` while this configuration has a live run unless `replace`; 409 `no_runner`; 400/409 `invalid_spec` when the result is not a valid spec or links a Secret the project no longer has; 404 for no such configuration or environment"
+            "description": "The run, `starting` (as `startProjectRun`), with the configuration and environment laid over the spec: its command, folder and port, and the environment's variables (a Secret link is leased to the runner as `${secret:NAME}`, never sent as a value). The configuration's runner is used when it is online. 409 `conflict` while this configuration has a live run unless `replace`; 409 `no_runner`; 400/409 `invalid_spec` when the result is not a valid spec or links a Secret the project no longer has; 404 for no such configuration or environment. A `task` configuration (E15-3) starts as a heavy job instead: the answer carries the job's id in `job`, the variables travel as the job's environment (a Secret leased to the device it lands on, redeemed once there), and `replace` does not apply"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -27037,6 +28226,162 @@
           "devices"
         ],
         "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/runner/jobs": {
+      "post": {
+        "operationId": "runnerCreateJob",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunnerNewJob"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobLocal"
+                }
+              }
+            },
+            "description": "Run it locally, and why"
+          },
+          "201": {
+            "description": "Placed on other hardware: the body is an NDJSON stream (`application/x-ndjson`), one JSON object per line: the remote `ShimVerdict` line, then `state`, `out` and `exit` frames (`ShimFrame`, runner protocol) until the job ends. Only the built-in runner may call it (`runner` scope)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "`interactive`"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-ainkrad-scope": "runner"
+      }
+    },
+    "/api/v1/runner/jobs/report": {
+      "post": {
+        "operationId": "runnerReportJob",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunnerJobReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "A local run's outcome, for the command history. Built-in runner only"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-ainkrad-scope": "runner"
+      }
+    },
+    "/api/v1/runner/jobs/{job}/signal": {
+      "post": {
+        "operationId": "runnerSignalJob",
+        "parameters": [
+          {
+            "description": "`j_…`",
+            "in": "path",
+            "name": "job",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobSignal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "A signal the shim forwarded; a second `INT` cancels. Built-in runner only"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-ainkrad-scope": "runner"
       }
     },
     "/api/v1/runners": {
