@@ -8,6 +8,14 @@
 //! The traits return boxed futures (`futures_util::future::BoxFuture`, the codebase's form for an
 //! async method behind `dyn`), which is what `#[async_trait]` would expand to.
 
+pub mod budget;
+pub mod cache;
+pub mod gemini;
+pub mod provider;
+pub mod redact;
+
+pub use provider::Service;
+
 use std::collections::BTreeMap;
 
 use ainkrad_core::ids::UserId;

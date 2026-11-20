@@ -471,6 +471,13 @@ impl AgentDriver {
                         .plan_limit
                         .then_some(&ainkrad_proto::v2::CAP_PLAN_LIMIT),
                 )
+                // E15-0: a runner that can serve the gateway also takes `gateway.call`.
+                .chain(
+                    self.sandbox
+                        .capabilities()
+                        .contains(&CAP_GATEWAY)
+                        .then_some(&ainkrad_proto::v2::CAP_GATEWAY_CALL),
+                )
                 .chain(
                     (self.config.history_read && self.config.history_root.is_some())
                         .then_some(&ainkrad_proto::v2::CAP_HISTORY_READ),
