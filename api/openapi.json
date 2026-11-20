@@ -2485,17 +2485,6 @@
         ],
         "type": "object"
       },
-      "Deleted": {
-        "properties": {
-          "deleted": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "deleted"
-        ],
-        "type": "object"
-      },
       "Device": {
         "description": "A device: who it is and what it may do. Never a key's private half: the Core has none.",
         "properties": {
@@ -5918,6 +5907,17 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "RunConfigDeleted": {
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
         "type": "object"
       },
       "RunConfigStart": {
@@ -15540,7 +15540,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Deleted"
+                  "$ref": "#/components/schemas/RunConfigDeleted"
                 }
               }
             },
@@ -16050,7 +16050,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Deleted"
+                  "$ref": "#/components/schemas/RunConfigDeleted"
                 }
               }
             },
