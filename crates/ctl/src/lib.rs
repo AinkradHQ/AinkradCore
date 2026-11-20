@@ -11,6 +11,7 @@ pub mod acct_help;
 pub mod acct_login;
 pub mod acct_usage;
 pub mod agents;
+pub mod api;
 pub mod budgets;
 pub mod chains;
 pub mod client;

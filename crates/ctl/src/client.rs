@@ -52,8 +52,9 @@ pub struct Client {
     pub clock_offset: i64,
     /// The step-up key's file (beside the keystore) and where its passphrase comes from.
     pub stepup_file: Option<std::path::PathBuf>,
-    /// The app-unlock token, only ever set by `Client::unlock_with` (a test fixture). The CLI
-    /// does not unlock: commands that need the unlock are refused with a plain message.
+    /// The app-unlock token, set by `Client::unlock_with` (a test fixture, or `--unlock` in a
+    /// `test-support` build such as the e2e kit's). A shipped CLI does not unlock: commands that
+    /// need the unlock are refused with a plain message.
     pub unlock_token: Option<String>,
     pub passphrase: Passphrase,
     /// The `Retry-After` seconds of the last refused request that carried one (a 429's pacing).
@@ -410,6 +411,28 @@ impl Client {
         self.step_up_with(
             |m| key.sign(m),
             |s, c| stepup::message(&core_fp, &device, s, c),
+        )
+        .await
+    }
+
+    /// The app unlock for this command only (`--unlock`, test builds only: `test-support`): the
+    /// same step-up key and passphrase as `elevate`, signing the V2 message with purpose `session`,
+    /// as the app does with its own key. The token lives in this process and is gone when it exits.
+    /// A shipped ctl has no unlock at all.
+    #[cfg(feature = "test-support")]
+    pub async fn unlock(&mut self) -> Result<(), Error> {
+        let path = self.stepup_file.clone().ok_or_else(|| {
+            Error::StepUp("this device has no step-up key, so it cannot unlock".into())
+        })?;
+        let (device, core_fp) = (self.store.device_id.clone(), self.store.core_fp.clone());
+        if !path.exists() {
+            return Err(Error::StepUp(stepup::no_key(&path)));
+        }
+        let pass = self.passphrase.read(false).map_err(Error::StepUp)?;
+        let key = stepup::load(&path, &pass, &device, &core_fp).map_err(Error::StepUp)?;
+        self.unlock_with(
+            |m| key.sign(m),
+            |s, c| stepup::message_v2(&core_fp, &device, s, c, "session"),
         )
         .await
     }

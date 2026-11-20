@@ -1,6 +1,6 @@
 //! The reference terminal client: REST lifecycle plus a resumable raw-mode WebSocket attach.
 
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::process::Command;
 use std::time::Duration;
 
@@ -113,6 +113,7 @@ async fn attach_once(
     c: &mut Client,
     terminal: &str,
     after: u64,
+    watch: bool,
     out: &mut impl Write,
 ) -> Result<(bool, u64), Error> {
     let mut ws = c
@@ -137,7 +138,7 @@ async fn attach_once(
                     last_size = Some((rows, cols));
                 }
             }
-            read = input.read(&mut buf) => {
+            read = input.read(&mut buf), if !watch => {
                 let n = read.map_err(|e| Error::Unreachable(format!("stdin: {e}")))?;
                 if n == 0 { return Ok((false, next)); }
                 if let Some(pos) = buf[..n].iter().position(|b| *b == 0x1c) {
@@ -176,11 +177,14 @@ async fn attach_once(
 }
 
 // `out` is main's locked stdout: tokio's own stdout would wait on that lock forever.
+/// Stdin not a terminal (a script, a pipe): watch only, no raw mode and no input, until the
+/// terminal ends.
 async fn attach(c: &mut Client, terminal: &str, out: &mut impl Write) -> Result<(), Error> {
-    let _raw = RawMode::enter()?;
+    let watch = !std::io::stdin().is_terminal();
+    let _raw = if watch { None } else { Some(RawMode::enter()?) };
     let mut after = 0;
     loop {
-        match attach_once(c, terminal, after, out).await {
+        match attach_once(c, terminal, after, watch, out).await {
             Ok((done, seq)) if done => {
                 after = seq;
                 tokio::time::sleep(Duration::from_millis(100)).await;
