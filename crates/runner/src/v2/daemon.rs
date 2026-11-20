@@ -136,6 +136,13 @@ impl Daemon {
         if let Some(run) = self.run_driver() {
             session = session.with_run(run);
         }
+        // Heavy jobs and workspace sync (E15-4), where the CLI set them up.
+        let core_fp = self.enrolment.lock().unwrap().core_fp.clone();
+        if let Some(redeem) = self.redeem()
+            && let Some((job, sync)) = super::hwsource::build(&core_fp, redeem, self.agents.clone())
+        {
+            session = session.with_job(job).with_sync(sync);
+        }
         let mut delay = self.backoff.min;
         let mut refused = 0;
         loop {

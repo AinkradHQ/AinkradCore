@@ -173,6 +173,10 @@ pub struct PtyDriver {
     reserved: Arc<AtomicUsize>,
     /// Set once by `start_jobs`, when the runner is the Core's and the shim binary is installed.
     jobs: std::sync::OnceLock<Jobs>,
+    /// Whether this runner opens terminals of any purpose: the Core host's built-in runner
+    /// (`--workspace-root`) and This Mac (`--bundled`). A remote runner opens only the guided
+    /// sign-in (`PtyOpen::purpose = login`); any other open is `terminal_target_removed` (E15-4).
+    local: bool,
 }
 
 /// A capacity slot held for an ssh terminal from `check_ssh` until its host has started (or the
@@ -285,6 +289,7 @@ impl PtyDriver {
             trust: Mutex::default(),
             reserved: Arc::default(),
             jobs: std::sync::OnceLock::new(),
+            local: true,
         }
     }
 
@@ -322,6 +327,12 @@ impl PtyDriver {
                 None
             }
         }
+    }
+
+    /// A remote runner: terminals only for the guided sign-in.
+    pub fn remote(mut self) -> Self {
+        self.local = false;
+        self
     }
 
     /// Remembers the Core this runner is connected to (proven by its handshake).
@@ -517,6 +528,12 @@ impl PtyDriver {
         slot: Option<SshSlot>,
     ) -> Result<String, StreamError> {
         self.enabled()?;
+        if !self.local && req.purpose.as_deref() != Some(ainkrad_proto::v2::PTY_PURPOSE_LOGIN) {
+            return Err(err(
+                ErrorCode::TerminalTargetRemoved,
+                "this runner opens no terminals: use the Core or This Mac",
+            ));
+        }
         let invalid = |m: &str| err(ErrorCode::InvalidArgs, m);
         if ssh.is_some() {
             self.ssh_shape(req)?;
@@ -1300,3 +1317,6 @@ mod shell_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod remote_tests;

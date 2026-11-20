@@ -303,6 +303,7 @@ dependencies = [
  "ainkrad-ptyhost",
  "ainkrad-sys",
  "base64 0.22.1",
+ "blake3",
  "futures-util",
  "log",
  "rand 0.10.3",

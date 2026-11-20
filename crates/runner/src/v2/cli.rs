@@ -245,7 +245,7 @@ pub const CONNECT_USAGE: &str = "usage:
   ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec] [--enable-pty]
                          [--enable-agents] [--share-history] [--terminal-sandbox=on|off]
                          [--terminal-hide <path>]… [--terminal-user <account>]
-                         [--terminal-network=host|none|filtered] [--job-shims]
+                         [--terminal-network=host|none|filtered] [--workspace-root <dir>] [--job-shims]
 
 Serves the Core it paired with (`ainkrad-runner pair`) over protocol v2, reconnecting with a
 jittered backoff and resuming commands in flight. Stops on SIGTERM or Ctrl-C; commands still
@@ -438,6 +438,22 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         }
     };
     let state = state_dir(flag(args, "--state"));
+    // E15-4: the Core host's built-in runner works in the canonical workspace; This Mac is `--bundled`.
+    // Both open terminals and keep the pty driver; any other runner opens only the sign-in terminal.
+    let workspace_root =
+        flag(args, ainkrad_proto::v2::RUNNER_FLAG_WORKSPACE_ROOT).map(PathBuf::from);
+    if let Some(ws) = &workspace_root
+        && !(ws.is_absolute() && ws.is_dir())
+    {
+        eprintln!("ainkrad-runner: --workspace-root must be an existing absolute folder");
+        return ExitCode::from(2);
+    }
+    let local_host = workspace_root.is_some() || bundled;
+    super::hwsource::set_setup(super::hwsource::HwSetup {
+        state: state.0.clone(),
+        workspace_root,
+        bundled,
+    });
     super::aitools::set_prefix(state.0.join("ai-tools"));
     // The policy a Core set from the App overrides the flags for these three (see `control`).
     let policy = super::control::load(&state.0);
@@ -545,7 +561,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     let host = ainkrad_ptyhost::client::find_host_binary()
         .unwrap_or_else(|| PathBuf::from("ainkrad-ptyhost"));
     let pty = pty_enabled.then(|| {
-        let d = Arc::new(super::PtyDriver::new(super::PtyConfig {
+        let driver = super::PtyDriver::new(super::PtyConfig {
             enabled: true,
             hide: hidden.clone(),
             readonly: super::termbox::readonly_paths(&host),
@@ -566,10 +582,12 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             allow_real: bundled,
             job_shims,
             ..super::PtyConfig::new(state.0.join("terminals"))
-        }));
+        });
+        let d = Arc::new(if local_host { driver } else { driver.remote() });
         d.spawn_budget_loop();
         d
     });
+
     // Shells left by an earlier runner with a weaker network than this one requires.
     if let Some(d) = &pty {
         let n = d.retire_weaker().await;
