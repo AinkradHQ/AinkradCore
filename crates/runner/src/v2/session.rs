@@ -147,6 +147,9 @@ pub struct Session {
     pub(super) login: Option<Arc<super::login::LoginDriver>>, // KAN-441 L2, set with `agent`
     /// The runner policy and tool installs, when this runner serves them.
     control: Option<Arc<super::control::Control>>,
+    /// Heavy jobs and workspace sync (E15-4), where the sandbox works and the runner offers them.
+    job: Option<Arc<super::job::JobDriver>>,
+    sync: Option<Arc<super::sync::SyncDriver>>,
     /// Where wall time comes from: a monotonic clock stands still while the machine sleeps.
     clock: Clock,
     boot: String,
@@ -168,6 +171,8 @@ impl Session {
             design: None,
             login: None,
             control: None,
+            job: None,
+            sync: None,
             clock: Arc::new(SystemTime::now),
             boot: format!("b_{}", key::b64(&key::random::<16>())),
             core_boot: None,
@@ -211,6 +216,18 @@ impl Session {
     /// Offers the `control` driver too (the runner policy and tool installs).
     pub fn with_control(mut self, control: Arc<super::control::Control>) -> Self {
         self.control = Some(control);
+        self
+    }
+
+    /// Offers the `job` driver too (E15-4).
+    pub fn with_job(mut self, job: Arc<super::job::JobDriver>) -> Self {
+        self.job = Some(job);
+        self
+    }
+
+    /// Offers the `sync` driver too (E15-4).
+    pub fn with_sync(mut self, sync: Arc<super::sync::SyncDriver>) -> Self {
+        self.sync = Some(sync);
         self
     }
 
@@ -289,6 +306,8 @@ impl Session {
                 .chain(self.run.as_ref().and_then(|r| r.info()))
                 .chain(self.run.as_ref().and_then(|r| r.port_info()))
                 .chain(agent_info)
+                .chain(self.job.as_ref().and_then(|j| j.info()))
+                .chain(self.sync.as_ref().map(|s| s.info()))
                 .chain(self.design.as_ref().map(|d| d.info()))
                 .chain(
                     self.control
@@ -636,15 +655,15 @@ impl Session {
                 self.start_control(stream, command)
             }
             // The sign-in driver's, or (an op of a newer Core) `unsupported_command`.
-            // E15 (protocol 2.1): the `job`, `sync` and `gateway-call` drivers are E15-4's and
-            // E15-0's; until then this runner advertises none of them, so none is expected.
+            // E15 (protocol 2.1): `job` and `sync` are E15-4's; `gateway-call` is E15-0's and is not
+            // offered by this runner yet.
             Command::JobRun(_)
             | Command::SyncManifest(_)
             | Command::SyncPush(_)
             | Command::SyncPull(_)
             | Command::SyncWatch(_)
-            | Command::SyncDrop(_)
-            | Command::GatewayCall(_) => Some(Body::Error(StreamError::new(
+            | Command::SyncDrop(_) => self.start_e15(stream, command, h),
+            Command::GatewayCall(_) => Some(Body::Error(StreamError::new(
                 ErrorCode::UnsupportedCommand,
                 format!("{} is not offered by this runner", command.op()),
             ))),
@@ -659,6 +678,55 @@ impl Session {
 }
 
 impl Session {
+    /// Starts a `job.run` or `sync.*` command (E15-4): a long command with a credited stream of its own.
+    fn start_e15(&self, stream: u64, command: Command, h: &mut Held) -> Option<Body> {
+        let off = |what: &str| {
+            Some(Body::Error(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                format!("{what} is not offered by this runner"),
+            )))
+        };
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        let (inbox_tx, inbox) = mpsc::unbounded_channel();
+        let done = self.done_tx.clone();
+        let window = match command {
+            Command::JobRun(_) => ainkrad_proto::v2::STREAM_WINDOW,
+            _ => ainkrad_proto::v2::SYNC_STREAM_WINDOW,
+        };
+        let flow = super::flow::Flow::new(stream, done.clone(), inbox, cancel_rx, window);
+        let req = match command {
+            Command::JobRun(req) => req,
+            other => {
+                let Some(sync) = self.sync.as_ref() else {
+                    return off(other.op());
+                };
+                let sync = Arc::clone(sync);
+                (h.cancel, h.inbox) = (Some(cancel_tx), Some(inbox_tx));
+                tokio::spawn(async move {
+                    let body = match sync.handle(other, flow).await {
+                        Ok(reply) => Body::Result(reply),
+                        Err(e) => Body::Error(e),
+                    };
+                    let _ = done.send((stream, body));
+                });
+                return None;
+            }
+        };
+        let Some(job) = self.job.as_ref().filter(|j| j.info().is_some()) else {
+            return off("job.run");
+        };
+        let job = Arc::clone(job);
+        (h.cancel, h.inbox) = (Some(cancel_tx), Some(inbox_tx));
+        tokio::spawn(async move {
+            let body = match job.run(req, flow).await {
+                Ok(finished) => Body::Result(Reply::JobRun(finished)),
+                Err(e) => Body::Error(e),
+            };
+            let _ = done.send((stream, body));
+        });
+        None
+    }
+
     /// Starts a `pty.*` command; `None` when a task answers later.
     fn start_pty(&self, stream: u64, command: Command, h: &mut Held) -> Option<Body> {
         let Some(pty) = self.pty.as_ref().filter(|p| p.info().is_some()) else {

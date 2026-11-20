@@ -168,6 +168,7 @@ fn e15_frames_are_pinned() {
                 exclude: vec!["target/".to_owned()],
                 ..Default::default()
             },
+            seed: None,
         }),
     );
     res(
