@@ -143,7 +143,7 @@ fn candidates<'a>(hw: &'a [HwView], need: &JobNeed) -> Result<Vec<&'a HwView>, S
         .iter()
         .filter(|h| h.kind != HwKind::Core && h.online && !h.degraded)
         .collect();
-    let mut step = |set: &mut Vec<&'a HwView>, keep: &dyn Fn(&HwView) -> bool, missing: String| {
+    let step = |set: &mut Vec<&'a HwView>, keep: &dyn Fn(&HwView) -> bool, missing: String| {
         set.retain(|h| keep(h));
         if set.is_empty() { Err(missing) } else { Ok(()) }
     };
