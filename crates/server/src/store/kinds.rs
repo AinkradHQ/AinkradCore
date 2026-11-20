@@ -43,6 +43,9 @@ pub const PLATFORM_EVENT_KINDS: &[&str] = &[
     "audit",
     "connection.health",
     "hardware.changed",
+    "job.ended",
+    "job.queued",
+    "job.started",
     "agent.approval_decided",
     "agent.approval_requested",
     "agent.created",
@@ -88,6 +91,7 @@ pub fn platform_scope(kind: &str) -> &'static str {
     } else if kind.starts_with("runner.")
         || kind.starts_with("project.")
         || kind.starts_with("hardware.")
+        || kind.starts_with("job.")
     {
         "read"
     } else if kind.starts_with("terminal.") {

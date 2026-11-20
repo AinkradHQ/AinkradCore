@@ -12,13 +12,16 @@ use axum::Json;
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use utoipa::{IntoParams, ToSchema};
 
 use super::types::{Timestamp, opt_ts, ts};
 use super::{ApiError, ApiResult, Caller};
 use crate::api::App;
 use crate::heavy::decide::{Decision, Deps, decide as heavy_decide};
+use crate::heavy::run::{self, Start, Started};
 use crate::heavy::{history, rules};
 
 /// Why the Core put a job where it did.
@@ -136,14 +139,6 @@ pub struct JobsQuery {
     pub limit: Option<u32>,
 }
 
-fn not_yet() -> ApiError {
-    ApiError::new(
-        StatusCode::NOT_IMPLEMENTED,
-        "not_implemented",
-        "heavy jobs arrive with E15-3",
-    )
-}
-
 #[utoipa::path(post, path = "/api/v1/jobs", operation_id = "createJob", tag = "jobs",
     request_body = NewJob,
     responses(
@@ -154,11 +149,13 @@ pub async fn create(State(app): State<App>, Json(req): Json<NewJob>) -> Response
     let asked = Asked {
         project: req.project,
         session: req.session,
+        terminal: None,
         argv: req.argv,
         cwd_rel: req.cwd_rel,
+        env: req.env.unwrap_or_default(),
         tty: req.tty,
     };
-    answer(&app, asked)
+    answer(&app, asked, false)
         .await
         .unwrap_or_else(IntoResponse::into_response)
 }
@@ -197,23 +194,57 @@ pub async fn get(State(app): State<App>, Path(id): Path<String>) -> ApiResult<Jo
     params(("id" = String, Path, description = "`j_…`")),
     responses((status = 101, description = "Job WebSocket: `out`, `state` and `exit` frames, \
         replaying up to 4 MiB")))]
-pub async fn stream(Path(_): Path<String>) -> Response {
-    not_yet().into_response()
+pub async fn stream(Path(id): Path<String>, ws: axum::extract::WebSocketUpgrade) -> Response {
+    let Some(live) = run::get(&id) else {
+        return ApiError::not_found("no such live job (its frames are kept five minutes)")
+            .into_response();
+    };
+    ws.on_upgrade(move |mut socket| async move {
+        use axum::extract::ws::Message;
+        let mut lines = std::pin::pin!(run::lines(live, Vec::new()));
+        while let Some(l) = lines.next().await {
+            let text = l.trim_end().to_owned();
+            if socket.send(Message::Text(text.into())).await.is_err() {
+                return;
+            }
+        }
+        let _ = socket.close().await;
+    })
+}
+
+fn signal_name(s: &str) -> Result<&'static str, ApiError> {
+    match s {
+        "INT" => Ok("INT"),
+        "TERM" => Ok("TERM"),
+        "KILL" => Ok("KILL"),
+        _ => Err(ApiError::bad_request("a signal is INT, TERM or KILL")),
+    }
+}
+
+fn delivered(ok: bool) -> Response {
+    if ok {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        ApiError::not_found("no such running job").into_response()
+    }
 }
 
 #[utoipa::path(post, path = "/api/v1/jobs/{id}/signal", operation_id = "signalJob", tag = "jobs",
     request_body = JobSignal, params(("id" = String, Path, description = "`j_…`")),
     responses((status = 204, description = "The signal was delivered to the job's process group")))]
-pub async fn signal(Path(_): Path<String>, Json(_): Json<JobSignal>) -> Response {
-    not_yet().into_response()
+pub async fn signal(Path(id): Path<String>, Json(b): Json<JobSignal>) -> Response {
+    match signal_name(&b.signal) {
+        Ok(sig) => delivered(run::signal(&id, sig)),
+        Err(e) => e.into_response(),
+    }
 }
 
 #[utoipa::path(delete, path = "/api/v1/jobs/{id}", operation_id = "cancelJob", tag = "jobs",
     params(("id" = String, Path, description = "`j_…`")),
     responses((status = 204, description = "Cancelled: TERM, then KILL after 10 s; nothing is \
         synced back")))]
-pub async fn cancel(Path(_): Path<String>) -> Response {
-    not_yet().into_response()
+pub async fn cancel(Path(id): Path<String>) -> Response {
+    delivered(run::cancel(&id))
 }
 
 /// `POST /runner/jobs`: what the built-in runner forwards from a shim, with the origin it stamped
@@ -266,11 +297,13 @@ pub async fn runner_create(
     let asked = Asked {
         project: req.project,
         session: req.session,
+        terminal: req.terminal,
         argv: req.argv,
         cwd_rel: req.cwd_rel,
+        env: req.env.unwrap_or_default(),
         tty: req.tty,
     };
-    answer(&app, asked)
+    answer(&app, asked, true)
         .await
         .unwrap_or_else(IntoResponse::into_response)
 }
@@ -282,14 +315,16 @@ pub async fn runner_create(
 pub async fn runner_signal(
     State(app): State<App>,
     Extension(caller): Extension<Caller>,
-    Path(_job): Path<String>,
-    Json(_): Json<JobSignal>,
+    Path(job): Path<String>,
+    Json(b): Json<JobSignal>,
 ) -> Response {
     if let Err(e) = built_in(&app, &caller).await {
         return e.into_response();
     }
-    // E15-3 step 2: `heavy/run.rs` owns the live jobs; until it is wired no job can be running.
-    ApiError::not_found("no such job").into_response()
+    match signal_name(&b.signal) {
+        Ok(sig) => delivered(run::signal(&job, sig)),
+        Err(e) => e.into_response(),
+    }
 }
 
 #[utoipa::path(post, path = "/api/v1/runner/jobs/report", operation_id = "runnerReportJob",
@@ -319,13 +354,12 @@ pub async fn runner_report(
 struct Asked {
     project: Option<i64>,
     session: Option<String>,
+    terminal: Option<String>,
     argv: Vec<String>,
     cwd_rel: String,
+    env: BTreeMap<String, String>,
     tty: bool,
 }
-
-/// The user's settings are not wired yet: a model must be this sure before a job leaves the Core.
-const MIN_CONFIDENCE: f32 = 0.7;
 
 fn local(reason: &str, report: bool) -> Response {
     Json(JobLocal {
@@ -355,7 +389,7 @@ async fn built_in(app: &App, caller: &Caller) -> Result<(), ApiError> {
 }
 
 /// Tiers 0 to 3 for one request. Placing and running a heavy job is `heavy/run.rs` (step 2).
-async fn answer(app: &App, a: Asked) -> Result<Response, ApiError> {
+async fn answer(app: &App, a: Asked, from_runner: bool) -> Result<Response, ApiError> {
     if a.argv.is_empty() || a.argv.len() > 256 || a.argv[0].is_empty() {
         return Err(ApiError::bad_request(
             "argv is one to 256 words, the first a program",
@@ -393,12 +427,22 @@ async fn answer(app: &App, a: Asked) -> Result<Response, ApiError> {
         }
         None => (Vec::new(), None),
     };
-    let decider = crate::decisions::Stub;
+    // The Decisions service, over the hub. The model must be this sure (a percent setting) before a
+    // command it was asked about leaves the Core.
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let decider = crate::decisions::Service::for_app(app, ws.root(), home.as_deref());
+    let min = crate::store::settings::value(
+        &app.pool,
+        ainkrad_core::settings::Key::DecisionsHeavyJobMinConfidence,
+        ainkrad_core::settings::Scope::Server,
+    )
+    .await
+    .unwrap_or(70);
     let deps = Deps {
         pool: &app.pool,
         decide: &decider,
         user: ainkrad_core::ids::UserId(1),
-        min_confidence: MIN_CONFIDENCE,
+        min_confidence: min as f32 / 100.0,
     };
     let dir = dir.unwrap_or_default();
     Ok(
@@ -411,11 +455,58 @@ async fn answer(app: &App, a: Asked) -> Result<Response, ApiError> {
                 ));
             }
             Decision::Local { reason, report } => local(reason, report),
-            // E15-3 step 2 places the job and streams it. Until `heavy/run.rs` exists nothing can
-            // take it, and the command runs where it was typed.
-            Decision::Heavy { .. } => local("no_hardware", true),
+            Decision::Heavy { row, tier } => {
+                let Some(project) = a.project else {
+                    return Ok(local("no_project", false));
+                };
+                let env = a
+                    .env
+                    .into_iter()
+                    .filter(|(k, _)| crate::heavy::ENV_ALLOW.contains(&k.as_str()))
+                    .collect();
+                let start = Start {
+                    project,
+                    session: a.session,
+                    terminal: a.terminal,
+                    run_config: None,
+                    argv: a.argv,
+                    cwd_rel: a.cwd_rel,
+                    env,
+                    row,
+                    tier: tier.as_str(),
+                };
+                match run::start(app, start).await? {
+                    Started::Local(why) => local(&why, true),
+                    Started::Job { id, device_name } if from_runner => ndjson(&id, &device_name),
+                    Started::Job { id, .. } => {
+                        let row: Row = sqlx::query_as(&format!("{SELECT} WHERE j.id = ?"))
+                            .bind(&id)
+                            .fetch_one(&app.pool)
+                            .await?;
+                        (StatusCode::CREATED, Json(Job::from(row))).into_response()
+                    }
+                }
+            }
         },
     )
+}
+
+/// The 201 answer of `POST /runner/jobs`: the verdict line, then the job's frames, one JSON object
+/// a line, until its `exit` (or its end with none: the shim then runs the command itself).
+fn ndjson(id: &str, device_name: &str) -> Response {
+    let Some(live) = run::get(id) else {
+        return local("job_gone", false);
+    };
+    let verdict = json!({"verdict": "remote", "job": id, "device_name": device_name});
+    let lines = run::lines(live, vec![format!("{verdict}\n")]);
+    let body = axum::body::Body::from_stream(
+        lines.map(|l| Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(l))),
+    );
+    Response::builder()
+        .status(StatusCode::CREATED)
+        .header("content-type", "application/x-ndjson")
+        .body(body)
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 /// `core_hw_jobs` joined with the device's name, as `Job` reads it.
