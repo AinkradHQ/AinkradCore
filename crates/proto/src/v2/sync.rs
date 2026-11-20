@@ -147,6 +147,11 @@ pub struct SyncManifest {
     pub rules_hash: Hash,
     /// The rules the manifest is taken under.
     pub rules: SyncRules,
+    /// F0-bis (E15-4): seed an empty cache with `git clone` from the Core's copy of the project's
+    /// repo before the manifest is taken (spec §4.4). The Core serves the copy only while it holds a
+    /// lease for this runner. Absent: the cache is not seeded (or already is).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<super::run::RunClone>,
 }
 
 /// The project's include/exclude rules (§4.4, the built-ins merged with `.ainkrad/jobs.toml
