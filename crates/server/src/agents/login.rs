@@ -291,6 +291,7 @@ async fn run_start(app: App, l: Login, harness: String, bound: bool) {
     .await;
 }
 
+#[cfg(test)]
 fn url_ok(url: &str) -> bool {
     url_ok_for(url, &URL_HOSTS)
 }
