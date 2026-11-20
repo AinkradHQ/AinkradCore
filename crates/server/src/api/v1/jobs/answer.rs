@@ -221,7 +221,7 @@ mod tests {
         ]
         .map(str::to_owned);
         assert_eq!(
-            JobNet::of_sandbox(Some("filtered"), Some(&hosts)),
+            JobNet::of_sandbox(Some("filtered"), Some(&hosts[..])),
             JobNet::Hosts(vec!["crates.io".into(), "pypi.org".into()])
         );
         assert_eq!(

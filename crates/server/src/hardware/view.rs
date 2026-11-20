@@ -150,7 +150,7 @@ pub async fn machines(app: &App) -> Result<Vec<Machine>, sqlx::Error> {
             None => {
                 let f = (c.cores, c.mem_total_mb);
                 if let Err(e) = record_first(&app.pool, &device, f).await {
-                    tracing::warn!(error = %e, device, "recording a runner's first hardware failed");
+                    tracing::warn!(error = %e, device = %device, "recording a runner's first hardware failed");
                 }
                 first.insert(device.clone(), f);
                 f
