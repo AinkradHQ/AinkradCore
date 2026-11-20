@@ -90,7 +90,8 @@ pub struct Metered {
 
 /// A [`DecisionProvider`] that also says what a call used. The frozen trait returns scores only;
 /// the service needs the tokens for the ledger and the cap, so it asks through this. A provider
-/// that reports no usage implements it empty and is never charged.
+/// that reports no usage implements it empty and is charged the call's estimate (no 2xx answer
+/// is free, E15 security review M11).
 pub trait MeteredProvider: DecisionProvider {
     fn score_metered<'a>(
         &'a self,
@@ -174,6 +175,8 @@ pub struct Service {
     clock: Arc<dyn Clock + Send + Sync>,
     providers: Vec<Arc<dyn MeteredProvider>>,
     redact: Redactor,
+    /// Calls in flight and their reservations (M11, M12): the process's one for the Core.
+    gate: Arc<budget::Gate>,
 }
 
 impl Service {
@@ -188,6 +191,7 @@ impl Service {
             clock,
             providers,
             redact,
+            gate: Arc::new(budget::Gate::new()),
         }
     }
 
@@ -199,12 +203,15 @@ impl Service {
             hub: Arc::clone(&app.hub),
             clock: Arc::clone(&app.clock),
         });
-        Self::new(
-            app.pool.clone(),
-            Arc::clone(&app.clock),
-            vec![Arc::new(Gemini::new(transport)) as Arc<dyn MeteredProvider>],
-            Redactor::new(ws_root, home),
-        )
+        Self {
+            gate: budget::Gate::shared(),
+            ..Self::new(
+                app.pool.clone(),
+                Arc::clone(&app.clock),
+                vec![Arc::new(Gemini::new(transport)) as Arc<dyn MeteredProvider>],
+                Redactor::new(ws_root, home),
+            )
+        }
     }
 
     /// A setting's value now; a store error reads as the default.
@@ -331,12 +338,7 @@ impl Service {
             return "ok";
         }
         let cap = self.setting(DAILY_CAP).await;
-        if budget::cap_reached(&self.pool, &now, cap)
-            .await
-            .unwrap_or(false)
-        {
-            return "cap_reached";
-        }
+        let price = self.setting(INPUT_PRICE).await;
         let timeout_ms = u64::try_from(self.setting(TIMEOUT).await).unwrap_or(8_000);
         let call = ProviderCall {
             consumer: req.consumer,
@@ -347,13 +349,56 @@ impl Service {
             context: ctx,
             timeout_ms,
         };
+        let cached = req.questions.len() - misses.len();
+        // M12: a bounded number of calls at once; the rest use their fallback.
+        let Ok(_permit) = self.gate.calls.try_acquire() else {
+            return "overloaded";
+        };
+        // M11, M12: the estimate is reserved before the call, against the cap, atomically.
+        let est_tokens = budget::estimate_tokens(request_bytes(&call));
+        let est = budget::cost_micros(est_tokens, price).max(1);
+        if !self.gate.reserve(&self.pool, &now, cap, est).await {
+            return "cap_reached";
+        }
         // Each attempt is bounded by the transport; this is only the guard around both.
         let guard = Duration::from_millis(timeout_ms * 2 + 2_000);
         let asked = match tokio::time::timeout(guard, p.score_metered(&call)).await {
             Ok(r) => r,
             Err(_) => Err(ProviderError::Timeout),
         };
-        let cached = req.questions.len() - misses.len();
+        // What the call costs: its reported tokens on an answer (never 0), else the estimate, so a
+        // timeout, a cut body or a parse failure is never free. Only a call never made is free.
+        let charge = match &asked {
+            Ok(m) => {
+                let tokens = if m.usage.input_tokens > 0 {
+                    m.usage.input_tokens
+                } else {
+                    est_tokens
+                };
+                Some((
+                    m.usage.account,
+                    m.usage.model.clone(),
+                    tokens,
+                    budget::cost_micros(tokens, price).max(1),
+                ))
+            }
+            Err(ProviderError::Unavailable | ProviderError::CapReached) => None,
+            Err(_) => Some((None, "estimate".to_owned(), est_tokens, est)),
+        };
+        let usd = charge.as_ref().map_or(0, |c| c.3);
+        if let Some((account, model, input_tokens, usd_micros)) = &charge {
+            let row = budget::Charge {
+                consumer: req.consumer.as_str(),
+                account: *account,
+                model,
+                input_tokens: *input_tokens,
+                usd_micros: *usd_micros,
+            };
+            if let Err(e) = budget::record(&self.pool, &row, &now).await {
+                tracing::warn!(error = %e, "recording a decision's cost failed");
+            }
+        }
+        self.gate.release(est).await;
         let m = match asked.and_then(|m| valid(m, &call)) {
             Ok(m) => m,
             Err(e) => {
@@ -362,27 +407,13 @@ impl Service {
                     req.consumer,
                     p.id(),
                     (misses.len(), cached),
-                    0,
+                    usd,
                     outcome_of(&e),
                 )
                 .await;
                 return outcome_of(&e);
             }
         };
-        let price = self.setting(INPUT_PRICE).await;
-        let usd = budget::cost_micros(m.usage.input_tokens, price);
-        if let Some(account) = m.usage.account {
-            let charge = budget::Charge {
-                consumer: req.consumer.as_str(),
-                account,
-                model: &m.usage.model,
-                input_tokens: m.usage.input_tokens,
-                usd_micros: usd,
-            };
-            if let Err(e) = budget::record(&self.pool, &charge, &now).await {
-                tracing::warn!(error = %e, "recording a decision's cost failed");
-            }
-        }
         self.audit(
             req.user,
             req.consumer,
@@ -416,6 +447,15 @@ impl Service {
 }
 
 /// A provider's answer, checked against the call: one finite vector per question, one score per option.
+/// The bytes of text a call carries (the estimate's base).
+fn request_bytes(call: &ProviderCall) -> usize {
+    let map = |m: &BTreeMap<String, String>| m.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>();
+    call.questions.iter().map(String::len).sum::<usize>()
+        + call.facts.iter().map(map).sum::<usize>()
+        + map(&call.context)
+        + call.options.iter().map(String::len).sum::<usize>()
+}
+
 fn valid(m: Metered, call: &ProviderCall) -> Result<Metered, ProviderError> {
     let ok = m.scores.len() == call.questions.len()
         && m.scores
