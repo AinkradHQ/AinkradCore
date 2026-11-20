@@ -228,9 +228,8 @@ fn the_launcher_gets_a_clean_environment_and_the_shell_gets_the_clients() {
         let first = b.args.iter().position(|a| a == "--setenv").unwrap();
         assert!(clear < first);
     } else {
-        assert!(b.args.contains(&"EDITOR=vi".to_owned()));
-        let at = b.args.iter().position(|a| a == "/usr/bin/env").unwrap();
-        assert_eq!(b.args[at - 1], "--");
+        assert!(b.env.iter().any(|(k, v)| k == "EDITOR" && v == "vi"));
+        assert!(!b.args.iter().any(|a| a.contains("EDITOR")));
     }
     // The host-view wrapper does the same.
     let mut args: Vec<String> = if cfg!(target_os = "macos") {
@@ -243,7 +242,10 @@ fn the_launcher_gets_a_clean_environment_and_the_shell_gets_the_clients() {
             .to_vec()
     };
     inject_env(&mut args, &env);
-    assert!(args.iter().any(|a| a == "EDITOR=vi" || a == "EDITOR"));
+    assert_eq!(
+        args.iter().any(|a| a == "EDITOR"),
+        !cfg!(target_os = "macos")
+    );
     assert_eq!(args.last().unwrap(), "/bin/sh");
     assert_eq!(
         launcher_env(),
@@ -252,6 +254,48 @@ fn the_launcher_gets_a_clean_environment_and_the_shell_gets_the_clients() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// No variable of a shell is in the launcher's argv on Linux: `--setenv` pairs go to a pipe, the
+/// first one's place keeps the order after `--clearenv`.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn setenv_pairs_leave_the_argv_for_a_pipe() {
+    let mut args: Vec<String> = [
+        "--clearenv",
+        "--setenv",
+        "A",
+        "SECRET-1",
+        "--bind",
+        "/",
+        "/",
+        "--setenv",
+        "B",
+        "SECRET-2",
+        "--chdir",
+        "/",
+        "--",
+        "/bin/sh",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let bytes = setenv_to_fd(&mut args).unwrap();
+    assert_eq!(
+        args,
+        [
+            "--clearenv",
+            "--args",
+            "3",
+            "--bind",
+            "/",
+            "/",
+            "--chdir",
+            "/",
+            "--",
+            "/bin/sh"
+        ]
+    );
+    assert_eq!(bytes, b"--setenv\0A\0SECRET-1\0--setenv\0B\0SECRET-2\0");
+    assert!(setenv_to_fd(&mut args).is_none());
+}
 /// H1, H2, M5: the profile names devices one by one, allows IP only (no unix sockets but the
 /// name service's), names the Mach services and sysctls, and shuts what a shell must not touch.
 #[test]
