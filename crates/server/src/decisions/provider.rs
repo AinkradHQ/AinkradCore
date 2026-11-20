@@ -375,9 +375,15 @@ impl Service {
                 } else {
                     est_tokens
                 };
+                // A provider that names no model is booked as the estimate (the ledger refuses an
+                // empty model, which would make the call free).
+                let model = match m.usage.model.is_empty() {
+                    true => "estimate".to_owned(),
+                    false => m.usage.model.clone(),
+                };
                 Some((
                     m.usage.account,
-                    m.usage.model.clone(),
+                    model,
                     tokens,
                     budget::cost_micros(tokens, price).max(1),
                 ))

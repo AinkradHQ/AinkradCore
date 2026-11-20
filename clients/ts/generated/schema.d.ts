@@ -5717,6 +5717,16 @@ export interface components {
             env?: {
                 [key: string]: string;
             } | null;
+            /**
+             * @description A `filtered` sandbox's allowed host names; a job sent elsewhere gets them cut to the
+             *     registry list.
+             */
+            hosts?: string[] | null;
+            /**
+             * @description The sandbox's own network: `allow`, `deny` or `filtered` (E15 H2). Absent or unknown is
+             *     `deny`: the command runs where it was typed.
+             */
+            network?: string | null;
             /** Format: int64 */
             project?: number | null;
             /** @description The AI session (`as_…`) whose sandbox the shim ran in. */

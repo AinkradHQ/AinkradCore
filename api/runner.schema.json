@@ -2842,7 +2842,7 @@
         },
         {
           "const": "terminal_target_removed",
-          "description": "`pty.open` to a runner that no longer opens terminals (E15-4): only the Core and This Mac\ndo, and any runner for `purpose: login`.",
+          "description": "`pty.open` to a runner that no longer opens terminals (E15-4): only the Core and This Mac\ndo.",
           "type": "string"
         },
         {
@@ -3837,6 +3837,16 @@
           "description": "The child's environment, which otherwise starts empty.",
           "type": "object"
         },
+        "hosts": {
+          "description": "The hosts the job may reach, already within [`JOB_REGISTRY_HOSTS`] (the asking session's\nown `filtered` list cut to it, E15 H2). Absent: the whole registry list. The runner cuts it\nto the registry list again.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "job": {
           "default": "",
           "description": "`j_…`.",
@@ -3847,6 +3857,10 @@
           "default": {
             "xcode": false
           }
+        },
+        "origin": {
+          "description": "Who asked: `s:<session>`, `t:<terminal>` or `u` (a person or a task), set by the Core. A\njob from another origin than the last one's finds the cache's home and build folders\ncleared (E15 M5).",
+          "type": "string"
         },
         "prepare": {
           "description": "Run first, in the same folder (`npm ci` when the lockfile changed). Empty: nothing.",
@@ -4547,7 +4561,7 @@
           ]
         },
         "purpose": {
-          "description": "Why the terminal is opened (E15-4): `login` for the Accounts guided sign-in, the one\nterminal a remote runner still opens ([`PTY_PURPOSE_LOGIN`]). Absent: a plain terminal.",
+          "description": "Why the terminal is opened (E15-4). Kept for the wire only: no purpose makes a remote\nrunner open a terminal (E15 security review M7; the Accounts sign-in is `login.start`).",
           "type": [
             "string",
             "null"
