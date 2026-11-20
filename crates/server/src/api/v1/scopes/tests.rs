@@ -313,6 +313,51 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
         ),
         (
             "POST",
+            "/api/v1/projects/{id}/run-configs",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PATCH",
+            "/api/v1/projects/{id}/run-configs/{config}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/projects/{id}/run-configs/{config}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/projects/{id}/run-configs/{config}/duplicate",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/projects/{id}/run-configs/{config}/env/{env}/import",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/projects/{id}/run-envs",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/projects/{id}/run-envs/{name}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
             "/api/v1/projects/{id}/repos",
             "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
         ),
@@ -461,7 +506,6 @@ fn the_danger_list_is_the_d4_list() {
         ("PUT", "/api/v1/devices/{id}/scopes"),
         ("POST", "/api/v1/pairings"),
         ("POST", "/api/v1/pairings/invites"),
-        ("POST", "/api/v1/runners/{id}/bundled"),
         ("POST", "/api/v1/pairings/{id}/approve"),
         ("POST", "/api/v1/pairings/{id}/reject"),
         ("POST", "/api/v1/auth/lockouts/clear"),
