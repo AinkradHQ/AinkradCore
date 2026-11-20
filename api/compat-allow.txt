@@ -535,3 +535,9 @@ openapi.json: removed /paths//api/v1/terminals/{id}/local/post/x-ainkrad-destruc
 openapi.json: removed /paths//api/v1/terminals/{id}/signal/post/x-ainkrad-destructive
 openapi.json: removed /paths//api/v1/terminals/{id}/ws/get/x-ainkrad-destructive
 openapi.json: removed /paths//api/v1/terminals/post/x-ainkrad-destructive
+
+# E6 (`pty.tail`) and E8 (runner report) add runner commands and replies in the middle of the enums;
+# the runner protocol is op-tagged, so nothing is removed on the wire, but the positional comparison
+# reads the shifted tail as one removed variant each. Delete once the baseline carries them.
+runner.schema.json: variant #46 removed at /$defs/Command/oneOf
+runner.schema.json: variant #44 removed at /$defs/Reply/oneOf

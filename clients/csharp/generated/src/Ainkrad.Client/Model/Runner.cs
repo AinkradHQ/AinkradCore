@@ -47,9 +47,11 @@ namespace Ainkrad.Client.Model
         /// <param name="connectedSince">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
         /// <param name="degraded">Connected but silent past two heartbeats..</param>
         /// <param name="drivers">What it last advertised (empty until it first connected since the Core started)..</param>
+        /// <param name="home">The folder its work happens in, as the runner reports it..</param>
         /// <param name="hostLoad">The host&#39;s load as its runner last reported it (E2-15.2), if it has..</param>
         /// <param name="id">The runner&#39;s device id, &#x60;d_…&#x60;. (required).</param>
         /// <param name="isolation">The isolation it offers now (E8a-09): absent until it reports, and then no tier can be assumed..</param>
+        /// <param name="lastError">Why it is not fully working, in words: its last-error note..</param>
         /// <param name="lastSeen">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
         /// <param name="load">Commands in flight..</param>
         /// <param name="name">name (required).</param>
@@ -61,10 +63,11 @@ namespace Ainkrad.Client.Model
         /// <param name="runsAs">The user the runner process runs as, and whether that is root..</param>
         /// <param name="sandbox">&#x60;process&#x60; when the runner offers a process sandbox for agents, else &#x60;none&#x60;; absent when it did not report (agents off)..</param>
         /// <param name="slots">Sessions and terminals running now, and how many it takes..</param>
+        /// <param name="toolInstall">The AI tool install under way on its host, or the last one, as the runner reports it in its heartbeats (D-22). Absent until a runner of this version reports..</param>
         /// <param name="tools">Tools it found on its host, name to version (&#x60;claude&#x60; to &#x60;2.1.318&#x60;, &#x60;git&#x60;, &#x60;node&#x60;, &#x60;python&#x60;, &#x60;go&#x60;, &#x60;rust&#x60;, &#x60;docker&#x60;, &#x60;codex&#x60;); a tool that is not installed is not listed..</param>
         /// <param name="updateAvailable">This Core&#39;s own version is newer than the runner&#39;s &#x60;version&#x60;. Absent until it connected..</param>
         /// <param name="varVersion">Its &#x60;ainkrad-runner&#x60; version, once connected..</param>
-        public Runner(RunnerAccounts accounts = default, string arch = default, bool? builtIn = default, int? capacity = default, DateTime connectedSince = default, bool? degraded = default, List<RunnerDriver> drivers = default, RunnerHostLoad hostLoad = default, string id = default, RunnerIsolation isolation = default, DateTime lastSeen = default, int? load = default, string name = default, bool? online = default, string os = default, string osPretty = default, List<string> ownLogins = default, RunnerPolicyBody policy = default, RunnerRunsAs runsAs = default, string sandbox = default, RunnerSlots slots = default, Dictionary<string, string> tools = default, bool? updateAvailable = default, string varVersion = default)
+        public Runner(RunnerAccounts accounts = default, string arch = default, bool? builtIn = default, int? capacity = default, DateTime connectedSince = default, bool? degraded = default, List<RunnerDriver> drivers = default, string home = default, RunnerHostLoad hostLoad = default, string id = default, RunnerIsolation isolation = default, string lastError = default, DateTime lastSeen = default, int? load = default, string name = default, bool? online = default, string os = default, string osPretty = default, List<string> ownLogins = default, RunnerPolicyBody policy = default, RunnerRunsAs runsAs = default, string sandbox = default, RunnerSlots slots = default, RunnerToolInstall toolInstall = default, Dictionary<string, string> tools = default, bool? updateAvailable = default, string varVersion = default)
         {
             // to ensure "id" is required (not null)
             if (id == null)
@@ -85,8 +88,10 @@ namespace Ainkrad.Client.Model
             this.ConnectedSince = connectedSince;
             this.Degraded = degraded;
             this.Drivers = drivers;
+            this.Home = home;
             this.HostLoad = hostLoad;
             this.Isolation = isolation;
+            this.LastError = lastError;
             this.LastSeen = lastSeen;
             this.Load = load;
             this.Online = online;
@@ -97,6 +102,7 @@ namespace Ainkrad.Client.Model
             this.RunsAs = runsAs;
             this.Sandbox = sandbox;
             this.Slots = slots;
+            this.ToolInstall = toolInstall;
             this.Tools = tools;
             this.UpdateAvailable = updateAvailable;
             this.VarVersion = varVersion;
@@ -152,6 +158,13 @@ namespace Ainkrad.Client.Model
         public List<RunnerDriver> Drivers { get; set; }
 
         /// <summary>
+        /// The folder its work happens in, as the runner reports it.
+        /// </summary>
+        /// <value>The folder its work happens in, as the runner reports it.</value>
+        [DataMember(Name = "home", EmitDefaultValue = true)]
+        public string Home { get; set; }
+
+        /// <summary>
         /// The host&#39;s load as its runner last reported it (E2-15.2), if it has.
         /// </summary>
         /// <value>The host&#39;s load as its runner last reported it (E2-15.2), if it has.</value>
@@ -171,6 +184,13 @@ namespace Ainkrad.Client.Model
         /// <value>The isolation it offers now (E8a-09): absent until it reports, and then no tier can be assumed.</value>
         [DataMember(Name = "isolation", EmitDefaultValue = false)]
         public RunnerIsolation Isolation { get; set; }
+
+        /// <summary>
+        /// Why it is not fully working, in words: its last-error note.
+        /// </summary>
+        /// <value>Why it is not fully working, in words: its last-error note.</value>
+        [DataMember(Name = "last_error", EmitDefaultValue = true)]
+        public string LastError { get; set; }
 
         /// <summary>
         /// RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4).
@@ -249,6 +269,13 @@ namespace Ainkrad.Client.Model
         public RunnerSlots Slots { get; set; }
 
         /// <summary>
+        /// The AI tool install under way on its host, or the last one, as the runner reports it in its heartbeats (D-22). Absent until a runner of this version reports.
+        /// </summary>
+        /// <value>The AI tool install under way on its host, or the last one, as the runner reports it in its heartbeats (D-22). Absent until a runner of this version reports.</value>
+        [DataMember(Name = "tool_install", EmitDefaultValue = false)]
+        public RunnerToolInstall ToolInstall { get; set; }
+
+        /// <summary>
         /// Tools it found on its host, name to version (&#x60;claude&#x60; to &#x60;2.1.318&#x60;, &#x60;git&#x60;, &#x60;node&#x60;, &#x60;python&#x60;, &#x60;go&#x60;, &#x60;rust&#x60;, &#x60;docker&#x60;, &#x60;codex&#x60;); a tool that is not installed is not listed.
         /// </summary>
         /// <value>Tools it found on its host, name to version (&#x60;claude&#x60; to &#x60;2.1.318&#x60;, &#x60;git&#x60;, &#x60;node&#x60;, &#x60;python&#x60;, &#x60;go&#x60;, &#x60;rust&#x60;, &#x60;docker&#x60;, &#x60;codex&#x60;); a tool that is not installed is not listed.</value>
@@ -284,9 +311,11 @@ namespace Ainkrad.Client.Model
             sb.Append("  ConnectedSince: ").Append(ConnectedSince).Append("\n");
             sb.Append("  Degraded: ").Append(Degraded).Append("\n");
             sb.Append("  Drivers: ").Append(Drivers).Append("\n");
+            sb.Append("  Home: ").Append(Home).Append("\n");
             sb.Append("  HostLoad: ").Append(HostLoad).Append("\n");
             sb.Append("  Id: ").Append(Id).Append("\n");
             sb.Append("  Isolation: ").Append(Isolation).Append("\n");
+            sb.Append("  LastError: ").Append(LastError).Append("\n");
             sb.Append("  LastSeen: ").Append(LastSeen).Append("\n");
             sb.Append("  Load: ").Append(Load).Append("\n");
             sb.Append("  Name: ").Append(Name).Append("\n");
@@ -298,6 +327,7 @@ namespace Ainkrad.Client.Model
             sb.Append("  RunsAs: ").Append(RunsAs).Append("\n");
             sb.Append("  Sandbox: ").Append(Sandbox).Append("\n");
             sb.Append("  Slots: ").Append(Slots).Append("\n");
+            sb.Append("  ToolInstall: ").Append(ToolInstall).Append("\n");
             sb.Append("  Tools: ").Append(Tools).Append("\n");
             sb.Append("  UpdateAvailable: ").Append(UpdateAvailable).Append("\n");
             sb.Append("  VarVersion: ").Append(VarVersion).Append("\n");

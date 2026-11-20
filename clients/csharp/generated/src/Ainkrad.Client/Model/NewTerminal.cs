@@ -44,10 +44,12 @@ namespace Ainkrad.Client.Model
         /// <param name="cwd">An absolute directory to start in; absent, the home folder. Not with &#x60;session&#x60;..</param>
         /// <param name="env">env.</param>
         /// <param name="program">program.</param>
+        /// <param name="project">With &#x60;sandbox: real&#x60; only: start the shell in this project&#39;s folder (a cwd on the runner, not a mount). A sandbox names its project in &#x60;sandbox&#x60; (400 otherwise)..</param>
         /// <param name="runner">runner (required).</param>
+        /// <param name="sandbox">Where the shell lives (D-17): &#x60;home&#x60; (the default: a private root with the caller&#39;s persistent sandbox home), &#x60;project:&lt;id&gt;&#x60; or &#x60;session:&lt;id&gt;&#x60; (that, plus the project&#39;s or session&#39;s folder, which the Core resolves: no &#x60;cwd&#x60;), or &#x60;real&#x60; (the runner&#39;s host view, allowed only to the Mac that owns a macOS runner, over that Mac&#39;s own device key). 400 &#x60;bad_request&#x60; for a bad value or a &#x60;cwd&#x60; with a private mode, 403 &#x60;real_terminal_refused&#x60; for &#x60;real&#x60; from anyone else. 409 &#x60;runner_update_required&#x60; (\&quot;Update this runner to open terminals\&quot;) when the runner predates sandboxes: no terminal opens on it..</param>
         /// <param name="session">Start in the folder of this AI session (&#x60;as_…&#x60;, its &#x60;AgentSession.folder&#x60;) without naming the path: the Core resolves it. The session must be on &#x60;runner&#x60;, one the caller can see (and the caller needs the &#x60;agent&#x60; scope), and its runner must have reported its folder. Not with &#x60;cwd&#x60;..</param>
         /// <param name="size">size (required).</param>
-        public NewTerminal(List<string> args = default, string cwd = default, Dictionary<string, string> env = default, string program = default, string runner = default, string session = default, TerminalSize size = default)
+        public NewTerminal(List<string> args = default, string cwd = default, Dictionary<string, string> env = default, string program = default, long? project = default, string runner = default, string sandbox = default, string session = default, TerminalSize size = default)
         {
             // to ensure "runner" is required (not null)
             if (runner == null)
@@ -65,6 +67,8 @@ namespace Ainkrad.Client.Model
             this.Cwd = cwd;
             this.Env = env;
             this.Program = program;
+            this.Project = project;
+            this.Sandbox = sandbox;
             this.Session = session;
         }
 
@@ -94,10 +98,24 @@ namespace Ainkrad.Client.Model
         public string Program { get; set; }
 
         /// <summary>
+        /// With &#x60;sandbox: real&#x60; only: start the shell in this project&#39;s folder (a cwd on the runner, not a mount). A sandbox names its project in &#x60;sandbox&#x60; (400 otherwise).
+        /// </summary>
+        /// <value>With &#x60;sandbox: real&#x60; only: start the shell in this project&#39;s folder (a cwd on the runner, not a mount). A sandbox names its project in &#x60;sandbox&#x60; (400 otherwise).</value>
+        [DataMember(Name = "project", EmitDefaultValue = true)]
+        public long? Project { get; set; }
+
+        /// <summary>
         /// Gets or Sets Runner
         /// </summary>
         [DataMember(Name = "runner", IsRequired = true, EmitDefaultValue = true)]
         public string Runner { get; set; }
+
+        /// <summary>
+        /// Where the shell lives (D-17): &#x60;home&#x60; (the default: a private root with the caller&#39;s persistent sandbox home), &#x60;project:&lt;id&gt;&#x60; or &#x60;session:&lt;id&gt;&#x60; (that, plus the project&#39;s or session&#39;s folder, which the Core resolves: no &#x60;cwd&#x60;), or &#x60;real&#x60; (the runner&#39;s host view, allowed only to the Mac that owns a macOS runner, over that Mac&#39;s own device key). 400 &#x60;bad_request&#x60; for a bad value or a &#x60;cwd&#x60; with a private mode, 403 &#x60;real_terminal_refused&#x60; for &#x60;real&#x60; from anyone else. 409 &#x60;runner_update_required&#x60; (\&quot;Update this runner to open terminals\&quot;) when the runner predates sandboxes: no terminal opens on it.
+        /// </summary>
+        /// <value>Where the shell lives (D-17): &#x60;home&#x60; (the default: a private root with the caller&#39;s persistent sandbox home), &#x60;project:&lt;id&gt;&#x60; or &#x60;session:&lt;id&gt;&#x60; (that, plus the project&#39;s or session&#39;s folder, which the Core resolves: no &#x60;cwd&#x60;), or &#x60;real&#x60; (the runner&#39;s host view, allowed only to the Mac that owns a macOS runner, over that Mac&#39;s own device key). 400 &#x60;bad_request&#x60; for a bad value or a &#x60;cwd&#x60; with a private mode, 403 &#x60;real_terminal_refused&#x60; for &#x60;real&#x60; from anyone else. 409 &#x60;runner_update_required&#x60; (\&quot;Update this runner to open terminals\&quot;) when the runner predates sandboxes: no terminal opens on it.</value>
+        [DataMember(Name = "sandbox", EmitDefaultValue = true)]
+        public string Sandbox { get; set; }
 
         /// <summary>
         /// Start in the folder of this AI session (&#x60;as_…&#x60;, its &#x60;AgentSession.folder&#x60;) without naming the path: the Core resolves it. The session must be on &#x60;runner&#x60;, one the caller can see (and the caller needs the &#x60;agent&#x60; scope), and its runner must have reported its folder. Not with &#x60;cwd&#x60;.
@@ -124,7 +142,9 @@ namespace Ainkrad.Client.Model
             sb.Append("  Cwd: ").Append(Cwd).Append("\n");
             sb.Append("  Env: ").Append(Env).Append("\n");
             sb.Append("  Program: ").Append(Program).Append("\n");
+            sb.Append("  Project: ").Append(Project).Append("\n");
             sb.Append("  Runner: ").Append(Runner).Append("\n");
+            sb.Append("  Sandbox: ").Append(Sandbox).Append("\n");
             sb.Append("  Session: ").Append(Session).Append("\n");
             sb.Append("  Size: ").Append(Size).Append("\n");
             sb.Append("}\n");

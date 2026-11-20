@@ -295,9 +295,15 @@ fn the_seatbelt_profile_is_an_allowlist() {
     }
     // The scratch directory and the home are open; the runner's configuration is not.
     assert!(p.contains("(allow file-read* file-write* (subpath \"/private/tmp/s/u/t\"))"));
-    assert!(
-        p.ends_with("(deny file-read* file-write* (subpath \"/private/etc/ainkrad-runner\"))\n")
-    );
+    // Seatbelt's last matching rule wins: the hidden path is denied BEFORE the allows, so the home,
+    // the scratch and a session folder inside the hidden state are let back in.
+    let deny = p
+        .find("(deny file-read* file-write* (subpath \"/private/etc/ainkrad-runner\"))\n")
+        .expect("the hidden path is denied");
+    let allow = p
+        .find("(allow file-read* file-write* (subpath \"/private/tmp/s/u/t\"))")
+        .unwrap();
+    assert!(deny < allow, "the denies come first");
     // A locked network has no network rules at all.
     let none = seatbelt_profile(&home, None, &scratch, &Net::None, &[]);
     assert!(!none.contains("network-outbound (remote"), "{none}");

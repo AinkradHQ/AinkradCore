@@ -34,6 +34,7 @@ import kotlinx.serialization.Contextual
  * @param exitSignal 
  * @param openedBy 
  * @param orphaned Running with no client attached: it is closed once idle past `terminal.idle_secs`.
+ * @param sandbox Where the shell lives (D-17): `home`, `project:<id>`, `session:<id>` or `real` (this Mac's own shell). Absent: a terminal opened before sandboxes, a host-view shell.
  * @param seq 
  * @param propertySize 
  */
@@ -69,6 +70,10 @@ data class Terminal (
     /* Running with no client attached: it is closed once idle past `terminal.idle_secs`. */
     @SerialName(value = "orphaned")
     val orphaned: kotlin.Boolean? = null,
+
+    /* Where the shell lives (D-17): `home`, `project:<id>`, `session:<id>` or `real` (this Mac's own shell). Absent: a terminal opened before sandboxes, a host-view shell. */
+    @SerialName(value = "sandbox")
+    val sandbox: kotlin.String? = null,
 
     @SerialName(value = "seq")
     val seq: kotlin.Long? = null,

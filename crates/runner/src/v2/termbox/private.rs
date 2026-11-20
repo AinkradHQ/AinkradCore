@@ -391,8 +391,24 @@ pub fn seatbelt_profile(
         "(allow file-read* file-write* (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\") (literal \"/dev/tty\") (subpath \"/dev/fd\"))\n",
         "(allow file-ioctl (regex #\"^/dev/ttys[0-9]+$\") (literal \"/dev/tty\"))\n",
     ));
-    let mut open: Vec<&Path> = vec![home, scratch];
-    open.extend(folder);
+    // Hidden first: Seatbelt's last matching rule wins, so the home, the scratch and the session's
+    // folder (which lies inside the hidden state) are let in again by the allows that follow.
+    for x in hidden {
+        let q = quote(x);
+        p.push_str(&format!(
+            "(deny file-read* file-write* (subpath \"{q}\"))\n"
+        ));
+    }
+    let mut open: Vec<PathBuf> = vec![home.to_owned(), scratch.to_owned()];
+    open.extend(folder.map(Path::to_owned));
+    // Seatbelt matches the resolved path: a folder reached through a symlink (`/var` is
+    // `/private/var`) needs its real path, and that path's parents, let in as well.
+    let real: Vec<PathBuf> = open
+        .iter()
+        .filter_map(|d| d.canonicalize().ok())
+        .filter(|r| !open.contains(r))
+        .collect();
+    open.extend(real);
     for d in &open {
         p.push_str(&format!(
             "(allow file-read* file-write* (subpath \"{}\"))\n",
@@ -412,12 +428,6 @@ pub fn seatbelt_profile(
         // Over the network by IP, and over no unix socket but the name service's: the host's own services on `localhost` are out of reach. Link-local
         // ranges cannot be named in Seatbelt; macOS hosts have no metadata service there.
         p.push_str("(allow network-outbound (remote ip \"*:*\") (literal \"/private/var/run/mDNSResponder\"))\n(allow network-bind (local ip \"*:*\"))\n(allow network-inbound (local ip \"*:*\"))\n(deny network-outbound (remote ip \"localhost:*\"))\n(deny network-inbound (local ip \"localhost:*\"))\n");
-    }
-    for x in hidden {
-        let q = quote(x);
-        p.push_str(&format!(
-            "(deny file-read* file-write* (subpath \"{q}\"))\n"
-        ));
     }
     p
 }
