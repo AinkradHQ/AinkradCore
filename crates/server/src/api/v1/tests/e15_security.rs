@@ -44,7 +44,11 @@ async fn only_the_core_and_this_mac_host_terminals() {
     let remote = runner(&fx, "remote", Some(("654321", false))).await;
     let ok = |d: String| {
         let pool = fx.app.pool.clone();
-        async move { crate::hardware::view::hosts_terminals(&pool, &d).await.unwrap() }
+        async move {
+            crate::hardware::view::hosts_terminals(&pool, &d)
+                .await
+                .unwrap()
+        }
     };
     assert!(ok(core).await);
     assert!(ok(mac).await);

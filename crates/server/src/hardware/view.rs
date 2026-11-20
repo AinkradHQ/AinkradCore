@@ -113,7 +113,13 @@ fn view_of(
 pub async fn machines(app: &App) -> Result<Vec<Machine>, sqlx::Error> {
     let kinds = kinds(&app.pool).await?;
     let now = app.clock.now();
-    type PrefRow = (String, Option<String>, Option<u32>, Option<u32>, Option<i64>);
+    type PrefRow = (
+        String,
+        Option<String>,
+        Option<u32>,
+        Option<u32>,
+        Option<i64>,
+    );
     let rows: Vec<PrefRow> = sqlx::query_as(
         "SELECT device_id, paused_until, job_slots, first_cores, first_mem_mb FROM core_hardware_prefs",
     )
@@ -219,7 +225,11 @@ pub async fn machines(app: &App) -> Result<Vec<Machine>, sqlx::Error> {
 
 /// Records the hardware the Core first saw from `device` (`core_hardware_prefs.first_*`); a later
 /// first sight never replaces it.
-async fn record_first(pool: &SqlitePool, device: &str, (cores, mem): (u32, u64)) -> Result<(), sqlx::Error> {
+async fn record_first(
+    pool: &SqlitePool,
+    device: &str,
+    (cores, mem): (u32, u64),
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO core_hardware_prefs (device_id, first_cores, first_mem_mb) VALUES (?, ?, ?) \
          ON CONFLICT (device_id) DO UPDATE SET \
@@ -295,11 +305,16 @@ mod tests {
                     ..Default::default()
                 })
                 .to_vec(),
-            toolchains: (0..100).map(|i| (format!("t{i:03}"), "1".to_owned())).collect(),
+            toolchains: (0..100)
+                .map(|i| (format!("t{i:03}"), "1".to_owned()))
+                .collect(),
             ..Default::default()
         };
         held_to(&mut c, (8, 16_384), |p| p == 4);
-        assert_eq!((c.cores, c.mem_total_mb, c.mem_free_mb), (8, 16_384, 16_384));
+        assert_eq!(
+            (c.cores, c.mem_total_mb, c.mem_free_mb),
+            (8, 16_384, 16_384)
+        );
         assert_eq!((c.cpu_pct, c.job_slots), (100, 8));
         assert_eq!(c.caches.iter().map(|k| k.project).collect::<Vec<_>>(), [4]);
         assert_eq!(c.toolchains.len(), MAX_TOOLCHAINS);
@@ -347,10 +362,7 @@ mod tests {
     #[test]
     fn a_label_is_the_program_and_one_subcommand() {
         assert_eq!(label_of(r#"["cargo","build","-p","x"]"#), "cargo build");
-        assert_eq!(
-            label_of(r#"["sh","-c","deploy --token s3cret"]"#),
-            "sh -c"
-        );
+        assert_eq!(label_of(r#"["sh","-c","deploy --token s3cret"]"#), "sh -c");
         assert_eq!(label_of("nonsense"), "");
     }
 }

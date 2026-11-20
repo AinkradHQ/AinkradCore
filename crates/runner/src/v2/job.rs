@@ -24,8 +24,8 @@ use ainkrad_harness::Spec;
 use ainkrad_harness::exec::{ExecBackend, Launch, LocalBackend, SpawnRequest, Stdio as HStdio};
 use ainkrad_proto::redact::Redactor;
 use ainkrad_proto::v2::{
-    CAP_JOB, DriverInfo, ErrorCode, JOB_REGISTRY_HOSTS, job_hosts_within, JobDone, JobRun, MAX_SYNC_OUT_BYTES,
-    OP_JOB_RUN, StreamError, TreeHash,
+    CAP_JOB, DriverInfo, ErrorCode, JOB_REGISTRY_HOSTS, JobDone, JobRun, MAX_SYNC_OUT_BYTES,
+    OP_JOB_RUN, StreamError, TreeHash, job_hosts_within,
 };
 use tokio::io::AsyncReadExt;
 use tokio::sync::{Semaphore, mpsc};
@@ -254,15 +254,11 @@ impl JobDriver {
         let sock = egress::socket_in(&job_dir.join("egress"));
         let policy = match &req.hosts {
             // The asking session's own list, cut to the registry list again here (E15 H2).
-            Some(hosts) => Arc::new(
-                self.policy()
-                    .await?
-                    .only_hosts(&job_hosts_within(hosts)),
-            ),
+            Some(hosts) => Arc::new(self.policy().await?.only_hosts(&job_hosts_within(hosts))),
             None => self.policy().await?,
         };
-        let _proxy = egress::start(&sock, policy)
-            .map_err(|e| internal(format!("egress proxy: {e}")))?;
+        let _proxy =
+            egress::start(&sock, policy).map_err(|e| internal(format!("egress proxy: {e}")))?;
         let timeout = req
             .timeout_ms
             .map_or(DEFAULT_TIMEOUT, Duration::from_millis)

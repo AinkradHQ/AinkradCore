@@ -266,7 +266,10 @@ mod tests {
             ("app db_Pass=abcSecret9", "abcSecret9"),
             ("curl -u admin:s3cretPw https://x.example", "s3cretPw"),
             ("curl --user admin:s3cretPw x", "s3cretPw"),
-            ("curl -H 'Authorization: Basic YWRtaW46czNjcmV0' x", "YWRtaW46czNjcmV0"),
+            (
+                "curl -H 'Authorization: Basic YWRtaW46czNjcmV0' x",
+                "YWRtaW46czNjcmV0",
+            ),
             ("curl -H \"Authorization: Bearer opaqueTok\" x", "opaqueTok"),
             ("curl -H 'Authorization: rawCredValue' x", "rawCredValue"),
             ("deploy --api-key zzTopSecret", "zzTopSecret"),
@@ -279,7 +282,10 @@ mod tests {
         }
         // What is not a secret keeps its words, so equal questions still share an answer.
         assert_eq!(r().text("mkdir -p a/b"), "mkdir -p a/b");
-        assert_eq!(r().text("cargo build --release -j 4"), "cargo build --release -j 4");
+        assert_eq!(
+            r().text("cargo build --release -j 4"),
+            "cargo build --release -j 4"
+        );
         assert_eq!(r().text("gh auth token"), "gh auth token");
     }
 

@@ -370,7 +370,8 @@ impl HarnessExecutor {
             let net = {
                 let envs = self.run_env.lock().expect("run env lock");
                 let e = envs.get(&job.run).map(Vec::as_slice).unwrap_or_default();
-                let account = ainkrad_harness::last_env(e, crate::egress::ACCOUNT_SESSION).is_some();
+                let account =
+                    ainkrad_harness::last_env(e, crate::egress::ACCOUNT_SESSION).is_some();
                 crate::v2::jobsock::Net::from_mode(
                     ainkrad_harness::last_env(e, "AINKRAD_SANDBOX_NETWORK").map(String::as_str),
                     || {

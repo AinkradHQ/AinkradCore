@@ -212,8 +212,14 @@ mod tests {
         assert_eq!(JobNet::of_sandbox(Some("Allow"), None), JobNet::Deny);
         assert_eq!(JobNet::of_sandbox(Some("allow"), None), JobNet::Registry);
         // `filtered`: the session's list cut to the registry list; a forge never survives.
-        let hosts = ["github.com", "CRATES.io", "evil.example", "pypi.org", "crates.io"]
-            .map(str::to_owned);
+        let hosts = [
+            "github.com",
+            "CRATES.io",
+            "evil.example",
+            "pypi.org",
+            "crates.io",
+        ]
+        .map(str::to_owned);
         assert_eq!(
             JobNet::of_sandbox(Some("filtered"), Some(&hosts)),
             JobNet::Hosts(vec!["crates.io".into(), "pypi.org".into()])
@@ -222,8 +228,10 @@ mod tests {
             JobNet::of_sandbox(Some("filtered"), None),
             JobNet::Hosts(Vec::new())
         );
-        assert!(!ainkrad_proto::v2::JOB_REGISTRY_HOSTS
-            .iter()
-            .any(|h| h.contains("github")));
+        assert!(
+            !ainkrad_proto::v2::JOB_REGISTRY_HOSTS
+                .iter()
+                .any(|h| h.contains("github"))
+        );
     }
 }

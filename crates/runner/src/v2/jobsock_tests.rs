@@ -21,7 +21,10 @@ fn the_sandbox_network_goes_with_every_request_and_defaults_to_deny() {
     let d = sent(Net::default());
     assert_eq!((&d["network"], &d["hosts"]), (&json!("deny"), &Value::Null));
     let f = sent(Net::Filtered(vec!["crates.io".into()]));
-    assert_eq!((&f["network"], &f["hosts"]), (&json!("filtered"), &json!(["crates.io"])));
+    assert_eq!(
+        (&f["network"], &f["hosts"]),
+        (&json!("filtered"), &json!(["crates.io"]))
+    );
     assert_eq!(sent(Net::Allow)["network"], "allow");
     assert_eq!(Net::from_mode(None, Vec::new), Net::Deny);
     assert_eq!(Net::from_mode(Some("none"), Vec::new), Net::Deny);

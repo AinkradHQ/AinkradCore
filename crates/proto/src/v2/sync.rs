@@ -325,7 +325,10 @@ mod tests {
         assert!(!file_entry_sound(&e(1, 100_000)) && !file_entry_sound(&e(1, 0)));
         assert!(!file_entry_sound(&e(CHUNK_BYTES * 2, 1)));
         let big = MAX_FILE_BYTES + 1;
-        assert!(!file_entry_sound(&e(big, big.div_ceil(CHUNK_BYTES) as usize)));
+        assert!(!file_entry_sound(&e(
+            big,
+            big.div_ceil(CHUNK_BYTES) as usize
+        )));
     }
 
     #[test]

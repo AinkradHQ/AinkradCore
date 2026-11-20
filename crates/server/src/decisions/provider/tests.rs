@@ -404,7 +404,9 @@ async fn a_failed_call_is_charged_its_estimate_so_the_cap_still_trips() {
         .await
         .unwrap();
     for i in 0..5 {
-        s.decide(req(&["x"], &format!("q{i}")), &Rule).await.unwrap();
+        s.decide(req(&["x"], &format!("q{i}")), &Rule)
+            .await
+            .unwrap();
     }
     // Each estimate is (2 + 10) / 4 + 200 = 203 tokens, 21 micro-dollars: two fit under 50.
     assert_eq!(p.calls.load(Ordering::Relaxed), 2);

@@ -92,7 +92,9 @@ impl Default for Gate {
 
 /// The input tokens a call of `bytes` request text is estimated at (bytes / 4, plus the prompt).
 pub fn estimate_tokens(bytes: usize) -> u64 {
-    u64::try_from(bytes / 4).unwrap_or(u64::MAX).saturating_add(PROMPT_TOKENS)
+    u64::try_from(bytes / 4)
+        .unwrap_or(u64::MAX)
+        .saturating_add(PROMPT_TOKENS)
 }
 
 /// One provider call's ledger row.

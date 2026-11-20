@@ -58,7 +58,8 @@ impl SyncDriver {
         })?;
         // The cache is shared with jobs: git reads it sealed (E15 H1).
         let mut rev = ainkrad_sys::git::sealed(root);
-        rev.args(["rev-parse", "HEAD"]).stdout(std::process::Stdio::piped());
+        rev.args(["rev-parse", "HEAD"])
+            .stdout(std::process::Stdio::piped());
         let head = tokio::process::Command::from(rev)
             .output()
             .await

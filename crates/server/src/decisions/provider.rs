@@ -449,7 +449,8 @@ impl Service {
 /// A provider's answer, checked against the call: one finite vector per question, one score per option.
 /// The bytes of text a call carries (the estimate's base).
 fn request_bytes(call: &ProviderCall) -> usize {
-    let map = |m: &BTreeMap<String, String>| m.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>();
+    let map =
+        |m: &BTreeMap<String, String>| m.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>();
     call.questions.iter().map(String::len).sum::<usize>()
         + call.facts.iter().map(map).sum::<usize>()
         + map(&call.context)
