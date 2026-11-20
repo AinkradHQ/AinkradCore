@@ -41,7 +41,83 @@ const WAIT: Duration = Duration::from_secs(20);
 const SESSIONS_MAX: i64 = 20;
 const TEXT_MAX: usize = 2_000_000;
 
+/// A session whose folder is in the Core's workspace (E15-2) is read and written there directly:
+/// no runner is asked. An overflow session's write goes to its runner first (`write_through`).
+async fn local(app: &App, root: std::path::PathBuf, req: AgentDocs) -> Result<DocsReply, String> {
+    use ainkrad_core_server::workspace::{adopt, docs, fs::Tree};
+    let io = |e: std::io::Error| e.to_string();
+    let path = || req.path.clone().ok_or_else(|| "a document path".to_owned());
+    let tree = Tree::open(&root).map_err(io)?;
+    match req.action {
+        DocsAction::List => {
+            let (session, ws) = (req.session.clone(), adopt::workspace());
+            let files = tokio::task::spawn_blocking(move || docs::list(ws.root(), &session, &tree))
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(io)?;
+            Ok(DocsReply {
+                files,
+                ..Default::default()
+            })
+        }
+        DocsAction::Read => {
+            let (text, sha) = docs::read(&tree, &path()?).map_err(io)?;
+            Ok(DocsReply {
+                text: Some(text),
+                sha256: Some(sha),
+                ..Default::default()
+            })
+        }
+        DocsAction::Write => {
+            let ended: Option<String> =
+                sqlx::query_scalar("SELECT state FROM core_agent_sessions WHERE id = ?")
+                    .bind(&req.session)
+                    .fetch_optional(&app.pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            if matches!(ended.as_deref(), Some("ended" | "lost")) {
+                return Err("the session is over: its documents are not written".into());
+            }
+            let (rel, text) = (path()?, req.text.clone().ok_or("the text")?);
+            let docs::Write::Put(bytes) =
+                docs::plan_write(&tree, &rel, &text, req.base.as_deref()).map_err(io)?
+            else {
+                return Err("the file is not as it was last synced".into());
+            };
+            if adopt::is_overflow(&app.pool, &req.session)
+                .await
+                .map_err(|e| e.to_string())?
+            {
+                let w = app
+                    .hub
+                    .sync
+                    .watches
+                    .get(&req.session)
+                    .filter(|w| w.is_live())
+                    .ok_or("the session's runner is not syncing now")?;
+                ainkrad_core_server::workspace::watch::write_through(
+                    &app.hub, &w, &rel, &bytes, None,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            } else {
+                tree.write(&rel, &bytes, None).map_err(io)?;
+            }
+            Ok(DocsReply {
+                sha256: Some(docs::sha256(&bytes)),
+                ..Default::default()
+            })
+        }
+    }
+}
+
 async fn call(app: &App, runner: &str, req: AgentDocs) -> Result<DocsReply, String> {
+    let ws = ainkrad_core_server::workspace::adopt::ws_path(&app.pool, &req.session)
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Some(root) = ws {
+        return local(app, root, req).await;
+    }
     let online = app.hub.runners().get(runner).is_some_and(|r| {
         r.online
             && r.drivers

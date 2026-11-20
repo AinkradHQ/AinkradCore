@@ -53,3 +53,10 @@ path = "fuzz_targets/term_feed.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "sync_path"
+path = "fuzz_targets/sync_path.rs"
+test = false
+doc = false
+bench = false

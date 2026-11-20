@@ -38,7 +38,8 @@ use ainkrad_proto::v2::{
     Body, CAP_GATEWAY, CAP_LOGIN, Close, Command, Control, Credit, DriverInfo, ErrorCode,
     FEATURE_PTY_SSH, Frame, Heartbeat, HostLoad, IsolationCaps, OP_AGENT_LIMIT, OP_AGENT_READ,
     OP_GATEWAY_TEST, OP_LOGIN_CANCEL, OP_LOGIN_CODE, OP_LOGIN_START, OP_PTY_ATTACH, OP_PTY_OPEN,
-    RunnerHello, STREAM_WINDOW, StreamError, StreamState,
+    OP_SYNC_DROP, OP_SYNC_MANIFEST, OP_SYNC_PULL, OP_SYNC_PUSH, OP_SYNC_WATCH, RunnerHello,
+    STREAM_WINDOW, StreamError, StreamState, SyncEvent,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -141,8 +142,11 @@ struct Pending {
     credit: u64,
     /// A `pty.open`/`pty.attach` stream: it may carry one `opened` and credited `snapshot`s.
     terminal: bool,
-    /// A `port.open` stream (P6-01): the runner's `credit` for the Core's bytes reaches the dispatcher.
+    /// A `port.open` stream (P6-01) or a `sync.push` (E15-2): the runner's `credit` for the Core's bytes
+    /// reaches the dispatcher.
     port: bool,
+    /// A `sync.watch` stream (E15-2): the runner's `sync_event` controls, metered like output.
+    watch: bool,
     opened: bool,
     /// The driver, when it declares its own `streams` (counted apart).
     own: Option<String>,
@@ -194,6 +198,23 @@ fn offers(listed: &str, op: &str) -> bool {
         || (listed == ainkrad_proto::v2::CAP_HISTORY_READ
             && op == ainkrad_proto::v2::OP_HISTORY_READ)
         || (listed == CAP_LOGIN && matches!(op, OP_LOGIN_START | OP_LOGIN_CODE | OP_LOGIN_CANCEL))
+        || (listed == ainkrad_proto::v2::CAP_SYNC
+            && matches!(
+                op,
+                OP_SYNC_MANIFEST | OP_SYNC_PUSH | OP_SYNC_PULL | OP_SYNC_WATCH | OP_SYNC_DROP
+            ))
+}
+
+/// What a `sync_event` costs against its stream's credit: its paths and inline bytes, and a fixed
+/// 256 per entry. The same count grants it back when the dispatcher takes it.
+fn event_cost(e: &SyncEvent) -> u64 {
+    let paths = e.put.iter().map(|p| p.path.len() + 256).sum::<usize>()
+        + e.delete.iter().map(|p| p.len() + 64).sum::<usize>()
+        + e.inline
+            .iter()
+            .map(|i| i.path.len() + i.data.len())
+            .sum::<usize>();
+    paths as u64 + 64
 }
 
 impl Runner {
@@ -329,6 +350,8 @@ pub struct Hub {
     live: tokio::sync::watch::Sender<usize>,
     /// The one [`SshAgentLine`] was handed out.
     ssh_agent_taken: AtomicBool,
+    /// Workspace sync (E15-2): the leases and the live session watches.
+    pub sync: crate::workspace::sync::Registry,
 }
 
 /// The only way to send `ssh.agent.load` / `ssh.agent.drop` (Leyline Mac-direct). It has no public
@@ -388,6 +411,9 @@ impl Dispatched {
         if let Some(data) = read {
             self.hub
                 .grant(&self.runner, self.stream, b64_len(data).unwrap_or(0));
+        }
+        if let Body::Control(Control::SyncEvent(e)) = &body {
+            self.hub.grant(&self.runner, self.stream, event_cost(e));
         }
         Some(body)
     }
@@ -456,6 +482,7 @@ impl Hub {
             streams: AtomicU64::new(1),
             live: tokio::sync::watch::Sender::new(0),
             ssh_agent_taken: AtomicBool::new(false),
+            sync: Default::default(),
         }
     }
 
@@ -682,6 +709,30 @@ impl Hub {
         self.send_command(runner, command)
     }
 
+    /// The `sync.*` ops (E15-2): a runner is only ever sent a project's own files, under a lease the
+    /// caller holds (`workspace::sync`); no program runs. Only these ops pass.
+    pub(crate) fn dispatch_sync(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+    ) -> Result<Dispatched, StreamError> {
+        let sync = matches!(
+            command,
+            Command::SyncManifest(_)
+                | Command::SyncPush(_)
+                | Command::SyncPull(_)
+                | Command::SyncWatch(_)
+                | Command::SyncDrop(_)
+        );
+        if !sync {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "only sync.* ops use the sync path",
+            ));
+        }
+        self.send_command(runner, command)
+    }
+
     /// Design helper ops (V6-01): the runner runs its own fixed `ainkrad-design` helper, or headless
     /// Chromium, in a sandbox with no network, on data the Core sends; no program or path the caller
     /// chooses runs. So a module may send them without a step-up. Only the design commands pass.
@@ -776,7 +827,8 @@ impl Hub {
             received: 0,
             credit: STREAM_WINDOW,
             terminal,
-            port: command.op() == ainkrad_proto::v2::OP_PORT_OPEN,
+            port: matches!(command.op(), ainkrad_proto::v2::OP_PORT_OPEN | OP_SYNC_PUSH),
+            watch: command.op() == OP_SYNC_WATCH,
             opened: false,
             own,
         };
@@ -1117,6 +1169,11 @@ impl Hub {
                     }
                     None => Body::Error(err(ErrorCode::BadFrame, "a snapshot that is not base64")),
                 }
+            }
+            Body::Control(Control::SyncEvent(e)) if p.watch && event_cost(&e) <= p.credit => {
+                p.credit -= event_cost(&e);
+                let _ = p.to.send(Body::Control(Control::SyncEvent(e)));
+                return;
             }
             Body::Control(_) => {
                 tracing::warn!(device, stream, "a control frame this stream does not take");
