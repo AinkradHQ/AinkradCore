@@ -43,6 +43,41 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
         ),
         (
             "POST",
+            "/api/v1/accounts/logins/{id}/input",
+            "a menu number or a code typed into one sign-in; free text is refused, and the login stays on its runner",
+        ),
+        (
+            "PUT",
+            "/api/v1/accounts/{id}/models/{model}",
+            "switches one model on or off for one account: a limit, never a grant",
+        ),
+        (
+            "POST",
+            "/api/v1/accounts/{id}/restore",
+            "brings a deleted account back within its window; nothing new is granted",
+        ),
+        (
+            "PUT",
+            "/api/v1/ai-order",
+            "the order accounts are tried in: a preference, not a grant",
+        ),
+        (
+            "PUT",
+            "/api/v1/ai-order/agents/{agent}",
+            "one agent's order of accounts: a preference, not a grant",
+        ),
+        (
+            "DELETE",
+            "/api/v1/ai-order/agents/{agent}",
+            "drops one agent's own order: a preference, not a grant",
+        ),
+        (
+            "PUT",
+            "/api/v1/projects/defaults",
+            "limits for new projects (CPU, memory, idle stop): a normal project setting",
+        ),
+        (
+            "POST",
             "/api/v1/system/backup",
             "starts the unit the backup timer starts, with no input; audited and held back for a minute",
         ),

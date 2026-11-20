@@ -592,10 +592,14 @@ mod tests {
         ];
         assert_eq!(a[..fixed.len()], fixed);
         assert_eq!(a[a.len() - 5..], ["--chdir", "/", "--", "/bin/sh", "-i"]);
-        // What lies between is only the per-user runtime dir's tmpfs, when it exists.
+        // What lies between is only a tmpfs over the per-user runtime dir and over the Core's state
+        // dirs, when they exist (a host that also runs a Core has them).
         for w in a[fixed.len()..a.len() - 5].chunks(2) {
             assert_eq!(w[0], "--tmpfs");
-            assert!(w[1].starts_with("/run/user/"), "{w:?}");
+            assert!(
+                w[1].starts_with("/run/user/") || CORE_STATE_DIRS.contains(&w[1].as_str()),
+                "{w:?}"
+            );
         }
         // And a locked network adds the socket dirs' tmpfs on top of that.
         let none = argv(&Net::None).unwrap();

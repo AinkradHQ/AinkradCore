@@ -295,7 +295,13 @@ async fn a_typed_line_is_one_printable_line_and_a_codex_sign_in_is_not_guided_by
 /// A stand-in `agy`: shows a page and wants the pasted code, then says it is signed in and stays up
 /// (a TUI does not exit). It records HOME so the test sees the account's home was used.
 fn agy_driver(t: &Tmp, said: &str) -> Arc<LoginDriver> {
-    let p = t.file("agy");
+    // The sign-in runs in the session sandbox, which hides the host's temp dir: the stand-in lives
+    // beside the test binary (its dir stays readable), named after this test's scratch dir.
+    let own = t.file("agy");
+    let name = own.parent().and_then(|d| d.file_name()).unwrap();
+    let p = std::env::current_exe()
+        .unwrap()
+        .with_file_name(format!("{}-agy", name.to_string_lossy()));
     let body = format!(
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo 'agy 9.9.9'; exit 0; fi
