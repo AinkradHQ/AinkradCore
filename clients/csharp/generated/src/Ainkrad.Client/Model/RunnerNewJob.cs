@@ -43,11 +43,13 @@ namespace Ainkrad.Client.Model
         /// <param name="argv">argv (required).</param>
         /// <param name="cwdRel">A wire path relative to the session or project folder (the runner maps the shim&#39;s &#x60;cwd&#x60;)..</param>
         /// <param name="env">env.</param>
+        /// <param name="hosts">A &#x60;filtered&#x60; sandbox&#39;s allowed host names; a job sent elsewhere gets them cut to the registry list..</param>
+        /// <param name="network">The sandbox&#39;s own network: &#x60;allow&#x60;, &#x60;deny&#x60; or &#x60;filtered&#x60; (E15 H2). Absent or unknown is &#x60;deny&#x60;: the command runs where it was typed..</param>
         /// <param name="project">project.</param>
         /// <param name="session">The AI session (&#x60;as_…&#x60;) whose sandbox the shim ran in..</param>
         /// <param name="terminal">The Core terminal it ran in..</param>
         /// <param name="tty">tty.</param>
-        public RunnerNewJob(List<string> argv = default, string cwdRel = default, Dictionary<string, string> env = default, long? project = default, string session = default, string terminal = default, bool tty = default)
+        public RunnerNewJob(List<string> argv = default, string cwdRel = default, Dictionary<string, string> env = default, List<string> hosts = default, string network = default, long? project = default, string session = default, string terminal = default, bool tty = default)
         {
             // to ensure "argv" is required (not null)
             if (argv == null)
@@ -57,6 +59,8 @@ namespace Ainkrad.Client.Model
             this.Argv = argv;
             this.CwdRel = cwdRel;
             this.Env = env;
+            this.Hosts = hosts;
+            this.Network = network;
             this.Project = project;
             this.Session = session;
             this.Terminal = terminal;
@@ -81,6 +85,20 @@ namespace Ainkrad.Client.Model
         /// </summary>
         [DataMember(Name = "env", EmitDefaultValue = false)]
         public Dictionary<string, string> Env { get; set; }
+
+        /// <summary>
+        /// A &#x60;filtered&#x60; sandbox&#39;s allowed host names; a job sent elsewhere gets them cut to the registry list.
+        /// </summary>
+        /// <value>A &#x60;filtered&#x60; sandbox&#39;s allowed host names; a job sent elsewhere gets them cut to the registry list.</value>
+        [DataMember(Name = "hosts", EmitDefaultValue = true)]
+        public List<string> Hosts { get; set; }
+
+        /// <summary>
+        /// The sandbox&#39;s own network: &#x60;allow&#x60;, &#x60;deny&#x60; or &#x60;filtered&#x60; (E15 H2). Absent or unknown is &#x60;deny&#x60;: the command runs where it was typed.
+        /// </summary>
+        /// <value>The sandbox&#39;s own network: &#x60;allow&#x60;, &#x60;deny&#x60; or &#x60;filtered&#x60; (E15 H2). Absent or unknown is &#x60;deny&#x60;: the command runs where it was typed.</value>
+        [DataMember(Name = "network", EmitDefaultValue = true)]
+        public string Network { get; set; }
 
         /// <summary>
         /// Gets or Sets Project
@@ -119,6 +137,8 @@ namespace Ainkrad.Client.Model
             sb.Append("  Argv: ").Append(Argv).Append("\n");
             sb.Append("  CwdRel: ").Append(CwdRel).Append("\n");
             sb.Append("  Env: ").Append(Env).Append("\n");
+            sb.Append("  Hosts: ").Append(Hosts).Append("\n");
+            sb.Append("  Network: ").Append(Network).Append("\n");
             sb.Append("  Project: ").Append(Project).Append("\n");
             sb.Append("  Session: ").Append(Session).Append("\n");
             sb.Append("  Terminal: ").Append(Terminal).Append("\n");

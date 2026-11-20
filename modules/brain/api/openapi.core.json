@@ -9922,6 +9922,23 @@
               "null"
             ]
           },
+          "hosts": {
+            "description": "A `filtered` sandbox's allowed host names; a job sent elsewhere gets them cut to the\nregistry list.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "network": {
+            "description": "The sandbox's own network: `allow`, `deny` or `filtered` (E15 H2). Absent or unknown is\n`deny`: the command runs where it was typed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "project": {
             "format": "int64",
             "type": [
