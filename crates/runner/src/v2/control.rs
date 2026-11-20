@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    DRIVER_CONTROL, DriverInfo, ErrorCode, OP_RUNNER_POLICY, OP_RUNNER_UPDATE, OP_TOOLS_INSTALL, OP_TOOLS_STATUS,
-    PolicyApplied, RunnerPolicy, StreamError, ToolsInstall,
+    DRIVER_CONTROL, DriverInfo, ErrorCode, OP_RUNNER_POLICY, OP_RUNNER_UPDATE, OP_TOOLS_INSTALL,
+    OP_TOOLS_STATUS, PolicyApplied, RunnerPolicy, StreamError, ToolsInstall,
 };
 use tokio::sync::watch;
 
@@ -109,9 +109,14 @@ impl Control {
     pub fn info() -> DriverInfo {
         DriverInfo {
             name: DRIVER_CONTROL.to_owned(),
-            commands: [OP_RUNNER_POLICY, OP_TOOLS_INSTALL, OP_TOOLS_STATUS, OP_RUNNER_UPDATE]
-                .map(str::to_owned)
-                .into(),
+            commands: [
+                OP_RUNNER_POLICY,
+                OP_TOOLS_INSTALL,
+                OP_TOOLS_STATUS,
+                OP_RUNNER_UPDATE,
+            ]
+            .map(str::to_owned)
+            .into(),
             capacity: 4,
             ..DriverInfo::default()
         }
@@ -191,8 +196,9 @@ impl Control {
         if !ainkrad_proto::v2::plain_version(&req.version) {
             return Err(StreamError::new(ErrorCode::InvalidArgs, "not a version"));
         }
-        std::fs::write(self.state.join("update-request"), req.version.as_bytes())
-            .map_err(|e| StreamError::new(ErrorCode::Internal, format!("asking for the update: {e}")))?;
+        std::fs::write(self.state.join("update-request"), req.version.as_bytes()).map_err(|e| {
+            StreamError::new(ErrorCode::Internal, format!("asking for the update: {e}"))
+        })?;
         Ok(ainkrad_proto::v2::RunnerUpdateAccepted {
             version: req.version.clone(),
         })

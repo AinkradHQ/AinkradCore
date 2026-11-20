@@ -309,7 +309,8 @@ fn of(d: gov::Device, live: Option<&RunnerState>, x: &Extra) -> Runner {
             .and_then(semver)
             .zip(semver(env!("CARGO_PKG_VERSION")))
             .map(|(runner, core)| core > runner),
-        updating: crate::runner_update::is_updating(&d.id, crate::runner_update::unix_now()).then_some(true),
+        updating: crate::runner_update::is_updating(&d.id, crate::runner_update::unix_now())
+            .then_some(true),
         update_required: version
             .as_deref()
             .map(crate::runner_update::runner_too_old)

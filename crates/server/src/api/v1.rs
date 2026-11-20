@@ -29,8 +29,8 @@ mod agents;
 #[cfg(feature = "test-support")]
 pub use agents::create as create_agent_for_tests;
 mod accounts;
-mod ai_order;
 mod activity;
+mod ai_order;
 mod audit;
 mod budgets;
 mod chains;

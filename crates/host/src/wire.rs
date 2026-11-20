@@ -74,7 +74,7 @@ pub const REGISTRY: &[(&str, Class)] = &[
     ("update", Class::A),
     ("runner_policy", Class::B),
     ("install_tool", Class::B),
-        ("restore", Class::B),
+    ("restore", Class::B),
     ("uninstall", Class::B),
     ("host_config", Class::B),
     ("add_owner", Class::B),

@@ -211,7 +211,11 @@ fn backup_keep_is_no_longer_a_helper_action() {
 #[test]
 fn update_takes_no_parameters() {
     // No version, URL or path: the updater reads the signed manifest itself.
-    for p in [r#"{"version":"9"}"#, r#"{"url":"https://x"}"#, r#"{"path":"/x"}"#] {
+    for p in [
+        r#"{"version":"9"}"#,
+        r#"{"url":"https://x"}"#,
+        r#"{"path":"/x"}"#,
+    ] {
         assert_eq!(code(&req("update", p)), Code::BadRequest, "{p}");
     }
 }

@@ -168,8 +168,12 @@ pub fn plain_version(v: &str) -> bool {
     let (core, rest) = v.split_once(['-', '+']).unwrap_or((v, ""));
     v.len() <= 40
         && core.split('.').count() == 3
-        && core.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-        && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+        && core
+            .split('.')
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        && rest
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
 }
 
 #[cfg(test)]
@@ -181,7 +185,15 @@ mod update_tests {
         for ok in ["0.10.1", "1.2.3-beta.1", "10.0.0+build5"] {
             assert!(plain_version(ok), "{ok}");
         }
-        for bad in ["", "1.2", "1.2.x", "../1.2.3", "1.2.3 ; rm", "1.2.3\n", &"1".repeat(50)] {
+        for bad in [
+            "",
+            "1.2",
+            "1.2.x",
+            "../1.2.3",
+            "1.2.3 ; rm",
+            "1.2.3\n",
+            &"1".repeat(50),
+        ] {
             assert!(!plain_version(bad), "{bad}");
         }
     }

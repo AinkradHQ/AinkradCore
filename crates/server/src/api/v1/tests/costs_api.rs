@@ -195,7 +195,14 @@ async fn a_price_needs_admin_and_no_step_up_and_the_account_limit_routes_are_gon
         .unwrap();
     assert_eq!(n, 0, "nothing was written");
     // An admin needs no step-up: its scope is enough, so the route answers.
-    let (st, b) = call(&fx, &plain, writes[0].0.clone(), &writes[0].1, writes[0].2.clone()).await;
+    let (st, b) = call(
+        &fx,
+        &plain,
+        writes[0].0.clone(),
+        &writes[0].1,
+        writes[0].2.clone(),
+    )
+    .await;
     assert_ne!(st, StatusCode::FORBIDDEN, "{b}");
     // The per-account limit routes were retired for budgets (`PUT /budgets`, kind `account`).
     for (m, uri) in [

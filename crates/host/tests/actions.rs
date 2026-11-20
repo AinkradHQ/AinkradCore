@@ -407,9 +407,14 @@ fn update_starts_the_fixed_oneshot_unit_with_start_not_restart() {
     assert_eq!(
         fx.fake.argv(),
         vec![
-            ["--no-block", "--no-ask-password", "start", "ainkrad-update@now.service"]
-                .map(String::from)
-                .to_vec()
+            [
+                "--no-block",
+                "--no-ask-password",
+                "start",
+                "ainkrad-update@now.service"
+            ]
+            .map(String::from)
+            .to_vec()
         ]
     );
     // A second ask inside 5 minutes is refused, so a loop cannot hammer the release server.
