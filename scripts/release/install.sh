@@ -51,7 +51,7 @@ if [ -z "$names" ]; then
 else
   # The heavy-job shim (E15-3) goes beside the runner, where it looks for it; optional, so an older release still installs.
   # (no `grep -q`: under pipefail its early exit can SIGPIPE the echo and read as "absent")
-  if [ "$part" != core ] && echo "$names" | grep -x "ainkrad-job-[0-9].*-$target" >/dev/null; then order="$order ainkrad-job"; fi
+  if [ "${part:-}" != core ] && echo "$names" | grep -x "ainkrad-job-[0-9].*-$target" >/dev/null; then order="$order ainkrad-job"; fi
   # A release is all four: a set without the CLI (first-device step) or ptyhost (terminals) is refused, not half-installed.
   for b in $order; do
     echo "$names" | grep -qx "$b-[0-9].*-$target" || die "the signed sums have no $b for $target"
