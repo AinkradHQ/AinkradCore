@@ -61,6 +61,11 @@ impl Workspace {
         self.root.join("u").join(user.0.to_string())
     }
 
+    /// `<ws>/p/<project_id>/main/`: the project's working copy (one repo: its clone).
+    pub fn project_main(&self, project: i64) -> PathBuf {
+        self.project(project).join("main")
+    }
+
     /// `<ws>/p/<project_id>/main/<repo>/`.
     pub fn project_repo(&self, project: i64, repo: &str) -> Option<PathBuf> {
         Some(self.project(project).join("main").join(one(repo)?))

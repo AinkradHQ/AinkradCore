@@ -90,6 +90,11 @@ pub fn set_setup(setup: HwSetup) {
     let _ = SETUP.set(setup);
 }
 
+/// `--workspace-root`, once `connect_main` has set the runner up.
+pub fn workspace_root() -> Option<std::path::PathBuf> {
+    SETUP.get().and_then(|s| s.workspace_root.clone())
+}
+
 /// The `job` and `sync` drivers for this runner, and the capacity source registered. `None` when
 /// the CLI set nothing up or the Core's identity is not a safe path name.
 pub fn build(

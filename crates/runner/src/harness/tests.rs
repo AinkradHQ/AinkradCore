@@ -492,3 +492,33 @@ fn an_agent_sessions_runs_share_one_work_folder() {
     other.agent = 3;
     assert_eq!(ex.cwd(&other), PathBuf::from("/work/run-1"));
 }
+
+#[tokio::test]
+async fn a_session_with_a_folder_works_there_for_its_whole_life_and_keeps_it() {
+    let root = scratch("session-folder");
+    let h = HarnessExecutor::new(root.join("work"), root.join("config"));
+    let folder = root.join("ws/u/1/s/as_f");
+    let session = Job {
+        agent: 0,
+        issue: None,
+        context_ref: "as_f".to_owned(),
+        ..job("claude")
+    };
+    assert_eq!(
+        Executor::work_dir(&h, &session),
+        Some(root.join("work/session-as_f"))
+    );
+    Executor::set_session_folder(&h, "as_f", Some(folder.clone()));
+    assert_eq!(Executor::work_dir(&h, &session), Some(folder.clone()));
+    // Its end leaves the folder: it is the Core's copy, not the runner's scratch.
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("notes.md"), "kept").unwrap();
+    Executor::cleanup_agent_workspace(&h, "as_f", 0).await;
+    assert!(folder.join("notes.md").exists());
+    Executor::set_session_folder(&h, "as_f", None);
+    assert_eq!(
+        Executor::work_dir(&h, &session),
+        Some(root.join("work/session-as_f"))
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
