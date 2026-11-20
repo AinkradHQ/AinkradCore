@@ -43,6 +43,24 @@ namespace Ainkrad.Client.Api
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <returns>ApiResponse of string</returns>
         ApiResponse<string> GetMetricsWithHttpInfo();
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="hours">How many hours back, 1 to 24 (default 24). (optional)</param>
+        /// <returns>OpsHistory</returns>
+        OpsHistory GetOpsHistory(int? hours = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="hours">How many hours back, 1 to 24 (default 24). (optional)</param>
+        /// <returns>ApiResponse of OpsHistory</returns>
+        ApiResponse<OpsHistory> GetOpsHistoryWithHttpInfo(int? hours = default);
         #endregion Synchronous Operations
     }
 
@@ -73,6 +91,29 @@ namespace Ainkrad.Client.Api
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse (string)</returns>
         System.Threading.Tasks.Task<ApiResponse<string>> GetMetricsWithHttpInfoAsync(System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="hours">How many hours back, 1 to 24 (default 24). (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of OpsHistory</returns>
+        System.Threading.Tasks.Task<OpsHistory> GetOpsHistoryAsync(int? hours = default, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="hours">How many hours back, 1 to 24 (default 24). (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (OpsHistory)</returns>
+        System.Threading.Tasks.Task<ApiResponse<OpsHistory>> GetOpsHistoryWithHttpInfoAsync(int? hours = default, System.Threading.CancellationToken cancellationToken = default);
         #endregion Asynchronous Operations
     }
 
@@ -393,6 +434,129 @@ namespace Ainkrad.Client.Api
             if (this.ExceptionFactory != null)
             {
                 Exception _exception = this.ExceptionFactory("GetMetrics", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="hours">How many hours back, 1 to 24 (default 24). (optional)</param>
+        /// <returns>OpsHistory</returns>
+        public OpsHistory GetOpsHistory(int? hours = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<OpsHistory> localVarResponse = GetOpsHistoryWithHttpInfo(hours);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="hours">How many hours back, 1 to 24 (default 24). (optional)</param>
+        /// <returns>ApiResponse of OpsHistory</returns>
+        public Ainkrad.Client.Client.ApiResponse<OpsHistory> GetOpsHistoryWithHttpInfo(int? hours = default)
+        {
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            if (hours != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "hours", hours));
+            }
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Get<OpsHistory>("/api/v1/ops/history", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("GetOpsHistory", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="hours">How many hours back, 1 to 24 (default 24). (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of OpsHistory</returns>
+        public async System.Threading.Tasks.Task<OpsHistory> GetOpsHistoryAsync(int? hours = default, System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<OpsHistory> localVarResponse = await GetOpsHistoryWithHttpInfoAsync(hours, cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="hours">How many hours back, 1 to 24 (default 24). (optional)</param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (OpsHistory)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<OpsHistory>> GetOpsHistoryWithHttpInfoAsync(int? hours = default, System.Threading.CancellationToken cancellationToken = default)
+        {
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            if (hours != null)
+            {
+                localVarRequestOptions.QueryParameters.Add(Ainkrad.Client.Client.ClientUtils.ParameterToMultiMap("", "hours", hours));
+            }
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.GetAsync<OpsHistory>("/api/v1/ops/history", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("GetOpsHistory", localVarResponse);
                 if (_exception != null) throw _exception;
             }
 

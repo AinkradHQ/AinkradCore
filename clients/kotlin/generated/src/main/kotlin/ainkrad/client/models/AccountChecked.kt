@@ -25,6 +25,7 @@ import kotlinx.serialization.Contextual
  *
  * @param result `ok`, or why not. A Claude plan: `token_expired`, `limit_reached`, `no_runner` (none that may hold the token is online), `runner_outdated`, `runner_busy`, `runner_failed`, `egress_not_proven`, `sandbox_unavailable`, `unreachable`, `timeout` or `failed`. An API-key account: the key test's class (`ok`, `auth_failed`, ...) or `no_runner`.
  * @param latencyMs 
+ * @param models A preset: how many model ids the provider listed (E7-3); absent otherwise.
  * @param runner The runner device that made the check; absent when none was asked.
  */
 @Serializable
@@ -37,6 +38,10 @@ data class AccountChecked (
 
     @SerialName(value = "latency_ms")
     val latencyMs: kotlin.Long? = null,
+
+    /* A preset: how many model ids the provider listed (E7-3); absent otherwise. */
+    @SerialName(value = "models")
+    val models: kotlin.Int? = null,
 
     /* The runner device that made the check; absent when none was asked. */
     @SerialName(value = "runner")

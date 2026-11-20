@@ -23,6 +23,7 @@ import ainkrad.client.models.ConnectionFlowCallback
 import ainkrad.client.models.ConnectionFlowChoice
 import ainkrad.client.models.ConnectionGrant
 import ainkrad.client.models.ConnectionKind
+import ainkrad.client.models.ConnectionResources
 import ainkrad.client.models.ConnectionUse
 import ainkrad.client.models.DefaultConnection
 import ainkrad.client.models.ErrorBody
@@ -481,6 +482,42 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.GET,
             "/api/v1/connection-kinds",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/connections/{id}/resources
+        * 
+        * 
+         * @param id The connection&#39;s id 
+         * @param q Case-insensitive text in the name or id. (optional)
+         * @return ConnectionResources
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun listConnectionResources(id: kotlin.String, q: kotlin.String?): HttpResponse<ConnectionResources> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+            q?.apply { localVariableQuery["q"] = listOf("$q") }
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/connections/{id}/resources".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

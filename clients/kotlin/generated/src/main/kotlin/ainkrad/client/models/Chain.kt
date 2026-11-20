@@ -22,7 +22,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
 
 /**
- * An ordered fallback chain of 1 to 4 pools. A new session draws an account from the first entry that has one to give.
+ * An ordered fallback chain of 1 to 16 pools. Deprecated with the pool routes: the AI order (`/api/v1/ai-order`) replaces it. A new session draws an account from the first entry that has one to give.
  *
  * @param createdAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param propertyEntries In fallback order.

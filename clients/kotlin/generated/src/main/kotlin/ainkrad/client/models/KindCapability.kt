@@ -27,6 +27,7 @@ import kotlinx.serialization.Contextual
  * @param name 
  * @param title A plain label.
  * @param write 
+ * @param summary One plain sentence under the title, for the \"What may your assistant do\" step.
  */
 @Serializable
 
@@ -44,7 +45,11 @@ data class KindCapability (
     val title: kotlin.String,
 
     @SerialName(value = "write")
-    val write: kotlin.Boolean
+    val write: kotlin.Boolean,
+
+    /* One plain sentence under the title, for the \"What may your assistant do\" step. */
+    @SerialName(value = "summary")
+    val summary: kotlin.String? = null
 
 ) {
 

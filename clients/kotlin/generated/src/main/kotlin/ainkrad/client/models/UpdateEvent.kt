@@ -23,30 +23,25 @@ import kotlinx.serialization.Contextual
 /**
  * 
  *
- * @param accountId 
- * @param cap 
- * @param unit 
- * @param windowSecs 
- * @param warnPercent 
+ * @param at Unix seconds.
+ * @param step `snapshot`, `install`, `health` or `done`.
+ * @param text A fixed sentence from the updater.
  */
 @Serializable
 
-data class LimitSet (
+data class UpdateEvent (
 
-    @SerialName(value = "account_id")
-    val accountId: kotlin.Long,
+    /* Unix seconds. */
+    @SerialName(value = "at")
+    val at: kotlin.Long,
 
-    @SerialName(value = "cap")
-    val cap: kotlin.Long,
+    /* `snapshot`, `install`, `health` or `done`. */
+    @SerialName(value = "step")
+    val step: kotlin.String,
 
-    @SerialName(value = "unit")
-    val unit: kotlin.String,
-
-    @SerialName(value = "window_secs")
-    val windowSecs: kotlin.Long,
-
-    @SerialName(value = "warn_percent")
-    val warnPercent: kotlin.Long? = null
+    /* A fixed sentence from the updater. */
+    @SerialName(value = "text")
+    val text: kotlin.String
 
 ) {
 

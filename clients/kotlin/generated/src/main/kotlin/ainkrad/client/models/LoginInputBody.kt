@@ -21,16 +21,17 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
 
 /**
- * 
+ * One line the user typed into a guided sign-in. No `Debug`: it may be a pasted code.
  *
- * @param cleared 
+ * @param text Up to 512 printable characters, sent to the runner with Enter and dropped.
  */
 @Serializable
 
-data class LimitCleared (
+data class LoginInputBody (
 
-    @SerialName(value = "cleared")
-    val cleared: kotlin.Boolean
+    /* Up to 512 printable characters, sent to the runner with Enter and dropped. */
+    @SerialName(value = "text")
+    val text: kotlin.String
 
 ) {
 

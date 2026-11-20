@@ -27,62 +27,36 @@ using OpenAPIDateConverter = Ainkrad.Client.Client.OpenAPIDateConverter;
 namespace Ainkrad.Client.Model
 {
     /// <summary>
-    /// SetLimit
+    /// BackupStarted
     /// </summary>
-    [DataContract(Name = "SetLimit")]
-    public partial class SetLimit : IValidatableObject
+    [DataContract(Name = "BackupStarted")]
+    public partial class BackupStarted : IValidatableObject
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="SetLimit" /> class.
+        /// Initializes a new instance of the <see cref="BackupStarted" /> class.
         /// </summary>
         [JsonConstructorAttribute]
-        protected SetLimit() { }
+        protected BackupStarted() { }
         /// <summary>
-        /// Initializes a new instance of the <see cref="SetLimit" /> class.
+        /// Initializes a new instance of the <see cref="BackupStarted" /> class.
         /// </summary>
-        /// <param name="cap">cap (required).</param>
-        /// <param name="unit">&#x60;tokens&#x60; or &#x60;messages&#x60;. (required).</param>
-        /// <param name="warnPercent">Warn at this percent of the cap (1 to 100); default 80..</param>
-        /// <param name="windowSecs">1 to 31622400 seconds. (required).</param>
-        public SetLimit(long cap = default, string unit = default, long? warnPercent = default, long windowSecs = default)
+        /// <param name="requestId">The id the start is audited under (&#x60;host.backup_requested&#x60;, &#x60;host.action_result&#x60;). (required).</param>
+        public BackupStarted(string requestId = default)
         {
-            this.Cap = cap;
-            // to ensure "unit" is required (not null)
-            if (unit == null)
+            // to ensure "requestId" is required (not null)
+            if (requestId == null)
             {
-                throw new ArgumentNullException("unit is a required property for SetLimit and cannot be null");
+                throw new ArgumentNullException("requestId is a required property for BackupStarted and cannot be null");
             }
-            this.Unit = unit;
-            this.WindowSecs = windowSecs;
-            this.WarnPercent = warnPercent;
+            this.RequestId = requestId;
         }
 
         /// <summary>
-        /// Gets or Sets Cap
+        /// The id the start is audited under (&#x60;host.backup_requested&#x60;, &#x60;host.action_result&#x60;).
         /// </summary>
-        [DataMember(Name = "cap", IsRequired = true, EmitDefaultValue = true)]
-        public long Cap { get; set; }
-
-        /// <summary>
-        /// &#x60;tokens&#x60; or &#x60;messages&#x60;.
-        /// </summary>
-        /// <value>&#x60;tokens&#x60; or &#x60;messages&#x60;.</value>
-        [DataMember(Name = "unit", IsRequired = true, EmitDefaultValue = true)]
-        public string Unit { get; set; }
-
-        /// <summary>
-        /// Warn at this percent of the cap (1 to 100); default 80.
-        /// </summary>
-        /// <value>Warn at this percent of the cap (1 to 100); default 80.</value>
-        [DataMember(Name = "warn_percent", EmitDefaultValue = true)]
-        public long? WarnPercent { get; set; }
-
-        /// <summary>
-        /// 1 to 31622400 seconds.
-        /// </summary>
-        /// <value>1 to 31622400 seconds.</value>
-        [DataMember(Name = "window_secs", IsRequired = true, EmitDefaultValue = true)]
-        public long WindowSecs { get; set; }
+        /// <value>The id the start is audited under (&#x60;host.backup_requested&#x60;, &#x60;host.action_result&#x60;).</value>
+        [DataMember(Name = "request_id", IsRequired = true, EmitDefaultValue = true)]
+        public string RequestId { get; set; }
 
         /// <summary>
         /// Returns the string presentation of the object
@@ -91,11 +65,8 @@ namespace Ainkrad.Client.Model
         public override string ToString()
         {
             StringBuilder sb = new StringBuilder();
-            sb.Append("class SetLimit {\n");
-            sb.Append("  Cap: ").Append(Cap).Append("\n");
-            sb.Append("  Unit: ").Append(Unit).Append("\n");
-            sb.Append("  WarnPercent: ").Append(WarnPercent).Append("\n");
-            sb.Append("  WindowSecs: ").Append(WindowSecs).Append("\n");
+            sb.Append("class BackupStarted {\n");
+            sb.Append("  RequestId: ").Append(RequestId).Append("\n");
             sb.Append("}\n");
             return sb.ToString();
         }

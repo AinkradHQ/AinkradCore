@@ -57,6 +57,8 @@ import kotlinx.serialization.Contextual
  * @param toolInstall The AI tool install under way on its host, or the last one, as the runner reports it in its heartbeats (D-22). Absent until a runner of this version reports.
  * @param tools Tools it found on its host, name to version (`claude` to `2.1.318`, `git`, `node`, `python`, `go`, `rust`, `docker`, `codex`); a tool that is not installed is not listed.
  * @param updateAvailable This Core's own version is newer than the runner's `version`. Absent until it connected.
+ * @param updateRequired E12-5: the runner is older than the oldest this Core works with (`GET /core/health` `min_runner`), so the app asks to update it before relying on it. Absent until it connected.
+ * @param updating E12-4: asked to update in the last 15 minutes (it restarts and reconnects on the new version). Absent when not.
  * @param version Its `ainkrad-runner` version, once connected.
  */
 @Serializable
@@ -165,6 +167,14 @@ data class Runner (
     /* This Core's own version is newer than the runner's `version`. Absent until it connected. */
     @SerialName(value = "update_available")
     val updateAvailable: kotlin.Boolean? = null,
+
+    /* E12-5: the runner is older than the oldest this Core works with (`GET /core/health` `min_runner`), so the app asks to update it before relying on it. Absent until it connected. */
+    @SerialName(value = "update_required")
+    val updateRequired: kotlin.Boolean? = null,
+
+    /* E12-4: asked to update in the last 15 minutes (it restarts and reconnects on the new version). Absent when not. */
+    @SerialName(value = "updating")
+    val updating: kotlin.Boolean? = null,
 
     /* Its `ainkrad-runner` version, once connected. */
     @SerialName(value = "version")

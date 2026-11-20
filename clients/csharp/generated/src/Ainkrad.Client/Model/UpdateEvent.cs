@@ -27,76 +27,59 @@ using OpenAPIDateConverter = Ainkrad.Client.Client.OpenAPIDateConverter;
 namespace Ainkrad.Client.Model
 {
     /// <summary>
-    /// A limit and how much of it is used.
+    /// UpdateEvent
     /// </summary>
-    [DataContract(Name = "LimitStanding")]
-    public partial class LimitStanding : IValidatableObject
+    [DataContract(Name = "UpdateEvent")]
+    public partial class UpdateEvent : IValidatableObject
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="LimitStanding" /> class.
+        /// Initializes a new instance of the <see cref="UpdateEvent" /> class.
         /// </summary>
         [JsonConstructorAttribute]
-        protected LimitStanding() { }
+        protected UpdateEvent() { }
         /// <summary>
-        /// Initializes a new instance of the <see cref="LimitStanding" /> class.
+        /// Initializes a new instance of the <see cref="UpdateEvent" /> class.
         /// </summary>
-        /// <param name="cap">cap (required).</param>
-        /// <param name="exhausted">exhausted (required).</param>
-        /// <param name="unit">&#x60;tokens&#x60; or &#x60;messages&#x60;. (required).</param>
-        /// <param name="used">used (required).</param>
-        /// <param name="warnPercent">warnPercent (required).</param>
-        /// <param name="windowSecs">windowSecs (required).</param>
-        public LimitStanding(long cap = default, bool exhausted = default, string unit = default, long used = default, long warnPercent = default, long windowSecs = default)
+        /// <param name="at">Unix seconds. (required).</param>
+        /// <param name="step">&#x60;snapshot&#x60;, &#x60;install&#x60;, &#x60;health&#x60; or &#x60;done&#x60;. (required).</param>
+        /// <param name="text">A fixed sentence from the updater. (required).</param>
+        public UpdateEvent(long at = default, string step = default, string text = default)
         {
-            this.Cap = cap;
-            this.Exhausted = exhausted;
-            // to ensure "unit" is required (not null)
-            if (unit == null)
+            this.At = at;
+            // to ensure "step" is required (not null)
+            if (step == null)
             {
-                throw new ArgumentNullException("unit is a required property for LimitStanding and cannot be null");
+                throw new ArgumentNullException("step is a required property for UpdateEvent and cannot be null");
             }
-            this.Unit = unit;
-            this.Used = used;
-            this.WarnPercent = warnPercent;
-            this.WindowSecs = windowSecs;
+            this.Step = step;
+            // to ensure "text" is required (not null)
+            if (text == null)
+            {
+                throw new ArgumentNullException("text is a required property for UpdateEvent and cannot be null");
+            }
+            this.Text = text;
         }
 
         /// <summary>
-        /// Gets or Sets Cap
+        /// Unix seconds.
         /// </summary>
-        [DataMember(Name = "cap", IsRequired = true, EmitDefaultValue = true)]
-        public long Cap { get; set; }
+        /// <value>Unix seconds.</value>
+        [DataMember(Name = "at", IsRequired = true, EmitDefaultValue = true)]
+        public long At { get; set; }
 
         /// <summary>
-        /// Gets or Sets Exhausted
+        /// &#x60;snapshot&#x60;, &#x60;install&#x60;, &#x60;health&#x60; or &#x60;done&#x60;.
         /// </summary>
-        [DataMember(Name = "exhausted", IsRequired = true, EmitDefaultValue = true)]
-        public bool Exhausted { get; set; }
+        /// <value>&#x60;snapshot&#x60;, &#x60;install&#x60;, &#x60;health&#x60; or &#x60;done&#x60;.</value>
+        [DataMember(Name = "step", IsRequired = true, EmitDefaultValue = true)]
+        public string Step { get; set; }
 
         /// <summary>
-        /// &#x60;tokens&#x60; or &#x60;messages&#x60;.
+        /// A fixed sentence from the updater.
         /// </summary>
-        /// <value>&#x60;tokens&#x60; or &#x60;messages&#x60;.</value>
-        [DataMember(Name = "unit", IsRequired = true, EmitDefaultValue = true)]
-        public string Unit { get; set; }
-
-        /// <summary>
-        /// Gets or Sets Used
-        /// </summary>
-        [DataMember(Name = "used", IsRequired = true, EmitDefaultValue = true)]
-        public long Used { get; set; }
-
-        /// <summary>
-        /// Gets or Sets WarnPercent
-        /// </summary>
-        [DataMember(Name = "warn_percent", IsRequired = true, EmitDefaultValue = true)]
-        public long WarnPercent { get; set; }
-
-        /// <summary>
-        /// Gets or Sets WindowSecs
-        /// </summary>
-        [DataMember(Name = "window_secs", IsRequired = true, EmitDefaultValue = true)]
-        public long WindowSecs { get; set; }
+        /// <value>A fixed sentence from the updater.</value>
+        [DataMember(Name = "text", IsRequired = true, EmitDefaultValue = true)]
+        public string Text { get; set; }
 
         /// <summary>
         /// Returns the string presentation of the object
@@ -105,13 +88,10 @@ namespace Ainkrad.Client.Model
         public override string ToString()
         {
             StringBuilder sb = new StringBuilder();
-            sb.Append("class LimitStanding {\n");
-            sb.Append("  Cap: ").Append(Cap).Append("\n");
-            sb.Append("  Exhausted: ").Append(Exhausted).Append("\n");
-            sb.Append("  Unit: ").Append(Unit).Append("\n");
-            sb.Append("  Used: ").Append(Used).Append("\n");
-            sb.Append("  WarnPercent: ").Append(WarnPercent).Append("\n");
-            sb.Append("  WindowSecs: ").Append(WindowSecs).Append("\n");
+            sb.Append("class UpdateEvent {\n");
+            sb.Append("  At: ").Append(At).Append("\n");
+            sb.Append("  Step: ").Append(Step).Append("\n");
+            sb.Append("  Text: ").Append(Text).Append("\n");
             sb.Append("}\n");
             return sb.ToString();
         }

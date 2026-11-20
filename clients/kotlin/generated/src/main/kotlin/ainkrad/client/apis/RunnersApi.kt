@@ -243,4 +243,37 @@ import io.ktor.http.ParametersBuilder
             ).wrap()
             }
 
+        /**
+        * POST /api/v1/runners/{id}/update
+        * 
+        * 
+         * @param id The runner&#39;s device id, &#x60;d_…&#x60; 
+         * @return void
+        */
+        open suspend fun updateRunner(id: kotlin.String): HttpResponse<Unit> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/runners/{id}/update".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
         }

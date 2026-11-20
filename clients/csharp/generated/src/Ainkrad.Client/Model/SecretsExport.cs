@@ -27,67 +27,43 @@ using OpenAPIDateConverter = Ainkrad.Client.Client.OpenAPIDateConverter;
 namespace Ainkrad.Client.Model
 {
     /// <summary>
-    /// LimitSet
+    /// Every secret the Secrets screen lists, with its value. No &#x60;Debug&#x60;.
     /// </summary>
-    [DataContract(Name = "LimitSet")]
-    public partial class LimitSet : IValidatableObject
+    [DataContract(Name = "SecretsExport")]
+    public partial class SecretsExport : IValidatableObject
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="LimitSet" /> class.
+        /// Initializes a new instance of the <see cref="SecretsExport" /> class.
         /// </summary>
         [JsonConstructorAttribute]
-        protected LimitSet() { }
+        protected SecretsExport() { }
         /// <summary>
-        /// Initializes a new instance of the <see cref="LimitSet" /> class.
+        /// Initializes a new instance of the <see cref="SecretsExport" /> class.
         /// </summary>
-        /// <param name="accountId">accountId (required).</param>
-        /// <param name="cap">cap (required).</param>
-        /// <param name="unit">unit (required).</param>
-        /// <param name="warnPercent">warnPercent.</param>
-        /// <param name="windowSecs">windowSecs (required).</param>
-        public LimitSet(long accountId = default, long cap = default, string unit = default, long? warnPercent = default, long windowSecs = default)
+        /// <param name="count">count (required).</param>
+        /// <param name="items">items (required).</param>
+        public SecretsExport(long count = default, List<ExportedSecret> items = default)
         {
-            this.AccountId = accountId;
-            this.Cap = cap;
-            // to ensure "unit" is required (not null)
-            if (unit == null)
+            this.Count = count;
+            // to ensure "items" is required (not null)
+            if (items == null)
             {
-                throw new ArgumentNullException("unit is a required property for LimitSet and cannot be null");
+                throw new ArgumentNullException("items is a required property for SecretsExport and cannot be null");
             }
-            this.Unit = unit;
-            this.WindowSecs = windowSecs;
-            this.WarnPercent = warnPercent;
+            this.Items = items;
         }
 
         /// <summary>
-        /// Gets or Sets AccountId
+        /// Gets or Sets Count
         /// </summary>
-        [DataMember(Name = "account_id", IsRequired = true, EmitDefaultValue = true)]
-        public long AccountId { get; set; }
+        [DataMember(Name = "count", IsRequired = true, EmitDefaultValue = true)]
+        public long Count { get; set; }
 
         /// <summary>
-        /// Gets or Sets Cap
+        /// Gets or Sets Items
         /// </summary>
-        [DataMember(Name = "cap", IsRequired = true, EmitDefaultValue = true)]
-        public long Cap { get; set; }
-
-        /// <summary>
-        /// Gets or Sets Unit
-        /// </summary>
-        [DataMember(Name = "unit", IsRequired = true, EmitDefaultValue = true)]
-        public string Unit { get; set; }
-
-        /// <summary>
-        /// Gets or Sets WarnPercent
-        /// </summary>
-        [DataMember(Name = "warn_percent", EmitDefaultValue = true)]
-        public long? WarnPercent { get; set; }
-
-        /// <summary>
-        /// Gets or Sets WindowSecs
-        /// </summary>
-        [DataMember(Name = "window_secs", IsRequired = true, EmitDefaultValue = true)]
-        public long WindowSecs { get; set; }
+        [DataMember(Name = "items", IsRequired = true, EmitDefaultValue = true)]
+        public List<ExportedSecret> Items { get; set; }
 
         /// <summary>
         /// Returns the string presentation of the object
@@ -96,12 +72,9 @@ namespace Ainkrad.Client.Model
         public override string ToString()
         {
             StringBuilder sb = new StringBuilder();
-            sb.Append("class LimitSet {\n");
-            sb.Append("  AccountId: ").Append(AccountId).Append("\n");
-            sb.Append("  Cap: ").Append(Cap).Append("\n");
-            sb.Append("  Unit: ").Append(Unit).Append("\n");
-            sb.Append("  WarnPercent: ").Append(WarnPercent).Append("\n");
-            sb.Append("  WindowSecs: ").Append(WindowSecs).Append("\n");
+            sb.Append("class SecretsExport {\n");
+            sb.Append("  Count: ").Append(Count).Append("\n");
+            sb.Append("  Items: ").Append(Items).Append("\n");
             sb.Append("}\n");
             return sb.ToString();
         }

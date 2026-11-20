@@ -27,30 +27,81 @@ using OpenAPIDateConverter = Ainkrad.Client.Client.OpenAPIDateConverter;
 namespace Ainkrad.Client.Model
 {
     /// <summary>
-    /// LimitCleared
+    /// One day of the audit log.
     /// </summary>
-    [DataContract(Name = "LimitCleared")]
-    public partial class LimitCleared : IValidatableObject
+    [DataContract(Name = "AuditDay")]
+    public partial class AuditDay : IValidatableObject
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="LimitCleared" /> class.
+        /// Initializes a new instance of the <see cref="AuditDay" /> class.
         /// </summary>
         [JsonConstructorAttribute]
-        protected LimitCleared() { }
+        protected AuditDay() { }
         /// <summary>
-        /// Initializes a new instance of the <see cref="LimitCleared" /> class.
+        /// Initializes a new instance of the <see cref="AuditDay" /> class.
         /// </summary>
-        /// <param name="cleared">cleared (required).</param>
-        public LimitCleared(bool cleared = default)
+        /// <param name="date">&#x60;YYYY-MM-DD&#x60; in the client&#39;s offset. (required).</param>
+        /// <param name="hours">Rows per hour of that day, 24 numbers. (required).</param>
+        /// <param name="kinds">Rows per kind (every kind, zero included). (required).</param>
+        /// <param name="needsAttention">Rows that need a look: failures, refusals, lockouts, raised alarms. (required).</param>
+        /// <param name="total">total (required).</param>
+        public AuditDay(string date = default, List<long> hours = default, List<KindCount> kinds = default, long needsAttention = default, long total = default)
         {
-            this.Cleared = cleared;
+            // to ensure "date" is required (not null)
+            if (date == null)
+            {
+                throw new ArgumentNullException("date is a required property for AuditDay and cannot be null");
+            }
+            this.Date = date;
+            // to ensure "hours" is required (not null)
+            if (hours == null)
+            {
+                throw new ArgumentNullException("hours is a required property for AuditDay and cannot be null");
+            }
+            this.Hours = hours;
+            // to ensure "kinds" is required (not null)
+            if (kinds == null)
+            {
+                throw new ArgumentNullException("kinds is a required property for AuditDay and cannot be null");
+            }
+            this.Kinds = kinds;
+            this.NeedsAttention = needsAttention;
+            this.Total = total;
         }
 
         /// <summary>
-        /// Gets or Sets Cleared
+        /// &#x60;YYYY-MM-DD&#x60; in the client&#39;s offset.
         /// </summary>
-        [DataMember(Name = "cleared", IsRequired = true, EmitDefaultValue = true)]
-        public bool Cleared { get; set; }
+        /// <value>&#x60;YYYY-MM-DD&#x60; in the client&#39;s offset.</value>
+        [DataMember(Name = "date", IsRequired = true, EmitDefaultValue = true)]
+        public string Date { get; set; }
+
+        /// <summary>
+        /// Rows per hour of that day, 24 numbers.
+        /// </summary>
+        /// <value>Rows per hour of that day, 24 numbers.</value>
+        [DataMember(Name = "hours", IsRequired = true, EmitDefaultValue = true)]
+        public List<long> Hours { get; set; }
+
+        /// <summary>
+        /// Rows per kind (every kind, zero included).
+        /// </summary>
+        /// <value>Rows per kind (every kind, zero included).</value>
+        [DataMember(Name = "kinds", IsRequired = true, EmitDefaultValue = true)]
+        public List<KindCount> Kinds { get; set; }
+
+        /// <summary>
+        /// Rows that need a look: failures, refusals, lockouts, raised alarms.
+        /// </summary>
+        /// <value>Rows that need a look: failures, refusals, lockouts, raised alarms.</value>
+        [DataMember(Name = "needs_attention", IsRequired = true, EmitDefaultValue = true)]
+        public long NeedsAttention { get; set; }
+
+        /// <summary>
+        /// Gets or Sets Total
+        /// </summary>
+        [DataMember(Name = "total", IsRequired = true, EmitDefaultValue = true)]
+        public long Total { get; set; }
 
         /// <summary>
         /// Returns the string presentation of the object
@@ -59,8 +110,12 @@ namespace Ainkrad.Client.Model
         public override string ToString()
         {
             StringBuilder sb = new StringBuilder();
-            sb.Append("class LimitCleared {\n");
-            sb.Append("  Cleared: ").Append(Cleared).Append("\n");
+            sb.Append("class AuditDay {\n");
+            sb.Append("  Date: ").Append(Date).Append("\n");
+            sb.Append("  Hours: ").Append(Hours).Append("\n");
+            sb.Append("  Kinds: ").Append(Kinds).Append("\n");
+            sb.Append("  NeedsAttention: ").Append(NeedsAttention).Append("\n");
+            sb.Append("  Total: ").Append(Total).Append("\n");
             sb.Append("}\n");
             return sb.ToString();
         }

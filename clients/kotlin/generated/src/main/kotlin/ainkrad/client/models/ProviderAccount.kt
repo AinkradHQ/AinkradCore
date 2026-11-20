@@ -16,6 +16,7 @@
 package ainkrad.client.models
 
 import ainkrad.client.models.AccountHealth
+import ainkrad.client.models.AccountMeter
 import ainkrad.client.models.LastTest
 import ainkrad.client.models.SessionLimits
 
@@ -39,11 +40,15 @@ import kotlinx.serialization.Contextual
  * @param lastTest The last one-shot test of the key; absent when it was never tested.
  * @param lastUsedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param live Sessions that hold a slot of its cap now (`starting`, `running`, `interrupted`). Only the reads (`listAccounts`, `getAccount`) say it.
+ * @param modelsEnforced Whether a model the person switched off for this account is refused in its sessions: true for an API-key account (its gateway grants only the models left on), false for a subscription or runner-bound login, where the harness talks to its provider itself and the Core only skips the account when a session asks for a switched-off model at its start. The app shows the limit as advice when it is false.
  * @param monthLimitUsdMicros The account's monthly dollar budget cap, when one is set; absent when it has none.
  * @param monthSpendUsdMicros What the account cost this calendar month (UTC), in millionths of a US dollar, from the cost ledger. Only the reads say it, and only to an `admin` device.
+ * @param runner The runner device a runner-bound subscription (Codex, OpenCode, Antigravity) signed in on: its sessions run only there. Absent for any other account. An `admin` device only; a device id is not a secret.
  * @param sessionLimits What one session may spend through this account; absent when only the budgets limit it.
  * @param stateReason 
  * @param stateUntil RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param usage The row's usage meter: how much of its plan or budget is used and whether it can take work now. Only the reads say it, and only to an `admin` device.
+ * @param wipeNote A plain-language limit of removing this account, e.g. an Antigravity login that stays in the runner's keyring. Absent when removal clears everything.
  */
 @Serializable
 
@@ -99,6 +104,10 @@ data class ProviderAccount (
     @SerialName(value = "live")
     val live: kotlin.Long? = null,
 
+    /* Whether a model the person switched off for this account is refused in its sessions: true for an API-key account (its gateway grants only the models left on), false for a subscription or runner-bound login, where the harness talks to its provider itself and the Core only skips the account when a session asks for a switched-off model at its start. The app shows the limit as advice when it is false. */
+    @SerialName(value = "models_enforced")
+    val modelsEnforced: kotlin.Boolean? = null,
+
     /* The account's monthly dollar budget cap, when one is set; absent when it has none. */
     @SerialName(value = "month_limit_usd_micros")
     val monthLimitUsdMicros: kotlin.Long? = null,
@@ -106,6 +115,10 @@ data class ProviderAccount (
     /* What the account cost this calendar month (UTC), in millionths of a US dollar, from the cost ledger. Only the reads say it, and only to an `admin` device. */
     @SerialName(value = "month_spend_usd_micros")
     val monthSpendUsdMicros: kotlin.Long? = null,
+
+    /* The runner device a runner-bound subscription (Codex, OpenCode, Antigravity) signed in on: its sessions run only there. Absent for any other account. An `admin` device only; a device id is not a secret. */
+    @SerialName(value = "runner")
+    val runner: kotlin.String? = null,
 
     /* What one session may spend through this account; absent when only the budgets limit it. */
     @SerialName(value = "session_limits")
@@ -116,7 +129,15 @@ data class ProviderAccount (
 
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "state_until")
-    val stateUntil: java.time.OffsetDateTime? = null
+    val stateUntil: java.time.OffsetDateTime? = null,
+
+    /* The row's usage meter: how much of its plan or budget is used and whether it can take work now. Only the reads say it, and only to an `admin` device. */
+    @SerialName(value = "usage")
+    val usage: AccountMeter? = null,
+
+    /* A plain-language limit of removing this account, e.g. an Antigravity login that stays in the runner's keyring. Absent when removal clears everything. */
+    @SerialName(value = "wipe_note")
+    val wipeNote: kotlin.String? = null
 
 ) {
 
