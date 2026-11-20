@@ -19,7 +19,7 @@ use ainkrad_proto::v2::{
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
 
-use super::live::{Ctl, registry};
+use super::live::{Ctl, copy_lock, registry};
 pub use super::live::{Live, cancel, get, lines, signal};
 use super::rules::Row;
 use super::{cache, history};
@@ -303,6 +303,10 @@ async fn execute(
 ) -> End {
     let ws = super::workspace();
     let mut sync = None;
+    let _copy = match run.on_core {
+        true => None,
+        false => Some(copy_lock(&run.device, run.s.project).lock_owned().await),
+    };
     if !run.on_core {
         set_state(app, &run.id, "syncing").await;
         live.push(json!({"t": "state", "state": "syncing"}));

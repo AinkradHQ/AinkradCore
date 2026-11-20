@@ -218,11 +218,107 @@ impl Tree {
             if name.starts_with(TMP_PREFIX) {
                 continue;
             }
-            // Gone between the listing and the stat: skip.
-            if let Ok(st) = crate::fstatat(fd.as_fd(), &name) {
-                out.push((name, st));
+            // Gone between the listing and the stat: skip. Any other failure fails the listing,
+            // so a sync never reads a name it could not stat as deleted (E15 L9).
+            match crate::fstatat(fd.as_fd(), &name) {
+                Ok(st) => out.push((name, st)),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
             }
         }
         Ok(out)
+    }
+
+    /// Whether `rel` resolves to an entry already on disk under ANOTHER spelling: on a
+    /// case-insensitive or normalisation-insensitive disk (APFS), `SRC/Main.rs` opens
+    /// `src/main.rs`, and an NFD name opens its NFC twin (E15 security review L1). Each component
+    /// is compared byte for byte with its folder's listing. An absent path is not aliased.
+    pub fn aliased(&self, rel: &str) -> io::Result<bool> {
+        check_path(rel).map_err(refuse)?;
+        if matches!(self.stat(rel), Err(e) if e.kind() == io::ErrorKind::NotFound) {
+            return Ok(false);
+        }
+        let mut dir = String::new();
+        for name in rel.split('/') {
+            let fd = match crate::open_beneath(self.root.as_fd(), &dir, crate::FLAGS_DIR, 0) {
+                Ok(fd) => fd,
+                Err(e) if matches!(e.raw_os_error(), Some(libc::ENOENT | libc::ENOTDIR)) => {
+                    return Ok(false);
+                }
+                Err(e) => return Err(e),
+            };
+            let exact = crate::list_dir(fd.as_fd())?
+                .iter()
+                .any(|n| n.as_encoded_bytes() == name.as_bytes());
+            if !exact {
+                return match crate::fstatat(fd.as_fd(), name) {
+                    Ok(_) => Ok(true),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+                    Err(e) => Err(e),
+                };
+            }
+            if !dir.is_empty() {
+                dir.push('/');
+            }
+            dir.push_str(name);
+        }
+        Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("ainkrad-tree-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// The disk under the temp folder folds case (APFS default) when `A` opens `a`.
+    fn folds(d: &Path) -> bool {
+        std::fs::write(d.join("probe"), "").unwrap();
+        let f = d.join("PROBE").exists();
+        std::fs::remove_file(d.join("probe")).unwrap();
+        f
+    }
+
+    #[test]
+    fn another_spelling_of_an_existing_path_is_an_alias() {
+        // L1: on APFS a runner's `SRC/main.rs` or `.ENV` lands on the Core's `src/main.rs`/`.env`.
+        let d = temp("alias");
+        std::fs::create_dir_all(d.join("src")).unwrap();
+        std::fs::write(d.join("src/main.rs"), "x").unwrap();
+        std::fs::write(d.join("caf\u{e9}.txt"), "nfc").unwrap();
+        let t = Tree::open(&d).unwrap();
+        assert!(!t.aliased("src/main.rs").unwrap(), "the exact spelling");
+        assert!(!t.aliased("src/new.rs").unwrap(), "absent");
+        assert!(!t.aliased("nope/new.rs").unwrap(), "absent folder");
+        let fold = folds(&d);
+        assert_eq!(t.aliased("SRC/main.rs").unwrap(), fold);
+        assert_eq!(t.aliased("src/MAIN.rs").unwrap(), fold);
+        // NFD `e` + combining acute: APFS opens the NFC file whatever its case handling.
+        let nfd_twin = d.join("cafe\u{301}.txt").exists();
+        assert_eq!(t.aliased("cafe\u{301}.txt").unwrap(), nfd_twin);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_read_fails_the_listing() {
+        // L9: an unreadable folder must be an error, never an empty (all deleted) listing.
+        if crate::getuid() == 0 {
+            return;
+        }
+        let d = temp("unreadable");
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        std::fs::write(d.join("sub/f"), "x").unwrap();
+        std::fs::set_permissions(d.join("sub"), std::fs::Permissions::from_mode(0o000)).unwrap();
+        let t = Tree::open(&d).unwrap();
+        let r = t.read_dir("sub");
+        std::fs::set_permissions(d.join("sub"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(r.is_err(), "{r:?}");
+        let _ = std::fs::remove_dir_all(d);
     }
 }

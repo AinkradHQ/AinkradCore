@@ -222,7 +222,12 @@ impl JobDriver {
                 .join("jobs-home")
                 .join(req.project.to_string()),
         };
-        super::sync::fresh_for_origin(&home_dir, cache_mode.then_some(root.as_path()), &req.origin)
+        let rules = match cache_mode {
+            true => Some(self.sync.rules(req.project).await),
+            false => None,
+        };
+        let tree = rules.as_ref().map(|r| (root.as_path(), r));
+        super::sync::fresh_for_origin(&home_dir, tree, &req.origin)
             .map_err(|e| internal(format!("clearing the cache for a new origin: {e}")))?;
         let home = match cache_mode {
             true => self.sync.job_home(req.project),

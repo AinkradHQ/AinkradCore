@@ -199,7 +199,11 @@ pub async fn sync_back(
         if same(mine, Some(e)) {
             continue;
         }
-        let core_untouched = same(mine, m0.get(&e.path));
+        // A name new to the Core that a case- or normalisation-insensitive disk (APFS) resolves
+        // to an existing file (`SRC/main.rs` onto `src/main.rs`, `.ENV` onto `.env`): never a
+        // silent overwrite, it goes to the conflicts folder (E15 security review L1).
+        let aliased = mine.is_none() && tree.aliased(&e.path)?;
+        let core_untouched = !aliased && same(mine, m0.get(&e.path));
         match (core_untouched, e.kind) {
             (true, EntryKind::Symlink) => {
                 let target = e.link.as_deref().unwrap_or_default();
