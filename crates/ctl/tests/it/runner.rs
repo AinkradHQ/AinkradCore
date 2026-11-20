@@ -47,6 +47,20 @@ pub fn loopback_core_at(name: &str, port: u16, public: u16) -> Core {
 }
 
 /// Pairs a real runner as `name` through ctl (`base`: an admin device); its device id.
+/// The Core's built-in runner, enrolled as the installer does (`runner-enroll-local`): its state
+/// under `<dir>/<name>`. Returns its device id.
+pub fn enroll_local_runner(core: &Core, url: &str, name: &str) -> String {
+    let o = Command::new(server_bin())
+        .arg("runner-enroll-local")
+        .arg(&core.db)
+        .arg(core.dir.join(name))
+        .arg(url)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{o:?}");
+    String::from_utf8(o.stdout).unwrap().trim().to_owned()
+}
+
 pub fn pair_runner(core: &Core, base: &[String], url: &str, name: &str) -> String {
     let o = ctl(&args(&[
         base,
@@ -290,11 +304,17 @@ fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
     let ks = core.keystore("mac");
     bootstrap(&core, &ks);
     let a = args(&[&s(&["--keystore", &ks.display().to_string()]), &core.at()]);
-    let id = pair_runner(&core, &a, &url, "vm");
+    // Terminals open on the Core's own runner only (E15 M6, spec §9): enrolled as the installer
+    // enrols the built-in one, and run with a workspace root, as the built-in runner is.
+    let id = enroll_local_runner(&core, &url, "vm");
+    let ws = core.dir.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
     let log = std::fs::File::create(core.dir.join("vm.log")).unwrap();
     let mut runner = Reap(
         Command::new(runner_bin())
-            .args(["connect", "--enable-pty", "--state"])
+            .args(["connect", "--enable-pty", "--workspace-root"])
+            .arg(&ws)
+            .arg("--state")
             .arg(core.dir.join("vm"))
             .env("AINKRAD_PTYHOST", ptyhost_bin())
             .env("RUST_LOG", "info")
