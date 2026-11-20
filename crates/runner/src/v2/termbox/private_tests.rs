@@ -296,6 +296,48 @@ fn setenv_pairs_leave_the_argv_for_a_pipe() {
     assert_eq!(bytes, b"--setenv\0A\0SECRET-1\0--setenv\0B\0SECRET-2\0");
     assert!(setenv_to_fd(&mut args).is_none());
 }
+/// A program argument that looks like an option is never one: nothing after `--` moves.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn only_the_launchers_options_move_never_the_programs_arguments() {
+    let mut args: Vec<String> = [
+        "--clearenv",
+        "--setenv",
+        "A",
+        "1",
+        "--chdir",
+        "/",
+        "--",
+        "/bin/echo",
+        "--setenv",
+        "K",
+        "V",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let bytes = setenv_to_fd(&mut args).unwrap();
+    assert_eq!(bytes, b"--setenv\0A\0\x31\0");
+    assert_eq!(
+        args,
+        [
+            "--clearenv",
+            "--args",
+            "3",
+            "--chdir",
+            "/",
+            "--",
+            "/bin/echo",
+            "--setenv",
+            "K",
+            "V"
+        ]
+    );
+    let mut only_program: Vec<String> = ["--chdir", "/", "--", "/bin/echo", "--setenv", "K", "V"]
+        .map(str::to_owned)
+        .to_vec();
+    assert!(setenv_to_fd(&mut only_program).is_none());
+    assert_eq!(only_program.len(), 7);
+}
 /// H1, H2, M5: the profile names devices one by one, allows IP only (no unix sockets but the
 /// name service's), names the Mach services and sysctls, and shuts what a shell must not touch.
 #[test]

@@ -460,12 +460,15 @@ pub fn setenv_to_fd(args: &mut Vec<String>) -> Option<Vec<u8>> {
     if cfg!(target_os = "macos") {
         return None;
     }
-    let first = args.iter().position(|a| a == "--setenv")?;
+    // Only bubblewrap's own options: what follows the first `--` is the program and its
+    // arguments, where a `--setenv K V` is just text.
+    let end = args.iter().position(|a| a == "--").unwrap_or(args.len());
+    let first = args[..end].iter().position(|a| a == "--setenv")?;
     let mut bytes = Vec::new();
     let mut kept = Vec::with_capacity(args.len());
     let mut i = 0;
     while i < args.len() {
-        if args[i] == "--setenv" && i + 2 < args.len() {
+        if i < end && args[i] == "--setenv" && i + 2 < end {
             for a in &args[i..i + 3] {
                 bytes.extend_from_slice(a.as_bytes());
                 bytes.push(0);
