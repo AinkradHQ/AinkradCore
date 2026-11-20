@@ -15,6 +15,7 @@
 
 package ainkrad.client.models
 
+import ainkrad.client.models.HardwareDecisions
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -27,6 +28,7 @@ import kotlinx.serialization.Contextual
  * @param loadPct Running jobs over all online job slots, 0 to 100.
  * @param paused A pause-all is in effect.
  * @param sessions 
+ * @param decisions Smart job routing (the Decisions service) for commands no rule or history knows.
  */
 @Serializable
 
@@ -44,7 +46,11 @@ data class HardwarePool (
     val paused: kotlin.Boolean,
 
     @SerialName(value = "sessions")
-    val sessions: kotlin.Int
+    val sessions: kotlin.Int,
+
+    /* Smart job routing (the Decisions service) for commands no rule or history knows. */
+    @SerialName(value = "decisions")
+    val decisions: HardwareDecisions? = null
 
 ) {
 

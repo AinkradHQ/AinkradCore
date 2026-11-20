@@ -112,6 +112,38 @@ mod transport;
 use transport::upstream_of;
 pub use transport::{Called, HubTransport, Transport, class_name};
 
+/// What Smart job routing (the heavy-job Decisions consumer) is now, for `/hardware/pool`:
+/// `disabled` (its setting is off), `off_no_provider` (no active Google account in `user`'s AI
+/// order, so every unknown command runs where it was typed), or `on`.
+pub async fn heavy_job_status(pool: &SqlitePool, user: UserId) -> &'static str {
+    let k = SettingKey::DecisionsHeavyJobEnabled;
+    let on = settings::value(pool, k, Scope::Server)
+        .await
+        .unwrap_or(k.spec().default);
+    if on == 0 {
+        return "disabled";
+    }
+    match transport::google_in_ai_order(pool, user).await {
+        Ok(a) if !a.is_empty() => "on",
+        _ => "off_no_provider",
+    }
+}
+
+/// Unix second of the last `no_provider` warning: one an hour, not one per command.
+static NO_PROVIDER_WARNED: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn warn_no_provider(consumer: Consumer, now: i64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let last = NO_PROVIDER_WARNED.load(Relaxed);
+    if now - last >= 3600
+        && NO_PROVIDER_WARNED
+            .compare_exchange(last, now, Relaxed, Relaxed)
+            .is_ok()
+    {
+        tracing::warn!(consumer = ?consumer, "Decisions are off: no active Google account in the AI order (off_no_provider); commands nothing else knows run where they were typed");
+    }
+}
+
 const DAILY_CAP: SettingKey = SettingKey::DecisionsDailyUsdMicros;
 const TIMEOUT: SettingKey = SettingKey::DecisionsTimeoutMs;
 const INPUT_PRICE: SettingKey = SettingKey::DecisionsInputPriceMicros;
@@ -264,6 +296,9 @@ impl Service {
         };
         if let Some(p) = provider {
             why = self.ask(&req, &*p, &k, &mut out).await;
+        }
+        if why == "no_provider" {
+            warn_no_provider(req.consumer, self.clock.unix());
         }
         let mut done = Vec::with_capacity(n);
         for (q, got) in req.questions.iter().zip(out) {

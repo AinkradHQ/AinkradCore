@@ -4811,6 +4811,14 @@ export interface components {
              */
             percent: number;
         };
+        /** @description Whether Decisions can route heavy jobs. */
+        HardwareDecisions: {
+            /**
+             * @description `on`; `off_no_provider` (no active Google account in the AI order: unknown commands run
+             *     where they were typed); `disabled` (`decisions.heavy_job.enabled` is 0).
+             */
+            status: string;
+        };
         HardwareGate: ("open" | "busy" | "on_battery" | "paused" | "off") | string;
         /** @description A job running on a machine now. */
         HardwareJob: {
@@ -4835,6 +4843,8 @@ export interface components {
         };
         /** @description The pool as a whole, for the top bar's load ring. */
         HardwarePool: {
+            /** @description Smart job routing (the Decisions service) for commands no rule or history knows. */
+            decisions?: components["schemas"]["HardwareDecisions"];
             /** Format: int32 */
             jobs: number;
             /**

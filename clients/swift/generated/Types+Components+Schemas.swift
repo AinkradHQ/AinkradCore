@@ -5111,6 +5111,26 @@ extension Components {
                 case percent
             }
         }
+        /// Whether Decisions can route heavy jobs.
+        ///
+        /// - Remark: Generated from `#/components/schemas/HardwareDecisions`.
+        public struct HardwareDecisions: Codable, Hashable, Sendable {
+            /// `on`; `off_no_provider` (no active Google account in the AI order: unknown commands run
+            /// where they were typed); `disabled` (`decisions.heavy_job.enabled` is 0).
+            ///
+            /// - Remark: Generated from `#/components/schemas/HardwareDecisions/status`.
+            public var status: Swift.String
+            /// Creates a new `HardwareDecisions`.
+            ///
+            /// - Parameters:
+            ///   - status: `on`; `off_no_provider` (no active Google account in the AI order: unknown commands run
+            public init(status: Swift.String) {
+                self.status = status
+            }
+            public enum CodingKeys: String, CodingKey {
+                case status
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/HardwareGate`.
         public struct HardwareGate: Codable, Hashable, Sendable {
             /// Whether a machine takes jobs now, by its own measure.
@@ -5292,6 +5312,10 @@ extension Components {
         ///
         /// - Remark: Generated from `#/components/schemas/HardwarePool`.
         public struct HardwarePool: Codable, Hashable, Sendable {
+            /// Smart job routing (the Decisions service) for commands no rule or history knows.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HardwarePool/decisions`.
+            public var decisions: Components.Schemas.HardwareDecisions?
             /// - Remark: Generated from `#/components/schemas/HardwarePool/jobs`.
             public var jobs: Swift.Int32
             /// Running jobs over all online job slots, 0 to 100.
@@ -5307,22 +5331,26 @@ extension Components {
             /// Creates a new `HardwarePool`.
             ///
             /// - Parameters:
+            ///   - decisions: Smart job routing (the Decisions service) for commands no rule or history knows.
             ///   - jobs:
             ///   - loadPct: Running jobs over all online job slots, 0 to 100.
             ///   - paused: A pause-all is in effect.
             ///   - sessions:
             public init(
+                decisions: Components.Schemas.HardwareDecisions? = nil,
                 jobs: Swift.Int32,
                 loadPct: Swift.Int32,
                 paused: Swift.Bool,
                 sessions: Swift.Int32
             ) {
+                self.decisions = decisions
                 self.jobs = jobs
                 self.loadPct = loadPct
                 self.paused = paused
                 self.sessions = sessions
             }
             public enum CodingKeys: String, CodingKey {
+                case decisions
                 case jobs
                 case loadPct = "load_pct"
                 case paused
