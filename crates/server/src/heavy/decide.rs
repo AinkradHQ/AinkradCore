@@ -35,8 +35,14 @@ pub enum Decision {
     /// A person is at a terminal with it: 409 `interactive` (the shim runs it).
     Interactive,
     /// Run it where it was typed. `report` asks the shim to time it, for history.
-    Local { reason: &'static str, report: bool },
-    Heavy { row: Row, tier: Tier },
+    Local {
+        reason: &'static str,
+        report: bool,
+    },
+    Heavy {
+        row: Row,
+        tier: Tier,
+    },
 }
 
 /// What the decision reads.
@@ -86,7 +92,10 @@ pub fn facts_of(dir: &Path) -> Facts {
             f.languages.push(lang);
         }
     }
-    f.lockfiles = locks.into_iter().filter(|l| dir.join(l).is_file()).collect();
+    f.lockfiles = locks
+        .into_iter()
+        .filter(|l| dir.join(l).is_file())
+        .collect();
     f
 }
 
@@ -127,7 +136,9 @@ async fn ask_model(d: &Deps<'_>, argv: &[String], facts: &Facts) -> bool {
     let req = DecideRequest {
         consumer: Consumer::HeavyJob,
         user: d.user,
-        options: [HEAVY_SAFE, HEAVY_UNSAFE, LIGHT].map(str::to_owned).to_vec(),
+        options: [HEAVY_SAFE, HEAVY_UNSAFE, LIGHT]
+            .map(str::to_owned)
+            .to_vec(),
         questions: vec![q],
         context: BTreeMap::new(),
     };
@@ -153,31 +164,56 @@ pub async fn decide(
         Verdict::Interactive(_) => return Decision::Interactive,
         Verdict::Rule(row, _) => {
             return if row.heavy {
-                Decision::Heavy { row, tier: Tier::Rule }
+                Decision::Heavy {
+                    row,
+                    tier: Tier::Rule,
+                }
             } else {
-                Decision::Local { reason: "light", report: false }
+                Decision::Local {
+                    reason: "light",
+                    report: false,
+                }
             };
         }
         Verdict::Unknown => {}
     }
     let Some(project) = project else {
-        return Decision::Local { reason: "no_project", report: false };
+        return Decision::Local {
+            reason: "no_project",
+            report: false,
+        };
     };
     let heavy = |tier| Decision::Heavy {
-        row: Row { heavy: true, ..Row::default() },
+        row: Row {
+            heavy: true,
+            ..Row::default()
+        },
         tier,
     };
     match history::lookup(d.pool, project, &history::cmd_key(argv)).await {
         Ok(Hist::Heavy) => return heavy(Tier::History),
-        Ok(Hist::Light) => return Decision::Local { reason: "history_light", report: true },
+        Ok(Hist::Light) => {
+            return Decision::Local {
+                reason: "history_light",
+                report: true,
+            };
+        }
         Ok(Hist::Unknown) => {}
         // A database that will not answer is not a reason to hold the command.
-        Err(_) => return Decision::Local { reason: "history_unavailable", report: false },
+        Err(_) => {
+            return Decision::Local {
+                reason: "history_unavailable",
+                report: false,
+            };
+        }
     }
     if ask_model(d, argv, &facts_of(dir)).await {
         heavy(Tier::Decision)
     } else {
-        Decision::Local { reason: "unknown_command", report: true }
+        Decision::Local {
+            reason: "unknown_command",
+            report: true,
+        }
     }
 }
 
@@ -220,7 +256,11 @@ mod tests {
     fn scored(heavy: f32, light: f32) -> Scored {
         Scored {
             key: "cmd".into(),
-            scores: vec![(HEAVY_SAFE.into(), heavy), (HEAVY_UNSAFE.into(), 0.0), (LIGHT.into(), light)],
+            scores: vec![
+                (HEAVY_SAFE.into(), heavy),
+                (HEAVY_UNSAFE.into(), 0.0),
+                (LIGHT.into(), light),
+            ],
             source: Source::Cache,
         }
     }
@@ -228,11 +268,18 @@ mod tests {
     #[test]
     fn only_a_confident_heavy_safe_sends_a_job_away() {
         assert!(heavy_by_scores(&scored(0.8, 0.1), 0.7));
-        assert!(!heavy_by_scores(&scored(0.6, 0.1), 0.7), "not confident enough");
+        assert!(
+            !heavy_by_scores(&scored(0.6, 0.1), 0.7),
+            "not confident enough"
+        );
         assert!(!heavy_by_scores(&scored(0.4, 0.5), 0.3), "light is on top");
         let equal = Scored {
             key: "cmd".into(),
-            scores: vec![(HEAVY_SAFE.into(), 0.33), (HEAVY_UNSAFE.into(), 0.33), (LIGHT.into(), 0.33)],
+            scores: vec![
+                (HEAVY_SAFE.into(), 0.33),
+                (HEAVY_UNSAFE.into(), 0.33),
+                (LIGHT.into(), 0.33),
+            ],
             source: Source::None,
         };
         assert!(!heavy_by_scores(&equal, 0.7));
@@ -244,24 +291,45 @@ mod tests {
         let hot = Fixed(0.9);
         let dir = std::env::temp_dir();
         let argv = |s: &str| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>();
-        let d = Deps { pool: &pool, decide: &hot, user: UserId(1), min_confidence: 0.7 };
+        let d = Deps {
+            pool: &pool,
+            decide: &hot,
+            user: UserId(1),
+            min_confidence: 0.7,
+        };
         // Tier 0 and 1 never touch the database or the model.
-        assert_eq!(decide(&d, Some(1), &argv("cargo run"), true, &[], &dir).await, Decision::Interactive);
-        let Decision::Heavy { tier, row } = decide(&d, Some(1), &argv("cargo test"), false, &[], &dir).await else { panic!() };
+        assert_eq!(
+            decide(&d, Some(1), &argv("cargo run"), true, &[], &dir).await,
+            Decision::Interactive
+        );
+        let Decision::Heavy { tier, row } =
+            decide(&d, Some(1), &argv("cargo test"), false, &[], &dir).await
+        else {
+            panic!()
+        };
         assert_eq!((tier, row.need), (Tier::Rule, vec!["rust".to_owned()]));
         assert_eq!(
             decide(&d, Some(1), &argv("npm ci"), false, &[], &dir).await,
-            Decision::Local { reason: "light", report: false }
+            Decision::Local {
+                reason: "light",
+                report: false
+            }
         );
         // No project: nothing to sync, so no model call either.
         assert_eq!(
             decide(&d, None, &argv("./weird"), false, &[], &dir).await,
-            Decision::Local { reason: "no_project", report: false }
+            Decision::Local {
+                reason: "no_project",
+                report: false
+            }
         );
         // A database that cannot be read holds nothing back.
         assert_eq!(
             decide(&d, Some(1), &argv("./weird"), false, &[], &dir).await,
-            Decision::Local { reason: "history_unavailable", report: false }
+            Decision::Local {
+                reason: "history_unavailable",
+                report: false
+            }
         );
     }
 

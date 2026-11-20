@@ -455,7 +455,10 @@ fn jobs_rules(bin: &Path, sock_dir: &Path) -> String {
         quote(&dir.join("job.sock"))
     );
     for a in bin.ancestors().skip(1).chain(dir.ancestors().skip(1)) {
-        r.push_str(&format!("(allow file-read-metadata (literal \"{}\"))\n", quote(a)));
+        r.push_str(&format!(
+            "(allow file-read-metadata (literal \"{}\"))\n",
+            quote(a)
+        ));
     }
     r
 }

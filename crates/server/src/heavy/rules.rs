@@ -63,7 +63,9 @@ pub fn interactive(argv: &[String], tty: bool) -> Option<&'static str> {
         "cargo" => sub == "run" || sub == "r",
         "go" => sub == "run",
         "npm" | "pnpm" | "yarn" | "bun" => {
-            sub == "start" || sub == "dev" || (sub == "run" && matches!(w.get(1), Some(&"dev" | &"start")))
+            sub == "start"
+                || sub == "dev"
+                || (sub == "run" && matches!(w.get(1), Some(&"dev" | &"start")))
         }
         "vite" => true,
         "next" => sub == "dev",
@@ -82,7 +84,10 @@ fn install(argv: &[String]) -> bool {
         "npm" | "pnpm" => matches!(sub, "install" | "i" | "ci" | "add" | "remove" | "uninstall"),
         "yarn" => w.is_empty() || matches!(sub, "install" | "add" | "remove"),
         "bun" => matches!(sub, "install" | "i" | "add" | "remove"),
-        "cargo" => matches!(sub, "fetch" | "add" | "install" | "update" | "remove" | "generate-lockfile"),
+        "cargo" => matches!(
+            sub,
+            "fetch" | "add" | "install" | "update" | "remove" | "generate-lockfile"
+        ),
         "go" => matches!(sub, "get" | "mod"),
         "pip" | "pip3" | "uv" => matches!(sub, "install" | "add"),
         _ => false,
@@ -112,7 +117,12 @@ pub fn builtin(argv: &[String]) -> Option<Row> {
     let (prog, w) = (program(argv), words(argv));
     let sub = w.first().copied().unwrap_or("");
     match prog {
-        "cargo" if matches!(sub, "build" | "b" | "test" | "t" | "check" | "c" | "clippy" | "bench" | "doc") => {
+        "cargo"
+            if matches!(
+                sub,
+                "build" | "b" | "test" | "t" | "check" | "c" | "clippy" | "bench" | "doc"
+            ) =>
+        {
             Some(heavy(&["rust"], None, &["target"]))
         }
         "go" if matches!(sub, "build" | "test") => Some(heavy(&["go"], None, &[])),
@@ -144,7 +154,9 @@ pub fn builtin(argv: &[String]) -> Option<Row> {
             (!probe.iter().any(|p| has(argv, p))).then(|| heavy(&["java"], None, &["build"]))
         }
         "pytest" => Some(heavy(&["python"], None, &[])),
-        "tsc" => (has(argv, "-b") || has(argv, "--build")).then(|| heavy(&["node"], None, &["dist"])),
+        "tsc" => {
+            (has(argv, "-b") || has(argv, "--build")).then(|| heavy(&["node"], None, &["dist"]))
+        }
         _ => None,
     }
 }
@@ -194,7 +206,8 @@ pub fn parse_project(toml_text: &str) -> Vec<ProjectRule> {
 impl ProjectRule {
     fn matches(&self, argv: &[String]) -> bool {
         let want: Vec<&str> = self.pattern.split_whitespace().collect();
-        let mut have = std::iter::once(program(argv)).chain(argv.iter().skip(1).map(String::as_str));
+        let mut have =
+            std::iter::once(program(argv)).chain(argv.iter().skip(1).map(String::as_str));
         !want.is_empty()
             && want
                 .iter()
@@ -237,9 +250,21 @@ mod tests {
     #[test]
     fn the_table_sends_builds_and_tests_away() {
         for c in [
-            "cargo build --release", "cargo +nightly test", "cargo clippy", "go test ./...", "npm run build",
-            "pnpm test", "yarn build", "make", "make -j8", "xcodebuild -scheme A", "swift build", "./gradlew assemble",
-            "pytest -q", "tsc -b", "/usr/bin/cargo check",
+            "cargo build --release",
+            "cargo +nightly test",
+            "cargo clippy",
+            "go test ./...",
+            "npm run build",
+            "pnpm test",
+            "yarn build",
+            "make",
+            "make -j8",
+            "xcodebuild -scheme A",
+            "swift build",
+            "./gradlew assemble",
+            "pytest -q",
+            "tsc -b",
+            "/usr/bin/cargo check",
         ] {
             assert_eq!(is_heavy(c), Some(true), "{c}");
         }
@@ -247,26 +272,65 @@ mod tests {
 
     #[test]
     fn installs_and_probes_stay_light() {
-        for c in ["npm ci", "npm install", "pnpm add x", "yarn", "cargo fetch", "cargo install ripgrep", "xcodebuild -version", "gradle --version"] {
+        for c in [
+            "npm ci",
+            "npm install",
+            "pnpm add x",
+            "yarn",
+            "cargo fetch",
+            "cargo install ripgrep",
+            "xcodebuild -version",
+            "gradle --version",
+        ] {
             assert_eq!(is_heavy(c), Some(false), "{c}");
         }
     }
 
     #[test]
     fn what_the_table_does_not_know_is_unknown() {
-        for c in ["make test", "go vet", "cargo fmt", "npm run lint", "ls", "tsc"] {
+        for c in [
+            "make test",
+            "go vet",
+            "cargo fmt",
+            "npm run lint",
+            "ls",
+            "tsc",
+        ] {
             assert_eq!(is_heavy(c), None, "{c}");
         }
     }
 
     #[test]
     fn a_terminal_user_waiting_runs_locally() {
-        for c in ["cargo run", "go run .", "npm start", "npm run dev", "vite", "next dev", "python", "swift repl", "cargo test --watch", "python -i x.py"] {
-            assert!(matches!(decide(&a(c), true, &[]), Verdict::Interactive(_)), "{c}");
-            assert!(!matches!(decide(&a(c), false, &[]), Verdict::Interactive(_)), "no tty: {c}");
+        for c in [
+            "cargo run",
+            "go run .",
+            "npm start",
+            "npm run dev",
+            "vite",
+            "next dev",
+            "python",
+            "swift repl",
+            "cargo test --watch",
+            "python -i x.py",
+        ] {
+            assert!(
+                matches!(decide(&a(c), true, &[]), Verdict::Interactive(_)),
+                "{c}"
+            );
+            assert!(
+                !matches!(decide(&a(c), false, &[]), Verdict::Interactive(_)),
+                "no tty: {c}"
+            );
         }
-        assert!(!matches!(decide(&a("cargo build"), true, &[]), Verdict::Interactive(_)));
-        assert!(!matches!(decide(&a("python x.py"), true, &[]), Verdict::Interactive(_)));
+        assert!(!matches!(
+            decide(&a("cargo build"), true, &[]),
+            Verdict::Interactive(_)
+        ));
+        assert!(!matches!(
+            decide(&a("python x.py"), true, &[]),
+            Verdict::Interactive(_)
+        ));
     }
 
     #[test]
@@ -275,11 +339,19 @@ mod tests {
             "[sync]\ninclude = [\"x\"]\n[[rule]]\nmatch = \"cargo test\"\nheavy = false\n[[rule]]\nmatch = \"make *\"\nneed = [\"go\"]\noutputs = [\"out\"]\n",
         );
         assert_eq!(rules.len(), 2);
-        assert_eq!(decide(&a("cargo test"), false, &rules), Verdict::Rule(Row::default(), Source::Project));
-        let Verdict::Rule(r, Source::Project) = decide(&a("make ci"), false, &rules) else { panic!() };
+        assert_eq!(
+            decide(&a("cargo test"), false, &rules),
+            Verdict::Rule(Row::default(), Source::Project)
+        );
+        let Verdict::Rule(r, Source::Project) = decide(&a("make ci"), false, &rules) else {
+            panic!()
+        };
         assert!(r.heavy && r.need == ["go"] && r.outputs == ["out"]);
         // `make *` needs a word; bare make falls through to the table.
-        assert!(matches!(decide(&a("make"), false, &rules), Verdict::Rule(_, Source::Builtin)));
+        assert!(matches!(
+            decide(&a("make"), false, &rules),
+            Verdict::Rule(_, Source::Builtin)
+        ));
         assert!(parse_project("[[rule]\nbroken").is_empty());
     }
 }

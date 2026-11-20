@@ -65,13 +65,17 @@ fn tool_of(argv: &[String]) -> Option<(String, Vec<String>)> {
 /// it (same device and inode), so the shim never finds itself.
 fn find_real(name: &str, path: &str, me: Option<&Path>) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
-    let mine = me.and_then(|p| std::fs::metadata(p).ok()).map(|m| (m.dev(), m.ino()));
+    let mine = me
+        .and_then(|p| std::fs::metadata(p).ok())
+        .map(|m| (m.dev(), m.ino()));
     path.split(':')
         .filter(|d| d.starts_with('/'))
         .map(|d| Path::new(d).join(name))
         .find(|p| {
             std::fs::metadata(p).is_ok_and(|m| {
-                m.is_file() && m.permissions().mode() & 0o111 != 0 && Some((m.dev(), m.ino())) != mine
+                m.is_file()
+                    && m.permissions().mode() & 0o111 != 0
+                    && Some((m.dev(), m.ino())) != mine
             })
         })
 }
@@ -120,7 +124,9 @@ fn follow(frames: impl BufRead, out: &mut impl Write, err: &mut impl Write) -> O
                     let _ = sink.flush();
                 }
             }
-            Some("exit") => return Outcome::Exit(status_of(f["code"].as_i64(), f["signal"].as_i64())),
+            Some("exit") => {
+                return Outcome::Exit(status_of(f["code"].as_i64(), f["signal"].as_i64()));
+            }
             _ => {}
         }
     }
@@ -169,10 +175,20 @@ fn ask(sock: &str, req: &str, tool: &str) -> (Outcome, Option<UnixStream>) {
 /// Runs the real tool as a child, mirrors its status and tells the endpoint how long it took.
 /// Signals go to the child: all three when no terminal is there to send them itself, else only
 /// TERM (a terminal's Ctrl-C and hang-up already reach the child's process group).
-fn run_and_report(real: &Path, tool: &str, args: &[String], mut stream: UnixStream, tty: bool) -> ! {
+fn run_and_report(
+    real: &Path,
+    tool: &str,
+    args: &[String],
+    mut stream: UnixStream,
+    tty: bool,
+) -> ! {
     let signals = ainkrad_sys::catch_signals(&[libc_int::HUP, libc_int::INT, libc_int::TERM]).ok();
     let start = std::time::Instant::now();
-    let mut child = match std::process::Command::new(real).arg0(tool).args(args).spawn() {
+    let mut child = match std::process::Command::new(real)
+        .arg0(tool)
+        .args(args)
+        .spawn()
+    {
         Ok(c) => c,
         Err(e) => {
             eprintln!("ainkrad-job: cannot run {}: {e}", real.display());
@@ -244,7 +260,9 @@ fn main() {
     };
     let path = std::env::var("PATH").unwrap_or_default();
     let me = std::env::current_exe().ok();
-    let sock = std::env::var("AINKRAD_JOB_SOCK").ok().filter(|s| !s.is_empty());
+    let sock = std::env::var("AINKRAD_JOB_SOCK")
+        .ok()
+        .filter(|s| !s.is_empty());
     // AINKRAD_JOB_LOCAL: set for a command the job runner itself starts, so it cannot loop back.
     if let Some(sock) = sock.filter(|_| std::env::var_os("AINKRAD_JOB_LOCAL").is_none()) {
         let cwd = std::env::current_dir()
@@ -267,7 +285,10 @@ fn main() {
     }
     match find_real(&tool, &path, me.as_deref()) {
         Some(real) => {
-            let e = std::process::Command::new(&real).arg0(&tool).args(&args).exec();
+            let e = std::process::Command::new(&real)
+                .arg0(&tool)
+                .args(&args)
+                .exec();
             eprintln!("ainkrad-job: cannot run {}: {e}", real.display());
         }
         None => eprintln!("ainkrad-job: {tool}: command not found"),
@@ -285,8 +306,14 @@ mod tests {
 
     #[test]
     fn the_tool_is_the_link_name_or_the_first_argument() {
-        assert_eq!(tool_of(&s(&["/x/shims/cargo", "build"])), Some(("cargo".into(), s(&["build"]))));
-        assert_eq!(tool_of(&s(&["ainkrad-job", "/usr/bin/go", "test"])), Some(("go".into(), s(&["test"]))));
+        assert_eq!(
+            tool_of(&s(&["/x/shims/cargo", "build"])),
+            Some(("cargo".into(), s(&["build"])))
+        );
+        assert_eq!(
+            tool_of(&s(&["ainkrad-job", "/usr/bin/go", "test"])),
+            Some(("go".into(), s(&["test"])))
+        );
         assert_eq!(tool_of(&s(&["ainkrad-job"])), None);
     }
 
@@ -323,21 +350,36 @@ mod tests {
             json!({"t": "out", "fd": 2, "b64": STANDARD.encode("warn\n")}),
             json!({"t": "exit", "code": 101}),
         ]);
-        assert_eq!((o, out, err), (Outcome::Exit(101), b"hi\n".to_vec(), b"warn\n".to_vec()));
-        assert_eq!(frames(&[json!({"t": "exit", "signal": 9})]).0, Outcome::Exit(137));
+        assert_eq!(
+            (o, out, err),
+            (Outcome::Exit(101), b"hi\n".to_vec(), b"warn\n".to_vec())
+        );
+        assert_eq!(
+            frames(&[json!({"t": "exit", "signal": 9})]).0,
+            Outcome::Exit(137)
+        );
     }
 
     #[test]
     fn a_stream_that_ends_early_falls_back_and_says_so_only_after_the_start() {
-        assert_eq!(frames(&[json!({"t": "state", "state": "syncing"})]).0, Outcome::Local { note: None });
+        assert_eq!(
+            frames(&[json!({"t": "state", "state": "syncing"})]).0,
+            Outcome::Local { note: None }
+        );
         let after = frames(&[json!({"t": "state", "state": "running"})]).0;
         assert!(matches!(after, Outcome::Local { note: Some(_) }));
     }
 
     #[test]
     fn no_socket_means_local_and_a_missing_tool_is_not_found() {
-        assert_eq!(ask("/nonexistent/sock", "{}\n", "cargo").0, Outcome::Local { note: None });
-        assert_eq!(find_real("definitely-not-a-tool", "/usr/bin:/bin", None), None);
+        assert_eq!(
+            ask("/nonexistent/sock", "{}\n", "cargo").0,
+            Outcome::Local { note: None }
+        );
+        assert_eq!(
+            find_real("definitely-not-a-tool", "/usr/bin:/bin", None),
+            None
+        );
     }
 
     #[test]
@@ -363,11 +405,17 @@ mod tests {
         let t = std::thread::spawn(move || {
             let (mut c, _) = l.accept().unwrap();
             let mut line = String::new();
-            BufReader::new(c.try_clone().unwrap()).read_line(&mut line).unwrap();
+            BufReader::new(c.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
             writeln!(c, "{}", json!({"verdict": "local", "reason": "light"})).unwrap();
             line
         });
-        let (o, report) = ask(sock.to_str().unwrap(), &request("make", &[], "/w", false, &[]), "make");
+        let (o, report) = ask(
+            sock.to_str().unwrap(),
+            &request("make", &[], "/w", false, &[]),
+            "make",
+        );
         assert_eq!(o, Outcome::Local { note: None });
         assert!(report.is_none());
         assert!(t.join().unwrap().contains("\"argv\":[\"make\"]"));

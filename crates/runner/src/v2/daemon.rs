@@ -228,8 +228,20 @@ pub async fn from_state(
     let key = Arc::new(Key::load(&state.key()).map_err(config)?);
     let enrolment = Arc::new(Mutex::new(enrolment));
     let url = enrolment.lock().unwrap().url.clone();
+    // The Core's own runner: terminals and sessions get the heavy-job shims, asking the Core with
+    // signed requests.
+    let jobs = pty.as_ref().filter(|p| p.wants_jobs()).and_then(|p| {
+        let c = Client::new(&url, tls.clone()).ok()?;
+        let up =
+            super::mirror::http_upstream(Arc::new(c), Arc::clone(&key), Arc::clone(&enrolment));
+        p.start_jobs(&state.0, up)
+    });
     // Leases are redeemed with this runner's own signed requests (E2-07.2).
     let agents = agents.map(|a| {
+        let a = match &jobs {
+            Some((socks, bin)) => a.with_job_shims(Arc::clone(socks), bin.clone()),
+            None => a,
+        };
         let client = Client::new(&url, tls.clone()).map(Arc::new);
         let agent = Arc::new(match client {
             Ok(c) => a
@@ -258,15 +270,6 @@ pub async fn from_state(
         });
         agent
     });
-    // The Core's own runner: terminals get the heavy-job shims, asking the Core with a signed request.
-    if let Some(p) = pty.as_ref().filter(|p| p.wants_jobs())
-        && let Ok(c) = Client::new(&url, tls.clone())
-    {
-        p.start_jobs(
-            &state.0,
-            super::mirror::http_upstream(Arc::new(c), Arc::clone(&key), Arc::clone(&enrolment)),
-        );
-    }
     // Whatever is enabled, a crash may have left a sign-in's scratch HOME behind.
     super::login::sweep(&state.0);
     let login = match agents.is_some() {

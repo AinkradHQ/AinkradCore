@@ -5,3 +5,9 @@
 pub mod decide;
 pub mod history;
 pub mod rules;
+
+/// The canonical workspace the jobs' folders live in.
+// ponytail: the default root; E15-2 puts the configured `workspace_root` on `App`, and this reads it.
+pub fn workspace() -> crate::workspace::paths::Workspace {
+    crate::workspace::paths::Workspace::new(crate::workspace::paths::DEFAULT_ROOT)
+}

@@ -21,7 +21,9 @@ pub enum Hist {
 
 /// The program plus its first two non-flag arguments: `cargo test`, `npm run build`.
 pub fn cmd_key(argv: &[String]) -> String {
-    let prog = argv.first().map_or("", |p| p.rsplit('/').next().unwrap_or(p));
+    let prog = argv
+        .first()
+        .map_or("", |p| p.rsplit('/').next().unwrap_or(p));
     let words = argv
         .iter()
         .skip(1)
@@ -108,7 +110,10 @@ mod tests {
 
     #[test]
     fn the_key_is_the_program_and_two_words() {
-        assert_eq!(cmd_key(&a("/usr/bin/cargo +nightly test -p x --release foo bar")), "cargo test x");
+        assert_eq!(
+            cmd_key(&a("/usr/bin/cargo +nightly test -p x --release foo bar")),
+            "cargo test x"
+        );
         assert_eq!(cmd_key(&a("make")), "make");
         assert_eq!(cmd_key(&a("npm run build")), "npm run build");
         assert_eq!(cmd_key(&[]), "");

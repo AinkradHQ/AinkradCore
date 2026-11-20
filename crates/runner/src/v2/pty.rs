@@ -129,7 +129,7 @@ struct Jobs {
 }
 
 /// Closes a terminal's job socket unless the terminal started.
-struct JobGuard(Option<(Arc<super::jobsock::JobSocks>, String)>);
+pub(crate) struct JobGuard(pub(crate) Option<(Arc<super::jobsock::JobSocks>, String)>);
 
 impl Drop for JobGuard {
     fn drop(&mut self) {
@@ -296,20 +296,31 @@ impl PtyDriver {
     /// Installs the shims under `state` and serves terminals' job sockets through `up`. Quietly
     /// does nothing when the `ainkrad-job` binary is not next to this one: terminals then run
     /// every command locally, as before.
-    pub fn start_jobs(&self, state: &Path, up: crate::workspace::relay::Upstream) {
+    pub fn start_jobs(
+        &self,
+        state: &Path,
+        up: crate::workspace::relay::Upstream,
+    ) -> Option<(Arc<super::jobsock::JobSocks>, PathBuf)> {
         let Some(shim) = std::env::current_exe()
             .ok()
             .and_then(|e| super::jobsock::shim_binary(&e))
         else {
             tracing::warn!("ainkrad-job is not installed next to the runner: no job shims");
-            return;
+            return None;
         };
         match super::jobsock::install_shims(state, &shim) {
             Ok(bin) => {
                 let socks = super::jobsock::JobSocks::new(state.join("jobsock"), up);
-                let _ = self.jobs.set(Jobs { socks, bin });
+                let _ = self.jobs.set(Jobs {
+                    socks: Arc::clone(&socks),
+                    bin: bin.clone(),
+                });
+                Some((socks, bin))
             }
-            Err(e) => tracing::warn!("could not install the job shims: {e}"),
+            Err(e) => {
+                tracing::warn!("could not install the job shims: {e}");
+                None
+            }
         }
     }
 
@@ -614,13 +625,21 @@ impl PtyDriver {
         let mut job_guard = JobGuard(None);
         let mut job_mount: Option<(PathBuf, PathBuf)> = None;
         if private && let Some(j) = self.jobs.get() {
-            let session = match &mode {
-                Some(ainkrad_proto::v2::SandboxMode::Session(s)) => Some(s.clone()),
-                _ => None,
+            use ainkrad_proto::v2::SandboxMode as M;
+            let (session, project) = match &mode {
+                Some(M::Session(s)) => (Some(s.clone()), None),
+                // `p_<number>`; anything else leaves the Core to find the project from the terminal.
+                Some(M::Project(p)) => (None, p.trim_start_matches("p_").parse().ok()),
+                _ => (None, None),
             };
             let origin = super::jobsock::Origin {
                 terminal: Some(id.clone()),
                 session,
+                project,
+                // A home terminal has no folder: its commands stay local.
+                folder: matches!(&mode, Some(M::Session(_) | M::Project(_)))
+                    .then(|| req.cwd.clone().map(PathBuf::from))
+                    .flatten(),
             };
             match j.socks.open(&id, origin).await {
                 Ok(sock) => {

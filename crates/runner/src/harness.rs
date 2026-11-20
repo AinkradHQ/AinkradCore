@@ -138,6 +138,8 @@ pub struct HarnessExecutor {
     /// The connection tools the Core lists for each session (C4b), which the policy checks a
     /// connection tool's name against (`connection_call`); the agent driver is given the same.
     pub tools: Option<Arc<crate::v2::agent::tools::Tools>>,
+    /// The heavy-job shims of the Core's own runner (E15-3): the socket server and the shim dir.
+    pub(crate) job_shims: Mutex<Option<(Arc<crate::v2::jobsock::JobSocks>, PathBuf)>>,
 }
 
 impl HarnessExecutor {
@@ -193,6 +195,7 @@ impl HarnessExecutor {
             versions: Mutex::new(BTreeMap::new()),
             backend: None,
             tools: None,
+            job_shims: Mutex::new(None),
         }
     }
 
@@ -446,6 +449,10 @@ impl Executor for HarnessExecutor {
 
     fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream) {
         self.workspaces.set_mirror_upstream(up);
+    }
+
+    fn set_job_shims(&self, socks: Arc<crate::v2::jobsock::JobSocks>, bin: PathBuf) {
+        *self.job_shims.lock().expect("job shims") = Some((socks, bin));
     }
 
     async fn prepare_agent_workspace(

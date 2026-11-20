@@ -11,6 +11,7 @@ pub mod decisions;
 pub mod gateway;
 pub mod hardware;
 pub mod health;
+pub mod heavy;
 pub mod host;
 pub mod hub;
 pub mod jobs;

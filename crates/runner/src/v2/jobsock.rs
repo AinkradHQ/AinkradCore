@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -31,8 +30,27 @@ use crate::workspace::relay::{Call, Upstream};
 
 /// The commands the shim stands in for (spec §5.1).
 pub const SHIM_NAMES: [&str; 21] = [
-    "cargo", "go", "npm", "pnpm", "yarn", "bun", "make", "cmake", "ninja", "gradle", "gradlew", "mvn",
-    "bazel", "swift", "xcodebuild", "pytest", "tox", "dotnet", "tsc", "vitest", "jest",
+    "cargo",
+    "go",
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun",
+    "make",
+    "cmake",
+    "ninja",
+    "gradle",
+    "gradlew",
+    "mvn",
+    "bazel",
+    "swift",
+    "xcodebuild",
+    "pytest",
+    "tox",
+    "dotnet",
+    "tsc",
+    "vitest",
+    "jest",
 ];
 /// Environment names a request may carry; the shim sends the same list and this side checks again.
 pub const ENV_ALLOW: [&str; 11] = [
@@ -67,12 +85,15 @@ const MAX_ARG: usize = 4096;
 
 /// Whose socket this is: stamped by the runner when it opens the socket, never taken from the
 /// sandbox.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Origin {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// The project, when the sandbox names one.
+    pub project: Option<i64>,
+    /// The session or project folder the sandbox works in: a command's `cwd` is sent relative to
+    /// it, and a command outside it is not sent at all. `None` (a home terminal): always local.
+    pub folder: Option<PathBuf>,
 }
 
 /// Hardlinks `shim` (the `ainkrad-job` binary) as every name in [`SHIM_NAMES`] under
@@ -144,8 +165,15 @@ impl JobSocks {
     /// Starts serving `key`'s socket for `origin`; the socket's path. `key` is the terminal or
     /// session id, which is unguessable, so it is also what keeps another sandbox off the socket.
     pub async fn open(&self, key: &str, origin: Origin) -> io::Result<PathBuf> {
-        if key.is_empty() || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "bad socket key"));
+        if key.is_empty()
+            || !key
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "bad socket key",
+            ));
         }
         self.close(key);
         std::fs::create_dir_all(&self.dir)?;
@@ -190,7 +218,9 @@ impl JobSocks {
             .lock()
             .unwrap()
             .iter()
-            .filter(|(k, (_, at))| k.starts_with("t_") && at.elapsed() > SWEEP_AGE && !live.contains(k))
+            .filter(|(k, (_, at))| {
+                k.starts_with("t_") && at.elapsed() > SWEEP_AGE && !live.contains(k)
+            })
             .map(|(k, _)| k.clone())
             .collect();
         for k in stale {
@@ -210,15 +240,27 @@ async fn say(wr: &mut tokio::net::unix::OwnedWriteHalf, v: Value) {
     let _ = wr.write_all(format!("{v}\n").as_bytes()).await;
 }
 
-/// The request the Core gets, or why the shim should run the tool itself.
+/// `cwd` relative to `folder` (empty for the folder itself), or `None` when it lies outside.
+fn rel_cwd(cwd: &str, folder: &Path) -> Option<String> {
+    let rel = Path::new(cwd).strip_prefix(folder).ok()?;
+    let s = rel.to_str()?;
+    // `..` cannot be in an absolute path the shim read from the kernel, but the check is cheap.
+    (!s.split('/').any(|c| c == "..")).then(|| s.to_owned())
+}
+
+/// The request the Core gets (`RunnerNewJob`), or why the shim should run the tool itself.
 fn build(req: &Value, origin: &Origin) -> Option<Vec<u8>> {
     let argv = req["argv"].as_array()?;
-    let ok_str = |v: &Value| v.as_str().filter(|s| s.len() <= MAX_ARG && !s.contains('\0'));
+    let ok_str = |v: &Value| {
+        v.as_str()
+            .filter(|s| s.len() <= MAX_ARG && !s.contains('\0'))
+    };
     let argv: Vec<&str> = argv.iter().map(ok_str).collect::<Option<_>>()?;
     if argv.is_empty() || argv.len() > MAX_ARGV || argv[0].is_empty() {
         return None;
     }
     let cwd = ok_str(&req["cwd"]).filter(|c| c.starts_with('/'))?;
+    let cwd_rel = rel_cwd(cwd, origin.folder.as_deref()?)?;
     let env: serde_json::Map<String, Value> = req["env"]
         .as_object()
         .map(|m| {
@@ -229,20 +271,24 @@ fn build(req: &Value, origin: &Origin) -> Option<Vec<u8>> {
         })
         .unwrap_or_default();
     let body = json!({
-        "origin": origin,
+        "session": origin.session,
+        "terminal": origin.terminal,
+        "project": origin.project,
         "argv": argv,
-        "cwd": cwd,
+        "cwd_rel": cwd_rel,
         "tty": req["tty"].as_bool().unwrap_or(false),
         "env": env,
     });
     Some(body.to_string().into_bytes())
 }
 
-/// The report of a command that ran here: what `build` made, plus how long it took.
+/// The report of a command that ran here (`RunnerJobReport`): who, what, and how long it took.
 fn report_call(request: &[u8], ms: u64, code: i64) -> Option<Call> {
-    let mut v: Value = serde_json::from_slice(request).ok()?;
-    v["ms"] = json!(ms);
-    v["code"] = json!(code);
+    let r: Value = serde_json::from_slice(request).ok()?;
+    let v = json!({
+        "session": r["session"], "terminal": r["terminal"], "project": r["project"],
+        "argv": r["argv"], "exit_code": i32::try_from(code).ok(), "duration_ms": ms,
+    });
     Some(Call {
         method: "POST",
         path: format!("{JOBS_PATH}/report"),
@@ -254,8 +300,9 @@ fn report_call(request: &[u8], ms: u64, code: i64) -> Option<Call> {
 
 /// A job id as the Core makes them, safe to put in a path.
 fn job_id_ok(id: &str) -> bool {
-    id.strip_prefix("j_")
-        .is_some_and(|r| !r.is_empty() && r.len() <= 64 && r.bytes().all(|b| b.is_ascii_alphanumeric()))
+    id.strip_prefix("j_").is_some_and(|r| {
+        !r.is_empty() && r.len() <= 64 && r.bytes().all(|b| b.is_ascii_alphanumeric())
+    })
 }
 
 /// What the shim asks of a running job, or tells after a local run.
@@ -285,16 +332,17 @@ fn parse_ask(l: &str) -> Option<Ask> {
 }
 
 fn signal_call(job: &str, ask: &Ask) -> Call {
+    // The Core's `JobSignal` knows INT, TERM and KILL: a hang-up or a cancel is a TERM.
     let sig = match ask {
-        Ask::Signal(s) => *s,
-        Ask::Cancel | Ask::Done { .. } => "cancel",
+        Ask::Signal("INT") => "INT",
+        _ => "TERM",
     };
     Call {
         method: "POST",
         path: format!("{JOBS_PATH}/{job}/signal"),
         query: String::new(),
         headers: vec![("content-type".to_owned(), "application/json".to_owned())],
-        body: json!({ "sig": sig }).to_string().into_bytes(),
+        body: json!({ "signal": sig }).to_string().into_bytes(),
     }
 }
 
@@ -322,7 +370,14 @@ async fn serve(conn: UnixStream, up: Upstream, origin: Origin) -> io::Result<()>
     };
     let body_sent = body;
     let reply = match tokio::time::timeout(VERDICT_WAIT, up(call)).await {
-        Ok(Ok(r)) if r.status == 200 => r,
+        // 201: placed, an NDJSON stream. 200: the Core's `JobLocal`, one JSON document.
+        Ok(Ok(r)) if r.status == 200 || r.status == 201 => r,
+        // 409: a person waits on an interactive command.
+        Ok(Ok(r)) if r.status == 409 => {
+            let v = json!({"verdict": "local", "reason": "interactive"});
+            say(&mut wr, v).await;
+            return Ok(());
+        }
         _ => {
             say(&mut wr, local("core_unavailable")).await;
             return Ok(());
@@ -346,6 +401,13 @@ async fn serve(conn: UnixStream, up: Upstream, origin: Origin) -> io::Result<()>
         tokio::select! {
             chunk = body.recv() => {
                 let Some(Ok(c)) = chunk else {
+                    // A document with no final newline (the 200 answer) is the last line.
+                    if !buf.is_empty() {
+                        let v: Value = serde_json::from_slice(&buf).unwrap_or(Value::Null);
+                        report_local |= v["verdict"] == "local" && v["report"] == true;
+                        buf.push(b'\n');
+                        wr.write_all(&buf).await?;
+                    }
                     if !report_local {
                         return Ok(());
                     }
@@ -403,6 +465,8 @@ mod tests {
         Origin {
             terminal: Some("t1".into()),
             session: None,
+            project: Some(7),
+            folder: Some(PathBuf::from("/w/p")),
         }
     }
 
@@ -420,7 +484,11 @@ mod tests {
         let env = shim_env(Some("/usr/bin"), &bin, Path::new("/s/job.sock"));
         assert!(env[0].1.starts_with(&format!("{}:/usr/bin", bin.display())));
         assert_eq!(env[2], ("AINKRAD_JOB_SOCK".into(), "/s/job.sock".into()));
-        assert!(shim_env(None, &bin, Path::new("/s"))[0].1.ends_with(":/usr/bin:/bin"));
+        assert!(
+            shim_env(None, &bin, Path::new("/s"))[0]
+                .1
+                .ends_with(":/usr/bin:/bin")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -429,7 +497,21 @@ mod tests {
         let ok = json!({"argv": ["cargo", "test"], "cwd": "/w/p", "tty": true,
             "env": {"CI": "1", "AWS_SECRET_ACCESS_KEY": "x"}});
         let b: Value = serde_json::from_slice(&build(&ok, &origin()).unwrap()).unwrap();
-        assert_eq!(b["origin"], json!({"terminal": "t1"}));
+        assert_eq!(
+            (&b["terminal"], &b["project"], &b["cwd_rel"]),
+            (&json!("t1"), &json!(7), &json!(""))
+        );
+        let deeper = json!({"argv": ["make"], "cwd": "/w/p/app/x", "env": {}});
+        let b: Value = serde_json::from_slice(&build(&deeper, &origin()).unwrap()).unwrap();
+        assert_eq!(b["cwd_rel"], "app/x");
+        // Outside the sandbox's folder, or a sandbox with none: the shim runs the tool itself.
+        let outside = json!({"argv": ["make"], "cwd": "/w/other", "env": {}});
+        assert!(build(&outside, &origin()).is_none());
+        let home = Origin {
+            folder: None,
+            ..origin()
+        };
+        assert!(build(&deeper, &home).is_none());
         assert_eq!(b["env"], json!({"CI": "1"}));
         assert_eq!(b["tty"], true);
         for bad in [
@@ -445,12 +527,18 @@ mod tests {
 
     #[test]
     fn shim_frames_and_job_ids_are_checked() {
-        assert_eq!(parse_ask(r#"{"t":"signal","sig":"INT"}"#), Some(Ask::Signal("INT")));
+        assert_eq!(
+            parse_ask(r#"{"t":"signal","sig":"INT"}"#),
+            Some(Ask::Signal("INT"))
+        );
         assert_eq!(parse_ask(r#"{"t":"cancel"}"#), Some(Ask::Cancel));
         assert_eq!(parse_ask(r#"{"t":"signal","sig":"KILL"}"#), None);
         assert!(job_id_ok("j_abc123"));
         assert!(!job_id_ok("j_../x") && !job_id_ok("x_abc") && !job_id_ok("j_"));
-        assert_eq!(signal_call("j_a", &Ask::Cancel).path, "/api/v1/runner/jobs/j_a/signal");
+        assert_eq!(
+            signal_call("j_a", &Ask::Cancel).path,
+            "/api/v1/runner/jobs/j_a/signal"
+        );
     }
 
     #[test]
@@ -465,9 +553,10 @@ mod tests {
         Arc::new(move |call: Call| {
             let (reply, seen) = (reply.clone(), Arc::clone(&seen));
             Box::pin(async move {
-                seen.lock()
-                    .unwrap()
-                    .push((call.path.clone(), String::from_utf8_lossy(&call.body).into_owned()));
+                seen.lock().unwrap().push((
+                    call.path.clone(),
+                    String::from_utf8_lossy(&call.body).into_owned(),
+                ));
                 let (tx, body) = mpsc::channel(8);
                 if call.path == JOBS_PATH {
                     for l in reply {
@@ -477,7 +566,7 @@ mod tests {
                     std::mem::forget(tx);
                 }
                 Ok(crate::workspace::relay::Reply {
-                    status: 200,
+                    status: if call.path == JOBS_PATH { 201 } else { 204 },
                     content_type: "application/x-ndjson".into(),
                     body,
                 })
@@ -525,15 +614,26 @@ mod tests {
             ],
             Arc::clone(&seen),
         );
-        let (c, _g) = talk(up, "{\"argv\":[\"cargo\",\"build\"],\"cwd\":\"/w\",\"tty\":false,\"env\":{}}\n").await;
+        let (c, _g) = talk(
+            up,
+            "{\"argv\":[\"cargo\",\"build\"],\"cwd\":\"/w\",\"tty\":false,\"env\":{}}\n",
+        )
+        .await;
         let (rd, mut wr) = c.into_split();
         let mut rd = BufReader::new(rd);
         let v = line(&mut rd, 4096).await.unwrap();
         assert!(v.contains("\"remote\""));
         assert!(line(&mut rd, 4096).await.unwrap().contains("running"));
-        wr.write_all(b"{\"t\":\"signal\",\"sig\":\"TERM\"}\n").await.unwrap();
+        wr.write_all(b"{\"t\":\"signal\",\"sig\":\"TERM\"}\n")
+            .await
+            .unwrap();
         for _ in 0..50 {
-            if seen.lock().unwrap().iter().any(|(p, _)| p.ends_with("/j_a1/signal")) {
+            if seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(p, _)| p.ends_with("/j_a1/signal"))
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -541,7 +641,11 @@ mod tests {
         let calls = seen.lock().unwrap().clone();
         assert_eq!(calls[0].0, JOBS_PATH);
         assert!(calls[0].1.contains("\"terminal\":\"t1\""));
-        assert!(calls.iter().any(|(p, b)| p.ends_with("/j_a1/signal") && b.contains("TERM")));
+        assert!(
+            calls
+                .iter()
+                .any(|(p, b)| p.ends_with("/j_a1/signal") && b.contains("TERM"))
+        );
     }
 
     #[tokio::test]
