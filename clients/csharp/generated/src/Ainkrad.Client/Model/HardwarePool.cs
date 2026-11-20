@@ -40,17 +40,26 @@ namespace Ainkrad.Client.Model
         /// <summary>
         /// Initializes a new instance of the <see cref="HardwarePool" /> class.
         /// </summary>
+        /// <param name="decisions">Smart job routing (the Decisions service) for commands no rule or history knows..</param>
         /// <param name="jobs">jobs (required).</param>
         /// <param name="loadPct">Running jobs over all online job slots, 0 to 100. (required).</param>
         /// <param name="paused">A pause-all is in effect. (required).</param>
         /// <param name="sessions">sessions (required).</param>
-        public HardwarePool(int jobs = default, int loadPct = default, bool paused = default, int sessions = default)
+        public HardwarePool(HardwareDecisions decisions = default, int jobs = default, int loadPct = default, bool paused = default, int sessions = default)
         {
             this.Jobs = jobs;
             this.LoadPct = loadPct;
             this.Paused = paused;
             this.Sessions = sessions;
+            this.Decisions = decisions;
         }
+
+        /// <summary>
+        /// Smart job routing (the Decisions service) for commands no rule or history knows.
+        /// </summary>
+        /// <value>Smart job routing (the Decisions service) for commands no rule or history knows.</value>
+        [DataMember(Name = "decisions", EmitDefaultValue = false)]
+        public HardwareDecisions Decisions { get; set; }
 
         /// <summary>
         /// Gets or Sets Jobs
@@ -86,6 +95,7 @@ namespace Ainkrad.Client.Model
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("class HardwarePool {\n");
+            sb.Append("  Decisions: ").Append(Decisions).Append("\n");
             sb.Append("  Jobs: ").Append(Jobs).Append("\n");
             sb.Append("  LoadPct: ").Append(LoadPct).Append("\n");
             sb.Append("  Paused: ").Append(Paused).Append("\n");

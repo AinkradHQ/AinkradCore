@@ -141,6 +141,7 @@ src/main/kotlin/ainkrad/client/models/HandshakeBody.kt
 src/main/kotlin/ainkrad/client/models/HandshakeProof.kt
 src/main/kotlin/ainkrad/client/models/Hardware.kt
 src/main/kotlin/ainkrad/client/models/HardwareBattery.kt
+src/main/kotlin/ainkrad/client/models/HardwareDecisions.kt
 src/main/kotlin/ainkrad/client/models/HardwareGate.kt
 src/main/kotlin/ainkrad/client/models/HardwareJob.kt
 src/main/kotlin/ainkrad/client/models/HardwareKind.kt

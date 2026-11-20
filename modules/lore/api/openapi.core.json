@@ -4086,6 +4086,19 @@
         ],
         "type": "object"
       },
+      "HardwareDecisions": {
+        "description": "Whether Decisions can route heavy jobs.",
+        "properties": {
+          "status": {
+            "description": "`on`; `off_no_provider` (no active Google account in the AI order: unknown commands run\nwhere they were typed); `disabled` (`decisions.heavy_job.enabled` is 0).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
       "HardwareGate": {
         "anyOf": [
           {
@@ -4162,6 +4175,10 @@
       "HardwarePool": {
         "description": "The pool as a whole, for the top bar's load ring.",
         "properties": {
+          "decisions": {
+            "$ref": "#/components/schemas/HardwareDecisions",
+            "description": "Smart job routing (the Decisions service) for commands no rule or history knows."
+          },
           "jobs": {
             "format": "int32",
             "minimum": 0,

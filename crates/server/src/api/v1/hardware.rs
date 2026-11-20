@@ -104,6 +104,18 @@ pub struct HardwarePool {
     pub sessions: u32,
     /// A pause-all is in effect.
     pub paused: bool,
+    /// Smart job routing (the Decisions service) for commands no rule or history knows.
+    #[schema(required = false)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decisions: Option<HardwareDecisions>,
+}
+
+/// Whether Decisions can route heavy jobs.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct HardwareDecisions {
+    /// `on`; `off_no_provider` (no active Google account in the AI order: unknown commands run
+    /// where they were typed); `disabled` (`decisions.heavy_job.enabled` is 0).
+    pub status: String,
 }
 
 /// `PUT …/pause`: until when; `null` lifts the pause, and any time in the year 2100 or later means
@@ -197,6 +209,7 @@ fn pool_of(machines: &[Machine]) -> HardwarePool {
         jobs,
         sessions: machines.iter().map(|m| m.view.sessions).sum(),
         paused: global || (!remote.is_empty() && remote.iter().all(|m| m.paused_until.is_some())),
+        decisions: None,
     }
 }
 
@@ -214,7 +227,14 @@ pub async fn list(State(app): State<App>) -> ApiResult<Vec<Hardware>> {
     responses((status = 200, description = "The pool's load, jobs and sessions. Needs `read`",
         body = HardwarePool)))]
 pub async fn pool(State(app): State<App>) -> ApiResult<HardwarePool> {
-    Ok(Json(pool_of(&view::machines(&app).await?)))
+    let mut pool = pool_of(&view::machines(&app).await?);
+    // The heavy-job decider asks as the owner (`jobs::answer`), so this reads the owner's AI order.
+    let status =
+        crate::decisions::provider::heavy_job_status(&app.pool, ainkrad_core::ids::UserId(1)).await;
+    pool.decisions = Some(HardwareDecisions {
+        status: status.to_owned(),
+    });
+    Ok(Json(pool))
 }
 
 /// The stored `until` of a pause: `None` lifts it; a time in the past is refused.
@@ -382,5 +402,51 @@ mod tests {
         // The pool's pause (the Core row) holds with no runner at all.
         assert!(pool_of(&[m(HwKind::Core, 0, 1, true, true)]).paused);
         assert_eq!(pool_of(&[m(HwKind::Core, 9, 2, true, false)]).load_pct, 100);
+    }
+}
+
+#[cfg(test)]
+mod decisions_tests {
+    use ainkrad_core::ids::UserId;
+    use ainkrad_core::settings::{Key, Scope};
+
+    use crate::decisions::provider::heavy_job_status;
+
+    /// Smart job routing says why it is off: no active Google account in the AI order.
+    #[tokio::test]
+    async fn smart_job_routing_says_it_is_off_without_a_google_account() {
+        let fx = crate::api::v1::tests::fx().await;
+        let pool = &fx.app.pool;
+        assert_eq!(heavy_job_status(pool, UserId(1)).await, "off_no_provider");
+        for (provider, secret) in [("anthropic", "a.key"), ("google", "g.key")] {
+            sqlx::query(
+                "INSERT INTO core_accounts (provider, label, secret_name, masked_tail, owner, \
+                 created_at, updated_at) VALUES (?, ?, ?, 'abcd', ?, 'n', 'n')",
+            )
+            .bind(provider)
+            .bind(provider)
+            .bind(secret)
+            .bind(&fx.dev.id)
+            .execute(pool)
+            .await
+            .unwrap();
+            let want = if provider == "google" {
+                "on"
+            } else {
+                "off_no_provider"
+            };
+            assert_eq!(heavy_job_status(pool, UserId(1)).await, want, "{provider}");
+        }
+        crate::store::settings::set(
+            pool,
+            Key::DecisionsHeavyJobEnabled,
+            Scope::Server,
+            "0",
+            ainkrad_core::audit::AuditActor::User(UserId(1)),
+            "2026-11-20T00:00:00.000Z",
+        )
+        .await
+        .unwrap();
+        assert_eq!(heavy_job_status(pool, UserId(1)).await, "disabled");
     }
 }

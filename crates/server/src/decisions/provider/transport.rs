@@ -102,20 +102,7 @@ impl HubTransport {
         runner: &str,
         user: UserId,
     ) -> Result<(accounts::Account, Upstream, String), ProviderError> {
-        let all = accounts::list(&self.pool)
-            .await
-            .map_err(|_| ProviderError::Unavailable)?;
-        let order = crate::store::chains::order::get(&self.pool, user.0)
-            .await
-            .map_err(|_| ProviderError::Unavailable)?;
-        let ids: Vec<i64> = order.items.iter().map(|it| it.account).collect();
-        let ready = by_ai_order(
-            all.into_iter()
-                .filter(|a| a.provider == "google" && a.state == "active")
-                .collect(),
-            |a| a.id,
-            &ids,
-        );
+        let ready = google_in_ai_order(&self.pool, user).await?;
         for a in ready {
             let Some(up) = upstream_of(&a.base_url) else {
                 continue;
@@ -193,6 +180,28 @@ impl Transport for HubTransport {
     ) -> BoxFuture<'a, Result<Called, ProviderError>> {
         self.send(user, path, body, timeout_ms).boxed()
     }
+}
+
+/// The active `google` accounts in `user`'s AI order, first tried first: what Decisions can call.
+/// Empty means Decisions are off for want of a provider (`off_no_provider`).
+pub(crate) async fn google_in_ai_order(
+    pool: &SqlitePool,
+    user: UserId,
+) -> Result<Vec<accounts::Account>, ProviderError> {
+    let all = accounts::list(pool)
+        .await
+        .map_err(|_| ProviderError::Unavailable)?;
+    let order = crate::store::chains::order::get(pool, user.0)
+        .await
+        .map_err(|_| ProviderError::Unavailable)?;
+    let ids: Vec<i64> = order.items.iter().map(|it| it.account).collect();
+    Ok(by_ai_order(
+        all.into_iter()
+            .filter(|a| a.provider == "google" && a.state == "active")
+            .collect(),
+        |a| a.id,
+        &ids,
+    ))
 }
 
 /// `items` in the AI order `order` (account ids, first is tried first), leaving out what the order

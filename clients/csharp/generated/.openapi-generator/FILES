@@ -149,6 +149,7 @@ src/Ainkrad.Client/Model/HandshakeBody.cs
 src/Ainkrad.Client/Model/HandshakeProof.cs
 src/Ainkrad.Client/Model/Hardware.cs
 src/Ainkrad.Client/Model/HardwareBattery.cs
+src/Ainkrad.Client/Model/HardwareDecisions.cs
 src/Ainkrad.Client/Model/HardwareGate.cs
 src/Ainkrad.Client/Model/HardwareJob.cs
 src/Ainkrad.Client/Model/HardwareKind.cs
