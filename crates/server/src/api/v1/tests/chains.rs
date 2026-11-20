@@ -168,10 +168,7 @@ async fn update_runs_the_same_rules_and_keeps_the_old_list_when_refused() {
         pool(&fx, "a", "anthropic").await,
         pool(&fx, "o", "openai").await,
     );
-    let (s1, s2) = (
-        pool(&fx, "s1", "claude-sub").await,
-        pool(&fx, "s2", "claude-sub").await,
-    );
+    let s1 = pool(&fx, "s1", "claude-sub").await;
     let c = make(&fx, "main", &[s1, a]).await;
     // A pool is in a chain once (several subscriptions are fine since E7: D-18).
     let bad = [spec(s1), spec(s1)];

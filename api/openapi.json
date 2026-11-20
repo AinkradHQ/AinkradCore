@@ -2073,6 +2073,30 @@
         ],
         "type": "object"
       },
+      "Change": {
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "description": "`commit` or `session`.",
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "who": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "who",
+          "kind",
+          "summary",
+          "at"
+        ],
+        "type": "object"
+      },
       "ClaimBody": {
         "additionalProperties": false,
         "description": "A claim. The credential hash is SHA-256 of the canonical typed code (upper-cased, dashes\nand spaces dropped, `I`/`L` read as `1` and `O` as `0`: 10 ASCII Crockford characters), or\nof the QR secret's 16 decoded bytes (not its base64 text). Vectors:\n`crates/server/tests/vectors/pairing-v1.json`.",
@@ -3112,6 +3136,17 @@
         "required": [
           "kind",
           "connection"
+        ],
+        "type": "object"
+      },
+      "Deleted": {
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
         ],
         "type": "object"
       },
@@ -5900,30 +5935,6 @@
         ],
         "type": "object"
       },
-      "ProjectChange": {
-        "properties": {
-          "at": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "kind": {
-            "description": "`commit` or `session`.",
-            "type": "string"
-          },
-          "summary": {
-            "type": "string"
-          },
-          "who": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "who",
-          "kind",
-          "summary",
-          "at"
-        ],
-        "type": "object"
-      },
       "ProjectChanges": {
         "properties": {
           "by_author": {
@@ -5936,7 +5947,7 @@
           "recent": {
             "description": "Newest first, at most 50.",
             "items": {
-              "$ref": "#/components/schemas/ProjectChange"
+              "$ref": "#/components/schemas/Change"
             },
             "type": "array"
           }
@@ -6873,17 +6884,6 @@
             ]
           }
         },
-        "type": "object"
-      },
-      "RunConfigDeleted": {
-        "properties": {
-          "deleted": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "deleted"
-        ],
         "type": "object"
       },
       "RunConfigStart": {
@@ -17582,7 +17582,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunConfigDeleted"
+                  "$ref": "#/components/schemas/Deleted"
                 }
               }
             },
@@ -18092,7 +18092,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunConfigDeleted"
+                  "$ref": "#/components/schemas/Deleted"
                 }
               }
             },

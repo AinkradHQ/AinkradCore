@@ -295,7 +295,16 @@ async fn a_typed_line_is_one_printable_line_and_a_codex_sign_in_is_not_guided_by
 /// A stand-in `agy`: shows a page and wants the pasted code, then says it is signed in and stays up
 /// (a TUI does not exit). It records HOME so the test sees the account's home was used.
 fn agy_driver(t: &Tmp, said: &str) -> Arc<LoginDriver> {
-    let p = t.file("agy");
+    // The sign-in runs in the session sandbox: it hides the host's temp dir and binds only the
+    // program's own dir. So the stand-in is the program itself, alone in a dir beside the test
+    // binary (named after this test's scratch dir).
+    let own = t.file("agy");
+    let name = own.parent().and_then(|d| d.file_name()).unwrap();
+    let dir = std::env::current_exe()
+        .unwrap()
+        .with_file_name(format!("{}-agy", name.to_string_lossy()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("agy");
     let body = format!(
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo 'agy 9.9.9'; exit 0; fi
@@ -308,11 +317,15 @@ sleep 30
 "#
     );
     std::fs::write(&p, body).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let mut cfg = LoginConfig::new(t.file("logins"), PathBuf::from("/bin/false"));
     cfg.bound = vec![BoundCli {
         harness: "agy",
-        program: PathBuf::from("/bin/sh"),
-        args: vec![p.display().to_string()],
+        program: p,
+        args: vec![],
         pinned: vec!["9.9.9".to_owned()],
     }];
     cfg.homes = t.file("homes");

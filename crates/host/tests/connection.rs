@@ -199,7 +199,8 @@ fn every_refusal_is_answered_with_its_code_logged_and_changes_nothing() {
         cases.len(),
         "{log}"
     );
-    assert_eq!(log.matches("class=b").count(), 8);
+    // `update` is a class A action since E12: seven class B names are refused.
+    assert_eq!(log.matches("class=b").count(), 7);
     assert!(
         !log.contains("shadow") && !log.contains("nope"),
         "request text is never logged"

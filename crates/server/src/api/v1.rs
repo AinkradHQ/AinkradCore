@@ -688,6 +688,9 @@ pub fn router(app: App) -> Router {
         .route("/api/v1/agent-sessions/{id}/wake", post(agents::wake))
         // Modules sit inside the same gate: they never authenticate for themselves.
         .merge(crate::module::mount(&app.modules))
+        // A body that does not fit its type (an unknown field, a wrong type) is axum's plain-text 422;
+        // the API answers it as every other bad input: a JSON 400 `bad_request`.
+        .route_layer(middleware::from_fn(json_body_refusal))
         // `Deprecation`/`Sunset` on deprecated routes (`deprecation`).
         .route_layer(middleware::from_fn(|r, n| {
             deprecation::headers(deprecation::DEPRECATED, r, n)
@@ -698,6 +701,24 @@ pub fn router(app: App) -> Router {
             trace::audit_refusals,
         ))
         .with_state(app)
+}
+
+/// Turns the extractor's plain-text 422 into a JSON 400 (a handler's own JSON 422, such as
+/// `could_not_draft`, passes through).
+async fn json_body_refusal(req: axum::extract::Request, next: middleware::Next) -> Response {
+    let res = next.run(req).await;
+    let plain = res
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .is_some_and(|v| v.as_bytes().starts_with(b"text/plain"));
+    if res.status() != StatusCode::UNPROCESSABLE_ENTITY || !plain {
+        return res;
+    }
+    let why = axum::body::to_bytes(res.into_body(), 4096)
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
+    ApiError::bad_request(why).into_response()
 }
 
 #[cfg(test)]
