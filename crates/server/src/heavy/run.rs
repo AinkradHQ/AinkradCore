@@ -383,6 +383,11 @@ async fn execute(
         timeout_ms: None,
         need: need_of(&run.s.row),
         hosts: run.s.hosts.clone(),
+        origin: match (&run.s.session, &run.s.terminal) {
+            (Some(s), _) => format!("s:{s}"),
+            (None, Some(t)) => format!("t:{t}"),
+            (None, None) => "u".to_owned(),
+        },
     };
     let mut d = match app.hub.dispatch_job(&run.device, Command::JobRun(job)) {
         Ok(d) => d,

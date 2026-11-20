@@ -213,6 +213,17 @@ impl JobDriver {
             private_dir(&job_dir.join(d)).map_err(|e| internal(e.to_string()))?;
         }
         let _cleanup = JobDir(job_dir.clone());
+        // M5: a job never inherits another origin's home or build folders.
+        let home_dir = match cache_mode {
+            true => self.sync.layout().home(req.project),
+            false => self
+                .cfg
+                .state
+                .join("jobs-home")
+                .join(req.project.to_string()),
+        };
+        super::sync::fresh_for_origin(&home_dir, cache_mode.then_some(root.as_path()), &req.origin)
+            .map_err(|e| internal(format!("clearing the cache for a new origin: {e}")))?;
         let home = match cache_mode {
             true => self.sync.job_home(req.project),
             false => {

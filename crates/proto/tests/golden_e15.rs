@@ -146,6 +146,7 @@ fn e15_frames_are_pinned() {
                 xcode: false,
             },
             hosts: None,
+            origin: String::new(),
         }),
     );
     res(

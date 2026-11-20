@@ -35,6 +35,7 @@ mod seed;
 
 use ainkrad_proto::v2::synctree::Rules;
 use ainkrad_sys::tree::Tree;
+pub(super) use cache::fresh_for_origin;
 pub(super) use cache::safe_core_id as safe_name;
 use cache::{Held, Layout};
 use manifest::{Entries, Memo, Scan, scan, tree_hash};

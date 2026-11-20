@@ -88,6 +88,11 @@ pub struct JobRun {
     /// to the registry list again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hosts: Option<Vec<String>>,
+    /// Who asked: `s:<session>`, `t:<terminal>` or `u` (a person or a task), set by the Core. A
+    /// job from another origin than the last one's finds the cache's home and build folders
+    /// cleared (E15 M5).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub origin: String,
 }
 
 impl std::fmt::Debug for JobRun {
