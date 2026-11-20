@@ -99,6 +99,9 @@ pub struct Origin {
     pub net: Net,
 }
 
+/// The commands of one sandbox served at once (E15 M12).
+pub const MAX_CONNS: usize = 4;
+
 /// A sandbox's network, as the Core is told it (`RunnerNewJob::network`, `hosts`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Net {
@@ -213,10 +216,17 @@ impl JobSocks {
         std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o666))?;
         let up = Arc::clone(&self.up);
         let task = tokio::spawn(async move {
+            // E15 security review M12: at most MAX_CONNS commands of one sandbox in flight; the
+            // next connection waits, so a sandbox cannot fan out unbounded questions to the Core.
+            let gate = Arc::new(tokio::sync::Semaphore::new(MAX_CONNS));
             while let Ok((conn, _)) = listener.accept().await {
+                let Ok(permit) = Arc::clone(&gate).acquire_owned().await else {
+                    break;
+                };
                 let (up, origin) = (Arc::clone(&up), origin.clone());
                 tokio::spawn(async move {
                     let _ = serve(conn, up, origin).await;
+                    drop(permit);
                 });
             }
         });
