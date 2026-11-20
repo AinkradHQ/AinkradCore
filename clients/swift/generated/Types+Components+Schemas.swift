@@ -3989,6 +3989,404 @@ extension Components {
                 case supportedMinors = "supported_minors"
             }
         }
+        /// One machine.
+        ///
+        /// - Remark: Generated from `#/components/schemas/Hardware`.
+        public struct Hardware: Codable, Hashable, Sendable {
+            /// `aarch64`, `x86_64`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Hardware/arch`.
+            public var arch: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/Hardware/battery`.
+            public var battery: Components.Schemas.HardwareBattery?
+            /// - Remark: Generated from `#/components/schemas/Hardware/cores`.
+            public var cores: Swift.Int32
+            /// 0 to 100, over 60 s.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Hardware/cpu_pct`.
+            public var cpuPct: Swift.Int32
+            /// - Remark: Generated from `#/components/schemas/Hardware/degraded`.
+            public var degraded: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/Hardware/gate`.
+            public var gate: Components.Schemas.HardwareGate
+            /// The runner device, `d_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Hardware/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Hardware/job_slots`.
+            public var jobSlots: Swift.Int32
+            /// - Remark: Generated from `#/components/schemas/Hardware/jobs`.
+            public var jobs: [Components.Schemas.HardwareJob]
+            /// - Remark: Generated from `#/components/schemas/Hardware/kind`.
+            public var kind: Components.Schemas.HardwareKind
+            /// - Remark: Generated from `#/components/schemas/Hardware/mem_free_mb`.
+            public var memFreeMb: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/Hardware/mem_total_mb`.
+            public var memTotalMb: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/Hardware/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Hardware/online`.
+            public var online: Swift.Bool
+            /// `linux`, `macos`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Hardware/os`.
+            public var os: Swift.String?
+            /// Paused on the Core until then; absent: not paused.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Hardware/paused_until`.
+            public var pausedUntil: Components.Schemas.Timestamp?
+            /// AI sessions live on it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Hardware/sessions`.
+            public var sessions: Swift.Int32
+            /// Ready toolchains, name to version.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Hardware/toolchains`.
+            public struct ToolchainsPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: [String: Swift.String]
+                /// Creates a new `ToolchainsPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: [String: Swift.String] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// Ready toolchains, name to version.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Hardware/toolchains`.
+            public var toolchains: Components.Schemas.Hardware.ToolchainsPayload
+            /// Creates a new `Hardware`.
+            ///
+            /// - Parameters:
+            ///   - arch: `aarch64`, `x86_64`.
+            ///   - battery:
+            ///   - cores:
+            ///   - cpuPct: 0 to 100, over 60 s.
+            ///   - degraded:
+            ///   - gate:
+            ///   - id: The runner device, `d_…`.
+            ///   - jobSlots:
+            ///   - jobs:
+            ///   - kind:
+            ///   - memFreeMb:
+            ///   - memTotalMb:
+            ///   - name:
+            ///   - online:
+            ///   - os: `linux`, `macos`.
+            ///   - pausedUntil: Paused on the Core until then; absent: not paused.
+            ///   - sessions: AI sessions live on it.
+            ///   - toolchains: Ready toolchains, name to version.
+            public init(
+                arch: Swift.String? = nil,
+                battery: Components.Schemas.HardwareBattery? = nil,
+                cores: Swift.Int32,
+                cpuPct: Swift.Int32,
+                degraded: Swift.Bool,
+                gate: Components.Schemas.HardwareGate,
+                id: Swift.String,
+                jobSlots: Swift.Int32,
+                jobs: [Components.Schemas.HardwareJob],
+                kind: Components.Schemas.HardwareKind,
+                memFreeMb: Swift.Int64,
+                memTotalMb: Swift.Int64,
+                name: Swift.String,
+                online: Swift.Bool,
+                os: Swift.String? = nil,
+                pausedUntil: Components.Schemas.Timestamp? = nil,
+                sessions: Swift.Int32,
+                toolchains: Components.Schemas.Hardware.ToolchainsPayload
+            ) {
+                self.arch = arch
+                self.battery = battery
+                self.cores = cores
+                self.cpuPct = cpuPct
+                self.degraded = degraded
+                self.gate = gate
+                self.id = id
+                self.jobSlots = jobSlots
+                self.jobs = jobs
+                self.kind = kind
+                self.memFreeMb = memFreeMb
+                self.memTotalMb = memTotalMb
+                self.name = name
+                self.online = online
+                self.os = os
+                self.pausedUntil = pausedUntil
+                self.sessions = sessions
+                self.toolchains = toolchains
+            }
+            public enum CodingKeys: String, CodingKey {
+                case arch
+                case battery
+                case cores
+                case cpuPct = "cpu_pct"
+                case degraded
+                case gate
+                case id
+                case jobSlots = "job_slots"
+                case jobs
+                case kind
+                case memFreeMb = "mem_free_mb"
+                case memTotalMb = "mem_total_mb"
+                case name
+                case online
+                case os
+                case pausedUntil = "paused_until"
+                case sessions
+                case toolchains
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/HardwareBattery`.
+        public struct HardwareBattery: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/HardwareBattery/on_battery`.
+            public var onBattery: Swift.Bool
+            /// 0 to 100.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HardwareBattery/percent`.
+            public var percent: Swift.Int32
+            /// Creates a new `HardwareBattery`.
+            ///
+            /// - Parameters:
+            ///   - onBattery:
+            ///   - percent: 0 to 100.
+            public init(
+                onBattery: Swift.Bool,
+                percent: Swift.Int32
+            ) {
+                self.onBattery = onBattery
+                self.percent = percent
+            }
+            public enum CodingKeys: String, CodingKey {
+                case onBattery = "on_battery"
+                case percent
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/HardwareGate`.
+        public struct HardwareGate: Codable, Hashable, Sendable {
+            /// Whether a machine takes jobs now, by its own measure.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HardwareGate/value1`.
+            @frozen public enum Value1Payload: String, Codable, Hashable, Sendable, CaseIterable {
+                case open = "open"
+                case busy = "busy"
+                case onBattery = "on_battery"
+                case paused = "paused"
+                case off = "off"
+            }
+            /// Whether a machine takes jobs now, by its own measure.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HardwareGate/value1`.
+            public var value1: Components.Schemas.HardwareGate.Value1Payload?
+            /// - Remark: Generated from `#/components/schemas/HardwareGate/value2`.
+            public var value2: Swift.String?
+            /// Creates a new `HardwareGate`.
+            ///
+            /// - Parameters:
+            ///   - value1: Whether a machine takes jobs now, by its own measure.
+            ///   - value2:
+            public init(
+                value1: Components.Schemas.HardwareGate.Value1Payload? = nil,
+                value2: Swift.String? = nil
+            ) {
+                self.value1 = value1
+                self.value2 = value2
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                var errors: [any Swift.Error] = []
+                do {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                do {
+                    self.value2 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                try Swift.DecodingError.verifyAtLeastOneSchemaIsNotNil(
+                    [
+                        self.value1,
+                        self.value2
+                    ],
+                    type: Self.self,
+                    codingPath: decoder.codingPath,
+                    errors: errors
+                )
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                try encoder.encodeFirstNonNilValueToSingleValueContainer([
+                    self.value1,
+                    self.value2
+                ])
+            }
+        }
+        /// A job running on a machine now.
+        ///
+        /// - Remark: Generated from `#/components/schemas/HardwareJob`.
+        public struct HardwareJob: Codable, Hashable, Sendable {
+            /// `j_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HardwareJob/id`.
+            public var id: Swift.String
+            /// What it runs, `cargo build`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HardwareJob/label`.
+            public var label: Swift.String
+            /// The project id, absent for a job of a session with no project.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HardwareJob/project`.
+            public var project: Swift.Int64?
+            /// - Remark: Generated from `#/components/schemas/HardwareJob/started_at`.
+            public var startedAt: Components.Schemas.Timestamp
+            /// Creates a new `HardwareJob`.
+            ///
+            /// - Parameters:
+            ///   - id: `j_…`.
+            ///   - label: What it runs, `cargo build`.
+            ///   - project: The project id, absent for a job of a session with no project.
+            ///   - startedAt:
+            public init(
+                id: Swift.String,
+                label: Swift.String,
+                project: Swift.Int64? = nil,
+                startedAt: Components.Schemas.Timestamp
+            ) {
+                self.id = id
+                self.label = label
+                self.project = project
+                self.startedAt = startedAt
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case label
+                case project
+                case startedAt = "started_at"
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/HardwareKind`.
+        public struct HardwareKind: Codable, Hashable, Sendable {
+            /// What a machine is.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HardwareKind/value1`.
+            @frozen public enum Value1Payload: String, Codable, Hashable, Sendable, CaseIterable {
+                case core = "core"
+                case mac = "mac"
+                case runner = "runner"
+            }
+            /// What a machine is.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HardwareKind/value1`.
+            public var value1: Components.Schemas.HardwareKind.Value1Payload?
+            /// - Remark: Generated from `#/components/schemas/HardwareKind/value2`.
+            public var value2: Swift.String?
+            /// Creates a new `HardwareKind`.
+            ///
+            /// - Parameters:
+            ///   - value1: What a machine is.
+            ///   - value2:
+            public init(
+                value1: Components.Schemas.HardwareKind.Value1Payload? = nil,
+                value2: Swift.String? = nil
+            ) {
+                self.value1 = value1
+                self.value2 = value2
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                var errors: [any Swift.Error] = []
+                do {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                do {
+                    self.value2 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                try Swift.DecodingError.verifyAtLeastOneSchemaIsNotNil(
+                    [
+                        self.value1,
+                        self.value2
+                    ],
+                    type: Self.self,
+                    codingPath: decoder.codingPath,
+                    errors: errors
+                )
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                try encoder.encodeFirstNonNilValueToSingleValueContainer([
+                    self.value1,
+                    self.value2
+                ])
+            }
+        }
+        /// `PUT …/pause`: until when; `null` lifts the pause, and any time in the year 2100 or later means
+        /// indefinitely.
+        ///
+        /// - Remark: Generated from `#/components/schemas/HardwarePause`.
+        public struct HardwarePause: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/HardwarePause/until`.
+            public var until: Components.Schemas.Timestamp?
+            /// Creates a new `HardwarePause`.
+            ///
+            /// - Parameters:
+            ///   - until:
+            public init(until: Components.Schemas.Timestamp? = nil) {
+                self.until = until
+            }
+            public enum CodingKeys: String, CodingKey {
+                case until
+            }
+        }
+        /// The pool as a whole, for the top bar's load ring.
+        ///
+        /// - Remark: Generated from `#/components/schemas/HardwarePool`.
+        public struct HardwarePool: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/HardwarePool/jobs`.
+            public var jobs: Swift.Int32
+            /// Running jobs over all online job slots, 0 to 100.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HardwarePool/load_pct`.
+            public var loadPct: Swift.Int32
+            /// A pause-all is in effect.
+            ///
+            /// - Remark: Generated from `#/components/schemas/HardwarePool/paused`.
+            public var paused: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/HardwarePool/sessions`.
+            public var sessions: Swift.Int32
+            /// Creates a new `HardwarePool`.
+            ///
+            /// - Parameters:
+            ///   - jobs:
+            ///   - loadPct: Running jobs over all online job slots, 0 to 100.
+            ///   - paused: A pause-all is in effect.
+            ///   - sessions:
+            public init(
+                jobs: Swift.Int32,
+                loadPct: Swift.Int32,
+                paused: Swift.Bool,
+                sessions: Swift.Int32
+            ) {
+                self.jobs = jobs
+                self.loadPct = loadPct
+                self.paused = paused
+                self.sessions = sessions
+            }
+            public enum CodingKeys: String, CodingKey {
+                case jobs
+                case loadPct = "load_pct"
+                case paused
+                case sessions
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/Health`.
         public struct Health: Codable, Hashable, Sendable {
             /// Run inside the container, one line of 1-512 characters; exit 0 is healthy.
@@ -4335,6 +4733,367 @@ extension Components {
                 case pairingId = "pairing_id"
                 case secret
                 case token
+            }
+        }
+        /// One job.
+        ///
+        /// - Remark: Generated from `#/components/schemas/Job`.
+        public struct Job: Codable, Hashable, Sendable {
+            /// Files the Core kept over the machine's version (`.ainkrad/conflicts/<job>/`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/Job/conflicts`.
+            public var conflicts: Swift.Int32
+            /// - Remark: Generated from `#/components/schemas/Job/created_at`.
+            public var createdAt: Components.Schemas.Timestamp
+            /// The device it runs on, `d_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Job/device`.
+            public var device: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Job/device_name`.
+            public var deviceName: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Job/duration_ms`.
+            public var durationMs: Swift.Int64?
+            /// - Remark: Generated from `#/components/schemas/Job/ended_at`.
+            public var endedAt: Components.Schemas.Timestamp?
+            /// - Remark: Generated from `#/components/schemas/Job/exit_code`.
+            public var exitCode: Swift.Int32?
+            /// `j_…`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Job/id`.
+            public var id: Swift.String
+            /// What it runs, `cargo build`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Job/label`.
+            public var label: Swift.String
+            /// With `core_no_fit`: what no other machine had (`xcode`, `os macos`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/Job/missing`.
+            public var missing: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/Job/place_reason`.
+            public var placeReason: Components.Schemas.JobPlaceReason
+            /// The project id; absent for a job of a session with no project.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Job/project`.
+            public var project: Swift.Int64?
+            /// The AI session (`as_…`) it came from.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Job/session`.
+            public var session: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/Job/started_at`.
+            public var startedAt: Components.Schemas.Timestamp?
+            /// - Remark: Generated from `#/components/schemas/Job/state`.
+            public var state: Components.Schemas.JobState
+            /// The terminal it came from.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Job/terminal`.
+            public var terminal: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/Job/tier`.
+            public var tier: Components.Schemas.JobTier
+            /// Creates a new `Job`.
+            ///
+            /// - Parameters:
+            ///   - conflicts: Files the Core kept over the machine's version (`.ainkrad/conflicts/<job>/`).
+            ///   - createdAt:
+            ///   - device: The device it runs on, `d_…`.
+            ///   - deviceName:
+            ///   - durationMs:
+            ///   - endedAt:
+            ///   - exitCode:
+            ///   - id: `j_…`.
+            ///   - label: What it runs, `cargo build`.
+            ///   - missing: With `core_no_fit`: what no other machine had (`xcode`, `os macos`).
+            ///   - placeReason:
+            ///   - project: The project id; absent for a job of a session with no project.
+            ///   - session: The AI session (`as_…`) it came from.
+            ///   - startedAt:
+            ///   - state:
+            ///   - terminal: The terminal it came from.
+            ///   - tier:
+            public init(
+                conflicts: Swift.Int32,
+                createdAt: Components.Schemas.Timestamp,
+                device: Swift.String,
+                deviceName: Swift.String,
+                durationMs: Swift.Int64? = nil,
+                endedAt: Components.Schemas.Timestamp? = nil,
+                exitCode: Swift.Int32? = nil,
+                id: Swift.String,
+                label: Swift.String,
+                missing: Swift.String? = nil,
+                placeReason: Components.Schemas.JobPlaceReason,
+                project: Swift.Int64? = nil,
+                session: Swift.String? = nil,
+                startedAt: Components.Schemas.Timestamp? = nil,
+                state: Components.Schemas.JobState,
+                terminal: Swift.String? = nil,
+                tier: Components.Schemas.JobTier
+            ) {
+                self.conflicts = conflicts
+                self.createdAt = createdAt
+                self.device = device
+                self.deviceName = deviceName
+                self.durationMs = durationMs
+                self.endedAt = endedAt
+                self.exitCode = exitCode
+                self.id = id
+                self.label = label
+                self.missing = missing
+                self.placeReason = placeReason
+                self.project = project
+                self.session = session
+                self.startedAt = startedAt
+                self.state = state
+                self.terminal = terminal
+                self.tier = tier
+            }
+            public enum CodingKeys: String, CodingKey {
+                case conflicts
+                case createdAt = "created_at"
+                case device
+                case deviceName = "device_name"
+                case durationMs = "duration_ms"
+                case endedAt = "ended_at"
+                case exitCode = "exit_code"
+                case id
+                case label
+                case missing
+                case placeReason = "place_reason"
+                case project
+                case session
+                case startedAt = "started_at"
+                case state
+                case terminal
+                case tier
+            }
+        }
+        /// The 200 answer of `POST /jobs`: run it where you are.
+        ///
+        /// - Remark: Generated from `#/components/schemas/JobLocal`.
+        public struct JobLocal: Codable, Hashable, Sendable {
+            /// Why (`light`, `rule`, `no_hardware`, ...).
+            ///
+            /// - Remark: Generated from `#/components/schemas/JobLocal/reason`.
+            public var reason: Swift.String
+            /// Report the local run's outcome and duration (`POST /runner/jobs/report`, the shim's `done`
+            /// frame), for the command history.
+            ///
+            /// - Remark: Generated from `#/components/schemas/JobLocal/report`.
+            public var report: Swift.Bool
+            /// Always `local`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/JobLocal/verdict`.
+            public var verdict: Swift.String
+            /// Creates a new `JobLocal`.
+            ///
+            /// - Parameters:
+            ///   - reason: Why (`light`, `rule`, `no_hardware`, ...).
+            ///   - report: Report the local run's outcome and duration (`POST /runner/jobs/report`, the shim's `done`
+            ///   - verdict: Always `local`.
+            public init(
+                reason: Swift.String,
+                report: Swift.Bool,
+                verdict: Swift.String
+            ) {
+                self.reason = reason
+                self.report = report
+                self.verdict = verdict
+            }
+            public enum CodingKeys: String, CodingKey {
+                case reason
+                case report
+                case verdict
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/JobPlaceReason`.
+        public struct JobPlaceReason: Codable, Hashable, Sendable {
+            /// Why the Core put a job where it did.
+            ///
+            /// - Remark: Generated from `#/components/schemas/JobPlaceReason/value1`.
+            @frozen public enum Value1Payload: String, Codable, Hashable, Sendable, CaseIterable {
+                case core = "core"
+                case overflow = "overflow"
+                case runner = "runner"
+                case thisMac = "this_mac"
+                case coreNoFit = "core_no_fit"
+                case pinned = "pinned"
+            }
+            /// Why the Core put a job where it did.
+            ///
+            /// - Remark: Generated from `#/components/schemas/JobPlaceReason/value1`.
+            public var value1: Components.Schemas.JobPlaceReason.Value1Payload?
+            /// - Remark: Generated from `#/components/schemas/JobPlaceReason/value2`.
+            public var value2: Swift.String?
+            /// Creates a new `JobPlaceReason`.
+            ///
+            /// - Parameters:
+            ///   - value1: Why the Core put a job where it did.
+            ///   - value2:
+            public init(
+                value1: Components.Schemas.JobPlaceReason.Value1Payload? = nil,
+                value2: Swift.String? = nil
+            ) {
+                self.value1 = value1
+                self.value2 = value2
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                var errors: [any Swift.Error] = []
+                do {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                do {
+                    self.value2 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                try Swift.DecodingError.verifyAtLeastOneSchemaIsNotNil(
+                    [
+                        self.value1,
+                        self.value2
+                    ],
+                    type: Self.self,
+                    codingPath: decoder.codingPath,
+                    errors: errors
+                )
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                try encoder.encodeFirstNonNilValueToSingleValueContainer([
+                    self.value1,
+                    self.value2
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/JobSignal`.
+        public struct JobSignal: Codable, Hashable, Sendable {
+            /// `INT`, `TERM` or `KILL`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/JobSignal/signal`.
+            public var signal: Swift.String
+            /// Creates a new `JobSignal`.
+            ///
+            /// - Parameters:
+            ///   - signal: `INT`, `TERM` or `KILL`.
+            public init(signal: Swift.String) {
+                self.signal = signal
+            }
+            public enum CodingKeys: String, CodingKey {
+                case signal
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/JobState`.
+        public struct JobState: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/JobState/value1`.
+            @frozen public enum Value1Payload: String, Codable, Hashable, Sendable, CaseIterable {
+                case queued = "queued"
+                case syncing = "syncing"
+                case running = "running"
+                case ended = "ended"
+                case failed = "failed"
+                case cancelled = "cancelled"
+                case lost = "lost"
+            }
+            /// - Remark: Generated from `#/components/schemas/JobState/value1`.
+            public var value1: Components.Schemas.JobState.Value1Payload?
+            /// - Remark: Generated from `#/components/schemas/JobState/value2`.
+            public var value2: Swift.String?
+            /// Creates a new `JobState`.
+            ///
+            /// - Parameters:
+            ///   - value1:
+            ///   - value2:
+            public init(
+                value1: Components.Schemas.JobState.Value1Payload? = nil,
+                value2: Swift.String? = nil
+            ) {
+                self.value1 = value1
+                self.value2 = value2
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                var errors: [any Swift.Error] = []
+                do {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                do {
+                    self.value2 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                try Swift.DecodingError.verifyAtLeastOneSchemaIsNotNil(
+                    [
+                        self.value1,
+                        self.value2
+                    ],
+                    type: Self.self,
+                    codingPath: decoder.codingPath,
+                    errors: errors
+                )
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                try encoder.encodeFirstNonNilValueToSingleValueContainer([
+                    self.value1,
+                    self.value2
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/JobTier`.
+        public struct JobTier: Codable, Hashable, Sendable {
+            /// Which step of the decision made the command heavy.
+            ///
+            /// - Remark: Generated from `#/components/schemas/JobTier/value1`.
+            @frozen public enum Value1Payload: String, Codable, Hashable, Sendable, CaseIterable {
+                case rule = "rule"
+                case history = "history"
+                case decision = "decision"
+                case config = "config"
+            }
+            /// Which step of the decision made the command heavy.
+            ///
+            /// - Remark: Generated from `#/components/schemas/JobTier/value1`.
+            public var value1: Components.Schemas.JobTier.Value1Payload?
+            /// - Remark: Generated from `#/components/schemas/JobTier/value2`.
+            public var value2: Swift.String?
+            /// Creates a new `JobTier`.
+            ///
+            /// - Parameters:
+            ///   - value1: Which step of the decision made the command heavy.
+            ///   - value2:
+            public init(
+                value1: Components.Schemas.JobTier.Value1Payload? = nil,
+                value2: Swift.String? = nil
+            ) {
+                self.value1 = value1
+                self.value2 = value2
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                var errors: [any Swift.Error] = []
+                do {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                do {
+                    self.value2 = try decoder.decodeFromSingleValueContainer()
+                } catch {
+                    errors.append(error)
+                }
+                try Swift.DecodingError.verifyAtLeastOneSchemaIsNotNil(
+                    [
+                        self.value1,
+                        self.value2
+                    ],
+                    type: Self.self,
+                    codingPath: decoder.codingPath,
+                    errors: errors
+                )
+            }
+            public func encode(to encoder: any Swift.Encoder) throws {
+                try encoder.encodeFirstNonNilValueToSingleValueContainer([
+                    self.value1,
+                    self.value2
+                ])
             }
         }
         /// One way to sign in to a kind, easiest first.
@@ -5160,10 +5919,12 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/prompt`.
             public var prompt: Swift.String?
-            /// The runner's device id, `d_…`.
+            /// Deprecated (E15): the Core places every session. Absent: the Core's built-in runner (until
+            /// E15-1 places by load, after which a given runner is ignored).
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/runner`.
-            public var runner: Swift.String
+            @available(*, deprecated)
+            public var runner: Swift.String?
             /// At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
             ///
             /// - Remark: Generated from `#/components/schemas/NewAgentSession/secrets`.
@@ -5187,7 +5948,7 @@ extension Components {
             ///   - policy: `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.
             ///   - projectId: Start the session for a project (P3-02): the Core builds the workspace from the project's
             ///   - prompt: The first message. Absent or empty: the session starts with no message, like opening the
-            ///   - runner: The runner's device id, `d_…`.
+            ///   - runner: Deprecated (E15): the Core places every session. Absent: the Core's built-in runner (until
             ///   - secrets: At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
             ///   - workspace: The repo and worktree to work in (`{"repo_url", "base_branch", "branch", …}`); absent, a
             public init(
@@ -5202,7 +5963,7 @@ extension Components {
                 policy: OpenAPIRuntime.OpenAPIObjectContainer? = nil,
                 projectId: Swift.Int64? = nil,
                 prompt: Swift.String? = nil,
-                runner: Swift.String,
+                runner: Swift.String? = nil,
                 secrets: [Components.Schemas.AgentSecret]? = nil,
                 workspace: OpenAPIRuntime.OpenAPIObjectContainer? = nil
             ) {
@@ -5558,6 +6319,81 @@ extension Components {
                     "name",
                     "scopes"
                 ])
+            }
+        }
+        /// `POST /jobs`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/NewJob`.
+        public struct NewJob: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/NewJob/argv`.
+            public var argv: [Swift.String]
+            /// A wire path relative to the project or session folder; empty is its root.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewJob/cwd_rel`.
+            public var cwdRel: Swift.String?
+            /// Allow-listed variable names to values.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewJob/env`.
+            public struct EnvPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: [String: Swift.String]
+                /// Creates a new `EnvPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: [String: Swift.String] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// Allow-listed variable names to values.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewJob/env`.
+            public var env: Components.Schemas.NewJob.EnvPayload?
+            /// - Remark: Generated from `#/components/schemas/NewJob/project`.
+            public var project: Swift.Int64?
+            /// - Remark: Generated from `#/components/schemas/NewJob/session`.
+            public var session: Swift.String?
+            /// The caller is a terminal: an interactive command answers 409 `interactive`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewJob/tty`.
+            public var tty: Swift.Bool?
+            /// Creates a new `NewJob`.
+            ///
+            /// - Parameters:
+            ///   - argv:
+            ///   - cwdRel: A wire path relative to the project or session folder; empty is its root.
+            ///   - env: Allow-listed variable names to values.
+            ///   - project:
+            ///   - session:
+            ///   - tty: The caller is a terminal: an interactive command answers 409 `interactive`.
+            public init(
+                argv: [Swift.String],
+                cwdRel: Swift.String? = nil,
+                env: Components.Schemas.NewJob.EnvPayload? = nil,
+                project: Swift.Int64? = nil,
+                session: Swift.String? = nil,
+                tty: Swift.Bool? = nil
+            ) {
+                self.argv = argv
+                self.cwdRel = cwdRel
+                self.env = env
+                self.project = project
+                self.session = session
+                self.tty = tty
+            }
+            public enum CodingKeys: String, CodingKey {
+                case argv
+                case cwdRel = "cwd_rel"
+                case env
+                case project
+                case session
+                case tty
             }
         }
         /// A lease to grant.
@@ -8812,6 +9648,141 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case kvm
                 case tiers
+            }
+        }
+        /// `POST /runner/jobs/report`: a local run the Core said to report (`JobLocal.report`).
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunnerJobReport`.
+        public struct RunnerJobReport: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunnerJobReport/argv`.
+            public var argv: [Swift.String]
+            /// - Remark: Generated from `#/components/schemas/RunnerJobReport/duration_ms`.
+            public var durationMs: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/RunnerJobReport/exit_code`.
+            public var exitCode: Swift.Int32?
+            /// - Remark: Generated from `#/components/schemas/RunnerJobReport/project`.
+            public var project: Swift.Int64?
+            /// - Remark: Generated from `#/components/schemas/RunnerJobReport/session`.
+            public var session: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RunnerJobReport/signal`.
+            public var signal: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RunnerJobReport/terminal`.
+            public var terminal: Swift.String?
+            /// Creates a new `RunnerJobReport`.
+            ///
+            /// - Parameters:
+            ///   - argv:
+            ///   - durationMs:
+            ///   - exitCode:
+            ///   - project:
+            ///   - session:
+            ///   - signal:
+            ///   - terminal:
+            public init(
+                argv: [Swift.String],
+                durationMs: Swift.Int64,
+                exitCode: Swift.Int32? = nil,
+                project: Swift.Int64? = nil,
+                session: Swift.String? = nil,
+                signal: Swift.String? = nil,
+                terminal: Swift.String? = nil
+            ) {
+                self.argv = argv
+                self.durationMs = durationMs
+                self.exitCode = exitCode
+                self.project = project
+                self.session = session
+                self.signal = signal
+                self.terminal = terminal
+            }
+            public enum CodingKeys: String, CodingKey {
+                case argv
+                case durationMs = "duration_ms"
+                case exitCode = "exit_code"
+                case project
+                case session
+                case signal
+                case terminal
+            }
+        }
+        /// `POST /runner/jobs`: what the built-in runner forwards from a shim, with the origin it stamped
+        /// (the sandbox the socket belongs to, never the shim's word).
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunnerNewJob`.
+        public struct RunnerNewJob: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RunnerNewJob/argv`.
+            public var argv: [Swift.String]
+            /// A wire path relative to the session or project folder (the runner maps the shim's `cwd`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerNewJob/cwd_rel`.
+            public var cwdRel: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RunnerNewJob/env`.
+            public struct EnvPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: [String: Swift.String]
+                /// Creates a new `EnvPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: [String: Swift.String] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RunnerNewJob/env`.
+            public var env: Components.Schemas.RunnerNewJob.EnvPayload?
+            /// - Remark: Generated from `#/components/schemas/RunnerNewJob/project`.
+            public var project: Swift.Int64?
+            /// The AI session (`as_…`) whose sandbox the shim ran in.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerNewJob/session`.
+            public var session: Swift.String?
+            /// The Core terminal it ran in.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerNewJob/terminal`.
+            public var terminal: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/RunnerNewJob/tty`.
+            public var tty: Swift.Bool?
+            /// Creates a new `RunnerNewJob`.
+            ///
+            /// - Parameters:
+            ///   - argv:
+            ///   - cwdRel: A wire path relative to the session or project folder (the runner maps the shim's `cwd`).
+            ///   - env:
+            ///   - project:
+            ///   - session: The AI session (`as_…`) whose sandbox the shim ran in.
+            ///   - terminal: The Core terminal it ran in.
+            ///   - tty:
+            public init(
+                argv: [Swift.String],
+                cwdRel: Swift.String? = nil,
+                env: Components.Schemas.RunnerNewJob.EnvPayload? = nil,
+                project: Swift.Int64? = nil,
+                session: Swift.String? = nil,
+                terminal: Swift.String? = nil,
+                tty: Swift.Bool? = nil
+            ) {
+                self.argv = argv
+                self.cwdRel = cwdRel
+                self.env = env
+                self.project = project
+                self.session = session
+                self.terminal = terminal
+                self.tty = tty
+            }
+            public enum CodingKeys: String, CodingKey {
+                case argv
+                case cwdRel = "cwd_rel"
+                case env
+                case project
+                case session
+                case terminal
+                case tty
             }
         }
         /// What a runner offers: terminals, agents, and how many agent sessions at once.
