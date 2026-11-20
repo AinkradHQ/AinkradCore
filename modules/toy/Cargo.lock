@@ -102,6 +102,7 @@ dependencies = [
  "ainkrad-proto",
  "axum",
  "base64 0.22.1",
+ "blake3",
  "getrandom 0.4.3",
  "hyper",
  "hyper-util",

@@ -38,7 +38,7 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-binary="$HERE/../target/release/ainkrad-runner" design=0 design_helper='' ptyhost='' with_run=0 pty=0 agents=0 job_shims=0 ca='' pair='' code='' invite='' prefix='' start=0 dry=0 exec_on=0 root=0
+binary="$HERE/../target/release/ainkrad-runner" design=0 design_helper='' ptyhost='' with_run=0 pty=0 agents=0 ca='' pair='' code='' invite='' prefix='' start=0 dry=0 exec_on=0 root=0 ws_root='' job_shims=0
 run() { printf '+ %s\n' "$*"; [ "$dry" = 1 ] || "$@"; }
 WAS_ACTIVE=1
 # Demoting a root runner: its terminal hosts (ptyhosts, started as root; KillMode=process keeps them alive across a restart)
@@ -181,6 +181,7 @@ while [ $# -gt 0 ]; do
     --agents) agents=1; shift ;;
     --job-shims) job_shims=1; shift ;;
     --root) root=1; shift ;;
+    --workspace-root) ws_root=${2:?}; shift 2 ;;
     --with-run) with_run=1; shift ;;
     --design) design=1; shift ;;
     --design-helper) design_helper=${2:?}; shift 2 ;;
@@ -218,6 +219,16 @@ if [ -z "$prefix" ]; then
   # `pair` runs as the user before the unit's StateDirectory exists.
   run install -d -m 0700 -o ainkrad-runner -g ainkrad-runner /var/lib/ainkrad-runner
 fi
+# E15-2: the Core's canonical workspace. The built-in runner and the Core share one folder through the group ainkrad-ws
+# (setgid, mode 2770, root-owned so neither user owns it). Only the built-in runner gets this; a remote runner never does.
+if [ -n "$ws_root" ] && [ -z "$prefix" ]; then
+  case $ws_root in /*[!A-Za-z0-9_./-]* | '') echo "--workspace-root is an absolute path of plain characters" >&2; exit 2 ;; /*) ;; *) echo "--workspace-root is an absolute path" >&2; exit 2 ;; esac
+  getent group ainkrad-ws >/dev/null 2>&1 || run groupadd --system ainkrad-ws
+  run usermod -aG ainkrad-ws ainkrad-runner
+  ! id ainkrad >/dev/null 2>&1 || run usermod -aG ainkrad-ws ainkrad
+  run install -d -m 2770 -o root -g ainkrad-ws "$ws_root"
+  run chmod 2770 "$ws_root"
+fi
 run install -d "$prefix/usr/local/bin" "$prefix/etc/systemd/system"
 # install_bin SRC DEST: copy and set 0755; when SRC already IS DEST (--binary pointing at the final path) `install` would die with
 # "are the same file" under set -e, leaving a half-installed runner: only the mode is set then.
@@ -243,6 +254,7 @@ args=''
 # The Core's own runner only (E15-3): terminals get the heavy-job shims (needs ainkrad-job beside the runner).
 [ "$job_shims" = 0 ] || args="${args:+$args }--job-shims"
 [ -z "$ca" ] || args="${args:+$args }--ca $ca"
+[ -z "$ws_root" ] || args="${args:+$args }--workspace-root $ws_root"
 if [ -n "$prefix" ]; then run install -d "$prefix/etc/ainkrad-runner"; fi
 dropin="$prefix/etc/systemd/system/ainkrad-runner.service.d"
 envfile="$prefix/etc/ainkrad-runner/runner.env"
@@ -277,6 +289,13 @@ SystemCallFilter=
 CONF
   fi
 else run rm -f "$dropin/authority.conf"; fi
+# The built-in runner's workspace: its files are group-writable for the Core (UMask 0007), its unit may write the folder and
+# carries the group. A runner without --workspace-root keeps no drop-in and the strict 0077.
+if [ -n "$ws_root" ]; then
+  run install -d "$dropin"
+  printf '+ write %s/workspace.conf\n' "$dropin"
+  if [ "$dry" = 0 ]; then printf '# Written by deploy/install-linux.sh --workspace-root: the Core'"'"'s canonical workspace, shared through group ainkrad-ws.\n[Service]\nSupplementaryGroups=ainkrad-ws\nUMask=0007\nReadWritePaths=%s\n' "$ws_root" >"$dropin/workspace.conf"; fi
+else run rm -f "$dropin/workspace.conf"; fi
 printf '+ write %s: RUNNER_ARGS=%s%s\n' "$envfile" "$args" "$([ "$agents" = 0 ] || echo ' (+ AINKRAD_AGENT_NETWORK=filtered, AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com)')"
 if [ "$dry" = 0 ]; then
   printf '# Written by deploy/install-linux.sh. exec.run is off unless --enable-exec is added here.\nRUNNER_ARGS=%s\n' "$args" >"$envfile"
