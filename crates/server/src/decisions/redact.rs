@@ -3,7 +3,10 @@
 //! First `ainkrad_proto::redact` (key shapes), then, per whitespace-separated word: workspace paths
 //! become `$WS/…`, home folders `~`, env assignments `NAME=…`, URLs lose their userinfo, query and
 //! fragment; last, runs of 16 or more hex digits (which covers digit runs: ids, hashes, tokens)
-//! become `#`. The same output feeds the cache key, so equal questions share an answer whatever
+//! become `#`. Secrets by position and shape (E15 security review M10): the value of any name or
+//! flag that names a secret (`pass`, `secret`, `token`, `key`, `auth`, `cred`, any case), the word
+//! after `-u`/`--user` or such a flag, `-p<value>`, the credential after `Authorization:` and its
+//! scheme, JWTs and Stripe-style `sk_live_`/`rk_live_` keys. The same output feeds the cache key, so equal questions share an answer whatever
 //! their paths or ids were.
 
 use std::collections::BTreeMap;
@@ -29,18 +32,35 @@ impl Redactor {
     pub fn text(&self, text: &str) -> String {
         let shaped = ainkrad_proto::redact::Redactor::new().text(text);
         let mut out = String::with_capacity(shaped.len());
-        let mut word = String::new();
-        for c in shaped.chars() {
-            if c.is_whitespace() {
-                out.push_str(&hex_runs(&self.word(&word)));
-                word.clear();
-                out.push(c);
-            } else {
-                word.push(c);
-            }
+        let mut mask_next = false;
+        for piece in shaped.split_inclusive(char::is_whitespace) {
+            let (word, ws) = piece.split_at(piece.trim_end_matches(char::is_whitespace).len());
+            out.push_str(&hex_runs(&self.positional(word, &mut mask_next)));
+            out.push_str(ws);
         }
-        out.push_str(&hex_runs(&self.word(&word)));
         out
+    }
+
+    /// One word, with what the word before it said (`mask_next`: it was a secret's flag or an
+    /// `Authorization:`).
+    fn positional(&self, w: &str, mask_next: &mut bool) -> String {
+        if w.is_empty() {
+            return String::new();
+        }
+        let bare = w.trim_matches(['"', '\'']).to_ascii_lowercase();
+        let scheme = ["basic", "bearer", "token", "digest"].contains(&bare.as_str());
+        if *mask_next {
+            if !scheme {
+                *mask_next = false;
+                return "…".to_owned();
+            }
+            return self.word(w);
+        }
+        let flag = bare.starts_with('-') && !bare.contains('=');
+        *mask_next = bare.ends_with("authorization:")
+            || (scheme && bare != "token")
+            || (flag && (bare == "-u" || bare == "--user" || secret_named(&bare)));
+        self.word(w)
     }
 
     /// Every value of `facts` redacted; keys are the consumer's own fixed names and stay.
@@ -57,16 +77,57 @@ impl Redactor {
         }
         let w = url(w);
         if let Some((name, _)) = w.split_once('=')
-            && is_env_name(name)
+            && (is_env_name(name) || secret_named(name))
         {
             return format!("{name}=…");
         }
+        // `mysql -pSecret`: the password is glued to the flag.
+        if w.len() > 2 && w.starts_with("-p") && !w.starts_with("--") {
+            return "-p…".to_owned();
+        }
+        let w = shaped_tokens(&w);
         let mut w = replace_root(&w, &self.ws_root, "$WS");
         if let Some(home) = &self.home {
             w = replace_root(&w, home, "~");
         }
         generic_home(&w)
     }
+}
+
+/// A name or flag that names a secret: any case, any of these parts (`--password`, `apiKey`,
+/// `db_token`, `X-Auth`). Over-masking (`--author`) only costs a word the model does not need.
+fn secret_named(name: &str) -> bool {
+    let l = name.trim_start_matches('-').to_ascii_lowercase();
+    !l.is_empty()
+        && ["pass", "secret", "token", "key", "auth", "cred"]
+            .iter()
+            .any(|p| l.contains(p))
+}
+
+/// JWTs (`eyJ…` with two dots) and Stripe-style keys inside a word, as `…`.
+fn shaped_tokens(w: &str) -> String {
+    let tok = |c: char| c.is_ascii_alphanumeric() || "_-.".contains(c);
+    let secret = |t: &str| {
+        (t.starts_with("eyJ") && t.matches('.').count() >= 2 && t.len() >= 20)
+            || (["sk_live_", "rk_live_", "sk_test_", "rk_test_"]
+                .iter()
+                .any(|p| t.starts_with(p))
+                && t.len() >= 16)
+    };
+    let mut out = String::with_capacity(w.len());
+    let mut run = String::new();
+    for c in w.chars().chain(std::iter::once('\0')) {
+        if tok(c) {
+            run.push(c);
+            continue;
+        }
+        out.push_str(if secret(&run) { "…" } else { &run });
+        run.clear();
+        if c != '\0' {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn is_env_name(s: &str) -> bool {
@@ -191,6 +252,41 @@ mod tests {
             "short 123456789012345 stays?"
         );
         assert_eq!(r().text("a\tb\n"), "a\tb\n");
+    }
+
+    #[test]
+    fn secrets_by_name_flag_position_and_shape_are_masked() {
+        // M10: each of these went to the model with its secret in it.
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJlX3Zh";
+        for (input, secret) in [
+            ("mysql -pProdPw -h db", "ProdPw"),
+            ("tool --password=hunter2x", "hunter2x"),
+            ("tool --Password hunter2x", "hunter2x"),
+            ("app token=abcSecret9", "abcSecret9"),
+            ("app db_Pass=abcSecret9", "abcSecret9"),
+            ("curl -u admin:s3cretPw https://x.example", "s3cretPw"),
+            ("curl --user admin:s3cretPw x", "s3cretPw"),
+            (
+                "curl -H 'Authorization: Basic YWRtaW46czNjcmV0' x",
+                "YWRtaW46czNjcmV0",
+            ),
+            ("curl -H \"Authorization: Bearer opaqueTok\" x", "opaqueTok"),
+            ("curl -H 'Authorization: rawCredValue' x", "rawCredValue"),
+            ("deploy --api-key zzTopSecret", "zzTopSecret"),
+            (&format!("call {jwt}"), "eyJzdWIiOiIxMjM0In0"),
+            ("stripe sk_live_51HxQkPZabcdefgh", "51HxQkPZabcdefgh"),
+            ("stripe --key=rk_live_51HxQkPZabcdefgh", "51HxQkPZabcdefgh"),
+        ] {
+            let t = r().text(input);
+            assert!(!t.contains(secret), "{input} -> {t}");
+        }
+        // What is not a secret keeps its words, so equal questions still share an answer.
+        assert_eq!(r().text("mkdir -p a/b"), "mkdir -p a/b");
+        assert_eq!(
+            r().text("cargo build --release -j 4"),
+            "cargo build --release -j 4"
+        );
+        assert_eq!(r().text("gh auth token"), "gh auth token");
     }
 
     #[test]

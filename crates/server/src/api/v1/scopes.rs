@@ -437,6 +437,8 @@ pub const UNLOCKED: &[(&str, &str)] = &[
     ("POST", "/api/v1/jobs"),
     ("POST", "/api/v1/jobs/{id}/signal"),
     ("DELETE", "/api/v1/jobs/{id}"),
+    // A job's live output reads like a terminal attach (E15 security review M4).
+    ("GET", "/api/v1/jobs/{id}/stream"),
 ];
 
 /// Whether `path` fits `template` segment by segment.

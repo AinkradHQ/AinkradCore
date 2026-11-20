@@ -326,13 +326,28 @@ pub(super) async fn place_new(
     secrets: &[SessionSecret],
     draws_account: bool,
 ) -> Result<Placed, ApiError> {
+    let views = crate::hardware::view::views(app).await?;
+    // M9: a pinned session goes only to a runner that is online and neither paused nor degraded.
+    let pin = |r: &str| match place::pin_refusal(&views, r) {
+        None => Ok(place::pinned(r)),
+        Some("offline") => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "runner_offline",
+            "that runner is not connected",
+        )),
+        Some(why) => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "runner_paused",
+            format!("that runner takes no new work now ({why})"),
+        )),
+    };
     if let Some(r) = named
         && !draws_account
         && RUNNER_BOUND.contains(&harness)
         && !agents::holds_account(secrets)
         && own_login(app, r, harness)
     {
-        return Ok(place::pinned(r));
+        return pin(r);
     }
     let policy = agents::with_account_floor(
         policy.cloned().unwrap_or_else(|| {
@@ -340,7 +355,6 @@ pub(super) async fn place_new(
         }),
         draws_account || agents::holds_account(secrets),
     );
-    let views = crate::hardware::view::views(app).await?;
     // Which devices could take it now: the same checks a create makes on its runner. A session
     // that draws from a chain names no harness yet, so only the placement rules are asked.
     let mut fit = std::collections::HashSet::new();
@@ -365,7 +379,7 @@ pub(super) async fn place_new(
     match place::place_session(&views, &|d| fit.contains(d)) {
         Ok(p) => Ok(p),
         Err(place::NoFit) => match named {
-            Some(r) => Ok(place::pinned(r)),
+            Some(r) => pin(r),
             None => Err(ApiError::new(
                 StatusCode::CONFLICT,
                 "runner_offline",

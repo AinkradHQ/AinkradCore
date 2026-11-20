@@ -83,8 +83,8 @@ pub struct PtyOpen {
     /// The Core user whose persistent sandbox home the shell gets (`[a-z0-9_-]{1,32}`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_user: Option<String>,
-    /// Why the terminal is opened (E15-4): `login` for the Accounts guided sign-in, the one
-    /// terminal a remote runner still opens ([`PTY_PURPOSE_LOGIN`]). Absent: a plain terminal.
+    /// Why the terminal is opened (E15-4). Kept for the wire only: no purpose makes a remote
+    /// runner open a terminal (E15 security review M7; the Accounts sign-in is `login.start`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
 }

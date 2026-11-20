@@ -34,15 +34,74 @@ pub async fn spent_today(pool: &SqlitePool, now: &str) -> Result<i64, sqlx::Erro
     .await
 }
 
-/// Whether the day's spend has reached `cap` (a cap of 0 is always reached).
-pub async fn cap_reached(pool: &SqlitePool, now: &str, cap: i64) -> Result<bool, sqlx::Error> {
-    Ok(spent_today(pool, now).await? >= cap)
+/// The calls in flight and what they have reserved (E15 security review M11, M12). The Core's
+/// service shares one ([`Gate::shared`]); a test service gets its own.
+pub struct Gate {
+    /// At most this many provider calls at once; another one falls back (`overloaded`).
+    pub calls: tokio::sync::Semaphore,
+    /// Micro-dollars reserved by calls in flight: counted with the day's spend before a call.
+    reserved: tokio::sync::Mutex<i64>,
+}
+
+/// Provider calls in flight at once.
+pub const MAX_IN_FLIGHT: usize = 3;
+/// The prompt's fixed text, in tokens, on top of what a call carries.
+const PROMPT_TOKENS: u64 = 200;
+
+impl Gate {
+    pub fn new() -> Self {
+        Self {
+            calls: tokio::sync::Semaphore::new(MAX_IN_FLIGHT),
+            reserved: tokio::sync::Mutex::new(0),
+        }
+    }
+
+    /// The process's one gate.
+    pub fn shared() -> std::sync::Arc<Gate> {
+        static G: std::sync::LazyLock<std::sync::Arc<Gate>> =
+            std::sync::LazyLock::new(|| std::sync::Arc::new(Gate::new()));
+        std::sync::Arc::clone(&G)
+    }
+
+    /// Reserves `usd` before a call: `false` when the day's spend plus every reservation in flight
+    /// plus this one passes `cap` (a cap of 0 always does). Checked and taken under one lock, so
+    /// parallel calls cannot all pass the check before any charge lands.
+    pub async fn reserve(&self, pool: &SqlitePool, now: &str, cap: i64, usd: i64) -> bool {
+        let mut held = self.reserved.lock().await;
+        let spent = spent_today(pool, now).await.unwrap_or(i64::MAX);
+        let total = spent.saturating_add(*held).saturating_add(usd);
+        if cap <= 0 || total > cap {
+            return false;
+        }
+        *held += usd;
+        true
+    }
+
+    /// Ends a reservation of `usd` (its charge is now in the ledger, or was never owed).
+    pub async fn release(&self, usd: i64) {
+        let mut held = self.reserved.lock().await;
+        *held = (*held - usd).max(0);
+    }
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The input tokens a call of `bytes` request text is estimated at (bytes / 4, plus the prompt).
+pub fn estimate_tokens(bytes: usize) -> u64 {
+    u64::try_from(bytes / 4)
+        .unwrap_or(u64::MAX)
+        .saturating_add(PROMPT_TOKENS)
 }
 
 /// One provider call's ledger row.
 pub struct Charge<'a> {
     pub consumer: &'a str,
-    pub account: i64,
+    /// The account billed; `None` for a failed call's estimate (no account answered).
+    pub account: Option<i64>,
     pub model: &'a str,
     pub input_tokens: u64,
     pub usd_micros: i64,
@@ -56,7 +115,7 @@ pub async fn record(pool: &SqlitePool, c: &Charge<'_>, now: &str) -> Result<(), 
     let cost = costs::NewCost {
         session: &session,
         epoch: 0,
-        account_id: Some(c.account),
+        account_id: c.account,
         legacy_account_id: None,
         provider: "google",
         harness: "agy",
@@ -90,5 +149,7 @@ mod tests {
         assert_eq!(cost_micros(0, 100_000), 0);
         assert_eq!(cost_micros(500, -5), 0);
         assert_eq!(subject("heavy_job"), "decisions:heavy_job");
+        assert_eq!(estimate_tokens(0), 200);
+        assert_eq!(estimate_tokens(400), 300);
     }
 }

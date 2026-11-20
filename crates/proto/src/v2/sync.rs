@@ -136,6 +136,14 @@ pub struct Entry {
     pub link: Option<String>,
 }
 
+/// A file entry whose chunk list exactly covers its size, and the size within
+/// [`MAX_FILE_BYTES`] (E15 security review M1: a pull loops over the chunk list, so a list
+/// longer than the size would let a runner stream far more than it declared).
+pub fn file_entry_sound(e: &Entry) -> bool {
+    e.size <= MAX_FILE_BYTES
+        && u64::try_from(e.chunks.len()).is_ok_and(|n| n == e.size.div_ceil(CHUNK_BYTES))
+}
+
 /// Core to runner: the manifest of the runner's cache of `project`.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
@@ -303,6 +311,25 @@ lease_debug!(SyncWatch, session);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chunk_list_must_cover_the_size_exactly() {
+        let e = |size: u64, n: usize| Entry {
+            size,
+            chunks: vec![Hash::default(); n],
+            ..Default::default()
+        };
+        assert!(file_entry_sound(&e(0, 0)) && file_entry_sound(&e(1, 1)));
+        assert!(file_entry_sound(&e(CHUNK_BYTES, 1)) && file_entry_sound(&e(CHUNK_BYTES + 1, 2)));
+        // M1: `size: 1` with 100k chunks would stream 100 GB.
+        assert!(!file_entry_sound(&e(1, 100_000)) && !file_entry_sound(&e(1, 0)));
+        assert!(!file_entry_sound(&e(CHUNK_BYTES * 2, 1)));
+        let big = MAX_FILE_BYTES + 1;
+        assert!(!file_entry_sound(&e(
+            big,
+            big.div_ceil(CHUNK_BYTES) as usize
+        )));
+    }
 
     #[test]
     fn hashes_are_lowercase_hex_and_refuse_anything_else() {

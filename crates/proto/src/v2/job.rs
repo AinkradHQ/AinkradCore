@@ -16,17 +16,30 @@ pub const OP_JOB_RUN: &str = "job.run";
 /// The driver (and capability) name of a runner that runs jobs.
 pub const CAP_JOB: &str = "job";
 
-/// The hosts a job's `filtered` network may reach (package registries only).
-pub const JOB_REGISTRY_HOSTS: [&str; 8] = [
+/// The hosts a job's `filtered` network may reach (package registries only). No forge: a job
+/// that could reach github.com could push the project anywhere (E15 security review H2); git
+/// seeding goes through the Core-supplied clone, never the job's network.
+pub const JOB_REGISTRY_HOSTS: [&str; 6] = [
     "crates.io",
     "static.crates.io",
     "registry.npmjs.org",
     "pypi.org",
     "files.pythonhosted.org",
     "proxy.golang.org",
-    "github.com",
-    "objects.githubusercontent.com",
 ];
+
+/// `hosts` (a session's own allow list) cut to [`JOB_REGISTRY_HOSTS`]: what a job from a
+/// `filtered` session may reach (E15 H2). Lower-cased; order and duplicates dropped.
+pub fn job_hosts_within(hosts: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = hosts
+        .iter()
+        .map(|h| h.trim().trim_end_matches('.').to_ascii_lowercase())
+        .filter(|h| JOB_REGISTRY_HOSTS.contains(&h.as_str()))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
 
 /// What a job needs of the hardware it runs on.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -70,6 +83,16 @@ pub struct JobRun {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     pub need: JobNeed,
+    /// The hosts the job may reach, already within [`JOB_REGISTRY_HOSTS`] (the asking session's
+    /// own `filtered` list cut to it, E15 H2). Absent: the whole registry list. The runner cuts it
+    /// to the registry list again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosts: Option<Vec<String>>,
+    /// Who asked: `s:<session>`, `t:<terminal>` or `u` (a person or a task), set by the Core. A
+    /// job from another origin than the last one's finds the cache's home and build folders
+    /// cleared (E15 M5).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub origin: String,
 }
 
 impl std::fmt::Debug for JobRun {

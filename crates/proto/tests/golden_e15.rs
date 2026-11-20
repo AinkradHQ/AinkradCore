@@ -145,6 +145,8 @@ fn e15_frames_are_pinned() {
                 toolchains: vec!["rust".to_owned()],
                 xcode: false,
             },
+            hosts: None,
+            origin: String::new(),
         }),
     );
     res(

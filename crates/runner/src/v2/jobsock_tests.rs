@@ -6,7 +6,34 @@ fn origin() -> Origin {
         session: None,
         project: Some(7),
         folder: Some(PathBuf::from("/w/p")),
+        net: Net::Allow,
     }
+}
+
+#[test]
+fn the_sandbox_network_goes_with_every_request_and_defaults_to_deny() {
+    // E15 H2: a `deny` session's job must stay local, a `filtered` one keeps its own list.
+    let ok = json!({"argv": ["cargo", "build"], "cwd": "/w/p", "env": {}});
+    let sent = |net: Net| -> Value {
+        let o = Origin { net, ..origin() };
+        serde_json::from_slice(&build(&ok, &o).unwrap()).unwrap()
+    };
+    let d = sent(Net::default());
+    assert_eq!((&d["network"], &d["hosts"]), (&json!("deny"), &Value::Null));
+    let f = sent(Net::Filtered(vec!["crates.io".into()]));
+    assert_eq!(
+        (&f["network"], &f["hosts"]),
+        (&json!("filtered"), &json!(["crates.io"]))
+    );
+    assert_eq!(sent(Net::Allow)["network"], "allow");
+    assert_eq!(Net::from_mode(None, Vec::new), Net::Deny);
+    assert_eq!(Net::from_mode(Some("none"), Vec::new), Net::Deny);
+    assert_eq!(Net::from_mode(Some("bogus"), Vec::new), Net::Deny);
+    assert_eq!(Net::from_mode(Some("host"), Vec::new), Net::Allow);
+    assert_eq!(
+        Net::from_mode(Some("filtered"), || vec!["pypi.org".into()]),
+        Net::Filtered(vec!["pypi.org".into()])
+    );
 }
 
 #[test]

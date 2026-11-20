@@ -325,6 +325,19 @@ impl Policy {
         p
     }
 
+    /// This policy with only the host names in `keep` (E15 H2: a job gets no more than the
+    /// session that asked for it). CIDRs and ports are kept.
+    pub fn only_hosts(&self, keep: &[String]) -> Policy {
+        let mut p = self.clone();
+        p.hosts.retain(|h| keep.iter().any(|k| k == h));
+        p
+    }
+
+    /// The listed host names.
+    pub fn host_names(&self) -> Vec<String> {
+        self.hosts.iter().cloned().collect()
+    }
+
     /// `name` is exactly a listed host name (already lower-case, no trailing dot).
     pub fn host_listed(&self, name: &str) -> bool {
         self.hosts.contains(name)

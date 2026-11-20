@@ -47,6 +47,11 @@ fuzz_target!(|data: &[u8]| {
     // A link target the manifest accepts never climbs out of the root.
     if link_ok("a", path) {
         assert!(!path.starts_with('/'));
+        // M2: `..` only as a leading run, so the target climbs from the link's folder and then
+        // only descends: no chain of links can leave the root.
+        let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty() && *p != ".").collect();
+        let ups = parts.iter().take_while(|p| **p == "..").count();
+        assert!(ups == 0 && !parts[ups..].contains(&".."));
     }
     assert_eq!(
         std::fs::read_dir(&f.outside).unwrap().count(),

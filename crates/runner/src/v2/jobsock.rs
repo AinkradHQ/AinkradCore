@@ -94,6 +94,34 @@ pub struct Origin {
     /// The session or project folder the sandbox works in: a command's `cwd` is sent relative to
     /// it, and a command outside it is not sent at all. `None` (a home terminal): always local.
     pub folder: Option<PathBuf>,
+    /// The network the sandbox itself has (E15 H2): the Core never gives a job sent elsewhere
+    /// more. The default is `Deny`, so an origin that does not say keeps its jobs local.
+    pub net: Net,
+}
+
+/// The commands of one sandbox served at once (E15 M12).
+pub const MAX_CONNS: usize = 4;
+
+/// A sandbox's network, as the Core is told it (`RunnerNewJob::network`, `hosts`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Net {
+    #[default]
+    Deny,
+    Allow,
+    /// Only these host names (the runner's egress allow list).
+    Filtered(Vec<String>),
+}
+
+impl Net {
+    /// From a sandbox's network mode name (`AINKRAD_SANDBOX_NETWORK`, `--terminal-network`):
+    /// anything unknown is `Deny`.
+    pub fn from_mode(mode: Option<&str>, hosts: impl FnOnce() -> Vec<String>) -> Net {
+        match mode {
+            Some("allow" | "host") => Net::Allow,
+            Some("filtered") => Net::Filtered(hosts()),
+            _ => Net::Deny,
+        }
+    }
 }
 
 /// Hardlinks `shim` (the `ainkrad-job` binary) as every name in [`SHIM_NAMES`] under
@@ -188,10 +216,17 @@ impl JobSocks {
         std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o666))?;
         let up = Arc::clone(&self.up);
         let task = tokio::spawn(async move {
+            // E15 security review M12: at most MAX_CONNS commands of one sandbox in flight; the
+            // next connection waits, so a sandbox cannot fan out unbounded questions to the Core.
+            let gate = Arc::new(tokio::sync::Semaphore::new(MAX_CONNS));
             while let Ok((conn, _)) = listener.accept().await {
+                let Ok(permit) = Arc::clone(&gate).acquire_owned().await else {
+                    break;
+                };
                 let (up, origin) = (Arc::clone(&up), origin.clone());
                 tokio::spawn(async move {
                     let _ = serve(conn, up, origin).await;
+                    drop(permit);
                 });
             }
         });
@@ -278,6 +313,15 @@ fn build(req: &Value, origin: &Origin) -> Option<Vec<u8>> {
         "cwd_rel": cwd_rel,
         "tty": req["tty"].as_bool().unwrap_or(false),
         "env": env,
+        "network": match origin.net {
+            Net::Deny => "deny",
+            Net::Allow => "allow",
+            Net::Filtered(_) => "filtered",
+        },
+        "hosts": match &origin.net {
+            Net::Filtered(h) => json!(h),
+            _ => Value::Null,
+        },
     });
     Some(body.to_string().into_bytes())
 }

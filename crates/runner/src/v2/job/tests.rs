@@ -235,8 +235,6 @@ fn the_registry_list_is_the_one_the_spec_names() {
             "pypi.org",
             "files.pythonhosted.org",
             "proxy.golang.org",
-            "github.com",
-            "objects.githubusercontent.com"
         ]
     );
 }

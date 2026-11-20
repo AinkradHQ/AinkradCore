@@ -25,7 +25,8 @@ pub const MAX_COMPONENT: usize = 255;
 /// Flags for [`open_beneath`] and [`openat_nofollow`]: a folder, a read that cannot block on a
 /// FIFO, a new file that must not exist.
 pub const FLAGS_DIR: i32 = libc::O_RDONLY | libc::O_DIRECTORY;
-pub const FLAGS_READ: i32 = libc::O_RDONLY | libc::O_NONBLOCK;
+/// `O_NOCTTY`: a device node opened before its type check never becomes a terminal (E15 L10).
+pub const FLAGS_READ: i32 = libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOCTTY;
 pub const FLAGS_CREATE_NEW: i32 = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL;
 
 fn invalid() -> io::Error {

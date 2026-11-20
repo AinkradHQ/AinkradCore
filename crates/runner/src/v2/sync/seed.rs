@@ -56,12 +56,11 @@ impl SyncDriver {
         moved.map_err(|e| {
             StreamError::new(ErrorCode::Internal, format!("seeding the cache: {e}"))
         })?;
-        let head = tokio::process::Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(["rev-parse", "HEAD"])
-            .env_clear()
-            .env("GIT_CONFIG_NOSYSTEM", "1")
+        // The cache is shared with jobs: git reads it sealed (E15 H1).
+        let mut rev = ainkrad_sys::git::sealed(root);
+        rev.args(["rev-parse", "HEAD"])
+            .stdout(std::process::Stdio::piped());
+        let head = tokio::process::Command::from(rev)
             .output()
             .await
             .ok()

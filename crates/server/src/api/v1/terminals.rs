@@ -1042,6 +1042,14 @@ async fn admit(
         Some(d) if d.kind == "runner" && d.usable() => d,
         _ => return Err(ApiError::not_found("no such runner")),
     };
+    // M6: the Core refuses a remote runner itself, whatever that runner's own flags say.
+    if !crate::hardware::view::hosts_terminals(&app.pool, &runner.id).await? {
+        return Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "terminal_target_removed",
+            "terminals open on the Core or This Mac only",
+        ));
+    }
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM core_terminals WHERE runner=? AND status IN ('created','running')",
     )

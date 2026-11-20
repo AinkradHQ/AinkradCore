@@ -25,7 +25,7 @@ use ainkrad_harness::exec::{ExecBackend, Launch, LocalBackend, SpawnRequest, Std
 use ainkrad_proto::redact::Redactor;
 use ainkrad_proto::v2::{
     CAP_JOB, DriverInfo, ErrorCode, JOB_REGISTRY_HOSTS, JobDone, JobRun, MAX_SYNC_OUT_BYTES,
-    OP_JOB_RUN, StreamError, TreeHash,
+    OP_JOB_RUN, StreamError, TreeHash, job_hosts_within,
 };
 use tokio::io::AsyncReadExt;
 use tokio::sync::{Semaphore, mpsc};
@@ -213,6 +213,17 @@ impl JobDriver {
             private_dir(&job_dir.join(d)).map_err(|e| internal(e.to_string()))?;
         }
         let _cleanup = JobDir(job_dir.clone());
+        // M5: a job never inherits another origin's home or build folders.
+        let home_dir = match cache_mode {
+            true => self.sync.layout().home(req.project),
+            false => self
+                .cfg
+                .state
+                .join("jobs-home")
+                .join(req.project.to_string()),
+        };
+        super::sync::fresh_for_origin(&home_dir, cache_mode.then_some(root.as_path()), &req.origin)
+            .map_err(|e| internal(format!("clearing the cache for a new origin: {e}")))?;
         let home = match cache_mode {
             true => self.sync.job_home(req.project),
             false => {
@@ -241,8 +252,13 @@ impl JobDriver {
         }
         // The network: a proxy outside the sandbox that dials only the registry list.
         let sock = egress::socket_in(&job_dir.join("egress"));
-        let _proxy = egress::start(&sock, self.policy().await?)
-            .map_err(|e| internal(format!("egress proxy: {e}")))?;
+        let policy = match &req.hosts {
+            // The asking session's own list, cut to the registry list again here (E15 H2).
+            Some(hosts) => Arc::new(self.policy().await?.only_hosts(&job_hosts_within(hosts))),
+            None => self.policy().await?,
+        };
+        let _proxy =
+            egress::start(&sock, policy).map_err(|e| internal(format!("egress proxy: {e}")))?;
         let timeout = req
             .timeout_ms
             .map_or(DEFAULT_TIMEOUT, Duration::from_millis)

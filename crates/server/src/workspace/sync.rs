@@ -13,8 +13,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, CHUNK_BYTES, Command, Entry, EntryKind, ErrorCode, Hash, MAX_FILE_BYTES, Output, Reply,
-    SYNC_FRAME_BYTES, SYNC_STREAM_WINDOW, StreamError, SyncManifest, SyncPull, SyncPush, TreeHash,
+    Body, CHUNK_BYTES, Command, Entry, EntryKind, ErrorCode, Hash, MAX_SYNC_OUT_BYTES, Output,
+    Reply, SYNC_FRAME_BYTES, SYNC_STREAM_WINDOW, StreamError, SyncManifest, SyncPull, SyncPush,
+    TreeHash, file_entry_sound,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -102,7 +103,7 @@ impl ChunkReader<'_> {
         };
         let want = e.chunks.get(i).ok_or_else(changed)?;
         let start = i as u64 * CHUNK_BYTES;
-        let len = (e.size - start).min(CHUNK_BYTES) as usize;
+        let len = e.size.saturating_sub(start).min(CHUNK_BYTES) as usize;
         let bytes = match self.src {
             Source::Mem(m) => {
                 let all = m.get(&e.path).ok_or_else(changed)?;
@@ -183,6 +184,12 @@ pub async fn manifest(
     for e in r.entries {
         check_path(&e.path)
             .map_err(|w| SyncError::new("path_refused", format!("{}: {w}", e.path)))?;
+        if e.kind == EntryKind::File && !file_entry_sound(&e) {
+            return Err(SyncError::new(
+                "runner_failed",
+                format!("{}: the chunk list does not cover the file", e.path),
+            ));
+        }
         if entries.insert(e.path.clone(), e).is_some() {
             return Err(SyncError::new("runner_failed", "a path listed twice"));
         }
@@ -279,14 +286,20 @@ pub async fn pull(
     wanted: &[Entry],
     route: &Route<'_>,
 ) -> Result<u64, SyncError> {
+    let mut total = 0u64;
     for e in wanted {
         check_path(&e.path).map_err(|w| SyncError::new("path_refused", w))?;
-        if e.kind != EntryKind::File || e.size > MAX_FILE_BYTES {
+        if e.kind != EntryKind::File || !file_entry_sound(e) {
             return Err(SyncError::new(
                 "path_refused",
                 format!("{} is not a pullable file", e.path),
             ));
         }
+        // M1: one pull never brings more than the sync-out cap, counted without overflow.
+        total = total
+            .checked_add(e.size)
+            .filter(|t| *t <= MAX_SYNC_OUT_BYTES)
+            .ok_or_else(|| SyncError::new("outputs_too_large", "a pull over the size limit"))?;
     }
     let cmd = Command::SyncPull(SyncPull {
         project,
@@ -305,7 +318,10 @@ pub async fn pull(
         let mut got = 0u64;
         for i in 0..e.chunks.len() {
             // One hashing chunk arrives as frames that never span two chunks.
-            let want = (e.size - i as u64 * CHUNK_BYTES).min(CHUNK_BYTES) as usize;
+            let want = e
+                .size
+                .saturating_sub(i as u64 * CHUNK_BYTES)
+                .min(CHUNK_BYTES) as usize;
             let mut bytes = Vec::with_capacity(want);
             while bytes.len() < want {
                 let data = match next(&mut d).await? {

@@ -58,6 +58,8 @@ pub struct Start {
     pub secrets: Vec<(String, String)>,
     /// The device that started it (the lease audit's `by`).
     pub by: String,
+    /// The hosts the job may reach (`JobRun::hosts`, E15 H2); `None`: the registry list.
+    pub hosts: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -145,7 +147,12 @@ fn base_of(s: &Start) -> PathBuf {
 /// Places the job. A job for the Core, started from a shim, is not a job at all (`Local`): the
 /// command already is on the Core. A task run configuration runs on the Core's own runner.
 pub async fn start(app: &App, s: Start) -> Result<Started, sqlx::Error> {
-    let views = view::views(app).await?;
+    let mut views = view::views(app).await?;
+    // M8: a job that carries secrets never goes to a plain paired runner, only to the Core or the
+    // attested This Mac (no per-runner opt-in exists yet).
+    if !s.secrets.is_empty() {
+        views.retain(|v| v.kind != ainkrad_proto::v2::HwKind::Runner);
+    }
     let placed = place_job(&views, &need_of(&s.row), &s.project.to_string());
     let on_core = matches!(
         placed.reason,
@@ -380,6 +387,12 @@ async fn execute(
             .collect(),
         timeout_ms: None,
         need: need_of(&run.s.row),
+        hosts: run.s.hosts.clone(),
+        origin: match (&run.s.session, &run.s.terminal) {
+            (Some(s), _) => format!("s:{s}"),
+            (None, Some(t)) => format!("t:{t}"),
+            (None, None) => "u".to_owned(),
+        },
     };
     let mut d = match app.hub.dispatch_job(&run.device, Command::JobRun(job)) {
         Ok(d) => d,

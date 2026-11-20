@@ -9,6 +9,7 @@
 use std::io;
 
 mod beneath;
+pub mod git;
 pub mod tree;
 pub use beneath::*;
 

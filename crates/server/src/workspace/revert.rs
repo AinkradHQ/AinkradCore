@@ -3,7 +3,6 @@
 //! file's git `HEAD` copy.
 
 use std::path::Path;
-use std::process::{Command as Proc, Stdio};
 
 use ainkrad_proto::v2::{RevertEdit, RevertResult};
 
@@ -18,34 +17,10 @@ pub enum Plan {
     Refused(RevertResult),
 }
 
-/// The text of `rel` at git `HEAD`, read with the plumbing `cat-file` (no filter, hook or
-/// textconv runs): `None` when untracked, not UTF-8, or no repo.
+/// The text of `rel` at its repo's `HEAD`, through the sealed git of E15 H1 (an explicit,
+/// verified `--git-dir`; no lazy fetch, no global config): see [`ainkrad_sys::git`].
 pub(super) fn head_blob(root: &Path, rel: &str) -> Option<String> {
-    let out = Proc::new("git")
-        .args([
-            "-c",
-            "core.fsmonitor=false",
-            "-c",
-            "core.hooksPath=/dev/null",
-        ])
-        .args(["-c", "safe.directory=*"])
-        .args(["cat-file", "blob"])
-        .arg(format!("HEAD:./{rel}"))
-        .current_dir(root)
-        .env_clear()
-        .env("PATH", "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_NO_REPLACE_OBJECTS", "1")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8(out.stdout).ok())
-        .flatten()
+    ainkrad_sys::git::head_blob(root, rel)
 }
 
 /// What a reversal leaves in the file.

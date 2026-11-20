@@ -404,3 +404,70 @@ fn an_account_url_becomes_the_upstream_or_nothing() {
     );
     assert!(upstream_of("http://h.example.com").is_none());
 }
+
+#[tokio::test]
+async fn a_failed_call_is_charged_its_estimate_so_the_cap_still_trips() {
+    // M11: timeouts and bad answers used to be free, so the cap never tripped while they lasted.
+    let db = db().await;
+    let p = Fake::failing(ProviderError::Timeout);
+    let s = service(&db, &p);
+    settings::set(&db.0, DAILY_CAP, Scope::Server, "50", BY, NOW)
+        .await
+        .unwrap();
+    for i in 0..5 {
+        s.decide(req(&["x"], &format!("q{i}")), &Rule)
+            .await
+            .unwrap();
+    }
+    // Each estimate is (2 + 10) / 4 + 200 = 203 tokens, 21 micro-dollars: two fit under 50.
+    assert_eq!(p.calls.load(Ordering::Relaxed), 2);
+    assert_eq!(budget::spent_today(&db.0, NOW).await.unwrap(), 42);
+}
+
+/// Answers after a pause, with no usage of its own: what parallel calls look like.
+struct Slow(AtomicUsize);
+impl DecisionProvider for Slow {
+    fn id(&self) -> &'static str {
+        "fake-decision"
+    }
+    fn score<'a>(
+        &'a self,
+        call: &'a ProviderCall,
+    ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, ProviderError>> {
+        async move {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Ok(call.questions.iter().map(|_| vec![0.1, 0.9]).collect())
+        }
+        .boxed()
+    }
+}
+impl MeteredProvider for Slow {}
+
+#[tokio::test]
+async fn parallel_calls_cannot_all_pass_the_cap_check() {
+    // M12: the check and the charge were apart, so N parallel calls all passed it.
+    let db = db().await;
+    let p = Arc::new(Slow(AtomicUsize::new(0)));
+    let s = Service::new(
+        db.0.clone(),
+        Arc::new(Fixed),
+        vec![p.clone() as Arc<dyn MeteredProvider>],
+        Redactor::new(Path::new("/w"), None),
+    );
+    settings::set(&db.0, DAILY_CAP, Scope::Server, "50", BY, NOW)
+        .await
+        .unwrap();
+    let asks: Vec<_> = (0..8)
+        .map(|i| s.decide(req(&["x"], &format!("p{i}")), &Rule))
+        .collect();
+    futures_util::future::join_all(asks).await;
+    let calls = p.0.load(Ordering::Relaxed);
+    assert!(calls <= 2, "{calls} calls passed a cap that holds two");
+    assert!(calls <= budget::MAX_IN_FLIGHT);
+    // A 2xx with no reported usage is charged its estimate, never 0.
+    assert_eq!(
+        budget::spent_today(&db.0, NOW).await.unwrap(),
+        21 * i64::try_from(calls).unwrap()
+    );
+}
