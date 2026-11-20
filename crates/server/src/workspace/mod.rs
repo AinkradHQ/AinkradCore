@@ -5,9 +5,12 @@
 
 pub mod adopt;
 pub mod docs;
+pub mod flow;
 pub mod fs;
+pub mod leases;
 pub mod manifest;
 pub mod paths;
+pub mod revert;
 pub mod rules;
 pub mod sync;
 pub mod watch;
