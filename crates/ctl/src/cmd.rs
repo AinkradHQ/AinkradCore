@@ -197,7 +197,8 @@ const VALUED: [&str; 35] = [
     "--file",
     "--connection-access",
 ];
-const SWITCHES: [&str; 7] = [
+const SWITCHES: [&str; 8] = [
+    "--unlock",
     "--json",
     "--version",
     "--no-follow",
