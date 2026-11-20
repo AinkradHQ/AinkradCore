@@ -1,5 +1,5 @@
-//! A remote runner opens no terminal but the guided sign-in (E15-4, spec §6); the Core host's built-in
-//! runner and This Mac keep every terminal.
+//! A remote runner opens no terminal at all (E15-4, spec §6; the `login` purpose too since the
+//! E15 security review M7); the Core host's built-in runner and This Mac keep every terminal.
 
 use std::collections::BTreeMap;
 
@@ -44,12 +44,13 @@ async fn a_remote_runner_refuses_a_plain_terminal_before_anything_starts() {
 }
 
 #[tokio::test]
-async fn the_sign_in_purpose_gets_past_the_remote_refusal() {
+async fn the_sign_in_purpose_no_longer_gets_past_the_remote_refusal() {
+    // M7: a `login` purpose with the caller's own program would be a full remote shell.
     let d = driver().remote();
-    // It goes on to the ordinary checks (here the runner has no host binary or sandbox set up), so
-    // whatever the answer is, it is not the refusal.
-    let got = d.open(&open(Some(PTY_PURPOSE_LOGIN))).await;
-    assert!(got.is_ok() || got.unwrap_err().code != ErrorCode::TerminalTargetRemoved);
+    let mut o = open(Some(PTY_PURPOSE_LOGIN));
+    o.program = Some("/bin/sh".into());
+    let e = d.open(&o).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::TerminalTargetRemoved);
 }
 
 #[tokio::test]

@@ -629,7 +629,7 @@ pub enum ErrorCode {
     /// `job.run`: the job's sync out is over `MAX_SYNC_OUT_BYTES`.
     OutputsTooLarge,
     /// `pty.open` to a runner that no longer opens terminals (E15-4): only the Core and This Mac
-    /// do, and any runner for `purpose: login`.
+    /// do.
     TerminalTargetRemoved,
     /// A code from a newer peer. Never sent.
     #[serde(other)]

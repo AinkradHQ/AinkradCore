@@ -173,9 +173,9 @@ pub struct PtyDriver {
     reserved: Arc<AtomicUsize>,
     /// Set once by `start_jobs`, when the runner is the Core's and the shim binary is installed.
     jobs: std::sync::OnceLock<Jobs>,
-    /// Whether this runner opens terminals of any purpose: the Core host's built-in runner
-    /// (`--workspace-root`) and This Mac (`--bundled`). A remote runner opens only the guided
-    /// sign-in (`PtyOpen::purpose = login`); any other open is `terminal_target_removed` (E15-4).
+    /// Whether this runner opens terminals: the Core host's built-in runner (`--workspace-root`)
+    /// and This Mac (`--bundled`). On a remote runner every open is `terminal_target_removed`
+    /// (E15-4; no purpose is exempt since the E15 security review M7).
     local: bool,
 }
 
@@ -528,7 +528,9 @@ impl PtyDriver {
         slot: Option<SshSlot>,
     ) -> Result<String, StreamError> {
         self.enabled()?;
-        if !self.local && req.purpose.as_deref() != Some(ainkrad_proto::v2::PTY_PURPOSE_LOGIN) {
+        // E15 security review M7: no purpose gets past this. The account sign-in is `login.start`,
+        // never a terminal, so a `login` purpose would only reopen a remote shell.
+        if !self.local {
             return Err(err(
                 ErrorCode::TerminalTargetRemoved,
                 "this runner opens no terminals: use the Core or This Mac",
