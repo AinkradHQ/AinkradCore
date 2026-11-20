@@ -101,6 +101,16 @@ async fn bad_and_reserved_slugs_are_refused_and_good_ones_work() {
 }
 
 #[tokio::test]
+async fn unarchive_undoes_an_archive_only_once() {
+    let fx = fx().await;
+    let p = mk(&fx, "undo").await.unwrap();
+    assert_eq!(code(unarchive(&fx.pool, p.id, W).await), "conflict");
+    archive(&fx.pool, p.id, W).await.unwrap();
+    assert_eq!(unarchive(&fx.pool, p.id, W).await.unwrap().state, "active");
+    assert_eq!(code(unarchive(&fx.pool, p.id, W).await), "conflict");
+}
+
+#[tokio::test]
 async fn defaults_update_and_archive_keeps_every_row() {
     let fx = fx().await;
     let p = mk(&fx, "shop").await.unwrap();
@@ -300,4 +310,163 @@ async fn a_refused_binding_leaves_no_project() {
     assert_eq!(code(r), "not_found");
     assert!(list(&fx.pool, false).await.unwrap().is_empty());
     assert!(list(&fx.pool, true).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_mirror_has_an_explicit_state_and_every_change_is_an_event() {
+    let fx = fx().await;
+    let p = mk(&fx, "shop").await.unwrap();
+    let r = add(&fx, p.id, "web", false).await.unwrap();
+    let none = (None, None);
+    set_mirror_state(&fx.pool, r.id, ("fetching", Some(NOW)), none, none)
+        .await
+        .unwrap();
+    let m = mirror(&fx.pool, r.id).await.unwrap().unwrap();
+    assert_eq!(
+        (m.state.as_str(), m.started_at.as_deref()),
+        ("fetching", Some(NOW))
+    );
+    let why = (Some("private"), Some("needs_github"));
+    set_mirror_state(&fx.pool, r.id, ("failed", None), none, why)
+        .await
+        .unwrap();
+    let m = mirror(&fx.pool, r.id).await.unwrap().unwrap();
+    assert_eq!(m.state, "failed");
+    assert_eq!(m.reason.as_deref(), Some("needs_github"));
+    assert_eq!(m.started_at, None);
+    let events: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM events WHERE kind = 'project.mirror_changed'")
+            .fetch_one(&fx.pool)
+            .await
+            .unwrap();
+    assert_eq!(events, 2);
+}
+
+#[tokio::test]
+async fn runner_preference_defaults_to_auto_and_only_takes_known_values() {
+    let fx = fx().await;
+    let p = mk(&fx, "shop").await.unwrap();
+    assert_eq!(p.runner_pref, "auto");
+    let set = |r| Change {
+        runner: Some(r),
+        ..Change::default()
+    };
+    let u = change(&fx.pool, p.id, &set("home_server"), W)
+        .await
+        .unwrap();
+    assert_eq!(u.runner_pref, "home_server");
+    assert_eq!(
+        code(change(&fx.pool, p.id, &set("cloud"), W).await),
+        "bad_request"
+    );
+    // An unrelated change keeps the preference.
+    let k = update(&fx.pool, p.id, Some("Shop 2"), None, None, W)
+        .await
+        .unwrap();
+    assert_eq!(k.runner_pref, "home_server");
+}
+
+#[tokio::test]
+async fn fetch_interval_and_default_environment_are_checked() {
+    let fx = fx().await;
+    let p = mk(&fx, "shop").await.unwrap();
+    assert_eq!(
+        (p.fetch_interval_minutes, p.default_environment.as_deref()),
+        (15, None)
+    );
+    let fetch = |m| Change {
+        fetch_interval_minutes: Some(m),
+        ..Change::default()
+    };
+    assert_eq!(
+        change(&fx.pool, p.id, &fetch(60), W)
+            .await
+            .unwrap()
+            .fetch_interval_minutes,
+        60
+    );
+    assert_eq!(
+        change(&fx.pool, p.id, &fetch(0), W)
+            .await
+            .unwrap()
+            .fetch_interval_minutes,
+        0
+    );
+    assert_eq!(
+        code(change(&fx.pool, p.id, &fetch(7), W).await),
+        "bad_request"
+    );
+    let env = |e| Change {
+        default_environment: Some(e),
+        ..Change::default()
+    };
+    // A project that never opened its environments has Development and Staging.
+    let u = change(&fx.pool, p.id, &env("Staging"), W).await.unwrap();
+    assert_eq!(u.default_environment.as_deref(), Some("Staging"));
+    assert_eq!(
+        code(change(&fx.pool, p.id, &env("Nope"), W).await),
+        "bad_request"
+    );
+    let cleared = change(&fx.pool, p.id, &env(""), W).await.unwrap();
+    assert_eq!(cleared.default_environment, None);
+}
+
+#[tokio::test]
+async fn saved_defaults_reach_new_and_existing_projects_and_are_checked() {
+    let fx = fx().await;
+    let old = mk(&fx, "shop").await.unwrap();
+    assert_eq!(
+        (
+            old.cpu_limit,
+            old.mem_limit_mb,
+            old.idle_minutes,
+            old.idle_never
+        ),
+        (2.0, 4096, 30, false)
+    );
+    let c = DefaultsChange {
+        cpu_limit: Some(4.0),
+        mem_limit_mb: Some(8192),
+        idle_never: Some(true),
+        ..DefaultsChange::default()
+    };
+    let d = set_defaults(&fx.pool, &c, W).await.unwrap();
+    assert_eq!(
+        (d.cpu_limit, d.mem_limit_mb, d.idle_minutes),
+        (4.0, 8192, 30)
+    );
+    let mut conn = fx.pool.acquire().await.unwrap();
+    let old = get(&mut conn, old.id).await.unwrap();
+    assert_eq!(
+        (old.cpu_limit, old.mem_limit_mb, old.idle_never),
+        (4.0, 8192, true)
+    );
+    drop(conn);
+    let new = mk(&fx, "blog").await.unwrap();
+    assert_eq!(
+        (new.cpu_limit, new.mem_limit_mb, new.idle_never),
+        (4.0, 8192, true)
+    );
+    let bad = DefaultsChange {
+        cpu_limit: Some(0.0),
+        ..DefaultsChange::default()
+    };
+    assert!(set_defaults(&fx.pool, &bad, W).await.is_err());
+    let mut conn = fx.pool.acquire().await.unwrap();
+    assert_eq!(
+        defaults(&mut conn).await.unwrap().cpu_limit,
+        4.0,
+        "a refusal keeps them"
+    );
+}
+
+#[tokio::test]
+async fn an_archived_project_comes_back_and_only_an_archived_one_can() {
+    let fx = fx().await;
+    let p = mk(&fx, "shop").await.unwrap();
+    assert!(unarchive(&fx.pool, p.id, W).await.is_err(), "it is active");
+    archive(&fx.pool, p.id, W).await.unwrap();
+    assert!(list(&fx.pool, false).await.unwrap().is_empty());
+    assert_eq!(unarchive(&fx.pool, p.id, W).await.unwrap().state, "active");
+    assert_eq!(list(&fx.pool, false).await.unwrap().len(), 1);
 }

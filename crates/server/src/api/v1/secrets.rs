@@ -1,7 +1,7 @@
 //! The secrets broker v0 (E2-07, `store::secrets`): store, list, rotate and delete secrets
-//! (scope `admin`; every write needs a step-up), grant a runner a lease (`admin`, step-up: it is
-//! the only way a value leaves the Core, the spec §8 "reveal"), and the runner's redemption
-//! (scope `runner`, the lease's own runner only). No route returns a value to a client.
+//! (scope `admin`; every write needs a step-up), grant a runner a lease (`admin`, step-up) and the
+//! runner's redemption (scope `runner`, the lease's own runner only). A value reaches a person
+//! only through `secret_export` (a fresh step-up) and `reveal` (E1); this file's routes return none.
 //!
 //! Bodies are parsed here, not by axum's `Json`: a serde error can quote the input, and the
 //! input may be the value. A malformed body gets one fixed message.
@@ -234,6 +234,19 @@ fn not_account(name: &str) -> Result<&str, ApiError> {
     }
 }
 
+/// A module's own secrets (its master key and the like: `brain.*`, `leyline.*`) are not rotated,
+/// deleted, leased or revealed through the general routes; the module opens them itself.
+fn not_module(name: &str) -> Result<&str, ApiError> {
+    match name.split_once('.').map(|(m, _)| m) {
+        Some("brain" | "leyline") => Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "a module's own secret is not managed here",
+        )),
+        _ => Ok(name),
+    }
+}
+
 /// Project secrets (`/projects/{id}/secrets`) are not written, moved or deleted here: the project
 /// routes check that no spec still uses one. `secret` is the existing secret, `group` the group a
 /// request asks for.
@@ -280,7 +293,14 @@ async fn not_project_slug(app: &App, name: &str) -> Result<(), ApiError> {
     responses((status = 200, description = "Every secret, by name, without its value", body = Vec<SecretInfo>)))]
 pub async fn list(State(app): State<App>) -> ApiResult<Vec<SecretInfo>> {
     let all = store::list(&app.pool).await?;
-    Ok(Json(all.into_iter().map(Into::into).collect()))
+    // An account's key (`acct.*`) is the Accounts screen's: it is never a row here. (`store::list`
+    // stays whole: the secret groups read it.)
+    Ok(Json(
+        all.into_iter()
+            .filter(|m| !m.name.starts_with(store::ACCOUNT_PREFIX))
+            .map(Into::into)
+            .collect(),
+    ))
 }
 
 #[utoipa::path(post, path = "/api/v1/secrets", operation_id = "createSecret", tag = "secrets",
@@ -296,6 +316,7 @@ pub async fn create(
 ) -> ApiResult<SecretInfo> {
     let b: NewSecret = parse(&body)?;
     not_account(&b.name)?;
+    not_module(&b.name)?;
     not_project(&app, None, b.group.as_deref()).await?;
     not_project_slug(&app, &b.name).await?;
     let new = NewValue {
@@ -331,10 +352,19 @@ pub async fn rotate(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path(n): Path<String>,
+    headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> ApiResult<SecretInfo> {
-    let n = not_account(name(&n)?)?;
+    let n = not_module(not_account(name(&n)?)?)?;
     let b: RotateSecret = parse(&body)?;
+    // Widening which runners may lease a secret needs the app unlock, not just its scope.
+    if b.runners.is_some() {
+        super::stepup::require_unlock(&app, &me, &headers)?;
+    }
+    // Putting an existing secret in a group widens who may lease it: danger (E1 review M6).
+    if b.group.as_deref().is_some_and(|g| !g.is_empty()) {
+        super::stepup::require_elevated(&app, &me)?;
+    }
     not_project(&app, Some(n), b.group.as_deref()).await?;
     let new = NewValue {
         value: &b.value,
@@ -375,7 +405,7 @@ pub async fn delete(
     Extension(me): Extension<Caller>,
     Path(n): Path<String>,
 ) -> ApiResult<SecretDeleted> {
-    let n = not_account(name(&n)?)?;
+    let n = not_module(not_account(name(&n)?)?)?;
     not_project(&app, Some(n), None).await?;
     store::delete(&app.pool, n, &me.device.id, BY).await?;
     Ok(Json(SecretDeleted { deleted: true }))
@@ -394,7 +424,7 @@ pub async fn lease(
     Path(n): Path<String>,
     body: Bytes,
 ) -> ApiResult<LeaseGrant> {
-    let n = name(&n)?;
+    let n = not_module(name(&n)?)?;
     not_project(&app, Some(n), None).await?;
     let b: NewLease = parse(&body)?;
     let (lease, expires_at) = store::lease(
@@ -412,6 +442,41 @@ pub async fn lease(
         lease,
         expires_at: ts(&iso_of_unix(expires_at)),
     }))
+}
+
+/// A secret's value, shown to the person who asked. No `Debug`.
+#[derive(Serialize, ToSchema)]
+pub struct RevealedSecret {
+    #[schema(value_type = String)]
+    pub value: Zeroizing<String>,
+}
+
+#[utoipa::path(post, path = "/api/v1/secrets/{id}/reveal", operation_id = "revealSecret",
+    tag = "secrets",
+    params(("id" = String, Path, description = "The secret's name")),
+    responses((status = 200, description = "The plain value, for the app's Reveal (a fresh \
+        step-up, audited as `secret.revealed`). 404 no such secret, 409 `secrets_disabled` or \
+        `secrets_unavailable`, 400 for a provider account's key", body = RevealedSecret)))]
+pub async fn reveal(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(n): Path<String>,
+) -> ApiResult<RevealedSecret> {
+    let n = not_module(name(&n)?)?;
+    not_project(&app, Some(n), None).await?;
+    if let Err(wait) = app
+        .auth
+        .reveal_limit
+        .take(&me.device.id, std::time::Instant::now())
+    {
+        return Err(ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            format!("too many reveals; wait {} s", wait.as_secs() + 1),
+        ));
+    }
+    let value = store::reveal(&app.pool, sealer(&app)?, n, &me.device.id, BY).await?;
+    Ok(Json(RevealedSecret { value }))
 }
 
 #[utoipa::path(post, path = "/api/v1/secret-leases/redeem", operation_id = "redeemSecretLease",

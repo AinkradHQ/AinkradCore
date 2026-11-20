@@ -26,6 +26,8 @@ pub enum Command {
     PtyAttach(super::PtyAttach),
     #[serde(rename = "pty.close")]
     PtyClose(super::PtyClose),
+    #[serde(rename = "pty.tail")]
+    PtyTail(super::PtyTail),
     #[serde(rename = "agent.start")]
     AgentStart(super::AgentStart),
     #[serde(rename = "agent.read")]
@@ -110,6 +112,44 @@ pub enum Command {
     /// A TCP stream to an exposed port of a live run (P6-01); bytes are `output` frames.
     #[serde(rename = "port.open")]
     PortOpen(super::PortOpen),
+    /// Session documents (E10-2): list, read or write the `.md` files of a session's folder.
+    #[serde(rename = "agent.docs")]
+    AgentDocs(super::AgentDocs),
+    // After every older op: the schema-compat gate tells variants by position.
+    #[serde(rename = "agent.files")]
+    AgentFiles(super::AgentFiles),
+    #[serde(rename = "agent.revert")]
+    AgentRevert(super::AgentRevert),
+    #[serde(rename = "agent.write")]
+    AgentWrite(super::AgentWrite),
+    /// (After every older op.) Wait for a runner-bound sign-in to finish (E7-4).
+    #[serde(rename = "login.wait")]
+    LoginWait(super::LoginWait),
+    #[serde(rename = "login.input")]
+    LoginInput(super::LoginInput),
+    #[serde(rename = "login.screen")]
+    LoginScreen(super::LoginScreenReq),
+    /// (After every older op.) Wipe a removed runner-bound account's home (E7 closeout).
+    #[serde(rename = "login.wipe")]
+    LoginWipe(super::LoginWipe),
+    /// E12-4 (after every older op: the schema-compat gate tells variants by position).
+    #[serde(rename = "runner.update")]
+    RunnerUpdate(super::RunnerUpdate),
+    // E15 (protocol 2.1), after every older op.
+    #[serde(rename = "job.run")]
+    JobRun(super::JobRun),
+    #[serde(rename = "sync.manifest")]
+    SyncManifest(super::SyncManifest),
+    #[serde(rename = "sync.push")]
+    SyncPush(super::SyncPush),
+    #[serde(rename = "sync.pull")]
+    SyncPull(super::SyncPull),
+    #[serde(rename = "sync.watch")]
+    SyncWatch(super::SyncWatch),
+    #[serde(rename = "sync.drop")]
+    SyncDrop(super::SyncDrop),
+    #[serde(rename = "gateway.call")]
+    GatewayCall(super::GatewayCall),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -124,6 +164,7 @@ impl Command {
             Self::PtyOpen(_) => super::OP_PTY_OPEN,
             Self::PtyAttach(_) => super::OP_PTY_ATTACH,
             Self::PtyClose(_) => super::OP_PTY_CLOSE,
+            Self::PtyTail(_) => super::OP_PTY_TAIL,
             Self::AgentStart(_) => super::OP_AGENT_START,
             Self::AgentRead(_) => super::OP_AGENT_READ,
             Self::AgentSend(_) => super::OP_AGENT_SEND,
@@ -136,10 +177,15 @@ impl Command {
             Self::HistoryRead(_) => super::OP_HISTORY_READ,
             Self::AgentMode(_) => super::OP_AGENT_MODE,
             Self::AgentAttach(_) => super::OP_AGENT_ATTACH,
+            Self::AgentDocs(_) => super::OP_AGENT_DOCS,
             Self::AgentSubagentStop(_) => super::OP_AGENT_SUBAGENT_STOP,
             Self::LoginStart(_) => super::OP_LOGIN_START,
             Self::LoginCode(_) => super::OP_LOGIN_CODE,
             Self::LoginCancel(_) => super::OP_LOGIN_CANCEL,
+            Self::LoginWait(_) => super::OP_LOGIN_WAIT,
+            Self::LoginInput(_) => super::OP_LOGIN_INPUT,
+            Self::LoginScreen(_) => super::OP_LOGIN_SCREEN,
+            Self::LoginWipe(_) => super::OP_LOGIN_WIPE,
             Self::RunnerPolicy(_) => super::OP_RUNNER_POLICY,
             Self::ToolsInstall(_) => super::OP_TOOLS_INSTALL,
             Self::ToolsStatus(_) => super::OP_TOOLS_STATUS,
@@ -165,6 +211,17 @@ impl Command {
             Self::RunStatus(_) => super::OP_RUN_STATUS,
             Self::RunObserve(_) => super::OP_RUN_OBSERVE,
             Self::PortOpen(_) => super::OP_PORT_OPEN,
+            Self::AgentFiles(_) => super::OP_AGENT_FILES,
+            Self::AgentRevert(_) => super::OP_AGENT_REVERT,
+            Self::AgentWrite(_) => super::OP_AGENT_WRITE,
+            Self::RunnerUpdate(_) => super::OP_RUNNER_UPDATE,
+            Self::JobRun(_) => super::OP_JOB_RUN,
+            Self::SyncManifest(_) => super::OP_SYNC_MANIFEST,
+            Self::SyncPush(_) => super::OP_SYNC_PUSH,
+            Self::SyncPull(_) => super::OP_SYNC_PULL,
+            Self::SyncWatch(_) => super::OP_SYNC_WATCH,
+            Self::SyncDrop(_) => super::OP_SYNC_DROP,
+            Self::GatewayCall(_) => super::OP_GATEWAY_CALL,
             Self::Unknown => "unknown",
         }
     }
@@ -219,6 +276,8 @@ pub enum Reply {
     PtyAttach(super::TerminalExit),
     #[serde(rename = "pty.close")]
     PtyClose(super::TerminalExit),
+    #[serde(rename = "pty.tail")]
+    PtyTail(super::TerminalTail),
     /// Every `agent.*` op answers with the session's state (`agent.read` with its entries).
     #[serde(rename = "agent.start")]
     AgentStart(super::AgentEvents),
@@ -309,6 +368,36 @@ pub enum Reply {
     /// The last frame of `port.open`.
     #[serde(rename = "port.open")]
     PortOpen(super::PortClosed),
+    /// The answer to `agent.docs`.
+    #[serde(rename = "agent.docs")]
+    AgentDocs(super::DocsReply),
+    #[serde(rename = "agent.files")]
+    AgentFiles(super::AgentFolder),
+    #[serde(rename = "agent.revert")]
+    AgentRevert(super::AgentReverted),
+    #[serde(rename = "agent.write")]
+    AgentWrite(super::AgentWritten),
+    /// The answer to `login.screen`.
+    #[serde(rename = "login.screen")]
+    LoginScreen(super::LoginScreen),
+    /// The answer to `runner.update` (E12-4).
+    #[serde(rename = "runner.update")]
+    RunnerUpdate(super::RunnerUpdateAccepted),
+    // E15 (protocol 2.1), after every older op.
+    #[serde(rename = "job.run")]
+    JobRun(super::JobDone),
+    #[serde(rename = "sync.manifest")]
+    SyncManifest(super::SyncManifestReply),
+    #[serde(rename = "sync.push")]
+    SyncPush(super::SyncPushed),
+    #[serde(rename = "sync.pull")]
+    SyncPull(super::SyncPulled),
+    #[serde(rename = "sync.watch")]
+    SyncWatch(super::SyncWatched),
+    #[serde(rename = "sync.drop")]
+    SyncDrop(super::SyncDropped),
+    #[serde(rename = "gateway.call")]
+    GatewayCall(super::GatewayCalled),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

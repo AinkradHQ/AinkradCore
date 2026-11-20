@@ -1,4 +1,4 @@
-//! The run spec routes (P4-01): reading is `read`, a save is `admin` plus a step-up, a bad spec is
+//! The run spec routes (P4-01): reading is `read`, a save is `admin` plus the app unlock, a bad spec is
 //! a 400 `invalid_spec` naming the field, and every save is a new version.
 
 use axum::http::{Method, StatusCode};
@@ -51,7 +51,7 @@ fn spec() -> Value {
 }
 
 #[tokio::test]
-async fn reading_is_read_scope_and_a_save_needs_admin_and_a_step_up() {
+async fn reading_is_read_scope_and_a_save_needs_admin_and_the_app_unlock() {
     let fx = fx().await;
     let phone = fx.enroll("phone", &["read"]).await;
     let plain = TestDevice::enroll(
@@ -71,7 +71,7 @@ async fn reading_is_read_scope_and_a_save_needs_admin_and_a_step_up() {
     let r = call(&fx, &phone, Method::PUT, &uri, body.clone()).await;
     assert_eq!(code(&r), (StatusCode::FORBIDDEN, "forbidden_scope"));
     let r = call(&fx, &plain, Method::PUT, &uri, body).await;
-    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "step_up_required"));
+    assert_eq!(code(&r), (StatusCode::FORBIDDEN, "unlock_required"));
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_project_run_specs")
         .fetch_one(&fx.app.pool)
         .await

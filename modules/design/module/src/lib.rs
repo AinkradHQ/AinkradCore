@@ -11,6 +11,7 @@ mod asset_links;
 mod assets;
 mod checks;
 mod collections;
+mod compose;
 mod docs;
 mod fidelity;
 mod package;
@@ -68,6 +69,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0005_design_check_attempts.up.sql"),
         down: include_str!("../migrations/0005_design_check_attempts.down.sql"),
     },
+    Migration {
+        version: 6,
+        name: "0006_design_compose",
+        up: include_str!("../migrations/0006_design_compose.up.sql"),
+        down: include_str!("../migrations/0006_design_compose.down.sql"),
+    },
 ];
 
 /// T8: 25 MB per asset, 2 GB for the library; both can only be lowered by the person (the upload
@@ -89,14 +96,12 @@ const SETTINGS: &[ModuleSetting] = &[
     },
 ];
 
-// Archiving hides a design from every list, so it needs a step-up like archiving a project.
-// Deleting an asset or a collection is as final as archiving a design.
-const DESTRUCTIVE: &[(&str, &str)] = &[
+// D-4: nothing here is on the danger list; archiving and deleting are normal writes.
+const DESTRUCTIVE: &[(&str, &str)] = &[];
+const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/docs/{doc}/archive"),
     ("DELETE", "/assets/{sha}"),
     ("DELETE", "/collections/{id}"),
-];
-const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/docs"),
     ("PATCH", "/docs/{doc}"),
     ("POST", "/docs/{doc}/take-over"),
@@ -116,6 +121,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("PUT", "/docs/{doc}/package/files"),
     ("POST", "/docs/{doc}/package/manifest"),
     ("POST", "/docs/{doc}/apply"),
+    ("POST", "/docs/{doc}/compose"),
     ("POST", "/docs/{doc}/versions"),
     ("POST", "/docs/{doc}/versions/{version}/restore"),
     ("POST", "/docs/{doc}/comments"),
@@ -137,6 +143,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/docs/{doc}/versions", "read"),
     ("GET", "/docs/{doc}/comments", "read"),
     ("GET", "/docs/{doc}/approvals", "read"),
+    ("GET", "/docs/{doc}/compose/{id}", "read"),
 ];
 // A signed upload is read whole to check its signature: the file cap plus nothing else.
 const BODY_LIMITS: &[(&str, &str, usize)] = &[
@@ -201,6 +208,8 @@ pub use sync::Limits;
         package::seal,
         ws::sync,
         apply::apply,
+        compose::start,
+        compose::get,
         versions::list,
         versions::create,
         versions::restore,
@@ -229,6 +238,9 @@ pub use sync::Limits;
         apply::ApplyOut,
         apply::LintDelta,
         apply::FindingView,
+        compose::NewCompose,
+        compose::ComposeView,
+        compose::Direction,
         versions::VersionView,
         versions::NewVersion,
         versions::Restored,
@@ -259,6 +271,8 @@ impl Module for Design {
                 put(docs::link).delete(docs::unlink),
             )
             .route("/docs/{doc}/apply", post(apply::apply))
+            .route("/docs/{doc}/compose", post(compose::start))
+            .route("/docs/{doc}/compose/{id}", get(compose::get))
             .route(
                 "/docs/{doc}/versions",
                 get(versions::list).post(versions::create),

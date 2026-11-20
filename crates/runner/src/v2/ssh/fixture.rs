@@ -25,6 +25,36 @@ pub(in crate::v2) fn fp(key: &PrivateKey) -> String {
     key.public_key().fingerprint(HashAlg::Sha256).to_string()
 }
 
+/// A throwaway 2048-bit RSA key made with `ssh-keygen` (generating one in a debug build is slow).
+pub(in crate::v2) const RSA_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABFwAAAAdzc2gtcn
+NhAAAAAwEAAQAAAQEA1B+BB583HHMCHagayAdGD9yiYJDABMAliiBcbwfMgEr7IR90gkCW
+wqzC+PF1pcDtrGgxxFVzns+LyK2zKF9hlYGlIKcu2cK6SAW+PTySHRPoT7lUuGtDpkxNnL
+JTeTKzC0Z4av5C3fGNaiAoG6EzVgXmeMqIYoUZhPO3o3uRc7GkqcNi2RSDegtN5XvdRhGq
+nkW1MQlA4HlGq8ivsNKLSVKrHPoRUWjvzhJ/QJoL2/1l0gFqCQPTC/NfIBqL/gvRlXt8vY
+/En2i68AUdw82WT7+XlOfhKdoSlXEoOu5DO4vuUwpoclxhPaKBgz4SvbdROf8XVt9wzZ/K
+KrOgayN5BwAAA7gVVLWIFVS1iAAAAAdzc2gtcnNhAAABAQDUH4EHnzcccwIdqBrIB0YP3K
+JgkMAEwCWKIFxvB8yASvshH3SCQJbCrML48XWlwO2saDHEVXOez4vIrbMoX2GVgaUgpy7Z
+wrpIBb49PJIdE+hPuVS4a0OmTE2cslN5MrMLRnhq/kLd8Y1qICgboTNWBeZ4yohihRmE87
+eje5FzsaSpw2LZFIN6C03le91GEaqeRbUxCUDgeUaryK+w0otJUqsc+hFRaO/OEn9Amgvb
+/WXSAWoJA9ML818gGov+C9GVe3y9j8SfaLrwBR3DzZZPv5eU5+Ep2hKVcSg67kM7i+5TCm
+hyXGE9ooGDPhK9t1E5/xdW33DNn8oqs6BrI3kHAAAAAwEAAQAAAQEAiUceLP2YH/w6GVFK
+i7tRV0CVgWMMMcbcRIju6Rgl+70KywPdVdJQ/wnpYEx7s9qothP0aThYDCYLM8NeF7mqoK
+P3ZqtrgZgpECVPWbgSY2kXxkiNkJAyhrQI4mjx5pSuFJT1p2CHi7UgrNbEviTT4U8OOYvx
+Obkjq8xCQzXcCv91jEuUt90GXXKx2W1XU2Xi9bVI617Euzy42WGFtVfSLL+1JZ0/6Xhzjr
+iKreoQ+wMg/Qc5u4TjUWnfRSKKqms40DmfQ3cdAUtuQKDRZ1MMZwOeIQSpGUYfxTZ1aFFm
+adCOnnlMDCn9kzBXf0GXLJCT+ZCCSsvBE9v85aO/fnFFEQAAAIBHfs9kyJU+FBlk/n7rQC
+iO6sYk54ZDs9yDn0tNHqprH9Bot+Q6E3xvR0vd94sVRqQAJDkKhlYBu8mrp5H9nhBO9CdR
+8Yvgcar+OthcdUgaJZIV4q/j0q/PVmO0Ub43N8p/2H2pQ+NXJbh/PptWwYfB2h7QCToc1t
+X/jIyrA2wWbQAAAIEA6v4nS4jXp0KZezVJS6eCHPgkjOLGct6udjCVxBGp/BYz6RQsgBaE
+tQ+RIQ4WvHkxBHwHrUfFWO9P9zt2RiB7xVsz1qPAcUQp/Gq5ldHpMZKN36gWeUJHWa/WTY
+H8lYjZ3t9Mi6Sot6WvWHScGXvzBc9Z9O4B+XWwh7cMjvFWHN8AAACBAOcV+SudjxkIA6d7
+kD9MKeH5A0g1GvL7mMCR7YTtj7cvGdhp244o0uymnV2zGlvX8TFtli1FdmBWObzMxVnL1H
+aPJEy7pEly9qeC8+PJO1Fkxj+n/ffWMckhou05SUdoFg3jfZPCr6NbfrMqqzrohYxeLZOT
+GRC2LbPIpu9GewDZAAAAAAEC
+-----END OPENSSH PRIVATE KEY-----
+";
+
 pub(in crate::v2) fn new_key() -> PrivateKey {
     PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap()
 }
@@ -42,6 +72,8 @@ pub(in crate::v2) struct Seen {
     pub(in crate::v2) execs: AtomicUsize,
     /// Channel `signal` requests (the best-effort KILL).
     pub(in crate::v2) signals: AtomicUsize,
+    /// The algorithm of each verified `publickey` signature (`ssh-ed25519`, `rsa-sha2-512`, ...).
+    pub(in crate::v2) algos: Mutex<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -86,9 +118,10 @@ impl russh::server::Handler for Fixture {
     async fn auth_publickey(
         &mut self,
         _: &str,
-        _: VerifiedPublicKey<'_>,
+        key: VerifiedPublicKey<'_>,
     ) -> Result<Auth, Self::Error> {
         self.seen.auth.fetch_add(1, SeqCst);
+        (self.seen.algos.lock().unwrap()).push(key.algorithm.as_str().to_owned());
         Ok(if self.accept {
             Auth::Accept
         } else {

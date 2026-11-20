@@ -464,3 +464,102 @@ async fn one_auth_failed_is_kept_pending_and_never_disables_the_account() {
         "active"
     );
 }
+
+/// A refusal's text, or `None` when the grant was issued.
+fn why(
+    r: Result<Option<crate::agents::gateway::Issued>, crate::agents::Refusal>,
+) -> Option<String> {
+    match r {
+        Ok(_) => None,
+        Err(e) => Some(format!("{e:?}")),
+    }
+}
+
+#[tokio::test]
+async fn a_built_in_providers_unlisted_model_is_granted_at_the_flagged_default_and_a_user_providers_is_refused()
+ {
+    // A built-in: a model the book does not know runs at the epoch-flagged default, above Opus.
+    let g = gw().await;
+    let mut s = g.session.clone();
+    s.model = Some("claude-brand-new".to_owned());
+    let issued = crate::agents::gateway::grant(&g.fx.app, &s)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(issued.grant.models.iter().any(|m| m == "claude-brand-new"));
+    let p = issued
+        .grant
+        .prices
+        .iter()
+        .find(|p| p.model == "claude-brand-new")
+        .unwrap();
+    assert!(p.input >= 15_000_000 && p.output >= 75_000_000);
+    // The kept book flags it: the epoch is no real price's date.
+    let kept: String = sqlx::query_scalar("SELECT gw_prices FROM core_agent_sessions WHERE id = ?")
+        .bind(&s.id)
+        .fetch_one(&g.fx.app.pool)
+        .await
+        .unwrap();
+    assert!(
+        kept.contains("claude-brand-new") && kept.contains("1970-01-01"),
+        "{kept}"
+    );
+
+    // A user-defined provider: its listed model is granted, an unlisted one is refused.
+    let (fx, vm, sealer) = setup().await;
+    super::accounts_gateway::open_gate(&fx).await;
+    crate::store::providers::create(
+        &fx.app.pool,
+        &super::accounts_gateway::router("openrouter", Some("sk-or-v1-")),
+        "d_x",
+        BY,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let a = acc::create(
+        &fx.app.pool,
+        &sealer,
+        &acc::NewAccount {
+            provider: "openrouter",
+            label: "or-main",
+            value: "sk-or-v1-0123456789abcdefghijklmnopqrstuvwxyzTESTONLY",
+            runners: std::slice::from_ref(&vm.id),
+            cap: None,
+        },
+        &fx.dev.id,
+        BY,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let policy = json!({"mode": "ask", "min_isolation": "process"});
+    let secrets = [SessionSecret {
+        name: a.secret_name.clone(),
+        var: "OPENAI_API_KEY".to_owned(),
+    }];
+    let mk = |model: &'static str| {
+        let (fx, vm, policy, secrets) = (&fx, &vm, &policy, &secrets);
+        async move {
+            let new = NewSession {
+                runner: &vm.id,
+                harness: "codex",
+                model: Some(model),
+                prompt: None,
+                workspace: None,
+                policy,
+                secrets,
+                created_by: &fx.dev.id,
+            };
+            store::create(&fx.app.pool, &new, BY, NOW).await.unwrap()
+        }
+    };
+    let listed = mk("vendor/model-1").await;
+    assert_eq!(
+        why(crate::agents::gateway::grant(&fx.app, &listed).await),
+        None
+    );
+    let unlisted = mk("vendor/unlisted").await;
+    let refused = why(crate::agents::gateway::grant(&fx.app, &unlisted).await).unwrap();
+    assert!(refused.contains("has no price"), "{refused}");
+}

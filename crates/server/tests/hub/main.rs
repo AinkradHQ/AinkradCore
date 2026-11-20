@@ -10,6 +10,7 @@ mod attachments;
 use ainkrad_core_server::agents::AgentsConfig;
 mod account_placement;
 mod allocator;
+mod bound_login;
 mod chains;
 mod connection_tools;
 mod creator_revoked;
@@ -336,6 +337,7 @@ impl Fake {
             load: self.load,
             isolation: self.isolation.clone(),
             facts: self.facts.clone(),
+            capacity: None,
         };
         self.send(CONTROL_STREAM, Body::Control(Control::Hello(hello)))
             .await;
@@ -367,6 +369,8 @@ impl Fake {
             Body::Heartbeat(Heartbeat {
                 load,
                 isolation: None,
+                report: None,
+                capacity: None,
             }),
         )
         .await;

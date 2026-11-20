@@ -218,7 +218,7 @@ async fn same_project_as_merges_now_and_in_every_later_import() {
             .map(|i| {
                 item(
                     from + i,
-                    "/u/Home/Projects/dvxmotive/a",
+                    "/u/Home/Projects/harborauto/a",
                     &format!("d{i}"),
                     &format!("dealer listing {from} {i}"),
                 )
@@ -227,7 +227,7 @@ async fn same_project_as_merges_now_and_in_every_later_import() {
         v.extend((3..6).map(|i| {
             item(
                 from + i,
-                "/u/Home/Projects/AutomotiveAi/b",
+                "/u/Home/Projects/HarborMotors/b",
                 &format!("a{i}"),
                 &format!("dealer calls {from} {i}"),
             )
@@ -239,8 +239,8 @@ async fn same_project_as_merges_now_and_in_every_later_import() {
     finish(&fx, &run).await;
     let p = proposals(&fx, &run).await;
     let (dvx, auto) = (
-        by_name(&p, "dvxmotive")["id"].clone(),
-        by_name(&p, "AutomotiveAi")["id"].clone(),
+        by_name(&p, "harborauto")["id"].clone(),
+        by_name(&p, "HarborMotors")["id"].clone(),
     );
     let card = ok(
         &fx,
@@ -252,7 +252,7 @@ async fn same_project_as_merges_now_and_in_every_later_import() {
         Some(json!({"into": auto})),
     )
     .await;
-    assert_eq!(card["name"], "AutomotiveAi");
+    assert_eq!(card["name"], "HarborMotors");
     assert_eq!(card["item_count"], 6);
     assert_eq!(card["warnings"], json!([]), "one employer now, not mixed");
     // It can be accepted: the employer guard counts the two as one.
@@ -264,7 +264,7 @@ async fn same_project_as_merges_now_and_in_every_later_import() {
     )
     .await;
     let list = ok(&fx, Method::GET, "/aliases", None).await;
-    assert_eq!(list, json!([{"from": "dvxmotive", "to": "AutomotiveAi"}]));
+    assert_eq!(list, json!([{"from": "harborauto", "to": "HarborMotors"}]));
     // A re-sort keeps them one.
     ok(&fx, Method::POST, &format!("/imports/{run}/regroup"), None).await;
     let p = proposals(&fx, &run).await;
@@ -278,16 +278,16 @@ async fn same_project_as_merges_now_and_in_every_later_import() {
     assert_eq!(p.len(), 1, "{p:?}");
     assert_eq!(
         (p[0]["name"].as_str(), p[0]["item_count"].as_i64()),
-        (Some("AutomotiveAi"), Some(6))
+        (Some("HarborMotors"), Some(6))
     );
     // Undone: the next re-sort keeps them apart again.
     assert_eq!(
-        ok(&fx, Method::DELETE, "/aliases/dvxmotive", None).await,
+        ok(&fx, Method::DELETE, "/aliases/harborauto", None).await,
         json!([])
     );
     ok(&fx, Method::POST, &format!("/imports/{run2}/regroup"), None).await;
     assert_eq!(proposals(&fx, &run2).await.len(), 2);
-    let (s, _) = call(&fx, &fx.admin, Method::DELETE, "/aliases/dvxmotive", None).await;
+    let (s, _) = call(&fx, &fx.admin, Method::DELETE, "/aliases/harborauto", None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
 

@@ -44,8 +44,12 @@ mod auth;
 mod command;
 mod control;
 mod design;
+mod docs;
+mod files;
 mod gateway;
+mod hardware;
 mod history;
+mod job;
 pub mod local;
 mod login;
 mod observe;
@@ -56,6 +60,8 @@ mod sftp;
 mod ssh;
 mod ssh_agent;
 mod subscription;
+mod sync;
+pub mod synctree;
 mod terminal;
 mod tools;
 pub use agent::*;
@@ -64,8 +70,12 @@ pub use auth::*;
 pub use command::*;
 pub use control::*;
 pub use design::*;
+pub use docs::*;
+pub use files::*;
 pub use gateway::*;
+pub use hardware::*;
 pub use history::*;
+pub use job::*;
 pub use login::*;
 pub use observe::*;
 pub use plan_limit::*;
@@ -75,11 +85,12 @@ pub use sftp::*;
 pub use ssh::*;
 pub use ssh_agent::*;
 pub use subscription::*;
+pub use sync::*;
 pub use terminal::*;
 pub use tools::*;
 
 /// The v2 protocol version, `major.minor`; minors only add optional fields and kinds.
-pub const PROTOCOL_VERSION: &str = "2.0";
+pub const PROTOCOL_VERSION: &str = "2.1";
 
 /// The connection's own stream.
 pub const CONTROL_STREAM: u64 = 0;
@@ -144,6 +155,37 @@ pub struct HostLoad {
     pub cores: u32,
 }
 
+/// How an AI tool install on a runner stands (D-22): the one under way, or the last one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ToolInstallReport {
+    /// `claude`, `codex`, `opencode`, `agy`.
+    pub tool: String,
+    pub state: ToolOpState,
+    /// 0 to 100.
+    pub percent: u8,
+    /// What it is doing, a short sentence: `Downloading Claude 2.1.318`.
+    pub step: String,
+    /// Why it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// What a runner says about itself in every heartbeat, beyond load: its AI tool install, its
+/// sandbox home folder and the plain-words reason it is not fully working. The Core keeps it
+/// beside the hello's facts and serves it with `GET /runners`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RunnerReport {
+    /// The install under way or the last one; absent when none ran since the runner started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<ToolInstallReport>,
+    /// The folder the runner's work happens in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
+    /// The runner's last-error note (why it is up without AI tools), cleared when it starts them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
 /// A runner's heartbeat: carries `load` when the runner measured one, and the isolation it
 /// offers now.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -156,6 +198,12 @@ pub struct Heartbeat {
     /// runner that does not report it, and from one that offers no agent driver.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<IsolationCaps>,
+    /// Its tool install, home folder and last error. Absent from a runner that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<RunnerReport>,
+    /// Its capacity now (E15-1). Absent from a runner that predates 2.1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<Capacity>,
 }
 
 /// Facts a runner reports about itself in its hello (display only: the Core decides nothing by
@@ -191,6 +239,13 @@ pub struct RunnerFacts {
     /// not place a run on a runner without it, because the limits would be silently ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_caps: Option<RunCaps>,
+    /// The runner's own report (latest heartbeat): see [`RunnerReport`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_install: Option<ToolInstallReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 /// Podman as the runner finds it.
@@ -272,6 +327,8 @@ impl IsolationCaps {
 
 /// A frame's payload, typed.
 #[derive(Debug, Clone, PartialEq)]
+// A frame is built once and moved once; boxing Command would touch every match site.
+#[allow(clippy::large_enum_variant)]
 pub enum Body {
     Control(Control),
     Command(Command),
@@ -358,6 +415,8 @@ pub enum Control {
     Snapshot(Snapshot),
     /// Core to runner on an `ssh.sftp.write` stream: the last byte was sent (`sftp`).
     Eof,
+    /// Runner to Core on a `sync.watch` stream: what changed in the session folder (E15-2).
+    SyncEvent(SyncEvent),
     /// A type from a newer peer: ignored. Never sent.
     #[serde(other)]
     Unknown,
@@ -407,6 +466,10 @@ pub struct RunnerHello {
     /// that does not report it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facts: Option<Box<RunnerFacts>>,
+    /// Its capacity when the hello was sent (E15-1), beside `load`. Absent from a runner that
+    /// predates 2.1: the Core then treats it as plain session hardware ("update runner").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<Box<Capacity>>,
 }
 
 /// Resume by `seq` (E1-11.4): how many of the peer's frames one side received on a stream.
@@ -556,6 +619,18 @@ pub enum ErrorCode {
     /// `design.*`: the helper (or Chromium) ran out of wall clock. Load on the runner can cause it as
     /// much as the input, so it is no verdict on the file: try again later.
     DesignLimit,
+    /// `sync.*`: a chunk or file did not hash as listed, or the tree after a push is not `want_tree`.
+    HashMismatch,
+    /// `sync.push`: the cache is not at `base`.
+    BaseMismatch,
+    /// `sync.*`, `job.run`: a path that is not a wire path (`wire_path_problem`), or one outside
+    /// the project.
+    PathRefused,
+    /// `job.run`: the job's sync out is over `MAX_SYNC_OUT_BYTES`.
+    OutputsTooLarge,
+    /// `pty.open` to a runner that no longer opens terminals (E15-4): only the Core and This Mac
+    /// do.
+    TerminalTargetRemoved,
     /// A code from a newer peer. Never sent.
     #[serde(other)]
     Unknown,

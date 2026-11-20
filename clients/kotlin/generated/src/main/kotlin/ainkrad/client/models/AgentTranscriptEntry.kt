@@ -24,7 +24,7 @@ import kotlinx.serialization.Contextual
  * 
  *
  * @param atMs Unix milliseconds, on the runner: when it took the event. A `tool_use`'s is when the call started (a sub-agent's `Task` or `Agent` included), an `approval_request`'s when the approval was asked.
- * @param body A harness event, or the session's own (`started`, `message`, `approval_request`, `approval_decided`, `interrupted`, `gap`, `ended`), redacted. A file edit's `tool_use` also carries `edit` (`AgentEdit`).
+ * @param body A harness event, or the session's own (`started`, `message`, `approval_request`, `approval_decided`, `interrupted`, `gap`, `ended`), redacted. A file edit's `tool_use` also carries `edit` (`AgentEdit`). A harness that shows its reasoning (Claude Code's `thinking` blocks) adds `{\"type\": \"thinking\", \"text\": \"…\"}` entries, before the text or tool call they belong to, at most 16 KiB each (cut with a `[cut]` marker); the other harnesses send none. An `approval_decided` the Core made by a project's \"always\" rule carries `note` saying which.
  * @param seq From 1, by one: replay from any `seq` with `after`.
  */
 @Serializable
@@ -35,7 +35,7 @@ data class AgentTranscriptEntry (
     @SerialName(value = "at_ms")
     val atMs: kotlin.Long,
 
-    /* A harness event, or the session's own (`started`, `message`, `approval_request`, `approval_decided`, `interrupted`, `gap`, `ended`), redacted. A file edit's `tool_use` also carries `edit` (`AgentEdit`). */
+    /* A harness event, or the session's own (`started`, `message`, `approval_request`, `approval_decided`, `interrupted`, `gap`, `ended`), redacted. A file edit's `tool_use` also carries `edit` (`AgentEdit`). A harness that shows its reasoning (Claude Code's `thinking` blocks) adds `{\"type\": \"thinking\", \"text\": \"…\"}` entries, before the text or tool call they belong to, at most 16 KiB each (cut with a `[cut]` marker); the other harnesses send none. An `approval_decided` the Core made by a project's \"always\" rule carries `note` saying which. */
     @Contextual @SerialName(value = "body")
     val body: kotlin.Any,
 

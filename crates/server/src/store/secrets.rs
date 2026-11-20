@@ -48,6 +48,9 @@ use zeroize::Zeroizing;
 use super::settings::value_in;
 use crate::ops::secretbox::SecretBox;
 
+mod export;
+pub use export::{Exported, export_all};
+
 /// How a runner hands a secret to a session (E2-07.2).
 pub const DELIVERY: [&str; 3] = ["env", "file", "askpass"];
 
@@ -169,13 +172,18 @@ pub const ACCOUNT_PREFIX: &str = "acct.";
 
 /// The provider kinds an account secret may name. Extending it is a code change on purpose.
 /// Each is paired with the redactor kind of its own key shape.
-pub const ACCOUNT_PROVIDERS: [(&str, &str); 4] = [
+pub const ACCOUNT_PROVIDERS: [(&str, &str); 7] = [
     ("anthropic", "anthropic_key"),
     // A Claude subscription's `setup-token` (`sk-ant-oat01-…`): the redactor reads it as an
     // Anthropic key, so the narrow gate judges it as one.
     ("claude-sub", "anthropic_key"),
     ("openai", "openai_key"),
     ("google", "google_key"),
+    // A runner-bound sign-in (E7-4): the secret holds a non-secret marker (`ainkrad-bound:<home>`),
+    // never a token. Its scope is the one runner that holds the login.
+    ("codex-sub", "openai_key"),
+    ("opencode-sub", "openai_key"),
+    ("agy-sub", "google_key"),
 ];
 
 /// What a secret is for, from its name alone (the account model will mint these names).
@@ -248,7 +256,8 @@ async fn enabled(conn: &mut SqliteConnection) -> Result<i64, Error> {
     match setting(conn, Key::SecretsMode).await? {
         0 => refused(
             "secrets_disabled",
-            "the secrets broker is off (secrets.mode 0, gate G-SEC)",
+            "the secrets broker is off: secrets.mode is 0; set it to 1 (`ainkradctl setting set \
+             secrets.mode 1`, or the AI accounts step of setup) to store keys",
         ),
         mode => Ok(mode),
     }
@@ -327,13 +336,43 @@ async fn check_value(
         {
             Ok(true)
         }
-        _ => refused(
-            "real_secret_refused",
-            "the value contains a recognised credential shape and is not, as a whole, one key \
-             of this provider's own shape. A provider's own key needs secrets.provider_accounts; \
-             every other real secret waits for gate G-SEC (secrets.mode 2)",
-        ),
+        _ => {
+            let accounts = setting(conn, Key::SecretsProviderAccounts).await?;
+            refused("real_secret_refused", refusal_words(mode, accounts))
+        }
     }
+}
+
+/// What a refused real value is told: the settings as they are and the one that lets a provider's
+/// own key in (the app's AI-accounts setup step sets it).
+fn refusal_words(mode: i64, provider_accounts: i64) -> String {
+    let fix = match provider_accounts {
+        1 => "this value is not, as a whole, one key of this provider's own shape".to_owned(),
+        n => format!(
+            "secrets.provider_accounts is {n}: set it to 1 (`ainkradctl setting set secrets.provider_accounts 1`, \
+             or the AI accounts step of setup) to add a provider's own key"
+        ),
+    };
+    format!(
+        "the value contains a recognised credential shape and secrets.mode is {mode}; {fix}. \
+         Every other real secret waits for gate G-SEC (secrets.mode 2)"
+    )
+}
+
+#[cfg(test)]
+#[test]
+fn a_refused_real_key_names_the_setting_that_lets_it_in() {
+    let off = refusal_words(1, 0);
+    assert!(
+        off.contains("secrets.mode is 1")
+            && off.contains("secrets.provider_accounts is 0: set it to 1"),
+        "{off}"
+    );
+    let on = refusal_words(1, 1);
+    assert!(
+        on.contains("not, as a whole, one key") && !on.contains("set it to 1"),
+        "{on}"
+    );
 }
 
 /// The scope, checked: each an active runner device, no repeats.
@@ -920,6 +959,64 @@ pub async fn revoke_lease(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Opens secret `name` for a person at the app (E1, the mockup's "Reveal"): the plain value,
+/// audited as `secret.revealed` with the device. Never an account key (`acct.*`: the Accounts
+/// screen owns those) and only a text value: a file or bundle is not shown.
+///
+/// # Errors
+///
+/// `not_found`, `secrets_disabled`, `bad_request` for an account key, `secrets_unavailable`
+/// when the value cannot be opened.
+pub async fn reveal(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    name: &str,
+    by_device: &str,
+    actor: AuditActor,
+) -> Result<Zeroizing<String>, Error> {
+    if name.starts_with(ACCOUNT_PREFIX) {
+        return refused("bad_request", "a provider account's key is never shown");
+    }
+    let mut tx = super::begin_write(pool).await?;
+    enabled(&mut tx).await?;
+    let row =
+        sqlx::query("SELECT id, version, key_id, sealed, kind FROM core_secrets WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some(row) = row else {
+        return refused("not_found", "no such secret");
+    };
+    let (id, version): (i64, i64) = (row.try_get("id")?, row.try_get("version")?);
+    if row.try_get::<String, _>("kind")? != "text" {
+        return refused("bad_request", "only a text secret is shown");
+    }
+    let key_id: String = row.try_get("key_id")?;
+    let sealed: Vec<u8> = row.try_get("sealed")?;
+    if !sealer.holds(&key_id) {
+        return refused(
+            "secrets_unavailable",
+            "the secret is sealed under a master key this Core does not hold",
+        );
+    }
+    let plain = sealer
+        .open_as(&key_id, &label(name, version), &sealed)
+        .or_else(|_| refused("secrets_unavailable", "the secret did not open"))?;
+    let value = std::str::from_utf8(&plain)
+        .map(|v| Zeroizing::new(v.to_owned()))
+        .or_else(|_| refused("secrets_unavailable", "the secret did not open"))?;
+    audit(
+        &mut tx,
+        actor,
+        "secret.revealed",
+        id,
+        json!({"name": name, "version": version, "by_device": by_device}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(value)
 }
 
 /// Redeems lease `id` for `runner` (the calling device): once, before it expires, while the

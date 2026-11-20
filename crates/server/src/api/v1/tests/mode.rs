@@ -137,7 +137,7 @@ async fn a_mode_change_is_kept_for_the_next_start_and_audited() {
         (&r.1["policy"], &r.1["plan"]),
         (&json!("ask"), &json!(true))
     );
-    let body = json!({"policy": "accept_edits", "plan": false});
+    let body = json!({"policy": "accept_edits", "plan": false, "effort": null});
     let r = call(&fx, Method::POST, &mode_uri(&s), body).await;
     assert_eq!(r.0, StatusCode::OK, "{}", r.1);
     assert_eq!(
@@ -159,11 +159,17 @@ async fn a_mode_change_is_kept_for_the_next_start_and_audited() {
         .map(|d| serde_json::from_str(d).unwrap())
         .collect();
     assert_eq!(audited.len(), 2);
-    assert_eq!(audited[0]["from"], json!({"policy": "ask", "plan": false}));
-    assert_eq!(audited[0]["to"], json!({"policy": "ask", "plan": true}));
+    assert_eq!(
+        audited[0]["from"],
+        json!({"policy": "ask", "plan": false, "effort": null})
+    );
+    assert_eq!(
+        audited[0]["to"],
+        json!({"policy": "ask", "plan": true, "effort": null})
+    );
     assert_eq!(
         audited[1]["to"],
-        json!({"policy": "accept_edits", "plan": false})
+        json!({"policy": "accept_edits", "plan": false, "effort": null})
     );
 }
 
@@ -223,4 +229,85 @@ async fn what_a_mode_cannot_be_is_refused_and_changes_nothing() {
             .await
             .unwrap();
     assert_eq!(audited, 0);
+}
+
+/// E14: an effort level is `low`, `medium`, `high` or `max`, only for a harness that can take one
+/// (Claude, Codex), and only through a runner that lists the `effort` capability (here: none).
+#[tokio::test]
+async fn effort_is_checked_for_its_value_its_harness_and_its_runner() {
+    let fx = fx().await;
+    let opencode = session(&fx, "opencode", json!({"mode": "ask"}), "interrupted").await;
+    let r = call(
+        &fx,
+        Method::POST,
+        &mode_uri(&opencode),
+        json!({"effort": "high"}),
+    )
+    .await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("effort_unsupported")),
+        "{}",
+        r.1
+    );
+    let claude = session(&fx, "claude", json!({"mode": "ask"}), "interrupted").await;
+    let r = call(
+        &fx,
+        Method::POST,
+        &mode_uri(&claude),
+        json!({"effort": "turbo"}),
+    )
+    .await;
+    assert_eq!(r.0, StatusCode::BAD_REQUEST, "{}", r.1);
+    let r = call(
+        &fx,
+        Method::POST,
+        &mode_uri(&claude),
+        json!({"effort": "high"}),
+    )
+    .await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::CONFLICT, Some("unsupported_command")),
+        "{}",
+        r.1
+    );
+    // Nothing was kept, and the session says it cannot take one here.
+    assert!(policy_of(&fx, &claude).await.get("effort").is_none());
+    let shown = fx
+        .ok(&format!("/api/v1/agent-sessions/{}", claude.id))
+        .await;
+    assert_eq!(
+        (&shown["effort"], &shown["can_set_effort"]),
+        (&Value::Null, &json!(false))
+    );
+    // A stored effort is shown.
+    let set = json!({"mode": "ask", "effort": "max"});
+    let kept = session(&fx, "codex", set, "running").await;
+    let shown = fx.ok(&format!("/api/v1/agent-sessions/{}", kept.id)).await;
+    assert_eq!(shown["effort"], "max");
+    // Neither policy, plan nor effort is still a 400.
+    let r = call(&fx, Method::POST, &mode_uri(&claude), json!({})).await;
+    assert_eq!(r.0, StatusCode::BAD_REQUEST, "{}", r.1);
+}
+
+/// E14: "always for this project" is refused, with nothing decided, for a session of no project.
+#[tokio::test]
+async fn always_needs_a_project_and_a_rule_the_allowlist_accepts() {
+    let fx = fx().await;
+    let s = session(&fx, "claude", json!({"mode": "ask"}), "running").await;
+    let uri = format!("/api/v1/agent-sessions/{}/approvals/tc_1", s.id);
+    let r = call(
+        &fx,
+        Method::POST,
+        &uri,
+        json!({"approved": true, "always": true}),
+    )
+    .await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("rule_not_allowed")),
+        "{}",
+        r.1
+    );
 }

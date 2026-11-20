@@ -251,4 +251,162 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0041_project_runs.up.sql"),
         down: include_str!("../../../migrations/0041_project_runs.down.sql"),
     },
+    Migration {
+        version: 42,
+        name: "mirror_state",
+        up: include_str!("../../../migrations/0042_mirror_state.up.sql"),
+        down: include_str!("../../../migrations/0042_mirror_state.down.sql"),
+    },
+    Migration {
+        version: 43,
+        name: "terminal_sandbox_e6",
+        up: include_str!("../../../migrations/0043_terminal_sandbox_e6.up.sql"),
+        down: include_str!("../../../migrations/0043_terminal_sandbox_e6.down.sql"),
+    },
+    Migration {
+        version: 44,
+        name: "pairing_bundled_e6",
+        up: include_str!("../../../migrations/0044_pairing_bundled_e6.up.sql"),
+        down: include_str!("../../../migrations/0044_pairing_bundled_e6.down.sql"),
+    },
+    Migration {
+        version: 45,
+        name: "approval_rules",
+        up: include_str!("../../../migrations/0045_approval_rules.up.sql"),
+        down: include_str!("../../../migrations/0045_approval_rules.down.sql"),
+    },
+    Migration {
+        version: 46,
+        name: "project_runner_pref",
+        up: include_str!("../../../migrations/0046_project_runner_pref.up.sql"),
+        down: include_str!("../../../migrations/0046_project_runner_pref.down.sql"),
+    },
+    Migration {
+        version: 47,
+        name: "run_configs",
+        up: include_str!("../../../migrations/0047_run_configs.up.sql"),
+        down: include_str!("../../../migrations/0047_run_configs.down.sql"),
+    },
+    Migration {
+        version: 48,
+        name: "project_data",
+        up: include_str!("../../../migrations/0048_project_data.up.sql"),
+        down: include_str!("../../../migrations/0048_project_data.down.sql"),
+    },
+    Migration {
+        version: 49,
+        name: "concurrent_runs",
+        up: include_str!("../../../migrations/0049_concurrent_runs.up.sql"),
+        down: include_str!("../../../migrations/0049_concurrent_runs.down.sql"),
+    },
+    Migration {
+        version: 50,
+        name: "e7_ai_order",
+        up: include_str!("../../../migrations/0050_e7_ai_order.up.sql"),
+        down: include_str!("../../../migrations/0050_e7_ai_order.down.sql"),
+    },
+    Migration {
+        version: 51,
+        name: "e7_codex_sub",
+        up: include_str!("../../../migrations/0051_e7_codex_sub.up.sql"),
+        down: include_str!("../../../migrations/0051_e7_codex_sub.down.sql"),
+    },
+    Migration {
+        version: 52,
+        name: "e7_presets",
+        up: include_str!("../../../migrations/0052_e7_presets.up.sql"),
+        down: include_str!("../../../migrations/0052_e7_presets.down.sql"),
+    },
+    Migration {
+        version: 53,
+        name: "e7_limits",
+        up: include_str!("../../../migrations/0053_e7_limits.up.sql"),
+        down: include_str!("../../../migrations/0053_e7_limits.down.sql"),
+    },
+    Migration {
+        version: 54,
+        name: "e7_model_allow",
+        up: include_str!("../../../migrations/0054_e7_model_allow.up.sql"),
+        down: include_str!("../../../migrations/0054_e7_model_allow.down.sql"),
+    },
+    Migration {
+        version: 55,
+        name: "e7_provider_limits",
+        up: include_str!("../../../migrations/0055_e7_provider_limits.up.sql"),
+        down: include_str!("../../../migrations/0055_e7_provider_limits.down.sql"),
+    },
+    Migration {
+        version: 56,
+        name: "e7_retire_account_limits",
+        up: include_str!("../../../migrations/0056_e7_retire_account_limits.up.sql"),
+        down: include_str!("../../../migrations/0056_e7_retire_account_limits.down.sql"),
+    },
+    Migration {
+        version: 57,
+        name: "e7_account_soft_delete",
+        up: include_str!("../../../migrations/0057_e7_account_soft_delete.up.sql"),
+        down: include_str!("../../../migrations/0057_e7_account_soft_delete.down.sql"),
+    },
+    Migration {
+        version: 58,
+        name: "project_idle_never_e24",
+        up: include_str!("../../../migrations/0058_project_idle_never_e24.up.sql"),
+        down: include_str!("../../../migrations/0058_project_idle_never_e24.down.sql"),
+    },
+    Migration {
+        version: 59,
+        name: "hardware",
+        up: include_str!("../../../migrations/0059_hardware.up.sql"),
+        down: include_str!("../../../migrations/0059_hardware.down.sql"),
+    },
+    Migration {
+        version: 60,
+        name: "ws_path_run_kind",
+        up: include_str!("../../../migrations/0060_ws_path_run_kind.up.sql"),
+        down: include_str!("../../../migrations/0060_ws_path_run_kind.down.sql"),
+    },
+    Migration {
+        version: 61,
+        name: "decisions",
+        up: include_str!("../../../migrations/0061_decisions.up.sql"),
+        down: include_str!("../../../migrations/0061_decisions.down.sql"),
+    },
+    Migration {
+        version: 62,
+        name: "hw_cache_prepared",
+        up: include_str!("../../../migrations/0062_hw_cache_prepared.up.sql"),
+        down: include_str!("../../../migrations/0062_hw_cache_prepared.down.sql"),
+    },
+    Migration {
+        version: 63,
+        name: "hw_first_capacity",
+        up: include_str!("../../../migrations/0063_hw_first_capacity.up.sql"),
+        down: include_str!("../../../migrations/0063_hw_first_capacity.down.sql"),
+    },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::CORE_MIGRATIONS;
+
+    /// Every `migrations/NNNN_name.up.sql` file is registered, in order, under its own number and name.
+    #[test]
+    fn every_migration_file_is_registered() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/migrations");
+        let mut files: Vec<(i64, String)> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| {
+                let n = e.unwrap().file_name().into_string().unwrap();
+                let stem = n.strip_suffix(".up.sql")?;
+                let (v, name) = stem.split_once('_')?;
+                Some((v.parse().ok()?, name.to_owned()))
+            })
+            .collect();
+        files.sort();
+        let listed: Vec<(i64, String)> = CORE_MIGRATIONS
+            .iter()
+            .map(|m| (m.version, m.name.to_owned()))
+            .collect();
+        assert_eq!(listed, files);
+    }
+}

@@ -64,6 +64,51 @@ const RESERVED_VARS: &[&str] = &["PATH", "HOME", "SHELL", "USER", "LOGNAME", "TM
 /// The variable a module's run token is delivered under; a client session may not name it.
 pub const RUN_TOKEN_VAR: &str = "CITADEL_RUN_TOKEN";
 
+/// Variables that change how a program is found, loaded or localised, which no client may set
+/// in a process the runner starts: the loader's (`LD_*`, `DYLD_*`), the C library's data paths
+/// (`GCONV_PATH`, `LOCPATH`, `NLSPATH`), the resolver's, and the interpreters' start-up hooks.
+pub fn loader_var(var: &str) -> bool {
+    var.starts_with("LD_")
+        || var.starts_with("DYLD_")
+        || var.starts_with("GIT_CONFIG_")
+        || matches!(
+            var,
+            "GCONV_PATH"
+                | "LOCPATH"
+                | "NLSPATH"
+                | "HOSTALIASES"
+                | "RES_OPTIONS"
+                | "MALLOC_CONF"
+                | "BASH_ENV"
+                | "ENV"
+                | "NODE_OPTIONS"
+                | "PYTHONPATH"
+                | "PYTHONSTARTUP"
+                | "PERL5LIB"
+                | "PERL5OPT"
+                | "RUBYLIB"
+                | "RUBYOPT"
+                | "PERLLIB"
+                | "JAVA_TOOL_OPTIONS"
+                | "_JAVA_OPTIONS"
+                | "GIT_EXEC_PATH"
+                | "PYTHONHOME"
+                | "ZDOTDIR"
+        )
+}
+
+/// A variable a terminal's client (`NewTerminal.env`) may set: `[A-Za-z_][A-Za-z0-9_]{0,63}`, not
+/// a [`loader_var`], not one the runner sets itself, not `AINKRAD_*`.
+pub fn valid_terminal_env(var: &str) -> bool {
+    let b = var.as_bytes();
+    (1..=64).contains(&b.len())
+        && (b[0].is_ascii_alphabetic() || b[0] == b'_')
+        && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_')
+        && !loader_var(var)
+        && !RESERVED_VARS.contains(&var)
+        && !var.starts_with("AINKRAD_")
+}
+
 /// A variable a secret may be delivered under: `[A-Z_][A-Z0-9_]{0,63}`, not one the runner
 /// sets itself, not a loader's (`LD_*`, `DYLD_*`).
 pub fn valid_secret_var(var: &str) -> bool {
@@ -74,9 +119,7 @@ pub fn valid_secret_var(var: &str) -> bool {
             .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == b'_')
         && !RESERVED_VARS.contains(&var)
         && !var.starts_with("AINKRAD_")
-        && !matches!(var, "BASH_ENV" | "ENV" | "NODE_OPTIONS" | "PYTHONPATH")
-        && !var.starts_with("LD_")
-        && !var.starts_with("DYLD_")
+        && !loader_var(var)
 }
 
 /// A file secret's name on the runner: `[A-Za-z0-9._-]{1,64}`, never `.` or `..` (it becomes a
@@ -190,6 +233,12 @@ pub fn account_var_problem<'a>(
     grants: impl IntoIterator<Item = (&'a str, &'a str)> + Clone,
 ) -> Option<&'static str> {
     let allowed = account_vars(harness);
+    // A runner-bound account holds no key: nothing is delivered, `bound_problem` judges it.
+    let grants: Vec<(&str, &str)> = grants
+        .into_iter()
+        .filter(|(n, _)| !super::subscription::is_bound_secret(n))
+        .collect();
+    let grants = grants.iter().copied();
     // An ordinary secret may not take a harness authentication variable either: it would carry a
     // credential past every rule below.
     if !grants
@@ -289,7 +338,22 @@ pub struct AgentStart {
     /// beside the session, never inside the repo checkout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+    /// The session's folder in the canonical workspace (E15 §4.1, `workspace::paths::session_dir`),
+    /// set only for the built-in runner started with `--workspace-root`: the harness works there,
+    /// and the runner refuses a folder outside its workspace root (`invalid_args`). The Core checks
+    /// the runner's reported `meta.folder` against it. Absent: the runner picks its own folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// A runner-bound account's home key (`CAP_BOUND_HOME`, E7-4): the harness runs with its
+    /// config dir at `<config root>/bound/<home>`, where the account's login lives. No credential
+    /// travels: the runner reads its own files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
 }
+
+/// The runner flag that makes it the Core host's built-in runner over the canonical workspace
+/// (`--workspace-root <dir>`, E15-4): `pty` and `AgentStart::folder` are served beneath it.
+pub const RUNNER_FLAG_WORKSPACE_ROOT: &str = "--workspace-root";
 
 fn is_zero(n: &u32) -> bool {
     *n == 0

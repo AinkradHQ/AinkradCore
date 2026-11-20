@@ -21,8 +21,12 @@ use super::secrets::Error;
 pub const MAX_PRICE: i64 = 1_000_000_000;
 
 /// The provider list prices this release ships, as `(provider, model, input, output, cache read)`
-/// in micro-dollars per million tokens. A price someone set (`set`) always wins over these. Read
-/// 2026-11-11; OpenAI and Gemini have none until a list is recorded.
+/// in micro-dollars per million tokens (standard tier, text, short context). A price someone set
+/// (`set`) always wins over these. Anthropic read 2026-11-11; OpenAI
+/// (developers.openai.com/api/docs/pricing) and Gemini (aistudio.google.com/docs/pricing) read
+/// 2026-11-19. Gemini rows whose price rises on 2026-12-01 or 2027-01-01 carry the higher, scheduled
+/// price (an over-estimate is safe for a ceiling). A long-context rate is not a row: the default
+/// ([`default_rates`]) covers it. Re-read them when a provider changes its list ([`shipped_at`]).
 pub const SHIPPED: &[(&str, &str, i64, i64, i64)] = &[
     (
         "anthropic",
@@ -39,8 +43,122 @@ pub const SHIPPED: &[(&str, &str, i64, i64, i64)] = &[
         100_000,
     ),
     ("anthropic", "claude-haiku-5-5", 100_000, 500_000, 10_000),
+    ("openai", "gpt-6.2-astra", 8_000_000, 40_000_000, 400_000),
+    ("openai", "gpt-6.2-sol", 2_000_000, 10_000_000, 100_000),
+    ("openai", "gpt-6-astra", 10_000_000, 50_000_000, 1_000_000),
+    ("openai", "gpt-6.1-sol", 2_000_000, 10_000_000, 100_000),
+    ("openai", "gpt-6.1-terra", 1_000_000, 5_000_000, 50_000),
+    ("openai", "gpt-6-luna", 100_000, 500_000, 10_000),
+    ("openai", "gpt-6-sol", 2_000_000, 10_000_000, 200_000),
+    ("openai", "gpt-5.6-sol", 4_000_000, 20_000_000, 400_000),
+    ("openai", "gpt-5.6-terra", 2_000_000, 12_000_000, 200_000),
+    ("openai", "gpt-5.6-luna", 200_000, 1_200_000, 20_000),
+    ("openai", "gpt-5.5", 5_000_000, 30_000_000, 500_000),
+    ("openai", "gpt-5.5-pro", 30_000_000, 180_000_000, 30_000_000),
+    ("openai", "gpt-5.4", 2_500_000, 15_000_000, 250_000),
+    ("openai", "gpt-5.4-pro", 30_000_000, 180_000_000, 30_000_000),
+    ("openai", "gpt-5.4-mini", 750_000, 4_500_000, 75_000),
+    ("openai", "gpt-5.4-nano", 200_000, 1_250_000, 20_000),
+    ("openai", "gpt-5.3-codex", 1_750_000, 14_000_000, 175_000),
+    ("openai", "gpt-5.2", 1_750_000, 14_000_000, 175_000),
+    ("openai", "gpt-5.1", 1_250_000, 10_000_000, 125_000),
+    ("openai", "gpt-5", 1_250_000, 10_000_000, 125_000),
+    ("openai", "gpt-5-mini", 250_000, 2_000_000, 25_000),
+    ("openai", "gpt-5-nano", 50_000, 400_000, 5_000),
+    ("openai", "gpt-4.1", 2_000_000, 8_000_000, 500_000),
+    ("openai", "gpt-4.1-mini", 400_000, 1_600_000, 100_000),
+    ("openai", "gpt-4o", 2_500_000, 10_000_000, 1_250_000),
+    ("openai", "gpt-4o-mini", 150_000, 600_000, 75_000),
+    ("openai", "o3", 2_000_000, 8_000_000, 500_000),
+    ("google", "gemini-4-carbon", 4_000_000, 20_000_000, 200_000),
+    ("google", "gemini-4-argon", 4_000_000, 20_000_000, 200_000),
+    ("google", "gemini-4-neon", 3_000_000, 15_000_000, 150_000),
+    ("google", "gemini-4-hydrogen", 1_500_000, 7_500_000, 75_000),
+    ("google", "gemini-3.8-flash", 1_500_000, 7_500_000, 150_000),
+    ("google", "gemini-3.6-flash", 1_500_000, 7_500_000, 150_000),
+    (
+        "google",
+        "gemini-3.5-flash-lite",
+        300_000,
+        2_500_000,
+        30_000,
+    ),
+    (
+        "google",
+        "gemini-3.1-pro-preview",
+        2_000_000,
+        12_000_000,
+        200_000,
+    ),
+    (
+        "google",
+        "gemini-3.1-flash-lite",
+        250_000,
+        1_500_000,
+        25_000,
+    ),
+    (
+        "google",
+        "gemini-3-flash-preview",
+        500_000,
+        3_000_000,
+        50_000,
+    ),
+    ("google", "gemini-2.5-pro", 1_250_000, 10_000_000, 125_000),
+    ("google", "gemini-2.5-flash", 300_000, 2_500_000, 30_000),
+    ("google", "gemini-2.5-flash-lite", 100_000, 400_000, 10_000),
 ];
-const SHIPPED_AT: &str = "2026-11-11T00:00:00Z";
+
+/// When a shipped provider's list was read.
+fn shipped_at(provider: &str) -> &'static str {
+    match provider {
+        "anthropic" => "2026-11-11T00:00:00Z",
+        _ => "2026-11-19T00:00:00Z",
+    }
+}
+
+/// The highest list price of each built-in provider's models, long context included, as
+/// `(provider, input, output)` in micro-dollars per million tokens: OpenAI gpt-5.5-pro and
+/// gpt-5.4-pro above 272k ($60/$270), Anthropic Opus ($15/$75), Google's gemini-4 from 2026-12-01
+/// ($4/$20; Pro above 200k is $4/$18). Read 2026-11-19. Raise a row when a provider lists more.
+const MAX_LIST: [(&str, i64, i64); 3] = [
+    ("openai", 60_000_000, 270_000_000),
+    ("anthropic", 15_000_000, 75_000_000),
+    ("google", 4_000_000, 20_000_000),
+];
+
+/// The flagged default rates `[input, output, cache]` of a model of a built-in provider that the
+/// book and [`SHIPPED`] do not know, so a user's own model id never hard-fails. It is the
+/// provider's [`MAX_LIST`] (cache read priced as input), at or above any real price, so a dollar
+/// ceiling can only be over-counted. A provider with no row gets the highest of all.
+fn default_rates(provider: &str) -> [i64; 3] {
+    let (_, i, o) = MAX_LIST
+        .iter()
+        .find(|r| r.0 == provider)
+        .copied()
+        .unwrap_or(MAX_LIST[0]);
+    [i, o, i]
+}
+
+/// The flagged default's `priced_at`: the epoch, which no real price has. The default lives in the
+/// session's grant book only (so its cost events carry the flag as their rates' `priced_at`); the
+/// Core's price book never holds it.
+const DEFAULT_PRICED_AT: &str = "1970-01-01T00:00:00Z";
+
+/// The flagged default price of `model`, for the grant's book.
+pub fn default_price(provider: &str, model: &str) -> Price {
+    let [input, output, cache] = default_rates(provider);
+    Price {
+        provider: provider.to_owned(),
+        model: model.to_owned(),
+        version: 0,
+        input_per_mtok_micro: input,
+        output_per_mtok_micro: output,
+        cache_per_mtok_micro: cache,
+        priced_at: DEFAULT_PRICED_AT.to_owned(),
+        created_at: String::new(),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Price {
@@ -231,7 +349,7 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<Price>, sqlx::Error> {
                 input_per_mtok_micro: i,
                 output_per_mtok_micro: o,
                 cache_per_mtok_micro: c,
-                priced_at: SHIPPED_AT.to_owned(),
+                priced_at: shipped_at(provider).to_owned(),
                 created_at: String::new(),
             });
         }
@@ -283,7 +401,7 @@ pub async fn rates_in(
             input,
             output,
             cache,
-            priced_at: SHIPPED_AT.to_owned(),
+            priced_at: shipped_at(provider).to_owned(),
         }));
     }
     // A user definition's own list, read as of its newest version; a built-in has none.
@@ -299,4 +417,32 @@ pub async fn rates_in(
         cache: m.input_per_mtok_micro,
         priced_at: at,
     }))
+}
+
+#[cfg(test)]
+mod shipped_tests {
+    use super::*;
+
+    #[test]
+    fn the_default_is_at_or_above_every_shipped_and_documented_list_price() {
+        for p in ["anthropic", "openai", "google"] {
+            assert!(SHIPPED.iter().any(|s| s.0 == p), "{p}");
+        }
+        assert!(SHIPPED.iter().all(|s| s.2 > 0 && s.4 <= s.2));
+        for &(p, m, i, o, c) in SHIPPED {
+            let [di, d_o, dc] = default_rates(p);
+            assert!(di >= i && d_o >= o && dc >= c, "{p}/{m}");
+        }
+        // The documented maxima (long context included): gpt-5.5-pro 60/270, Opus 4 15/75, gemini-4 4/20.
+        for (p, i, o) in [
+            ("openai", 60, 270),
+            ("anthropic", 15, 75),
+            ("google", 4, 20),
+        ] {
+            let [di, d_o, _] = default_rates(p);
+            assert!(di >= i * 1_000_000 && d_o >= o * 1_000_000, "{p}");
+        }
+        let d = default_price("google", "gemini-next");
+        assert_eq!(d.priced_at, "1970-01-01T00:00:00Z");
+    }
 }

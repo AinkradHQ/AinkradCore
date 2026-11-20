@@ -27,6 +27,7 @@ use std::time::Instant;
 use utoipa::ToSchema;
 
 mod local;
+pub(crate) mod sandbox;
 pub use local::*;
 mod ssh_ops;
 pub use ssh_ops::{MAX_SMALL_FILE, MAX_UPLOAD, SftpJob, sftp_job, type_into};
@@ -98,6 +99,25 @@ pub struct Rooms {
     warned: Mutex<HashMap<String, i64>>,
     /// Hosts a runner holds that the Core has no live record of (`flag_orphans`).
     orphans: Mutex<HashMap<String, Orphan>>,
+    /// When each terminal's screen tail was last read (`tail_due`).
+    tails: Mutex<HashMap<String, Instant>>,
+}
+
+impl Rooms {
+    /// Whether `terminal`'s screen may be read now: once a second at most, so a client polling a
+    /// whole list cannot turn the runner into a busy loop. The map is pruned as it is used.
+    fn tail_due(&self, terminal: &str) -> bool {
+        let now = Instant::now();
+        let mut t = self.tails.lock().unwrap();
+        t.retain(|_, at| now.duration_since(*at) < Duration::from_secs(30));
+        match t.get(terminal) {
+            Some(at) if now.duration_since(*at) < Duration::from_secs(1) => false,
+            _ => {
+                t.insert(terminal.to_owned(), now);
+                true
+            }
+        }
+    }
 }
 
 /// A host with no Core record: when it was first seen, and when it was warned about.
@@ -285,6 +305,10 @@ pub struct Terminal {
     pub attached: Option<u32>,
     /// Running with no client attached: it is closed once idle past `terminal.idle_secs`.
     pub orphaned: Option<bool>,
+    /// Where the shell lives (D-17): `home`, `project:<id>`, `session:<id>` or `real` (this Mac's
+    /// own shell). Absent: a terminal opened before sandboxes, a host-view shell.
+    #[schema(required = false)]
+    pub sandbox: Option<String>,
 }
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct NewTerminal {
@@ -300,6 +324,19 @@ pub struct NewTerminal {
     pub session: Option<String>,
     pub env: Option<BTreeMap<String, String>>,
     pub size: TerminalSize,
+    /// Where the shell lives (D-17): `home` (the default: a private root with the caller's
+    /// persistent sandbox home), `project:<id>` or `session:<id>` (that, plus the project's or
+    /// session's folder, which the Core resolves: no `cwd`), or `real` (the runner's host view,
+    /// allowed only to the Mac that owns a macOS runner, over that Mac's own device key). 400
+    /// `bad_request` for a bad value or a `cwd` with a private mode, 403 `real_terminal_refused`
+    /// for `real` from anyone else. 409 `runner_update_required` ("Update this runner to open
+    /// terminals") when the runner predates sandboxes: no terminal opens on it.
+    #[schema(required = false)]
+    pub sandbox: Option<String>,
+    /// With `sandbox: real` only: start the shell in this project's folder (a cwd on the runner,
+    /// not a mount). A sandbox names its project in `sandbox` (400 otherwise).
+    #[schema(required = false)]
+    pub project: Option<i64>,
 }
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct TerminalSignal {
@@ -326,7 +363,7 @@ fn failed(e: &ainkrad_proto::v2::StreamError) -> ApiError {
     )
 }
 async fn row(app: &App, id: &str) -> Result<Terminal, ApiError> {
-    let r = sqlx::query_as::<_, (String,String,String,i64,i64,i64,Option<String>,String,Option<i32>,Option<String>)>("SELECT id,runner,status,rows,cols,output_seq,opened_by,created_at,exit_code,exit_signal FROM core_terminals WHERE id=? AND status!='reaped'").bind(id).fetch_optional(&app.pool).await?.ok_or_else(|| ApiError::not_found("no such terminal"))?;
+    let r = sqlx::query_as::<_, (String,String,String,i64,i64,i64,Option<String>,String,Option<i32>,Option<String>,Option<String>)>("SELECT id,runner,status,rows,cols,output_seq,opened_by,created_at,exit_code,exit_signal,sandbox FROM core_terminals WHERE id=? AND status!='reaped'").bind(id).fetch_optional(&app.pool).await?.ok_or_else(|| ApiError::not_found("no such terminal"))?;
     let status = TerminalStatus::parse(&r.2);
     let attached = app.terminals.attached(id);
     Ok(Terminal {
@@ -344,6 +381,7 @@ async fn row(app: &App, id: &str) -> Result<Terminal, ApiError> {
         exit_signal: r.9,
         attached: Some(attached),
         orphaned: Some(attached == 0 && status == TerminalStatus::Running),
+        sandbox: r.10,
     })
 }
 
@@ -656,9 +694,37 @@ async fn touch(app: &App, id: &str) {
         .await;
 }
 
+/// A shell with no recorded sandbox is a host-view shell opened before sandboxes (E6 L3): nothing
+/// attaches to it, and the sweep closes it.
+fn refuse_unsandboxed(t: &Terminal) -> Result<(), ApiError> {
+    if t.sandbox.is_none() {
+        return Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "terminal_unsandboxed",
+            "this terminal has no sandbox and is being closed",
+        ));
+    }
+    Ok(())
+}
+
+/// Running terminals with no recorded mode: opened before sandboxes existed.
+pub(crate) async fn unsandboxed(pool: &sqlx::SqlitePool) -> Vec<(String, String)> {
+    sqlx::query_as::<_, (String, String)>(
+        "SELECT id,runner FROM core_terminals WHERE status='running' AND sandbox IS NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+}
+
 /// Closes every running terminal nobody has been attached to for `terminal.idle_secs`
 /// (0 turns it off). A runner that is offline is tried again at the next pass.
 pub async fn sweep(app: &App) {
+    // A shell opened before sandboxes (no mode recorded) is a host-view shell this Core no longer
+    // opens; every terminal opened since records its mode (an SSH terminal records `ssh`).
+    for (id, runner) in unsandboxed(&app.pool).await {
+        hang_up(app, &id, &runner, "sandbox_upgrade").await;
+    }
     local::lapse(app).await;
     ack_exited(app).await;
     sweep_orphans(app).await;
@@ -874,28 +940,43 @@ pub async fn create(
     if !(1..=1000).contains(&req.size.rows) || !(1..=1000).contains(&req.size.cols) {
         return ApiError::bad_request("terminal size is out of range").into_response();
     }
-    let session = req.session.clone();
-    let cwd = match (req.session.as_deref(), req.cwd) {
-        (Some(_), Some(_)) => {
-            return ApiError::bad_request("give cwd or session, not both").into_response();
-        }
-        (Some(id), None) => {
-            match super::agents::terminal_folder(&app, &me, &req.runner, id).await {
-                Ok(folder) => Some(folder),
-                Err(e) => return e.into_response(),
-            }
-        }
-        (None, cwd) => cwd,
+    if let Some(bad) = req
+        .env
+        .iter()
+        .flatten()
+        .map(|(k, _)| k)
+        .find(|k| !ainkrad_proto::v2::valid_terminal_env(k))
+    {
+        return ApiError::bad_request(format!(
+            "{bad:?} cannot be set: loader, runner and reserved variables are refused"
+        ))
+        .into_response();
+    }
+    let plan = match sandbox::plan(
+        &app,
+        &me,
+        &req.runner,
+        req.sandbox.as_deref(),
+        req.session.as_deref(),
+        req.cwd.as_deref(),
+        req.project,
+    )
+    .await
+    {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
     };
     let spec = Spec {
         program: req.program,
         args: req.args.unwrap_or_default(),
-        cwd,
-        // Only this path names a session: the runner then lets the shell into that session's
+        cwd: plan.cwd,
+        // Only the host view names a session: the runner then lets the shell into that session's
         // folder, inside its hidden state, once it has checked it is the folder it recorded.
-        session,
+        session: plan.session,
         env: req.env.unwrap_or_default(),
         ssh: None,
+        sandbox: plan.sandbox,
+        sandbox_user: plan.user,
     };
     match open(&app, &me, &req.runner, req.size, spec, None).await {
         Ok(t) => (axum::http::StatusCode::CREATED, Json(t)).into_response(),
@@ -911,6 +992,9 @@ struct Spec {
     session: Option<String>,
     env: BTreeMap<String, String>,
     ssh: Option<ainkrad_proto::v2::SshTerminal>,
+    /// `PtyOpen::sandbox` and `sandbox_user`, set only by [`sandbox::plan`].
+    sandbox: Option<String>,
+    sandbox_user: Option<String>,
 }
 
 /// How a terminal ended, as its monitor saw it, handed to whoever asked to be told
@@ -958,6 +1042,14 @@ async fn admit(
         Some(d) if d.kind == "runner" && d.usable() => d,
         _ => return Err(ApiError::not_found("no such runner")),
     };
+    // M6: the Core refuses a remote runner itself, whatever that runner's own flags say.
+    if !crate::hardware::view::hosts_terminals(&app.pool, &runner.id).await? {
+        return Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "terminal_target_removed",
+            "terminals open on the Core or This Mac only",
+        ));
+    }
     let count = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM core_terminals WHERE runner=? AND status IN ('created','running')",
     )
@@ -1012,6 +1104,9 @@ async fn open(
                 scrollback_bytes: u64::try_from(scrollback.0).ok(),
                 scrollback_budget: u64::try_from(scrollback.1).ok(),
                 ssh: spec.ssh,
+                sandbox: spec.sandbox.clone().filter(|s| s != "ssh"),
+                sandbox_user: spec.sandbox_user,
+                purpose: None,
             }),
             app.hub.terminal_elevation(me),
         )
@@ -1039,7 +1134,7 @@ async fn open(
             return Err(e);
         }
     };
-    if let Err(e) = register(app, me, &runner.id, &info).await {
+    if let Err(e) = register(app, me, &runner.id, &info, spec.sandbox.as_deref()).await {
         abandon(app, &runner.id, &info.terminal);
         return Err(e);
     }
@@ -1108,6 +1203,9 @@ pub async fn open_ssh(
         session: None,
         env: BTreeMap::new(),
         ssh: Some(ssh),
+        // Recorded, not sent: the runner's `pty.open` for an SSH terminal carries no mode.
+        sandbox: Some("ssh".to_owned()),
+        sandbox_user: None,
     };
     open(app, me, runner, size, spec, Some(tx))
         .await
@@ -1120,6 +1218,7 @@ async fn register(
     me: &Caller,
     runner: &str,
     info: &TerminalInfo,
+    sandbox: Option<&str>,
 ) -> Result<(), ApiError> {
     let t = &info.terminal;
     if !named(t) {
@@ -1130,8 +1229,8 @@ async fn register(
         ));
     }
     let mut tx = store::begin_write(&app.pool).await?;
-    let seq=sqlx::query_scalar::<_,i64>("INSERT INTO core_terminals(id,runner,status,rows,cols,output_seq,opened_by,created_at,last_activity) VALUES(?,?, 'running',?,?,?,?,?,?) RETURNING seq").bind(t).bind(runner).bind(info.size.rows.clamp(1,1000)).bind(info.size.cols.clamp(1,1000)).bind(info.seq as i64).bind(&me.device.id).bind(iso_of_unix(app.clock.unix())).bind(app.clock.unix()).fetch_one(&mut *tx).await?;
-    let details = json!({"terminal":t,"runner":runner,"by_device":me.device.id});
+    let seq=sqlx::query_scalar::<_,i64>("INSERT INTO core_terminals(id,runner,status,rows,cols,output_seq,opened_by,created_at,last_activity,sandbox) VALUES(?,?, 'running',?,?,?,?,?,?,?) RETURNING seq").bind(t).bind(runner).bind(info.size.rows.clamp(1,1000)).bind(info.size.cols.clamp(1,1000)).bind(info.seq as i64).bind(&me.device.id).bind(iso_of_unix(app.clock.unix())).bind(app.clock.unix()).bind(sandbox).fetch_one(&mut *tx).await?;
+    let details = json!({"terminal":t,"runner":runner,"by_device":me.device.id,"sandbox":sandbox});
     let ae = NewAuditEvent {
         actor: BY,
         action: "terminal.opened".to_owned(),
@@ -1235,6 +1334,59 @@ pub async fn close(
         ..before
     }))
 }
+#[derive(Debug, Deserialize)]
+pub struct TailQuery {
+    pub lines: Option<u16>,
+}
+/// The last rows of a terminal's screen.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TerminalTailView {
+    /// Plain text, oldest first; empty when the terminal is not running.
+    pub lines: Vec<String>,
+}
+#[utoipa::path(get,path="/api/v1/terminals/{id}/tail",operation_id="tailTerminal",tag="terminals",params(("id"=String,Path),("lines"=Option<u16>,Query,description="1 to 20, default 5")),responses((status=200,description="The last rows of the screen as text, for a live preview. The terminal scope and the caller's own terminal; no step-up",body=TerminalTailView)))]
+pub async fn tail(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    Query(q): Query<TailQuery>,
+) -> ApiResult<TerminalTailView> {
+    let t = owned_row(&app, &id, &me.device.id).await?;
+    // A real shell on the person's own Mac is never read through the Core without an attach, and
+    // one opened before sandboxes (no mode recorded) counts as real.
+    if t.status != TerminalStatus::Running
+        || !matches!(t.sandbox.as_deref(), Some(s) if s != "real" && s != "ssh")
+    {
+        return Ok(Json(TerminalTailView { lines: Vec::new() }));
+    }
+    if !app.terminals.tail_due(&id) {
+        return Err(ApiError::new(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "a terminal's screen is read at most once a second",
+        ));
+    }
+    let lines = q.lines.unwrap_or(5).clamp(1, 20);
+    let d = app
+        .hub
+        .dispatch_elevated(
+            &t.runner,
+            Command::PtyTail(ainkrad_proto::v2::PtyTail {
+                terminal: id,
+                lines,
+            }),
+            app.hub.tail_elevation(),
+        )
+        .map_err(|e| failed(&e))?;
+    match tokio::time::timeout(Duration::from_secs(3), d.outcome()).await {
+        Ok(Ok(Body::Result(Reply::PtyTail(x)))) => Ok(Json(TerminalTailView { lines: x.lines })),
+        _ => Err(ApiError::new(
+            axum::http::StatusCode::BAD_GATEWAY,
+            "terminal_failed",
+            "the runner did not answer",
+        )),
+    }
+}
 #[utoipa::path(post,path="/api/v1/terminals/{id}/signal",operation_id="signalTerminal",tag="terminals",request_body=TerminalSignal,params(("id"=String,Path)),responses((status=204,description="The signal was delivered")))]
 pub async fn signal(
     State(app): State<App>,
@@ -1248,6 +1400,9 @@ pub async fn signal(
     };
     if !ainkrad_proto::v2::SIGNALS.contains(&req.signal.as_str()) {
         return ApiError::bad_request("unknown signal").into_response();
+    }
+    if let Err(e) = refuse_unsandboxed(&t) {
+        return e.into_response();
     }
     ensure_monitor(&app, &t);
     let mut d = match app.hub.dispatch_elevated(
@@ -1326,6 +1481,9 @@ pub async fn attach(
         Ok(t) => t,
         Err(e) => return e.into_response(),
     };
+    if let Err(e) = refuse_unsandboxed(&t) {
+        return e.into_response();
+    }
     let Some(slot) = app.terminals.reserve(&id, &me.device.id) else {
         return ApiError::new(
             axum::http::StatusCode::TOO_MANY_REQUESTS,
@@ -1354,11 +1512,6 @@ pub async fn attach(
     if let Err(e) = event(&app, "terminal.attached", &id, &me.device.id).await {
         return e.into_response();
     }
-    let elevation = app
-        .auth
-        .session(&me.session, &me.device.id, app.clock.unix())
-        .and_then(|s| s.elevated_until)
-        .unwrap_or(app.clock.unix());
     let terminal_id = id.clone();
     let by_device = me.device.id.clone();
     let from = q.after.unwrap_or(0);
@@ -1373,7 +1526,6 @@ pub async fn attach(
                 t.runner,
                 terminal_id,
                 by_device,
-                elevation,
                 revoked,
                 rescoped,
                 slot,
@@ -1389,7 +1541,6 @@ async fn stream(
     runner: String,
     terminal: String,
     by_device: String,
-    elevation: i64,
     revoked: impl std::future::Future<Output = ()>,
     rescoped: impl std::future::Future<Output = ()>,
     _slot: AttachSlot,
@@ -1405,10 +1556,21 @@ async fn stream(
     touch(&app, &terminal).await;
     tokio::pin!(revoked);
     tokio::pin!(rescoped);
-    let expiry = tokio::time::sleep(Duration::from_secs(
-        elevation.saturating_sub(app.clock.unix()).max(0) as u64,
-    ));
-    tokio::pin!(expiry);
+    // The app unlock ends (the Mac locked or slept, the app quit, or no heartbeat): the socket
+    // closes within 2 s (E1 review: a shell must not outlive the unlock that opened it).
+    let lapse = async {
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            if app
+                .auth
+                .unlocked_until(&by_device, app.clock.unix())
+                .is_none()
+            {
+                break;
+            }
+        }
+    };
+    tokio::pin!(lapse);
     // A send to a client that stopped reading is bounded, so revoke, rescope and expiry are
     // always polled again within it (spec §4.7: 5 s).
     let cap = app.hub.config.send_timeout.min(Duration::from_secs(4));
@@ -1424,7 +1586,7 @@ async fn stream(
         biased;
         ()=&mut revoked=>{close_socket(&mut socket,4001,"revoked",cap).await;break},
         ()=&mut rescoped=>{close_socket(&mut socket,4003,"scope changed",cap).await;break},
-        ()=&mut expiry=>{close_socket(&mut socket,4003,"step-up expired",cap).await;break},
+        ()=&mut lapse=>{close_socket(&mut socket,4003,"unlock ended",cap).await;break},
         next=d.next()=>match next{Some(body)=>{
                 if let Some(t)=&tap{match &body{
                     Body::Output(o)=>{t.output(at,&o.data);at=at.saturating_add(b64_len(&o.data))}
@@ -1477,7 +1639,7 @@ async fn send(s: &mut WebSocket, f: Frame, cap: Duration) -> Result<(), ()> {
         .map_err(|_| ())?
         .map_err(|_| ())
 }
-async fn close_socket(s: &mut WebSocket, code: u16, reason: &str, cap: Duration) {
+pub(super) async fn close_socket(s: &mut WebSocket, code: u16, reason: &str, cap: Duration) {
     let close = s.send(Message::Close(Some(CloseFrame {
         code,
         reason: reason.into(),
@@ -1497,6 +1659,15 @@ mod tests {
     }
 
     /// M5: a client's credit is never forwarded, and oversized or invalid frames are dropped.
+    /// L4: a terminal's screen is read once a second at most; another terminal is not held back.
+    #[test]
+    fn the_screen_tail_is_rate_limited_per_terminal() {
+        let r = Rooms::default();
+        assert!(r.tail_due("t_a"));
+        assert!(!r.tail_due("t_a"));
+        assert!(r.tail_due("t_b"));
+    }
+
     #[test]
     fn client_frames_are_filtered() {
         assert!(client_frame(&typed("ls\n")));

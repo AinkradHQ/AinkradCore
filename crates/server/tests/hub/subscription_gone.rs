@@ -165,7 +165,7 @@ async fn deleting_the_account_kills_the_live_sessions_holding_its_token() {
     });
     expect_kill(&mut w.fake, &row.id).await;
     del.await.unwrap().unwrap();
-    killed("the subscription account was deleted", &w).await;
+    killed("the account was deleted", &w).await;
 }
 
 #[tokio::test]
@@ -196,4 +196,42 @@ async fn an_account_disabled_after_the_live_check_and_before_the_lease_leaves_no
         0,
         "the lease it wrote was revoked"
     );
+}
+
+#[tokio::test]
+async fn deleting_a_gateway_account_kills_the_live_sessions_holding_its_key() {
+    let mut w = up("gw-kill-del").await;
+    let now = w.core.app.clock.now();
+    let runners = [w.runner.clone()];
+    let new = ainkrad_core_server::store::accounts::NewAccount {
+        provider: "anthropic",
+        label: "api-main",
+        value: "throwaway-gateway-value-3c9e1a",
+        runners: &runners,
+        cap: None,
+    };
+    let sealer = w.core.app.secrets.as_deref().unwrap();
+    let key = ainkrad_core_server::store::accounts::create_by(
+        &w.core.app.pool,
+        sealer,
+        &new,
+        "key",
+        &w.runner,
+        AuditActor::System,
+        &now,
+    )
+    .await
+    .unwrap();
+    let held = [sessions::SessionSecret {
+        name: key.secret_name.clone(),
+        var: "ANTHROPIC_API_KEY".to_owned(),
+    }];
+    let row = make(&w, "claude", &held, None).await;
+    let (app, id, by) = (w.core.app.clone(), key.id, w.runner.clone());
+    let del = tokio::spawn(async move {
+        service::subscription::delete(&app, id, &by, AuditActor::System).await
+    });
+    expect_kill(&mut w.fake, &row.id).await;
+    del.await.unwrap().unwrap();
+    killed("the account was deleted", &w).await;
 }

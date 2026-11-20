@@ -37,10 +37,12 @@ import kotlinx.serialization.Contextual
  * @param account The account the session holds, whatever its delivery (an API key or a subscription).
  * @param agent The opaque agent id the create named (the key of its chain binding).
  * @param attempt Which attempt of its run it is, from 0.
+ * @param canSetEffort Whether its effort can be set (`effort` on `createAgentSession` or `setAgentSessionMode`): its harness takes one (Claude, Codex) and its runner relays it.
  * @param canStopSubagents Whether one sub-agent of it (a running `Task`/`Agent` tool call) can be stopped on its own with `stopAgentSubagent`: its harness can (Claude Code) and its runner relays it.
  * @param chain The chain as it was when the session began (an edit never moves a running run).
  * @param chainId The chain the run draws its accounts from; absent for a session that names its account itself or uses the runner's own login.
  * @param chainPos The entry of `chain` the run sits on, from 0.
+ * @param effort Its effort level now (`low`, `medium`, `high`, `max`), from the create or the latest `setAgentSessionMode`; absent: the harness's own default.
  * @param endedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param failedOverTo The attempt that replaced this one.
  * @param failoverClass Why the run was moved off this attempt (`rate_limited`, `quota`, `auth`, `budget_pool`, …). An ended run's last attempt says in `outcome.failover` (`{result, why, reasons}`) why it could not move on. Admin only.
@@ -52,6 +54,8 @@ import kotlinx.serialization.Contextual
  * @param live A live conversation (`createAgentSession`'s `live`): the state is `waiting` between answers.
  * @param model 
  * @param outcome Once over: `{\"kind\": \"succeeded\" | \"failed\" | \"cancelled\" | \"token_cap\" | \"stalled\" | \"lost\", \"reason\": …}`.
+ * @param placeReason Why the Core placed it where it runs (E15): `core`, `overflow` (the Core was full) or `pinned` (a runner-bound login); absent for a session placed before E15.
+ * @param placedOn The name of the machine it runs on (`runner` is its id), for \"Ran on X\".
  * @param plan Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`).
  * @param policy Its permission mode now: `ask`, `accept_edits` or `sandboxed` (the create's `policy.mode`, or the latest `setAgentSessionMode`).
  * @param projectId The project it was started for (`createAgentSession` with `project_id`): its workspace is that project's repos, cloned from the Core's copies. Absent for any other session.
@@ -114,6 +118,10 @@ data class AgentSession (
     @SerialName(value = "attempt")
     val attempt: kotlin.Long? = null,
 
+    /* Whether its effort can be set (`effort` on `createAgentSession` or `setAgentSessionMode`): its harness takes one (Claude, Codex) and its runner relays it. */
+    @SerialName(value = "can_set_effort")
+    val canSetEffort: kotlin.Boolean? = null,
+
     /* Whether one sub-agent of it (a running `Task`/`Agent` tool call) can be stopped on its own with `stopAgentSubagent`: its harness can (Claude Code) and its runner relays it. */
     @SerialName(value = "can_stop_subagents")
     val canStopSubagents: kotlin.Boolean? = null,
@@ -129,6 +137,10 @@ data class AgentSession (
     /* The entry of `chain` the run sits on, from 0. */
     @SerialName(value = "chain_pos")
     val chainPos: kotlin.Long? = null,
+
+    /* Its effort level now (`low`, `medium`, `high`, `max`), from the create or the latest `setAgentSessionMode`; absent: the harness's own default. */
+    @SerialName(value = "effort")
+    val effort: kotlin.String? = null,
 
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "ended_at")
@@ -172,6 +184,14 @@ data class AgentSession (
     /* Once over: `{\"kind\": \"succeeded\" | \"failed\" | \"cancelled\" | \"token_cap\" | \"stalled\" | \"lost\", \"reason\": …}`. */
     @Contextual @SerialName(value = "outcome")
     val outcome: kotlin.Any? = null,
+
+    /* Why the Core placed it where it runs (E15): `core`, `overflow` (the Core was full) or `pinned` (a runner-bound login); absent for a session placed before E15. */
+    @SerialName(value = "place_reason")
+    val placeReason: kotlin.String? = null,
+
+    /* The name of the machine it runs on (`runner` is its id), for \"Ran on X\". */
+    @SerialName(value = "placed_on")
+    val placedOn: kotlin.String? = null,
 
     /* Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`). */
     @SerialName(value = "plan")

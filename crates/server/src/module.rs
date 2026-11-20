@@ -211,6 +211,14 @@ pub trait Module: Send + Sync + 'static {
         &[]
     }
 
+    /// `(method, path template)` of the module's routes that need the **app unlock** (E1-3, D-6),
+    /// relative to `/modules/<id>/v1`: the app's one Touch ID at open, held until the Mac locks
+    /// or sleeps or the app quits (`Auth::unlock`). No per-action prompt. A write listed here is
+    /// classified like a `non_destructive` one. None by default.
+    fn needs_unlock(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+
     /// The module's writes (POST, PUT, PATCH, DELETE) that deliberately need no step-up. `None`
     /// (the default) leaves the classification unchecked. `Some(list)` makes `mount` refuse the
     /// module unless every documented write is in `destructive` XOR this list, so a new write
@@ -452,13 +460,24 @@ pub(crate) fn validate(m: &dyn Module) {
                     assert!(
                         !write
                             || listed(m.destructive(), method, template)
-                            || listed(plain, method, template),
+                            || listed(plain, method, template)
+                            || listed(m.needs_unlock(), method, template),
                         "module {id}: write {method} {template} is not classified: add it to \
                          destructive or non_destructive"
                     );
                 }
             }
         }
+    }
+    for (method, template) in m.needs_unlock() {
+        assert!(
+            legal_template(template)
+                && !m
+                    .destructive()
+                    .iter()
+                    .any(|(m2, t2)| m2.eq_ignore_ascii_case(method) && t2 == template),
+            "module {id}: bad or destructive needs_unlock {method} {template}"
+        );
     }
     let mut token = HashSet::new();
     for r in m.token_routes() {

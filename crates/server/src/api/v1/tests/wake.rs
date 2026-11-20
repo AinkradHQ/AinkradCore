@@ -56,7 +56,7 @@ async fn count(fx: &Fx, sql: &'static str) -> i64 {
 }
 
 #[tokio::test]
-async fn a_wake_needs_agent_and_a_step_up_and_leaves_no_text_in_the_audit_log() {
+async fn a_wake_needs_agent_and_the_app_unlock_and_leaves_no_text_in_the_audit_log() {
     let fx = fx().await;
     scheduled(&fx).await;
     let vm = super::secrets::runner(&fx, "vm").await;
@@ -72,7 +72,7 @@ async fn a_wake_needs_agent_and_a_step_up_and_leaves_no_text_in_the_audit_log() 
     let r = call(&fx, &plain, &uri, json!({})).await;
     assert_eq!(
         (r.0, r.1["code"].as_str()),
-        (StatusCode::FORBIDDEN, Some("step_up_required"))
+        (StatusCode::FORBIDDEN, Some("unlock_required"))
     );
     assert_eq!(count(&fx, "SELECT count(*) FROM core_job_runs").await, 0);
 

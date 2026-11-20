@@ -35,6 +35,9 @@ pub struct KindCapability {
     /// `read` or `write`: a write capability is only ever granted by naming it.
     pub class: String,
     pub write: bool,
+    /// One plain sentence under the title, for the "What may your assistant do" step.
+    #[schema(required = false)]
+    pub summary: Option<String>,
 }
 
 /// A key of the resource limit a grant may carry.
@@ -59,6 +62,32 @@ pub struct ConnectionKind {
     pub configured: bool,
     /// GitHub: where the person installs the GitHub App to choose repositories, when it is set up.
     pub install_url: Option<String>,
+}
+
+/// One thing on a connection a grant's limit can name, for the picker (step "Which repositories").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+pub struct ConnectionResource {
+    /// What a grant's limit names: `owner/name`, a project or team key, a Slack channel id, a Teams
+    /// `team/channel` key. Send it back as it is.
+    pub id: String,
+    /// What the person reads.
+    pub name: String,
+    /// A short second line: who or what it is (a project key, "14 people", the team).
+    #[schema(required = false)]
+    pub detail: Option<String>,
+    /// When it last changed, when the service says (a GitHub repository's last push).
+    #[schema(required = false)]
+    pub updated_at: Option<Timestamp>,
+}
+
+/// The things a connection can reach, as the service lists them now.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ConnectionResources {
+    /// The kind's limit key the ids belong to (`repos`, `projects`, `teams`, `channels`).
+    pub key: String,
+    pub resources: Vec<ConnectionResource>,
+    /// The service has more than was read: type in the search to narrow it.
+    pub truncated: bool,
 }
 
 /// What someone may do with a connection.

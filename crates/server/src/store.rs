@@ -14,12 +14,15 @@ use sqlx::{AssertSqlSafe, Transaction};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 pub mod account_keys;
+pub mod account_models;
 pub mod accounts;
 pub mod agents;
 pub mod alloc;
+pub mod approval_rules;
 pub mod attachments;
 pub mod audit;
 mod backup;
+pub mod bound;
 pub mod budgets;
 pub mod chains;
 pub mod connections;
@@ -37,11 +40,13 @@ pub mod placement;
 pub mod pools;
 pub mod prices;
 pub mod project_secrets;
+pub mod project_usage;
 pub mod projects;
 pub mod provider_rules;
 mod provider_url;
 pub mod providers;
 pub mod redact;
+pub mod run_configs;
 pub mod run_specs;
 pub mod runs;
 pub mod secret_groups;
@@ -184,6 +189,10 @@ pub async fn connect(path: &Path) -> Result<SqlitePool, sqlx::Error> {
         e => sqlx::Error::Configuration(Box::new(e)),
     })?;
     kinds::register_platform(&pool).await?;
+    // 0056 leaves its converted limits to be audited (SQL cannot write the hash-chained log).
+    accounts::audit_retired_limits(&pool)
+        .await
+        .map_err(|e| sqlx::Error::Configuration(e.to_string().into()))?;
     Ok(pool)
 }
 

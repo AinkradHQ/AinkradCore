@@ -238,6 +238,8 @@ async fn write_budget(
         period: b.period.as_str(),
         token_cap: b.token_cap,
         usd_cap_micros: b.usd_cap_micros,
+        // E7: a message cap is a Core budget field; Citadel's budgets do not set one.
+        message_cap: None,
         warn_at_percent: Some(i64::from(b.warn_at_percent)),
         hard_stop: b.hard_stop,
     };

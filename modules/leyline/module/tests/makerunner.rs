@@ -99,6 +99,7 @@ async fn fx() -> Fx {
     let admin = enroll(&app, "admin", "device", &scopes).await;
     let session = admin.session.lock().unwrap().clone().unwrap();
     app.auth.elevate(&session, &admin.id, clock.unix() + 3600);
+    admin.unlock(&app.auth, clock.unix() + 3600);
     let laptop = enroll(&app, "laptop", "device", &scopes).await;
     let runner = enroll(&app, "runner-1", "runner", &["runner"]).await;
     Fx {
@@ -585,12 +586,12 @@ async fn refusals_come_before_any_invite() {
         (s, &b["code"]),
         (StatusCode::CONFLICT, &json!("host_not_trusted"))
     );
-    // A step-up is needed.
+    // The app unlock is needed (not a step-up).
     trust_row(&fx, &h, &fp('A'), "trusted").await;
     let (s, b) = make(&fx, &fx.laptop, &h).await;
     assert_eq!(
         (s, &b["code"]),
-        (StatusCode::FORBIDDEN, &json!("step_up_required"))
+        (StatusCode::FORBIDDEN, &json!("unlock_required"))
     );
     // A device without the runner scope cannot make an invite.
     let tablet = enroll(&fx.app, "tablet", "device", &["admin", "terminal"]).await;
@@ -598,6 +599,7 @@ async fn refusals_come_before_any_invite() {
     fx.app
         .auth
         .elevate(&session, &tablet.id, SystemClock.unix() + 3600);
+    tablet.unlock(&fx.app.auth, SystemClock.unix() + 3600);
     let (s, b) = make(&fx, &tablet, &h).await;
     assert_eq!(
         (s, &b["code"]),

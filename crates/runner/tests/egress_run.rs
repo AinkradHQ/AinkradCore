@@ -127,6 +127,8 @@ fn start_request() -> AgentStart {
         gateway: None,
         epoch: 0,
         live: false,
+        folder: None,
+        home: None,
     }
 }
 

@@ -147,6 +147,9 @@ pub struct Session {
     pub(super) login: Option<Arc<super::login::LoginDriver>>, // KAN-441 L2, set with `agent`
     /// The runner policy and tool installs, when this runner serves them.
     control: Option<Arc<super::control::Control>>,
+    /// Heavy jobs and workspace sync (E15-4), where the sandbox works and the runner offers them.
+    job: Option<Arc<super::job::JobDriver>>,
+    sync: Option<Arc<super::sync::SyncDriver>>,
     /// Where wall time comes from: a monotonic clock stands still while the machine sleeps.
     clock: Clock,
     boot: String,
@@ -168,6 +171,8 @@ impl Session {
             design: None,
             login: None,
             control: None,
+            job: None,
+            sync: None,
             clock: Arc::new(SystemTime::now),
             boot: format!("b_{}", key::b64(&key::random::<16>())),
             core_boot: None,
@@ -211,6 +216,18 @@ impl Session {
     /// Offers the `control` driver too (the runner policy and tool installs).
     pub fn with_control(mut self, control: Arc<super::control::Control>) -> Self {
         self.control = Some(control);
+        self
+    }
+
+    /// Offers the `job` driver too (E15-4).
+    pub fn with_job(mut self, job: Arc<super::job::JobDriver>) -> Self {
+        self.job = Some(job);
+        self
+    }
+
+    /// Offers the `sync` driver too (E15-4).
+    pub fn with_sync(mut self, sync: Arc<super::sync::SyncDriver>) -> Self {
+        self.sync = Some(sync);
         self
     }
 
@@ -289,6 +306,8 @@ impl Session {
                 .chain(self.run.as_ref().and_then(|r| r.info()))
                 .chain(self.run.as_ref().and_then(|r| r.port_info()))
                 .chain(agent_info)
+                .chain(self.job.as_ref().and_then(|j| j.info()))
+                .chain(self.sync.as_ref().map(|s| s.info()))
                 .chain(self.design.as_ref().map(|d| d.info()))
                 .chain(
                     self.control
@@ -305,6 +324,10 @@ impl Session {
                 avg1: l.avg1,
                 cores: l.cores,
             }),
+            capacity: tokio::task::spawn_blocking(super::capacity::capacity)
+                .await
+                .ok()
+                .map(Box::new),
             ..RunnerHello::default()
         };
         let (welcome, core_spki) = handshake(&mut sink, &mut source, link, hello).await?;
@@ -387,6 +410,10 @@ impl Session {
                                     cores: l.cores,
                                 }),
                                 isolation: self.agent.as_ref().map(|a| a.isolation()),
+                                report: super::aitools::report(),
+                                capacity: tokio::task::spawn_blocking(super::capacity::capacity)
+                                    .await
+                                    .ok(),
                             }),
                         ),
                     )
@@ -532,10 +559,18 @@ impl Session {
                     Ok(slot) => slot,
                     Err(e) => return Some(Body::Error(e)),
                 };
+                if super::aitools::restart_pending() {
+                    return Some(Body::Error(StreamError::new(
+                        ErrorCode::Busy,
+                        "this runner is about to restart to finish an update; try again in a moment",
+                    )));
+                }
+                let working = super::aitools::working();
                 let (cancel_tx, cancel_rx) = oneshot::channel();
                 h.cancel = Some(cancel_tx);
                 let (ssh, done) = (Arc::clone(ssh), self.done_tx.clone());
                 tokio::spawn(async move {
+                    let _working = working;
                     let body = match ssh.run(&req, cancel_rx).await {
                         Ok(result) => Body::Result(Reply::SshExec(result)),
                         Err(e) => Body::Error(e),
@@ -555,7 +590,7 @@ impl Session {
             Command::SshAgentLoad(_) | Command::SshAgentDrop(_) => {
                 self.start_ssh_agent(stream, command)
             }
-            Command::PtyOpen(_) | Command::PtyAttach(_) | Command::PtyClose(_) => {
+            Command::PtyOpen(_) | Command::PtyAttach(_) | Command::PtyClose(_) | Command::PtyTail(_) => {
                 self.start_pty(stream, command, h)
             }
             Command::DesignRender(_)
@@ -578,8 +613,13 @@ impl Session {
             | Command::HistoryRead(_)
             | Command::AgentMode(_)
             | Command::AgentAttach(_)
+            | Command::AgentDocs(_)
             | Command::AgentSubagentStop(_)
-            | Command::GatewayTest(_) => self.start_agent(stream, command),
+            | Command::AgentFiles(_)
+            | Command::AgentRevert(_)
+            | Command::AgentWrite(_)
+            | Command::GatewayTest(_)
+            | Command::GatewayCall(_) => self.start_agent(stream, command),
             Command::RunStart(_)
             | Command::RunStop(_)
             | Command::RunStatus(_)
@@ -618,13 +658,27 @@ impl Session {
                 });
                 None
             }
-            Command::RunnerPolicy(_) | Command::ToolsInstall(_) | Command::ToolsStatus(_) => {
+            Command::RunnerPolicy(_)
+            | Command::ToolsInstall(_)
+            | Command::ToolsStatus(_)
+            | Command::RunnerUpdate(_) => {
                 self.start_control(stream, command)
             }
+            // E15 (protocol 2.1): the `job` and `sync` drivers (E15-4). `gateway-call` is the agent's.
+            Command::JobRun(_)
+            | Command::SyncManifest(_)
+            | Command::SyncPush(_)
+            | Command::SyncPull(_)
+            | Command::SyncWatch(_)
+            | Command::SyncDrop(_) => self.start_e15(stream, command, h),
             // The sign-in driver's, or (an op of a newer Core) `unsupported_command`.
             Command::LoginStart(_)
             | Command::LoginCode(_)
             | Command::LoginCancel(_)
+            | Command::LoginWait(_)
+            | Command::LoginInput(_)
+            | Command::LoginScreen(_)
+            | Command::LoginWipe(_)
             | Command::Unknown => {
                 super::login::dispatch(self.login.as_ref(), stream, command, &self.done_tx)
             }
@@ -633,6 +687,55 @@ impl Session {
 }
 
 impl Session {
+    /// Starts a `job.run` or `sync.*` command (E15-4): a long command with a credited stream of its own.
+    fn start_e15(&self, stream: u64, command: Command, h: &mut Held) -> Option<Body> {
+        let off = |what: &str| {
+            Some(Body::Error(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                format!("{what} is not offered by this runner"),
+            )))
+        };
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        let (inbox_tx, inbox) = mpsc::unbounded_channel();
+        let done = self.done_tx.clone();
+        let window = match command {
+            Command::JobRun(_) => ainkrad_proto::v2::STREAM_WINDOW,
+            _ => ainkrad_proto::v2::SYNC_STREAM_WINDOW,
+        };
+        let flow = super::flow::Flow::new(stream, done.clone(), inbox, cancel_rx, window);
+        let req = match command {
+            Command::JobRun(req) => req,
+            other => {
+                let Some(sync) = self.sync.as_ref() else {
+                    return off(other.op());
+                };
+                let sync = Arc::clone(sync);
+                (h.cancel, h.inbox) = (Some(cancel_tx), Some(inbox_tx));
+                tokio::spawn(async move {
+                    let body = match sync.handle(other, flow).await {
+                        Ok(reply) => Body::Result(reply),
+                        Err(e) => Body::Error(e),
+                    };
+                    let _ = done.send((stream, body));
+                });
+                return None;
+            }
+        };
+        let Some(job) = self.job.as_ref().filter(|j| j.info().is_some()) else {
+            return off("job.run");
+        };
+        let job = Arc::clone(job);
+        (h.cancel, h.inbox) = (Some(cancel_tx), Some(inbox_tx));
+        tokio::spawn(async move {
+            let body = match job.run(req, flow).await {
+                Ok(finished) => Body::Result(Reply::JobRun(finished)),
+                Err(e) => Body::Error(e),
+            };
+            let _ = done.send((stream, body));
+        });
+        None
+    }
+
     /// Starts a `pty.*` command; `None` when a task answers later.
     fn start_pty(&self, stream: u64, command: Command, h: &mut Held) -> Option<Body> {
         let Some(pty) = self.pty.as_ref().filter(|p| p.info().is_some()) else {
@@ -645,6 +748,17 @@ impl Session {
         let ssh = self.ssh.clone();
         let (cancel_tx, cancel_rx) = oneshot::channel();
         h.cancel = Some(cancel_tx);
+        if let Command::PtyTail(req) = command {
+            tokio::spawn(async move {
+                let body = match pty.tail(&req.terminal, req.lines).await {
+                    Ok(t) => Body::Result(Reply::PtyTail(t)),
+                    Err(e) => Body::Error(e),
+                };
+                drop(cancel_rx);
+                let _ = done.send((stream, body));
+            });
+            return None;
+        }
         if let Command::PtyClose(req) = command {
             tokio::spawn(async move {
                 let body = match pty.close(&req.terminal).await {
@@ -824,6 +938,7 @@ impl Session {
                 Command::ToolsStatus(r) => {
                     control.tools.status(&r.operation).map(Reply::ToolsStatus)
                 }
+                Command::RunnerUpdate(r) => control.update(&r).map(Reply::RunnerUpdate),
                 _ => return,
             };
             let body = match answer {
@@ -855,12 +970,17 @@ impl Session {
                 Command::AgentStop(req) => agent.stop(req).map(Reply::AgentStop),
                 Command::AgentMode(req) => agent.mode(req).map(Reply::AgentMode),
                 Command::AgentAttach(req) => agent.attach(req).map(Reply::AgentAttach),
+                Command::AgentDocs(req) => agent.docs(req).await.map(Reply::AgentDocs),
                 Command::AgentSubagentStop(req) => {
                     agent.subagent_stop(req).map(Reply::AgentSubagentStop)
                 }
+                Command::AgentFiles(req) => agent.files(req).map(Reply::AgentFiles),
+                Command::AgentRevert(req) => agent.revert(req).map(Reply::AgentRevert),
+                Command::AgentWrite(req) => agent.write(req).map(Reply::AgentWrite),
                 Command::AgentLimit(req) => agent.limit(req).map(Reply::AgentLimit),
                 Command::AgentTools(req) => agent.tools(&req).await.map(Reply::AgentTools),
                 Command::GatewayTest(req) => agent.gateway_test(req).await.map(Reply::GatewayTest),
+                Command::GatewayCall(req) => agent.gateway_call(req).await.map(Reply::GatewayCall),
                 Command::PlanCheck(req) => agent.plan_check(req).await.map(Reply::PlanCheck),
                 Command::HistoryRead(req) => agent.history_read(req).await.map(Reply::HistoryRead),
                 _ => return,

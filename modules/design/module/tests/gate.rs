@@ -172,7 +172,7 @@ async fn project(fx: &Fx, slug: &str) -> String {
 }
 
 #[tokio::test]
-async fn scopes_and_step_up_follow_the_modules_tables() {
+async fn scopes_follow_the_modules_tables_and_no_write_needs_a_step_up() {
     let fx = fx().await;
     let reader = enroll(&fx.app, "reader", &["read"]).await;
     let laptop = enroll(&fx.app, "laptop", &["admin"]).await; // admin, not elevated
@@ -195,11 +195,9 @@ async fn scopes_and_step_up_follow_the_modules_tables() {
             .starts_with("person:d_")
     );
     let archive = format!("/docs/{id}/archive");
+    // Archiving is a plain write: admin scope without a step-up is enough.
     let (s, b) = call(&fx, &laptop, Method::POST, &archive, None).await;
-    assert_eq!(
-        (s, &b["code"]),
-        (StatusCode::FORBIDDEN, &json!("step_up_required"))
-    );
+    assert_eq!(s, StatusCode::OK, "{b}");
     assert_eq!(
         call(&fx, &fx.admin, Method::POST, &archive, None).await.0,
         StatusCode::OK
@@ -578,10 +576,8 @@ fn the_contract_marks_scope_and_step_up() {
         p["/modules/design/v1/docs"]["post"]["x-ainkrad-scope"],
         "admin"
     );
-    assert_eq!(
-        p["/modules/design/v1/docs/{doc}/archive"]["post"]["x-ainkrad-destructive"],
-        true
-    );
+    // None of the design routes is a danger route now.
+    assert!(p["/modules/design/v1/docs/{doc}/archive"]["post"]["x-ainkrad-destructive"].is_null());
     assert!(p["/modules/design/v1/docs/{doc}"]["patch"]["x-ainkrad-destructive"].is_null());
 }
 

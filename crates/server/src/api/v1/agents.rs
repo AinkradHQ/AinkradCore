@@ -34,12 +34,40 @@ use sched::{AgentWaiting, create_named, listed, page, shown};
 use types::*;
 // Schemas only the spec lists (no route returns them whole).
 pub(super) use types::{AgentEdit, AgentEditChange};
+pub(in crate::api::v1) mod files;
+pub(in crate::api::v1) mod rules;
 
 const MAX_MESSAGE: usize = 16 * 1024;
 
 /// The harnesses that can stop one sub-agent on its own (Claude Code's `stop_task`). Codex's
 /// app-server and OpenCode have no such request, and agy has no sub-agents.
 pub(super) const SUBAGENT_STOP_HARNESSES: &[&str] = &["claude"];
+
+/// The harnesses that take an effort level: Claude's `--effort`, Codex's `model_reasoning_effort`.
+/// OpenCode and agy have no such setting the runner can pass.
+pub(super) const EFFORT_HARNESSES: &[&str] = &["claude", "codex"];
+
+/// A level, checked against what the harness can take and the runner offers; the 400 or 409.
+fn effort_ok(app: &App, runner: &str, harness: &str, level: &str) -> Result<(), ApiError> {
+    if !ainkrad_proto::v2::EFFORTS.contains(&level) {
+        return Err(ApiError::bad_request("effort is low, medium, high or max"));
+    }
+    if !harness.is_empty() && !EFFORT_HARNESSES.contains(&harness) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "effort_unsupported",
+            format!("the {harness} harness has no effort setting"),
+        ));
+    }
+    if !agents::offers(app, runner, ainkrad_proto::v2::CAP_EFFORT) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "unsupported_command",
+            "the runner is too old for an effort level",
+        ));
+    }
+    Ok(())
+}
 
 /// The one harness with a plan mode (Claude Code's `--permission-mode plan`).
 const PLAN_HARNESS: &str = "claude";
@@ -153,6 +181,19 @@ pub struct AgentSession {
     /// Whether one sub-agent of it (a running `Task`/`Agent` tool call) can be stopped on its own
     /// with `stopAgentSubagent`: its harness can (Claude Code) and its runner relays it.
     pub can_stop_subagents: Option<bool>,
+    /// Its effort level now (`low`, `medium`, `high`, `max`), from the create or the latest
+    /// `setAgentSessionMode`; absent: the harness's own default.
+    pub effort: Option<String>,
+    /// Whether its effort can be set (`effort` on `createAgentSession` or `setAgentSessionMode`):
+    /// its harness takes one (Claude, Codex) and its runner relays it.
+    pub can_set_effort: Option<bool>,
+    /// Why the Core placed it where it runs (E15): `core`, `overflow` (the Core was full) or
+    /// `pinned` (a runner-bound login); absent for a session placed before E15.
+    #[schema(required = false)]
+    pub place_reason: Option<String>,
+    /// The name of the machine it runs on (`runner` is its id), for "Ran on X".
+    #[schema(required = false)]
+    pub placed_on: Option<String>,
 }
 
 impl From<Session> for AgentSession {
@@ -177,6 +218,8 @@ impl From<Session> for AgentSession {
             turn_cost_approximate: Some(turn_cost.is_some() && s.turn_cost_approx),
             turn_cost_usd_micros: turn_cost,
             can_stop_subagents: Some(false),
+            effort: s.policy["effort"].as_str().map(str::to_owned),
+            can_set_effort: Some(false),
             workspace: s.workspace,
             id: s.id,
             runner: s.runner,
@@ -214,6 +257,8 @@ impl From<Session> for AgentSession {
             failed_over_to: None,
             failover_class: None,
             skip_pools: None,
+            place_reason: None,
+            placed_on: None,
         }
     }
 }
@@ -253,27 +298,40 @@ pub(in crate::api::v1) async fn terminal_folder(
         ));
     }
     let s = shown(app, me, id).await?.0;
-    let conflict =
-        |code: &'static str, why: &str| Err(ApiError::new(StatusCode::CONFLICT, code, why));
+    // A session holding secrets answers only to its creator or an admin: its folder is no exception.
+    owns_secrets(&one(app, me, id).await?, me)?;
     if s.runner != runner {
-        return conflict(
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
             "session_runner_mismatch",
             "the session runs on another runner",
-        );
+        ));
     }
-    if s.workspace.is_some() && matches!(s.state.as_str(), "ended" | "lost") {
-        return conflict(
+    session_folder(s.workspace.is_some(), &s.state, s.folder.as_deref())
+}
+
+/// The folder session `s` works in, on its runner: what its runner reported, never a path from a
+/// client. 409 `session_folder_gone` for an ended session whose worktree was moved away,
+/// `session_folder_unknown` before its runner has reported one. Shared by terminals and the
+/// session's files.
+pub(in crate::api::v1) fn session_folder(
+    has_workspace: bool,
+    state: &str,
+    folder: Option<&str>,
+) -> Result<String, ApiError> {
+    let conflict = |code: &'static str, why: &str| ApiError::new(StatusCode::CONFLICT, code, why);
+    if has_workspace && matches!(state, "ended" | "lost") {
+        return Err(conflict(
             "session_folder_gone",
             "the session's worktree was moved away when it ended",
-        );
+        ));
     }
-    match s.folder {
-        Some(folder) => Ok(folder),
-        None => conflict(
+    folder.map(str::to_owned).ok_or_else(|| {
+        conflict(
             "session_folder_unknown",
             "the session's runner has not reported its folder yet",
-        ),
-    }
+        )
+    })
 }
 
 /// A session a module drives answers to that module's own routes (its audit, its approvals, its
@@ -325,7 +383,7 @@ pub async fn create(
     Extension(me): Extension<Caller>,
     body: Bytes,
 ) -> ApiResult<AgentSession> {
-    let b: NewAgentSession = parse(&body)?;
+    let mut b: NewAgentSession = parse(&body)?;
     let secrets: Vec<SessionSecret> = b
         .secrets
         .unwrap_or_default()
@@ -344,6 +402,41 @@ pub async fn create(
             ));
         }
     }
+    let mut draws_account = b.chain.is_some() || b.agent.is_some();
+    let mut placed = sched::place_new(
+        &app,
+        b.runner.as_deref(),
+        &b.harness,
+        b.policy.as_ref(),
+        &secrets,
+        draws_account,
+    )
+    .await?;
+    // Naming no chain and no agent, with no account of its own: the default chain serves it.
+    let admin = me.device.scopes.iter().any(|scope| scope == "admin");
+    if !draws_account
+        && let Some(id) = sched::default_chain(
+            &app,
+            &me.device.id,
+            admin,
+            &placed.device,
+            &b.harness,
+            &secrets,
+        )
+        .await?
+    {
+        (b.chain, b.harness, b.model, draws_account) = (Some(id), String::new(), None, true);
+        placed = sched::place_new(
+            &app,
+            b.runner.as_deref(),
+            &b.harness,
+            b.policy.as_ref(),
+            &secrets,
+            draws_account,
+        )
+        .await?;
+    }
+    let runner = placed.device.clone();
     let mut policy = b.policy.unwrap_or_else(|| {
         serde_json::to_value(ainkrad_proto::runner::Policy::default()).expect("a policy serializes")
     });
@@ -352,11 +445,17 @@ pub async fn create(
     {
         m.insert("plan".into(), true.into());
     }
+    if let Some(level) = b.effort.as_deref() {
+        effort_ok(&app, &runner, &b.harness, level)?;
+        if let Some(m) = policy.as_object_mut() {
+            m.insert("effort".into(), level.into());
+        }
+    }
     if policy["plan"] == true {
         if b.harness != PLAN_HARNESS {
             return Err(no_plan());
         }
-        if !agents::offers(&app, &b.runner, ainkrad_proto::v2::OP_AGENT_MODE) {
+        if !agents::offers(&app, &runner, ainkrad_proto::v2::OP_AGENT_MODE) {
             return Err(ApiError::new(
                 StatusCode::CONFLICT,
                 "unsupported_command",
@@ -366,10 +465,8 @@ pub async fn create(
     }
     // An account session (an `acct.*` secret, or a chain/agent the allocator draws one from) runs
     // sandboxed: the Core adds the floor instead of refusing a client that left it out.
-    let draws_account = b.chain.is_some() || b.agent.is_some();
     let policy =
         agents::with_account_floor(policy, draws_account || agents::holds_account(&secrets));
-    let admin = me.device.scopes.iter().any(|scope| scope == "admin");
     // A project's session: the Core builds the workspace; a client may not name a mirror itself.
     // Its launch fetches the project's repos with the project's connection (the owner's token),
     // which `POST /projects/{id}/repos/{repo}/fetch` does under `admin`: so this needs `admin`
@@ -395,7 +492,7 @@ pub async fn create(
         }
     };
     let new = store::NewSession {
-        runner: &b.runner,
+        runner: &runner,
         harness: &b.harness,
         model: b.model.as_deref(),
         // No first message (absent or empty): the session starts waiting for one.
@@ -415,8 +512,8 @@ pub async fn create(
                 ApiError::new(StatusCode::FORBIDDEN, "forbidden_scope", why)
             }
         })?;
-        agents::admit_holding(&app, &b.runner, &b.harness, &policy, &secrets).await?;
-        if let Some(e) = sched::no_account(&new, sched::own_login(&app, &b.runner, &b.harness)) {
+        agents::admit_holding(&app, &runner, &b.harness, &policy, &secrets).await?;
+        if let Some(e) = sched::no_account(&new, sched::own_login(&app, &runner, &b.harness)) {
             return Err(e);
         }
         store::create(&app.pool, &new, BY, &app.clock.now()).await?
@@ -431,6 +528,7 @@ pub async fn create(
         }
         None => s,
     };
+    store::set_place_reason(&app.pool, &s.id, &placed.reason.as_str()).await?;
     // A live conversation, where the runner offers it; titled by its first message.
     let live = b.live.unwrap_or(true) && agents::offers_live(&app, &s.runner);
     let title = s.prompt.as_deref().and_then(store::title_of);
@@ -771,8 +869,8 @@ pub async fn mode(
     let was = s.policy["mode"].as_str().unwrap_or("ask").to_owned();
     let was_plan = s.policy["plan"] == true;
     let mode = match b.policy.as_deref() {
-        None if b.plan.is_none() => {
-            return Err(ApiError::bad_request("send policy, plan or both"));
+        None if b.plan.is_none() && b.effort.is_none() => {
+            return Err(ApiError::bad_request("send policy, plan, effort or more"));
         }
         None => was.clone(),
         Some(m) => m
@@ -792,10 +890,16 @@ pub async fn mode(
             "sandboxed is chosen at start: it decides where the session runs",
         ));
     }
+    if let Some(level) = b.effort.as_deref() {
+        effort_ok(&app, &s.runner, &s.harness, level)?;
+    }
     let mut policy = match &s.policy {
         Value::Object(m) => m.clone(),
         _ => serde_json::Map::new(),
     };
+    if let Some(level) = b.effort.as_deref() {
+        policy.insert("effort".into(), level.into());
+    }
     policy.insert("mode".into(), mode.clone().into());
     // Absent when off: an older runner refuses a policy field it does not know.
     match plan {
@@ -825,8 +929,8 @@ pub async fn mode(
         _ => {}
     }
     store::set_policy(&app.pool, &s.id, &policy).await?;
-    let details = json!({"from": {"policy": was, "plan": was_plan},
-                         "to": {"policy": mode, "plan": plan}});
+    let details = json!({"from": {"policy": was, "plan": was_plan, "effort": s.policy["effort"]},
+                         "to": {"policy": mode, "plan": plan, "effort": policy["effort"]}});
     let action = "agent.mode_changed";
     store::action(&app.pool, &s, BY, action, None, details, &me.device.id).await?;
     shown(&app, &me, &id).await
@@ -929,6 +1033,11 @@ pub async fn decide(
         .await?;
         return shown(&app, &me, &id).await;
     }
+    // "Always for this project": the rule is checked before anything is decided, stored after.
+    let always = match b.approved && b.always == Some(true) {
+        true => Some(rules::derived(&app, &s, &request).await?),
+        false => None,
+    };
     let cmd = Command::AgentDecide(AgentDecide {
         session: s.id.clone(),
         request: request.clone(),
@@ -936,7 +1045,14 @@ pub async fn decide(
         reply: b.reply,
     });
     tell(&app, &s, cmd, &me).await?;
-    let details = json!({"request": request, "approved": b.approved});
+    let mut details = json!({"request": request, "approved": b.approved});
+    if let Some((project, tool, pattern)) = always {
+        let now = app.clock.now();
+        let by = &me.device.id;
+        let rule = crate::store::approval_rules::add(&app.pool, project, &tool, &pattern, by, &now)
+            .await?;
+        details["always_rule"] = json!(rule.id);
+    }
     let kind = Some("agent.approval_decided");
     store::action(
         &app.pool,

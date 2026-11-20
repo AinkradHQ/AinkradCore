@@ -148,6 +148,7 @@ async fn a_panic_in_the_task_still_removes_the_scratch_dir_and_the_slot() {
         driver: Arc::clone(&d),
         id: "l_p".to_owned(),
         scratch: scratch.clone(),
+        home: None,
     };
     let task = tokio::spawn(async move {
         let _guard = guard;

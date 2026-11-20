@@ -9,8 +9,9 @@ use ainkrad_core_server::store::{accounts, pools};
 use super::login::{TOKEN, W, refusal, up};
 
 #[test]
-fn a_sign_in_start_needs_a_step_up_and_its_code_a_read_or_cancel_does_not() {
-    assert!(declared_destructive("POST", "/api/v1/accounts/logins"));
+fn a_sign_in_start_is_an_admin_write_and_no_login_route_is_on_the_danger_list() {
+    // E1: the danger list is the D-4 set; a sign-in is gated by `admin`, not a per-action step-up.
+    assert!(!declared_destructive("POST", "/api/v1/accounts/logins"));
     assert_eq!(declared("POST", "/api/v1/accounts/logins"), Some("admin"));
     for (m, t) in [
         ("POST", "/api/v1/accounts/logins/{id}/code"),

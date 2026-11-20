@@ -43,8 +43,10 @@ use tokio::sync::{Notify, mpsc};
 use crate::{Answer, Control, Executor, Job, Report};
 
 mod attach;
+mod files;
 pub mod secrets;
 use secrets::{Delivered, Redeem};
+mod docs;
 mod front;
 mod gw;
 mod history;
@@ -97,6 +99,46 @@ pub struct AgentConfig {
     /// Where the claude harness keeps its sessions (`~/.claude/projects`); the one folder
     /// `history.read` may read.
     pub history_root: Option<PathBuf>,
+    /// `--workspace-root`: the Core host's built-in runner, whose sessions work in the folder the
+    /// Core names (`AgentStart::folder`) beneath it.
+    pub workspace_root: Option<PathBuf>,
+}
+
+/// `folder` (an `AgentStart::folder`) when it is `session`'s own place beneath `root`:
+/// `<root>/u/<n>/s/<session>` or `<root>/p/<n>/s/<session>`, nothing else.
+pub(crate) fn session_folder(
+    root: &std::path::Path,
+    folder: &str,
+    session: &str,
+) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let bad = || {
+        format!(
+            "the session folder is not this session's place under {}",
+            root.display()
+        )
+    };
+    let path = std::path::Path::new(folder);
+    let rest = path.strip_prefix(root).map_err(|_| bad())?;
+    let parts: Vec<&str> = rest
+        .components()
+        .map(|c| match c {
+            Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect::<Option<_>>()
+        .ok_or_else(bad)?;
+    match parts.as_slice() {
+        [kind, n, "s", id]
+            if matches!(*kind, "u" | "p")
+                && !n.is_empty()
+                && n.bytes().all(|b| b.is_ascii_digit())
+                && *id == session =>
+        {
+            Ok(path.to_path_buf())
+        }
+        _ => Err(bad()),
+    }
 }
 
 /// `slots` for `harness`, cut to one where its runs share state. agy reads its MCP config
@@ -124,6 +166,7 @@ impl AgentConfig {
             plan_limit: true,
             history_read: false,
             history_root: None,
+            workspace_root: None,
         }
     }
 }
@@ -202,6 +245,8 @@ trait Harness: Send + Sync {
     fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()>;
     fn discard_agent_workspaces(&self, name: &str, prefix: bool, keep: &[String]);
     fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream);
+    fn set_job_shims(&self, socks: Arc<super::jobsock::JobSocks>, bin: PathBuf);
+    fn set_session_folder(&self, session: &str, folder: Option<PathBuf>);
     fn work_dir(&self, job: &Job) -> Option<PathBuf>;
 }
 
@@ -251,6 +296,12 @@ impl<E: Executor> Harness for E {
     }
     fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream) {
         Executor::set_mirror_upstream(self, up);
+    }
+    fn set_job_shims(&self, socks: Arc<super::jobsock::JobSocks>, bin: PathBuf) {
+        Executor::set_job_shims(self, socks, bin);
+    }
+    fn set_session_folder(&self, session: &str, folder: Option<PathBuf>) {
+        Executor::set_session_folder(self, session, folder);
     }
     fn work_dir(&self, job: &Job) -> Option<PathBuf> {
         Executor::work_dir(self, job)
@@ -333,10 +384,16 @@ pub struct AgentDriver {
     /// Woken on every new entry or state change, for reads.
     changed: Notify,
     next_run: Mutex<i64>,
+    /// Per session, the `.md` files its folder held when its harness started (size, mtime in ns), so
+    /// `agent.docs` lists only what the session made or changed. Also saved in the session's dir
+    /// (`docs-base.json`), so a runner restart keeps it.
+    docs_base: Mutex<HashMap<String, DocsBase>>,
     /// Harness name to version, as probed at start; reported to the Core as `RunnerFacts.tools`.
     versions: BTreeMap<String, String>,
 }
 
+/// A session folder's .md files as (size, mtime ns), by path.
+type DocsBase = HashMap<String, (u64, i64)>;
 /// The one harness with a plan mode (Claude Code's `--permission-mode plan`).
 const PLAN_HARNESS: &str = "claude";
 const NO_PLAN: &str = "only claude has a plan mode";
@@ -376,6 +433,7 @@ impl AgentDriver {
             // Unique across runner processes: a harness names its scratch dirs `run-<id>`, and a
             // run after a restart must never land in a dead session's.
             next_run: Mutex::new(now_ms()),
+            docs_base: Mutex::new(HashMap::new()),
             versions: BTreeMap::new(),
         })
     }
@@ -389,6 +447,12 @@ impl AgentDriver {
     /// How a project repo's copy on the Core is read (`mirror::http_upstream`).
     pub fn with_mirror(self, up: crate::workspace::relay::Upstream) -> Self {
         self.harness.set_mirror_upstream(up);
+        self
+    }
+
+    /// The Core's own runner: sessions get the heavy-job shims (`jobsock`).
+    pub fn with_job_shims(self, socks: Arc<super::jobsock::JobSocks>, bin: PathBuf) -> Self {
+        self.harness.set_job_shims(socks, bin);
         self
     }
 
@@ -440,12 +504,24 @@ impl AgentDriver {
                     &CAP_LIVE,
                     &ainkrad_proto::v2::OP_AGENT_MODE,
                     &ainkrad_proto::v2::OP_AGENT_ATTACH,
+                    &ainkrad_proto::v2::OP_AGENT_DOCS,
                     &ainkrad_proto::v2::OP_AGENT_SUBAGENT_STOP,
+                    &ainkrad_proto::v2::OP_AGENT_FILES,
+                    &ainkrad_proto::v2::OP_AGENT_REVERT,
+                    &ainkrad_proto::v2::OP_AGENT_WRITE,
+                    &ainkrad_proto::v2::CAP_EFFORT,
                 ])
                 .chain(
                     self.config
                         .plan_limit
                         .then_some(&ainkrad_proto::v2::CAP_PLAN_LIMIT),
+                )
+                // E15-0: a runner that can serve the gateway also takes `gateway.call`.
+                .chain(
+                    self.sandbox
+                        .capabilities()
+                        .contains(&CAP_GATEWAY)
+                        .then_some(&ainkrad_proto::v2::CAP_GATEWAY_CALL),
                 )
                 .chain(
                     (self.config.history_read && self.config.history_root.is_some())
@@ -498,6 +574,12 @@ impl AgentDriver {
 
     /// Starts `req`'s session, or answers with the one it already holds (a resent start).
     pub fn start(self: &Arc<Self>, req: AgentStart) -> Result<AgentEvents, StreamError> {
+        if super::aitools::restart_pending() {
+            return Err(refuse(
+                ErrorCode::Busy,
+                "this runner is about to restart to finish an update; try again in a moment",
+            ));
+        }
         if !valid_session(&req.session) {
             return Err(refuse(ErrorCode::InvalidArgs, "a session id is as_…"));
         }
@@ -506,6 +588,14 @@ impl AgentDriver {
                 ErrorCode::InvalidArgs,
                 "session ids starting as_run belong to project runs",
             ));
+        }
+        // A runner-bound account's home key names a dir of this runner: plain, never a path.
+        if req
+            .home
+            .as_deref()
+            .is_some_and(|h| !ainkrad_proto::v2::bound_key_ok(h))
+        {
+            return Err(refuse(ErrorCode::InvalidArgs, "a home key is a plain name"));
         }
         if req.secrets.iter().any(|s| !secrets::valid_var(&s.var)) {
             return Err(refuse(
@@ -549,6 +639,15 @@ impl AgentDriver {
                 "this runner offers no slot for that harness",
             ));
         }
+        // The Core's built-in runner works in the session's place in the canonical workspace. A
+        // runner with no workspace root keeps picking its own folder.
+        let folder = match (&req.folder, &self.config.workspace_root) {
+            (Some(f), Some(root)) => Some(
+                session_folder(root, f, &req.session)
+                    .map_err(|why| refuse(ErrorCode::InvalidArgs, why))?,
+            ),
+            _ => None,
+        };
         let mut all = self.sessions.lock().unwrap();
         // A resent start is answered; an interrupted session is started again; one that ended is
         // started again only by a newer resume (a wake), so a resent resume never runs it twice.
@@ -623,6 +722,7 @@ impl AgentDriver {
         live.meta.epoch = req.epoch;
         live.run = run;
         save_meta(&self.config, &req.session, &live.meta);
+        self.harness.set_session_folder(&req.session, folder);
         let me = Arc::clone(self);
         let session = req.session.clone();
         let task = tokio::spawn(async move { me.work(req, run, resumed).await });
@@ -649,7 +749,13 @@ impl AgentDriver {
             policy: req.policy.clone(),
             issue_key: None,
             instructions: req.instructions.clone(),
-            account: None,
+            account: req.home.as_deref().map(|h| ainkrad_proto::runner::Account {
+                id: 0,
+                label: "bound".to_owned(),
+                config_dir: format!("{}/{h}", ainkrad_proto::v2::BOUND_HOME_DIR),
+                credential_ref: None,
+                credential_env: None,
+            }),
             fallbacks: vec![],
             limits: None,
             resume_session: req.resume.clone(),
@@ -756,6 +862,8 @@ impl AgentDriver {
                 .stopped_before_start(&session, run, workspace_prepared)
                 .await;
         }
+        self.take_docs_baseline(&session, self.harness.work_dir(&job))
+            .await;
         self.harness.session_env(run, Some(env));
         let started = match self.harness.start(&job).await {
             Ok(id) => id,
@@ -805,6 +913,9 @@ impl AgentDriver {
             self.report(&session, r);
         }
         self.harness.session_env(run, None);
+        // The folder goes next: keep what the session wrote for a last import (`agent.docs` serves it).
+        self.keep_final_docs(&session, self.harness.work_dir(&job))
+            .await;
         self.harness.cleanup_agent_workspace(&session, run).await;
         drop(delivered);
         self.end(&session, outcome);
@@ -974,8 +1085,14 @@ impl AgentDriver {
                 approved: req.approved,
                 reply: req.reply.clone(),
             });
-            let entry = json!({"type": "approval_decided", "id": req.request,
+            let mut entry = json!({"type": "approval_decided", "id": req.request,
                                "approved": req.approved});
+            // The Core approving by a project rule says which: kept as the entry's note.
+            if req.approved
+                && let Some(note) = &req.reply
+            {
+                entry["note"] = note.clone().into();
+            }
             push(cfg, &req.session, live, entry);
             Ok(())
         })
@@ -1003,8 +1120,11 @@ impl AgentDriver {
                     "the policy needs more isolation than the session started with",
                 ));
             }
-            let entry = json!({"type": "mode_changed", "mode": req.policy.mode.as_str(),
+            let mut entry = json!({"type": "mode_changed", "mode": req.policy.mode.as_str(),
                                "plan": req.policy.plan});
+            if let Some(effort) = &req.policy.effort {
+                entry["effort"] = effort.clone().into();
+            }
             self.harness
                 .control(live.run, Control::Policy(req.policy.clone()));
             push(cfg, &req.session, live, entry);

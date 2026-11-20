@@ -138,12 +138,14 @@ async fn a_write_runs_inside_the_creators_scopes_and_leaves_origin_and_root() {
 }
 
 #[tokio::test]
-async fn a_write_on_a_step_up_route_is_not_available_unless_it_is_risky() {
+async fn a_session_never_reaches_a_danger_list_route() {
     let fx = fx().await;
-    ops(&fx, &[("cancelAgentSession", Risk::Write)]);
-    let s = session(&fx, &["read", "agent"]).await;
-    let a = json!({"op": "cancelAgentSession", "args": {"id": s.id}});
-    assert_eq!(go(&fx, &s, a).await, (false, "not_available".to_owned()));
+    // The restart is on the danger list (D-4) and needs `admin`, which a session never holds,
+    // even when its creator does (the step-up marks of the session routes are gone with E1).
+    ops(&fx, &[("restartHostService", Risk::Write)]);
+    let s = session(&fx, &["read", "admin"]).await;
+    let a = json!({"op": "restartHostService", "args": {"body": {}}});
+    assert_eq!(go(&fx, &s, a).await, (false, "forbidden_scope".to_owned()));
     // The class and the method must agree: a GET is never a write.
     let fx = self::fx().await;
     ops(&fx, &[("getCoreHealth", Risk::Write)]);
@@ -277,7 +279,7 @@ async fn an_approval_is_single_use_and_bound_to_its_arguments() {
 }
 
 #[tokio::test]
-async fn only_a_device_with_approve_and_a_step_up_can_decide() {
+async fn only_a_device_with_approve_and_the_app_unlock_can_decide() {
     let fx = fx().await;
     ops(&fx, &[("titleAgentSession", Risk::Risky)]);
     let s = session(&fx, &["read", "agent"]).await;
@@ -306,7 +308,7 @@ async fn only_a_device_with_approve_and_a_step_up_can_decide() {
     let (st, body) = decide(&fx, &cold, &s, &id, true).await;
     assert_eq!(
         (st, body["code"].as_str()),
-        (StatusCode::FORBIDDEN, Some("step_up_required"))
+        (StatusCode::FORBIDDEN, Some("unlock_required"))
     );
     let (st, _) = send(
         &fx.app,
@@ -611,5 +613,58 @@ async fn secrets_and_device_or_runner_admin_are_never_callable() {
     // And the committed allow-list holds none of them.
     for a in crate::ops_catalog::allow_list().unwrap() {
         assert!(!hidden.contains(&a.op), "{} is allow-listed", a.op);
+    }
+}
+
+/// A Code Mode session never inherits the person's app unlock: a route that needs it (`UNLOCKED`)
+/// is risky whatever the allow-list calls it, so even a `write` op waits for an approval.
+#[tokio::test]
+async fn an_unlock_only_route_needs_an_approval_even_when_listed_as_a_plain_write() {
+    let fx = fx().await;
+    ops(&fx, &[("createTerminal", Risk::Write)]);
+    let s = session(&fx, &["read", "agent", "terminal"]).await;
+    let approver = fx.enroll("approver", &["read", "agent", "approve"]).await;
+    let open = json!({"op": "createTerminal", "args": {"body": {
+        "runner": s.runner, "size": {"rows": 24, "cols": 80}}}});
+
+    let h = spawn(&fx, &s, open.clone());
+    let id = parked(&fx, &s).await;
+    let held = crate::ops_catalog::pending(&fx.app, &s.id).await.unwrap();
+    assert_eq!(held[0].tool, "ainkrad.createTerminal");
+    let none: i64 = sqlx::query_scalar("SELECT count(*) FROM core_terminals")
+        .fetch_one(&fx.app.pool)
+        .await
+        .unwrap();
+    assert_eq!(none, 0, "nothing ran while it waited");
+    // Denied: refused, plainly.
+    assert_eq!(
+        decide(&fx, &approver, &s, &id, false).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(done(h).await, (false, "approval_denied".to_owned()));
+
+    // Approved: it is allowed through (the runner is not connected here, so the route itself
+    // answers; what matters is that it was dispatched after an approval, not refused for one).
+    let h = spawn(&fx, &s, open);
+    let id = parked(&fx, &s).await;
+    assert_eq!(
+        decide(&fx, &approver, &s, &id, true).await.0,
+        StatusCode::OK
+    );
+    let (_, code) = done(h).await;
+    assert!(
+        !code.starts_with("approval_") && code != "not_available",
+        "{code}"
+    );
+}
+
+/// Every route that needs the unlock is risky in Code Mode, a module's included.
+#[test]
+fn every_unlocked_route_is_risky_in_code_mode() {
+    use crate::api::v1::scopes::{UNLOCKED, needs_unlock};
+    for (m, t) in UNLOCKED {
+        let path = t.replace(['{', '}'], "");
+        let method: Method = m.parse().unwrap();
+        assert!(needs_unlock(&method, &path, &[]), "{m} {t}");
     }
 }

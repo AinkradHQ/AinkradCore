@@ -26,6 +26,7 @@ import kotlinx.serialization.Contextual
  * @param name One line, 1-100 characters.
  * @param slug See `ProjectInfo.slug`; it is the project's public host name.
  * @param description Default empty.
+ * @param runner `auto` (default), `this_mac` or `home_server`.
  */
 @Serializable
 
@@ -41,7 +42,11 @@ data class NewProject (
 
     /* Default empty. */
     @SerialName(value = "description")
-    val description: kotlin.String? = null
+    val description: kotlin.String? = null,
+
+    /* `auto` (default), `this_mac` or `home_server`. */
+    @SerialName(value = "runner")
+    val runner: kotlin.String? = null
 
 ) {
 

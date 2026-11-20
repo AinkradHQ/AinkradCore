@@ -504,6 +504,18 @@ pub async fn apply(
     ev: &AgentEvents,
     now: &str,
 ) -> Result<u64, sqlx::Error> {
+    apply_quiet(pool, id, ev, now, &Default::default()).await
+}
+
+/// [`apply`], but an `approval_request` whose id is in `quiet` raises no `agent.approval_requested`
+/// event: the Core is about to decide it by a project rule, so nobody is asked.
+pub async fn apply_quiet(
+    pool: &SqlitePool,
+    id: &str,
+    ev: &AgentEvents,
+    now: &str,
+    quiet: &std::collections::HashSet<String>,
+) -> Result<u64, sqlx::Error> {
     let mut tx = super::begin_write(pool).await?;
     let last: i64 = sqlx::query_scalar("SELECT last_seq FROM core_agent_sessions WHERE id = ?")
         .bind(id)
@@ -528,7 +540,8 @@ pub async fn apply(
         }
         insert(&mut tx, id, e).await?;
         last = e.seq;
-        if e.body["type"] == "approval_request" {
+        let silent = e.body["id"].as_str().is_some_and(|r| quiet.contains(r));
+        if e.body["type"] == "approval_request" && !silent {
             let payload = json!({"session": id, "request": e.body["id"], "tool": e.body["tool"]});
             emit(&mut tx, "agent.approval_requested", payload).await?;
         }
@@ -574,7 +587,15 @@ pub async fn apply(
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    // E15-2: a built-in runner's folder that is its place in the workspace is the Core's own.
+    let bound = match &ev.folder {
+        Some(f) => crate::workspace::adopt::bind_folder(&mut tx, id, f).await?,
+        None => None,
+    };
     tx.commit().await?;
+    if let Some(folder) = bound {
+        crate::workspace::adopt::baseline(id.to_owned(), folder);
+    }
     Ok(last)
 }
 
@@ -711,6 +732,54 @@ pub async fn subagent_running(
     .bind(call)
     .fetch_one(pool)
     .await
+}
+
+/// Raises `agent.approval_requested` for a request the Core had silenced (`apply_quiet`) and then
+/// could not decide by its rule: it goes to the person after all.
+pub async fn raise_request(pool: &SqlitePool, payload: Value) -> Result<(), sqlx::Error> {
+    let mut tx = super::begin_write(pool).await?;
+    emit(&mut tx, "agent.approval_requested", payload).await?;
+    tx.commit().await
+}
+
+/// The `approval_request` entry `request` of session `id`: its `tool` and `input`.
+pub async fn approval_request(
+    pool: &SqlitePool,
+    id: &str,
+    request: &str,
+) -> Result<Option<Value>, sqlx::Error> {
+    let body: Option<String> = sqlx::query_scalar(
+        "SELECT body FROM core_agent_transcript WHERE session = ?1 \
+           AND json_extract(body, '$.type') = 'approval_request' \
+           AND json_extract(body, '$.id') = ?2 ORDER BY seq DESC LIMIT 1",
+    )
+    .bind(id)
+    .bind(request)
+    .fetch_optional(pool)
+    .await?;
+    Ok(body.and_then(|b| serde_json::from_str(&b).ok()))
+}
+
+/// The file-edit `tool_use` entries of session `id` (they carry `edit`), newest first, at most
+/// 2000, leaving out a call that ended in an error (it changed nothing, or was denied).
+pub async fn file_edits(pool: &SqlitePool, id: &str) -> Result<Vec<Value>, sqlx::Error> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT t.body FROM core_agent_transcript t WHERE t.session = ?1 \
+           AND json_extract(t.body, '$.type') = 'tool_use' \
+           AND json_extract(t.body, '$.edit') IS NOT NULL \
+           AND NOT EXISTS (SELECT 1 FROM core_agent_transcript r WHERE r.session = ?1 \
+             AND json_extract(r.body, '$.type') = 'tool_result' \
+             AND json_extract(r.body, '$.id') = json_extract(t.body, '$.id') \
+             AND json_extract(r.body, '$.status') = 'error') \
+         ORDER BY t.seq DESC LIMIT 2000",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .filter_map(|b| serde_json::from_str(b).ok())
+        .collect())
 }
 
 /// Entries with `seq` above `after`, oldest first, at most `limit`.
@@ -926,6 +995,20 @@ pub async fn wake_with(
 }
 
 /// Marks a just-created client session as a live conversation and gives it its title.
+/// Why the Core placed session `id` where it did (E15 `place_reason`).
+pub async fn set_place_reason(
+    pool: &SqlitePool,
+    id: &str,
+    reason: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE core_agent_sessions SET place_reason = ? WHERE id = ?")
+        .bind(reason)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map(drop)
+}
+
 pub async fn configure(
     pool: &SqlitePool,
     id: &str,

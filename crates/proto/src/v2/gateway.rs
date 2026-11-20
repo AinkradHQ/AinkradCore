@@ -11,9 +11,15 @@ use serde::{Deserialize, Serialize};
 
 pub const OP_AGENT_LIMIT: &str = "agent.limit";
 pub const OP_GATEWAY_TEST: &str = "gateway.test";
+/// One request through a lease for a Core service (E15-0 Decisions): sent to the built-in runner only.
+pub const OP_GATEWAY_CALL: &str = "gateway.call";
 
 /// The command an agent driver lists when its runner can run the gateway (as `egress-filter`).
 pub const CAP_GATEWAY: &str = "gateway";
+/// The command an agent driver lists when its runner takes [`OP_GATEWAY_CALL`].
+pub const CAP_GATEWAY_CALL: &str = "gateway-call";
+/// The most bytes of a `gateway.call` response body the runner returns.
+pub const MAX_GATEWAY_CALL_BYTES: usize = 1024 * 1024;
 
 /// The upstream API dialects the gateway speaks: a closed set, so the route table is code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -154,10 +160,17 @@ pub struct GatewayTest {
     /// authenticates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub test_path: Option<String>,
+    /// Also read the provider's model list (the wire's own, `GET <base>/models` on the OpenAI
+    /// wire) and send back its ids in [`GatewayTested::models`]. A preset's add flow asks for it;
+    /// a runner that predates it ignores it and sends none.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub want_models: bool,
 }
 
 /// The outcome class of an upstream request or test: a status class only, never provider text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum UpstreamStatus {
     Ok,
@@ -169,15 +182,75 @@ pub enum UpstreamStatus {
     RefusedAddress,
     TlsFailed,
     /// A class from a newer runner. Never sent.
+    #[default]
     #[serde(other)]
     Unknown,
 }
 
-/// Runner to Core: the status class and latency of a [`GatewayTest`]; never a body.
+/// Runner to Core: the status class and latency of a [`GatewayTest`], and the model ids it asked
+/// for; never any other part of a body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GatewayTested {
     pub result: UpstreamStatus,
     pub latency_ms: u64,
+    /// The model ids the provider listed, when [`GatewayTest::want_models`] asked and the list was
+    /// read in full: ids only (bounded), never any other part of the body. Provider text: the
+    /// Core filters each id before it keeps one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
+}
+
+/// Core to runner (E15-0): redeem `lease`, run the same dial checks as `gateway.test`, make one
+/// `POST` of `body` to `path` under the upstream's base path, and return the response. No `Debug`.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct GatewayCall {
+    pub lease: String,
+    /// As in [`GatewayGrant`].
+    pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_key: Option<UserKeyDef>,
+    /// Absent reads as no upstream, which the runner refuses (`invalid_args`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<Upstream>,
+    /// The request path under the upstream's base path, e.g. `/v1beta/models/x:generateContent`.
+    pub path: String,
+    /// The JSON request body, as text (already redacted by the Core).
+    pub body: String,
+    /// Absent: the runner's default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+/// The tokens a `gateway.call` used, as the upstream reported them.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(default)]
+pub struct CallUsage {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported_usd_micros: Option<u64>,
+}
+
+/// Runner to Core: the answer to `gateway.call`. `body` is the upstream's response text, at most
+/// [`MAX_GATEWAY_CALL_BYTES`] (longer is `truncated`), only for a status of `ok`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct GatewayCalled {
+    pub result: UpstreamStatus,
+    /// The HTTP status, 0 when none came back.
+    pub http_status: u16,
+    pub body: String,
+    pub truncated: bool,
+    pub usage: CallUsage,
+    pub latency_ms: u64,
+    /// Seconds the upstream asked to wait, for an overload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after: Option<u64>,
 }
 
 /// What a [`GatewayReport`] says.
@@ -269,6 +342,15 @@ impl std::fmt::Debug for GatewayGrant {
     }
 }
 
+impl std::fmt::Debug for GatewayCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatewayCall")
+            .field("host", &self.upstream.as_ref().map(|u| &u.host))
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
 impl std::fmt::Debug for GatewayTest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GatewayTest")
@@ -279,15 +361,19 @@ impl std::fmt::Debug for GatewayTest {
 
 /// Key classes by shape, most specific first, each with the one provider and host it belongs to.
 /// The OpenAI bare `sk-` catch-all is not here: it is the last resort in [`key_host_problem`].
-const KEY_CLASSES: [(&str, &str, &str); 5] = [
+const KEY_CLASSES: [(&str, &str, &str); 6] = [
     ("sk-ant-", "anthropic", "api.anthropic.com"),
     ("AIza", "google", "generativelanguage.googleapis.com"),
+    // Google's newer API keys (`AQ.` then a body with one more dot), for the Gemini API host only.
+    ("AQ.", "google", "generativelanguage.googleapis.com"),
     ("sk-proj-", "openai", "api.openai.com"),
     ("sk-svcacct-", "openai", "api.openai.com"),
     ("sk-admin-", "openai", "api.openai.com"),
 ];
 
-/// A user definition's key shape: the provider, its declared `key_prefix` and its frozen host.
+/// A user definition's key shape: the provider, its declared `key_prefix` and its frozen host. An
+/// empty `prefix` is a preset (D-19): the key has no shape of its own and is bound to the account's
+/// provider and frozen host instead ([`key_host_problem`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserKeyHost<'a> {
     pub provider: &'a str,
@@ -305,6 +391,24 @@ pub fn key_host_problem(
     host: &str,
     user: &[UserKeyHost],
 ) -> Option<&'static str> {
+    // A preset's key has no shape to read a host from: it goes to the account's own frozen host
+    // and nowhere else. It may not look like another provider's key (a built-in class, or a
+    // user definition's declared prefix): that key belongs to its own provider.
+    if let Some(p) = user
+        .iter()
+        .find(|u| u.prefix.is_empty() && u.provider == provider)
+    {
+        let foreign = KEY_CLASSES.iter().any(|c| value.starts_with(c.0))
+            || user
+                .iter()
+                .any(|u| !u.prefix.is_empty() && value.starts_with(u.prefix));
+        if foreign {
+            return Some("the key belongs to another provider");
+        }
+        return (!host.eq_ignore_ascii_case(p.host))
+            .then_some("the key may not be sent to that host");
+    }
+    let user: Vec<&UserKeyHost> = user.iter().filter(|u| !u.prefix.is_empty()).collect();
     let (want_provider, want_host) = match KEY_CLASSES.iter().find(|c| value.starts_with(c.0)) {
         Some(c) => (c.1, c.2),
         None => match user

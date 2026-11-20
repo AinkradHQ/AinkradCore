@@ -86,10 +86,11 @@ async fn each_validation_rule_refuses() {
         pool(&fx, "sub-1", "claude-sub").await,
         pool(&fx, "sub-2", "claude-sub").await,
     );
-    // 1 to 4 entries.
+    // 1 to 16 entries.
     assert_eq!(code(new(p, "c0", &[]).await), "bad_request");
     let five = [spec(a), spec(b), spec(o), spec(g), spec(s1)];
-    assert_eq!(code(new(p, "c5", &five).await), "bad_request");
+    assert_eq!(code(new(p, "c17", &[spec(a); 17]).await), "bad_request");
+    assert!(new(p, "c5", &five).await.is_ok());
     assert!(new(p, "c4", &five[..4]).await.is_ok());
     // No pool twice; the pool must exist.
     assert_eq!(
@@ -97,11 +98,8 @@ async fn each_validation_rule_refuses() {
         "bad_request"
     );
     assert_eq!(code(new(p, "ghost", &[spec(9999)]).await), "not_found");
-    // At most one subscription per chain, but one beside API keys is fine.
-    assert_eq!(
-        code(new(p, "subs", &[spec(s1), spec(s2)]).await),
-        "bad_request"
-    );
+    // Several subscriptions in one chain are fine (the AI order lists every account).
+    assert!(new(p, "subs", &[spec(s1), spec(s2)]).await.is_ok());
     assert!(new(p, "sub-then-key", &[spec(s1), spec(a)]).await.is_ok());
     // The harness, when named, is the pool's own.
     let wrong = EntrySpec {
@@ -128,7 +126,8 @@ async fn each_validation_rule_refuses() {
         ..spec(b)
     };
     assert!(new(p, "priced", &[priced]).await.is_ok());
-    assert_eq!(code(new(p, "unpriced", &[unpriced]).await), "bad_request");
+    // A built-in provider's unlisted model is not refused: the gateway prices it at a flagged default.
+    assert!(new(p, "unpriced", &[unpriced]).await.is_ok());
     assert_eq!(code(new(p, "shapeless", &[shapeless]).await), "bad_request");
     // A subscription's model needs no price.
     let plan = EntrySpec {
@@ -169,12 +168,10 @@ async fn update_runs_the_same_rules_and_keeps_the_old_list_when_refused() {
         pool(&fx, "a", "anthropic").await,
         pool(&fx, "o", "openai").await,
     );
-    let (s1, s2) = (
-        pool(&fx, "s1", "claude-sub").await,
-        pool(&fx, "s2", "claude-sub").await,
-    );
+    let s1 = pool(&fx, "s1", "claude-sub").await;
     let c = make(&fx, "main", &[s1, a]).await;
-    let bad = [spec(s1), spec(s2)];
+    // A pool is in a chain once (several subscriptions are fine since E7: D-18).
+    let bad = [spec(s1), spec(s1)];
     assert_eq!(
         code(ch::update(p, c.id, "main", &bad, "d_x", BY, NOW).await),
         "bad_request"
@@ -298,7 +295,7 @@ async fn the_tables_refuse_what_the_store_would() {
     };
     assert!(ins(0, b).await.is_err(), "duplicate position");
     assert!(ins(1, a).await.is_err(), "duplicate pool");
-    assert!(ins(4, b).await.is_err(), "position past 3");
+    assert!(ins(16, b).await.is_err(), "position past 15");
     assert!(ins(-1, b).await.is_err(), "negative position");
     assert!(ins(1, b).await.is_ok());
     // A second default per user is refused by the index; a RESTRICTed pool by the foreign key.

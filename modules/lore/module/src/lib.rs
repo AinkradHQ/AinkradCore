@@ -21,6 +21,7 @@ mod merge;
 mod notes;
 mod save;
 mod search;
+mod session_docs;
 mod versions;
 
 use std::sync::{Arc, OnceLock};
@@ -109,6 +110,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0007_lore_feed_editor.up.sql"),
         down: include_str!("../migrations/0007_lore_feed_editor.down.sql"),
     },
+    Migration {
+        version: 8,
+        name: "0008_lore_session_docs_e10",
+        up: include_str!("../migrations/0008_lore_session_docs_e10.up.sql"),
+        down: include_str!("../migrations/0008_lore_session_docs_e10.down.sql"),
+    },
 ];
 
 // The trash is reversible (every row is kept for 30 days), so no person's write needs a step-up. The one
@@ -140,6 +147,8 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/notes/{note}", "read"),
     ("GET", "/notes/{note}/backlinks", "read"),
     ("GET", "/search", "read"),
+    ("GET", "/tags", "read"),
+    ("GET", "/session-docs", "read"),
     ("GET", "/notes/{note}/versions", "read"),
     ("GET", "/notes/{note}/versions/{version}", "read"),
     ("GET", "/attachments/{sha}", "read"),
@@ -176,6 +185,8 @@ pub struct Lore {
 #[openapi(
     paths(
         notes::list,
+        notes::tags,
+        session_docs::list,
         notes::create,
         notes::today,
         notes::get,
@@ -211,6 +222,8 @@ pub struct Lore {
     ),
     components(schemas(
         notes::NoteSummary,
+        notes::TagCount,
+        session_docs::SessionDoc,
         notes::NoteView,
         notes::NewNote,
         notes::NotePatch,
@@ -281,6 +294,8 @@ impl Module for Lore {
             .route("/notes/{note}/versions/{version}", get(versions::get))
             .route("/notes/{note}/restore", post(versions::restore))
             .route("/search", get(search::search))
+            .route("/tags", get(notes::tags))
+            .route("/session-docs", get(session_docs::list))
             .route(
                 "/attachments",
                 post(attachments::upload).layer(DefaultBodyLimit::max(attachments::BODY_MAX)),
@@ -393,7 +408,16 @@ impl Module for Lore {
             Schedule::Every(30),
             Arc::new(embed::Embed(self.app.clone(), self.emb.clone())),
         );
+        let docs = Job::new(
+            "session_docs",
+            Schedule::Every(15),
+            Arc::new(session_docs::DocsJob(self.app.clone())),
+        );
         vec![
+            Job {
+                missed: Missed::Skip,
+                ..docs
+            },
             Job {
                 missed: Missed::Skip,
                 ..job

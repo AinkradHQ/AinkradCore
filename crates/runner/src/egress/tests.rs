@@ -496,3 +496,43 @@ fn the_sandbox_env_names_the_socket_the_forwarder_and_the_port() {
     assert_eq!(env[2].1, "47832");
     assert_eq!(EGRESS_PORT, crate::mcp_bridge::FORWARD_PORT + 1);
 }
+
+#[test]
+fn a_jobs_policy_keeps_only_the_hosts_its_session_allows() {
+    // E15 H2: a job from a `filtered` session gets the registry list cut to that session's own.
+    let reg = Policy::parse("", "crates.io,pypi.org,registry.npmjs.org", "443").unwrap();
+    let cut = reg.only_hosts(&["pypi.org".to_owned(), "github.com".to_owned()]);
+    assert!(cut.host_listed("pypi.org"));
+    assert!(!cut.host_listed("crates.io") && !cut.host_listed("github.com"));
+    assert_eq!(cut.host_names(), ["pypi.org"]);
+    assert_eq!(reg.only_hosts(&[]).counts(), (0, 0, 1));
+}
+
+#[test]
+fn an_unset_host_list_is_the_default_and_a_set_one_replaces_it() {
+    let p = Policy::parse("", &hosts_or_default(None), "").unwrap();
+    for h in [
+        "github.com",
+        "codeload.github.com",
+        "objects.githubusercontent.com",
+        "api.github.com",
+        "gitlab.com",
+        "bitbucket.org",
+        "registry.npmjs.org",
+        "crates.io",
+        "pypi.org",
+        "proxy.golang.org",
+        "rubygems.org",
+        "repo1.maven.org",
+    ] {
+        assert!(p.host_listed(h), "{h} missing from the default");
+    }
+    // Loopback, private and metadata space stay denied with the default list.
+    for a in ["127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.169.254"] {
+        assert!(p.check_ip(ip(a), true).is_err(), "{a} allowed");
+    }
+    let admin = Policy::parse("", &hosts_or_default(Some("example.com".into())), "").unwrap();
+    assert!(admin.host_listed("example.com") && !admin.host_listed("github.com"));
+    let none = Policy::parse("", &hosts_or_default(Some(String::new())), "").unwrap();
+    assert!(!none.host_listed("github.com"));
+}

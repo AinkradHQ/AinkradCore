@@ -52,6 +52,10 @@ pub struct Client {
     pub clock_offset: i64,
     /// The step-up key's file (beside the keystore) and where its passphrase comes from.
     pub stepup_file: Option<std::path::PathBuf>,
+    /// The app-unlock token, set by `Client::unlock_with` (a test fixture, or `--unlock` in a
+    /// `test-support` build such as the e2e kit's). A shipped CLI does not unlock: commands that
+    /// need the unlock are refused with a plain message.
+    pub unlock_token: Option<String>,
     pub passphrase: Passphrase,
     /// The `Retry-After` seconds of the last refused request that carried one (a 429's pacing).
     pub retry_after: Option<u64>,
@@ -170,6 +174,30 @@ pub async fn prove(net: &Net, pinned: Option<&str>) -> Result<(Handshake, String
     Ok((h, served))
 }
 
+/// What the CLI says when the Core wants the app unlock: it cannot give one (a routine key must
+/// not unlock), so the sentence says where to go.
+pub const UNLOCK_WORDS: &str = "Terminals open from the Ainkrad app (they need the app unlock)";
+
+/// `unlock_required` in plain words; any other refusal as it was.
+pub fn plain_unlock(err: Error) -> Error {
+    match err {
+        Error::Refused {
+            status,
+            code,
+            server_time,
+            local_time,
+            ..
+        } if code == "unlock_required" => Error::Refused {
+            status,
+            code,
+            message: UNLOCK_WORDS.to_owned(),
+            server_time,
+            local_time,
+        },
+        other => other,
+    }
+}
+
 impl Client {
     pub fn new(net: Net, store: Keystore) -> Self {
         Self {
@@ -178,6 +206,7 @@ impl Client {
             session: None,
             clock_offset: 0,
             stepup_file: None,
+            unlock_token: None,
             passphrase: Passphrase::default(),
             retry_after: None,
         }
@@ -215,6 +244,13 @@ impl Client {
             body,
         }
         .headers(&self.store.key)
+        .into_iter()
+        .chain(
+            session
+                .and(self.unlock_token.clone())
+                .map(|t| ("ainkrad-unlock", t)),
+        )
+        .collect()
     }
 
     /// A signed request with session `-` (`/handshake/session`, `/pair/status`).
@@ -316,9 +352,45 @@ impl Client {
                     elevated = true;
                     self.elevate().await?;
                 }
-                _ => return Err(err),
+                _ => return Err(plain_unlock(err)),
             }
         }
+    }
+
+    /// The app unlock with a given signer, for a test fixture: the same exchange as a step-up with
+    /// `purpose: session` and the V2 message. Keeps the token it is given. The CLI never calls this.
+    #[cfg(feature = "test-support")]
+    pub async fn unlock_with(
+        &mut self,
+        sign: impl Fn(&[u8]) -> Vec<u8>,
+        message: impl Fn(&str, &str) -> Vec<u8>,
+    ) -> Result<(), Error> {
+        let s = self.session().await?;
+        let res = self
+            .signed("POST", "/api/v1/auth/step-up/challenge", &s.id, Vec::new())
+            .await?;
+        let c: Value = parse(&res)?;
+        let challenge = c["challenge"]
+            .as_str()
+            .filter(|c| c.len() == 43)
+            .ok_or_else(|| Error::Protocol("a step-up challenge that is not 32 bytes".into()))?;
+        let proof = b64(&sign(&message(&s.id, challenge)));
+        let body =
+            serde_json::json!({"challenge": challenge, "stepup_sig": proof, "purpose": "session"});
+        let res = self
+            .signed(
+                "POST",
+                "/api/v1/auth/step-up",
+                &s.id,
+                serde_json::to_vec(&body).expect("serialisable"),
+            )
+            .await?;
+        let token = parse::<Value>(&res)?["unlock_token"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| Error::Protocol("an unlock answer without unlock_token".into()))?;
+        self.unlock_token = Some(token);
+        Ok(())
     }
 
     /// Elevates the current session with the step-up key (§8): opens the key (asking for its
@@ -339,6 +411,28 @@ impl Client {
         self.step_up_with(
             |m| key.sign(m),
             |s, c| stepup::message(&core_fp, &device, s, c),
+        )
+        .await
+    }
+
+    /// The app unlock for this command only (`--unlock`, test builds only: `test-support`): the
+    /// same step-up key and passphrase as `elevate`, signing the V2 message with purpose `session`,
+    /// as the app does with its own key. The token lives in this process and is gone when it exits.
+    /// A shipped ctl has no unlock at all.
+    #[cfg(feature = "test-support")]
+    pub async fn unlock(&mut self) -> Result<(), Error> {
+        let path = self.stepup_file.clone().ok_or_else(|| {
+            Error::StepUp("this device has no step-up key, so it cannot unlock".into())
+        })?;
+        let (device, core_fp) = (self.store.device_id.clone(), self.store.core_fp.clone());
+        if !path.exists() {
+            return Err(Error::StepUp(stepup::no_key(&path)));
+        }
+        let pass = self.passphrase.read(false).map_err(Error::StepUp)?;
+        let key = stepup::load(&path, &pass, &device, &core_fp).map_err(Error::StepUp)?;
+        self.unlock_with(
+            |m| key.sign(m),
+            |s, c| stepup::message_v2(&core_fp, &device, s, c, "session"),
         )
         .await
     }
@@ -446,6 +540,23 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unlock_refusal_is_said_plainly_and_others_are_untouched() {
+        let refused = |code: &str| Error::Refused {
+            status: 403,
+            code: code.into(),
+            message: "technical".into(),
+            server_time: None,
+            local_time: 0,
+        };
+        let msg = |e: Error| match e {
+            Error::Refused { message, .. } => message,
+            _ => String::new(),
+        };
+        assert_eq!(msg(plain_unlock(refused("unlock_required"))), UNLOCK_WORDS);
+        assert_eq!(msg(plain_unlock(refused("forbidden_scope"))), "technical");
+    }
 
     #[test]
     fn timestamps_parse() {

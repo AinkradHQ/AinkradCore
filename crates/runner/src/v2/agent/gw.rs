@@ -18,14 +18,14 @@ use std::io::Write;
 use std::sync::Arc;
 
 use ainkrad_proto::v2::{
-    AgentEvents, AgentLimit, CAP_GATEWAY, ErrorCode, GatewayReport, GatewayTest, GatewayTested,
-    StreamError,
+    AgentEvents, AgentLimit, CAP_GATEWAY, ErrorCode, GatewayCall, GatewayCalled, GatewayReport,
+    GatewayTest, GatewayTested, StreamError,
 };
 use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::*;
-use crate::gateway::{Event, check, dial::Dialer, meter::Meter};
+use crate::gateway::{Event, call, check, dial::Dialer, meter::Meter};
 
 /// Unacknowledged reports a session may hold before its gateway stops admitting requests.
 pub(super) const MAX_HELD: usize = 10_000;
@@ -296,6 +296,17 @@ impl AgentDriver {
             .map_err(|e| refuse(ErrorCode::Internal, format!("the gateway test: {e}")))?;
         let dialer = Arc::new(Dialer::new(own).with_total(Duration::from_secs(30)));
         self.gateway_test_with(req, dialer).await
+    }
+
+    /// `gateway.call` (E15-0): redeems the lease, runs the same checks as `gateway.test`, makes the
+    /// one `POST` the Core named and answers with the body and the tokens used.
+    pub async fn gateway_call(&self, req: GatewayCall) -> Result<GatewayCalled, StreamError> {
+        self.offers_gateway()?;
+        let own = crate::egress::host_addresses()
+            .map_err(|e| refuse(ErrorCode::Internal, format!("the gateway call: {e}")))?;
+        call::run(&req, self.redeem.as_ref(), own)
+            .await
+            .map_err(|why| refuse(ErrorCode::InvalidArgs, why))
     }
 
     pub(super) async fn gateway_test_with(

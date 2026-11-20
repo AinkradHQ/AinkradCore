@@ -23,6 +23,8 @@ scan() { # FILE... -> offending lines on stdout, exit 1 if any
     }
     if ($. == 1) { $skip = -B $ARGV; }
     if ($skip) { close ARGV if eof; next; }
+    # The release scan test plants fake values on purpose.
+    if ($ARGV eq "scripts/release/test-scan.sh") { close ARGV if eof; next; }
     my @why;
     my $l = $_;
     unless ($l =~ /version/i) {
@@ -56,6 +58,8 @@ scan() { # FILE... -> offending lines on stdout, exit 1 if any
       next if $dom eq "github.com";
       # OpenSSH names its protocol extensions like `session-bind@openssh.com`: public names, not addresses.
       next if $dom eq "openssh.com";
+      # systemd instance names (ainkrad-update at now.service) and the public contact domain of the project.
+      next if $tld eq "service" || $dom eq "ainkrad.io";
       push @why, "email at $dom";
     }
     for my $d (@deny) { push @why, "denylisted value" if index(lc $l, $d) >= 0; }

@@ -1,0 +1,1 @@
+{"stream_id":1,"kind":"command","seq":0,"payload":{"body":"{}","lease":"l_g","op":"gateway.call","path":"/v1beta/decisions:score","provider":"google","timeout_ms":8000,"upstream":{"auth":"x_goog_api_key","base_path":"","host":"generativelanguage.googleapis.com","wire":"gemini-generate"}}}

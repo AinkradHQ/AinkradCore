@@ -22,6 +22,7 @@ use super::super::{ApiError, ApiResult, BY, Caller};
 use super::{AgentSession, Session, one};
 use crate::agents::{self, Invalid, Refusal};
 use crate::api::App;
+use crate::hardware::place::{self, Placed};
 use crate::scheduler::iso_of_unix;
 use crate::store::agents::{NewSession, SessionSecret};
 use crate::store::chains as ch;
@@ -61,6 +62,10 @@ async fn present(app: &App, v: &Viewer, s: Session) -> Result<Option<AgentSessio
         && agents::offers(app, &s.runner, ainkrad_proto::v2::OP_AGENT_SUBAGENT_STOP);
     let mut out = AgentSession::from(s);
     out.can_stop_subagents = Some(can_stop);
+    out.can_set_effort = Some(
+        super::EFFORT_HARNESSES.contains(&out.harness.as_str())
+            && agents::offers(app, &out.runner, ainkrad_proto::v2::CAP_EFFORT),
+    );
     if v.admin {
         out.agent = sched.agent;
         out.chain_id = sched.chain_id;
@@ -70,6 +75,17 @@ async fn present(app: &App, v: &Viewer, s: Session) -> Result<Option<AgentSessio
     if v.admin {
         out.failover_class = sched.failover_class;
         out.skip_pools = Some(sched.skip_pools);
+    }
+    let placed: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT s.place_reason, d.name FROM core_agent_sessions s \
+         LEFT JOIN core_devices d ON d.id = s.runner WHERE s.id = ?",
+    )
+    .bind(&out.id)
+    .fetch_optional(&app.pool)
+    .await?;
+    if let Some((reason, name)) = placed {
+        out.place_reason = reason;
+        out.placed_on = name;
     }
     out.run = Some(sched.run);
     out.attempt = Some(sched.attempt);
@@ -272,6 +288,17 @@ pub(super) fn own_login(app: &App, runner: &str, harness: &str) -> bool {
 }
 
 pub(in crate::api::v1) fn no_account(new: &NewSession<'_>, own_login: bool) -> Option<ApiError> {
+    needs_account(new.harness, new.secrets, own_login).then(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "no_account",
+            "No account can serve this agent. Add an account and make its pool the default.",
+        )
+    })
+}
+
+/// Whether a plain session of `harness` with `secrets` would have no account to sign in with.
+fn needs_account(harness: &str, secrets: &[SessionSecret], own_login: bool) -> bool {
     const OWN: [&str; 6] = [
         "CLAUDE_CODE_OAUTH_TOKEN",
         "ANTHROPIC_API_KEY",
@@ -280,16 +307,112 @@ pub(in crate::api::v1) fn no_account(new: &NewSession<'_>, own_login: bool) -> O
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
     ];
-    let needs = matches!(new.harness, "claude" | "codex" | "agy");
-    let holds = new
-        .secrets
+    let needs = matches!(harness, "claude" | "codex" | "agy");
+    let holds = secrets
         .iter()
         .any(|s| s.name.starts_with(ACCOUNT_PREFIX) || OWN.contains(&s.var.as_str()));
-    (needs && !holds && !own_login).then(|| {
-        ApiError::new(
+    needs && !holds && !own_login
+}
+
+/// The default chain a request naming no chain and no agent gets (e2e round 1: a fresh Core's
+/// first session): the default of `device`'s user, when the request names no harness or would be
+/// refused `no_account` on `runner`. Only for an admin device (a chain session is admin-only) and
+/// never beside an `acct.*` secret (a pinned account).
+pub(in crate::api::v1) async fn default_chain(
+    app: &App,
+    device: &str,
+    admin: bool,
+    runner: &str,
+    harness: &str,
+    secrets: &[SessionSecret],
+) -> Result<Option<i64>, ApiError> {
+    let pinned = secrets.iter().any(|s| s.name.starts_with(ACCOUNT_PREFIX));
+    let wants =
+        harness.is_empty() || needs_account(harness, secrets, own_login(app, runner, harness));
+    if !admin || pinned || !wants {
+        return Ok(None);
+    }
+    let user = ch::user_of(&app.pool, device).await?;
+    Ok(
+        sqlx::query_scalar("SELECT id FROM core_chains WHERE user_id = ? AND is_default = 1")
+            .bind(user)
+            .fetch_optional(&app.pool)
+            .await?,
+    )
+}
+
+/// Harnesses whose login lives on one runner (codex-sub, Antigravity): a session of one stays there.
+const RUNNER_BOUND: [&str; 2] = ["codex", "agy"];
+
+/// Where a new session runs (E15 §3.3). The request's `runner` is deprecated and ignored, except
+/// for a runner-bound login ([`RUNNER_BOUND`] using the login that runner reports, no account, no
+/// chain), which stays pinned. Otherwise the Core places it on itself or, when full, an overflow
+/// runner that can take it. With no Core to place on (no built-in runner online and no qualifying
+/// runner) the named runner is used as before, else 409 `runner_offline`.
+pub(super) async fn place_new(
+    app: &App,
+    named: Option<&str>,
+    harness: &str,
+    policy: Option<&serde_json::Value>,
+    secrets: &[SessionSecret],
+    draws_account: bool,
+) -> Result<Placed, ApiError> {
+    let views = crate::hardware::view::views(app).await?;
+    // M9: a pinned session never goes to a paused or degraded runner. An offline one is pinned as
+    // before: the request is checked first (a 400/403 is never hidden behind a 409), and the session
+    // then waits `starting` while its runner is away, as `createAgentSession` documents.
+    let pin = |r: &str| match place::pin_refusal(&views, r) {
+        None | Some("offline") => Ok(place::pinned(r)),
+        Some(why) => Err(ApiError::new(
             StatusCode::CONFLICT,
-            "no_account",
-            "No account can serve this agent. Add an account and make its pool the default.",
-        )
-    })
+            "runner_paused",
+            format!("that runner takes no new work now ({why})"),
+        )),
+    };
+    if let Some(r) = named
+        && !draws_account
+        && RUNNER_BOUND.contains(&harness)
+        && !agents::holds_account(secrets)
+        && own_login(app, r, harness)
+    {
+        return pin(r);
+    }
+    let policy = agents::with_account_floor(
+        policy.cloned().unwrap_or_else(|| {
+            serde_json::to_value(ainkrad_proto::runner::Policy::default()).unwrap_or_default()
+        }),
+        draws_account || agents::holds_account(secrets),
+    );
+    // Which devices could take it now: the same checks a create makes on its runner. A session
+    // that draws from a chain names no harness yet, so only the placement rules are asked.
+    let mut fit = std::collections::HashSet::new();
+    let live = app.hub.runners();
+    for v in views.iter().filter(|v| v.online) {
+        let ok = if harness.is_empty() {
+            live.get(&v.device).is_some_and(|r| {
+                r.drivers
+                    .iter()
+                    .any(|d| d.name == ainkrad_proto::v2::AGENT_DRIVER)
+                    && agents::placement_refusal(r, secrets, &policy).is_none()
+            })
+        } else {
+            agents::admit_holding(app, &v.device, harness, &policy, secrets)
+                .await
+                .is_ok()
+        };
+        if ok {
+            fit.insert(v.device.clone());
+        }
+    }
+    match place::place_session(&views, &|d| fit.contains(d)) {
+        Ok(p) => Ok(p),
+        Err(place::NoFit) => match named {
+            Some(r) => pin(r),
+            None => Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "runner_offline",
+                "no hardware is connected to run the session on",
+            )),
+        },
+    }
 }

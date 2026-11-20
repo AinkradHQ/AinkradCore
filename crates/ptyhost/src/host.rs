@@ -447,6 +447,10 @@ impl State {
                 }
             }
             ToHost::Snapshot => self.send(client, self.snapshot()),
+            ToHost::Tail { lines } => {
+                let lines = self.screen.tail(usize::from(lines).min(TAIL_MAX));
+                self.send(client, FromHost::Tail { lines });
+            }
             ToHost::Close { grace_ms } => {
                 if !self.closing && self.exit.is_none() {
                     self.closing = true;
@@ -485,6 +489,9 @@ impl State {
         false
     }
 }
+
+/// The most rows a `tail` answers, each cut to 400 characters by the runner.
+const TAIL_MAX: usize = 20;
 
 fn unix_secs() -> i64 {
     SystemTime::now()

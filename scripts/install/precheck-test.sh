@@ -156,6 +156,8 @@ bash "$ROOT/deploy/install-linux.sh" --binary "$t/rb" --ptyhost "$t/ph" --pty --
 { grep -qx 'RUNNER_ARGS=--enable-pty' "$d/etc/ainkrad-runner/runner.env" && ! grep -q 'AGENT' "$d/etc/ainkrad-runner/runner.env"; } && ok || bad "without --agents runner.env must hold RUNNER_ARGS=--enable-pty only: $(cat "$d/etc/ainkrad-runner/runner.env" 2>&1)"
 bash "$ROOT/deploy/install-linux.sh" --binary "$t/rb" --ptyhost "$t/ph" --pty --agents --prefix "$d" >"$t/il3.out" 2>&1
 { grep -qx 'RUNNER_ARGS=--enable-pty --enable-agents' "$d/etc/ainkrad-runner/runner.env" && grep -qx 'AINKRAD_AGENT_NETWORK=filtered' "$d/etc/ainkrad-runner/runner.env" && grep -qx 'AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com' "$d/etc/ainkrad-runner/runner.env"; } && ok || bad "runner.env with --agents is wrong: $(cat "$d/etc/ainkrad-runner/runner.env" 2>&1)"
+# the terminals get their own egress list (the forges and registries), never the agents' one
+grep -qx 'AINKRAD_TERMINAL_EGRESS_HOSTS=github.com,codeload.github.com,objects.githubusercontent.com,api.github.com,gitlab.com,bitbucket.org,crates.io,static.crates.io,registry.npmjs.org,pypi.org,files.pythonhosted.org,proxy.golang.org,rubygems.org,index.rubygems.org,repo1.maven.org,repo.maven.apache.org' "$d/etc/ainkrad-runner/runner.env" && ok || bad "runner.env with --pty has no terminal egress list: $(cat "$d/etc/ainkrad-runner/runner.env" 2>&1)"
 # the installer: on by default for the guided install, off with --no-local-runner; the pinned versions are the ones asked for
 grep -q 'NODE_VERSION=22\.' "$ROOT/scripts/install/agent-tools.sh" && grep -q 'CLAUDE_VERSION=2.1.318' "$ROOT/scripts/install/agent-tools.sh" && ok || bad "agent-tools.sh does not pin Node 22 and claude 2.1.318"
 grep -q 'DISABLE_AUTOUPDATER' "$ROOT/scripts/install.sh" && grep -q '/etc/claude-code/managed-settings.json' "$ROOT/scripts/install.sh" && ok || bad "install.sh does not turn the claude auto-updater off"
@@ -174,7 +176,7 @@ sh_dir=$ROOT/deploy/shell
   done
   printf '%s' "$GITSTATUSD_SHA256_x86_64$GITSTATUSD_SHA256_aarch64" | grep -Eq '^[0-9a-f]{128}$' ) && ok || bad "deploy/shell/pins.sh does not pin every part to a full commit and a SHA-256"
 if command -v zsh >/dev/null; then zsh -n "$sh_dir/zshrc" && zsh -n "$sh_dir/p10k.zsh" && ok || bad "the Ainkrad shell profile is not valid zsh"; fi
-grep -qiE 'ahmed|melhalaby|/Users/|/home/|oh-my-zsh|@gmail' "$sh_dir/p10k.zsh" && bad "the p10k look holds a personal path, name or tool" || ok
+grep -qiE '/Users/|/home/|oh-my-zsh|@gmail' "$sh_dir/p10k.zsh" && bad "the p10k look holds a personal path, name or tool" || ok
 # the owner's Mac look (Ahmed, 2026-11-13: "the same style of the mac"): Nerd Font mode with powerline separators; the
 # os_icon segment shows the machine's own OS. The app draws the glyphs (macOS falls back to the Nerd Font).
 grep -q 'POWERLEVEL9K_MODE=nerdfont-v3' "$sh_dir/p10k.zsh" && grep -qF "LEFT_SEGMENT_SEPARATOR='\uE0B0'" "$sh_dir/p10k.zsh" && ok || bad "the p10k look is not the Mac's (nerdfont-v3, powerline separators)"

@@ -55,6 +55,11 @@ const SHAPES: &[Shape] = &[
     shape("sk-proj-", "openai_key", 20),
     shape("sk-", "openai_key", 20),
     shape("AIza", "google_key", 30),
+    // Google's newer keys: `AQ.` and a body that may hold a dot (so the mask never stops at one).
+    Shape {
+        body: bearer_byte,
+        ..shape("AQ.", "google_key", 30)
+    },
     shape("github_pat_", "github_token", 20),
     shape("ghp_", "github_token", 30),
     shape("gho_", "github_token", 30),

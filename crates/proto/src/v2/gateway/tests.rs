@@ -168,6 +168,7 @@ fn grants_and_ops_round_trip_and_hide_the_lease() {
         user_key: None,
         upstream: grant.upstream.clone(),
         test_path: None,
+        want_models: false,
     };
     assert!(!format!("{test:?}").contains("secretlease"));
     let cmd = crate::v2::Command::AgentLimit(AgentLimit {
@@ -233,6 +234,7 @@ fn a_test_result_is_a_status_class_and_nothing_else() {
     let ok = GatewayTested {
         result: UpstreamStatus::RefusedAddress,
         latency_ms: 3,
+        models: Vec::new(),
     };
     let json = serde_json::to_value(&ok).unwrap();
     assert_eq!(json["result"], "refused_address");
@@ -243,5 +245,81 @@ fn a_test_result_is_a_status_class_and_nothing_else() {
         .unwrap()
         .result
             == UpstreamStatus::Unknown
+    );
+}
+
+#[test]
+fn a_google_aq_key_is_googles_and_goes_to_googles_host_only() {
+    const AQ: &str = "AQ.Ab8RN6TESTTESTTESTTESTTESTTESTTESTTESTTEST";
+    let host = "generativelanguage.googleapis.com";
+    assert_eq!(key_host_problem(AQ, "google", host, &[]), None);
+    assert!(key_host_problem(AQ, "openai", host, &[]).is_some());
+    assert!(key_host_problem(AQ, "google", "api.openai.com", &[]).is_some());
+    // A user definition may not shadow the shape.
+    assert!(key_prefix_problem("AQ.Ab8RN6").is_some());
+}
+
+/// A preset's key has no shape: it is bound to its provider's frozen host (an empty prefix).
+#[test]
+fn a_presets_key_goes_to_its_frozen_host_only_and_never_looks_like_another_providers() {
+    let groq = [UserKeyHost {
+        provider: "groq",
+        prefix: "",
+        host: "api.groq.com",
+    }];
+    let key = "gsk_TESTTESTTESTTESTTESTTESTTEST";
+    assert_eq!(key_host_problem(key, "groq", "api.groq.com", &groq), None);
+    assert_eq!(
+        key_host_problem(key, "groq", "API.GROQ.COM", &groq),
+        None,
+        "host names compare without case"
+    );
+    for host in [
+        "api.openai.com",
+        "api.groq.com.evil.example",
+        "evil.example",
+        "groq.com",
+    ] {
+        assert!(
+            key_host_problem(key, "groq", host, &groq).is_some(),
+            "{host}"
+        );
+    }
+    // The preset rule applies to the account's own provider only.
+    assert!(key_host_problem(key, "deepseek", "api.groq.com", &groq).is_some());
+    // Another provider's key never goes to a preset's host: a built-in class, or a user prefix.
+    for foreign in [ANT, PROJ, GOOG] {
+        assert!(key_host_problem(foreign, "groq", "api.groq.com", &groq).is_some());
+    }
+    let both = [
+        groq[0],
+        UserKeyHost {
+            provider: "openrouter",
+            prefix: "sk-or-v1-",
+            host: "openrouter.ai",
+        },
+    ];
+    assert!(key_host_problem("sk-or-v1-xTESTTESTTEST", "groq", "api.groq.com", &both).is_some());
+    // A bare `sk-` key (DeepSeek's shape) is allowed under a preset, to its host only, and a
+    // preset entry does not capture a user definition's keys.
+    let deep = [UserKeyHost {
+        provider: "deepseek",
+        prefix: "",
+        host: "api.deepseek.com",
+    }];
+    let sk = "sk-TESTTESTTESTTESTTESTTESTTESTTEST";
+    assert_eq!(
+        key_host_problem(sk, "deepseek", "api.deepseek.com", &deep),
+        None
+    );
+    assert!(key_host_problem(sk, "deepseek", "api.openai.com", &deep).is_some());
+    assert_eq!(
+        key_host_problem(
+            "sk-or-v1-xTESTTESTTEST",
+            "openrouter",
+            "openrouter.ai",
+            &both
+        ),
+        None
     );
 }

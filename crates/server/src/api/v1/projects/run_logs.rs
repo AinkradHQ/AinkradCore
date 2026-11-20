@@ -139,6 +139,17 @@ pub struct LogsQuery {
     pub after: Option<i64>,
     /// At most this many (default and most 500); the WebSocket ignores it.
     pub limit: Option<u32>,
+    /// One of the project's live runs by id (a project can have one per configuration); default
+    /// the newest live run.
+    pub run: Option<String>,
+}
+
+/// Which live run `services` asks about.
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct ServicesQuery {
+    /// One of the project's live runs by id; default the newest live run.
+    pub run: Option<String>,
 }
 
 fn health(h: ServiceHealth) -> &'static str {
@@ -170,11 +181,17 @@ async fn runner_error(app: &App, project: i64, e: LinkError) -> ApiError {
 }
 
 /// The project's live run; 404 when it has none.
-async fn live_run(app: &App, project: i64) -> Result<Option<Run>, ApiError> {
+async fn live_run(app: &App, project: i64, run: Option<&str>) -> Result<Option<Run>, ApiError> {
     projects_store::get(&mut *app.pool.acquire().await?, project)
         .await
         .map_err(ApiError::from)?;
-    Ok(store::live(&app.pool, project).await?)
+    let Some(id) = run else {
+        return Ok(store::live(&app.pool, project).await?);
+    };
+    Ok(store::live_list(&app.pool, project)
+        .await?
+        .into_iter()
+        .find(|r| r.id == id))
 }
 
 /// What masks the project's secrets in a line: the values of its current secrets and the key
@@ -230,13 +247,17 @@ fn page(run: &str, o: RunObserve, red: &Redactor) -> RunLogs {
 
 #[utoipa::path(get, path = "/api/v1/projects/{id}/run/services",
     operation_id = "getProjectRunServices", tag = "projects",
-    params(("id" = String, Path, description = "The project's id")),
+    params(("id" = String, Path, description = "The project's id"), ServicesQuery),
     responses((status = 200, description = "Health, CPU, memory and restarts of each service of \
         the live run, sampled every few seconds on its runner; none when the project is not \
         running. 404 for no such project; 502 `runner_error` when the runner cannot answer",
         body = RunServices)))]
-pub async fn services(State(app): State<App>, Path(id): Path<String>) -> ApiResult<RunServices> {
-    let Some(run) = live_run(&app, num(&id, "project")?).await? else {
+pub async fn services(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    Query(q): Query<ServicesQuery>,
+) -> ApiResult<RunServices> {
+    let Some(run) = live_run(&app, num(&id, "project")?, q.run.as_deref()).await? else {
         return Ok(Json(RunServices {
             run: None,
             services: Vec::new(),
@@ -284,7 +305,7 @@ pub async fn logs(
     Query(q): Query<LogsQuery>,
 ) -> ApiResult<RunLogs> {
     let project = num(&id, "project")?;
-    let Some(run) = live_run(&app, project).await? else {
+    let Some(run) = live_run(&app, project, q.run.as_deref()).await? else {
         return Ok(Json(RunLogs {
             run: None,
             lines: Vec::new(),
@@ -328,7 +349,7 @@ pub async fn logs_ws(
         Ok(p) => p,
         Err(e) => return e.into_response(),
     };
-    let run = match live_run(&app, project).await {
+    let run = match live_run(&app, project, q.run.as_deref()).await {
         Ok(Some(r)) => r,
         Ok(None) => return ApiError::not_found("the project has no live run").into_response(),
         Err(e) => return e.into_response(),

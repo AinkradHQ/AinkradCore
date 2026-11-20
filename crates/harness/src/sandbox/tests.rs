@@ -132,6 +132,20 @@ fn macos_profile_has_no_blanket_network_and_no_unix_sockets() {
     // The only unix socket granted is the DNS resolver's.
     assert_eq!(text.matches("(allow network-outbound (literal").count(), 1);
     assert!(!text.contains("docker") && !text.contains("ssh-agent"));
+    // `allow` keeps the host's loopback open by design (a local dev server, Docker's API on TCP);
+    // `filtered`, the installed default, and `deny` grant no loopback but their own slot ports.
+    assert!(text.contains("(remote ip \"localhost:*\")"));
+    for mode in ["filtered", "deny"] {
+        let mut other = spec.clone();
+        other.env.retain(|(n, _)| n != "AINKRAD_SANDBOX_NETWORK");
+        other
+            .env
+            .push(("AINKRAD_SANDBOX_NETWORK".into(), mode.into()));
+        assert!(
+            !profile(&other, OsStr::new("/bin/true")).contains("localhost:*"),
+            "{mode}"
+        );
+    }
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -147,6 +161,9 @@ fn macos_profile_boots_from_system_sb_and_keeps_explicit_denies() {
     assert!(at("(deny default)") < at("(import \"system.sb\")"));
     assert!(text.contains("(allow file-read* file-map-executable (subpath \"/usr\"))"));
     assert!(text.contains("(subpath \"/System/Library\")"));
+    // TLS config and CA bundle, read-only, and nothing wider than ssl in /etc.
+    assert!(text.contains("(allow file-read* (subpath \"/private/etc/ssl\"))"));
+    assert!(!text.contains("(subpath \"/private/etc\")") && !text.contains("(subpath \"/etc\")"));
     // The Xcode shims' developer-dir lookup: that one symlink, read-only, nothing wider.
     assert!(text.contains("(allow file-read* (literal \"/private/var/db/xcode_select_link\"))"));
     assert!(text.contains("(allow file-read* (literal \"/var/db/xcode_select_link\"))"));
@@ -770,4 +787,94 @@ fn the_runners_mac_direct_agent_sockets_are_denied_by_name_last() {
     assert!(text.contains("(deny file-read* file-write* (subpath \"/tmp/a\\\"b\"))"));
     assert!(!text.contains("ainkrad-ssh"));
     let _ = std::fs::remove_dir_all(root);
+}
+
+/// The runner's own tools (`<state>/ai-tools/bin/<tool>` execs `<state>/ai-tools/<tool>/<version>/...`) are readable in the
+/// sandbox: the tool's folder, and no other part of the state.
+#[test]
+fn a_tool_the_runner_installed_is_readable_and_only_that_tool() {
+    let (root, spec) = fixture("managed");
+    let tools = root.join("state/ai-tools");
+    std::fs::create_dir_all(tools.join("bin")).unwrap();
+    std::fs::create_dir_all(tools.join("claude/2.1.318")).unwrap();
+    std::fs::create_dir_all(tools.join("codex/0.167.1")).unwrap();
+    std::fs::write(tools.join("bin/claude"), "#!/bin/sh\n").unwrap();
+    let dirs = program_dirs(tools.join("bin/claude").as_os_str(), &spec);
+    assert!(dirs.contains(&tools.join("claude")), "{dirs:?}");
+    assert!(
+        !dirs.contains(&tools.join("codex")),
+        "another tool stays hidden: {dirs:?}"
+    );
+    assert!(
+        !dirs.contains(&root.join("state")),
+        "never the whole state: {dirs:?}"
+    );
+    assert_eq!(
+        managed_dir(&tools.join("bin/claude")),
+        Some(tools.join("claude"))
+    );
+    assert_eq!(managed_dir(Path::new("/usr/local/bin/claude")), None);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Real Seatbelt: the TLS config and CA bundle are readable through both spellings, and a sibling
+/// in /etc is not (Apple curl cannot start TLS without openssl.cnf).
+#[cfg(target_os = "macos")]
+#[test]
+fn the_tls_config_is_readable_and_the_rest_of_etc_is_not() {
+    let (root, spec) = fixture("tls");
+    let prof = root.join("p.sb");
+    std::fs::write(&prof, profile(&spec, OsStr::new("/bin/cat"))).unwrap();
+    let cat = |f: &str| {
+        std::process::Command::new("/usr/bin/sandbox-exec")
+            .arg("-f")
+            .arg(&prof)
+            .args(["/bin/cat", f])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    for f in [
+        "/etc/ssl/openssl.cnf",
+        "/private/etc/ssl/openssl.cnf",
+        "/etc/ssl/cert.pem",
+    ] {
+        if Path::new(f).exists() {
+            assert!(cat(f), "{f} must be readable");
+        }
+    }
+    assert!(!cat("/etc/hosts"), "the rest of /etc stays closed");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A heavy job's `cargo build` in `tiny-shop/` ran in the project root on Linux: bwrap's `--chdir`
+/// took `cwd` and ignored `process_dir` (e2e 2026-11-20). A dir outside the bound folder (a warm
+/// server's work root) is never chdir'd into: it is not mounted.
+#[test]
+fn the_sandbox_starts_in_the_jobs_own_folder_inside_the_project() {
+    let spec = |dir: Option<&str>| Spec {
+        cwd: PathBuf::from("/w/p/1"),
+        process_dir: dir.map(PathBuf::from),
+        ..Spec::default()
+    };
+    assert_eq!(
+        workdir(&spec(Some("/w/p/1/tiny-shop"))),
+        Path::new("/w/p/1/tiny-shop")
+    );
+    assert_eq!(workdir(&spec(None)), Path::new("/w/p/1"));
+    assert_eq!(workdir(&spec(Some("/w/work-root"))), Path::new("/w/p/1"));
+    assert_eq!(workdir(&spec(Some("/w/p/10"))), Path::new("/w/p/1"));
+}
+
+/// `/usr/bin/cc` reaches gcc through /etc/alternatives on Debian and Ubuntu: the sandbox must
+/// mount it, or a Rust job has no linker. It never mounts /etc itself.
+#[test]
+fn the_sandbox_reads_etc_alternatives_but_never_all_of_etc() {
+    assert!(ETC_READ.contains(&"/etc/alternatives"));
+    assert!(
+        ETC_READ
+            .iter()
+            .all(|p| p.starts_with("/etc/") && *p != "/etc/")
+    );
 }

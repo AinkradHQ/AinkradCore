@@ -24,6 +24,7 @@ use crate::scheduler::Clock;
 use crate::store::connect;
 
 mod abuse;
+mod account_remove;
 mod account_secrets;
 mod accounts_api;
 mod accounts_gateway;
@@ -32,6 +33,7 @@ mod accounts_store;
 mod agents;
 mod allocator;
 mod allocator_life;
+mod allocator_model;
 mod allocator_props;
 mod allocator_rows;
 mod allocator_states;
@@ -59,14 +61,17 @@ mod connections_health;
 mod connections_jira;
 mod connections_leak;
 mod connections_linear;
+mod connections_resources;
 mod connections_review;
 mod connections_routes;
 mod connections_slack;
 mod connections_teams;
 mod core_data;
+mod core_prefs;
 mod costs_api;
 mod costs_store;
 mod devices;
+mod e15_security;
 mod events;
 mod failover;
 mod failover_more;
@@ -86,10 +91,12 @@ mod host_router;
 mod host_router_load;
 mod host_router_review;
 mod live;
+mod main_copy;
 mod me;
 mod metrics;
 mod mirrors_api;
 mod mode;
+mod model_allow;
 mod modules;
 mod neg_alloc;
 mod neg_chains;
@@ -105,6 +112,7 @@ mod passkeys;
 mod placement;
 mod pools;
 mod preauth;
+mod presets;
 mod project_run_checkouts;
 mod project_run_checkouts_review;
 mod project_runs;
@@ -121,6 +129,7 @@ mod projects_api;
 mod projects_github;
 mod providers;
 mod push;
+mod retire_limits;
 mod revocation;
 mod run_spec_api;
 mod run_spec_draft_api;
@@ -130,9 +139,11 @@ mod scheduler_failover;
 mod scheduler_sessions;
 mod scoped;
 mod scopes;
+mod secret_export;
 mod secret_kinds;
 mod secrets;
 mod secrets_runners;
+mod session_default_chain;
 mod sessions;
 mod settings;
 mod signed;
@@ -214,7 +225,7 @@ pub(super) async fn fx() -> Fx {
 }
 
 /// A new device enrolled with `scopes` and logged in (a session issued directly), elevated as
-/// if it had stepped up (`stepup` tests the real thing).
+/// if it had stepped up and unlocked the app (`stepup` tests the real thing).
 async fn enroll(app: &App, clock: &Arc<FixedClock>, name: &str, scopes: &[&str]) -> TestDevice {
     let dev = TestDevice::enroll(
         &app.pool,
@@ -228,6 +239,7 @@ async fn enroll(app: &App, clock: &Arc<FixedClock>, name: &str, scopes: &[&str])
     let s = app.auth.issue_session(&dev.id, clock.unix());
     app.auth
         .elevate(&s.id, &dev.id, clock.unix() + 10 * 365 * 86_400);
+    dev.unlock(&app.auth, clock.unix() + 10 * 365 * 86_400);
     dev.set_session(Some(s.id));
     dev
 }

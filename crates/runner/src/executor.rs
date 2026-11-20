@@ -209,6 +209,16 @@ pub trait Executor: Send + Sync + 'static {
         let _ = up;
     }
 
+    /// The Core's own runner serves heavy-job shims to its sessions (E15-3): `bin` is the shim
+    /// directory, `socks` serves each session's socket.
+    fn set_job_shims(
+        &self,
+        socks: std::sync::Arc<crate::v2::jobsock::JobSocks>,
+        bin: std::path::PathBuf,
+    ) {
+        let _ = (socks, bin);
+    }
+
     /// Removes all worktrees owned by an agent session.
     fn cleanup_agent_workspace(
         &self,
@@ -225,6 +235,12 @@ pub trait Executor: Send + Sync + 'static {
     /// `prefix`; not those in `keep`), saved work included: a project run's clone (P5-05).
     fn discard_agent_workspaces(&self, name: &str, prefix: bool, keep: &[String]) {
         let _ = (name, prefix, keep);
+    }
+
+    /// The session's folder in the canonical workspace (`AgentStart::folder`, already checked by
+    /// the driver), or `None` to clear it. Its harness then works there for its whole life.
+    fn set_session_folder(&self, session: &str, folder: Option<PathBuf>) {
+        let _ = (session, folder);
     }
 
     /// The absolute folder a started job's harness works in, when it runs in one.

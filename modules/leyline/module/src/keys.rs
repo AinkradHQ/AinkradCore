@@ -1,5 +1,7 @@
-//! Keys (Y1-02): generate an ed25519 key in the Core, or import an OpenSSH private key (ed25519,
-//! ECDSA P-256/P-384). RSA and DSA are refused (no `rsa` crate in the tree: RUSTSEC-2023-0071).
+//! Keys (Y1-02): generate an ed25519 key in the Core, or import a private key: OpenSSH form (ed25519,
+//! ECDSA P-256/P-384, RSA) or an unencrypted PEM RSA key (PKCS#1 or PKCS#8, E0-9). RSA needs 2048
+//! bits or more and is stored in OpenSSH form (see `rsa_import`); DSA is refused. There is no `rsa`
+//! crate in this module (the runner signs, with rsa-sha2 only).
 //!
 //! Where the private bytes are, and for how long:
 //! - The request body holds them (and a passphrase) in `Zeroizing` strings; the passphrase is used
@@ -43,14 +45,15 @@ use utoipa::ToSchema;
 use zeroize::Zeroizing;
 
 use crate::hosts::In;
-use crate::valid;
+use crate::{rsa_import, valid};
 
 /// The secret group every Leyline private key lives in.
 pub const GROUP: &str = "leyline-keys";
 const INVALID: &str = "the key is not valid";
-const UNSUPPORTED: &str = "RSA keys are not supported; generate an ed25519 key (Generate Key). \
-                           Only OpenSSH private keys of type ed25519 or ECDSA (P-256, P-384) are \
-                           accepted; DSA is refused too";
+const UNSUPPORTED: &str = "This key type is not supported. Use an OpenSSH or PEM key of type \
+                           ed25519, ECDSA (P-256, P-384) or RSA, or make a new key instead.";
+const ENCRYPTED_PEM: &str = "This key has a passphrase in an old format. Convert it first with \
+                             ssh-keygen -p -f <key file>, then add it again.";
 const PEM_MAX: usize = 16 * 1024;
 const PASS_MAX: usize = 1024;
 /// `ssh-keygen` writes 16; each round is milliseconds of CPU, so a hostile count is a DoS.
@@ -61,8 +64,11 @@ pub struct KeyView {
     /// `k_` and 16 hex characters.
     pub id: String,
     pub name: String,
-    /// `ed25519`, `ecdsa-p256` or `ecdsa-p384`.
+    /// `ed25519`, `ecdsa-p256`, `ecdsa-p384` or `rsa`.
     pub algo: String,
+    /// The key size in bits (RSA modulus, or the curve size); absent when unknown.
+    #[schema(required = false)]
+    pub bits: Option<u32>,
     /// The OpenSSH one-line public key.
     pub public_key: String,
     /// `SHA256:...`, as `ssh-keygen -l` prints it.
@@ -78,6 +84,7 @@ fn view(r: &sqlx::sqlite::SqliteRow) -> Result<KeyView, sqlx::Error> {
         id: text("id")?,
         name: text("name")?,
         algo: text("algo")?,
+        bits: bits_of(&text("public_key")?),
         public_key: text("public_key")?,
         fingerprint: text("fingerprint")?,
         origin: text("origin")?,
@@ -94,7 +101,8 @@ pub struct NewKey {
 #[derive(Deserialize, ToSchema)]
 pub struct ImportKey {
     pub name: String,
-    /// An OpenSSH private key (`-----BEGIN OPENSSH PRIVATE KEY-----`), at most 16 KiB.
+    /// A private key, at most 16 KiB: OpenSSH (`BEGIN OPENSSH PRIVATE KEY`) or an unencrypted PEM RSA key
+    /// (`BEGIN RSA PRIVATE KEY`, `BEGIN PRIVATE KEY`).
     #[schema(value_type = String)]
     pub private_key: Zeroizing<String>,
     /// Only for an encrypted key. Used once to decrypt, then dropped; never stored.
@@ -115,20 +123,62 @@ fn algo_of(a: &Algorithm) -> Option<&'static str> {
         Algorithm::Ecdsa {
             curve: EcdsaCurve::NistP384,
         } => Some("ecdsa-p384"),
+        Algorithm::Rsa { .. } => Some("rsa"),
         _ => None,
     }
 }
 
-/// An importable key, decrypted. The algorithm and the hashing cost are public even on an
-/// encrypted key, so an RSA or DSA key and a hostile cost are refused before the passphrase is
-/// used. CPU-bound: call it from `spawn_blocking`.
+/// The size shown in the key list, from the public key.
+fn bits_of(public: &str) -> Option<u32> {
+    let key = ssh_key::PublicKey::from_openssh(public).ok()?;
+    let n = match key.algorithm() {
+        Algorithm::Ed25519 => 256,
+        Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP256,
+        } => 256,
+        Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP384,
+        } => 384,
+        _ => rsa_import::modulus_bits(&key)?,
+    };
+    u32::try_from(n).ok()
+}
+
+/// An importable key, decrypted. The algorithm, the size and the hashing cost are public even on
+/// an encrypted key, so a DSA key, a weak RSA key and a hostile cost are refused before the
+/// passphrase is used. CPU-bound: call it from `spawn_blocking`.
 fn parse(pem: &str, pass: Option<&str>) -> Result<PrivateKey, ApiError> {
     if pem.len() > PEM_MAX || pass.is_some_and(|p| p.len() > PASS_MAX) {
         return Err(refuse(INVALID));
     }
-    let key = PrivateKey::from_openssh(pem).map_err(|_| refuse(INVALID))?;
+    let key = if pem
+        .trim_start()
+        .starts_with("-----BEGIN OPENSSH PRIVATE KEY-----")
+    {
+        PrivateKey::from_openssh(pem).map_err(|_| refuse(INVALID))?
+    } else {
+        match rsa_import::kind(pem) {
+            rsa_import::Pem::Plain => rsa_import::from_pem(pem).ok_or_else(|| refuse(INVALID))?,
+            rsa_import::Pem::Encrypted => return Err(refuse(ENCRYPTED_PEM)),
+            rsa_import::Pem::Other => return Err(refuse(INVALID)),
+        }
+    };
     if algo_of(&key.algorithm()).is_none() {
         return Err(refuse(UNSUPPORTED));
+    }
+    // The size is public on an encrypted key too: a weak key is refused before the passphrase.
+    if let Some(n) = rsa_import::modulus_bits(key.public_key()) {
+        if n < rsa_import::MIN_BITS {
+            return Err(ApiError::bad_request(format!(
+                "This key is too weak ({n} bits). Make a new key instead."
+            )));
+        }
+        if n > rsa_import::MAX_BITS {
+            return Err(ApiError::bad_request(format!(
+                "This key is too large ({n} bits). Use a key of {} bits or fewer.",
+                rsa_import::MAX_BITS
+            )));
+        }
     }
     if !key.is_encrypted() {
         return Ok(key);
@@ -459,13 +509,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_ed25519_and_nist_p256_p384_are_accepted() {
+    fn only_ed25519_nist_p256_p384_and_rsa_are_accepted() {
         assert_eq!(algo_of(&Algorithm::Ed25519), Some("ed25519"));
         let ecdsa = |curve| Algorithm::Ecdsa { curve };
         assert_eq!(algo_of(&ecdsa(EcdsaCurve::NistP256)), Some("ecdsa-p256"));
         assert_eq!(algo_of(&ecdsa(EcdsaCurve::NistP384)), Some("ecdsa-p384"));
         assert_eq!(algo_of(&ecdsa(EcdsaCurve::NistP521)), None);
         assert_eq!(algo_of(&Algorithm::Dsa), None);
-        assert_eq!(algo_of(&Algorithm::Rsa { hash: None }), None);
+        assert_eq!(algo_of(&Algorithm::Rsa { hash: None }), Some("rsa"));
     }
 }

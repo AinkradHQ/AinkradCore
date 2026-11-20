@@ -2,14 +2,14 @@
 # Installs the ainkrad-runner systemd unit (E1-12.3; protocol v2 since E1-14.5; terminals and pairing E2-15).
 # Idempotent; does not start unless --start or --pair. Works on the Core's own host and on a remote Linux host.
 #   install-linux.sh [--binary PATH] [--ptyhost PATH] [--pty] [--ca PEM]
-#                    [--agents] [--exec] [--root] [--with-run] [--design] [--pair https://<core> --code - | --invite -] [--start]
+#                    [--agents] [--job-shims] [--exec] [--root] [--with-run] [--design] [--pair https://<core> --code - | --invite -] [--start]
 #                    [--prefix DIR] [--dry-run]
 # --pty      offer terminals (--enable-pty); needs ainkrad-ptyhost (--ptyhost, default: beside --binary). The shell
 #            runs as the unprivileged ainkrad-runner user inside the unit's sandbox. Off unless asked. Also installs zsh
 #            and the read-only Ainkrad shell profile (deploy/shell) in /usr/local/share/ainkrad/shell: every terminal
 #            then starts `zsh -l` with that profile, the same on every runner. Without zsh the runner starts the login shell.
 # --agents   offer agent sessions (--enable-agents) with the egress filter on: sessions reach only api.anthropic.com
-#            (AINKRAD_AGENT_NETWORK=filtered, AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com in runner.env). Needs the harness
+#            (AINKRAD_AGENT_NETWORK=filtered, AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com in runner.env; --pty adds the terminals' AINKRAD_TERMINAL_EGRESS_HOSTS). Needs the harness
 #            (claude) on PATH. Off unless asked.
 # --ca       a PEM the runner trusts instead of the system roots (a test Core's CA only).
 # --pair     pair as the service user now (waits for the approver; compare the SAS it prints), then start.
@@ -38,7 +38,7 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-binary="$HERE/../target/release/ainkrad-runner" design=0 design_helper='' ptyhost='' with_run=0 pty=0 agents=0 ca='' pair='' code='' invite='' prefix='' start=0 dry=0 exec_on=0 root=0
+binary="$HERE/../target/release/ainkrad-runner" design=0 design_helper='' ptyhost='' with_run=0 pty=0 agents=0 ca='' pair='' code='' invite='' prefix='' start=0 dry=0 exec_on=0 root=0 ws_root='' job_shims=0
 run() { printf '+ %s\n' "$*"; [ "$dry" = 1 ] || "$@"; }
 WAS_ACTIVE=1
 # Demoting a root runner: its terminal hosts (ptyhosts, started as root; KillMode=process keeps them alive across a restart)
@@ -179,7 +179,9 @@ while [ $# -gt 0 ]; do
     --pty) pty=1; shift ;;
     --exec) exec_on=1; shift ;;
     --agents) agents=1; shift ;;
+    --job-shims) job_shims=1; shift ;;
     --root) root=1; shift ;;
+    --workspace-root) ws_root=${2:?}; shift 2 ;;
     --with-run) with_run=1; shift ;;
     --design) design=1; shift ;;
     --design-helper) design_helper=${2:?}; shift 2 ;;
@@ -217,6 +219,16 @@ if [ -z "$prefix" ]; then
   # `pair` runs as the user before the unit's StateDirectory exists.
   run install -d -m 0700 -o ainkrad-runner -g ainkrad-runner /var/lib/ainkrad-runner
 fi
+# E15-2: the Core's canonical workspace. The built-in runner and the Core share one folder through the group ainkrad-ws
+# (setgid, mode 2770, root-owned so neither user owns it). Only the built-in runner gets this; a remote runner never does.
+if [ -n "$ws_root" ] && [ -z "$prefix" ]; then
+  case $ws_root in /*[!A-Za-z0-9_./-]* | '') echo "--workspace-root is an absolute path of plain characters" >&2; exit 2 ;; /*) ;; *) echo "--workspace-root is an absolute path" >&2; exit 2 ;; esac
+  getent group ainkrad-ws >/dev/null 2>&1 || run groupadd --system ainkrad-ws
+  run usermod -aG ainkrad-ws ainkrad-runner
+  ! id ainkrad >/dev/null 2>&1 || run usermod -aG ainkrad-ws ainkrad
+  run install -d -m 2770 -o root -g ainkrad-ws "$ws_root"
+  run chmod 2770 "$ws_root"
+fi
 run install -d "$prefix/usr/local/bin" "$prefix/etc/systemd/system"
 # install_bin SRC DEST: copy and set 0755; when SRC already IS DEST (--binary pointing at the final path) `install` would die with
 # "are the same file" under set -e, leaving a half-installed runner: only the mode is set then.
@@ -225,6 +237,8 @@ install_bin "$binary" "$prefix/usr/local/bin/ainkrad-runner"
 # Beside the runner, where it looks first. Installed whenever it is at hand, so enabling pty later needs no re-install.
 [ -n "$ptyhost" ] || [ ! -x "$(dirname "$binary")/ainkrad-ptyhost" ] || ptyhost=$(dirname "$binary")/ainkrad-ptyhost
 [ -z "$ptyhost" ] || install_bin "$ptyhost" "$prefix/usr/local/bin/ainkrad-ptyhost"
+# The heavy-job shim (E15-3), the same way: the runner links it as cargo, npm, make and the other build tools.
+[ ! -x "$(dirname "$binary")/ainkrad-job" ] || install_bin "$(dirname "$binary")/ainkrad-job" "$prefix/usr/local/bin/ainkrad-job"
 # The design helper (V6-01), the same way: beside the runner, where it looks first.
 [ -n "$design_helper" ] || [ ! -x "$(dirname "$binary")/ainkrad-design" ] || design_helper=$(dirname "$binary")/ainkrad-design
 [ -z "$design_helper" ] || install_bin "$design_helper" "$prefix/usr/local/bin/ainkrad-design"
@@ -232,12 +246,21 @@ run install -m 0644 "$HERE/systemd/ainkrad-runner.service" "$prefix/etc/systemd/
 # The root-side tool installer the App's one-click install uses: a socket only the runner's group can reach, and the unit it starts.
 run install -m 0644 "$HERE/systemd/ainkrad-runner-tools.socket" "$prefix/etc/systemd/system/ainkrad-runner-tools.socket"
 run install -m 0644 "$HERE/systemd/ainkrad-runner-tools@.service" "$prefix/etc/systemd/system/ainkrad-runner-tools@.service"
+# E12-4: the runner's self-update: the updater, install.sh and the pinned key, and the unit pair that runs them as root on request.
+run install -d -m 0755 "$prefix/usr/local/lib/ainkrad"
+for f in update.sh install.sh; do run install -m 0755 "$HERE/../scripts/release/$f" "$prefix/usr/local/lib/ainkrad/$f"; done
+run install -m 0644 "$HERE/../scripts/release/ainkrad-release.pub" "$prefix/usr/local/lib/ainkrad/ainkrad-release.pub"
+run install -m 0644 "$HERE/systemd/ainkrad-update@.service" "$prefix/etc/systemd/system/ainkrad-update@.service"
+run install -m 0644 "$HERE/systemd/ainkrad-update-runner.path" "$prefix/etc/systemd/system/ainkrad-update-runner.path"
 # runner.env: RUNNER_ARGS from these flags, replaced on every run (so a re-run without --pty turns terminals off).
 args=''
 [ "$pty" = 1 ] && args="--enable-pty"
 [ "$agents" = 0 ] || args="${args:+$args }--enable-agents"
 [ "$exec_on" = 1 ] && args="${args:+$args }--enable-exec"
+# The Core's own runner only (E15-3): terminals get the heavy-job shims (needs ainkrad-job beside the runner).
+[ "$job_shims" = 0 ] || args="${args:+$args }--job-shims"
 [ -z "$ca" ] || args="${args:+$args }--ca $ca"
+[ -z "$ws_root" ] || args="${args:+$args }--workspace-root $ws_root"
 if [ -n "$prefix" ]; then run install -d "$prefix/etc/ainkrad-runner"; fi
 dropin="$prefix/etc/systemd/system/ainkrad-runner.service.d"
 envfile="$prefix/etc/ainkrad-runner/runner.env"
@@ -272,10 +295,21 @@ SystemCallFilter=
 CONF
   fi
 else run rm -f "$dropin/authority.conf"; fi
-printf '+ write %s: RUNNER_ARGS=%s%s\n' "$envfile" "$args" "$([ "$agents" = 0 ] || echo ' (+ AINKRAD_AGENT_NETWORK=filtered, AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com)')"
+# The built-in runner's workspace: its files are group-writable for the Core (UMask 0007), its unit may write the folder and
+# carries the group. A runner without --workspace-root keeps no drop-in and the strict 0077.
+if [ -n "$ws_root" ]; then
+  run install -d "$dropin"
+  printf '+ write %s/workspace.conf\n' "$dropin"
+  if [ "$dry" = 0 ]; then printf '# Written by deploy/install-linux.sh --workspace-root: the Core'"'"'s canonical workspace, shared through group ainkrad-ws.\n[Service]\nSupplementaryGroups=ainkrad-ws\nUMask=0007\nReadWritePaths=%s\n' "$ws_root" >"$dropin/workspace.conf"; fi
+else run rm -f "$dropin/workspace.conf"; fi
+# The terminals' egress hosts: the runner's built-in default (crates/runner/src/egress/policy.rs default_hosts), written
+# explicitly so an admin can edit it. The AI sessions keep their own AINKRAD_AGENT_EGRESS_HOSTS.
+term_hosts=github.com,codeload.github.com,objects.githubusercontent.com,api.github.com,gitlab.com,bitbucket.org,crates.io,static.crates.io,registry.npmjs.org,pypi.org,files.pythonhosted.org,proxy.golang.org,rubygems.org,index.rubygems.org,repo1.maven.org,repo.maven.apache.org
+printf '+ write %s: RUNNER_ARGS=%s%s\n' "$envfile" "$args" "$([ "$agents" = 0 ] || echo ' (+ AINKRAD_AGENT_NETWORK=filtered, AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com)')$([ "$pty" = 0 ] || echo " (+ AINKRAD_TERMINAL_EGRESS_HOSTS=$term_hosts)")"
 if [ "$dry" = 0 ]; then
   printf '# Written by deploy/install-linux.sh. exec.run is off unless --enable-exec is added here.\nRUNNER_ARGS=%s\n' "$args" >"$envfile"
   [ "$agents" = 0 ] || printf 'AINKRAD_AGENT_NETWORK=filtered\nAINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com\n' >>"$envfile"
+  [ "$pty" = 0 ] || printf 'AINKRAD_TERMINAL_EGRESS_HOSTS=%s\n' "$term_hosts" >>"$envfile"
   chmod 0640 "$envfile"; [ -n "$prefix" ] || chown root:ainkrad-runner "$envfile"
 fi
 runner_demote_kill
@@ -296,6 +330,7 @@ if [ "$pty" = 1 ]; then
 fi
 if [ -z "$prefix" ]; then
   run systemctl daemon-reload
+  run systemctl enable --now ainkrad-update-runner.path
   run systemctl enable --now ainkrad-runner-tools.socket
   if [ -n "$pair" ]; then
     # Blocks until the approver confirms the SAS (or the code expires); the Core's identity is pinned here.

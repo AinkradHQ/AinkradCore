@@ -14,7 +14,7 @@ use crate::net::{Endpoint, Net};
 use crate::pair::{Credential, Pairing};
 use crate::stepup::{self, Passphrase};
 use crate::{
-    EXIT_CODES, Error, acct, acct_help, agents, budgets, chains, connections, devices, events,
+    EXIT_CODES, Error, acct, acct_help, agents, api, budgets, chains, connections, devices, events,
     pair, pools, runners, secrets, settings, system, terminals,
 };
 
@@ -138,6 +138,13 @@ pub const USAGE: &str =
       Ainkrad's sign-in app of a kind (only the Core's owner admin sets it; others get a 403).
       `--field name=-` reads a value from stdin or --file (a secret field is refused on the
       command line); `--field name=` clears one.
+  api <GET|POST|PUT|DELETE> </api/v1/...[?query]> [json-body]
+      One signed request for a route with no command of its own (e.g. /api/v1/hardware,
+      /api/v1/jobs); prints the answer's JSON as is. Scopes and step-up apply as usual.
+  term ... --unlock  |  api ... --unlock
+      Test builds only (--features test-support, the e2e kit): opens the app unlock first, for
+      this one command, with the step-up key and its passphrase; the token is kept in memory
+      only. A shipped ctl refuses the flag.
   events tail [--after <seq>] [--no-follow]
       Events after <seq> (default: from now), one JSON object per line (every kind this
       device may see, runner.connected/.disconnected/.degraded included); follows the live
@@ -190,7 +197,8 @@ const VALUED: [&str; 35] = [
     "--file",
     "--connection-access",
 ];
-const SWITCHES: [&str; 7] = [
+const SWITCHES: [&str; 8] = [
+    "--unlock",
     "--json",
     "--version",
     "--no-follow",
@@ -309,6 +317,22 @@ impl Args {
     }
 
     /// A client for the paired device in the keystore.
+    /// `client`, unlocked first when `--unlock` is given (terminals and `api` only; a ctl built
+    /// with `test-support`, the e2e kit's: a shipped one refuses the flag).
+    async fn unlocked_client(&self) -> Result<Client, Error> {
+        #[allow(unused_mut)]
+        let mut c = self.client()?;
+        if self.on("--unlock") {
+            #[cfg(feature = "test-support")]
+            c.unlock().await?;
+            #[cfg(not(feature = "test-support"))]
+            return Err(Error::Usage(
+                "--unlock exists only in a test build (--features test-support); terminals open from the Ainkrad app".into(),
+            ));
+        }
+        Ok(c)
+    }
+
     fn client(&self) -> Result<Client, Error> {
         let store = Keystore::load(&self.keystore()?).map_err(Error::Usage)?;
         let endpoint = match self.endpoint()? {
@@ -440,8 +464,9 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
                 cwd: a.value("--cwd"),
                 signal: a.value("--signal"),
             };
-            terminals::terminal(&mut a.client()?, rest, &options, json, out).await
+            terminals::terminal(&mut a.unlocked_client().await?, rest, &options, json, out).await
         }
+        ["api", rest @ ..] => api::api(&mut a.unlocked_client().await?, rest, out).await,
         ["events", "tail"] => {
             let mut c = a.client()?;
             events::tail(&mut c, a.number("--after")?, !a.on("--no-follow"), out).await

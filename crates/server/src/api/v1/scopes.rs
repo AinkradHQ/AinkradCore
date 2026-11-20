@@ -24,12 +24,15 @@
 //! - A module's routes need the module's own `Module::scope` (`admin` unless it says otherwise),
 //!   or the scope its `Module::route_scopes` declares for that route (`module_scope`).
 //! - A `runner` device holds only `runner`, which only `POST /api/v1/secret-leases/redeem` and
-//!   the read side of the Core's repo copies (`/api/v1/mirrors/{repo}/…`, P3-01) take: it can call
+//!   the read side of the Core's repo copies (`/api/v1/mirrors/{repo}/…`, P3-01) take, and the
+//!   built-in runner's job routes (`/api/v1/runner/jobs…`, E15-3): it can call
 //!   nothing else here (the runner hub is E1-11).
 //!
-//! **Destructive routes** (spec §8, E1-09.6) are listed in [`DESTRUCTIVE`] (a module's in
-//! `Module::destructive`): on top of its scope, such a route needs a session elevated by a
-//! step-up (`auth::stepup`), else 403 `step_up_required`. The contract marks each with
+//! **Danger routes** (spec §8, E1-09.6, D-4; still named "destructive" in the contract) are
+//! listed in [`DESTRUCTIVE`] (a module's in `Module::destructive`): on top of its scope, such a
+//! route needs a session elevated by a fresh step-up (`auth::stepup`), else 403
+//! `step_up_required`. The list is short on purpose: every other write is a normal write. A
+//! module route in `Module::needs_unlock` needs the app unlock instead (`unlock_required`). The contract marks each with
 //! `x-ainkrad-destructive: true`. Reads never need it; the host socket's `bootstrap` and
 //! `recover` are not routes and never need it.
 
@@ -60,10 +63,24 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/devices", "admin"),
     ("DELETE", "/api/v1/devices/{id}", "admin"),
     ("GET", "/api/v1/audit", "admin"),
+    ("GET", "/api/v1/audit/stats", "admin"),
+    ("GET", "/api/v1/ops/history", "admin"),
     // The Core machine (host-helper plan §4): all `admin`; see DESTRUCTIVE for the step-up ones.
     ("GET", "/api/v1/system/host", "admin"),
     ("GET", "/api/v1/core/health", "read"),
+    ("GET", "/api/v1/core/prefs", "read"),
+    ("PUT", "/api/v1/core/prefs", "admin"),
+    ("GET", "/api/v1/core/storage", "admin"),
+    ("POST", "/api/v1/core/update/check", "admin"),
     ("POST", "/api/v1/system/restart", "admin"),
+    // A backup now and the backup schedule (E2-6): `admin`; a start is no danger, it is the unit the timer starts.
+    ("POST", "/api/v1/system/backup", "admin"),
+    ("GET", "/api/v1/system/backups", "admin"),
+    // How many local backups are kept: reading is `admin`; the write is in DESTRUCTIVE (D-4).
+    ("GET", "/api/v1/system/backups/retention", "admin"),
+    ("PUT", "/api/v1/system/backups/retention", "admin"),
+    ("GET", "/api/v1/system/update", "admin"),
+    ("POST", "/api/v1/system/update", "admin"),
     ("GET", "/api/v1/system/logs/core", "admin"),
     ("GET", "/api/v1/system/logs/helper", "admin"),
     ("GET", "/api/v1/system/logs/runner", "admin"),
@@ -71,21 +88,42 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/metrics", "admin"),
     ("POST", "/api/v1/pairings", "admin"),
     ("POST", "/api/v1/pairings/invites", "admin"),
+    ("POST", "/api/v1/runners/{id}/bundled", "admin"),
     ("GET", "/api/v1/pairings/{id}", "admin"),
     ("POST", "/api/v1/pairings/{id}/approve", "admin"),
     ("POST", "/api/v1/pairings/{id}/reject", "admin"),
     ("POST", "/api/v1/auth/step-up/challenge", "read"),
     ("POST", "/api/v1/auth/step-up", "read"),
+    ("POST", "/api/v1/auth/unlock/beat", "read"),
+    ("POST", "/api/v1/auth/unlock/end", "read"),
     ("GET", "/api/v1/devices/{id}", "admin"),
     ("PATCH", "/api/v1/devices/{id}", "admin"),
     ("PUT", "/api/v1/devices/{id}/scopes", "admin"),
     ("GET", "/api/v1/auth/lockouts", "admin"),
     ("POST", "/api/v1/auth/lockouts/clear", "admin"),
+    // Hardware (E15-1): reading is `read`; a pause withholds new work, `admin`.
+    ("GET", "/api/v1/hardware", "read"),
+    ("GET", "/api/v1/hardware/pool", "read"),
+    ("PUT", "/api/v1/hardware/pause", "admin"),
+    ("PUT", "/api/v1/hardware/{id}/pause", "admin"),
+    // Heavy jobs (E15-3): reading is `read`; the rest runs or controls code, as a terminal does.
+    ("POST", "/api/v1/jobs", "terminal"),
+    ("GET", "/api/v1/jobs", "read"),
+    ("GET", "/api/v1/jobs/{id}", "read"),
+    ("GET", "/api/v1/jobs/{id}/stream", "terminal"),
+    ("POST", "/api/v1/jobs/{id}/signal", "terminal"),
+    ("DELETE", "/api/v1/jobs/{id}", "terminal"),
+    // The built-in runner forwards its shims' requests (signed as itself; the handler refuses any
+    // other runner).
+    ("POST", "/api/v1/runner/jobs", "runner"),
+    ("POST", "/api/v1/runner/jobs/report", "runner"),
+    ("POST", "/api/v1/runner/jobs/{job}/signal", "runner"),
     ("GET", "/api/v1/runners", "read"),
     ("GET", "/api/v1/runners/{id}", "read"),
     ("POST", "/api/v1/runners/{id}/noop", "agent"),
     ("PUT", "/api/v1/runners/{id}/policy", "admin"),
     ("POST", "/api/v1/runners/{id}/tools", "admin"),
+    ("POST", "/api/v1/runners/{id}/update", "admin"),
     ("GET", "/api/v1/runners/{id}/tools/operations/{op}", "read"),
     ("GET", "/api/v1/accounts", "read"),
     // Before `/accounts/{id}`: the first template that fits a path decides, and `usage` fits `{id}`.
@@ -93,8 +131,12 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/accounts/logins", "admin"),
     ("GET", "/api/v1/accounts/logins/{id}", "admin"),
     ("POST", "/api/v1/accounts/logins/{id}/code", "admin"),
+    ("POST", "/api/v1/accounts/logins/{id}/input", "admin"),
+    ("GET", "/api/v1/accounts/logins/{id}/screen", "admin"),
     ("DELETE", "/api/v1/accounts/logins/{id}", "admin"),
     ("GET", "/api/v1/accounts/{id}", "read"),
+    ("GET", "/api/v1/accounts/{id}/models", "read"),
+    ("PUT", "/api/v1/accounts/{id}/models/{model}", "admin"),
     ("GET", "/api/v1/accounts/providers", "read"),
     ("POST", "/api/v1/accounts", "admin"),
     ("PUT", "/api/v1/accounts/{id}/secret", "admin"),
@@ -104,6 +146,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/accounts/{id}/test", "admin"),
     ("POST", "/api/v1/accounts/{id}/check", "admin"),
     ("DELETE", "/api/v1/accounts/{id}", "admin"),
+    ("POST", "/api/v1/accounts/{id}/restore", "admin"),
     ("POST", "/api/v1/accounts/providers", "admin"),
     ("PUT", "/api/v1/accounts/providers/{id}", "admin"),
     ("DELETE", "/api/v1/accounts/providers/{id}", "admin"),
@@ -116,6 +159,11 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/bindings", "read"),
     ("PUT", "/api/v1/bindings", "admin"),
     ("DELETE", "/api/v1/bindings/{agent}/{provider}", "admin"),
+    // The AI order (E7-1): reading says which accounts a run may walk, so it is `admin` too.
+    ("GET", "/api/v1/ai-order", "admin"),
+    ("PUT", "/api/v1/ai-order", "admin"),
+    ("PUT", "/api/v1/ai-order/agents/{agent}", "admin"),
+    ("DELETE", "/api/v1/ai-order/agents/{agent}", "admin"),
     // Fallback chains (S7): reading says which accounts a run may walk, so it is `admin` too.
     ("GET", "/api/v1/chains", "admin"),
     ("POST", "/api/v1/chains", "admin"),
@@ -141,6 +189,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PUT", "/api/v1/connections/{id}/credential", "admin"),
     ("POST", "/api/v1/connections/{id}/test", "admin"),
     ("GET", "/api/v1/connections/{id}/activity", "admin"),
+    ("GET", "/api/v1/connections/{id}/resources", "admin"),
     ("GET", "/api/v1/connections/{id}/grants", "admin"),
     ("PUT", "/api/v1/connections/{id}/grants", "admin"),
     (
@@ -153,13 +202,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("DELETE", "/api/v1/connection-defaults/{kind}", "admin"),
     ("GET", "/api/v1/connection-apps/{kind}", "admin"),
     ("PUT", "/api/v1/connection-apps/{kind}", "admin"),
-    ("PUT", "/api/v1/accounts/{id}/limits", "admin"),
-    (
-        "DELETE",
-        "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
-        "admin",
-    ),
     ("GET", "/api/v1/costs", "admin"),
+    ("GET", "/api/v1/costs/series", "admin"),
     ("GET", "/api/v1/prices", "read"),
     ("GET", "/api/v1/budgets", "read"),
     ("PUT", "/api/v1/budgets", "admin"),
@@ -174,6 +218,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/projects/{id}", "read"),
     ("PATCH", "/api/v1/projects/{id}", "admin"),
     ("POST", "/api/v1/projects/{id}/archive", "admin"),
+    ("POST", "/api/v1/projects/{id}/unarchive", "admin"),
+    ("GET", "/api/v1/projects/defaults", "read"),
+    ("PUT", "/api/v1/projects/defaults", "admin"),
     ("POST", "/api/v1/projects/{id}/repos", "admin"),
     ("DELETE", "/api/v1/projects/{id}/repos/{repo}", "admin"),
     (
@@ -203,6 +250,68 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/run/stop", "admin"),
     ("POST", "/api/v1/projects/{id}/run/restart", "admin"),
     ("POST", "/api/v1/projects/{id}/run/activity", "read"),
+    // Run configurations and environments (Core 0.10, E11-3): values never leave except `value`.
+    ("GET", "/api/v1/projects/{id}/runs", "read"),
+    ("POST", "/api/v1/projects/{id}/runs/{run}/stop", "admin"),
+    ("GET", "/api/v1/projects/{id}/code", "read"),
+    ("GET", "/api/v1/projects/{id}/usage", "read"),
+    ("GET", "/api/v1/projects/{id}/changes", "read"),
+    ("GET", "/api/v1/projects/{id}/run-configs", "read"),
+    ("POST", "/api/v1/projects/{id}/run-configs", "admin"),
+    ("GET", "/api/v1/projects/{id}/run-configs/{config}", "read"),
+    (
+        "PATCH",
+        "/api/v1/projects/{id}/run-configs/{config}",
+        "admin",
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/run-configs/{config}",
+        "admin",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/run-configs/{config}/duplicate",
+        "admin",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/run-configs/{config}/run",
+        "admin",
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/run-configs/{config}/env-diff",
+        "read",
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}",
+        "read",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}/import",
+        "admin",
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}",
+        "admin",
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}",
+        "admin",
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}/value",
+        "admin",
+    ),
+    ("GET", "/api/v1/projects/{id}/run-envs", "read"),
+    ("POST", "/api/v1/projects/{id}/run-envs", "admin"),
+    ("DELETE", "/api/v1/projects/{id}/run-envs/{name}", "admin"),
     ("GET", "/api/v1/projects/{id}/run/services", "read"),
     // Logs are what the project's code printed (redacted, but still its own words): admin.
     ("GET", "/api/v1/projects/{id}/run/logs", "admin"),
@@ -212,6 +321,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PUT", "/api/v1/secrets/{id}", "admin"),
     ("DELETE", "/api/v1/secrets/{id}", "admin"),
     ("POST", "/api/v1/secrets/{id}/leases", "admin"),
+    ("POST", "/api/v1/secrets/{id}/reveal", "admin"),
+    // Exporting every value (D-4): `admin`, destructive (a live step-up).
+    ("POST", "/api/v1/secrets/export", "admin"),
     ("POST", "/api/v1/secret-leases/redeem", "runner"),
     ("GET", "/api/v1/secret-groups", "admin"),
     ("POST", "/api/v1/secret-groups", "admin"),
@@ -225,6 +337,10 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/terminals/{id}/local", "terminal"),
     ("DELETE", "/api/v1/terminals/{id}/local", "terminal"),
     ("POST", "/api/v1/terminals/{id}/signal", "terminal"),
+    // A preview of a sandbox terminal's last screen rows: the terminal scope and the caller's own
+    // terminal, no per-action step-up (it attaches nothing). At integration it joins E1's
+    // `UNLOCKED` gate, so a locked Core answers `unlock_required`.
+    ("GET", "/api/v1/terminals/{id}/tail", "terminal"),
     ("DELETE", "/api/v1/terminals/{id}", "terminal"),
     ("GET", "/api/v1/agent-sessions", "agent"),
     ("POST", "/api/v1/agent-sessions", "agent"),
@@ -246,21 +362,35 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
         "agent",
     ),
     ("POST", "/api/v1/agent-sessions/{id}/mode", "agent"),
+    // A session's folder (E14): the listing is read like the transcript; a revert and a write
+    // change files on the runner.
+    ("GET", "/api/v1/agent-sessions/{id}/files", "agent"),
+    ("POST", "/api/v1/agent-sessions/{id}/files/revert", "agent"),
+    ("POST", "/api/v1/agent-sessions/{id}/files/write", "agent"),
+    // "Always for this project" rules (E14).
+    ("GET", "/api/v1/projects/{id}/approval-rules", "agent"),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/approval-rules/{rule}",
+        "approve",
+    ),
     ("POST", "/api/v1/agent-sessions/{id}/cancel", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/kill", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/resume", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/wake", "agent"),
 ];
 
-/// `(method, path template)` of every route that needs a live elevation (spec §8): device
-/// admin (pairing create, approve and reject; revoke, rename, scope change; clearing a lockout)
-/// and every setting write (one flag per route, and some settings weaken security, the step-up
-/// window itself among them). Each must also be in [`ROUTES`] (a test checks).
+/// `(method, path template)` of every route that needs a **fresh** step-up (spec §8, E1-2, D-4):
+/// the danger list, and nothing else. Touch ID per action, only for: devices and their access
+/// (pairing, revoking, rescoping, clearing a lockout), a secret leaving the Core (a lease, the
+/// runner and backup logs) and the Core machine (restart). Deleting the Core's data, a backup
+/// key or restore, and an update have no route here yet; they join this list when they get one.
+/// Security settings (`auth.*`) are danger too, matched by key in [`destructive`]. Every other
+/// write is a normal write (a module's own `needs_unlock` routes aside). Each must also be in
+/// [`ROUTES`] (a test checks).
 ///
 /// `POST /api/v1/runners/{id}/noop` is not here: it runs one fixed op that takes no input,
-/// reads nothing and changes nothing on the runner (it proves the path), so it needs `agent`
-/// but no elevation. A route that runs caller-chosen commands on a runner (`exec.run`, E2) is
-/// arbitrary code execution there and must be listed.
+/// reads nothing and changes nothing on the runner (it proves the path).
 pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/devices/{id}"),
     ("PATCH", "/api/v1/devices/{id}"),
@@ -268,129 +398,79 @@ pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/api/v1/pairings"),
     // It hands out a credential that enrols a device with no second approval.
     ("POST", "/api/v1/pairings/invites"),
+    ("POST", "/api/v1/runners/{id}/bundled"),
     ("POST", "/api/v1/pairings/{id}/approve"),
     ("POST", "/api/v1/pairings/{id}/reject"),
-    ("PUT", "/api/v1/settings/{scope}/{key}"),
-    ("DELETE", "/api/v1/settings/{scope}/{key}"),
     ("POST", "/api/v1/auth/lockouts/clear"),
     // The Core machine: a restart drops every session, and the runner and backup logs can hold
     // values no redactor recognises (D4). The Core and helper logs are not here.
     ("POST", "/api/v1/system/restart"),
-    // A runner's policy decides what runs on that machine, and a tool install runs a root-side installer there.
-    ("PUT", "/api/v1/runners/{id}/policy"),
-    ("POST", "/api/v1/runners/{id}/tools"),
+    // Retention decides how much history survives a loss (D-4): it writes the Core's config.
+    ("PUT", "/api/v1/system/backups/retention"),
+    // Replaces the Core's own programs (signed releases only) and restarts it: a step-up, like a restart.
+    ("POST", "/api/v1/system/update"),
+    // Replaces the programs a runner runs on its host (signed releases only), like a tool install.
+    ("POST", "/api/v1/runners/{id}/update"),
     ("GET", "/api/v1/system/logs/runner"),
     ("GET", "/api/v1/system/logs/backup"),
-    // Projects (P1-02): every write decides what the Core fetches and which repos a session gets.
-    ("POST", "/api/v1/projects"),
-    ("POST", "/api/v1/projects/from-github"),
-    ("PATCH", "/api/v1/projects/{id}"),
-    ("POST", "/api/v1/projects/{id}/archive"),
-    ("POST", "/api/v1/projects/{id}/repos"),
-    ("DELETE", "/api/v1/projects/{id}/repos/{repo}"),
-    ("POST", "/api/v1/projects/{id}/repos/{repo}/primary"),
-    // Run spec (P4-01): it decides what containers run on a runner.
-    ("PUT", "/api/v1/projects/{id}/spec"),
-    ("POST", "/api/v1/projects/{id}/run/spec/draft"),
-    // Project runs (P5-03): they start and stop containers on a runner.
-    ("POST", "/api/v1/projects/{id}/run/start"),
-    ("POST", "/api/v1/projects/{id}/run/stop"),
-    ("POST", "/api/v1/projects/{id}/run/restart"),
-    // Project secrets (P4-04): a write stores or removes a credential a run will be given.
-    ("PUT", "/api/v1/projects/{id}/secrets/{name}"),
-    ("DELETE", "/api/v1/projects/{id}/secrets/{name}"),
-    // Secrets (E2-07): every write, and a lease, the only way a value leaves the Core.
-    ("POST", "/api/v1/secrets"),
-    ("PUT", "/api/v1/secrets/{id}"),
-    ("DELETE", "/api/v1/secrets/{id}"),
+    // A lease or a reveal is how a secret's value leaves the Core.
+    ("POST", "/api/v1/secrets/{id}/reveal"),
     ("POST", "/api/v1/secrets/{id}/leases"),
-    ("POST", "/api/v1/secret-groups"),
-    ("PUT", "/api/v1/secret-groups/{id}"),
-    ("DELETE", "/api/v1/secret-groups/{id}"),
+    // An exported value leaves the Core to a file (D-4).
+    ("POST", "/api/v1/secrets/export"),
     ("POST", "/api/v1/secret-groups/{id}/leases"),
-    // AI provider accounts (KAN-432): every write changes who may spend which key.
-    ("POST", "/api/v1/accounts"),
-    // A sign-in ending in a stored credential; its code route is not (once, on the caller's own login).
-    ("POST", "/api/v1/accounts/logins"),
-    ("PUT", "/api/v1/accounts/{id}/secret"),
-    ("PUT", "/api/v1/accounts/{id}/state"),
-    ("PUT", "/api/v1/accounts/{id}/cap"),
-    // It raises what one session may spend (a test is not here: one fixed free request).
-    ("PUT", "/api/v1/accounts/{id}/session-limits"),
-    ("DELETE", "/api/v1/accounts/{id}"),
-    ("POST", "/api/v1/accounts/providers"),
-    ("PUT", "/api/v1/accounts/providers/{id}"),
-    ("DELETE", "/api/v1/accounts/providers/{id}"),
-    ("POST", "/api/v1/pools"),
-    ("DELETE", "/api/v1/pools/{id}"),
-    ("PUT", "/api/v1/pools/{id}/members/{account}"),
-    ("DELETE", "/api/v1/pools/{id}/members/{account}"),
-    ("PUT", "/api/v1/pools/{id}/default"),
-    ("PUT", "/api/v1/bindings"),
-    ("DELETE", "/api/v1/bindings/{agent}/{provider}"),
-    // Chains (S7): a chain decides which key a run spends next.
-    ("POST", "/api/v1/chains"),
-    ("PUT", "/api/v1/chains/bindings/{agent}"),
-    ("DELETE", "/api/v1/chains/bindings/{agent}"),
-    ("PUT", "/api/v1/chains/{id}"),
-    ("DELETE", "/api/v1/chains/{id}"),
-    ("PUT", "/api/v1/chains/{id}/default"),
-    // Connections (C5): every write; starting a sign-in ends in a stored credential (as an account
-    // login does); its poll, callback, site choice and cancel act on the caller's own flow, and a
-    // test is one fixed request, so none of them is here.
-    ("POST", "/api/v1/connections"),
-    ("POST", "/api/v1/connections/start"),
-    ("PATCH", "/api/v1/connections/{id}"),
-    ("DELETE", "/api/v1/connections/{id}"),
-    ("PUT", "/api/v1/connections/{id}/credential"),
-    ("PUT", "/api/v1/connections/{id}/grants"),
-    (
-        "DELETE",
-        "/api/v1/connections/{id}/grants/{grantee_kind}/{grantee}",
-    ),
-    ("PUT", "/api/v1/connection-defaults/{kind}"),
-    ("DELETE", "/api/v1/connection-defaults/{kind}"),
-    ("PUT", "/api/v1/connection-apps/{kind}"),
-    // The cost ledger (KAN-449): a price decides what every later turn costs, a limit what an account may spend.
-    ("PUT", "/api/v1/prices"),
-    ("PUT", "/api/v1/accounts/{id}/limits"),
-    (
-        "DELETE",
-        "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
-    ),
-    // Budgets (KAN-448): a limit decides what may be spent, and a raise lifts one.
-    ("PUT", "/api/v1/budgets"),
-    ("DELETE", "/api/v1/budgets/{id}"),
-    ("POST", "/api/v1/budgets/{id}/raise"),
-    // Opening or attaching a terminal is a shell on the runner (spec §8, E2-01).
+];
+
+/// `(method, path template)` of the routes that need the **app unlock** and no per-action prompt
+/// (E1-2, D-5): the ones that run code on a runner, the capability `hub::Elevated` stands for. A
+/// device unlocks once (`POST /api/v1/auth/step-up` with `purpose: session`) and holds it by
+/// heartbeat until the client ends it, so these cost the app nothing after the first Touch ID,
+/// while a device that never unlocked (a stolen routine key, a script) still cannot open a
+/// shell or start an AI session. Each must also be in [`ROUTES`] (a test checks).
+pub const UNLOCKED: &[(&str, &str)] = &[
     ("POST", "/api/v1/terminals"),
     ("GET", "/api/v1/terminals/{id}/ws"),
-    // The local path is an attach whose bytes bypass the Core: the same step-up.
+    // The last lines of a terminal's screen are the terminal's output: it reads like an attach (E6).
+    ("GET", "/api/v1/terminals/{id}/tail"),
     ("POST", "/api/v1/terminals/{id}/local"),
-    // Signalling or closing one acts on a live shell, so it needs the same step-up.
-    // The gate lets INT, TSTP and CONT through without one (Ctrl-C, Ctrl-Z, fg: `gate::plain_signal`).
+    // The gate lets INT, TSTP and CONT through (Ctrl-C, Ctrl-Z, fg: `gate::plain_signal`).
     ("POST", "/api/v1/terminals/{id}/signal"),
     ("DELETE", "/api/v1/terminals/{id}"),
-    // Agent sessions (E2-08): starting one, telling it what to do and resuming it run code on
-    // a runner and lease it secrets; cancelling and killing stop someone's work.
     ("POST", "/api/v1/agent-sessions"),
     ("POST", "/api/v1/agent-sessions/{id}/messages"),
-    // The same rights as a message (E4): what it uploads is shipped to the runner with one.
     ("POST", "/api/v1/agent-sessions/{id}/attachments"),
     ("POST", "/api/v1/agent-sessions/{id}/interrupt"),
     (
         "POST",
         "/api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop",
     ),
-    // A mode change can widen what the harness does unasked (accept_edits, leaving plan).
     ("POST", "/api/v1/agent-sessions/{id}/mode"),
+    // They change files on the runner, as a message could.
+    ("POST", "/api/v1/agent-sessions/{id}/files/revert"),
+    ("POST", "/api/v1/agent-sessions/{id}/files/write"),
+    // Removing a rule makes later calls ask again; it is a deletion like any other.
+    ("DELETE", "/api/v1/projects/{id}/approval-rules/{rule}"),
     ("POST", "/api/v1/agent-sessions/{id}/cancel"),
     ("POST", "/api/v1/agent-sessions/{id}/kill"),
     ("POST", "/api/v1/agent-sessions/{id}/resume"),
-    // A wake resumes a harness later, from the queue: it needs the step-up now.
     ("POST", "/api/v1/agent-sessions/{id}/wake"),
-    // Approval can execute a tool; a live step-up is required even for the approve scope.
     ("POST", "/api/v1/agent-sessions/{id}/approvals/{request}"),
+    ("PUT", "/api/v1/runners/{id}/policy"),
+    ("POST", "/api/v1/runners/{id}/tools"),
+    ("PUT", "/api/v1/projects/{id}/spec"),
+    ("POST", "/api/v1/projects/{id}/run/spec/draft"),
+    ("POST", "/api/v1/projects/{id}/run/start"),
+    ("POST", "/api/v1/projects/{id}/run/stop"),
+    ("POST", "/api/v1/projects/{id}/run/restart"),
+    // A run configuration starts a container on a runner, as the project run does (E11-3).
+    ("POST", "/api/v1/projects/{id}/run-configs/{config}/run"),
+    ("POST", "/api/v1/projects/{id}/runs/{run}/stop"),
+    // A heavy job runs code on a runner, as a terminal does (E15-3).
+    ("POST", "/api/v1/jobs"),
+    ("POST", "/api/v1/jobs/{id}/signal"),
+    ("DELETE", "/api/v1/jobs/{id}"),
+    // A job's live output reads like a terminal attach (E15 security review M4).
+    ("GET", "/api/v1/jobs/{id}/stream"),
 ];
 
 /// Whether `path` fits `template` segment by segment.
@@ -567,9 +647,40 @@ pub fn destructive(method: &Method, path: &str, modules: &[Arc<dyn Module>]) -> 
             .filter(|m| m.id() == id)
             .any(|m| module_destructive(m.as_ref(), method.as_str(), sub));
     }
-    DESTRUCTIVE
+    security_setting(method, path)
+        || DESTRUCTIVE
+            .iter()
+            .any(|(m, t)| *m == method.as_str() && fits(t, path))
+}
+
+/// A write to a security setting (`auth.*`: the step-up window, passkey admin): changing one
+/// weakens the danger list itself, so it is danger too.
+fn security_setting(method: &Method, path: &str) -> bool {
+    (*method == Method::PUT || *method == Method::DELETE)
+        && path
+            .strip_prefix("/api/v1/settings/")
+            .and_then(|rest| rest.split_once('/'))
+            // Fail closed: a `%` could spell `auth.` after decoding, so it is danger here; the
+            // handler decides from the parsed key (`settings::guard`).
+            .is_some_and(|(_, key)| key.starts_with("auth.") || key.contains('%'))
+}
+
+/// Whether a request needs the app unlock (E1-2, E1-3, D-6): a route in [`UNLOCKED`], or in its
+/// module's `Module::needs_unlock`. The unlock is the app's one Touch ID at open; no per-action prompt.
+pub fn needs_unlock(method: &Method, path: &str, modules: &[Arc<dyn Module>]) -> bool {
+    let Some((id, sub)) = module_path(path) else {
+        return UNLOCKED
+            .iter()
+            .any(|(m, t)| *m == method.as_str() && fits(t, path));
+    };
+    let Some(method) = module_method(method.as_str()) else {
+        return false;
+    };
+    modules
         .iter()
-        .any(|(m, t)| *m == method.as_str() && fits(t, path))
+        .filter(|m| m.id() == id)
+        .flat_map(|m| m.needs_unlock())
+        .any(|(mm, t)| mm.eq_ignore_ascii_case(method) && fits(t, sub))
 }
 
 /// The declared template of the destructive route `method path` is (a module's with its

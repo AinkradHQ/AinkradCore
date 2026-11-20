@@ -29,8 +29,11 @@ import kotlinx.serialization.Contextual
  * @param startedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param startedBy 
  * @param state `starting`, `running`, `stopping`, `stopped` or `failed`.
+ * @param configId The run configuration it started from, when it did (Core 0.10).
+ * @param environment The environment it ran in.
  * @param error What went wrong, for a failed run (redacted).
  * @param idleStopAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param job A `task` configuration's heavy job (`j_…`, E15-3): follow it with `/jobs/{id}`. Absent for a service run.
  * @param lastActivityAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param stopReason Why it ended, or is ending: `user`, `idle`, `crash`, `runner_lost`, `replaced` or `start_failed`.
  * @param stoppedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
@@ -60,6 +63,14 @@ data class ProjectRun (
     @SerialName(value = "state")
     val state: kotlin.String,
 
+    /* The run configuration it started from, when it did (Core 0.10). */
+    @SerialName(value = "config_id")
+    val configId: kotlin.Long? = null,
+
+    /* The environment it ran in. */
+    @SerialName(value = "environment")
+    val environment: kotlin.String? = null,
+
     /* What went wrong, for a failed run (redacted). */
     @SerialName(value = "error")
     val error: kotlin.String? = null,
@@ -67,6 +78,10 @@ data class ProjectRun (
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "idle_stop_at")
     val idleStopAt: java.time.OffsetDateTime? = null,
+
+    /* A `task` configuration's heavy job (`j_…`, E15-3): follow it with `/jobs/{id}`. Absent for a service run. */
+    @SerialName(value = "job")
+    val job: kotlin.String? = null,
 
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "last_activity_at")

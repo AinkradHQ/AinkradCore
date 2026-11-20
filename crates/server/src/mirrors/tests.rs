@@ -332,3 +332,46 @@ async fn a_gc_that_did_not_run_is_made_up_at_the_next_fetch() {
     assert_eq!(git(&m.dir(7), &["rev-parse", "refs/heads/main"]), new);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_failed_fetch_is_sorted_into_a_reason_a_person_can_act_on() {
+    let gh = "https://github.com/acme/web.git";
+    let prompt =
+        "fatal: could not read Username for 'https://github.com': terminal prompts disabled";
+    // Private on GitHub with no connection covering it: connect GitHub.
+    assert_eq!(classify(prompt, gh, false), Reason::NeedsGithub);
+    assert_eq!(
+        classify("remote: Repository not found.", gh, false),
+        Reason::NeedsGithub
+    );
+    // With a token the same words mean the token is wrong or cannot see it.
+    assert_eq!(classify(prompt, gh, true), Reason::AuthFailed);
+    assert_eq!(
+        classify("remote: Repository not found.", gh, true),
+        Reason::NotFoundOrPrivate
+    );
+    // Not GitHub: no connection could have helped.
+    let other = "https://git.example.com/a/b.git";
+    assert_eq!(classify(prompt, other, false), Reason::AuthFailed);
+    assert_eq!(
+        classify("fatal: repository 'x' not found", other, false),
+        Reason::NotFoundOrPrivate
+    );
+    assert_eq!(classify("git timed out", gh, true), Reason::Timeout);
+    assert_eq!(
+        classify(
+            "Permission denied (publickey).",
+            "git@github.com:a/b.git",
+            false
+        ),
+        Reason::SshNotSupported
+    );
+    assert_eq!(classify("disk full", gh, true), Reason::Other);
+    // A local path is not ssh.
+    assert_eq!(classify("fatal: boom", "/tmp/x", false), Reason::Other);
+    assert!(ssh_problem("ssh://git@github.com/a/b.git").is_some());
+    assert!(ssh_problem("git@github.com:a/b.git").is_some());
+    assert!(ssh_problem(gh).is_none());
+    // The sentence carries no git text, so no token or URL, except for `Other`.
+    assert!(!Reason::NeedsGithub.sentence("secret").contains("secret"));
+}

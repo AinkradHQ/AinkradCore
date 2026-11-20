@@ -475,6 +475,43 @@ pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next
         }
         return e.into_response();
     }
+    // The app unlock (E1-3): one Touch ID at open, held by heartbeat; never a per-action prompt.
+    if super::scopes::needs_unlock(&parts.method, parts.uri.path(), &app.modules)
+        && !plain_signal(&parts.method, parts.uri.path(), &v.body)
+        && !app.auth.unlock_ok(
+            &v.device.id,
+            parts
+                .headers
+                .get(crate::auth::signed::UNLOCK)
+                .and_then(|h| h.to_str().ok()),
+            app.clock.unix(),
+        )
+    {
+        tracing::warn!(device = v.device.id, "route refused: app not unlocked");
+        // Counted, and the first per device per window audited, like a step-up refusal.
+        let now = app.clock.unix();
+        app.auth.refusals.note("unlock_required", now);
+        if app
+            .auth
+            .refusals
+            .note(&format!("unlock_required:{}", v.device.id), now)
+        {
+            let e = super::stepup::unlock_required();
+            let event = ainkrad_core::audit::NewAuditEvent {
+                actor: super::BY,
+                action: "api.refused".to_owned(),
+                entity: None,
+                details: serde_json::json!({"error_id": e.error_id, "code": e.code,
+                    "status": 403, "method": parts.method.as_str(),
+                    "client": addr, "device": v.device.id})
+                .to_string(),
+            };
+            if let Err(err) = crate::store::audit::append_one(&app.pool, &event).await {
+                tracing::error!(error = %err, "auditing an unlock refusal failed");
+            }
+        }
+        return super::stepup::unlock_required().into_response();
+    }
     let session = session.id;
     // Everything this request writes to the diary starts with this device's person (E1).
     let origin = ainkrad_core::audit::AuditOrigin::new(

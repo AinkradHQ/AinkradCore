@@ -209,7 +209,7 @@ async fn refusing_a_room_writes_a_draft_rule_that_commit_turns_on() {
 }
 
 #[tokio::test]
-async fn commit_needs_a_step_up_and_writes_personal_and_employer_rooms() {
+async fn commit_needs_no_step_up_and_writes_personal_and_employer_rooms() {
     let fx = fx().await;
     let run = sample_run(&fx).await;
     let p = proposals(&fx, &run).await;
@@ -231,11 +231,9 @@ async fn commit_needs_a_step_up_and_writes_personal_and_employer_rooms() {
         None,
     )
     .await;
-    assert_eq!(
-        (s, &v["code"]),
-        (StatusCode::FORBIDDEN, &json!("step_up_required"))
-    );
-    let r = ok(&fx, Method::POST, &format!("/imports/{run}/commit"), None).await;
+    // A commit is a plain write: no step-up.
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let r = v;
     // Employer rooms commit like any other room (no backup hold since 2026-11-15).
     let mut names: Vec<(&str, i64)> = r["rooms"]
         .as_array()
@@ -343,7 +341,7 @@ async fn two_employers_never_share_a_room_and_a_mixed_commit_is_refused() {
         &run,
         vec![
             item(1, "/h/Projects/Shared/a", "for Optimus", "opt text"),
-            item(2, "/h/Projects/Shared/b", "for AutomotiveAi", "auto text"),
+            item(2, "/h/Projects/Shared/b", "for HarborMotors", "auto text"),
         ],
     )
     .await;
@@ -649,4 +647,46 @@ async fn rooms_held_for_a_backup_are_imported_and_undecided_rooms_stay() {
     assert_eq!(run_state, "review");
     // Run again: nothing is held any more.
     assert_eq!(fx.brain.release_held().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn collected_answers_at_once_and_a_large_run_is_discovered_in_the_background() {
+    let fx = fx().await;
+    let run = start(&fx).await;
+    // More items of one project than one UPDATE chunk (500) holds.
+    for part in 0..3u32 {
+        let batch: Vec<_> = (0..450u32)
+            .map(|i| {
+                let n = part * 450 + i;
+                item(
+                    n,
+                    "/h/Projects/Alpha/app",
+                    &format!("t{n}"),
+                    &format!("text {n}"),
+                )
+            })
+            .collect();
+        send(&fx, &run, batch).await;
+    }
+    let first = ok(
+        &fx,
+        Method::POST,
+        &format!("/imports/{run}/collected"),
+        Some(json!({"source": "claude_code"})),
+    )
+    .await;
+    // The reply does not wait for discovery.
+    assert!(["discovering", "review"].contains(&first["state"].as_str().unwrap()));
+    let mut state = first["state"].as_str().unwrap().to_owned();
+    for _ in 0..600 {
+        if state != "discovering" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let v = ok(&fx, Method::GET, &format!("/imports/{run}"), None).await;
+        state = v["state"].as_str().unwrap().to_owned();
+    }
+    assert_eq!(state, "review");
+    let p = proposals(&fx, &run).await;
+    assert_eq!(by_name(&p, "Alpha")["item_count"], 1350);
 }

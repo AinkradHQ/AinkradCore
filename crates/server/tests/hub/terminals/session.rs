@@ -26,7 +26,7 @@ async fn a_terminal_for_a_session_starts_in_the_sessions_folder() {
         .core
         .device("device", &["read", "terminal", "agent"])
         .await;
-    elevate(&fx.core, &dev);
+    unlock(&fx.core, &dev);
     let new = NewSession {
         runner: &fx.runner,
         harness: "claude",
@@ -83,20 +83,11 @@ async fn a_terminal_for_a_session_starts_in_the_sessions_folder() {
     assert!(out.contains("WORKCANARY-1187"), "{out}");
     assert!(!out.contains("KEYCANARY-6620"), "{out}");
 
-    // The same folder named as a plain `cwd` stays hidden: only the Core's session path reveals it.
+    // The same folder named as a plain `cwd` is refused (D-17): a sandboxed shell starts only in a
+    // folder the Core resolves from a session or project, never in a path the client names.
     let body = json!({"runner": fx.runner, "cwd": folder, "program": "/bin/sh",
-        "args": ["-c", "cat work.txt 2>/dev/null || echo WORK-HIDDEN; while read -r l; do :; done"],
         "size": {"rows": 24, "cols": 80}});
     let (status, t) = fx.call(&dev, "POST", "/api/v1/terminals", Some(body)).await;
-    assert_eq!(status, 201, "{t}");
-    let mut c = fx.ws(&dev, t["id"].as_str().unwrap()).await;
-    // macOS: the shell runs and cannot read its folder; Linux: bubblewrap cannot even enter it.
-    c.read_until(if cfg!(target_os = "macos") {
-        "WORK-HIDDEN"
-    } else {
-        "chdir"
-    })
-    .await;
-    assert!(!c.seen.contains("WORKCANARY-1187"), "{}", c.seen);
+    assert_eq!(status, 400, "{t}");
     let _ = std::fs::remove_dir_all(&state);
 }

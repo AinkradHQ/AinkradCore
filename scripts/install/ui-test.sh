@@ -85,7 +85,7 @@ dnsrun() { # NAME WANT A AAAA PUB [ip-6-local] [WANT-RC]: the verdict text, and 
     ui_init; ui_sleep() { :; }
     ANS_A=$3 ANS_AAAA=$4 ANS_PUB=$5
     dig() { if [[ "$*" == *" AAAA "* ]]; then printf '%s' "$ANS_AAAA"; else printf '%s' "$ANS_A"; fi; }
-    curl() { printf '%s' "$ANS_PUB"; }
+    curl() { local o=''; while [ $# -gt 0 ]; do [ "$1" = -o ] && o=$2; shift; done; [ -n "$ANS_PUB" ] || return 22; printf '{"ip":"%s","results":[]}' "$ANS_PUB" >"$o"; }
     ip() { printf '%s\n' "$LOCAL6"; }
     ui_check_dns core.example.com ) 2>&1; echo "rc=$?" )
   grep -Eq "$2" <<<"$out" && ok || bad "DNS check: $1 (wanted /$2/): $out"
@@ -100,7 +100,7 @@ dnsrun "the no-A card says which record to add" 'add an A record  core.example.c
 dnsrun "a stray AAAA record STOPS the install" 'AAAA\) record \(2001:db8::1\) that is not on this machine' "203.0.113.7" "2001:db8::1" "203.0.113.7" "" 1
 dnsrun "AAAA that IS on this machine" 'points at 203.0.113.7: this machine' "203.0.113.7" "2001:db8::1" "203.0.113.7" "    inet6 2001:db8::1/64 scope global"
 dnsrun "public address unknown" 'could not be looked up, so I cannot compare' "203.0.113.7" "" ""
-dnsrun "the third-party lookup is named" 'api.ipify.org' "203.0.113.7" "" "203.0.113.7"
+dnsrun "the lookup names Ainkrad's own service, not a third party" 'signin.ainkrad.io' "203.0.113.7" "" "203.0.113.7"
 dnsrun "the red card says nothing was set up" 'Nothing of the Core was set up' "" "" "203.0.113.7" "" 1
 # a dry run only warns
 o=$( ( . "$ROOT/scripts/install/ui.sh"; . "$ROOT/scripts/install/lib.sh"; . "$ROOT/scripts/install/guided.sh"; ui_init; ui_sleep() { :; }; DRY=1

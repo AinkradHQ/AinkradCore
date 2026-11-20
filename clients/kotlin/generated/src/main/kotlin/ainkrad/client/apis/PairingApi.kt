@@ -16,6 +16,7 @@
 package ainkrad.client.apis
 
 import ainkrad.client.models.ApproveBody
+import ainkrad.client.models.BundledAttested
 import ainkrad.client.models.ClaimBody
 import ainkrad.client.models.Claimed
 import ainkrad.client.models.ErrorBody
@@ -73,6 +74,40 @@ import io.ktor.http.ParametersBuilder
             )
 
             return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/runners/{id}/bundled
+        * 
+        * 
+         * @param id  
+         * @return BundledAttested
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun attestBundledRunner(id: kotlin.String): HttpResponse<BundledAttested> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/runners/{id}/bundled".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames

@@ -1,4 +1,4 @@
-//! The budget routes (KAN-448): reading is `read`, every change is `admin` plus a step-up, a list can be
+//! The budget routes (KAN-448): reading is `read`, every change is `admin`, a list can be
 //! filtered by company, and nothing reserves or releases headroom over HTTP.
 
 use axum::http::{Method, StatusCode};
@@ -17,7 +17,7 @@ fn body(kind: &str, subject: &str, company: Option<&str>) -> Value {
 }
 
 #[tokio::test]
-async fn every_change_needs_admin_and_a_step_up_and_a_phone_reads_and_filters_by_company() {
+async fn every_change_needs_admin_and_no_step_up_and_a_phone_reads_and_filters_by_company() {
     let fx = fx().await;
     let phone = fx.enroll("phone", &["read"]).await;
     let plain = TestDevice::enroll(
@@ -47,13 +47,17 @@ async fn every_change_needs_admin_and_a_step_up_and_a_phone_reads_and_filters_by
             (StatusCode::FORBIDDEN, Some("forbidden_scope")),
             "{m} {uri}"
         );
-        let (st, r) = call(&fx, &plain, m.clone(), uri, b.clone()).await;
-        assert_eq!(
-            (st, r["code"].as_str()),
-            (StatusCode::FORBIDDEN, Some("step_up_required")),
-            "{m} {uri}"
-        );
     }
+    // An admin device needs no step-up: its scope is enough, so the route answers (here: no such budget).
+    let (st, r) = call(
+        &fx,
+        &plain,
+        Method::DELETE,
+        "/api/v1/budgets/1",
+        Value::Null,
+    )
+    .await;
+    assert_eq!((st, r["deleted"].as_bool()), (StatusCode::OK, Some(false)));
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_budgets")
         .fetch_one(&fx.app.pool)
         .await

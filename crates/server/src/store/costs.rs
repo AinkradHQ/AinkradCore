@@ -298,6 +298,7 @@ pub async fn record_priced_in(
         c.session,
         tokens,
         cost.unwrap_or(0),
+        1,
         c.occurred_at,
     )
     .await?;
@@ -344,6 +345,15 @@ async fn add_subjects(
         sqlx::query(
             "INSERT INTO core_cost_subjects (event_id, kind, subject_id) \
              SELECT ?1, 'pool', CAST(pool_id AS TEXT) FROM core_pool_members WHERE account_id = ?2",
+        )
+        .bind(id)
+        .bind(a)
+        .execute(&mut *conn)
+        .await?;
+        // The account's provider counts it too (a provider's budget spans every account of it).
+        sqlx::query(
+            "INSERT OR IGNORE INTO core_cost_subjects (event_id, kind, subject_id) \
+             SELECT ?1, 'provider', provider FROM core_accounts WHERE id = ?2",
         )
         .bind(id)
         .bind(a)
@@ -425,7 +435,7 @@ pub async fn correct_in(
     .bind(id)
     .execute(&mut *conn)
     .await?;
-    guard::apply_in(conn, new, &o.session, 0, delta, &o.occurred_at).await?;
+    guard::apply_in(conn, new, &o.session, 0, delta, 0, &o.occurred_at).await?;
     let guard = guard::check_in(conn, new, &o.occurred_at, now).await?;
     let r = sqlx::query(concat!(
         "SELECT ",
@@ -462,6 +472,40 @@ pub async fn list(
     .await?
     .iter()
     .map(event)
+    .collect()
+}
+
+/// One day of one provider's ledger: tokens (input, output and cache) and dollars.
+#[derive(Debug, PartialEq)]
+pub struct DayUsage {
+    pub day: String,
+    pub provider: String,
+    pub total_tokens: i64,
+    pub cost_usd_micros: i64,
+}
+
+/// Per UTC day and provider, from the day `days - 1` before `now` to today, oldest first. Summed in SQL.
+pub async fn series(pool: &SqlitePool, now: &str, days: i64) -> Result<Vec<DayUsage>, sqlx::Error> {
+    sqlx::query(
+        "SELECT substr(occurred_at, 1, 10) AS day, provider, \
+         coalesce(sum(input_tokens + output_tokens + cache_tokens), 0) AS tokens, \
+         coalesce(sum(cost_usd_micros), 0) AS cost \
+         FROM core_cost_events WHERE substr(occurred_at, 1, 10) >= date(?1, ?2) \
+         GROUP BY day, provider ORDER BY day, provider",
+    )
+    .bind(now)
+    .bind(format!("-{} days", days - 1))
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(|r| {
+        Ok(DayUsage {
+            day: r.try_get("day")?,
+            provider: r.try_get("provider")?,
+            total_tokens: r.try_get("tokens")?,
+            cost_usd_micros: r.try_get("cost")?,
+        })
+    })
     .collect()
 }
 

@@ -61,6 +61,10 @@ pub(crate) fn profile(spec: &Spec, program: &OsStr) -> String {
             "(allow file-read* file-map-executable (subpath \"{p}\"))\n"
         ));
     }
+    // The TLS config and CA bundle. /etc is a link to /private/etc and Seatbelt matches the resolved
+    // path, so this one spelling covers both. Apple curl (LibreSSL) cannot start without openssl.cnf.
+    // Read-only, ssl only: never the rest of /etc.
+    s.push_str("(allow file-read* (subpath \"/private/etc/ssl\"))\n");
     // The /usr/bin developer shims (python3, git, make, ...) run xcode-select, which reads
     // this one symlink (both spellings, /var being a link to /private/var) to find the
     // developer dir, then stats its target (granted above). Nothing else in /var/db.
@@ -106,6 +110,13 @@ pub(crate) fn profile(spec: &Spec, program: &OsStr) -> String {
     for dir in program_dirs(program, spec) {
         s.push_str(&format!(
             "(allow file-read* (subpath \"{}\"))\n",
+            quote(&dir)
+        ));
+    }
+    // Heavy-job toolchains (E15-4): readable and executable, native libraries included.
+    for dir in extra_ro(spec) {
+        s.push_str(&format!(
+            "(allow file-read* file-map-executable (subpath \"{}\"))\n",
             quote(&dir)
         ));
     }
@@ -289,6 +300,29 @@ fn mac_prelude(spec: &Spec) -> String {
 /// the directory the name resolves to and the one its symlink points into (an `nvm` or
 /// `~/.local` install). Never `/`, a home directory or its parent, which would expose
 /// `~/.ssh`.
+/// `<state>/ai-tools/<tool>` for a launcher at `<state>/ai-tools/bin/<tool>`; `None` for any other file.
+fn managed_dir(file: &Path) -> Option<PathBuf> {
+    let bin = file.parent()?;
+    let tools = bin.parent()?;
+    if bin.file_name()? == "bin" && tools.file_name()? == "ai-tools" {
+        Some(tools.join(file.file_name()?))
+    } else {
+        None
+    }
+}
+
+/// `AINKRAD_SANDBOX_RO`: absolute existing directories (colon-separated) the sandbox may read and
+/// run from, read-only: the runner's heavy-job toolchains (E15-4). Nothing else of the state.
+fn extra_ro(spec: &Spec) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for p in std::env::split_paths(env(spec, "AINKRAD_SANDBOX_RO")) {
+        if p.is_absolute() && p.parent().is_some() && p.is_dir() && !dirs.contains(&p) {
+            dirs.push(p);
+        }
+    }
+    dirs
+}
+
 fn program_dirs(program: &OsStr, spec: &Spec) -> Vec<PathBuf> {
     let path = Path::new(program);
     let found = if path.is_absolute() {
@@ -309,12 +343,21 @@ fn program_dirs(program: &OsStr, spec: &Spec) -> Vec<PathBuf> {
         None
     };
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let mut dirs = Vec::new();
+    let mut dirs = extra_ro(spec);
     for file in found
         .into_iter()
         .flat_map(|f| [f.canonicalize().ok(), Some(f)])
         .flatten()
     {
+        // A tool the runner installed itself is `<state>/ai-tools/bin/<tool>`, a launcher that execs
+        // `<state>/ai-tools/<tool>/<version>/...`: that one tool's folder is readable (and executable),
+        // read-only, and nothing else of the state.
+        if let Some(m) = managed_dir(&file)
+            && m.is_dir()
+            && !dirs.contains(&m)
+        {
+            dirs.push(m);
+        }
         let Some(dir) = file.parent().map(Path::to_path_buf) else {
             continue;
         };
@@ -348,6 +391,28 @@ pub(crate) fn command_expecting_refusal(program: &OsStr, args: &[String], spec: 
         Command::new("/nonexistent/ainkrad-sandbox-refused")
     })
 }
+/// The parts of /etc a Linux sandbox reads, never all of it (it can hold credentials): resolver
+/// and CA data, the loader cache, and `alternatives`, the symlinks Debian and Ubuntu put
+/// `/usr/bin/cc`, `c++` and `editor` through (without it `cc` is a dead link: "linker `cc` not
+/// found" in every Rust job, e2e 2026-11-20).
+const ETC_READ: [&str; 5] = [
+    "/etc/resolv.conf",
+    "/etc/hosts",
+    "/etc/ssl/certs",
+    "/etc/ld.so.cache",
+    "/etc/alternatives",
+];
+
+/// Where the sandboxed process starts: its `process_dir` when that lies inside the bound `cwd`
+/// (a heavy job's folder below the project root), else `cwd`. bwrap's `--chdir` wins over the
+/// `current_dir` the caller sets, so without this every Linux job ran in the project root.
+fn workdir(spec: &Spec) -> &Path {
+    spec.process_dir
+        .as_deref()
+        .filter(|d| d.starts_with(&spec.cwd))
+        .unwrap_or(&spec.cwd)
+}
+
 fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command> {
     for path in [
         &spec.cwd,
@@ -427,12 +492,7 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         // Only resolver/CA data, never all of /etc (which can contain credentials). A filtered
         // sandbox gets no resolver config: names are resolved by the egress proxy, outside.
         let filtered = env(spec, "AINKRAD_SANDBOX_NETWORK") == "filtered";
-        for p in [
-            "/etc/resolv.conf",
-            "/etc/hosts",
-            "/etc/ssl/certs",
-            "/etc/ld.so.cache",
-        ] {
+        for p in ETC_READ {
             if filtered && matches!(p, "/etc/resolv.conf" | "/etc/hosts") {
                 continue;
             }
@@ -539,9 +599,23 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         }
         // The session's connection tools socket (C4b), whatever the network mode.
         tools::apply(&mut c, spec, &mut bound)?;
+        // The heavy-job shims (E15-3): their links and the session's own socket directory,
+        // read-only; connecting to the socket needs no write access.
+        if let Some(j) = &spec.job_shims {
+            let dir = j.socket.parent().filter(|d| d.is_absolute());
+            let (Some(dir), true) = (dir, j.bin_dir.is_absolute()) else {
+                return Err(io::Error::other("the job shims slot needs absolute paths"));
+            };
+            for d in [j.bin_dir.as_path(), dir] {
+                if !d.is_dir() {
+                    return Err(io::Error::other("the job shims slot needs its directories"));
+                }
+                c.arg("--ro-bind").arg(d).arg(d);
+            }
+        }
         c.args(["--remount-ro", "/dev", "--remount-ro", "/"])
             .arg("--chdir")
-            .arg(&spec.cwd)
+            .arg(workdir(spec))
             .arg("--");
     }
     let limits = |name, default: &str| {

@@ -547,8 +547,10 @@ mod tests {
             Some(json!({"env": {"DISABLE_AUTOUPDATER": "1"}}))
         );
         for t in Tool::ALL {
-            let known = matches!(t, Tool::Node | Tool::Claude | Tool::Codex)
-                || m.distro.contains_key(t.name());
+            let known = matches!(
+                t,
+                Tool::Node | Tool::Claude | Tool::Codex | Tool::Opencode | Tool::Agy
+            ) || m.distro.contains_key(t.name());
             assert!(known, "{}", t.name());
         }
         // Podman is not a one-click Tool: `install-linux.sh --with-run` installs it with the run user, from this entry.

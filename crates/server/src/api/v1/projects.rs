@@ -5,8 +5,11 @@
 //! read-only here; the mirror scheduler writes it (P3-01). Every remote goes through
 //! `repo_url_problem` here and again in the store, so no credential or odd scheme gets in.
 
+pub mod insight;
+pub mod run_configs;
 pub mod run_logs;
 pub mod run_spec;
+mod run_task;
 pub mod runs;
 pub mod secrets;
 
@@ -29,6 +32,16 @@ pub struct MirrorState {
     pub fetched_at: Option<Timestamp>,
     /// Why the last fetch failed; the older head is kept.
     pub error: Option<String>,
+    /// `fetching`, `ready` or `failed`.
+    #[schema(required = false)]
+    pub state: Option<String>,
+    /// Why the last fetch failed: `needs_github`, `not_found_or_private`, `auth_failed`,
+    /// `timeout`, `ssh_not_supported` or `other`. `error` is the same in one plain sentence.
+    #[schema(required = false)]
+    pub reason: Option<String>,
+    /// When the running fetch began (state `fetching`).
+    #[schema(required = false)]
+    pub started_at: Option<Timestamp>,
 }
 
 impl From<Mirror> for MirrorState {
@@ -37,6 +50,9 @@ impl From<Mirror> for MirrorState {
             head: m.head,
             fetched_at: opt_ts(m.fetched_at.as_deref()),
             error: m.error,
+            state: Some(m.state),
+            reason: m.reason,
+            started_at: opt_ts(m.started_at.as_deref()),
         }
     }
 }
@@ -88,8 +104,20 @@ pub struct ProjectInfo {
     /// Whether the running project gets a public link.
     pub expose: bool,
     pub idle_minutes: i64,
+    /// The idle stop is off: the run keeps going while nobody visits.
+    #[schema(required = false)]
+    pub idle_never: Option<bool>,
     pub cpu_limit: f64,
     pub mem_limit_mb: i64,
+    /// Where it prefers to run: `auto`, `this_mac` or `home_server`.
+    #[schema(required = false)]
+    pub runner: String,
+    /// Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
+    #[schema(required = false)]
+    pub fetch_interval_minutes: i64,
+    /// The run environment a Run button uses by default; one of the project's.
+    #[schema(required = false)]
+    pub default_environment: Option<String>,
     /// The primary repo first, then by name.
     pub repos: Vec<ProjectRepo>,
     /// The linked Brain room; null when the Brain is off or the project has none.
@@ -131,8 +159,12 @@ pub(super) async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError>
         source: p.source,
         expose: p.expose,
         idle_minutes: p.idle_minutes,
+        idle_never: Some(p.idle_never),
         cpu_limit: p.cpu_limit,
         mem_limit_mb: p.mem_limit_mb,
+        runner: p.runner_pref.clone(),
+        fetch_interval_minutes: p.fetch_interval_minutes,
+        default_environment: p.default_environment.clone(),
         repos,
         room,
         created_at: ts(&p.created_at),
@@ -201,6 +233,8 @@ pub struct NewProject {
     pub name: String,
     /// Default empty.
     pub description: Option<String>,
+    /// `auto` (default), `this_mac` or `home_server`.
+    pub runner: Option<String>,
 }
 
 #[utoipa::path(post, path = "/api/v1/projects", operation_id = "createProject", tag = "projects",
@@ -223,6 +257,16 @@ pub async fn create(
         who(&me, &now),
     )
     .await?;
+    let p = match b.runner.as_deref() {
+        Some(r) => {
+            let c = store::Change {
+                runner: Some(r),
+                ..store::Change::default()
+            };
+            store::change(&app.pool, p.id, &c, who(&me, &now)).await?
+        }
+        None => p,
+    };
     Ok(Json(info(&app, p).await?))
 }
 
@@ -236,10 +280,20 @@ pub struct UpdateProject {
     pub slug: Option<String>,
     /// Idle stop, 5 to 1440 minutes.
     pub idle_minutes: Option<i64>,
+    /// Turn the idle stop off (true) or back on (false).
+    pub idle_never: Option<bool>,
     /// CPUs a run may use, 0.1 to 16.
     pub cpu_limit: Option<f64>,
     /// Memory a run may use, 64 to 32768 MB.
     pub mem_limit_mb: Option<i64>,
+    /// Where it prefers to run: `auto`, `this_mac` or `home_server`.
+    pub runner: Option<String>,
+    /// Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
+    #[schema(required = false)]
+    pub fetch_interval_minutes: Option<i64>,
+    /// One of the project's run environments; an empty string clears it.
+    #[schema(required = false)]
+    pub default_environment: Option<String>,
 }
 
 #[utoipa::path(patch, path = "/api/v1/projects/{id}", operation_id = "updateProject",
@@ -261,8 +315,12 @@ pub async fn update(
         expose: b.expose,
         slug: b.slug.as_deref(),
         idle_minutes: b.idle_minutes,
+        idle_never: b.idle_never,
         cpu_limit: b.cpu_limit,
         mem_limit_mb: b.mem_limit_mb,
+        runner: b.runner.as_deref(),
+        fetch_interval_minutes: b.fetch_interval_minutes,
+        default_environment: b.default_environment.as_deref(),
     };
     let p = store::change(&app.pool, num(&id, "project")?, &c, who(&me, &now)).await?;
     Ok(Json(info(&app, p).await?))
@@ -283,6 +341,89 @@ pub async fn archive(
     Ok(Json(info(&app, p).await?))
 }
 
+#[utoipa::path(post, path = "/api/v1/projects/{id}/unarchive", operation_id = "unarchiveProject",
+    tag = "projects", params(("id" = String, Path, description = "The project's id")),
+    responses((status = 200, description = "Back to `active` (the undo of an archive; audited \
+        and emitted as `project.updated`). 404 for no such project; 409 `conflict` when it is \
+        not archived", body = ProjectInfo)))]
+pub async fn unarchive(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<ProjectInfo> {
+    let now = app.clock.now();
+    let p = store::unarchive(&app.pool, num(&id, "project")?, who(&me, &now)).await?;
+    Ok(Json(info(&app, p).await?))
+}
+
+/// What a run gets unless a project says otherwise: the Settings page's Projects > Options.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ProjectDefaults {
+    /// CPUs a run may use; 2 until set.
+    pub cpu_limit: f64,
+    /// Memory a run may use in MB; 4096 until set.
+    pub mem_limit_mb: i64,
+    /// Idle stop in minutes; 30 until set.
+    pub idle_minutes: i64,
+    /// Whether the idle stop is off.
+    pub idle_never: bool,
+}
+
+/// The defaults to change; a field left out stays. Saving also sets every project.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetProjectDefaults {
+    pub cpu_limit: Option<f64>,
+    pub mem_limit_mb: Option<i64>,
+    pub idle_minutes: Option<i64>,
+    pub idle_never: Option<bool>,
+}
+
+impl From<store::Defaults> for ProjectDefaults {
+    fn from(d: store::Defaults) -> Self {
+        Self {
+            cpu_limit: d.cpu_limit,
+            mem_limit_mb: d.mem_limit_mb,
+            idle_minutes: d.idle_minutes,
+            idle_never: d.idle_never,
+        }
+    }
+}
+
+#[utoipa::path(get, path = "/api/v1/projects/defaults", operation_id = "getProjectDefaults",
+    tag = "projects",
+    responses((status = 200, description = "The limits new projects start with. Needs `read`",
+        body = ProjectDefaults)))]
+pub async fn defaults(State(app): State<App>) -> ApiResult<ProjectDefaults> {
+    let mut conn = app.pool.acquire().await?;
+    Ok(Json(store::defaults(&mut conn).await?.into()))
+}
+
+#[utoipa::path(put, path = "/api/v1/projects/defaults", operation_id = "setProjectDefaults",
+    tag = "projects", request_body = SetProjectDefaults,
+    responses((status = 200, description = "Saved and applied to every project (audited as \
+        `project.defaults_changed`); the defaults now. A run already going keeps the limits it \
+        started with. 400 for a value out of range: CPUs 0.1 to 16, memory 64 to 32768 MB, idle \
+        stop 5 to 1440 minutes. Needs `admin`", body = ProjectDefaults)))]
+pub async fn set_defaults(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Json(b): Json<SetProjectDefaults>,
+) -> ApiResult<ProjectDefaults> {
+    let now = app.clock.now();
+    let c = store::DefaultsChange {
+        cpu_limit: b.cpu_limit,
+        mem_limit_mb: b.mem_limit_mb,
+        idle_minutes: b.idle_minutes,
+        idle_never: b.idle_never,
+    };
+    Ok(Json(
+        store::set_defaults(&app.pool, &c, who(&me, &now))
+            .await?
+            .into(),
+    ))
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct NewProjectRepo {
     /// The folder name: 1-100 of `[A-Za-z0-9._-]`, not starting with `.` or `-`.
@@ -299,7 +440,8 @@ pub struct NewProjectRepo {
     request_body = NewProjectRepo,
     responses((status = 200, description = "Added (audited as `project.repo_added`); the project \
         as it now is. 400 for a bad name, remote or branch; 404 for no such project; 409 \
-        `conflict` for an archived project or a repeated name or remote", body = ProjectInfo)))]
+        `conflict` for an archived project or a repeated name or remote. An ssh remote is 400: the \
+        Core holds no key. The Core starts copying the repo at once (`mirror.state`)", body = ProjectInfo)))]
 pub async fn add_repo(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -310,8 +452,11 @@ pub async fn add_repo(
     if let Some(why) = repo_url_problem(&b.remote_url) {
         return Err(ApiError::bad_request(why));
     }
+    if let Some(why) = crate::mirrors::ssh_problem(&b.remote_url) {
+        return Err(ApiError::bad_request(why));
+    }
     let now = app.clock.now();
-    store::add_repo(
+    let r = store::add_repo(
         &app.pool,
         id,
         &b.name,
@@ -321,6 +466,8 @@ pub async fn add_repo(
         who(&me, &now),
     )
     .await?;
+    // The copy starts now; `mirror.state` says `fetching` until it ends.
+    crate::mirrors::start(&app, r.id).await;
     current(&app, id).await
 }
 

@@ -1,9 +1,11 @@
 //! The Brain through the Core's real gate: signed requests into `api::router`, so scope, step-up,
 //! the migration guard and the registries are the Core's own code. Every item here is synthetic.
 
+mod activity;
 mod ai;
 mod ai_semantic;
 mod ai_write;
+mod areas;
 mod auto_distil;
 mod backfill;
 mod changes;

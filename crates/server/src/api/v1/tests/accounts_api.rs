@@ -87,6 +87,7 @@ async fn a_key_is_written_never_read_and_a_phone_sees_neither_secret_name_nor_ru
             "last_used_at",
             "live",
             "masked_tail",
+            "models_enforced",
             "month_limit_usd_micros",
             "month_spend_usd_micros",
             "provider",
@@ -145,7 +146,7 @@ async fn a_key_is_written_never_read_and_a_phone_sees_neither_secret_name_nor_ru
 }
 
 #[tokio::test]
-async fn every_write_needs_admin_and_a_step_up_and_a_phone_may_only_read() {
+async fn every_write_needs_admin_and_no_step_up_and_a_phone_may_only_read() {
     let (fx, _vm, phone) = setup().await;
     let plain = plain_admin(&fx).await;
     let writes = [
@@ -165,6 +166,11 @@ async fn every_write_needs_admin_and_a_step_up_and_a_phone_may_only_read() {
             json!({"state": "disabled"}),
         ),
         (Method::PUT, "/api/v1/accounts/1/cap", json!({"cap": 8})),
+        (
+            Method::PUT,
+            "/api/v1/accounts/1/models/m",
+            json!({"allowed": false}),
+        ),
         (
             Method::PUT,
             "/api/v1/accounts/1/session-limits",
@@ -197,13 +203,10 @@ async fn every_write_needs_admin_and_a_step_up_and_a_phone_may_only_read() {
             (StatusCode::FORBIDDEN, Some("forbidden_scope")),
             "{m} {uri}: {b}"
         );
-        let (s, b) = call(&fx, &plain, m.clone(), uri, body).await;
-        assert_eq!(
-            (s, b["code"].as_str()),
-            (StatusCode::FORBIDDEN, Some("step_up_required")),
-            "{m} {uri}: {b}"
-        );
     }
+    // An admin needs no step-up: its scope is enough, so the route answers (here not found).
+    let (s, b) = call(&fx, &plain, Method::DELETE, "/api/v1/pools/1", Value::Null).await;
+    assert_ne!(s, StatusCode::FORBIDDEN, "{b}");
     // Nothing was written.
     let n: i64 = sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM core_accounts) + (SELECT count(*) FROM core_pools)",
@@ -392,6 +395,18 @@ async fn the_list_gives_an_admin_the_months_spend_and_limit() {
     .execute(&fx.app.pool)
     .await
     .unwrap();
+    // The meter reads the budget's counters, which the ledger's account subjects feed: the raw
+    // rows above are the ledger, so name their accounts and recount.
+    sqlx::query(
+        "INSERT INTO core_cost_subjects (event_id, kind, subject_id) \
+         SELECT id, 'account', account_id FROM core_cost_events",
+    )
+    .execute(&fx.app.pool)
+    .await
+    .unwrap();
+    crate::store::budgets::recompute(&fx.app.pool, super::super::BY)
+        .await
+        .unwrap();
     let (_, list) = call(&fx, &fx.dev, Method::GET, "/api/v1/accounts", Value::Null).await;
     let of = |id: i64| {
         list.as_array()
@@ -418,5 +433,25 @@ async fn the_list_gives_an_admin_the_months_spend_and_limit() {
     assert!(
         seen[0]["month_spend_usd_micros"].is_null(),
         "a phone does not see spend"
+    );
+    // The usage meter of the row: the dollar budget's use and the state, for an admin only.
+    let u = &of(a)["usage"];
+    assert_eq!(
+        (
+            u["state"].as_str(),
+            u["unit"].as_str(),
+            u["window"].as_str()
+        ),
+        (Some("ready"), Some("usd_micros"), Some("month"))
+    );
+    assert_eq!(
+        (u["used"].as_f64(), u["limit"].as_f64()),
+        (Some(2e6), Some(5e7))
+    );
+    assert!((u["fraction"].as_f64().unwrap() - 0.04).abs() < 1e-9);
+    assert!(u["resets_at"].is_string());
+    assert!(
+        seen[0].get("usage").is_none(),
+        "a phone does not see the meter"
     );
 }

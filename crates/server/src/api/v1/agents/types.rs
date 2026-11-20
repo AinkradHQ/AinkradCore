@@ -29,6 +29,68 @@ pub struct AgentDecision {
     pub approved: bool,
     /// Told to the agent; a denial's reason.
     pub reply: Option<String>,
+    /// With `approved`: also allow this kind of call for every session of the session's project
+    /// from now on ("Always for this project"). The Core stores a rule derived from the request
+    /// (a safe shell command's first words, or a plain path prefix inside the project folder) and
+    /// approves later matching requests itself, auditing each (`agent.approval_auto`). 400
+    /// `rule_not_allowed` (nothing is decided) for a tool or command that can only be approved
+    /// once, or a session of no project. See `listApprovalRules`.
+    #[serde(default)]
+    pub always: Option<bool>,
+}
+
+/// An "always for this project" rule (see `AgentDecision.always`).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ApprovalRule {
+    pub id: i64,
+    /// The harness's tool name (`Bash`, `Edit`, `Write`, `MultiEdit`).
+    pub tool: String,
+    /// What it covers: a shell command's first words (`cargo test`), or a path prefix inside the
+    /// project folder (`src/api/`, or one file's relative path).
+    pub pattern: String,
+    pub created_at: super::super::types::Timestamp,
+}
+
+/// One level of a session's folder.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AgentFolderListing {
+    /// The folder listed, relative to the session's folder; empty for the folder itself.
+    pub dir: String,
+    /// Directories first, then by name; at most 500.
+    pub entries: Vec<AgentFolderEntry>,
+    /// There were more than the entries shown.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AgentFolderEntry {
+    pub name: String,
+    pub dir: bool,
+    /// Bytes, for a file.
+    pub size: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct FolderQuery {
+    /// A folder of the session, relative to its folder (no `..`); absent or empty, the folder itself.
+    pub dir: Option<String>,
+}
+
+/// A file of a session's folder to put back as it was before the session's edits.
+#[derive(Deserialize, ToSchema)]
+pub struct AgentFileRevert {
+    /// Inside the session's folder: absolute, or relative to it.
+    pub path: String,
+}
+
+/// A file to write into a session's folder.
+#[derive(Deserialize, ToSchema)]
+pub struct AgentFileWrite {
+    /// Inside the session's folder: absolute, or relative to it. Not under `.git`.
+    pub path: String,
+    /// The file's whole new text, at most 256 KiB.
+    pub content: String,
 }
 
 /// A Code Mode write the Core holds until a person decides (plan E6).
@@ -67,6 +129,10 @@ pub struct AgentModeChange {
     pub policy: Option<String>,
     /// Plan mode on or off; absent, unchanged.
     pub plan: Option<bool>,
+    /// How hard the harness thinks: `low`, `medium`, `high` or `max`; absent, unchanged. Takes
+    /// effect at the next turn (the harness is restarted with it). 400 `effort_unsupported` for a
+    /// harness that cannot (`can_set_effort`).
+    pub effort: Option<String>,
 }
 
 /// A new title for a session.
@@ -106,7 +172,10 @@ pub struct AgentTranscriptEntry {
     pub at_ms: i64,
     /// A harness event, or the session's own (`started`, `message`, `approval_request`,
     /// `approval_decided`, `interrupted`, `gap`, `ended`), redacted. A file edit's `tool_use` also
-    /// carries `edit` (`AgentEdit`).
+    /// carries `edit` (`AgentEdit`). A harness that shows its reasoning (Claude Code's `thinking`
+    /// blocks) adds `{"type": "thinking", "text": "…"}` entries, before the text or tool call they
+    /// belong to, at most 16 KiB each (cut with a `[cut]` marker); the other harnesses send none.
+    /// An `approval_decided` the Core made by a project's "always" rule carries `note` saying which.
     #[schema(value_type = Object)]
     pub body: Value,
 }
@@ -162,8 +231,13 @@ pub struct AgentSecret {
 /// A session to start. No `Debug`: the prompt is the caller's.
 #[derive(Deserialize, ToSchema)]
 pub struct NewAgentSession {
-    /// The runner's device id, `d_…`.
-    pub runner: String,
+    /// Deprecated and ignored (E15): the Core places every session (on itself, or on a runner
+    /// when it is full). Kept so an older client still parses. The one exception: a session of a
+    /// runner-bound login (`codex` or `agy` using the login its runner reports, with no account)
+    /// stays on the runner it names.
+    #[serde(default)]
+    #[schema(required = false, deprecated)]
+    pub runner: Option<String>,
     /// `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it
     /// (and `model`) when the session draws from a chain: the account the allocator picks sets them.
     #[serde(default)]
@@ -200,6 +274,10 @@ pub struct NewAgentSession {
     /// switched (`setAgentSessionMode`). Only `claude` has one (400 `plan_unsupported`); a
     /// runner too old for it answers 409 `unsupported_command`. Default `false`.
     pub plan: Option<bool>,
+    /// How hard the harness thinks: `low`, `medium`, `high` or `max`. Claude (its `--effort`) and
+    /// Codex (`model_reasoning_effort`) take it; 400 `effort_unsupported` for another harness, 409
+    /// `unsupported_command` for a runner too old for it. Absent: the harness's own default.
+    pub effort: Option<String>,
     /// At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC).
     pub secrets: Option<Vec<AgentSecret>>,
     /// A fallback chain's id: the session draws its account from it, one at a time. Needs

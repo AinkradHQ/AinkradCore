@@ -42,6 +42,10 @@ pub const PLATFORM_EVENT_KINDS: &[&str] = &[
     "alarm.raised",
     "audit",
     "connection.health",
+    "hardware.changed",
+    "job.ended",
+    "job.queued",
+    "job.started",
     "agent.approval_decided",
     "agent.approval_requested",
     "agent.created",
@@ -52,6 +56,8 @@ pub const PLATFORM_EVENT_KINDS: &[&str] = &[
     "notify.delivery",
     "project.archived",
     "project.created",
+    "project.mirror_changed",
+    "project.run_gave_up",
     "project.run_started",
     "project.run_stopped",
     "project.spec_saved",
@@ -82,7 +88,11 @@ pub fn platform_scope(kind: &str) -> &'static str {
         "approve"
     } else if kind.starts_with("agent.") {
         "agent"
-    } else if kind.starts_with("runner.") || kind.starts_with("project.") {
+    } else if kind.starts_with("runner.")
+        || kind.starts_with("project.")
+        || kind.starts_with("hardware.")
+        || kind.starts_with("job.")
+    {
         "read"
     } else if kind.starts_with("terminal.") {
         "terminal"
@@ -103,16 +113,24 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "account.login_cancelled",
     "account.login_failed",
     "account.login_started",
+    "account.model_allowed_set",
+    "account.restored",
     "account.secret_replaced",
     "account.session_limits_set",
     "account.state_set",
     "account.tested",
+    "account.wiped",
     "alarm.cleared",
     "alarm.raised",
+    "agent.approval_auto",
+    "agent.approval_rule_added",
+    "agent.approval_rule_removed",
     "agent.attachment_added",
     "agent.cancelled",
     "agent.created",
     "agent.decided",
+    "agent.file_reverted",
+    "agent.file_written",
     "agent.interrupted",
     "agent.killed",
     "agent.messaged",
@@ -127,6 +145,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "auth.lockout",
     "auth.lockout_cleared",
     "auth.step_up",
+    "auth.unlock",
     "budget.created",
     "budget.deleted",
     "budget.exhausted",
@@ -158,15 +177,21 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "connection.unbound",
     "connection.updated",
     "connection.used",
+    "decision.asked",
     "device.renamed",
     "device.scopes_changed",
     "device.enrolled",
     "device.last_admin_refused",
     "device.revoked",
+    "hardware.paused",
+    "hardware.resumed",
     "host.action_result",
+    "host.backup_requested",
+    "host.backup_retention_requested",
     "host.helper_refused",
     "host.logs_read",
     "host.restart_requested",
+    "host.update_requested",
     "identity.rotation.announced",
     "identity.rotation.started",
     "identity.rotation.switched",
@@ -197,6 +222,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "project.repo_added",
     "project.repo_primary_set",
     "project.repo_removed",
+    "project.run_gave_up",
     "project.run_started",
     "project.run_stopped",
     "project.spec_saved",
@@ -207,6 +233,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "runner.policy_set",
     "runner.refused",
     "runner.tool_install",
+    "runner.update_requested",
     "terminal.attached",
     "terminal.closed",
     "terminal.detached",
@@ -215,9 +242,11 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "terminal.signalled",
     "secret.created",
     "secret.deleted",
+    "secret.exported",
     "secret.leased",
     "secret.master_rotated",
     "secret.redeemed",
+    "secret.revealed",
     "secret.rotated",
     "secret.runners_changed",
     "secret.used",
@@ -226,6 +255,9 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "secret_group.updated",
     "setting.reset",
     "setting.set",
+    "core.prefs_changed",
+    "project.defaults_changed",
+    "project.unarchived",
 ];
 
 /// Whether `name` is dotted lowercase with at least `segments` segments.

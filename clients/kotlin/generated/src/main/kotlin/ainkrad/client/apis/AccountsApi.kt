@@ -18,13 +18,19 @@ package ainkrad.client.apis
 import ainkrad.client.models.AccountChecked
 import ainkrad.client.models.AccountDetail
 import ainkrad.client.models.AccountLogin
+import ainkrad.client.models.AccountModels
+import ainkrad.client.models.AccountRestored
 import ainkrad.client.models.AccountTested
 import ainkrad.client.models.AccountsDeleted
+import ainkrad.client.models.AiOrder
 import ainkrad.client.models.Binding
 import ainkrad.client.models.ErrorBody
 import ainkrad.client.models.LoginCode
+import ainkrad.client.models.LoginInputBody
+import ainkrad.client.models.LoginScreenView
 import ainkrad.client.models.NewBinding
 import ainkrad.client.models.NewLogin
+import ainkrad.client.models.NewOrder
 import ainkrad.client.models.NewPool
 import ainkrad.client.models.NewProviderAccount
 import ainkrad.client.models.Pool
@@ -33,6 +39,7 @@ import ainkrad.client.models.ProviderAccount
 import ainkrad.client.models.ReplaceKey
 import ainkrad.client.models.SessionLimits
 import ainkrad.client.models.SetCap
+import ainkrad.client.models.SetModelAllowed
 import ainkrad.client.models.SetState
 
 import ainkrad.client.infrastructure.*
@@ -175,6 +182,40 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.POST,
             "/api/v1/accounts/{id}/check".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * DELETE /api/v1/ai-order/agents/{agent}
+        * 
+        * 
+         * @param agent The agent&#39;s id 
+         * @return AccountsDeleted
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun clearAgentAiOrder(agent: kotlin.String): HttpResponse<AccountsDeleted> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.DELETE,
+            "/api/v1/ai-order/agents/{agent}".replace("{" + "agent" + "}", "$agent"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
@@ -457,6 +498,107 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * GET /api/v1/accounts/logins/{id}/screen
+        * 
+        * 
+         * @param id The sign-in&#39;s id 
+         * @return LoginScreenView
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getAccountLoginScreen(id: kotlin.String): HttpResponse<LoginScreenView> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/accounts/logins/{id}/screen".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/ai-order
+        * 
+        * 
+         * @return AiOrder
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getAiOrder(): HttpResponse<AiOrder> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/ai-order",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/accounts/{id}/models
+        * 
+        * 
+         * @param id The account&#39;s id 
+         * @return AccountModels
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun listAccountModels(id: kotlin.String): HttpResponse<AccountModels> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/accounts/{id}/models".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * GET /api/v1/accounts
         * 
         * 
@@ -692,6 +834,40 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * POST /api/v1/accounts/{id}/restore
+        * 
+        * 
+         * @param id The account&#39;s id 
+         * @return AccountRestored
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun restoreAccount(id: kotlin.String): HttpResponse<AccountRestored> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/accounts/{id}/restore".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * POST /api/v1/accounts/logins/{id}/code
         * 
         * 
@@ -726,6 +902,40 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * POST /api/v1/accounts/logins/{id}/input
+        * 
+        * 
+         * @param id The sign-in&#39;s id 
+         * @param loginInputBody  
+         * @return AccountLogin
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun sendAccountLoginInput(id: kotlin.String, loginInputBody: LoginInputBody): HttpResponse<AccountLogin> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = loginInputBody
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/accounts/logins/{id}/input".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * PUT /api/v1/accounts/{id}/cap
         * 
         * 
@@ -747,6 +957,41 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.PUT,
             "/api/v1/accounts/{id}/cap".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * PUT /api/v1/accounts/{id}/models/{model}
+        * 
+        * 
+         * @param id The account&#39;s id 
+         * @param model The model id 
+         * @param setModelAllowed  
+         * @return AccountModels
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun setAccountModelAllowed(id: kotlin.String, model: kotlin.String, setModelAllowed: SetModelAllowed): HttpResponse<AccountModels> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = setModelAllowed
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/accounts/{id}/models/{model}".replace("{" + "id" + "}", "$id").replace("{" + "model" + "}", "$model"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
@@ -815,6 +1060,73 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.PUT,
             "/api/v1/accounts/{id}/state".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * PUT /api/v1/ai-order/agents/{agent}
+        * 
+        * 
+         * @param agent The agent&#39;s id 
+         * @param newOrder  
+         * @return AiOrder
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun setAgentAiOrder(agent: kotlin.String, newOrder: NewOrder): HttpResponse<AiOrder> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = newOrder
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/ai-order/agents/{agent}".replace("{" + "agent" + "}", "$agent"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * PUT /api/v1/ai-order
+        * 
+        * 
+         * @param newOrder  
+         * @return AiOrder
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun setAiOrder(newOrder: NewOrder): HttpResponse<AiOrder> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = newOrder
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/ai-order",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

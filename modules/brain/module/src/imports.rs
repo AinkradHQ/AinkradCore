@@ -1,7 +1,7 @@
 //! Import runs and intake (E1-2, E1-5): start a run, take batches of items (validate, rule check,
 //! dedupe, clean, stage), close the collectors and let discovery run.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult};
@@ -248,7 +248,10 @@ pub(crate) async fn stage_items(
     let mut counts = load_counts(app, run).await?;
     let mut results = Vec::with_capacity(items.len());
     let mut stx = staging.begin().await?;
-    let mut seen_tx = begin_write(&app.pool).await?;
+    // The app database's write gate is taken once, at the end: the per-item work reads through
+    // the pool and collects what to write (a 100-item batch holds the gate for milliseconds).
+    let mut refused_hashes: BTreeSet<String> = BTreeSet::new();
+    let mut bumps: Vec<(String, &'static str)> = Vec::new();
     for item in items {
         counts.found += 1;
         let reply = |status: &str, detail: Option<String>| ItemReply {
@@ -277,11 +280,7 @@ pub(crate) async fn stage_items(
             let reason = format!("rule:{}", rule.id);
             *counts.skipped.entry(reason.clone()).or_default() += 1;
             counts.refused += 1;
-            sqlx::query("INSERT OR IGNORE INTO brain_seen (content_hash, room, run) VALUES (?, 'refused', ?)")
-                .bind(&item.content_hash)
-                .bind(run)
-                .execute(&mut *seen_tx)
-                .await?;
+            refused_hashes.insert(item.content_hash.clone());
             sqlx::query("INSERT INTO skips (item_id, reason) VALUES (?, ?)")
                 .bind(&item.item_id)
                 .bind(&reason)
@@ -293,13 +292,13 @@ pub(crate) async fn stage_items(
         let known: i64 =
             sqlx::query_scalar("SELECT count(*) FROM brain_seen WHERE content_hash = ?")
                 .bind(&item.content_hash)
-                .fetch_one(&mut *seen_tx)
+                .fetch_one(&app.pool)
                 .await?;
         let staged: i64 = sqlx::query_scalar("SELECT count(*) FROM items WHERE content_hash = ?")
             .bind(&item.content_hash)
             .fetch_one(&mut *stx)
             .await?;
-        if known > 0 || staged > 0 {
+        if known > 0 || staged > 0 || refused_hashes.contains(&item.content_hash) {
             counts.duplicate += 1;
             results.push(reply("duplicate", None));
             continue;
@@ -342,11 +341,7 @@ pub(crate) async fn stage_items(
         })?;
         if !again {
             counts.stored += 1;
-            sqlx::query("UPDATE brain_sources SET items = items + 1 WHERE device = ? AND kind = ?")
-                .bind(&item.origin.device)
-                .bind(item.source_kind.as_str())
-                .execute(&mut *seen_tx)
-                .await?;
+            bumps.push((item.origin.device.clone(), item.source_kind.as_str()));
         }
         if c.pointer {
             counts.pointers += 1;
@@ -359,6 +354,23 @@ pub(crate) async fn stage_items(
         }
     }
     stx.commit().await?;
+    let mut seen_tx = begin_write(&app.pool).await?;
+    for hash in &refused_hashes {
+        sqlx::query(
+            "INSERT OR IGNORE INTO brain_seen (content_hash, room, run) VALUES (?, 'refused', ?)",
+        )
+        .bind(hash)
+        .bind(run)
+        .execute(&mut *seen_tx)
+        .await?;
+    }
+    for (device, kind) in &bumps {
+        sqlx::query("UPDATE brain_sources SET items = items + 1 WHERE device = ? AND kind = ?")
+            .bind(device)
+            .bind(kind)
+            .execute(&mut *seen_tx)
+            .await?;
+    }
     save_counts(&mut seen_tx, run, &counts).await?;
     record_progress(&mut seen_tx, run, "collect", &counts).await?;
     seen_tx.commit().await?;
@@ -413,7 +425,8 @@ pub(crate) async fn collected(
     Json(req): Json<Collected>,
 ) -> ApiResult<RunView> {
     let (state, sources) = run_state(&app, &run).await?;
-    if state != "collecting" {
+    // `discovering` is allowed: a retry (or a Core that restarted mid-discovery) starts it again.
+    if state != "collecting" && state != "discovering" {
         return Err(ApiError::conflict("the run is not collecting"));
     }
     if !sources.contains(&req.source) {
@@ -421,9 +434,56 @@ pub(crate) async fn collected(
     }
     let finished = mark_done(&app, &run, &req.source, &sources).await?;
     if finished {
-        crate::review::discover(&app, &b, &run).await?;
+        spawn_discover(&app, &b, &run).await?;
     }
     get(State(app), Path(run)).await
+}
+
+/// Runs of this process whose discovery is under way.
+static DISCOVERING: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet::new());
+
+/// Marks the run `discovering` and runs discovery in the background: loading and grouping
+/// thousands of items takes longer than a client waits. A run already being discovered by this
+/// process is left alone. If discovery fails the run goes back to `collecting` (everything
+/// reported is kept), so the next `collected` starts it again.
+pub(crate) async fn spawn_discover(app: &App, b: &Brain, run: &str) -> Result<(), ApiError> {
+    if !DISCOVERING
+        .lock()
+        .expect("discovering")
+        .insert(run.to_owned())
+    {
+        return Ok(());
+    }
+    let marked = async {
+        let mut tx = begin_write(&app.pool).await?;
+        sqlx::query(
+            "UPDATE brain_import_runs SET state = 'discovering', stage = 'discover' WHERE id = ?",
+        )
+        .bind(run)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await
+    }
+    .await;
+    if let Err(e) = marked {
+        DISCOVERING.lock().expect("discovering").remove(run);
+        return Err(e.into());
+    }
+    let (app, b, run) = (app.clone(), b.clone(), run.to_owned());
+    tokio::spawn(async move {
+        if let Err(e) = crate::review::discover(&app, &b, &run).await {
+            tracing::warn!(run, error = ?e, "import discovery failed");
+            let _ = sqlx::query(
+                "UPDATE brain_import_runs SET state = 'collecting', stage = 'collect' \
+                 WHERE id = ? AND state = 'discovering'",
+            )
+            .bind(&run)
+            .execute(&app.pool)
+            .await;
+        }
+        DISCOVERING.lock().expect("discovering").remove(&run);
+    });
+    Ok(())
 }
 
 /// Records that `source` reported (a retry is harmless); true when every source of the run has.

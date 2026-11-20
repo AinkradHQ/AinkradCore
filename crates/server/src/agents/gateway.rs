@@ -74,7 +74,7 @@ pub(super) fn upstream_of(base_url: &str, wire: Wire) -> Result<Upstream, Refusa
 }
 
 /// A grant, and when its lease ends.
-pub(super) struct Issued {
+pub struct Issued {
     pub grant: Box<GatewayGrant>,
     pub until: i64,
 }
@@ -83,7 +83,7 @@ pub(super) struct Issued {
 /// this start (the account is gone, disabled, unpriced, or the budgets leave too little); a database
 /// error is not. The hold it takes is the grant's ceiling: what is left now, so a resume (a new
 /// gateway, spent 0) cannot spend what an earlier epoch already did.
-pub(super) async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refusal> {
+pub async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refusal> {
     let Some(secret) = gw::gateway_secret(&s.secrets) else {
         return Ok(None);
     };
@@ -122,7 +122,25 @@ pub(super) async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refu
     let route = route::of(&def, &account.base_url)?;
     let upstream = upstream_of(&account.base_url, route.wire)?;
     // The allowlist is the price book: a model with no price is refused, so dollar ceilings mean something.
-    let book = prices::book_of(prices::list(&app.pool).await?, provider, &def);
+    let mut book = prices::book_of(prices::list(&app.pool).await?, provider, &def);
+    // Except a built-in's or a preset's model the user named: it runs at the flagged default price
+    // (a user definition's model with no price is still refused: its host is the user's).
+    if let Some(m) = s
+        .model
+        .as_deref()
+        .filter(|m| (def.builtin || def.preset) && prices::valid_model(m))
+        && !book.iter().any(|p| p.model == m)
+    {
+        book.push(prices::default_price(provider, m));
+    }
+    // A model the person switched off for this account is neither granted nor named.
+    let off = crate::store::account_models::denied(&app.pool, id).await?;
+    if let Some(m) = s.model.as_ref().filter(|m| off.contains(*m)) {
+        return Err(refuse(format!(
+            "the model {m} is switched off for this account"
+        )));
+    }
+    book.retain(|p| !off.contains(&p.model));
     let prices = prices::model_prices(&book);
     let models: Vec<String> = book.iter().map(|p| p.model.clone()).collect();
     if models.is_empty() {
@@ -188,6 +206,14 @@ pub(super) fn module_refusal(secrets: &[store::SessionSecret]) -> Option<&'stati
              budgets would not bind the gateway's spend"
         })
         .or_else(|| super::subscription::module_refusal(secrets))
+        // A runner-bound account is a plan's login too (its home never leaves its runner), and it
+        // is not a subscription *secret*: it needs its own refusal.
+        .or_else(|| {
+            secrets.iter().any(super::bound::is_bound).then_some(
+                "a module's session may not use a runner-bound account: its budgets would count a \
+                 cost the plan does not bill",
+            )
+        })
 }
 
 /// What the Core does about a gateway session after each answer it stored: a stop a budget ordered,
@@ -393,6 +419,7 @@ async fn check(app: &App, s: &Session, account: i64) -> Result<(), Refusal> {
             user_key: route.user_key,
             upstream: upstream_of(&a.base_url, route.wire)?,
             test_path: route.test_path,
+            want_models: false,
         };
         let sent = app
             .hub
@@ -439,4 +466,25 @@ async fn check(app: &App, s: &Session, account: i64) -> Result<(), Refusal> {
         _ => gw::tried(&app.pool, signal, &now).await?,
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod module_refusal_tests {
+    use super::*;
+
+    fn secret(name: &str) -> store::SessionSecret {
+        store::SessionSecret {
+            name: name.to_owned(),
+            var: "X".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_module_session_is_refused_a_runner_bound_account_like_every_other_account() {
+        for name in ["acct.codex-sub.7", "acct.opencode-sub.7", "acct.agy-sub.7"] {
+            assert!(module_refusal(&[secret(name)]).is_some(), "{name}");
+        }
+        assert!(module_refusal(&[]).is_none());
+        assert!(module_refusal(&[secret("project.token")]).is_none());
+    }
 }

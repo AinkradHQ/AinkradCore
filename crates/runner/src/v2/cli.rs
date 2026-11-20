@@ -245,7 +245,7 @@ pub const CONNECT_USAGE: &str = "usage:
   ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec] [--enable-pty]
                          [--enable-agents] [--share-history] [--terminal-sandbox=on|off]
                          [--terminal-hide <path>]… [--terminal-user <account>]
-                         [--terminal-network=host|none|filtered]
+                         [--terminal-network=host|none|filtered] [--workspace-root <dir>] [--job-shims]
 
 Serves the Core it paired with (`ainkrad-runner pair`) over protocol v2, reconnecting with a
 jittered backoff and resuming commands in flight. Stops on SIGTERM or Ctrl-C; commands still
@@ -341,6 +341,25 @@ fn terminal_network(args: &[&str]) -> Option<&'static str> {
     it.next().is_none().then_some(value)
 }
 
+/// Whether launchd started this runner for the app's bundled agent (`XPC_SERVICE_NAME` is the job label).
+fn started_by_app() -> bool {
+    std::env::var("XPC_SERVICE_NAME").is_ok_and(|l| l.starts_with("com.ainkrad.core.runner"))
+}
+
+/// The plain-words reason the runner is up without AI tools, for the app to show: `<state>/last-error`,
+/// removed once agents start. Best effort; a runner that cannot write it still runs.
+fn write_last_error(state: &std::path::Path, why: Option<&str>) {
+    let file = state.join("last-error");
+    let _ = match why {
+        Some(why) => std::fs::create_dir_all(state).and_then(|()| std::fs::write(&file, why)),
+        None => std::fs::remove_file(&file).or_else(|e| {
+            (e.kind() == std::io::ErrorKind::NotFound)
+                .then_some(())
+                .ok_or(e)
+        }),
+    };
+}
+
 fn agents_enabled(args: &[&str]) -> bool {
     args.contains(&"--enable-agents")
 }
@@ -348,6 +367,10 @@ fn agents_enabled(args: &[&str]) -> bool {
 pub async fn connect_main(args: &[&str]) -> ExitCode {
     let run_enabled = args.contains(&"--enable-exec");
     let pty_flag = args.contains(&"--enable-pty");
+    // Set only by the Mac app's LaunchAgent: this runner may open a real (host-view) shell.
+    let bundled = args.contains(&"--bundled");
+    // Set only on the Core's own runner (E15-3): its terminals get the heavy-job shims.
+    let job_shims = args.contains(&"--job-shims") && !bundled;
     let agents_flag = agents_enabled(args);
     // Off unless asked: the Brain may then read this runner's harness history (`history.read`).
     let share_history = args.contains(&"--share-history");
@@ -378,7 +401,12 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         .filter(|a| {
             !matches!(
                 *a,
-                "--enable-exec" | "--enable-pty" | "--enable-agents" | "--share-history"
+                "--enable-exec"
+                    | "--enable-pty"
+                    | "--enable-agents"
+                    | "--share-history"
+                    | "--bundled"
+                    | "--job-shims"
             ) && !a.starts_with("--terminal-sandbox=")
                 && !a.starts_with("--terminal-network=")
         })
@@ -388,7 +416,12 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         || args.chunks(2).any(|f| {
             !matches!(
                 f[0],
-                "--state" | "--ca" | "--terminal-hide" | "--terminal-user"
+                "--state"
+                    | "--ca"
+                    | "--terminal-hide"
+                    | "--terminal-user"
+                    // E15-4: the built-in runner over the canonical workspace (taken, not used yet).
+                    | ainkrad_proto::v2::RUNNER_FLAG_WORKSPACE_ROOT
             )
         })
         || args.iter().filter(|a| **a == "--terminal-user").count() > 1
@@ -405,6 +438,23 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         }
     };
     let state = state_dir(flag(args, "--state"));
+    // E15-4: the Core host's built-in runner works in the canonical workspace; This Mac is `--bundled`.
+    // Both open terminals and keep the pty driver; any other runner opens only the sign-in terminal.
+    let workspace_root =
+        flag(args, ainkrad_proto::v2::RUNNER_FLAG_WORKSPACE_ROOT).map(PathBuf::from);
+    if let Some(ws) = &workspace_root
+        && !(ws.is_absolute() && ws.is_dir())
+    {
+        eprintln!("ainkrad-runner: --workspace-root must be an existing absolute folder");
+        return ExitCode::from(2);
+    }
+    let local_host = workspace_root.is_some() || bundled;
+    super::hwsource::set_setup(super::hwsource::HwSetup {
+        state: state.0.clone(),
+        workspace_root,
+        bundled,
+    });
+    super::aitools::set_prefix(state.0.join("ai-tools"));
     // The policy a Core set from the App overrides the flags for these three (see `control`).
     let policy = super::control::load(&state.0);
     let (pty_enabled, agents_enabled) =
@@ -412,7 +462,9 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     let agent_capacity = policy.map_or(2, |p| p.agent_capacity);
     let share_history = policy.map_or(share_history, |p| p.share_history);
     // Agents a policy asked for must not keep the runner from starting when they cannot run.
-    let agents_may_fail = agents_enabled && !agents_flag;
+    // Started by the app's own LaunchAgent (launchd names the job), the runner must stay up and
+    // connect without AI tools: the person installs one later, and the app says what is missing.
+    let agents_may_fail = agents_enabled && (!agents_flag || started_by_app());
     let exec = Arc::new(super::ExecDriver::new(
         super::ExecConfig {
             run_enabled,
@@ -438,7 +490,10 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         stop_signal.send_replace(true);
     });
     // Held until the runner stops: the proxy terminals reach through their socket dir.
-    let _terminal_proxy = if pty_enabled && terminal_network == "filtered" {
+    // Linux private-root terminals reach the network through it too unless the runner is set to
+    // `none`, so it also starts for the default `host` (E6 M1).
+    let private_filtered = cfg!(target_os = "linux") && terminal_network != "none";
+    let _terminal_proxy = if pty_enabled && (terminal_network == "filtered" || private_filtered) {
         match terminal_proxy(&state.0.join("terminal-egress")).await {
             Ok(p) => Some(p),
             Err(e) => {
@@ -451,6 +506,18 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     };
     if pty_enabled && !terminal_sandbox {
         let m = "terminal sandbox is OFF: a `terminal` device can read this runner's key, delivered secrets and harness logins; `terminal` scope is admin-equivalent on this host";
+        eprintln!("ainkrad-runner: WARNING: {m}");
+        tracing::warn!("{m}");
+    }
+    // Linux before 6.2, or a host that turned it back on: a shell could push keystrokes into its
+    // own controlling terminal with TIOCSTI (bwrap's --new-session would stop that but detaches the
+    // shell from its pty, so it is not used).
+    if pty_enabled
+        && cfg!(target_os = "linux")
+        && std::fs::read_to_string("/proc/sys/dev/tty/legacy_tiocsti")
+            .map_or(true, |v| v.trim() != "0")
+    {
+        let m = "dev.tty.legacy_tiocsti is not 0: set it to 0 (sysctl) so a terminal's shell cannot inject input with TIOCSTI";
         eprintln!("ainkrad-runner: WARNING: {m}");
         tracing::warn!("{m}");
     }
@@ -494,18 +561,33 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     let host = ainkrad_ptyhost::client::find_host_binary()
         .unwrap_or_else(|| PathBuf::from("ainkrad-ptyhost"));
     let pty = pty_enabled.then(|| {
-        let d = Arc::new(super::PtyDriver::new(super::PtyConfig {
+        let driver = super::PtyDriver::new(super::PtyConfig {
             enabled: true,
             hide: hidden.clone(),
             readonly: super::termbox::readonly_paths(&host),
             user: terminal_user.clone(),
             net: net.clone(),
             sessions: Some(state.0.join("agents")),
+            sandbox_dir: Some(state.0.join("sandbox")),
+            private_net: if private_filtered {
+                super::termbox::Net::Filtered {
+                    dir: egress_dir.clone(),
+                    exe: std::env::current_exe().unwrap_or_default(),
+                }
+            } else if terminal_network == "none" {
+                super::termbox::Net::None
+            } else {
+                net.clone()
+            },
+            allow_real: bundled,
+            job_shims,
             ..super::PtyConfig::new(state.0.join("terminals"))
-        }));
+        });
+        let d = Arc::new(if local_host { driver } else { driver.remote() });
         d.spawn_budget_loop();
         d
     });
+
     // Shells left by an earlier runner with a weaker network than this one requires.
     if let Some(d) = &pty {
         let n = d.retire_weaker().await;
@@ -525,14 +607,19 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             tls.clone(),
             agent_capacity,
             share_history,
+            super::hwsource::workspace_root(),
         )
     }) {
         None => None,
         Some(a) => match a.await {
-            Ok(a) => Some(a),
+            Ok(a) => {
+                write_last_error(&state.0, None);
+                Some(a)
+            }
             Err(e) if agents_may_fail => {
-                eprintln!("ainkrad-runner: agents (from the policy) are off: {e}");
-                tracing::warn!("agents (from the policy) are off: {e}");
+                eprintln!("ainkrad-runner: agents are off: {e}");
+                tracing::warn!("agents are off: {e}");
+                write_last_error(&state.0, Some(&e));
                 None
             }
             Err(e) => {
@@ -556,6 +643,14 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         restart: Arc::clone(&restart),
         stop,
     });
+    // Offered AI sessions mean the AI tools should be there and current (D-22): the runner is
+    // already connected, so it installs what is missing in the background and restarts once.
+    if agents_enabled {
+        let c = Arc::clone(&control);
+        tokio::spawn(super::aitools::keep_current(move || {
+            c.restart_when_idle(Duration::from_secs(2))
+        }));
+    }
     match super::daemon::from_state(&state, exec, pty, agents, Some(control), tls, stopping).await {
         Ok(()) if restart.load(std::sync::atomic::Ordering::SeqCst) => {
             eprintln!("ainkrad-runner: restarting to apply a new policy");
@@ -645,13 +740,13 @@ async fn gateway_selftest(agents: &std::path::Path) -> Result<(), String> {
     crate::gateway::selftest(agents, &exe).await
 }
 
-/// The egress proxy of `--terminal-network=filtered` (KAN-416): the policy of the agent sessions
-/// (`AINKRAD_AGENT_EGRESS_*`), proven by the same start-up check, on a socket in `dir` (0700) that
+/// The egress proxy of `--terminal-network=filtered` (KAN-416): `Policy::terminal_from_env` (the
+/// terminals' own host list, the agents' CIDRs and ports), proven by the same start-up check, on a socket in `dir` (0700) that
 /// the shells get bound in. A socket left by an earlier runner is replaced.
 async fn terminal_proxy(dir: &std::path::Path) -> Result<crate::egress::Proxy, String> {
     use std::os::unix::fs::DirBuilderExt;
-    let policy =
-        crate::egress::Policy::from_env()?.with_host_addresses(crate::egress::host_addresses()?);
+    let policy = crate::egress::Policy::terminal_from_env()?
+        .with_host_addresses(crate::egress::host_addresses()?);
     let exe =
         std::env::current_exe().map_err(|_| "cannot find the runner executable".to_owned())?;
     crate::egress::selftest(&policy, &exe)
@@ -683,8 +778,10 @@ async fn agents(
     tls: Option<Arc<rustls::ClientConfig>>,
     capacity: u32,
     share_history: bool,
+    workspace_root: Option<PathBuf>,
 ) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
+    super::aitools::set_home(work.clone());
     let mut executor = crate::HarnessExecutor::new(work, state.join("agents-config"));
     // Every run of this driver goes through its process sandbox (`ProcessSandbox` below), which
     // refuses a run it cannot confine and marks the run's environment once it has; the executor
@@ -714,8 +811,22 @@ async fn agents(
         .map(PathBuf::from)
         .unwrap_or_default();
     executor.check_roots(&home)?;
+    // launchd gives a bundled runner a bare PATH and cannot name the home folder, so a tool the
+    // person installed under ~/.local/bin (where Claude Code's installer puts it) is found here.
+    // The tools the runner installed itself (`aitools`, D-22) come first: they are the tested versions.
+    for name in ["claude", "codex", "opencode", "agy"] {
+        let managed = super::aitools::bin_dir().map(|d| d.join(name));
+        let local = home.join(".local/bin").join(name);
+        if let Some(bin) = managed
+            .filter(|b| b.is_file())
+            .or(local.is_file().then_some(local))
+        {
+            executor.bins.entry(name.to_owned()).or_insert(bin);
+        }
+    }
     let mut config = super::agent::AgentConfig::new(state.join("agents"), secrets.clone());
     config.capacity = capacity;
+    config.workspace_root = workspace_root;
     if share_history {
         config.history_read = true;
         config.history_root = Some(home.join(".claude").join("projects"));
@@ -729,7 +840,7 @@ async fn agents(
         }
     }
     if config.slots.is_empty() {
-        return Err("no harness is installed in a version the compat matrix takes".to_owned());
+        return Err("no AI tool installed: Ainkrad found no Claude Code, Codex, OpenCode or Antigravity it can drive".to_owned());
     }
     super::agent::AgentDriver::new(config, executor)
         .map(|d| {
@@ -796,6 +907,21 @@ mod tests {
             terminal_sandbox(&["--terminal-sandbox=on", "--terminal-sandbox=off"]),
             None
         );
+    }
+
+    #[test]
+    fn the_last_error_is_written_for_the_app_and_removed_when_agents_start() {
+        let dir = std::env::temp_dir().join(format!("ainkrad-last-error-{}", std::process::id()));
+        let file = dir.join("last-error");
+        super::write_last_error(&dir, Some("no AI tool installed"));
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "no AI tool installed"
+        );
+        super::write_last_error(&dir, None);
+        assert!(!file.exists());
+        super::write_last_error(&dir, None); // nothing to remove is fine
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

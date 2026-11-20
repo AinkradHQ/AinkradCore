@@ -46,6 +46,7 @@ async fn a_session_limit_is_the_ceiling_where_no_budget_limits_and_caps_the_hold
     // A budget with more room: the limit still caps what the session is given.
     let subject = g.account.id.to_string();
     let cap = NewBudget {
+        message_cap: None,
         kind: "account",
         subject: &subject,
         company: None,
@@ -61,6 +62,7 @@ async fn a_session_limit_is_the_ceiling_where_no_budget_limits_and_caps_the_hold
     assert_eq!(granted(reserve(&g).await), (1_000_000, 7_000_000));
     // A budget with less room wins, as it did.
     let tight = NewBudget {
+        message_cap: None,
         token_cap: 600_000,
         ..cap
     };

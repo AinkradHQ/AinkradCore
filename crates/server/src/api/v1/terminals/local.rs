@@ -68,12 +68,14 @@ impl Rooms {
             .is_some()
     }
 
-    /// Removes the leases that ran out; they are the detaches nobody reported.
-    pub(super) fn lapse(&self, now: i64) -> Vec<(String, String)> {
+    /// Removes the leases that ran out, and those of a device whose app unlock ended (`locked`):
+    /// they are the detaches nobody reported. The signed grant itself cannot be recalled, but it
+    /// is short and nothing renews it without the unlock.
+    pub(super) fn lapse(&self, now: i64, locked: impl Fn(&str) -> bool) -> Vec<(String, String)> {
         let mut m = self.leases.lock().unwrap();
         let gone: Vec<_> = m
             .iter()
-            .filter(|(_, u)| **u <= now)
+            .filter(|(k, u)| **u <= now || locked(&k.1))
             .map(|(k, _)| k.clone())
             .collect();
         for k in &gone {
@@ -117,8 +119,12 @@ async fn record(app: &App, action: &str, id: &str, by: &str, how: &str) -> Resul
 }
 
 /// Records the local attaches whose lease ran out without a release (the app died, the Mac slept).
-pub(super) async fn lapse(app: &App) {
-    for (terminal, device) in app.terminals.lapse(app.clock.unix()) {
+pub(in crate::api::v1) async fn lapse(app: &App) {
+    let now = app.clock.unix();
+    for (terminal, device) in app
+        .terminals
+        .lapse(now, |d| app.auth.unlocked_until(d, now).is_none())
+    {
         touch(app, &terminal).await;
         let _ = record(app, "terminal.detached", &terminal, &device, "lapsed").await;
     }
@@ -253,9 +259,20 @@ mod tests {
         let r = Rooms::default();
         r.lease("t_a", "d_1", 100, 50);
         r.lease("t_a", "d_2", 500, 50);
-        assert_eq!(r.lapse(99), vec![]);
-        assert_eq!(r.lapse(100), vec![("t_a".to_owned(), "d_1".to_owned())]);
-        assert_eq!(r.lapse(100), vec![]);
+        assert_eq!(r.lapse(99, |_| false), vec![]);
+        assert_eq!(
+            r.lapse(100, |_| false),
+            vec![("t_a".to_owned(), "d_1".to_owned())]
+        );
+        assert_eq!(r.lapse(100, |_| false), vec![]);
+        // A device whose unlock ended loses its lease at once, whatever time is left.
+        assert_eq!(r.lease("t_a", "d_1", 500, 50), Some(true));
+        assert_eq!(r.lease("t_a", "d_2", 500, 50), Some(false), "a renewal");
+        assert_eq!(
+            r.lapse(60, |d| d == "d_1"),
+            vec![("t_a".to_owned(), "d_1".to_owned())]
+        );
+        assert_eq!(r.attached("t_a"), 1);
         assert_eq!(r.attached("t_a"), 1);
     }
 }

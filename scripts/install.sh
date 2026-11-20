@@ -38,7 +38,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 CORE_HOME=/var/lib/ainkrad/core ETC=/etc/ainkrad BIN=/usr/local/bin UNITS=/etc/systemd/system
 STAGING_DIR=https://acme-staging-v02.api.letsencrypt.org/directory
-NO_LOCAL_RUNNER=0 RUNNER_STATE=/var/lib/ainkrad-runner/core
+NO_LOCAL_RUNNER=0 RUNNER_STATE=/var/lib/ainkrad-runner/core WS_ROOT=/var/lib/ainkrad-ws
 DEMO='' HARDEN_REQ='' HARDEN_WARN='' HARDEN_STATE='' FW_CHOICE=yes MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
 
 # say: a line that stays on the screen (in the guided install above the live progress line, so the two live lines stay at the bottom)
@@ -205,7 +205,11 @@ checks() { # ports and the host firewall first (before anything is installed), t
   fi
   if ! command -v getent >/dev/null; then warn "no getent here: DNS not checked"; return 0; fi
   addrs=$(getent ahosts "$A_HOSTNAME" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true) # pipefail: an unresolved name must reach the message below, not kill the script
-  pub=${A_PUBLIC_IP:-$(curl -fsS4 --max-time 5 https://api.ipify.org 2>/dev/null || curl -fsS4 --max-time 5 https://checkip.amazonaws.com 2>/dev/null || true)}
+  pub=${A_PUBLIC_IP:-}
+  if [ -z "$pub" ]; then # Ainkrad's own outside check (signin.ainkrad.io), no third party
+    _pf=$(mktemp) || _pf=''
+    if [ -n "$_pf" ]; then pub_probe "$_pf"; pub=$(cat "$_pf" 2>/dev/null || true); rm -f "$_pf"; fi
+  fi
   pub=$(clean_ip "$pub")
   info "DNS $A_HOSTNAME -> ${addrs:-nothing}; this host's public IPv4: ${pub:-unknown}"
   if [ -z "$addrs" ]; then bad="$A_HOSTNAME does not resolve: add an A record for this host"
@@ -236,7 +240,7 @@ stage_binaries() {
   STAGE=$(mktemp -d)
   # shellcheck disable=SC2016 # the string is eval'd at exit, when $STAGE is known
   if [ "$GUIDED" = 1 ]; then ui_clean_add 'rm -rf "$STAGE"'; else trap 'rm -rf "$STAGE"' EXIT; fi
-  for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost; do
+  for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost ainkrad-job; do
     if [ -f "$src/$n" ]; then cp "$src/$n" "$STAGE/$n"; chmod 0755 "$STAGE/$n"; info "$n sha256 $(sha "$STAGE/$n")"
     elif [ "$n" = ainkrad-core-server ] && [ "$DRY" = 0 ]; then die "no $n in $src"
     else warn "$n: not in $src (skipped; every signed release ships it, so a release installed with scripts/release/install.sh has it)"; fi
@@ -370,6 +374,16 @@ start_core() {
   run systemctl daemon-reload
   local tm=ainkrad-backup.timer
   [ -n "$A_BACKUP_RECIPIENT" ] || tm='' # no age recipient (guided, no terminal): the timer would only fail every day
+  # E12-3 (D-7): the Core updates itself at night. update.sh + install.sh + the pinned key live in /usr/local/lib/ainkrad;
+  # the units start nothing until the timer fires or the host helper's `update` action asks. Opt out: systemctl disable --now ainkrad-update.timer
+  run install -d -m 0755 /usr/local/lib/ainkrad
+  run install -m 0755 "$ROOT/scripts/release/update.sh" /usr/local/lib/ainkrad/update.sh
+  run install -m 0755 "$ROOT/scripts/release/install.sh" /usr/local/lib/ainkrad/install.sh
+  run install -m 0644 "$ROOT/scripts/release/ainkrad-release.pub" /usr/local/lib/ainkrad/ainkrad-release.pub
+  run install -m 0644 "$ROOT/deploy/systemd/ainkrad-update@.service" "$UNITS/ainkrad-update@.service"
+  run install -m 0644 "$ROOT/deploy/systemd/ainkrad-update.timer" "$UNITS/ainkrad-update.timer"
+  run systemctl daemon-reload
+  run systemctl enable --now ainkrad-update.timer
   run systemctl enable ainkrad-core.service $tm
   run systemctl restart ainkrad-core.service
   [ -z "$tm" ] || run systemctl restart ainkrad-backup.timer
@@ -418,7 +432,7 @@ runner_online() { # the Core has seen this runner connect (its device was used);
 }
 # N8: the Core's own runner, on by default: terminals and agents, as the unprivileged ainkrad-runner user in its sandbox.
 local_runner() {
-  local a=(--binary "$STAGE/ainkrad-runner" --ptyhost "$STAGE/ainkrad-ptyhost" --pty --agents)
+  local a=(--binary "$STAGE/ainkrad-runner" --ptyhost "$STAGE/ainkrad-ptyhost" --pty --agents --workspace-root "$WS_ROOT" --job-shims)
   if [ "$A_ACME_ENV" = staging ]; then
     warn "the Core serves a staging certificate that a runner does not trust, so the built-in runner is not set up. Re-run with a production certificate."
     return 0
@@ -429,7 +443,7 @@ local_runner() {
     bash "$ROOT/deploy/install-linux.sh" "${a[@]}" --dry-run; return 0
   fi
   if ! ui_run "Installing Node $NODE_VERSION and Claude Code $CLAUDE_VERSION for agents" install_agent_tools; then
-    warn "the agent tools did not install (see above); the runner is set up with terminals only"; a=(--binary "$STAGE/ainkrad-runner" --ptyhost "$STAGE/ainkrad-ptyhost" --pty)
+    warn "the agent tools did not install (see above); the runner is set up with terminals only"; a=(--binary "$STAGE/ainkrad-runner" --ptyhost "$STAGE/ainkrad-ptyhost" --pty --workspace-root "$WS_ROOT" --job-shims)
   fi
   ui_run "Installing the runner service (unprivileged user, sandboxed)" bash "$ROOT/deploy/install-linux.sh" "${a[@]}" || { warn "the runner did not install; see the log"; return 0; }
   if ! ui_run "Enrolling this Core's own runner (no code needed)" enrol_local_runner; then
@@ -591,7 +605,8 @@ uninstall() {
     "$UNITS/ainkrad-backup.timer" "$UNITS/ainkrad-backup.timer.d" "$UNITS/ainkrad-backup.service.d" "$UNITS/ainkrad-core.service.d" "$UNITS/ainkrad-runner.service.d" "$UNITS/ainkrad-runner-tools.socket" "$UNITS/ainkrad-runner-tools@.service"
   run systemctl daemon-reload
   run systemctl reset-failed 2>/dev/null || true
-  run rm -f "$BIN/ainkrad-core-server" "$BIN/ainkradctl" "$BIN/ainkrad-runner" "$BIN/ainkrad-ptyhost" "$BIN/ainkrad-core-citadel"
+  run rm -f /etc/avahi/services/ainkrad-core.service # the LAN advertisement (guided_announce)
+  run rm -f "$BIN/ainkrad-core-server" "$BIN/ainkradctl" "$BIN/ainkrad-runner" "$BIN/ainkrad-ptyhost" "$BIN/ainkrad-job" "$BIN/ainkrad-core-citadel"
   if [ "$PURGE" = 1 ]; then
     name=$(env_get AINKRAD_HOSTNAME); name=${name:-purge}
     say "  --purge deletes $CORE_HOME (database, keys, certificates), the runner's state and $ETC/core.env. Type '$name' to confirm:"
@@ -681,6 +696,7 @@ main() {
     step "First device"
     ui_live_end
     guided_invite || rc=$?
+    guided_announce
     guided_summary "$rc"
     [ "$rc" != 0 ] || [ -z "$INVITE" ] || guided_show_invite
     guided_next_steps "$rc"

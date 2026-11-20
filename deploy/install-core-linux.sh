@@ -33,9 +33,21 @@ home=/var/lib/ainkrad/core
 id ainkrad >/dev/null 2>&1 ||
   run useradd --system --user-group --home-dir /var/lib/ainkrad --no-create-home --shell /usr/sbin/nologin ainkrad
 run install -d -m 0750 -o ainkrad -g ainkrad /var/lib/ainkrad
+# E15-2: the canonical workspace, shared with the built-in runner through the group ainkrad-ws (setgid, 2770, root-owned).
+# The default `workspace.root` setting is this path.
+getent group ainkrad-ws >/dev/null 2>&1 || run groupadd --system ainkrad-ws
+run usermod -aG ainkrad-ws ainkrad
+run install -d -m 2770 -o root -g ainkrad-ws /var/lib/ainkrad-ws
+run chmod 2770 /var/lib/ainkrad-ws
 run install -d -m 0750 -o root -g ainkrad /etc/ainkrad
 run install -m 0755 "$binary" /usr/local/bin/ainkrad-core-server
 run install -m 0644 "$HERE/systemd/ainkrad-core.service" /etc/systemd/system/ainkrad-core.service
+# E12-3: the self-update (units, the updater, install.sh and the pinned key it verifies with). The timer is enabled below.
+run install -d -m 0755 /usr/local/lib/ainkrad
+for f in update.sh install.sh; do run install -m 0755 "$HERE/../scripts/release/$f" "/usr/local/lib/ainkrad/$f"; done
+run install -m 0644 "$HERE/../scripts/release/ainkrad-release.pub" /usr/local/lib/ainkrad/ainkrad-release.pub
+run install -m 0644 "$HERE/systemd/ainkrad-update@.service" /etc/systemd/system/ainkrad-update@.service
+run install -m 0644 "$HERE/systemd/ainkrad-update.timer" /etc/systemd/system/ainkrad-update.timer
 if [ -n "$hostname" ]; then
   env="AINKRAD_LISTEN=public
 AINKRAD_HOSTNAME=$hostname
@@ -78,6 +90,7 @@ run systemctl daemon-reload
 if [ "$start" = 1 ]; then
   [ "$dry" = 1 ] || [ -r /etc/ainkrad/core.env ] || { echo "no /etc/ainkrad/core.env: pass --hostname" >&2; exit 1; }
   run systemctl enable --now ainkrad-core.service
+  run systemctl enable --now ainkrad-update.timer
 else
   echo "installed, not started: systemctl enable --now ainkrad-core"
 fi

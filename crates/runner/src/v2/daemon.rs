@@ -136,6 +136,13 @@ impl Daemon {
         if let Some(run) = self.run_driver() {
             session = session.with_run(run);
         }
+        // Heavy jobs and workspace sync (E15-4), where the CLI set them up.
+        let core_fp = self.enrolment.lock().unwrap().core_fp.clone();
+        if let Some(redeem) = self.redeem()
+            && let Some((job, sync)) = super::hwsource::build(&core_fp, redeem, self.agents.clone())
+        {
+            session = session.with_job(job).with_sync(sync);
+        }
         let mut delay = self.backoff.min;
         let mut refused = 0;
         loop {
@@ -228,8 +235,20 @@ pub async fn from_state(
     let key = Arc::new(Key::load(&state.key()).map_err(config)?);
     let enrolment = Arc::new(Mutex::new(enrolment));
     let url = enrolment.lock().unwrap().url.clone();
+    // The Core's own runner: terminals and sessions get the heavy-job shims, asking the Core with
+    // signed requests.
+    let jobs = pty.as_ref().filter(|p| p.wants_jobs()).and_then(|p| {
+        let c = Client::new(&url, tls.clone()).ok()?;
+        let up =
+            super::mirror::http_upstream(Arc::new(c), Arc::clone(&key), Arc::clone(&enrolment));
+        p.start_jobs(&state.0, up)
+    });
     // Leases are redeemed with this runner's own signed requests (E2-07.2).
     let agents = agents.map(|a| {
+        let a = match &jobs {
+            Some((socks, bin)) => a.with_job_shims(Arc::clone(socks), bin.clone()),
+            None => a,
+        };
         let client = Client::new(&url, tls.clone()).map(Arc::new);
         let agent = Arc::new(match client {
             Ok(c) => a
@@ -247,6 +266,15 @@ pub async fn from_state(
         });
         // A tier that goes away mid-life ends the sessions that need it (E8a-09.3).
         agent.watch_isolation(std::time::Duration::from_secs(5));
+        // A tool install restarts the runner only when no session holds a slot.
+        let probe = Arc::clone(&agent);
+        super::aitools::set_idle(move || {
+            // A session waiting for its user's next message is not work in flight: only a running one is.
+            !probe
+                .states()
+                .values()
+                .any(|s| matches!(s, ainkrad_proto::v2::AgentState::Running))
+        });
         agent
     });
     // Whatever is enabled, a crash may have left a sign-in's scratch HOME behind.

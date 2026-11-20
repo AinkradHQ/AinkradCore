@@ -38,7 +38,11 @@ import kotlinx.serialization.Contextual
  * @param source `manual` or `github`.
  * @param state `active` or `archived`.
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param defaultEnvironment The run environment a Run button uses by default; one of the project's.
+ * @param fetchIntervalMinutes Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
+ * @param idleNever The idle stop is off: the run keeps going while nobody visits.
  * @param room The linked Brain room; null when the Brain is off or the project has none.
+ * @param runner Where it prefers to run: `auto`, `this_mac` or `home_server`.
  */
 @Serializable
 
@@ -90,9 +94,25 @@ data class ProjectInfo (
     @Contextual @SerialName(value = "updated_at")
     val updatedAt: java.time.OffsetDateTime,
 
+    /* The run environment a Run button uses by default; one of the project's. */
+    @SerialName(value = "default_environment")
+    val defaultEnvironment: kotlin.String? = null,
+
+    /* Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked. */
+    @SerialName(value = "fetch_interval_minutes")
+    val fetchIntervalMinutes: kotlin.Long? = null,
+
+    /* The idle stop is off: the run keeps going while nobody visits. */
+    @SerialName(value = "idle_never")
+    val idleNever: kotlin.Boolean? = null,
+
     /* The linked Brain room; null when the Brain is off or the project has none. */
     @SerialName(value = "room")
-    val room: ProjectRoom? = null
+    val room: ProjectRoom? = null,
+
+    /* Where it prefers to run: `auto`, `this_mac` or `home_server`. */
+    @SerialName(value = "runner")
+    val runner: kotlin.String? = null
 
 ) {
 

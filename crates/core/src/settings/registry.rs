@@ -15,9 +15,9 @@ registry! {
     EventsRetentionSecs "events.retention_secs" Seconds 2_592_000, 3_600, 315_360_000, SO,
         "How long events stay replayable; older ones are trimmed and a client resuming from \
          before them re-syncs. Read every scheduler tick.";
-    AuthStepUpSecs "auth.step_up_secs" Seconds 300, 60, 900, SO,
+    AuthStepUpSecs "auth.step_up_secs" Seconds 60, 60, 900, SO,
         "How long a step-up (user verification on the device) keeps its session elevated for \
-         destructive routes; read at each step-up.";
+         the danger routes (D-4); read at each step-up.";
     AuthWebSessionSecs "auth.web_session_secs" Seconds 28_800, 3_600, 86_400, SO,
         "How long a web session from a passkey sign-in lives, absolute (never extended); read at \
          each sign-in.";
@@ -152,4 +152,45 @@ registry! {
          session's tool list, leaving only `ainkrad_search` and `ainkrad_run` (connection \
          operations stay reachable as `connections.<kind>.<op>`); 0 (the default) lists both. \
          Read at each tool-list poll.";
+    DecisionsDailyUsdMicros "decisions.daily_usd_micros" Count 200_000, 0, 100_000_000, SO,
+        "Decisions service (E15-0): the most micro-dollars of provider calls a UTC day may cost \
+         (200000 is $0.20); at the cap there is no provider until UTC midnight and every \
+         consumer uses its own fallback. 0 turns the provider off. Read at each call.";
+    DecisionsTimeoutMs "decisions.timeout_ms" Milliseconds 8_000, 1_000, 60_000, SO,
+        "Decisions service: how long one provider call may take before it is a fallback; one \
+         retry, only when the upstream reports overload. Read at each call.";
+    DecisionsInputPriceMicros "decisions.input_price_micros_per_mtok" Count 100_000, 0, 10_000_000, SO,
+        "Decisions service: the price of one million input tokens in micro-dollars (100000 is \
+         $0.10), since the Decisions API reports tokens, not cost; used for the ledger and the \
+         daily cap. Read at each call.";
+    DecisionsHeavyJobEnabled "decisions.heavy_job.enabled" Count 1, 0, 1, SO,
+        "Decisions service: 1 (the default) lets the `heavy_job` consumer ask a model, 0 sends every \
+         question straight to its own fallback. Read at each call.";
+    DecisionsHeavyJobTtlSecs "decisions.heavy_job.ttl_secs" Seconds 2592000, 60, 31_536_000, SO,
+        "Decisions service: how long an answer for the `heavy_job` consumer is cached (default 30 days). \
+         Read at each call.";
+    DecisionsHeavyJobMinConfidence "decisions.heavy_job.min_confidence" Percent 70, 0, 100, SO,
+        "Decisions service: a model answer whose best option scores below this percent is not \
+         trusted for the `heavy_job` consumer and goes to its fallback when it has one. Read at each \
+         call.";
+    DecisionsBrainSortEnabled "decisions.brain_sort.enabled" Count 1, 0, 1, SO,
+        "Decisions service: 1 (the default) lets the `brain_sort` consumer ask a model, 0 sends every \
+         question straight to its own fallback. Read at each call.";
+    DecisionsBrainSortTtlSecs "decisions.brain_sort.ttl_secs" Seconds 604800, 60, 31_536_000, SO,
+        "Decisions service: how long an answer for the `brain_sort` consumer is cached (default 7 days). \
+         Read at each call.";
+    DecisionsBrainSortMinConfidence "decisions.brain_sort.min_confidence" Percent 70, 0, 100, SO,
+        "Decisions service: a model answer whose best option scores below this percent is not \
+         trusted for the `brain_sort` consumer and goes to its fallback when it has one. Read at each \
+         call.";
+    DecisionsAccountOrderEnabled "decisions.account_order.enabled" Count 1, 0, 1, SO,
+        "Decisions service: 1 (the default) lets the `account_order` consumer ask a model, 0 sends every \
+         question straight to its own fallback. Read at each call.";
+    DecisionsAccountOrderTtlSecs "decisions.account_order.ttl_secs" Seconds 300, 60, 31_536_000, SO,
+        "Decisions service: how long an answer for the `account_order` consumer is cached (default 5 minutes). \
+         Read at each call.";
+    DecisionsAccountOrderMinConfidence "decisions.account_order.min_confidence" Percent 70, 0, 100, SO,
+        "Decisions service: a model answer whose best option scores below this percent is not \
+         trusted for the `account_order` consumer and goes to its fallback when it has one. Read at each \
+         call.";
 }

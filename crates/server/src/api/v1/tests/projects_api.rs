@@ -1,4 +1,4 @@
-//! The projects routes (P1-02): reading is `read`, every change is `admin` plus a step-up, remotes
+//! The projects routes (P1-02): reading is `read`, every change is `admin`, remotes
 //! are checked, an archived project is read-only, and mirror state shows in the project.
 
 use axum::http::{Method, StatusCode};
@@ -37,7 +37,7 @@ async fn shop(fx: &Fx) -> i64 {
 }
 
 #[tokio::test]
-async fn reading_is_read_scope_and_every_change_needs_admin_and_a_step_up() {
+async fn reading_is_read_scope_and_every_change_needs_admin_and_no_step_up() {
     let fx = fx().await;
     let phone = fx.enroll("phone", &["read"]).await;
     let plain = TestDevice::enroll(
@@ -61,6 +61,12 @@ async fn reading_is_read_scope_and_every_change_needs_admin_and_a_step_up() {
         ),
         (Method::PATCH, p.clone(), json!({"name": "New"})),
         (Method::POST, format!("{p}/archive"), Value::Null),
+        (Method::POST, format!("{p}/unarchive"), Value::Null),
+        (
+            Method::PUT,
+            "/api/v1/projects/defaults".to_owned(),
+            json!({"cpu_limit": 1}),
+        ),
         (Method::POST, format!("{p}/repos"), repo("web")),
         (Method::DELETE, format!("{p}/repos/1"), Value::Null),
         (Method::POST, format!("{p}/repos/1/primary"), Value::Null),
@@ -72,13 +78,17 @@ async fn reading_is_read_scope_and_every_change_needs_admin_and_a_step_up() {
             (StatusCode::FORBIDDEN, "forbidden_scope"),
             "{m} {uri}"
         );
-        let r = call(&fx, &plain, m.clone(), uri, b.clone()).await;
-        assert_eq!(
-            code(&r),
-            (StatusCode::FORBIDDEN, "step_up_required"),
-            "{m} {uri}"
-        );
     }
+    // An admin needs no step-up: its scope is enough, so the route answers (here not found).
+    let r = call(
+        &fx,
+        &plain,
+        Method::DELETE,
+        &format!("{p}/repos/1"),
+        Value::Null,
+    )
+    .await;
+    assert_ne!(r.0, StatusCode::FORBIDDEN, "{}", r.1);
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM core_projects")
         .fetch_one(&fx.app.pool)
         .await
@@ -238,6 +248,13 @@ async fn repos_are_added_made_primary_removed_and_show_their_mirror() {
             "{url:?}"
         );
     }
+    // An ssh remote is refused with its plain reason: the Core holds no key.
+    let mut ssh = repo("ssh");
+    ssh["remote_url"] = json!("git@github.com:acme/ssh.git");
+    ssh["default_branch"] = json!("main");
+    let r = admin(&fx, Method::POST, &format!("{p}/repos"), ssh).await;
+    assert_eq!(r.0, StatusCode::BAD_REQUEST);
+    assert!(r.1["message"].as_str().unwrap().contains("SSH"));
     let mut body = repo("../x");
     body["default_branch"] = json!("main");
     assert_eq!(
@@ -351,4 +368,45 @@ async fn the_link_name_and_run_limits_change_through_the_update_route() {
     assert_eq!(other.0, StatusCode::OK);
     let taken = admin(&fx, Method::PATCH, &p, json!({"slug": "other"})).await;
     assert_eq!(code(&taken), (StatusCode::CONFLICT, "conflict"));
+}
+
+#[tokio::test]
+async fn project_defaults_are_set_for_all_and_an_archived_project_is_unarchived() {
+    let fx = fx().await;
+    let id = shop(&fx).await;
+    let d = admin(&fx, Method::GET, "/api/v1/projects/defaults", Value::Null).await;
+    assert_eq!(
+        (
+            d.1["cpu_limit"].as_f64(),
+            d.1["mem_limit_mb"].as_i64(),
+            d.1["idle_never"].as_bool()
+        ),
+        (Some(2.0), Some(4096), Some(false)),
+        "{}",
+        d.1
+    );
+    let put = |b| admin(&fx, Method::PUT, "/api/v1/projects/defaults", b);
+    let set = put(json!({"cpu_limit": 8, "idle_never": true})).await;
+    assert_eq!(set.0, StatusCode::OK, "{}", set.1);
+    let p = format!("/api/v1/projects/{id}");
+    let got = admin(&fx, Method::GET, &p, Value::Null).await.1;
+    assert_eq!(
+        (got["cpu_limit"].as_f64(), got["idle_never"].as_bool()),
+        (Some(8.0), Some(true))
+    );
+    assert_eq!(
+        put(json!({"mem_limit_mb": 1})).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(put(json!({"nope": 1})).await.0, StatusCode::BAD_REQUEST);
+
+    let un = admin(&fx, Method::POST, &format!("{p}/unarchive"), Value::Null).await;
+    assert_eq!(
+        code(&un),
+        (StatusCode::CONFLICT, "conflict"),
+        "active already"
+    );
+    admin(&fx, Method::POST, &format!("{p}/archive"), Value::Null).await;
+    let un = admin(&fx, Method::POST, &format!("{p}/unarchive"), Value::Null).await;
+    assert_eq!(un.1["state"], "active", "{}", un.1);
 }

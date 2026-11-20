@@ -38,6 +38,7 @@ pub(super) fn router(id: &str, prefix: Option<&str>) -> Definition {
         key_prefix: prefix.map(str::to_owned),
         test_path: None,
         builtin: false,
+        preset: false,
         version: 0,
     }
 }
@@ -161,7 +162,10 @@ async fn a_user_provider_without_a_key_prefix_holds_no_key() {
     // The API-key built-ins are delivered through the gateway only; a subscription's token is a
     // leased env variable (KAN-441), signed in through a login.
     for p in prov::built_in() {
-        let sub = p.id == "claude-sub";
+        let sub = matches!(
+            p.id.as_str(),
+            "claude-sub" | "codex-sub" | "opencode-sub" | "agy-sub"
+        );
         assert_eq!(
             p.delivery,
             if sub { ["env"] } else { ["gateway"] },
@@ -404,8 +408,8 @@ async fn the_test_route_needs_admin_and_a_runner_and_is_limited_to_one_a_minute(
         (st, b["code"].as_str()),
         (StatusCode::FORBIDDEN, Some("forbidden_scope"))
     );
-    // It is not destructive: an admin who never stepped up gets past the gate (and the session
-    // limits, which raise what a session may spend, need the step-up: `accounts_api`).
+    // It is not destructive: an admin who never stepped up gets past the gate (as does
+    // every other account write: `accounts_api`).
     let plain = plain_admin(&fx).await;
     let (st, b) = call(&fx, &plain, Method::POST, &uri, Value::Null).await;
     assert_eq!(
@@ -546,4 +550,27 @@ async fn a_secret_name_cannot_borrow_another_accounts_host() {
     };
     let r = crate::store::secrets::create(p, &s, &name, &new, &fx.dev.id, BY, NOW).await;
     assert_eq!(code(r), "bad_request");
+}
+
+#[tokio::test]
+async fn an_accounts_key_is_not_a_row_in_the_secrets_list() {
+    let (fx, _vm, s) = setup().await;
+    open_gate(&fx).await;
+    let a = store(&fx, &s, "anthropic", "ant-list", ANT).await.unwrap();
+    let (st, body) = send(
+        &fx.app,
+        req(Method::GET, "/api/v1/secrets", Some(&fx.dev), None),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let names: Vec<&str> = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["name"].as_str())
+        .collect();
+    assert!(!names.iter().any(|n| n.starts_with("acct.")), "{names:?}");
+    // The account is still stored: the store's own list (the secret groups') holds it.
+    let all = crate::store::secrets::list(&fx.app.pool).await.unwrap();
+    assert!(all.iter().any(|m| m.name == a.secret_name));
 }

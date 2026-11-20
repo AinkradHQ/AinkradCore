@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    DRIVER_CONTROL, DriverInfo, ErrorCode, OP_RUNNER_POLICY, OP_TOOLS_INSTALL, OP_TOOLS_STATUS,
-    PolicyApplied, RunnerPolicy, StreamError, Tool, ToolsInstall,
+    DRIVER_CONTROL, DriverInfo, ErrorCode, OP_RUNNER_POLICY, OP_RUNNER_UPDATE, OP_TOOLS_INSTALL,
+    OP_TOOLS_STATUS, PolicyApplied, RunnerPolicy, StreamError, ToolsInstall,
 };
 use tokio::sync::watch;
 
@@ -77,6 +77,22 @@ pub async fn precheck_agents(state: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The longest a pending restart waits for the runner to go idle; then it restarts anyway, so the
+/// "no new work" flag cannot block the runner for good.
+const IDLE_CAP: Duration = Duration::from_secs(20 * 60);
+
+/// Waits until `idle()` or `cap` has passed; true when it was idle.
+async fn wait_idle(cap: Duration, poll: Duration, idle: impl Fn() -> bool) -> bool {
+    let start = tokio::time::Instant::now();
+    while !idle() {
+        if start.elapsed() >= cap {
+            return false;
+        }
+        tokio::time::sleep(poll).await;
+    }
+    true
+}
+
 /// The control driver's state, shared by the session of every connection.
 pub struct Control {
     pub state: PathBuf,
@@ -93,19 +109,37 @@ impl Control {
     pub fn info() -> DriverInfo {
         DriverInfo {
             name: DRIVER_CONTROL.to_owned(),
-            commands: [OP_RUNNER_POLICY, OP_TOOLS_INSTALL, OP_TOOLS_STATUS]
-                .map(str::to_owned)
-                .into(),
+            commands: [
+                OP_RUNNER_POLICY,
+                OP_TOOLS_INSTALL,
+                OP_TOOLS_STATUS,
+                OP_RUNNER_UPDATE,
+            ]
+            .map(str::to_owned)
+            .into(),
             capacity: 4,
             ..DriverInfo::default()
         }
     }
 
     /// Stops this process after `after`, as a restart.
-    fn restart_after(self: &Arc<Self>, after: Duration) {
+    pub(super) fn restart_after(self: &Arc<Self>, after: Duration) {
         let me = Arc::clone(self);
         tokio::spawn(async move {
             tokio::time::sleep(after).await;
+            me.restart.store(true, Ordering::SeqCst);
+            me.stop.send_replace(true);
+        });
+    }
+
+    /// Restarts once nothing is running: an AI tool landed, and a session must not be cut for it.
+    /// Looks every 15 seconds until the runner is idle (no agent session holds a slot).
+    pub(super) fn restart_when_idle(self: &Arc<Self>, after: Duration) {
+        let me = Arc::clone(self);
+        super::aitools::set_restart_pending();
+        tokio::spawn(async move {
+            tokio::time::sleep(after).await;
+            wait_idle(IDLE_CAP, Duration::from_secs(15), super::aitools::idle).await;
             me.restart.store(true, Ordering::SeqCst);
             me.stop.send_replace(true);
         });
@@ -147,6 +181,29 @@ impl Control {
         })
     }
 
+    /// `runner.update` (E12-4): drop the request file the root-side updater waits for (`ainkrad-update-runner.path`).
+    /// The file holds nothing the updater reads; it checks the signed manifest itself. A Mac runner updates with the app.
+    pub fn update(
+        &self,
+        req: &ainkrad_proto::v2::RunnerUpdate,
+    ) -> Result<ainkrad_proto::v2::RunnerUpdateAccepted, StreamError> {
+        if cfg!(target_os = "macos") {
+            return Err(StreamError::new(
+                ErrorCode::UnsupportedCommand,
+                "a Mac runner updates with the app",
+            ));
+        }
+        if !ainkrad_proto::v2::plain_version(&req.version) {
+            return Err(StreamError::new(ErrorCode::InvalidArgs, "not a version"));
+        }
+        std::fs::write(self.state.join("update-request"), req.version.as_bytes()).map_err(|e| {
+            StreamError::new(ErrorCode::Internal, format!("asking for the update: {e}"))
+        })?;
+        Ok(ainkrad_proto::v2::RunnerUpdateAccepted {
+            version: req.version.clone(),
+        })
+    }
+
     /// `tools.install`: after a harness tool landed on a runner that offers agents, it restarts to
     /// pick the new tool up (the agent driver reads its harnesses at start), once the Core has had
     /// time to read the `done` status.
@@ -156,8 +213,8 @@ impl Control {
     ) -> Result<ainkrad_proto::v2::ToolsStatus, StreamError> {
         let me = Arc::clone(self);
         self.tools.install(req, move |tool| {
-            if me.active.agents && matches!(tool, Tool::Claude | Tool::Codex) {
-                me.restart_after(Duration::from_secs(5));
+            if me.active.agents && super::aitools::is_ai_tool(tool) {
+                me.restart_when_idle(Duration::from_secs(5));
             }
         })
     }
@@ -166,6 +223,15 @@ impl Control {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pending_restart_waits_for_idle_but_not_past_its_cap() {
+        let busy = || false;
+        assert!(!wait_idle(IDLE_CAP, Duration::from_secs(15), busy).await);
+        let n = std::sync::atomic::AtomicUsize::new(0);
+        let soon = || n.fetch_add(1, Ordering::SeqCst) >= 3;
+        assert!(wait_idle(IDLE_CAP, Duration::from_secs(15), soon).await);
+    }
 
     fn dir() -> PathBuf {
         let p = std::env::temp_dir().join(format!(
@@ -288,5 +354,22 @@ mod tests {
             e.message
         );
         assert_eq!(load(&d), None, "a refused policy is not saved");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn update_drops_the_request_file_and_refuses_a_bad_version() {
+        let d = dir();
+        let (c, _stopping) = control(&d, OFF);
+        let bad = ainkrad_proto::v2::RunnerUpdate {
+            version: "../x".into(),
+        };
+        assert_eq!(c.update(&bad).unwrap_err().code, ErrorCode::InvalidArgs);
+        assert!(!d.join("update-request").exists());
+        let ok = ainkrad_proto::v2::RunnerUpdate {
+            version: "0.10.1".into(),
+        };
+        assert_eq!(c.update(&ok).unwrap().version, "0.10.1");
+        assert!(d.join("update-request").exists());
     }
 }

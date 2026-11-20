@@ -190,7 +190,7 @@ async fn a_second_start_is_a_409_and_the_index_is_the_backstop() {
     let again = runs::begin_start(&fx.app, &link, p, w(&now)).await;
     assert_eq!(code(again.err().unwrap()), "conflict");
     // A racing writer that got past the check meets the unique index, also as `conflict`.
-    let raced = store::begin(&fx.app.pool, "r_other", p, 1, RUNNER, w(&now)).await;
+    let raced = store::begin(&fx.app.pool, "r_other", p, 1, RUNNER, None, w(&now)).await;
     assert_eq!(code(raced.err().unwrap()), "conflict");
     // Over HTTP: the same 409, before any runner is looked for.
     let r = send(
@@ -258,6 +258,25 @@ async fn each_start_and_stop_is_one_audit_row_with_its_origin() {
             ("project.run_stopped".to_owned(), "person".to_owned())
         ]
     );
+}
+
+#[tokio::test]
+async fn a_project_set_to_never_stop_for_idleness_keeps_running() {
+    let fx = fx().await;
+    let (link, p) = (Fake::new(), project(&fx, "shop").await);
+    *link.seen.lock().unwrap() = Some(Presence {
+        online: true,
+        last_seen: fx.app.clock.unix(),
+    });
+    sqlx::query("UPDATE core_projects SET idle_never = 1 WHERE id = ?")
+        .bind(p)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let id = start(&fx, &link, p).await.unwrap();
+    fx.clock.advance(24 * 3600);
+    runs::sweep(&fx.app, &link).await;
+    assert_eq!(run(&fx, &id).await.state, "running");
 }
 
 #[tokio::test]

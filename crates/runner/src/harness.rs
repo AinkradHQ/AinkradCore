@@ -91,6 +91,8 @@ pub struct HarnessExecutor {
     /// Per-issue git worktrees under `work_root`; git's config under `<config_root>/git`.
     pub workspaces: Workspaces,
     agent_workspaces: Mutex<HashMap<(String, i64), PathBuf>>,
+    /// Sessions working in their folder of the canonical workspace (`set_session_folder`).
+    session_folders: Mutex<HashMap<String, PathBuf>>,
     /// The token cap of a job that carries none (an older server).
     pub default_token_cap: u64,
     /// How often a run's usage so far is reported.
@@ -138,6 +140,8 @@ pub struct HarnessExecutor {
     /// The connection tools the Core lists for each session (C4b), which the policy checks a
     /// connection tool's name against (`connection_call`); the agent driver is given the same.
     pub tools: Option<Arc<crate::v2::agent::tools::Tools>>,
+    /// The heavy-job shims of the Core's own runner (E15-3): the socket server and the shim dir.
+    pub(crate) job_shims: Mutex<Option<(Arc<crate::v2::jobsock::JobSocks>, PathBuf)>>,
 }
 
 impl HarnessExecutor {
@@ -154,6 +158,7 @@ impl HarnessExecutor {
             harness_env: vec![],
             workspaces: Workspaces::new(work_root.clone(), config_root.join("git")),
             agent_workspaces: Mutex::default(),
+            session_folders: Mutex::default(),
             credentials_dir: config_root.join("credentials"),
             work_root,
             config_root,
@@ -193,6 +198,7 @@ impl HarnessExecutor {
             versions: Mutex::new(BTreeMap::new()),
             backend: None,
             tools: None,
+            job_shims: Mutex::new(None),
         }
     }
 
@@ -294,6 +300,14 @@ impl HarnessExecutor {
     /// session id) has ONE for its whole life, `session-<id>`, reused by every run (start, wake,
     /// resume), so its files stay and the harness finds its own session by the same cwd (Claude
     /// Code keys `--resume` on it). Any other job gets `run-<id>`.
+    fn session_folder(&self, session: &str) -> Option<PathBuf> {
+        self.session_folders
+            .lock()
+            .expect("session folders")
+            .get(session)
+            .cloned()
+    }
+
     fn scratch(&self, job: &Job) -> PathBuf {
         let id = &job.context_ref;
         let safe = !id.is_empty()
@@ -302,7 +316,9 @@ impl HarnessExecutor {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
         match job.issue.is_none() && job.agent == 0 && safe {
-            true => self.work_root.join(format!("session-{id}")),
+            true => self
+                .session_folder(id)
+                .unwrap_or_else(|| self.work_root.join(format!("session-{id}"))),
             false => self.work_root.join(format!("run-{}", job.run)),
         }
     }
@@ -448,6 +464,10 @@ impl Executor for HarnessExecutor {
         self.workspaces.set_mirror_upstream(up);
     }
 
+    fn set_job_shims(&self, socks: Arc<crate::v2::jobsock::JobSocks>, bin: PathBuf) {
+        *self.job_shims.lock().expect("job shims") = Some((socks, bin));
+    }
+
     async fn prepare_agent_workspace(
         &self,
         session: &str,
@@ -469,10 +489,18 @@ impl Executor for HarnessExecutor {
             name: w.name.clone(),
             mirror: w.mirror,
         }));
-        let path = self
-            .workspaces
-            .prepare_session(session, generation, &requests, helper)
-            .await?;
+        let path = match self.session_folder(session) {
+            Some(folder) => {
+                self.workspaces
+                    .prepare_in_folder(&folder, &requests, helper)
+                    .await?
+            }
+            None => {
+                self.workspaces
+                    .prepare_session(session, generation, &requests, helper)
+                    .await?
+            }
+        };
         self.agent_workspaces
             .lock()
             .expect("agent workspaces")
@@ -485,6 +513,10 @@ impl Executor for HarnessExecutor {
             .lock()
             .expect("agent workspaces")
             .remove(&(session.to_owned(), generation));
+        // A session folder in the canonical workspace is the Core's copy: it stays as it is.
+        if self.session_folder(session).is_some() {
+            return;
+        }
         if let Err(why) = self.workspaces.cleanup_session(session, generation).await {
             tracing::warn!(session, %why, "agent workspace cleanup failed");
         }
@@ -492,6 +524,14 @@ impl Executor for HarnessExecutor {
 
     fn recover_agent_workspaces(&self, adopted: &[String]) {
         self.workspaces.recover_sessions(adopted);
+    }
+
+    fn set_session_folder(&self, session: &str, folder: Option<PathBuf>) {
+        let mut all = self.session_folders.lock().expect("session folders");
+        match folder {
+            Some(f) => all.insert(session.to_owned(), f),
+            None => all.remove(session),
+        };
     }
 
     fn discard_agent_workspaces(&self, name: &str, prefix: bool, keep: &[String]) {
@@ -552,6 +592,7 @@ impl Executor for HarnessExecutor {
 }
 
 mod account;
+mod bound_session;
 mod cli;
 mod files;
 mod inbox;

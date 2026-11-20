@@ -31,6 +31,7 @@ use crate::store::projects::{self, Who};
 use crate::store::run_specs::{self, spec};
 use crate::store::runs::{self, End, Run};
 use crate::store::secrets::{self, Error};
+use crate::store::{project_secrets, run_configs};
 
 /// A `run.start` that does not answer in this long is a failed start (image pulls and builds are
 /// slow, so it is generous).
@@ -43,6 +44,8 @@ pub const SWEEP_EVERY: Duration = Duration::from_secs(30);
 /// A runner offline this long (unix seconds) has lost its runs.
 pub const RUNNER_LOST_AFTER: i64 = 10 * 60;
 const PIDS: u32 = 512;
+
+mod restart;
 
 /// When this process began running orchestration (forced by `sweep_loop`), for L4.
 static BOOT: LazyLock<std::time::Instant> = LazyLock::new(std::time::Instant::now);
@@ -91,6 +94,10 @@ pub trait Link: Send + Sync {
     fn runners(&self) -> Vec<String>;
     /// `None` for a runner the Core has not met since it started.
     fn presence(&self, runner: &str) -> Option<Presence>;
+    /// The OS a runner said in its hello (`linux`, `macos`), when it said.
+    fn os(&self, _runner: &str) -> Option<String> {
+        None
+    }
     /// Seconds this Core has been orchestrating (a runner never met since is only lost after
     /// the grace has passed on the Core's own clock).
     fn uptime_secs(&self) -> i64;
@@ -186,6 +193,10 @@ impl Link for HubLink {
             .and_then(|(facts, _)| facts.as_ref())
             .and_then(|f| f.run_caps.as_ref())
             .is_some_and(|c| c.can_clone)
+    }
+
+    fn os(&self, runner: &str) -> Option<String> {
+        self.0.runners().get(runner).and_then(|s| s.os.clone())
     }
 
     fn presence(&self, runner: &str) -> Option<Presence> {
@@ -284,14 +295,63 @@ pub async fn begin_start(
     project_id: i64,
     who: Who<'_>,
 ) -> Result<Pending, Error> {
+    begin_start_with(app, link, project_id, &StartOpts::default(), who).await
+}
+
+/// Which run configuration and environment a start uses (Core 0.10, E11-3). With a configuration
+/// the spec is the saved one with the configuration and the environment's variables laid over it
+/// ([`run_configs::overlay`]); the run remembers both. A configuration may name the runner.
+#[derive(Debug, Default, Clone)]
+pub struct StartOpts {
+    pub config: Option<i64>,
+    /// The environment; default the project's first.
+    pub environment: Option<String>,
+}
+
+pub async fn begin_start_with(
+    app: &App,
+    link: &dyn Link,
+    project_id: i64,
+    opts: &StartOpts,
+    who: Who<'_>,
+) -> Result<Pending, Error> {
     let project = projects::get(&mut *app.pool.acquire().await?, project_id).await?;
     if project.state == "archived" {
         return refused("conflict", "the project is archived");
     }
-    if runs::live(&app.pool, project_id).await?.is_some() {
-        return refused("conflict", "the project already has a live run");
+    if runs::live_for(&app.pool, project_id, opts.config)
+        .await?
+        .is_some()
+    {
+        return refused("conflict", "that run is already live");
     }
-    let spec = run_specs::latest(&app.pool, project_id).await?;
+    let mut spec = run_specs::latest(&app.pool, project_id).await?;
+    let mut used = None;
+    let mut wanted_runner = None;
+    if let Some(cid) = opts.config {
+        let cfg = run_configs::get(&app.pool, project_id, cid).await?;
+        let envs = run_configs::environments(&app.pool, project_id).await?;
+        let env = match &opts.environment {
+            Some(e) if envs.contains(e) => e.clone(),
+            Some(_) => return refused("not_found", "no such environment"),
+            None => envs.first().cloned().unwrap_or_default(),
+        };
+        let vars = run_configs::vars(&app.pool, cid, &env).await?;
+        run_configs::overlay(&mut spec.spec, &cfg, &vars).map_err(|why| Error::Refused {
+            code: "invalid_spec",
+            message: why,
+        })?;
+        project_secrets::check_refs(
+            &mut *app.pool.acquire().await?,
+            &project,
+            &spec::secret_refs(&spec.spec),
+        )
+        .await?;
+        if cfg.runner != "automatic" {
+            wanted_runner = Some(cfg.runner.clone());
+        }
+        used = Some((cid, env));
+    }
     let load = runs::load(&app.pool).await?;
     // Prefer a runner every referenced secret may be leased to; load breaks the tie.
     let mut scopes = Vec::new();
@@ -302,18 +362,54 @@ pub async fn begin_start(
     }
     // A spec that builds from or mounts repos needs a runner that can clone them (P5-05).
     let uses_repos = !spec::repo_refs(&spec.spec).is_empty();
-    let Some(runner) = link.runners().into_iter().min_by_key(|r| {
-        let out = scopes.iter().filter(|s| !s.contains(r)).count();
-        let cannot = uses_repos && !link.can_clone(r);
-        (cannot, out, load.get(r).copied().unwrap_or(0))
-    }) else {
+    // Where the project prefers to run (`Project::runner_pref`): `this_mac` is a macOS runner and
+    // `home_server` a Linux one (the OS a runner said in its hello). A configuration that names a
+    // runner overrides it.
+    let want_os = match (wanted_runner.is_some(), project.runner_pref.as_str()) {
+        (false, "this_mac") => Some("macos"),
+        (false, "home_server") => Some("linux"),
+        _ => None,
+    };
+    let Some(runner) = link
+        .runners()
+        .into_iter()
+        .filter(|r| wanted_runner.as_ref().is_none_or(|w| w == r))
+        .filter(|r| want_os.is_none_or(|o| link.os(r).as_deref() == Some(o)))
+        .min_by_key(|r| {
+            let out = scopes.iter().filter(|s| !s.contains(r)).count();
+            let cannot = uses_repos && !link.can_clone(r);
+            (cannot, out, load.get(r).copied().unwrap_or(0))
+        })
+    else {
         return refused(
             "no_runner",
-            "no online runner can run projects (it needs Podman, rootless setup and cgroup limits)",
+            match (&wanted_runner, want_os) {
+                (Some(_), _) => {
+                    "the runner this configuration names is not online or cannot run projects"
+                }
+                (None, Some("macos")) => {
+                    "no online Mac runner can run projects; change Where it runs to Automatic"
+                }
+                (None, Some(_)) => {
+                    "no online home-server runner can run projects; change Where it runs to Automatic"
+                }
+                _ => {
+                    "no online runner can run projects (it needs Podman, rootless setup and cgroup limits)"
+                }
+            },
         );
     };
     let id = crate::auth::crypto::random_id("r_");
-    let run = runs::begin(&app.pool, &id, project_id, spec.version, &runner, who).await?;
+    let run = runs::begin(
+        &app.pool,
+        &id,
+        project_id,
+        spec.version,
+        &runner,
+        used.as_ref().map(|(c, e)| (*c, e.as_str())),
+        who,
+    )
+    .await?;
     Ok(Pending { run, project, spec })
 }
 
@@ -555,6 +651,36 @@ pub async fn stop(
     settle_stop(app, link, run, reason, who).await
 }
 
+/// Stops one run by id (reason as `stop`); 404 when it is not a live run of the project.
+pub async fn stop_run(
+    app: &App,
+    link: &dyn Link,
+    project_id: i64,
+    run: &str,
+    reason: &str,
+    who: Who<'_>,
+) -> Result<Run, Error> {
+    let r = runs::get(&app.pool, run).await?;
+    if r.project_id != project_id || !r.is_live() {
+        return refused("not_found", "the project has no such live run");
+    }
+    settle_stop(app, link, r, reason, who).await
+}
+
+/// Stops the live run of one configuration (`None`: the setup as saved), if any.
+pub async fn replace_config(
+    app: &App,
+    link: &dyn Link,
+    project_id: i64,
+    config: Option<i64>,
+    who: Who<'_>,
+) -> Result<(), Error> {
+    match runs::live_for(&app.pool, project_id, config).await? {
+        Some(r) => settle_stop(app, link, r, "replaced", who).await.map(|_| ()),
+        None => Ok(()),
+    }
+}
+
 async fn settle_stop(
     app: &App,
     link: &dyn Link,
@@ -683,7 +809,7 @@ pub async fn sweep(app: &App, link: &dyn Link) {
                     continue;
                 };
                 let last = r.last_activity_at.as_deref().unwrap_or(&r.started_at);
-                if age(last) >= p.idle_minutes * 60 {
+                if !p.idle_never && age(last) >= p.idle_minutes * 60 {
                     let done = origin::scope(
                         idle.clone(),
                         settle_stop(app, link, r.clone(), "idle", system(&now)),
@@ -737,12 +863,16 @@ pub async fn sweep_loop(app: App) {
     let mut closing = app.closing.subscribe();
     let mut tick = tokio::time::interval(SWEEP_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Restarts of crashed runs are due within seconds, so they are looked at more often.
+    let mut quick = tokio::time::interval(Duration::from_secs(2));
+    quick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     LazyLock::force(&BOOT);
     let link = HubLink(Arc::clone(&app.hub));
     loop {
         tokio::select! {
             () = crate::api::stopping(&mut closing) => return,
             _ = tick.tick() => sweep(&app, &link).await,
+            _ = quick.tick() => restart::pass(&app, &link).await,
         }
     }
 }

@@ -57,7 +57,7 @@ fn elevate_once_and_traffic_never_extends_it() {
     assert!(o.status.success(), "{o:?}");
     let until = field(&stdout(&o), "elevated_until").unwrap();
     let left = until.parse::<i64>().unwrap() - ainkrad_ctl::client::unix_now();
-    assert!((290..=301).contains(&left), "the default window: {left} s");
+    assert!((50..=61).contains(&left), "the default window: {left} s");
     assert_eq!(audited(&a, "auth.step_up"), 1);
 
     // Traffic, new sessions included, a little later: the Core carries the same instant.

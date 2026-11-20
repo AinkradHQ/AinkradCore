@@ -113,6 +113,7 @@ async fn fx() -> Fx {
     let admin = enroll(&app, "admin", "device", &["admin", "read"]).await;
     let session = admin.session.lock().unwrap().clone().unwrap();
     app.auth.elevate(&session, &admin.id, clock.unix() + 3600);
+    admin.unlock(&app.auth, clock.unix() + 3600);
     let runner = enroll(&app, "runner-1", "runner", &["runner"]).await;
     // Captured on this thread (a `#[tokio::test]` runs on one): any log line the Core writes.
     let logs = Arc::new(Mutex::new(Vec::new()));
@@ -275,6 +276,7 @@ async fn a_generated_key_is_sealed_and_leases_only_to_the_runner_of_a_host_that_
         fields,
         [
             "algo",
+            "bits",
             "created_at",
             "fingerprint",
             "id",
@@ -360,19 +362,157 @@ async fn ed25519_and_ecdsa_import_and_the_passphrase_is_used_once_and_not_kept()
 }
 
 #[tokio::test]
-async fn rsa_dsa_and_unreadable_keys_are_refused_and_nothing_is_left_behind() {
+async fn rsa_2048_imports_from_openssh_and_both_pem_forms_and_is_stored_in_openssh_form() {
     let fx = fx().await;
-    let (s, v) = import(&fx, "old", RSA, None).await;
-    assert_eq!(s, StatusCode::BAD_REQUEST);
-    let msg = v["message"].as_str().unwrap();
-    assert!(
-        msg.contains("RSA keys are not supported; generate an ed25519 key")
-            && msg.contains("DSA")
-            && msg.contains("Generate Key"),
-        "{msg}"
+    for (i, pem) in [RSA_2048, RSA_PKCS1, RSA_PKCS8].into_iter().enumerate() {
+        let v = import_ok(&fx, &format!("rsa{i}"), pem, None).await;
+        assert_eq!(
+            (v["algo"].as_str(), v["bits"].as_u64()),
+            (Some("rsa"), Some(2048))
+        );
+        let id = v["id"].as_str().unwrap();
+        let (_, got) = call(&fx, Method::GET, &format!("/keys/{id}"), None).await;
+        assert_eq!(got["bits"], 2048);
+        host_with(&fx, &format!("h{i}"), id, Some(&fx.runner.id)).await;
+        let stored = lease_and_redeem(&fx, id).await.unwrap();
+        assert!(stored.algorithm().is_rsa() && !stored.is_encrypted());
+        // Whatever the input form, what is sealed is the OpenSSH form of the same key.
+        assert!(
+            stored
+                .to_openssh(ssh_key::LineEnding::LF)
+                .unwrap()
+                .starts_with("-----BEGIN OPENSSH PRIVATE KEY-----")
+        );
+    }
+    // The three are different keys, so the first has the fixture's public key.
+    let (_, list) = call(&fx, Method::GET, "/keys", None).await;
+    let pubs: Vec<_> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k["public_key"].as_str().unwrap())
+        .collect();
+    assert!(pubs.contains(&RSA_2048_PUB));
+    // An ed25519 key reports its size too.
+    assert_eq!(import_ok(&fx, "e", ED, None).await["bits"], 256);
+}
+
+#[tokio::test]
+async fn an_encrypted_rsa_key_takes_its_passphrase_and_an_old_format_one_is_refused_plainly() {
+    let fx = fx().await;
+    let (s, v) = import(&fx, "e", RSA_ENC, None).await;
+    assert_eq!(
+        (s, v["message"].as_str().unwrap().contains("passphrase")),
+        (StatusCode::BAD_REQUEST, true)
     );
-    // An encrypted RSA key is refused before its passphrase is looked at (DSA is the same
-    // branch: the algorithm is public on an encrypted key).
+    assert_eq!(
+        import(&fx, "e", RSA_ENC, Some("wrong")).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let ok = import_ok(&fx, "e", RSA_ENC, Some(PASS)).await;
+    assert_eq!(
+        (ok["algo"].as_str(), ok["bits"].as_u64()),
+        (Some("rsa"), Some(2048))
+    );
+    let (s, v) = import(&fx, "old", RSA_PEM_ENC, Some(PASS)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert!(
+        v["message"].as_str().unwrap().contains("ssh-keygen -p"),
+        "{v}"
+    );
+}
+
+/// A PKCS#1 PEM whose modulus has `bytes` bytes of 0xff (so `bytes * 8` bits) and dummy everything
+/// else: the Core only parses an RSA key, it does not check the numbers.
+fn rsa_pem_with_modulus(bytes: usize) -> String {
+    fn der(tag: u8, body: &[u8]) -> Vec<u8> {
+        let n = body.len();
+        let mut o = vec![tag];
+        match n {
+            0..=127 => o.push(n as u8),
+            128..=255 => o.extend([0x81, n as u8]),
+            _ => o.extend([0x82, (n >> 8) as u8, n as u8]),
+        }
+        o.extend(body);
+        o
+    }
+    fn int(be: &[u8]) -> Vec<u8> {
+        let mut v = if be[0] & 0x80 != 0 { vec![0] } else { vec![] };
+        v.extend(be);
+        der(2, &v)
+    }
+    let mut body = int(&[0]);
+    body.extend(int(&vec![0xff; bytes]));
+    body.extend(int(&[1, 0, 1]));
+    for _ in 0..6 {
+        body.extend(int(&[3]));
+    }
+    let b64 = STANDARD.encode(der(0x30, &body));
+    let lines: Vec<&str> = b64
+        .as_bytes()
+        .chunks(64)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect();
+    format!(
+        "-----BEGIN RSA PRIVATE KEY-----\n{}\n-----END RSA PRIVATE KEY-----\n",
+        lines.join("\n")
+    )
+}
+
+#[tokio::test]
+async fn an_rsa_key_over_8192_bits_is_refused_and_8192_is_not() {
+    let fx = fx().await;
+    let (s, v) = import(&fx, "huge", &rsa_pem_with_modulus(1025), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        v["message"],
+        "This key is too large (8200 bits). Use a key of 8192 bits or fewer."
+    );
+    // The bound itself is allowed (a 1024-byte modulus is exactly 8192 bits).
+    let ok = import_ok(&fx, "edge", &rsa_pem_with_modulus(1024), None).await;
+    assert_eq!(ok["bits"], 8192);
+    assert_eq!(count(&fx, "leyline_keys").await, 1);
+}
+
+#[tokio::test]
+async fn damaged_and_foreign_pem_keys_are_not_valid_and_leave_nothing_behind() {
+    let fx = fx().await;
+    let cut = &RSA_PKCS1[..RSA_PKCS1.len() / 2];
+    let flipped = RSA_PKCS8.replacen("MIIE", "MIIF", 1);
+    for junk in [
+        "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n",
+        "-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n",
+        "-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----\n",
+        cut,
+        &flipped,
+    ] {
+        let (s, v) = import(&fx, "j", junk, None).await;
+        assert_eq!(
+            (s, v["message"].as_str()),
+            (StatusCode::BAD_REQUEST, Some("the key is not valid")),
+            "{junk}"
+        );
+    }
+    assert_eq!(
+        count(&fx, "leyline_keys").await + count(&fx, "core_secrets").await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn weak_rsa_p521_and_unreadable_keys_are_refused_and_nothing_is_left_behind() {
+    let fx = fx().await;
+    // The 1024-bit fixture, in OpenSSH form and in PKCS#8 form: the same plain sentence.
+    for weak in [RSA, RSA_WEAK_PKCS8] {
+        let (s, v) = import(&fx, "old", weak, None).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            v["message"],
+            "This key is too weak (1024 bits). Make a new key instead."
+        );
+    }
+    // A weak RSA key is refused before its passphrase is looked at (the size is public on an
+    // encrypted key).
     assert_eq!(
         import(&fx, "old2", RSA, Some(PASS)).await.0,
         StatusCode::BAD_REQUEST
@@ -715,10 +855,7 @@ async fn scopes_step_up_and_the_contract_expose_public_data_only() {
         p["/modules/leyline/v1/keys/import"]["post"]["x-ainkrad-scope"],
         "admin"
     );
-    assert_eq!(
-        p["/modules/leyline/v1/keys/{key}"]["delete"]["x-ainkrad-destructive"],
-        true
-    );
+    assert!(p["/modules/leyline/v1/keys/{key}"]["delete"]["x-ainkrad-destructive"].is_null());
     // No schema a key route answers with has a private or passphrase field.
     let view = spec["components"]["schemas"]["KeyView"]["properties"]
         .as_object()
@@ -766,31 +903,24 @@ async fn a_hostile_bcrypt_cost_is_refused_at_once_and_junk_is_only_invalid() {
     let (s, v) = import(&fx, "junk", "not a key", None).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     assert_eq!(v["message"], "the key is not valid");
-    let (_, v) = import(&fx, "rsa", RSA, None).await;
+    let (_, v) = import(&fx, "p521", P521, None).await;
     assert!(
         v["message"]
             .as_str()
             .unwrap()
-            .contains("RSA keys are not supported"),
+            .contains("This key type is not supported"),
         "{v}"
     );
 }
 
 #[tokio::test]
-async fn importing_needs_the_step_up_and_generating_does_not() {
+async fn importing_and_generating_need_no_step_up() {
     let fx = fx().await;
     let laptop = enroll(&fx.app, "laptop", "device", &["admin"]).await; // admin, not elevated
     let uri = format!("{BASE}/keys/import");
     let body = json!({"name": "i", "private_key": ED});
     let (s, v) = send(&fx, &laptop, Method::POST, &uri, Some(body), true).await;
-    assert_eq!(
-        (s, v["code"].as_str()),
-        (StatusCode::FORBIDDEN, Some("step_up_required"))
-    );
-    assert_eq!(
-        count(&fx, "leyline_keys").await + count(&fx, "core_secrets").await,
-        0
-    );
+    assert_eq!(s, StatusCode::OK, "{v}");
     let uri = format!("{BASE}/keys");
     let (s, _) = send(
         &fx,
@@ -802,17 +932,13 @@ async fn importing_needs_the_step_up_and_generating_does_not() {
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    import_ok(&fx, "i", ED, None).await; // the elevated admin
     let spec: Value =
         serde_json::from_str(&ainkrad_core_server::api::v1::spec::json_for(&[Arc::new(
             Leyline,
         )]))
         .unwrap();
     let p = &spec["paths"];
-    assert_eq!(
-        p["/modules/leyline/v1/keys/import"]["post"]["x-ainkrad-destructive"],
-        true
-    );
+    assert!(p["/modules/leyline/v1/keys/import"]["post"]["x-ainkrad-destructive"].is_null());
     assert!(p["/modules/leyline/v1/keys"]["post"]["x-ainkrad-destructive"].is_null());
 }
 

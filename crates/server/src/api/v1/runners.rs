@@ -81,6 +81,13 @@ pub struct Runner {
     pub connected_since: Option<Timestamp>,
     /// This Core's own version is newer than the runner's `version`. Absent until it connected.
     pub update_available: Option<bool>,
+    /// E12-4: asked to update in the last 15 minutes (it restarts and reconnects on the new version). Absent when not.
+    #[schema(required = false)]
+    pub updating: Option<bool>,
+    /// E12-5: the runner is older than the oldest this Core works with (`GET /core/health` `min_runner`), so the app asks
+    /// to update it before relying on it. Absent until it connected.
+    #[schema(required = false)]
+    pub update_required: Option<bool>,
     /// Whether it can serve the accounts' kinds of key, with the reason when it cannot.
     pub accounts: Option<RunnerAccounts>,
     /// Sessions and terminals running now, and how many it takes.
@@ -96,6 +103,24 @@ pub struct Runner {
     /// What the runner offers now: terminals, agents, agent capacity (`PUT /runners/{id}/policy`
     /// sets it). Absent until a runner of this version connected.
     pub policy: Option<super::runner_control::RunnerPolicyBody>,
+    /// The AI tool install under way on its host, or the last one, as the runner reports it in
+    /// its heartbeats (D-22). Absent until a runner of this version reports.
+    pub tool_install: Option<RunnerToolInstall>,
+    /// The folder its work happens in, as the runner reports it.
+    pub home: Option<String>,
+    /// Why it is not fully working, in words: its last-error note.
+    pub last_error: Option<String>,
+}
+
+/// An AI tool install as a runner reports it.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RunnerToolInstall {
+    pub tool: String,
+    /// `running`, `done` or `failed`.
+    pub state: String,
+    pub percent: u32,
+    pub step: String,
+    pub reason: Option<String>,
 }
 
 /// Who the runner process is.
@@ -284,8 +309,30 @@ fn of(d: gov::Device, live: Option<&RunnerState>, x: &Extra) -> Runner {
             .and_then(semver)
             .zip(semver(env!("CARGO_PKG_VERSION")))
             .map(|(runner, core)| core > runner),
+        updating: crate::runner_update::is_updating(&d.id, crate::runner_update::unix_now())
+            .then_some(true),
+        update_required: version
+            .as_deref()
+            .map(crate::runner_update::runner_too_old)
+            .filter(|t| *t),
         built_in: Some(x.built_in),
         policy: facts.and_then(|f| f.policy).map(Into::into),
+        tool_install: facts
+            .and_then(|f| f.tool_install.as_ref())
+            .map(|t| RunnerToolInstall {
+                tool: t.tool.clone(),
+                state: match t.state {
+                    ainkrad_proto::v2::ToolOpState::Running => "running",
+                    ainkrad_proto::v2::ToolOpState::Done => "done",
+                    ainkrad_proto::v2::ToolOpState::Failed => "failed",
+                }
+                .to_owned(),
+                percent: u32::from(t.percent),
+                step: t.step.clone(),
+                reason: t.reason.clone(),
+            }),
+        home: facts.and_then(|f| f.home.clone()),
+        last_error: facts.and_then(|f| f.last_error.clone()),
         id: d.id,
         name: d.name,
         online: Some(live.is_some_and(|s| s.online)),
@@ -331,7 +378,7 @@ fn extra(
 
 /// A runner device that may connect: approved and not revoked (a pending, rejected or expired
 /// claimant is not a runner yet).
-fn listed(d: &gov::Device) -> bool {
+pub(super) fn listed(d: &gov::Device) -> bool {
     d.kind == "runner" && d.usable()
 }
 

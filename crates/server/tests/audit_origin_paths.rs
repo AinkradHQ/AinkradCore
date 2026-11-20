@@ -20,8 +20,11 @@ enum How {
 }
 
 const PATHS: &[(&str, How)] = &[
+    ("api/v1/coreprefs.rs", How::Request),
     ("api/v1/devices.rs", How::Request),
     ("api/v1/gate.rs", How::Request),
+    // Hardware pause and resume (E15-1), inside the admin's request.
+    ("api/v1/hardware.rs", How::Request),
     ("api/v1/runner_control.rs", How::Request),
     ("api/v1/runners.rs", How::Request),
     ("api/v1/secrets.rs", How::Request),
@@ -32,6 +35,8 @@ const PATHS: &[(&str, How)] = &[
     ("api/v1/trace.rs", How::Request),
     ("auth/identity.rs", How::Background),
     ("cli/admin/bootstrap.rs", How::Background),
+    // A Decisions provider call (E15-0), under the origin of the request or job that asked.
+    ("decisions/provider.rs", How::Ambient),
     ("health.rs", How::Background),
     ("hub/connect.rs", How::Background),
     ("jobs/store.rs", How::Explicit),
@@ -39,10 +44,13 @@ const PATHS: &[(&str, How)] = &[
     ("ops_catalog/call.rs", How::Explicit),
     ("push.rs", How::Background),
     ("store/accounts.rs", How::Ambient),
+    ("store/accounts/remove.rs", How::Ambient),
+    ("store/approval_rules.rs", How::Ambient),
     ("store/agents.rs", How::Session),
     ("store/budgets.rs", How::Ambient),
     ("store/budgets/write.rs", How::Ambient),
     ("store/chains.rs", How::Ambient),
+    ("store/chains/order.rs", How::Ambient),
     ("store/connections.rs", How::Ambient),
     ("store/connections/access.rs", How::Ambient),
     ("store/connections/apps.rs", How::Ambient),
@@ -60,11 +68,12 @@ const PATHS: &[(&str, How)] = &[
     ("store/pools.rs", How::Ambient),
     ("store/prices.rs", How::Ambient),
     ("store/projects.rs", How::Ambient),
+    ("store/projects/defaults.rs", How::Ambient),
     ("store/providers.rs", How::Ambient),
     ("store/secret_groups.rs", How::Ambient),
     ("store/secrets.rs", How::Ambient),
+    ("store/secrets/export.rs", How::Ambient),
     ("store/settings.rs", How::Ambient),
-    ("store/usage.rs", How::Ambient),
 ];
 
 /// The files that append audit rows, under `dir`, relative to `src`.

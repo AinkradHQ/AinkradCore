@@ -17,11 +17,9 @@ package ainkrad.client.apis
 
 import ainkrad.client.models.AccountSpend
 import ainkrad.client.models.CostEvent
+import ainkrad.client.models.DayUsage
 import ainkrad.client.models.ErrorBody
-import ainkrad.client.models.LimitCleared
-import ainkrad.client.models.LimitSet
 import ainkrad.client.models.PriceBookEntry
-import ainkrad.client.models.SetLimit
 import ainkrad.client.models.SetPrice
 
 import ainkrad.client.infrastructure.*
@@ -74,16 +72,14 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
-        * DELETE /api/v1/accounts/{id}/limits/{unit}/{window_secs}
+        * GET /api/v1/costs/series
         * 
         * 
-         * @param id The account&#39;s id 
-         * @param unit &#x60;tokens&#x60; or &#x60;messages&#x60; 
-         * @param windowSecs The limit&#39;s window 
-         * @return LimitCleared
+         * @param days Days back, today included (default 14, most 90). (optional)
+         * @return kotlin.collections.List<DayUsage>
         */
             @Suppress("UNCHECKED_CAST")
-        open suspend fun clearAccountLimit(id: kotlin.String, unit: kotlin.String, windowSecs: kotlin.Long): HttpResponse<LimitCleared> {
+        open suspend fun costSeries(days: kotlin.Long?): HttpResponse<kotlin.collections.List<DayUsage>> {
 
             val localVariableAuthNames = listOf<String>("device_signature")
 
@@ -91,12 +87,13 @@ import io.ktor.http.ParametersBuilder
                     io.ktor.client.utils.EmptyContent
 
             val localVariableQuery = mutableMapOf<String, List<String>>()
+            days?.apply { localVariableQuery["days"] = listOf("$days") }
 
             val localVariableHeaders = mutableMapOf<String, String>()
 
             val localVariableConfig = RequestConfig<kotlin.Any?>(
-            RequestMethod.DELETE,
-            "/api/v1/accounts/{id}/limits/{unit}/{window_secs}".replace("{" + "id" + "}", "$id").replace("{" + "unit" + "}", "$unit").replace("{" + "window_secs" + "}", "$windowSecs"),
+            RequestMethod.GET,
+            "/api/v1/costs/series",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
@@ -175,40 +172,6 @@ import io.ktor.http.ParametersBuilder
             )
 
             return request(
-            localVariableConfig,
-            localVariableBody,
-            localVariableAuthNames
-            ).wrap()
-            }
-
-        /**
-        * PUT /api/v1/accounts/{id}/limits
-        * 
-        * 
-         * @param id The account&#39;s id 
-         * @param setLimit  
-         * @return LimitSet
-        */
-            @Suppress("UNCHECKED_CAST")
-        open suspend fun setAccountLimit(id: kotlin.String, setLimit: SetLimit): HttpResponse<LimitSet> {
-
-            val localVariableAuthNames = listOf<String>("device_signature")
-
-            val localVariableBody = setLimit
-
-            val localVariableQuery = mutableMapOf<String, List<String>>()
-
-            val localVariableHeaders = mutableMapOf<String, String>()
-
-            val localVariableConfig = RequestConfig<kotlin.Any?>(
-            RequestMethod.PUT,
-            "/api/v1/accounts/{id}/limits".replace("{" + "id" + "}", "$id"),
-            query = localVariableQuery,
-            headers = localVariableHeaders,
-            requiresAuthentication = true,
-            )
-
-            return jsonRequest(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames

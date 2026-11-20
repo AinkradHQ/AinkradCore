@@ -223,7 +223,11 @@ fn spawn_with_fd3(
     let reader = key_pipe(&bytes, PIPE_WANT)?;
     let mut cmd = std::process::Command::new(program);
     cmd.args(&spec.args).env_clear().envs(&spec.env);
-    if let Some(dir) = spec.cwd.as_ref().or_else(|| spec.env.get("HOME")) {
+    // As the plain spawn does: a directory that is not on this host (a sandbox launcher's own
+    // `--chdir`, such as the box home) is left to the launcher, not an error here.
+    if let Some(dir) = spec.cwd.as_ref().or_else(|| spec.env.get("HOME"))
+        && std::path::Path::new(dir).is_dir()
+    {
         cmd.current_dir(dir);
     }
     cmd.stdin(open()?).stdout(open()?).stderr(open()?);

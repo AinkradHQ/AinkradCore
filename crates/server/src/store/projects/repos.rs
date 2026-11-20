@@ -197,23 +197,57 @@ pub async fn set_mirror(
     fetched_at: Option<&str>,
     error: Option<&str>,
 ) -> Result<(), sqlx::Error> {
+    let state = if error.is_some() { "failed" } else { "ready" };
+    let kept = (head, fetched_at);
+    set_mirror_state(pool, repo_id, (state, None), kept, (error, None)).await
+}
+
+/// [`set_mirror`] with the explicit `state` (`fetching`, `ready`, `failed`) and the classified
+/// `reason` of a failure. A fetch is marked `fetching` first (with its `started_at`); the older
+/// head and time are passed in again. Every change of state is emitted as `project.mirror_changed`
+/// (a payload of ids and words: no URL, no token).
+pub async fn set_mirror_state(
+    pool: &SqlitePool,
+    repo_id: i64,
+    (state, started_at): (&str, Option<&str>),
+    (head, fetched_at): (Option<&str>, Option<&str>),
+    (error, reason): (Option<&str>, Option<&str>),
+) -> Result<(), sqlx::Error> {
+    let mut tx = crate::store::begin_write(pool).await?;
+    let project: Option<i64> =
+        sqlx::query_scalar("SELECT project_id FROM core_project_repos WHERE id = ?")
+            .bind(repo_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some(project) = project else {
+        return Ok(());
+    };
     sqlx::query(
-        "INSERT INTO core_project_mirrors (repo_id, head, fetched_at, error) VALUES (?, ?, ?, ?) \
+        "INSERT INTO core_project_mirrors (repo_id, head, fetched_at, error, state, reason, started_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT (repo_id) DO UPDATE SET head = excluded.head, \
-         fetched_at = excluded.fetched_at, error = excluded.error",
+         fetched_at = excluded.fetched_at, error = excluded.error, state = excluded.state, \
+         reason = excluded.reason, started_at = excluded.started_at",
     )
     .bind(repo_id)
     .bind(head)
     .bind(fetched_at)
     .bind(error)
-    .execute(pool)
+    .bind(state)
+    .bind(reason)
+    .bind(started_at)
+    .execute(&mut *tx)
     .await?;
+    let payload = json!({"id": project, "repo": repo_id, "state": state, "reason": reason});
+    crate::store::events::append(&mut tx, "project.mirror_changed", &payload).await?;
+    tx.commit().await?;
     Ok(())
 }
 
 pub async fn mirror(pool: &SqlitePool, repo_id: i64) -> Result<Option<Mirror>, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT repo_id, head, fetched_at, error FROM core_project_mirrors WHERE repo_id = ?",
+        "SELECT repo_id, head, fetched_at, error, state, reason, started_at \
+         FROM core_project_mirrors WHERE repo_id = ?",
     )
     .bind(repo_id)
     .fetch_optional(pool)
@@ -224,6 +258,9 @@ pub async fn mirror(pool: &SqlitePool, repo_id: i64) -> Result<Option<Mirror>, s
             head: r.try_get("head")?,
             fetched_at: r.try_get("fetched_at")?,
             error: r.try_get("error")?,
+            state: r.try_get("state")?,
+            reason: r.try_get("reason")?,
+            started_at: r.try_get("started_at")?,
         })
     })
     .transpose()

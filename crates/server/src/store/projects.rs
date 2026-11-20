@@ -28,6 +28,12 @@ pub const RESERVED: &[&str] = &[
     "design", "leyline", "lore", "toy",
 ];
 
+/// Minutes between automatic fetches a project may pick; 0 is only when asked.
+pub const FETCH_INTERVALS: [i64; 4] = [0, 10, 15, 60];
+
+/// The values of a project's runner preference.
+pub const RUNNERS: [&str; 3] = ["auto", "this_mac", "home_server"];
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Project {
     pub id: i64,
@@ -39,8 +45,16 @@ pub struct Project {
     pub secret_group: Option<i64>,
     pub expose: bool,
     pub idle_minutes: i64,
+    /// The idle stop is off.
+    pub idle_never: bool,
     pub cpu_limit: f64,
     pub mem_limit_mb: i64,
+    /// `auto`, `this_mac` or `home_server`.
+    pub runner_pref: String,
+    /// Minutes between automatic fetches (`FETCH_INTERVALS`); 0 is only when asked.
+    pub fetch_interval_minutes: i64,
+    /// One of the project's run environments, when set.
+    pub default_environment: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -61,6 +75,12 @@ pub struct Mirror {
     pub head: Option<String>,
     pub fetched_at: Option<String>,
     pub error: Option<String>,
+    /// `fetching`, `ready` or `failed`.
+    pub state: String,
+    /// Why a failed fetch failed (`mirrors::Reason::code`).
+    pub reason: Option<String>,
+    /// When the running fetch began.
+    pub started_at: Option<String>,
 }
 
 fn refused<T>(code: &'static str, message: &str) -> Result<T, Error> {
@@ -88,7 +108,8 @@ pub fn slug_problem(slug: &str) -> Option<&'static str> {
 }
 
 const SELECT: &str = "SELECT id, slug, name, description, state, source, secret_group, expose, \
-    idle_minutes, cpu_limit, mem_limit_mb, created_at, updated_at FROM core_projects";
+    idle_minutes, idle_never, cpu_limit, mem_limit_mb, runner_pref, fetch_interval_minutes, \
+    default_environment, created_at, updated_at FROM core_projects";
 
 fn project(r: SqliteRow) -> Result<Project, sqlx::Error> {
     Ok(Project {
@@ -101,8 +122,12 @@ fn project(r: SqliteRow) -> Result<Project, sqlx::Error> {
         secret_group: r.try_get("secret_group")?,
         expose: r.try_get::<i64, _>("expose")? != 0,
         idle_minutes: r.try_get("idle_minutes")?,
+        idle_never: r.try_get::<i64, _>("idle_never")? != 0,
         cpu_limit: r.try_get("cpu_limit")?,
         mem_limit_mb: r.try_get("mem_limit_mb")?,
+        runner_pref: r.try_get("runner_pref")?,
+        fetch_interval_minutes: r.try_get("fetch_interval_minutes")?,
+        default_environment: r.try_get("default_environment")?,
         created_at: r.try_get("created_at")?,
         updated_at: r.try_get("updated_at")?,
     })
@@ -253,9 +278,11 @@ async fn create_in(
     if taken > 0 {
         return refused("conflict", "a project of that slug exists");
     }
+    let d = defaults::get(tx).await?;
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO core_projects (slug, name, description, source, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO core_projects (slug, name, description, source, created_at, updated_at, \
+         cpu_limit, mem_limit_mb, idle_minutes, idle_never) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(slug)
     .bind(name)
@@ -263,6 +290,10 @@ async fn create_in(
     .bind(source)
     .bind(who.now)
     .bind(who.now)
+    .bind(d.cpu_limit)
+    .bind(d.mem_limit_mb)
+    .bind(d.idle_minutes)
+    .bind(d.idle_never)
     .fetch_one(&mut *tx)
     .await?;
     let details = json!({"slug": slug, "name": name, "source": source, "by_device": who.by_device});
@@ -281,8 +312,14 @@ pub struct Change<'a> {
     /// The link name (`<slug>.ainkrad.io`).
     pub slug: Option<&'a str>,
     pub idle_minutes: Option<i64>,
+    pub idle_never: Option<bool>,
     pub cpu_limit: Option<f64>,
     pub mem_limit_mb: Option<i64>,
+    /// `auto`, `this_mac` or `home_server`.
+    pub runner: Option<&'a str>,
+    pub fetch_interval_minutes: Option<i64>,
+    /// An empty string clears it.
+    pub default_environment: Option<&'a str>,
 }
 
 /// Changes name, description and/or public exposure (`None` keeps it). An archived project is
@@ -325,15 +362,51 @@ pub async fn change(
     let idle = c.idle_minutes.unwrap_or(old.idle_minutes);
     let cpu = c.cpu_limit.unwrap_or(old.cpu_limit);
     let mem = c.mem_limit_mb.unwrap_or(old.mem_limit_mb);
-    if !(5..=1440).contains(&idle) {
-        return refused("bad_request", "idle stop is 5 to 1440 minutes");
+    let runner = c.runner.unwrap_or(&old.runner_pref);
+    if !RUNNERS.contains(&runner) {
+        return refused(
+            "bad_request",
+            "where it runs is auto, this_mac or home_server",
+        );
     }
-    if !(cpu.is_finite() && (0.1..=16.0).contains(&cpu)) {
-        return refused("bad_request", "CPUs are 0.1 to 16");
+    let fetch = c
+        .fetch_interval_minutes
+        .unwrap_or(old.fetch_interval_minutes);
+    if !FETCH_INTERVALS.contains(&fetch) {
+        return refused(
+            "bad_request",
+            "fetch every 10, 15 or 60 minutes, or 0 for only when asked",
+        );
     }
-    if !(64..=32768).contains(&mem) {
-        return refused("bad_request", "memory is 64 to 32768 MB");
+    let env = match c.default_environment {
+        Some("") => None,
+        Some(e) => Some(e.to_owned()),
+        None => old.default_environment.clone(),
+    };
+    if let Some(e) = env
+        .as_deref()
+        .filter(|e| Some(*e) != old.default_environment.as_deref())
+    {
+        let have: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM core_run_envs WHERE project_id = ?")
+                .bind(id)
+                .fetch_all(&mut *tx)
+                .await?;
+        // A project that never opened its environments has the two defaults.
+        let known = if have.is_empty() {
+            super::run_configs::DEFAULT_ENVS.contains(&e)
+        } else {
+            have.iter().any(|n| n == e)
+        };
+        if !known {
+            return refused(
+                "bad_request",
+                "the default environment is not one of the project's",
+            );
+        }
     }
+    let never = c.idle_never.unwrap_or(old.idle_never);
+    limits_ok(idle, cpu, mem)?;
     let slug = c.slug.unwrap_or(&old.slug);
     if slug != old.slug {
         if let Some(why) = slug_problem(slug) {
@@ -359,25 +432,46 @@ pub async fn change(
     }
     sqlx::query(
         "UPDATE core_projects SET slug = ?, name = ?, description = ?, expose = ?, \
-         idle_minutes = ?, cpu_limit = ?, mem_limit_mb = ?, updated_at = ? WHERE id = ?",
+         idle_minutes = ?, idle_never = ?, cpu_limit = ?, mem_limit_mb = ?, runner_pref = ?, \
+         fetch_interval_minutes = ?, default_environment = ?, updated_at = ? WHERE id = ?",
     )
     .bind(slug)
     .bind(name)
     .bind(description)
     .bind(expose)
     .bind(idle)
+    .bind(never)
     .bind(cpu)
     .bind(mem)
+    .bind(runner)
+    .bind(fetch)
+    .bind(&env)
     .bind(who.now)
     .bind(id)
     .execute(&mut *tx)
     .await?;
     let details = json!({"name": name, "slug": slug, "expose": expose, "idle_minutes": idle,
-        "cpu_limit": cpu, "mem_limit_mb": mem, "by_device": who.by_device});
+        "idle_never": never, "cpu_limit": cpu, "mem_limit_mb": mem, "runner": runner,
+        "fetch_interval_minutes": fetch, "default_environment": env, "by_device": who.by_device});
     record(&mut tx, who.actor, "project.updated", id, details, true).await?;
     let p = get(&mut tx, id).await?;
     tx.commit().await?;
     Ok(p)
+}
+
+/// The run limits a project may have: the idle stop 5 to 1440 minutes, 0.1 to 16 CPUs, 64 to
+/// 32768 MB.
+fn limits_ok(idle: i64, cpu: f64, mem: i64) -> Result<(), Error> {
+    if !(5..=1440).contains(&idle) {
+        return refused("bad_request", "idle stop is 5 to 1440 minutes");
+    }
+    if !(cpu.is_finite() && (0.1..=16.0).contains(&cpu)) {
+        return refused("bad_request", "CPUs are 0.1 to 16");
+    }
+    if !(64..=32768).contains(&mem) {
+        return refused("bad_request", "memory is 64 to 32768 MB");
+    }
+    Ok(())
 }
 
 /// Archives a project (idempotent refusal: archiving twice is a conflict). Repos, mirrors and
@@ -400,11 +494,33 @@ pub async fn archive(pool: &SqlitePool, id: i64, who: Who<'_>) -> Result<Project
     Ok(p)
 }
 
+/// Undoes an archive (the app's delete-with-undo): back to `active`, audited and emitted as
+/// `project.updated`. 409 `conflict` when it is not archived.
+pub async fn unarchive(pool: &SqlitePool, id: i64, who: Who<'_>) -> Result<Project, Error> {
+    let mut tx = super::begin_write(pool).await?;
+    let old = get(&mut tx, id).await?;
+    if old.state != "archived" {
+        return refused("conflict", "the project is not archived");
+    }
+    sqlx::query("UPDATE core_projects SET state = 'active', updated_at = ? WHERE id = ?")
+        .bind(who.now)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let details = json!({"slug": old.slug, "what": "unarchived", "by_device": who.by_device});
+    record(&mut tx, who.actor, "project.updated", id, details, true).await?;
+    let p = get(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(p)
+}
+
+mod defaults;
 mod github;
 mod repos;
+pub use defaults::{Defaults, DefaultsChange, get as defaults, set as set_defaults};
 pub use github::{NewGithubRepo, create_from_github};
 use repos::add_repo_in;
-pub use repos::{add_repo, mirror, remove_repo, set_mirror, set_primary};
+pub use repos::{add_repo, mirror, remove_repo, set_mirror, set_mirror_state, set_primary};
 
 #[cfg(test)]
 mod tests;

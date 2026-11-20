@@ -42,31 +42,34 @@ pub enum Reservation {
     Denied(Vec<Standing>),
 }
 
-/// Moves the counter of every budget the event `event_id` counts against by its tokens and dollars,
-/// in the period containing `at`; and shrinks `session`'s holds by the same.
+/// Moves the counter of every budget the event `event_id` counts against by its tokens, dollars and
+/// `messages` (1 for a request or turn, 0 for a billing correction), in the period containing `at`; and
+/// shrinks `session`'s holds by the tokens and dollars.
 pub async fn apply_in(
     conn: &mut SqliteConnection,
     event_id: i64,
     session: &str,
     tokens: i64,
     usd: i64,
+    messages: i64,
     at: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(concat!(
-        "INSERT INTO core_budget_spend (budget_id, period_key, tokens, usd_micros) \
+        "INSERT INTO core_budget_spend (budget_id, period_key, tokens, usd_micros, messages) \
          SELECT b.id, ",
         period_key!("?2"),
-        ", ?3, ?4 FROM core_budgets b WHERE EXISTS (SELECT 1 FROM core_cost_subjects s \
+        ", ?3, ?4, ?5 FROM core_budgets b WHERE EXISTS (SELECT 1 FROM core_cost_subjects s \
          WHERE s.event_id = ?1 AND s.kind = b.subject_kind AND s.subject_id = b.subject_id) \
          AND ",
         pool_gate!("?2"),
         " ON CONFLICT (budget_id, period_key) DO UPDATE SET tokens = tokens + excluded.tokens, \
-         usd_micros = usd_micros + excluded.usd_micros"
+         usd_micros = usd_micros + excluded.usd_micros, messages = messages + excluded.messages"
     ))
     .bind(event_id)
     .bind(at)
     .bind(tokens)
     .bind(usd)
+    .bind(messages)
     .execute(&mut *conn)
     .await?;
     if tokens > 0 || usd > 0 {
@@ -90,17 +93,18 @@ pub async fn recompute_in(
     only: Option<i64>,
 ) -> Result<u64, sqlx::Error> {
     sqlx::query(
-        "UPDATE core_budget_spend SET tokens = 0, usd_micros = 0 WHERE ?1 IS NULL OR budget_id = ?1",
+        "UPDATE core_budget_spend SET tokens = 0, usd_micros = 0, messages = 0 WHERE ?1 IS NULL OR budget_id = ?1",
     )
     .bind(only)
     .execute(&mut *conn)
     .await?;
     sqlx::query(concat!(
-        "INSERT INTO core_budget_spend (budget_id, period_key, tokens, usd_micros) \
+        "INSERT INTO core_budget_spend (budget_id, period_key, tokens, usd_micros, messages) \
          SELECT b.id, ",
         period_key!("e.occurred_at"),
         " AS key, sum(e.input_tokens + e.output_tokens + e.cache_tokens), \
-         coalesce(sum(e.cost_usd_micros), 0) FROM core_budgets b \
+         coalesce(sum(e.cost_usd_micros), 0), \
+         sum(CASE WHEN e.corrects_id IS NULL THEN 1 ELSE 0 END) FROM core_budgets b \
          JOIN core_cost_subjects s ON s.kind = b.subject_kind AND s.subject_id = b.subject_id \
          JOIN core_cost_events e ON e.id = s.event_id \
          WHERE (?1 IS NULL OR b.id = ?1) \
@@ -108,7 +112,7 @@ pub async fn recompute_in(
         pool_gate!("e.occurred_at"),
         " GROUP BY b.id, key \
          ON CONFLICT (budget_id, period_key) DO UPDATE SET tokens = excluded.tokens, \
-         usd_micros = excluded.usd_micros"
+         usd_micros = excluded.usd_micros, messages = excluded.messages"
     ))
     .bind(only)
     .execute(&mut *conn)
@@ -155,11 +159,16 @@ pub async fn check_in(
             .budget
             .usd_cap_micros
             .is_some_and(|c| s.usd_spent * 100 >= (c + s.raised_usd) * warn);
-        if (tokens || usd) && first(conn, &s, "warned_at", now).await? {
+        let messages = s
+            .budget
+            .message_cap
+            .is_some_and(|c| s.messages * 100 >= c * warn);
+        if (tokens || usd || messages) && first(conn, &s, "warned_at", now).await? {
             let d = json!({"kind": s.budget.kind, "subject": s.budget.subject,
                            "period": s.budget.period, "period_key": s.period_key, "spent": s.spent,
                            "usd_spent": s.usd_spent, "token_cap": s.budget.token_cap,
-                           "usd_cap_micros": s.budget.usd_cap_micros, "warn_at_percent": warn});
+                           "usd_cap_micros": s.budget.usd_cap_micros, "warn_at_percent": warn,
+                           "messages": s.messages, "message_cap": s.budget.message_cap});
             audit_in(conn, AuditActor::System, "budget.warning", s.budget.id, d).await?;
             announce(conn, &s, "warning").await?;
             out.warned.push(s.clone());
@@ -182,14 +191,14 @@ pub async fn check_in(
     Ok(out)
 }
 
-/// `account.budget {subject_kind, subject, state}` for an account's or a pool's budget (`state`
+/// `account.budget {subject_kind, subject, state}` for an account's, a provider's or a pool's budget (`state`
 /// `warning` or `exhausted`), beside the audit row; other subjects raise none.
 async fn announce(
     conn: &mut SqliteConnection,
     s: &Standing,
     state: &str,
 ) -> Result<(), sqlx::Error> {
-    if !matches!(s.budget.kind.as_str(), "account" | "pool") {
+    if !matches!(s.budget.kind.as_str(), "account" | "pool" | "provider") {
         return Ok(());
     }
     let payload =

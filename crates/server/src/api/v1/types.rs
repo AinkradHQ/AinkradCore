@@ -314,7 +314,25 @@
 ///    routes, audit actions and events live in `modules/brain/api`; the Code Mode allow-list gains the `brainAi*` v2
 ///    operations (`api/ai-ops.allow.json`) and the runner wire protocol the Brain hook commands (`api/runner.schema.json`).
 ///    Regenerated once, at the epic's build.
-pub const API_MINOR: u32 = 94;
+/// 95+ (pending, E14 AI session experience; the coordinator assigns the minor at the epic merge, `API_MINOR` NOT bumped here):
+///    `GET /agent-sessions/{id}/files?dir=` (`listAgentSessionFiles` -> `AgentFolderListing {dir, entries: [AgentFolderEntry
+///    {name, dir, size?}], truncated}`, runner op `agent.files`); `POST /agent-sessions/{id}/files/revert` (`revertAgentFile`,
+///    body `AgentFileRevert {path}` -> `AgentSession`, runner op `agent.revert`, 409 `revert_conflict` / `revert_impossible`,
+///    audit `agent.file_reverted`); `POST /agent-sessions/{id}/files/write` (`writeAgentFile`, body `AgentFileWrite {path,
+///    content}`, runner op `agent.write`, 413 `file_too_large`, audit `agent.file_written`); `effort` (`low|medium|high|max`)
+///    on `AgentSession`, `NewAgentSession` and `AgentModeChange`, with `AgentSession.can_set_effort` (400 `effort_unsupported`;
+///    runner `Policy.effort`, capability `effort`); `AgentDecision.always` (400 `rule_not_allowed`, audit `agent.approval_auto`,
+///    `approval_decided.note` in the transcript), `GET /projects/{id}/approval-rules` (`listApprovalRules`) and
+///    `DELETE /projects/{id}/approval-rules/{rule}` (`deleteApprovalRule`) returning `ApprovalRule {id, tool, pattern,
+///    created_at}` (migration 43, audit `agent.approval_rule_added` / `agent.approval_rule_removed`); transcript entry
+///    `{"type": "thinking", "text"}` (Claude only, at most 16 KiB). Run `make contract` and `make clients` at the epic's build.
+/// 95+ (pending, E15 hardware; F0 freeze, `API_MINOR` NOT bumped here): `GET /hardware` (`listHardware` -> `[Hardware]`),
+///    `GET /hardware/pool` (`getHardwarePool` -> `HardwarePool`), `PUT /hardware/{id}/pause` (`pauseHardware`) and
+///    `PUT /hardware/pause` (`pauseAllHardware`), body `HardwarePause {until?}`; `POST /jobs` (`createJob` -> 201 `Job` | 200
+///    `JobLocal` | 409 `interactive`), `GET /jobs` (`listJobs`, `project`, `session`, `state`, `limit`), `GET /jobs/{id}`
+///    (`getJob`), `GET /jobs/{id}/stream` (`streamJob`, WebSocket), `POST /jobs/{id}/signal` (`signalJob`, `JobSignal`),
+///    `DELETE /jobs/{id}` (`cancelJob`). Stubs until E15-1 and E15-3. Runner protocol 2.1: `job.run`, `sync.*`, `gateway.call`.
+pub const API_MINOR: u32 = 95;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

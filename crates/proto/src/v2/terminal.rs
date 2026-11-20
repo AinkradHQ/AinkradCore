@@ -23,6 +23,8 @@ pub const DRIVER_PTY: &str = "pty";
 pub const OP_PTY_OPEN: &str = "pty.open";
 pub const OP_PTY_ATTACH: &str = "pty.attach";
 pub const OP_PTY_CLOSE: &str = "pty.close";
+/// `pty.tail`: the last rows of a terminal's screen as text; read-only, no attach.
+pub const OP_PTY_TAIL: &str = "pty.tail";
 
 /// The largest `rows` and `cols` a terminal takes.
 pub const MAX_DIM: u16 = 1000;
@@ -73,6 +75,66 @@ pub struct PtyOpen {
     /// `cwd`, `session`, `env` and `env_pass` must be empty (`invalid_args`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<super::SshTerminal>,
+    /// Where the shell lives (D-17): `home`, `project:<id>`, `session:<id>` or `real`; see
+    /// [`SandboxMode`]. Absent: the runner-wide sandbox of before this field (an older Core), a
+    /// `real` shell. Needs `sandbox_user` unless `real`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<String>,
+    /// The Core user whose persistent sandbox home the shell gets (`[a-z0-9_-]{1,32}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_user: Option<String>,
+    /// Why the terminal is opened (E15-4). Kept for the wire only: no purpose makes a remote
+    /// runner open a terminal (E15 security review M7; the Accounts sign-in is `login.start`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
+}
+
+/// [`PtyOpen::purpose`] of the guided sign-in terminal.
+pub const PTY_PURPOSE_LOGIN: &str = "login";
+
+/// The parsed [`PtyOpen::sandbox`]. Schema compatibility: both fields are optional and skipped
+/// when absent, so an old Core's `pty.open` still parses on a new runner (legacy behaviour) and a
+/// new Core's on an old runner (unknown fields are ignored, so it would run the legacy sandbox:
+/// the Core therefore only sends them to a runner that advertises `pty.sandbox`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SandboxMode {
+    /// A private root with only the user's persistent sandbox home writable.
+    Home,
+    /// `Home` plus the project's folder (`cwd`, resolved and authorized by the Core).
+    Project(String),
+    /// `Home` plus the AI session's folder (`cwd`, which the runner checks against its record).
+    Session(String),
+    /// The runner's own host view (state hidden): only for this Mac's own terminal.
+    Real,
+}
+
+impl SandboxMode {
+    /// The id after `kind:` is `[A-Za-z0-9_-]{1,64}`: no path or option characters.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let id = |v: &str| {
+            let ok = (1..=64).contains(&v.len())
+                && v.bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-');
+            ok.then(|| v.to_owned())
+                .ok_or_else(|| format!("{s:?}: bad id in sandbox"))
+        };
+        match s.split_once(':') {
+            None if s == "home" => Ok(Self::Home),
+            None if s == "real" => Ok(Self::Real),
+            Some(("project", v)) => Ok(Self::Project(id(v)?)),
+            Some(("session", v)) => Ok(Self::Session(id(v)?)),
+            _ => Err(format!(
+                "sandbox must be home, project:<id>, session:<id> or real, not {s:?}"
+            )),
+        }
+    }
+}
+
+/// The accounts a sandbox home may be named for: `[a-z0-9_-]{1,32}`, so it cannot be a path.
+pub fn valid_sandbox_user(u: &str) -> bool {
+    (1..=32).contains(&u.len())
+        && u.bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
 }
 
 /// The bounds the runner clamps a terminal's scrollback cap and its disk budget to; the
@@ -97,6 +159,19 @@ pub struct PtyAttach {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PtyClose {
     pub terminal: String,
+}
+
+/// `pty.tail`: the last `lines` (1 to 20) non-empty rows of the terminal's screen, as plain text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PtyTail {
+    pub terminal: String,
+    pub lines: u16,
+}
+
+/// The answer to [`PtyTail`]: rows oldest first, each at most 400 characters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct TerminalTail {
+    pub lines: Vec<String>,
 }
 
 /// A terminal's size in cells; `control` `resize` carries one.
@@ -436,5 +511,99 @@ mod tests {
         assert!(sent <= granted, "{sent} > {granted}");
         assert!(sent > granted / 2, "output keeps flowing: {sent}");
         assert!(resyncs > 10, "{resyncs}");
+    }
+}
+
+#[cfg(test)]
+mod sandbox_tests {
+    use super::*;
+
+    #[test]
+    fn a_sandbox_mode_is_one_of_four_and_its_id_cannot_be_a_path() {
+        assert_eq!(SandboxMode::parse("home"), Ok(SandboxMode::Home));
+        assert_eq!(SandboxMode::parse("real"), Ok(SandboxMode::Real));
+        assert_eq!(
+            SandboxMode::parse("project:p_1"),
+            Ok(SandboxMode::Project("p_1".into()))
+        );
+        assert_eq!(
+            SandboxMode::parse("session:as_ab-c"),
+            Ok(SandboxMode::Session("as_ab-c".into()))
+        );
+        for bad in [
+            "",
+            "Home",
+            "home:x",
+            "real:1",
+            "project",
+            "project:",
+            "project:../x",
+            "session:a b",
+            "session:a/b",
+            "other:x",
+            "project:p:q",
+        ] {
+            assert!(SandboxMode::parse(bad).is_err(), "{bad:?}");
+        }
+        assert!(SandboxMode::parse(&format!("project:{}", "a".repeat(65))).is_err());
+        for bad in ["", "..", "a/b", "A", "a b", &"a".repeat(33)] {
+            assert!(!valid_sandbox_user(bad), "{bad:?}");
+        }
+        assert!(valid_sandbox_user("u-1_x"));
+    }
+
+    /// An older Core's `pty.open` (no sandbox fields) still parses, and serialises without them.
+    #[test]
+    fn the_new_fields_are_optional_on_the_wire() {
+        let o: PtyOpen = serde_json::from_str(r#"{"size":{"rows":24,"cols":80}}"#).unwrap();
+        assert!(o.sandbox.is_none() && o.sandbox_user.is_none());
+        let j = serde_json::to_string(&o).unwrap();
+        assert!(!j.contains("sandbox"), "{j}");
+    }
+
+    /// C2: what a client may put in a terminal's environment.
+    #[test]
+    fn a_terminals_environment_cannot_steer_the_loader() {
+        for ok in ["EDITOR", "http_proxy", "_X", "LANGUAGE", "GIT_AUTHOR_NAME"] {
+            assert!(crate::v2::valid_terminal_env(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "1A",
+            "A-B",
+            "A B",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "GCONV_PATH",
+            "LOCPATH",
+            "NLSPATH",
+            "HOSTALIASES",
+            "BASH_ENV",
+            "NODE_OPTIONS",
+            "HOME",
+            "PATH",
+            "TMPDIR",
+            "SHELL",
+            "AINKRAD_RUNNER",
+        ] {
+            assert!(!crate::v2::valid_terminal_env(bad), "{bad}");
+        }
+        for bad in [
+            "PERLLIB",
+            "JAVA_TOOL_OPTIONS",
+            "_JAVA_OPTIONS",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_VALUE_0",
+            "GIT_EXEC_PATH",
+            "PYTHONHOME",
+            "ZDOTDIR",
+        ] {
+            assert!(!crate::v2::valid_terminal_env(bad), "{bad}");
+        }
+        assert!(!crate::v2::valid_terminal_env(&"A".repeat(65)));
+        // The secret-name rule keeps refusing the same loader names.
+        assert!(!crate::v2::valid_secret_var("GCONV_PATH") && !crate::v2::valid_secret_var("LD_X"));
     }
 }

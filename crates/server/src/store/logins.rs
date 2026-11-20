@@ -48,6 +48,8 @@ pub struct Login {
     pub device: String,
     pub state: String,
     pub url: Option<String>,
+    /// The one-time device code shown beside the URL (Codex). Not a credential.
+    pub code: Option<String>,
     pub account_id: Option<i64>,
     pub reason: Option<String>,
     pub created_at: String,
@@ -59,6 +61,7 @@ pub struct Login {
 #[derive(Default)]
 pub struct Change<'a> {
     pub url: Option<&'a str>,
+    pub code: Option<&'a str>,
     pub account_id: Option<i64>,
     pub reason: Option<&'a str>,
 }
@@ -79,6 +82,7 @@ fn row(r: &SqliteRow) -> Result<Login, sqlx::Error> {
         device: r.try_get("device")?,
         state: r.try_get("state")?,
         url: r.try_get("url")?,
+        code: r.try_get("code")?,
         account_id: r.try_get("account_id")?,
         reason: r.try_get("reason")?,
         created_at: r.try_get("created_at")?,
@@ -87,7 +91,7 @@ fn row(r: &SqliteRow) -> Result<Login, sqlx::Error> {
     })
 }
 
-const COLUMNS: &str = "id, provider, label, runner, device, state, url, account_id, reason, \
+const COLUMNS: &str = "id, provider, label, runner, device, state, url, code, account_id, reason, \
                        created_at, updated_at, expires_at";
 
 async fn find(conn: &mut SqliteConnection, id: &str) -> Result<Option<Login>, sqlx::Error> {
@@ -126,6 +130,28 @@ async fn audit(
         details: details.to_string(),
     };
     super::audit::append(conn, &e).await?;
+    Ok(())
+}
+
+/// Audits that a line was typed into a guided sign-in (`account.login_input`): its length and
+/// nothing else. The text is a secret (a code) or an instruction to an agent; it is never recorded.
+pub async fn audit_input(
+    pool: &SqlitePool,
+    actor: AuditActor,
+    l: &Login,
+    len: usize,
+) -> Result<(), Error> {
+    let details = json!({"login_id": l.id, "provider": l.provider, "runner": l.runner,
+                         "by_device": l.device, "len": len});
+    let e = NewAuditEvent {
+        actor,
+        action: "account.login_input".to_owned(),
+        entity: None,
+        details: details.to_string(),
+    };
+    let mut tx = super::begin_write(pool).await?;
+    super::audit::append(&mut tx, &e).await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -322,12 +348,13 @@ async fn move_in(
                 .collect::<String>()
         });
     sqlx::query(
-        "UPDATE core_account_logins SET state = ?, url = COALESCE(?, url), \
+        "UPDATE core_account_logins SET state = ?, url = COALESCE(?, url), code = COALESCE(?, code), \
          account_id = COALESCE(?, account_id), reason = COALESCE(?, reason), updated_at = ? \
          WHERE id = ?",
     )
     .bind(to)
     .bind(change.url)
+    .bind(change.code)
     .bind(change.account_id)
     .bind(reason)
     .bind(iso_of_unix(now))

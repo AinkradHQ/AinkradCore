@@ -115,6 +115,7 @@ async fn fx() -> Fx {
     let admin = enroll(&app, "admin", "device", &scopes).await;
     let session = admin.session.lock().unwrap().clone().unwrap();
     app.auth.elevate(&session, &admin.id, clock.unix() + 3600);
+    admin.unlock(&app.auth, clock.unix() + 3600);
     let laptop = enroll(&app, "laptop", "device", &scopes).await;
     let runner = enroll(&app, "runner-1", "runner", &["runner"]).await;
     Fx {
@@ -416,7 +417,7 @@ async fn turning_recording_on_needs_a_step_up_and_off_does_not() {
         scalar(&fx, "SELECT record FROM leyline_hosts WHERE id = ?", &h).await,
         "on"
     );
-    // Off needs the step-up too.
+    // Off needs none: the route is a plain write, and only turning it on is checked in the handler.
     let (s, b) = call(
         &fx,
         &fx.laptop,
@@ -425,11 +426,11 @@ async fn turning_recording_on_needs_a_step_up_and_off_does_not() {
         Some(json!({"record": "off"})),
     )
     .await;
+    assert_eq!(s, StatusCode::OK, "{b}");
     assert_eq!(
-        (s, &b["code"]),
-        (StatusCode::FORBIDDEN, &json!("step_up_required"))
+        scalar(&fx, "SELECT record FROM leyline_hosts WHERE id = ?", &h).await,
+        "off"
     );
-    recording_for(&fx, &h, "off").await;
     let (s, _) = call(
         &fx,
         &fx.admin,

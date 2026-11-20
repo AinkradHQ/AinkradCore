@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core"
-version = "0.9.0"
+version = "0.10.0"
 
 [[package]]
 name = "ainkrad-core-citadel"
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core-server"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "age",
  "ainkrad-core",
@@ -153,8 +153,10 @@ dependencies = [
  "ainkrad-sys",
  "axum",
  "base64 0.22.1",
+ "blake3",
  "futures-util",
  "getrandom 0.4.3",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "instant-acme",
@@ -167,6 +169,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
+ "serde_yaml",
  "sha2 0.10.9",
  "sqlx",
  "tokio",
@@ -183,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-gitfixture"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "rcgen",
  "rustls",
@@ -193,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-harness"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "ainkrad-sys",
  "getrandom 0.4.3",
@@ -206,16 +209,18 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-proto"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
+ "blake3",
  "schemars",
  "serde",
  "serde_json",
+ "zeroize",
 ]
 
 [[package]]
 name = "ainkrad-providers"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "axum",
  "reqwest 0.12.28",
@@ -225,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-ptyhost"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "ainkrad-proto",
  "ainkrad-sys",
@@ -237,17 +242,19 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
 name = "ainkrad-runner"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "ainkrad-harness",
  "ainkrad-proto",
  "ainkrad-ptyhost",
  "ainkrad-sys",
  "base64 0.22.1",
+ "blake3",
  "futures-util",
  "reqwest 0.12.28",
  "ring",
@@ -267,14 +274,15 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-sys"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
+ "ainkrad-proto",
  "libc",
 ]
 
 [[package]]
 name = "ainkrad-term"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "vt100",
 ]
@@ -1038,6 +1046,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto-primes"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3633a51a39c69ebbaa4feaa694bd83d241e4093901c84a0963b19d9bb3f0cf8f"
+dependencies = [
+ "crypto-bigint",
+ "rand_core 0.10.1",
+]
+
+[[package]]
 name = "ctr"
 version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1264,6 +1282,7 @@ dependencies = [
  "const-oid",
  "crypto-common 0.2.2",
  "ctutils",
+ "zeroize",
 ]
 
 [[package]]
@@ -3658,6 +3677,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "pkcs1"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6250dd7321adbe93d12b750aee0ced159fd13e77f625edcdf1cb6f83cd99f650"
+dependencies = [
+ "der",
+ "spki",
+]
+
+[[package]]
 name = "pkcs5"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4263,10 +4292,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "russh"
-version = "0.65.1"
+name = "rsa"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94be3d86c71b9ed220a675c405e35c7a02565a009bf8da2e9cc13a700320a5c5"
+checksum = "23e77fd77e0dea28b3011fd62d15445b7de7959333b0276d930e03be0f755699"
+dependencies = [
+ "const-oid",
+ "crypto-bigint",
+ "crypto-common 0.2.2",
+ "crypto-primes",
+ "digest 0.11.3",
+ "hmac 0.13.0",
+ "pkcs1",
+ "pkcs8",
+ "rand_core 0.10.1",
+ "sha2 0.11.1",
+ "signature",
+ "spki",
+ "zeroize",
+]
+
+[[package]]
+name = "russh"
+version = "0.65.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78229f06e4d96d83bea5f5133ad3b6e4b5f0ce22d8e31c1ff7243ec8e18d5ba1"
 dependencies = [
  "aes 0.9.4",
  "bitflags 2.13.2",
@@ -4304,12 +4354,14 @@ dependencies = [
  "p521",
  "pageant",
  "pbkdf2 0.13.0",
+ "pkcs1",
  "pkcs5",
  "pkcs8",
  "polyval 0.7.3",
  "rand 0.10.3",
  "rand_core 0.10.1",
  "ring",
+ "rsa",
  "russh-cryptovec",
  "russh-util",
  "salsa20 0.11.0",
@@ -4810,6 +4862,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_yaml"
+version = "0.9.34+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
+]
+
+[[package]]
 name = "serdect"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5270,6 +5335,7 @@ checksum = "7b54d0ed0498daf3f78d82e00e28c8eec9d75a067c4cfbcc7a0f7d0f4077749e"
 dependencies = [
  "base64ct",
  "bytes",
+ "crypto-bigint",
  "ctutils",
  "digest 0.11.3",
  "pem-rfc7468",
@@ -5278,9 +5344,9 @@ dependencies = [
 
 [[package]]
 name = "ssh-key"
-version = "0.7.0-rc.11"
+version = "0.7.0-rc.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9a32fae177b74a22aa9c5b01bf7e68b33545be32d9e381e248058d2adc15ce3"
+checksum = "0701b552e6bd8f13a6e07bde25307c32d7daad80a79b65832d110c0416e7b638"
 dependencies = [
  "argon2",
  "bcrypt-pbkdf",
@@ -5292,6 +5358,7 @@ dependencies = [
  "p384",
  "p521",
  "rand_core 0.10.1",
+ "rsa",
  "sec1",
  "sha1 0.11.0",
  "sha2 0.11.1",
@@ -5958,6 +6025,12 @@ dependencies = [
  "crypto-common 0.2.2",
  "ctutils",
 ]
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"

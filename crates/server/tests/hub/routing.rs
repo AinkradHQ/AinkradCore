@@ -58,6 +58,9 @@ async fn the_noop_runs_end_to_end_and_only_advertised_commands_reach_the_runner(
         scrollback_bytes: None,
         scrollback_budget: None,
         ssh: None,
+        sandbox: None,
+        sandbox_user: None,
+        purpose: None,
     });
     for cmd in [
         shell,

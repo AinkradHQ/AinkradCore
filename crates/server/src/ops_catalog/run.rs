@@ -156,7 +156,7 @@ pub(super) async fn run(app: &App, (runner, session): (&str, &str), call: &ToolC
         body,
         approval: wait.map_or(lim.approval, |w| w.min(lim.approval)),
     };
-    if op.risk == Risk::Read {
+    if risk_of(app, op, &method) == Risk::Read {
         return send(app, op, &req, &lim, &method).await;
     }
     // 7. A write: claimed once per key (a retried script never writes twice).
@@ -225,6 +225,17 @@ struct Req<'a> {
     approval: Duration,
 }
 
+/// The risk a call runs under. A route that needs the app unlock (`scopes::UNLOCKED`, a module's
+/// `needs_unlock`) is always `Risky` here, whatever the allow-list says: a Code Mode session never
+/// inherits the person's unlock, so each such call waits for an explicit approval.
+fn risk_of(app: &App, op: &Op, method: &Method) -> Risk {
+    if crate::api::v1::scopes::needs_unlock(method, &op.path, &app.modules) {
+        Risk::Risky
+    } else {
+        op.risk
+    }
+}
+
 /// The principal of `session` as it is NOW, its scopes holding the op's, and its route allowed to
 /// it: a route that needs a step-up only as `risky` (the approver's stands for it).
 async fn authorize(app: &App, session: &str, op: &Op, method: &Method) -> Result<(), Done> {
@@ -247,7 +258,8 @@ async fn authorize(app: &App, session: &str, op: &Op, method: &Method) -> Result
             Some(op),
         ));
     }
-    if op.risk != Risk::Risky && crate::api::v1::scopes::destructive(method, &op.path, &app.modules)
+    if risk_of(app, op, method) != Risk::Risky
+        && crate::api::v1::scopes::destructive(method, &op.path, &app.modules)
     {
         return Err(deny(
             "not_available",
@@ -258,6 +270,21 @@ async fn authorize(app: &App, session: &str, op: &Op, method: &Method) -> Result
     Ok(())
 }
 
+/// Whether a call waits for a person's approval: one that needs the app unlock always (a module's
+/// own policy never stands in for the unlock, E1 follow-up), any other risky one unless its module
+/// route asks a person itself (Leyline's gate): not parked twice, its approval is the same
+/// Core-held `cm_` request (T11).
+fn parks(
+    modules: &[std::sync::Arc<dyn crate::module::Module>],
+    risk: Risk,
+    method: &Method,
+    path: &str,
+) -> bool {
+    use crate::api::v1::scopes::{needs_unlock, self_approved};
+    needs_unlock(method, path, modules)
+        || (risk == Risk::Risky && !self_approved(method, path, modules))
+}
+
 /// A risky write waits for its approval, a plain one goes on.
 async fn guarded(
     app: &App,
@@ -266,11 +293,7 @@ async fn guarded(
     lim: &Limits,
     (method, hash, args): (&Method, &str, &Value),
 ) -> Done {
-    // A module route that asks a person itself (Leyline's gate) is not parked twice: its own
-    // policy decides, and its approval is the same Core-held `cm_` request (T11).
-    if op.risk != Risk::Risky
-        || crate::api::v1::scopes::self_approved(method, &op.path, &app.modules)
-    {
+    if !parks(&app.modules, op.risk, method, &op.path) {
         return send(app, op, req, lim, method).await;
     }
     let reason = if crate::api::v1::scopes::destructive(method, &op.path, &app.modules) {
@@ -473,6 +496,45 @@ mod tests {
         assert!(cut.to_string().len() <= 2_048);
         let small = json!({"a": 1});
         assert_eq!(cap(small.clone(), 1_024), small);
+    }
+
+    /// A module with `POST /a` both self-approved and needing the unlock, and `POST /b`
+    /// self-approved only.
+    struct Both;
+
+    impl crate::module::Module for Both {
+        fn id(&self) -> &'static str {
+            "both"
+        }
+        fn routes(&self) -> axum::Router<App> {
+            axum::Router::new()
+        }
+        fn openapi(&self) -> Value {
+            json!({"paths": {"/a": {"post": {}}, "/b": {"post": {}}}})
+        }
+        fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
+            Some(&[("POST", "/a"), ("POST", "/b")])
+        }
+        fn self_approved(&self) -> &'static [(&'static str, &'static str)] {
+            &[("POST", "/a"), ("POST", "/b")]
+        }
+        fn needs_unlock(&self) -> &'static [(&'static str, &'static str)] {
+            &[("POST", "/a")]
+        }
+    }
+
+    #[test]
+    fn a_self_approved_route_that_needs_the_unlock_still_waits_for_an_approval() {
+        let m: Vec<std::sync::Arc<dyn crate::module::Module>> = vec![std::sync::Arc::new(Both)];
+        let post = Method::POST;
+        for risk in [Risk::Write, Risk::Risky] {
+            assert!(parks(&m, risk, &post, "/modules/both/v1/a"), "{risk:?}");
+        }
+        // Self-approved without the unlock: the module's own gate asks.
+        assert!(!parks(&m, Risk::Risky, &post, "/modules/both/v1/b"));
+        // A platform unlock route always waits; a plain write never does.
+        assert!(parks(&[], Risk::Write, &post, "/api/v1/terminals"));
+        assert!(!parks(&[], Risk::Write, &post, "/api/v1/projects"));
     }
 
     #[test]

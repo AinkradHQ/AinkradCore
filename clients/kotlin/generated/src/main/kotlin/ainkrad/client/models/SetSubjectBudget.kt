@@ -26,9 +26,10 @@ import kotlinx.serialization.Contextual
  * @param kind 
  * @param period 
  * @param subject 
- * @param tokenCap 
  * @param company The owner's company binding; for a company budget it must be the subject (or absent).
  * @param hardStop Default true.
+ * @param messageCap Messages per period, 1 or more; a request or turn is one message.
+ * @param tokenCap Default 0: with no token cap a dollar or message cap is needed.
  * @param usdCapMicros 
  * @param warnAtPercent Default 80.
  */
@@ -45,9 +46,6 @@ data class SetSubjectBudget (
     @SerialName(value = "subject")
     val subject: kotlin.String,
 
-    @SerialName(value = "token_cap")
-    val tokenCap: kotlin.Long,
-
     /* The owner's company binding; for a company budget it must be the subject (or absent). */
     @SerialName(value = "company")
     val company: kotlin.String? = null,
@@ -55,6 +53,14 @@ data class SetSubjectBudget (
     /* Default true. */
     @SerialName(value = "hard_stop")
     val hardStop: kotlin.Boolean? = null,
+
+    /* Messages per period, 1 or more; a request or turn is one message. */
+    @SerialName(value = "message_cap")
+    val messageCap: kotlin.Long? = null,
+
+    /* Default 0: with no token cap a dollar or message cap is needed. */
+    @SerialName(value = "token_cap")
+    val tokenCap: kotlin.Long? = null,
 
     @SerialName(value = "usd_cap_micros")
     val usdCapMicros: kotlin.Long? = null,

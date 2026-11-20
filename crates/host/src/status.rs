@@ -148,14 +148,50 @@ fn bin_dir_safe(ctx: &Ctx) -> bool {
 
 /// One unit's `systemctl show`: `None` when systemctl cannot be run at all.
 fn unit(ctx: &Ctx, name: &str) -> Option<BTreeMap<String, String>> {
-    let args = [
-        "--no-ask-password".to_owned(),
-        "show".to_owned(),
-        "-p".to_owned(),
-        "ActiveState,SubState,ActiveEnterTimestamp,NRestarts,LoadState".to_owned(),
-        name.to_owned(),
-    ];
-    let out = ctx.exec.run(SYSTEMCTL, &args, 16 * 1024).ok()?;
+    unit_with(
+        ctx,
+        name,
+        "ActiveState,SubState,ActiveEnterTimestamp,NRestarts,LoadState",
+    )
+}
+
+/// `unit` for a fixed list of properties (a literal of this crate, never input).
+pub(crate) fn unit_with(
+    ctx: &Ctx,
+    name: &str,
+    props: &'static str,
+) -> Option<BTreeMap<String, String>> {
+    unit_ts(ctx, name, props, false)
+}
+
+/// [`unit_with`], and with `unix` every timestamp prints as `@<unix seconds>` (systemd's
+/// `--timestamp=unix`), so a reader needs no clock zone to read it. An unset one prints empty.
+pub(crate) fn unit_ts(
+    ctx: &Ctx,
+    name: &str,
+    props: &'static str,
+    unix: bool,
+) -> Option<BTreeMap<String, String>> {
+    let args_for = |unix: bool| {
+        let mut args = vec![
+            "--no-ask-password".to_owned(),
+            "show".to_owned(),
+            "-p".to_owned(),
+            props.to_owned(),
+            name.to_owned(),
+        ];
+        if unix {
+            args.insert(2, "--timestamp=unix".to_owned());
+        }
+        args
+    };
+    // `--timestamp=unix` needs systemd 251; an older one refuses the flag, so ask again without
+    // it and let the reader parse the default (UTC) form.
+    let out = match ctx.exec.run(SYSTEMCTL, &args_for(unix), 16 * 1024) {
+        Ok(o) if o.ok => o,
+        _ if unix => ctx.exec.run(SYSTEMCTL, &args_for(false), 16 * 1024).ok()?,
+        _ => return None,
+    };
     out.ok.then_some(())?;
     Some(
         String::from_utf8_lossy(&out.stdout)
@@ -240,8 +276,13 @@ pub fn status(ctx: &Ctx) -> Result<Value, Code> {
     )
 }
 
-/// Whether `ainkrad-runner.service` is installed (`LoadState` is anything but `not-found`).
-pub fn runner_installed(ctx: &Ctx) -> Option<bool> {
-    let p = unit(ctx, "ainkrad-runner.service")?;
+/// Whether the unit `name` is installed (`LoadState` is anything but `not-found`).
+pub fn unit_installed(ctx: &Ctx, name: &str) -> Option<bool> {
+    let p = unit(ctx, name)?;
     Some(p.get("LoadState").is_some_and(|l| l != "not-found"))
+}
+
+/// Whether `ainkrad-runner.service` is installed.
+pub fn runner_installed(ctx: &Ctx) -> Option<bool> {
+    unit_installed(ctx, "ainkrad-runner.service")
 }

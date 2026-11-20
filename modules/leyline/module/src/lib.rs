@@ -27,9 +27,11 @@ mod hosts;
 mod keys;
 mod makerunner;
 mod policy;
+mod reach;
 mod ready;
 /// Terminal recording; public so `benches/relay_tap.rs` can time the relay's tap.
 pub mod record;
+mod rsa_import;
 mod scrub;
 mod terminal;
 mod valid;
@@ -102,40 +104,49 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0009_direct.up.sql"),
         down: include_str!("../migrations/0009_direct.down.sql"),
     },
+    Migration {
+        version: 10,
+        name: "0010_reach",
+        up: include_str!("../migrations/0010_reach.up.sql"),
+        down: include_str!("../migrations/0010_reach.down.sql"),
+    },
 ];
 
-// A key write is a secret write: importing needs the step-up like the Core's own secret writes.
-// Generating does not (the Core makes the key; nothing of the caller's is stored).
+// D-4: only a key leaving the Core is danger (a Mac-direct lease hands one to a runner on the
+// person's machine), and so is a reachability check (E8): it makes the Core connect to an address a
+// caller names, so it keeps its live step-up. Opening a shell, writing a file and installing the
+// runner run code on a host: they need the app unlock and no per-action prompt. Everything else is
+// a normal write.
 const DESTRUCTIVE: &[(&str, &str)] = &[
-    ("DELETE", "/hosts/{host}"),
-    ("DELETE", "/keys/{key}"),
-    ("POST", "/keys/import"),
-    // A terminal needs the step-up like the Core's own; replacing a pinned host key is a trust
-    // decision that could point a session at an impostor.
-    ("POST", "/hosts/{host}/terminals"),
-    ("POST", "/hosts/{host}/host-keys/replace"),
-    // A Mac-direct lease hands a key to a runner on the person's machine: Touch ID, like a terminal.
+    ("POST", "/hosts/check"),
     ("POST", "/hosts/{host}/direct"),
-    // Recording on or off both need it: turning it off hides what happens on a host. Resuming a
-    // paused recording too; pausing does not (a person who sees one can stop it at once).
-    ("PUT", "/hosts/{host}/recording"),
-    // Writing a file on a host: a person at a live step-up, like a terminal.
+];
+const NEEDS_UNLOCK: &[(&str, &str)] = &[
+    ("POST", "/hosts/{host}/terminals"),
     ("PUT", "/hosts/{host}/files/content"),
-    ("POST", "/sessions/{session}/recording/resume"),
-    // Installs software as root on a host and pairs it: a person at a live step-up.
     ("POST", "/hosts/{host}/runner"),
+    // Review H3: saved commands and fleet runs run code on hosts, and a command's text is what runs.
+    ("POST", "/commands"),
+    ("PATCH", "/commands/{command}"),
+    ("POST", "/commands/{command}/run"),
+    ("POST", "/fleet/runs"),
+    // Review M3: reading a host's files is a read of the host.
+    ("GET", "/hosts/{host}/files"),
+    ("GET", "/hosts/{host}/files/content"),
 ];
 // POST and PATCH need a step-up only for what widens an AI's reach or repoints a host (`allowed`,
 // address, port, user, key, jump chain, runner): checked in the handler (`hosts::needs_step_up`).
 const NON_DESTRUCTIVE: &[(&str, &str)] = &[
+    ("DELETE", "/hosts/{host}"),
+    ("DELETE", "/keys/{key}"),
+    ("POST", "/keys/import"),
+    ("POST", "/hosts/{host}/host-keys/replace"),
+    ("PUT", "/hosts/{host}/recording"),
+    ("POST", "/sessions/{session}/recording/resume"),
     ("POST", "/hosts"),
     ("PATCH", "/hosts/{host}"),
     ("POST", "/keys"),
-    ("POST", "/commands"),
-    ("PATCH", "/commands/{command}"),
     ("DELETE", "/commands/{command}"),
-    ("POST", "/commands/{command}/run"),
-    ("POST", "/fleet/runs"),
     ("POST", "/runs/{run}/cancel"),
     ("POST", "/hosts/{host}/host-keys/trust"),
     // Ending a lease only takes access away.
@@ -189,6 +200,7 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("POST", "/sessions/{session}/recording/pause", "terminal"),
     ("POST", "/sessions/{session}/recording/resume", "terminal"),
     ("POST", "/hosts/{host}/runner", "terminal"),
+    ("POST", "/hosts/check", "admin"),
 ];
 
 #[derive(Default, Clone, Copy)]
@@ -204,6 +216,7 @@ pub struct Leyline;
         hosts::remove,
         hosts::groups,
         hosts::tags,
+        reach::check,
         health::read,
         files::list,
         files::read,
@@ -286,6 +299,10 @@ pub struct Leyline;
         history::HostRecording,
         history::Paused,
         makerunner::Install,
+        makerunner::InstallState,
+        reach::CheckHost,
+        reach::Checked,
+        reach::HostReach,
         health::HealthView,
         health::HealthPoint,
         files::RemoteFile,
@@ -321,6 +338,7 @@ impl Module for Leyline {
     fn routes(&self) -> Router<App> {
         Router::new()
             .route("/hosts", get(hosts::list).post(hosts::create))
+            .route("/hosts/check", post(reach::check))
             .route(
                 "/hosts/{host}",
                 get(hosts::get).patch(hosts::patch).delete(hosts::remove),
@@ -458,6 +476,10 @@ impl Module for Leyline {
         DESTRUCTIVE
     }
 
+    fn needs_unlock(&self) -> &'static [(&'static str, &'static str)] {
+        NEEDS_UNLOCK
+    }
+
     fn non_destructive(&self) -> Option<&'static [(&'static str, &'static str)]> {
         Some(NON_DESTRUCTIVE)
     }
@@ -476,6 +498,7 @@ impl Module for Leyline {
 
     fn jobs(&self) -> Vec<Job> {
         let mut jobs = health::jobs();
+        jobs.extend(reach::jobs());
         jobs.extend(history::jobs());
         jobs
     }

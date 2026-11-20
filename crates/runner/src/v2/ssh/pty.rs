@@ -48,7 +48,6 @@ use std::collections::VecDeque;
 use std::io::Read;
 use std::os::fd::AsFd;
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
@@ -59,7 +58,7 @@ use ainkrad_ptyhost::pty::{Capped, FD3_MAX, Hidden};
 use russh::ChannelMsg;
 use russh::MethodKind;
 use russh::client::{AuthResult, Handle, KeyboardInteractiveAuthResponse};
-use russh::keys::{PrivateKeyWithHashAlg, ssh_key::PrivateKey};
+use russh::keys::ssh_key::PrivateKey;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -340,7 +339,9 @@ impl<O: AsyncWrite + Unpin + Send> HopAuth for PromptAuth<'_, O> {
         let key: PrivateKey =
             parse_key(&text).map_err(|m| fail(ErrorCode::SshAuthFailed, m.to_owned()))?;
         drop(text);
-        let key = PrivateKeyWithHashAlg::new(Arc::new(key), None);
+        let key = super::with_hash(handle, key)
+            .await
+            .map_err(|m| denied(index, m))?;
         let mut res = handle
             .authenticate_publickey(&hop.user, key)
             .await

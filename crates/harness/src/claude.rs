@@ -73,6 +73,11 @@ pub fn permission_mode(spec: &Spec) -> &'static str {
     }
 }
 
+/// Whether `level` is one `--effort` takes that the API offers.
+fn effort_level(level: &str) -> bool {
+    matches!(level, "low" | "medium" | "high" | "max")
+}
+
 /// The argv: flags and file paths only, never a prompt.
 pub fn args(spec: &Spec, resume: Option<&str>) -> Vec<String> {
     let mut args: Vec<String> = [
@@ -111,6 +116,9 @@ pub fn args(spec: &Spec, resume: Option<&str>) -> Vec<String> {
     }
     args.push(spec.model.clone());
     let mut flag = |name: &str, value: String| args.extend([name.to_owned(), value]);
+    if let Some(level) = spec.effort.as_deref().filter(|e| effort_level(e)) {
+        flag("--effort", level.to_owned());
+    }
     if let Some(file) = &spec.instructions {
         flag("--append-system-prompt-file", file.display().to_string());
     }
@@ -254,6 +262,11 @@ impl Decoder {
                         "text" => Some(HarnessEvent::AssistantText {
                             text: text(&b["text"]),
                         }),
+                        // Empty when the CLI redacts the reasoning: nothing to show.
+                        "thinking" => b["thinking"]
+                            .as_str()
+                            .filter(|t| !t.trim().is_empty())
+                            .map(|t| HarnessEvent::Thinking { text: t.to_owned() }),
                         "tool_use" => Some(HarnessEvent::ToolUse {
                             id: text(&b["id"]),
                             name: text(&b["name"]),
