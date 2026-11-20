@@ -162,10 +162,11 @@ mod tests {
     fn a_low_disk_drops_the_oldest_one() {
         let held = [h(1, 10, 1), h(2, 20, 1)];
         assert_eq!(
-            to_evict(&held, Some(5), 2),
+            to_evict(&held[1..], Some(5), 2),
             Vec::<i64>::new(),
             "only the kept one is left"
         );
+        assert_eq!(to_evict(&held, Some(5), 2), vec![1], "never the kept one");
         assert_eq!(to_evict(&held, Some(5), 9), vec![1]);
         assert!(to_evict(&held, Some(50), 9).is_empty());
         assert!(to_evict(&held, None, 9).is_empty());

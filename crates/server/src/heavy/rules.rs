@@ -146,12 +146,19 @@ pub fn builtin(argv: &[String]) -> Option<Row> {
         "make" => w.is_empty().then(|| heavy(&[], None, &[])),
         "xcodebuild" => {
             let probe = ["-version", "-list", "-showsdks", "-help", "-usage"];
-            (!probe.iter().any(|p| has(argv, p))).then(|| heavy(&["xcode"], None, &["build"]))
+            // A probe (`-version` …) is a light row: it stays on the Core.
+            Some(match probe.iter().any(|p| has(argv, p)) {
+                true => Row::default(),
+                false => heavy(&["xcode"], None, &["build"]),
+            })
         }
         "swift" if matches!(sub, "build" | "test") => Some(heavy(&["swift"], None, &[".build"])),
         "gradle" | "gradlew" => {
             let probe = ["--version", "-v", "--help", "-h"];
-            (!probe.iter().any(|p| has(argv, p))).then(|| heavy(&["java"], None, &["build"]))
+            Some(match probe.iter().any(|p| has(argv, p)) {
+                true => Row::default(),
+                false => heavy(&["java"], None, &["build"]),
+            })
         }
         "pytest" => Some(heavy(&["python"], None, &[])),
         "tsc" => {

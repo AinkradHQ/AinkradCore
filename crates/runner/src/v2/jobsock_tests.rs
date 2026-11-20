@@ -35,9 +35,9 @@ fn shims_are_linked_and_found_first_on_path() {
 fn a_request_is_checked_and_its_env_filtered() {
     let ok = json!({"argv": ["cargo", "test"], "cwd": "/w/p", "tty": true,
         "env": {"CI": "1", "AWS_SECRET_ACCESS_KEY": "x"}});
-    let b: Value = serde_json::from_slice(&build(&ok, &origin()).unwrap()).unwrap();
+    let first: Value = serde_json::from_slice(&build(&ok, &origin()).unwrap()).unwrap();
     assert_eq!(
-        (&b["terminal"], &b["project"], &b["cwd_rel"]),
+        (&first["terminal"], &first["project"], &first["cwd_rel"]),
         (&json!("t1"), &json!(7), &json!(""))
     );
     let deeper = json!({"argv": ["make"], "cwd": "/w/p/app/x", "env": {}});
@@ -51,8 +51,8 @@ fn a_request_is_checked_and_its_env_filtered() {
         ..origin()
     };
     assert!(build(&deeper, &home).is_none());
-    assert_eq!(b["env"], json!({"CI": "1"}));
-    assert_eq!(b["tty"], true);
+    assert_eq!(first["env"], json!({"CI": "1"}));
+    assert_eq!(first["tty"], true);
     for bad in [
         json!({"argv": [], "cwd": "/w"}),
         json!({"argv": ["cargo"], "cwd": "w"}),
@@ -155,7 +155,7 @@ async fn a_remote_job_is_streamed_through_and_a_signal_reaches_the_core() {
     );
     let (c, _g) = talk(
         up,
-        "{\"argv\":[\"cargo\",\"build\"],\"cwd\":\"/w\",\"tty\":false,\"env\":{}}\n",
+        "{\"argv\":[\"cargo\",\"build\"],\"cwd\":\"/w/p\",\"tty\":false,\"env\":{}}\n",
     )
     .await;
     let (rd, mut wr) = c.into_split();
