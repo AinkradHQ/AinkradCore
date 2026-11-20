@@ -506,6 +506,8 @@ fn the_danger_list_is_the_d4_list() {
         ("PUT", "/api/v1/devices/{id}/scopes"),
         ("POST", "/api/v1/pairings"),
         ("POST", "/api/v1/pairings/invites"),
+        // E6: only the Mac app that enrolled a runner may call it the bundled one.
+        ("POST", "/api/v1/runners/{id}/bundled"),
         ("POST", "/api/v1/pairings/{id}/approve"),
         ("POST", "/api/v1/pairings/{id}/reject"),
         ("POST", "/api/v1/auth/lockouts/clear"),
