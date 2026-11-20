@@ -147,6 +147,9 @@ fn macos_profile_boots_from_system_sb_and_keeps_explicit_denies() {
     assert!(at("(deny default)") < at("(import \"system.sb\")"));
     assert!(text.contains("(allow file-read* file-map-executable (subpath \"/usr\"))"));
     assert!(text.contains("(subpath \"/System/Library\")"));
+    // TLS config and CA bundle, read-only, and nothing wider than ssl in /etc.
+    assert!(text.contains("(allow file-read* (subpath \"/private/etc/ssl\"))"));
+    assert!(!text.contains("(subpath \"/private/etc\")") && !text.contains("(subpath \"/etc\")"));
     // The Xcode shims' developer-dir lookup: that one symlink, read-only, nothing wider.
     assert!(text.contains("(allow file-read* (literal \"/private/var/db/xcode_select_link\"))"));
     assert!(text.contains("(allow file-read* (literal \"/var/db/xcode_select_link\"))"));
@@ -797,5 +800,36 @@ fn a_tool_the_runner_installed_is_readable_and_only_that_tool() {
         Some(tools.join("claude"))
     );
     assert_eq!(managed_dir(Path::new("/usr/local/bin/claude")), None);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Real Seatbelt: the TLS config and CA bundle are readable through both spellings, and a sibling
+/// in /etc is not (Apple curl cannot start TLS without openssl.cnf).
+#[cfg(target_os = "macos")]
+#[test]
+fn the_tls_config_is_readable_and_the_rest_of_etc_is_not() {
+    let (root, spec) = fixture("tls");
+    let prof = root.join("p.sb");
+    std::fs::write(&prof, profile(&spec, OsStr::new("/bin/cat"))).unwrap();
+    let cat = |f: &str| {
+        std::process::Command::new("/usr/bin/sandbox-exec")
+            .arg("-f")
+            .arg(&prof)
+            .args(["/bin/cat", f])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    for f in [
+        "/etc/ssl/openssl.cnf",
+        "/private/etc/ssl/openssl.cnf",
+        "/etc/ssl/cert.pem",
+    ] {
+        if Path::new(f).exists() {
+            assert!(cat(f), "{f} must be readable");
+        }
+    }
+    assert!(!cat("/etc/hosts"), "the rest of /etc stays closed");
     let _ = std::fs::remove_dir_all(root);
 }

@@ -61,6 +61,10 @@ pub(crate) fn profile(spec: &Spec, program: &OsStr) -> String {
             "(allow file-read* file-map-executable (subpath \"{p}\"))\n"
         ));
     }
+    // The TLS config and CA bundle. /etc is a link to /private/etc and Seatbelt matches the resolved
+    // path, so this one spelling covers both. Apple curl (LibreSSL) cannot start without openssl.cnf.
+    // Read-only, ssl only: never the rest of /etc.
+    s.push_str("(allow file-read* (subpath \"/private/etc/ssl\"))\n");
     // The /usr/bin developer shims (python3, git, make, ...) run xcode-select, which reads
     // this one symlink (both spellings, /var being a link to /private/var) to find the
     // developer dir, then stats its target (granted above). Nothing else in /var/db.
