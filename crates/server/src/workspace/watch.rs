@@ -152,7 +152,8 @@ pub async fn apply_event(
     for e in ev.put {
         let ok = check_path(&e.path).is_ok()
             && args.rules.sync_out(&e.path).is_none()
-            && e.size <= MAX_FILE_BYTES;
+            && e.size <= MAX_FILE_BYTES
+            && (e.kind != EntryKind::File || ainkrad_proto::v2::file_entry_sound(&e));
         if !ok {
             refused += 1;
             continue;
