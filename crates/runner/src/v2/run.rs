@@ -493,7 +493,9 @@ fn safe_git() -> tokio::process::Command {
     .env_clear()
     .env("PATH", "/usr/local/bin:/usr/bin:/bin")
     .env("GIT_CONFIG_NOSYSTEM", "1")
+    .env("GIT_CONFIG_SYSTEM", "/dev/null")
     .env("GIT_CONFIG_GLOBAL", "/dev/null")
+    .env("GIT_NO_LAZY_FETCH", "1")
     .env("GIT_NO_REPLACE_OBJECTS", "1")
     .env("GIT_TERMINAL_PROMPT", "0");
     c
@@ -658,6 +660,8 @@ mod tests {
             .collect();
         assert_eq!(env["GIT_CONFIG_NOSYSTEM"].as_deref(), Some("1"));
         assert_eq!(env["GIT_NO_REPLACE_OBJECTS"].as_deref(), Some("1"));
+        assert_eq!(env["GIT_NO_LAZY_FETCH"].as_deref(), Some("1"));
+        assert_eq!(env["GIT_CONFIG_SYSTEM"].as_deref(), Some("/dev/null"));
     }
 }
 
