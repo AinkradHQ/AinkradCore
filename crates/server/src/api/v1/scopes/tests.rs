@@ -38,6 +38,16 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
     const PLAIN: &[(&str, &str, &str)] = &[
         (
             "PUT",
+            "/api/v1/hardware/pause",
+            "E15: a pause only withholds new work from a machine; running work finishes",
+        ),
+        (
+            "PUT",
+            "/api/v1/hardware/{id}/pause",
+            "E15: a pause only withholds new work from a machine; running work finishes",
+        ),
+        (
+            "PUT",
             "/api/v1/settings/{scope}/{key}",
             "a setting that is not `auth.*` (those are danger by key, in the handler)",
         ),

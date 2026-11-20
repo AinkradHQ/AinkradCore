@@ -112,6 +112,18 @@ pub struct Spec {
     /// Where the process is started (E8a-06); `None` is the local backend: bubblewrap, Seatbelt
     /// or nothing, as the spec's `AINKRAD_SANDBOX*` variables say.
     pub backend: Option<std::sync::Arc<dyn exec::ExecBackend>>,
+    /// The heavy-job shims for this session (E15-3 §5.1): mounted read-only and put first on
+    /// `PATH`, with the job socket bound in and named by `AINKRAD_JOB_SOCK`. `None`: no shims.
+    pub job_shims: Option<JobShims>,
+}
+
+/// The sandbox slot for the heavy-job shims (E15-3): what the runner binds into a session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobShims {
+    /// `<state>/shims/bin`: the `ainkrad-job` hardlinks (`cargo`, `npm`, ...), read-only.
+    pub bin_dir: PathBuf,
+    /// The session's own job socket (`v2/jobsock.rs`), bound at the same path inside.
+    pub socket: PathBuf,
 }
 
 /// One normalised harness event. Serialised as a `run_event` payload.

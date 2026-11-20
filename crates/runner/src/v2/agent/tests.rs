@@ -185,6 +185,7 @@ pub(super) fn start(session: &str, harness: &str) -> AgentStart {
         gateway: None,
         epoch: 0,
         live: false,
+        folder: None,
     }
 }
 

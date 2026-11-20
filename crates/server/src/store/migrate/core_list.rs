@@ -299,4 +299,22 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0049_concurrent_runs.up.sql"),
         down: include_str!("../../../migrations/0049_concurrent_runs.down.sql"),
     },
+    Migration {
+        version: 50,
+        name: "hardware",
+        up: include_str!("../../../migrations/0050_hardware.up.sql"),
+        down: include_str!("../../../migrations/0050_hardware.down.sql"),
+    },
+    Migration {
+        version: 51,
+        name: "ws_path_run_kind",
+        up: include_str!("../../../migrations/0051_ws_path_run_kind.up.sql"),
+        down: include_str!("../../../migrations/0051_ws_path_run_kind.down.sql"),
+    },
+    Migration {
+        version: 52,
+        name: "decisions",
+        up: include_str!("../../../migrations/0052_decisions.up.sql"),
+        down: include_str!("../../../migrations/0052_decisions.down.sql"),
+    },
 ];

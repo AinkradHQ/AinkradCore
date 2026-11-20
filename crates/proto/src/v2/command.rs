@@ -122,6 +122,21 @@ pub enum Command {
     AgentRevert(super::AgentRevert),
     #[serde(rename = "agent.write")]
     AgentWrite(super::AgentWrite),
+    // E15 (protocol 2.1), after every older op.
+    #[serde(rename = "job.run")]
+    JobRun(super::JobRun),
+    #[serde(rename = "sync.manifest")]
+    SyncManifest(super::SyncManifest),
+    #[serde(rename = "sync.push")]
+    SyncPush(super::SyncPush),
+    #[serde(rename = "sync.pull")]
+    SyncPull(super::SyncPull),
+    #[serde(rename = "sync.watch")]
+    SyncWatch(super::SyncWatch),
+    #[serde(rename = "sync.drop")]
+    SyncDrop(super::SyncDrop),
+    #[serde(rename = "gateway.call")]
+    GatewayCall(super::GatewayCall),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -182,6 +197,13 @@ impl Command {
             Self::AgentFiles(_) => super::OP_AGENT_FILES,
             Self::AgentRevert(_) => super::OP_AGENT_REVERT,
             Self::AgentWrite(_) => super::OP_AGENT_WRITE,
+            Self::JobRun(_) => super::OP_JOB_RUN,
+            Self::SyncManifest(_) => super::OP_SYNC_MANIFEST,
+            Self::SyncPush(_) => super::OP_SYNC_PUSH,
+            Self::SyncPull(_) => super::OP_SYNC_PULL,
+            Self::SyncWatch(_) => super::OP_SYNC_WATCH,
+            Self::SyncDrop(_) => super::OP_SYNC_DROP,
+            Self::GatewayCall(_) => super::OP_GATEWAY_CALL,
             Self::Unknown => "unknown",
         }
     }
@@ -337,6 +359,21 @@ pub enum Reply {
     AgentRevert(super::AgentReverted),
     #[serde(rename = "agent.write")]
     AgentWrite(super::AgentWritten),
+    // E15 (protocol 2.1), after every older op.
+    #[serde(rename = "job.run")]
+    JobRun(super::JobDone),
+    #[serde(rename = "sync.manifest")]
+    SyncManifest(super::SyncManifestReply),
+    #[serde(rename = "sync.push")]
+    SyncPush(super::SyncPushed),
+    #[serde(rename = "sync.pull")]
+    SyncPull(super::SyncPulled),
+    #[serde(rename = "sync.watch")]
+    SyncWatch(super::SyncWatched),
+    #[serde(rename = "sync.drop")]
+    SyncDrop(super::SyncDropped),
+    #[serde(rename = "gateway.call")]
+    GatewayCall(super::GatewayCalled),
     /// An op from a newer runner. Never sent.
     #[serde(other)]
     Unknown,

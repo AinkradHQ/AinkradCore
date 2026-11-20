@@ -382,6 +382,7 @@ fn v2_terminal_frames_are_pinned() {
             ssh: None,
             sandbox: None,
             sandbox_user: None,
+            purpose: None,
         })),
     );
     t(
