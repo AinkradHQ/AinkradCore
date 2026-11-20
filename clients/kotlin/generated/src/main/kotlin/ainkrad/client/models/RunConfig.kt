@@ -31,6 +31,7 @@ import kotlinx.serialization.Contextual
  * @param runner `automatic`, or the id of a runner.
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param workdir A folder in the service's repo checkout (`./app`), or an absolute path in the container.
+ * @param kind `service` (a container that keeps running) or `task` (runs as a heavy job on the hardware `place_job` picks, with the environment's variables as leased env). Absent: `service`.
  * @param port 
  * @param service The service of the run spec it is laid over; none lets the Core pick (the first that mounts a repo).
  */
@@ -67,6 +68,10 @@ data class RunConfig (
     /* A folder in the service's repo checkout (`./app`), or an absolute path in the container. */
     @SerialName(value = "workdir")
     val workdir: kotlin.String,
+
+    /* `service` (a container that keeps running) or `task` (runs as a heavy job on the hardware `place_job` picks, with the environment's variables as leased env). Absent: `service`. */
+    @SerialName(value = "kind")
+    val kind: kotlin.String? = null,
 
     @SerialName(value = "port")
     val port: kotlin.Long? = null,

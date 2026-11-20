@@ -161,6 +161,7 @@ dependencies = [
 name = "ainkrad-proto"
 version = "0.9.0"
 dependencies = [
+ "blake3",
  "schemars",
  "serde",
  "serde_json",
@@ -180,6 +181,7 @@ dependencies = [
 name = "ainkrad-sys"
 version = "0.9.0"
 dependencies = [
+ "ainkrad-proto",
  "libc",
 ]
 

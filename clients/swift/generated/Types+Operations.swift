@@ -28797,7 +28797,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The machine takes no new jobs or overflow sessions until `until` (`null` lifts it); running work finishes. Needs `admin`
+            /// The machine takes no new jobs or overflow sessions until `until` (`null` lifts it); running work finishes. 400 for the Core host or a past `until`, 404 for no such machine. Needs `admin`
             ///
             /// - Remark: Generated from `#/paths//api/v1/hardware/{id}/pause/put(pauseHardware)/responses/200`.
             ///
@@ -43491,7 +43491,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The run, `starting` (as `startProjectRun`), with the configuration and environment laid over the spec: its command, folder and port, and the environment's variables (a Secret link is leased to the runner as `${secret:NAME}`, never sent as a value). The configuration's runner is used when it is online. 409 `conflict` while this configuration has a live run unless `replace`; 409 `no_runner`; 400/409 `invalid_spec` when the result is not a valid spec or links a Secret the project no longer has; 404 for no such configuration or environment
+            /// The run, `starting` (as `startProjectRun`), with the configuration and environment laid over the spec: its command, folder and port, and the environment's variables (a Secret link is leased to the runner as `${secret:NAME}`, never sent as a value). The configuration's runner is used when it is online. 409 `conflict` while this configuration has a live run unless `replace`; 409 `no_runner`; 400/409 `invalid_spec` when the result is not a valid spec or links a Secret the project no longer has; 404 for no such configuration or environment. A `task` configuration (E15-3) starts as a heavy job instead: the answer carries the job's id in `job`, the variables travel as the job's environment (a Secret leased to the device it lands on, redeemed once there), and `replace` does not apply
             ///
             /// - Remark: Generated from `#/paths//api/v1/projects/{id}/run-configs/{config}/run/post(startRunConfig)/responses/200`.
             ///

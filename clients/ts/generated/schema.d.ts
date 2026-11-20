@@ -3276,6 +3276,13 @@ export interface components {
              *     "lost", "reason": …}`.
              */
             outcome?: Record<string, never> | null;
+            /**
+             * @description Why the Core placed it where it runs (E15): `core`, `overflow` (the Core was full) or
+             *     `pinned` (a runner-bound login); absent for a session placed before E15.
+             */
+            place_reason?: string | null;
+            /** @description The name of the machine it runs on (`runner` is its id), for "Ran on X". */
+            placed_on?: string | null;
             /** @description Plan mode: the harness reads and plans, edits nothing (Claude Code's `plan`). */
             plan?: boolean | null;
             /**
@@ -4641,8 +4648,10 @@ export interface components {
             prompt?: string | null;
             /**
              * @deprecated
-             * @description Deprecated (E15): the Core places every session. Absent: the Core's built-in runner (until
-             *     E15-1 places by load, after which a given runner is ignored).
+             * @description Deprecated and ignored (E15): the Core places every session (on itself, or on a runner
+             *     when it is full). Kept so an older client still parses. The one exception: a session of a
+             *     runner-bound login (`codex` or `agy` using the login its runner reports, with no account)
+             *     stays on the runner it names.
              */
             runner?: string | null;
             /** @description At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC). */
@@ -5138,6 +5147,11 @@ export interface components {
             id: string;
             /** @description When the idle stop is due, for a running run. */
             idle_stop_at?: components["schemas"]["Timestamp"];
+            /**
+             * @description A `task` configuration's heavy job (`j_…`, E15-3): follow it with `/jobs/{id}`. Absent for a
+             *     service run.
+             */
+            job?: string | null;
             last_activity_at?: components["schemas"]["Timestamp"];
             /** @description The runner it is placed on. */
             runner: string;
@@ -5397,6 +5411,11 @@ export interface components {
             created_at: components["schemas"]["Timestamp"];
             /** Format: int64 */
             id: number;
+            /**
+             * @description `service` (a container that keeps running) or `task` (runs as a heavy job on the hardware
+             *     `place_job` picks, with the environment's variables as leased env). Absent: `service`.
+             */
+            kind?: string | null;
             name: string;
             /** Format: int64 */
             port?: number | null;
@@ -5420,6 +5439,8 @@ export interface components {
         RunConfigBody: {
             /** @description Required to create. */
             command?: string | null;
+            /** @description `service` or `task`. */
+            kind?: string | null;
             /** @description Required to create. */
             name?: string | null;
             /**
@@ -9565,7 +9586,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The machine takes no new jobs or overflow sessions until `until` (`null` lifts it); running work finishes. Needs `admin` */
+            /** @description The machine takes no new jobs or overflow sessions until `until` (`null` lifts it); running work finishes. 400 for the Core host or a past `until`, 404 for no such machine. Needs `admin` */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -11172,7 +11193,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The run, `starting` (as `startProjectRun`), with the configuration and environment laid over the spec: its command, folder and port, and the environment's variables (a Secret link is leased to the runner as `${secret:NAME}`, never sent as a value). The configuration's runner is used when it is online. 409 `conflict` while this configuration has a live run unless `replace`; 409 `no_runner`; 400/409 `invalid_spec` when the result is not a valid spec or links a Secret the project no longer has; 404 for no such configuration or environment */
+            /** @description The run, `starting` (as `startProjectRun`), with the configuration and environment laid over the spec: its command, folder and port, and the environment's variables (a Secret link is leased to the runner as `${secret:NAME}`, never sent as a value). The configuration's runner is used when it is online. 409 `conflict` while this configuration has a live run unless `replace`; 409 `no_runner`; 400/409 `invalid_spec` when the result is not a valid spec or links a Secret the project no longer has; 404 for no such configuration or environment. A `task` configuration (E15-3) starts as a heavy job instead: the answer carries the job's id in `job`, the variables travel as the job's environment (a Secret leased to the device it lands on, redeemed once there), and `replace` does not apply */
             200: {
                 headers: {
                     [name: string]: unknown;
