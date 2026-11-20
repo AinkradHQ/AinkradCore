@@ -425,7 +425,15 @@ async fn execute(
                 Some(Body::Output(o)) => live.push(json!({"t": "out", "fd": 1, "b64": o.data})),
                 Some(Body::Result(Reply::JobRun(done))) => break done,
                 // The runner went away, or refused: the stream ends with no exit, so the shim runs it here.
-                Some(Body::Error(_)) | None => return End { state: "lost", ..End::default() },
+                Some(Body::Error(e)) => {
+                    // Without this line a refused job.run is undiagnosable: the runner logs nothing and the job only says `lost`.
+                    tracing::warn!(job = %run.id, device = %run.device, code = ?e.code, why = %e.message, "a heavy job was refused by its runner");
+                    return End { state: "lost", ..End::default() };
+                }
+                None => {
+                    tracing::warn!(job = %run.id, device = %run.device, "a heavy job's stream ended without an exit (runner gone)");
+                    return End { state: "lost", ..End::default() };
+                }
                 Some(_) => {}
             },
             c = ctl.recv() => match c {
