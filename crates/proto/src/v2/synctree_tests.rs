@@ -54,6 +54,25 @@ fn build_output_and_secrets_stay_out_unless_the_project_says() {
         "a/.netrc",
         "v.kdbx",
         "t.key",
+        // M3: the wider list, and any case.
+        "app/credentials.json",
+        "home/.aws/credentials",
+        ".aws/credentials",
+        ".git-credentials",
+        "c.pfx",
+        "k.jks",
+        "a.keystore",
+        "p.ppk",
+        "infra/terraform.tfstate",
+        "infra/terraform.tfstate.backup",
+        "config/secrets.yml",
+        "service-account-prod.json",
+        ".docker/config.json",
+        "x/.kube/config",
+        ".htpasswd",
+        ".ENV",
+        "KEY.PEM",
+        "App/.Env.Local",
     ] {
         assert_eq!(r.sync_in(p), Some(Skip::Secret), "{p}");
         assert_eq!(r.sync_out(p), Some(Skip::Secret), "{p}");
@@ -150,7 +169,10 @@ fn chunks_are_one_mebibyte_and_the_whole_hash_matches_the_bytes() {
 
 #[test]
 fn links_stay_inside_the_project_and_paths_are_checked() {
-    assert!(link_ok("a/b", "c") && link_ok("a/b", "../x") && link_ok("a", "b/../c"));
+    assert!(link_ok("a/b", "c") && link_ok("a/b", "../x") && link_ok("a/b/c", "../../x/y"));
+    // M2: `..` only as a leading run, so a chain through another link cannot climb out.
+    assert!(!link_ok("a", "b/../c") && !link_ok("z", "d1/d2/d3/l/../../.."));
+    assert!(link_ok("d1/d2/d3/l", "../../..") && !link_ok("a/b", "../x/../y"));
     assert!(!link_ok("a", "../x") && !link_ok("a/b", "../../x") && !link_ok("a", "/x"));
     assert!(!link_ok("a", ".git/config") && !link_ok("a", "x/.GIT") && !link_ok("a", ""));
     assert_eq!(check_path("src/main.rs"), Ok(()));

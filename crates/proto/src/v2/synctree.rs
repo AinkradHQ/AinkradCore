@@ -36,9 +36,35 @@ pub const BUILD_DIRS: &[&str] = &[
     ".turbo",
 ];
 
-/// Files that look like secrets, by file name (`*` matches any run).
+/// Files that look like secrets: by file name (`*` matches any run), or by path for the ones
+/// with a `/`. Lower case: [`is_secret`] matches them case-insensitively (E15 security review M3).
 pub const SECRET_NAMES: &[&str] = &[
-    ".env", ".env.*", "*.pem", "*.key", "*.p12", "id_*", ".npmrc", ".pypirc", ".netrc", "*.kdbx",
+    ".env",
+    ".env.*",
+    ".envrc",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+    "*.jks",
+    "*.keystore",
+    "*.ppk",
+    "*.kdbx",
+    "id_*",
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
+    ".git-credentials",
+    ".htpasswd",
+    "credentials.json",
+    "service-account*.json",
+    "secrets.yml",
+    "secrets.yaml",
+    "*.tfstate",
+    "*.tfstate.*",
+    "**/.aws/credentials",
+    "**/.docker/config.json",
+    "**/.kube/config",
 ];
 
 /// A manifest: entries by wire path.
@@ -156,10 +182,10 @@ pub fn in_build_dir(rel: &str) -> bool {
     false
 }
 
-/// The file name of `rel` looks like a secret (`.env`, `*.pem` ...).
+/// `rel` looks like a secret (`.env`, `*.pem`, `.aws/credentials` ...), whatever its case.
 pub fn is_secret(rel: &str) -> bool {
-    let name = rel.rsplit('/').next().unwrap_or(rel);
-    SECRET_NAMES.iter().any(|g| glob(g, name))
+    let low = rel.to_lowercase();
+    SECRET_NAMES.iter().any(|g| glob(g, &low))
 }
 
 /// A small glob: `*` any run without `/`, `**` any run (also across `/`), `?` one character
@@ -205,7 +231,11 @@ pub fn check_path(rel: &str) -> Result<(), &'static str> {
 }
 
 /// Whether the relative symlink `target` of the link at `path` stays inside the project: not
-/// absolute, never above the root at any step, and not through `.git`.
+/// absolute, never above the root at any step, and not through `.git`. `..` is allowed only as a
+/// leading run (E15 security review M2): `d/l/../..` would climb from wherever the link `d/l`
+/// points, not from `d`, so a chain of links could leave the root while each target passes on
+/// paper. With leading `..` only, a target climbs from the link's own folder (a real folder: no
+/// entry is written through a link) and then only descends, so every chain stays beneath the root.
 pub fn link_ok(path: &str, target: &str) -> bool {
     if target.is_empty()
         || target.starts_with('/')
@@ -215,9 +245,11 @@ pub fn link_ok(path: &str, target: &str) -> bool {
         return false;
     }
     let mut depth = path.split('/').count() as i64 - 1; // folders above the link
+    let mut descended = false;
     for part in target.split('/') {
         match part {
             "" | "." => {}
+            ".." if descended => return false,
             ".." => {
                 depth -= 1;
                 if depth < 0 {
@@ -225,7 +257,10 @@ pub fn link_ok(path: &str, target: &str) -> bool {
                 }
             }
             p if p.eq_ignore_ascii_case(".git") => return false,
-            _ => depth += 1,
+            _ => {
+                descended = true;
+                depth += 1;
+            }
         }
     }
     true
