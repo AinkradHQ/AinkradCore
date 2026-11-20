@@ -562,6 +562,8 @@ fn code_running_routes_need_the_unlock_and_are_not_danger() {
     }
     let m = |s: &str| Method::from_bytes(s.as_bytes()).unwrap();
     assert!(needs_unlock(&m("POST"), "/api/v1/terminals", &[]));
+    // M4: a job's live output needs the unlock, as a terminal's does.
+    assert!(needs_unlock(&m("GET"), "/api/v1/jobs/j_abc/stream", &[]));
     assert!(needs_unlock(&m("POST"), "/api/v1/agent-sessions", &[]));
     assert!(!needs_unlock(&m("GET"), "/api/v1/terminals", &[]));
     assert!(!needs_unlock(&m("POST"), "/api/v1/accounts", &[]));
