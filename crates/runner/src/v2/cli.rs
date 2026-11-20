@@ -607,6 +607,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
             tls.clone(),
             agent_capacity,
             share_history,
+            super::hwsource::workspace_root(),
         )
     }) {
         None => None,
@@ -777,6 +778,7 @@ async fn agents(
     tls: Option<Arc<rustls::ClientConfig>>,
     capacity: u32,
     share_history: bool,
+    workspace_root: Option<PathBuf>,
 ) -> Result<super::agent::AgentDriver, String> {
     let [secrets, work] = runtime_paths(state);
     super::aitools::set_home(work.clone());
@@ -824,6 +826,7 @@ async fn agents(
     }
     let mut config = super::agent::AgentConfig::new(state.join("agents"), secrets.clone());
     config.capacity = capacity;
+    config.workspace_root = workspace_root;
     if share_history {
         config.history_read = true;
         config.history_root = Some(home.join(".claude").join("projects"));

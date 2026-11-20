@@ -237,6 +237,12 @@ pub trait Executor: Send + Sync + 'static {
         let _ = (name, prefix, keep);
     }
 
+    /// The session's folder in the canonical workspace (`AgentStart::folder`, already checked by
+    /// the driver), or `None` to clear it. Its harness then works there for its whole life.
+    fn set_session_folder(&self, session: &str, folder: Option<PathBuf>) {
+        let _ = (session, folder);
+    }
+
     /// The absolute folder a started job's harness works in, when it runs in one.
     fn work_dir(&self, job: &Job) -> Option<PathBuf> {
         let _ = job;

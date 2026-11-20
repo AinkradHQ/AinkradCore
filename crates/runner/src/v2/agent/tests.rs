@@ -1602,3 +1602,53 @@ async fn an_agent_session_cannot_take_a_project_runs_id_range() {
     assert!(d.start(start("as_run6162", "fake")).is_err());
     assert!(d.start(start("as_runner", "fake")).is_err());
 }
+
+#[test]
+fn a_session_folder_is_only_this_sessions_place_under_the_workspace_root() {
+    let root = std::path::Path::new("/var/lib/ainkrad-ws");
+    for ok in [
+        "/var/lib/ainkrad-ws/u/1/s/as_f",
+        "/var/lib/ainkrad-ws/p/12/s/as_f",
+    ] {
+        assert_eq!(
+            super::session_folder(root, ok, "as_f").unwrap(),
+            std::path::PathBuf::from(ok)
+        );
+    }
+    for bad in [
+        "/var/lib/ainkrad-ws/u/1/s/as_other",
+        "/var/lib/ainkrad-ws/u/1/s/as_f/..",
+        "/var/lib/ainkrad-ws/u/x/s/as_f",
+        "/var/lib/ainkrad-ws/q/1/s/as_f",
+        "/var/lib/ainkrad-ws/u/1/s/../../../etc",
+        "/var/lib/elsewhere/u/1/s/as_f",
+        "u/1/s/as_f",
+        "/var/lib/ainkrad-ws",
+    ] {
+        assert!(super::session_folder(root, bad, "as_f").is_err(), "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn a_start_naming_a_folder_outside_the_workspace_is_refused_and_a_runner_without_one_ignores_it()
+ {
+    let (root, mut config) = dirs("folder-root");
+    let ws = root.0.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let plain = Arc::new(AgentDriver::new(config.clone(), script("echo hi")).unwrap());
+    let mut s = start("as_g", "fake");
+    s.folder = Some("/elsewhere/u/1/s/as_g".into());
+    plain
+        .start(s.clone())
+        .expect("no workspace root: the folder is not used");
+    config.workspace_root = Some(ws.clone());
+    let d = Arc::new(AgentDriver::new(config, script("echo hi")).unwrap());
+    let mut bad = start("as_h", "fake");
+    bad.folder = Some("/elsewhere/u/1/s/as_h".into());
+    let e = d.start(bad).unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidArgs);
+    let mut good = start("as_i", "fake");
+    good.folder = Some(ws.join("u/1/s/as_i").to_string_lossy().into_owned());
+    d.start(good).expect("its own place is taken");
+    drain(&d, "as_i").await;
+}
