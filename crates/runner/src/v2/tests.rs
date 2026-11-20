@@ -1318,6 +1318,30 @@ mod pty {
         std::path::PathBuf::from(format!("/tmp/apr-{r}"))
     }
 
+    /// A host-view runner started with `--terminal-user` has no descriptor to move a client's
+    /// variables to (`sudo` closes it): it refuses them, plainly, before anything starts.
+    #[tokio::test]
+    async fn a_runner_with_a_terminal_user_takes_no_client_env() {
+        let base = tmp();
+        let terminals = base.join("terminals");
+        std::fs::create_dir_all(&terminals).unwrap();
+        let host = ainkrad_ptyhost::client::find_host_binary().expect("ainkrad-ptyhost is built");
+        let d = PtyDriver::new(PtyConfig {
+            enabled: true,
+            host,
+            hide: Some(Vec::new()),
+            user: Some("nobody".to_owned()),
+            ..PtyConfig::new(terminals)
+        });
+        let Body::Command(Command::PtyOpen(mut req)) = open("true") else {
+            unreachable!()
+        };
+        req.env = [("SECRET".to_owned(), "hunter2".to_owned())].into();
+        let e = d.open(&req).await.unwrap_err();
+        assert_eq!(e.code, ErrorCode::InvalidArgs);
+        assert!(e.message.contains("--terminal-user"), "{}", e.message);
+        assert!(!e.message.contains("hunter2"));
+    }
     fn open(script: &str) -> Body {
         Body::Command(Command::PtyOpen(PtyOpen {
             program: Some("/bin/sh".to_owned()),

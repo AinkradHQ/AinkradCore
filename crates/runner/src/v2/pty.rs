@@ -496,6 +496,15 @@ impl PtyDriver {
                 "a private-root terminal names its folder in `sandbox`, and is not an ssh terminal",
             ));
         }
+        // A host-view shell run as another account (`--terminal-user`) goes through `sudo`, which
+        // takes no descriptor 3: its variables would stay in the launcher's argv, in every
+        // process listing. Refused, plainly, rather than leaked.
+        if self.config.user.is_some() && self.config.hide.is_some() && !req.env.is_empty() {
+            return Err(invalid(
+                "a runner started with --terminal-user takes no env for its terminals: \
+                 variables would show in its process listing",
+            ));
+        }
         // A session's folder lies in the state the sandbox hides: it is let in only for a
         // terminal the Core opened for that session, in the folder this runner recorded for it.
         let reveal = match &req.session {
