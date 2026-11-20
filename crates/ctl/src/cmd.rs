@@ -14,7 +14,7 @@ use crate::net::{Endpoint, Net};
 use crate::pair::{Credential, Pairing};
 use crate::stepup::{self, Passphrase};
 use crate::{
-    EXIT_CODES, Error, acct, acct_help, agents, budgets, chains, connections, devices, events,
+    EXIT_CODES, Error, acct, acct_help, agents, api, budgets, chains, connections, devices, events,
     pair, pools, runners, secrets, settings, system, terminals,
 };
 
@@ -138,6 +138,9 @@ pub const USAGE: &str =
       Ainkrad's sign-in app of a kind (only the Core's owner admin sets it; others get a 403).
       `--field name=-` reads a value from stdin or --file (a secret field is refused on the
       command line); `--field name=` clears one.
+  api <GET|POST|PUT|DELETE> </api/v1/...[?query]> [json-body]
+      One signed request for a route with no command of its own (e.g. /api/v1/hardware,
+      /api/v1/jobs); prints the answer's JSON as is. Scopes and step-up apply as usual.
   events tail [--after <seq>] [--no-follow]
       Events after <seq> (default: from now), one JSON object per line (every kind this
       device may see, runner.connected/.disconnected/.degraded included); follows the live
@@ -442,6 +445,7 @@ pub async fn run(args: &[String], out: &mut impl Write) -> Result<(), Error> {
             };
             terminals::terminal(&mut a.client()?, rest, &options, json, out).await
         }
+        ["api", rest @ ..] => api::api(&mut a.client()?, rest, out).await,
         ["events", "tail"] => {
             let mut c = a.client()?;
             events::tail(&mut c, a.number("--after")?, !a.on("--no-follow"), out).await
