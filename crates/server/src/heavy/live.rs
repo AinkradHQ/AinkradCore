@@ -100,3 +100,20 @@ pub fn lines(live: Arc<Live>, head: Vec<String>) -> impl futures_util::Stream<It
         }
     })
 }
+
+/// The lock of one working copy: a runner's warm cache of a project (E15 security review M5). A
+/// job holds it from its sync IN to its sync back, so two jobs (two sessions') never share the
+/// copy at once: one's sync never rewrites the files under the other, and the runner's clear on
+/// an origin change never pulls the folders from under a running job.
+///
+/// ponytail: one entry per (device, project) ever used, never dropped; a few bytes each.
+pub(super) fn copy_lock(device: &str, project: i64) -> Arc<tokio::sync::Mutex<()>> {
+    type Locks = Mutex<std::collections::HashMap<(String, i64), Arc<tokio::sync::Mutex<()>>>>;
+    static LOCKS: std::sync::OnceLock<Locks> = std::sync::OnceLock::new();
+    let mut all = LOCKS.get_or_init(Locks::default).lock().unwrap();
+    Arc::clone(all.entry((device.to_owned(), project)).or_default())
+}
+
+#[cfg(test)]
+#[path = "live_tests.rs"]
+mod copy_lock_tests;

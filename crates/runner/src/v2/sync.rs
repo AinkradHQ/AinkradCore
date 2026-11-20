@@ -333,6 +333,11 @@ impl SyncDriver {
         })
     }
 
+    /// The sync rules the Core last sent for project's cache.
+    pub async fn rules(&self, project: i64) -> Rules {
+        Rules::from_wire(&self.lock(&Key::Project(project)).await.saved.rules)
+    }
+
     /// The commit the cache was seeded at (`AINKRAD_GIT_HEAD`), if it was.
     pub async fn head(&self, project: i64) -> Option<String> {
         self.lock(&Key::Project(project)).await.saved.head.clone()

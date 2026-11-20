@@ -48,8 +48,57 @@ pub fn enclosing_repo(root: &Path, rel: &str) -> Option<(PathBuf, String)> {
     None
 }
 
+/// Most entries a `.git` may hold to be read; a bigger one is refused rather than walked.
+const MAX_GIT_ENTRIES: usize = 200_000;
+
+/// Whether everything in `.git` is the repo's own (E15 security review N1): no link anywhere
+/// (`HEAD`, `objects`, a fan-out folder, a loose object, `refs`, `packed-refs`, `config`,
+/// `reftable`), only plain files and folders, all owned by the work tree's owner. Without this an
+/// agent's `.git/objects -> <other project>/.git/objects` makes a revert read another project.
+///
+/// ponytail: checked, then git runs; an agent racing a swap in between still wins. Reading HEAD
+/// only from repos the Core cloned (recorded by inode) closes that; add it if agents race.
+fn repo_own(git: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    let Some(owner) = git.parent().and_then(|w| std::fs::symlink_metadata(w).ok()) else {
+        return false;
+    };
+    let own = |p: &Path| {
+        std::fs::symlink_metadata(p)
+            .ok()
+            .filter(|m| m.uid() == owner.uid())
+            .map(|m| m.file_type())
+    };
+    if !own(git).is_some_and(|t| t.is_dir()) {
+        return false;
+    }
+    let mut todo = vec![git.to_path_buf()];
+    let mut seen = 0usize;
+    while let Some(dir) = todo.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            return false;
+        };
+        for e in rd {
+            seen += 1;
+            let Ok(p) = e.map(|e| e.path()) else {
+                return false;
+            };
+            match own(&p) {
+                _ if seen > MAX_GIT_ENTRIES => return false,
+                Some(t) if t.is_dir() => todo.push(p),
+                Some(t) if t.is_file() => {}
+                _ => return false,
+            }
+        }
+    }
+    true
+}
+
 /// Whether a `.git` dir can be read without git fetching, borrowing or including anything.
 fn repo_clean(git: &Path) -> bool {
+    if !repo_own(git) {
+        return false;
+    }
     for borrowed in ["objects/info/alternates", "commondir", "config.worktree"] {
         if std::fs::symlink_metadata(git.join(borrowed)).is_ok() {
             return false;
@@ -234,6 +283,54 @@ mod tests {
         )
         .unwrap();
         assert_eq!(head_blob(&root, "wt/src/a.txt"), None);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_repo_borrowing_another_projects_store_by_link_is_refused() {
+        // N1: the agent's `proj/sub/.git` links `objects` and `refs` to another project's repo;
+        // a revert must not read the other project's `s.txt`.
+        let root = temp("n1");
+        let other = root.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("s.txt"), "other secret\n").unwrap();
+        git(&other, &["init", "-q"]);
+        git(&other, &["add", "."]);
+        git(&other, &["commit", "-qm", "x"]);
+        let fake = root.join("proj/sub");
+        std::fs::create_dir_all(fake.join(".git")).unwrap();
+        std::fs::write(fake.join("s.txt"), "agent\n").unwrap();
+        std::fs::write(fake.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            fake.join(".git/config"),
+            "[core]\n\trepositoryformatversion = 0\n\tbare = false\n",
+        )
+        .unwrap();
+        let link = |name: &str| {
+            std::os::unix::fs::symlink(other.join(".git").join(name), fake.join(".git").join(name))
+                .unwrap()
+        };
+        link("objects");
+        link("refs");
+        // Control: git itself follows the links (the exploit is real on this machine).
+        let out = sealed(&fake)
+            .args(["cat-file", "blob", "HEAD:s.txt"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "other secret\n");
+        assert_eq!(head_blob(&root, "proj/sub/s.txt"), None);
+        assert_eq!(enclosing_repo(&root, "proj/sub/s.txt"), None);
+        // A real store with one linked fan-out folder, or a linked HEAD, is refused too.
+        let mine = root.join("mine");
+        repo(&mine);
+        assert!(head_blob(&root, "mine/src/a.txt").is_some());
+        std::os::unix::fs::symlink(other.join(".git/objects"), mine.join(".git/objects/zz"))
+            .unwrap();
+        assert_eq!(head_blob(&root, "mine/src/a.txt"), None);
+        std::fs::remove_file(mine.join(".git/objects/zz")).unwrap();
+        std::fs::remove_file(mine.join(".git/HEAD")).unwrap();
+        std::os::unix::fs::symlink(other.join(".git/HEAD"), mine.join(".git/HEAD")).unwrap();
+        assert_eq!(head_blob(&root, "mine/src/a.txt"), None);
         let _ = std::fs::remove_dir_all(root);
     }
 
