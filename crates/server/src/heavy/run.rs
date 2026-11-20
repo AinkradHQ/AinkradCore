@@ -16,6 +16,8 @@ use ainkrad_core::ids::UserId;
 use ainkrad_proto::v2::{
     Body, Close, Command, Control, JobNeed, JobRun, Os, Reply, RunSecret, SignalReq,
 };
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
 
@@ -136,11 +138,7 @@ fn base_of(s: &Start) -> PathBuf {
                 project: Some(s.project),
             })
             .unwrap_or_default(),
-        None => ws
-            .project_meta(s.project)
-            .parent()
-            .map(|p| p.join("main"))
-            .unwrap_or_default(),
+        None => ws.project_main(s.project),
     }
 }
 
@@ -302,6 +300,14 @@ async fn execute(
     run: &Run,
 ) -> End {
     let ws = super::workspace();
+    // A job with no session works on the project's main copy: made now if it is not there yet.
+    if run.s.session.is_none()
+        && let Err(why) = crate::mirrors::ensure_main(app, run.s.project).await
+    {
+        let msg = format!("ainkrad: {why}\n");
+        live.push(json!({"t": "out", "fd": 2, "b64": B64.encode(msg)}));
+        return failed(&why);
+    }
     let mut sync = None;
     let _copy = match run.on_core {
         true => None,

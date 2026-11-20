@@ -87,6 +87,7 @@ mod host_router;
 mod host_router_load;
 mod host_router_review;
 mod live;
+mod main_copy;
 mod me;
 mod metrics;
 mod mirrors_api;

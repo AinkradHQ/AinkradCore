@@ -96,12 +96,16 @@ pub struct Mirrors {
 
 mod insight;
 mod lease;
+mod main_copy;
 mod read;
 mod serve;
 pub use insight::{CodeInfo, Commit};
 #[cfg(test)]
 pub(crate) use lease::grant_now;
 pub use lease::{LEASE_SECS, for_session, release_run, release_session, servable};
+pub use main_copy::ensure_main;
+#[cfg(test)]
+pub(crate) use main_copy::ensure_main_in as main_copy_for_test;
 pub use read::path_ok;
 
 /// Why a mirror cannot be served.
@@ -270,10 +274,18 @@ impl Mirrors {
         token: Option<&str>,
         limit: Duration,
     ) -> Result<String, String> {
-        let mut child = self
-            .command(args, token)
-            .spawn()
-            .map_err(|e| format!("git: {e}"))?;
+        self.run_command(self.command(args, token), token, limit)
+            .await
+    }
+
+    /// `cmd` (made by `command`) run as `run_for` runs it.
+    async fn run_command(
+        &self,
+        mut cmd: Command,
+        token: Option<&str>,
+        limit: Duration,
+    ) -> Result<String, String> {
+        let mut child = cmd.spawn().map_err(|e| format!("git: {e}"))?;
         let mut group = Group::new(child.id().ok_or("git has no pid")?);
         let (out, err) = (child.stdout.take(), child.stderr.take());
         let read = async {
@@ -843,7 +855,13 @@ pub async fn start(app: &App, repo: i64) {
     .await;
     let app = app.clone();
     tokio::spawn(async move {
-        let _ = refresh(&app, repo).await;
+        // A repo added (or a project made with one): its project folder is made right after.
+        if refresh(&app, repo).await.is_ok_and(|m| m.state == "ready")
+            && let Ok(Some(t)) = target(&app.pool, repo).await
+            && let Err(why) = ensure_main(&app, t.project).await
+        {
+            tracing::debug!(repo, why, "the project folder was not made");
+        }
     });
 }
 
