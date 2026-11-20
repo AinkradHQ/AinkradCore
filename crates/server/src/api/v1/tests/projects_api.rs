@@ -398,7 +398,11 @@ async fn project_defaults_are_set_for_all_and_an_archived_project_is_unarchived(
         put(json!({"mem_limit_mb": 1})).await.0,
         StatusCode::BAD_REQUEST
     );
-    assert_eq!(put(json!({"nope": 1})).await.0, StatusCode::BAD_REQUEST);
+    // An unknown field is refused by the JSON extractor (422).
+    assert_eq!(
+        put(json!({"nope": 1})).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
 
     let un = admin(&fx, Method::POST, &format!("{p}/unarchive"), Value::Null).await;
     assert_eq!(

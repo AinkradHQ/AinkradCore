@@ -49,7 +49,11 @@ async fn a_bad_name_or_hour_is_refused_and_changes_nothing() {
         json!({"nope": 1}),
     ] {
         let (s, got) = put(&fx, body).await;
-        assert_eq!(s, StatusCode::BAD_REQUEST, "{got}");
+        // An unknown field is refused by the JSON extractor (422); the others by the handler (400).
+        assert!(
+            s == StatusCode::BAD_REQUEST || s == StatusCode::UNPROCESSABLE_ENTITY,
+            "{s} {got}"
+        );
     }
     assert!(fx.ok("/api/v1/core/prefs").await["name"].is_null());
 }

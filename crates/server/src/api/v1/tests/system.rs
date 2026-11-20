@@ -195,8 +195,8 @@ async fn the_contract_declares_admin_everywhere_and_step_up_only_where_d4_says()
         .filter(|p| p.starts_with("/api/v1/system/"))
         .count();
     assert_eq!(
-        n, 9,
-        "six, the backup start and schedule, and the retention"
+        n, 10,
+        "six, the backup start and schedule, the retention and the update"
     );
 }
 

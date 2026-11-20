@@ -268,16 +268,6 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
         ),
         (
             "PUT",
-            "/api/v1/accounts/{id}/limits",
-            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
-        ),
-        (
-            "DELETE",
-            "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
-            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
-        ),
-        (
-            "PUT",
             "/api/v1/budgets",
             "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
         ),
@@ -435,6 +425,46 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
             "PATCH",
             "/api/v1/agent-sessions/{id}",
             "fixed or caller-owned effect, not a grant (see 0.9 notes)",
+        ),
+        (
+            "POST",
+            "/api/v1/system/backup",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/accounts/logins/{id}/input",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/accounts/{id}/models/{model}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "POST",
+            "/api/v1/accounts/{id}/restore",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/ai-order",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/ai-order/agents/{agent}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "DELETE",
+            "/api/v1/ai-order/agents/{agent}",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
+        ),
+        (
+            "PUT",
+            "/api/v1/projects/defaults",
+            "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
         ),
         (
             "POST",

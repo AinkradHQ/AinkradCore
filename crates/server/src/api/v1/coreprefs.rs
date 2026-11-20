@@ -64,13 +64,15 @@ pub struct SetCorePrefs {
     pub update_hour: Option<i64>,
 }
 
+/// The settings column holds JSON (`json_valid`), so a preference is stored as a JSON string and read back as the text.
 async fn read(conn: &mut SqliteConnection, key: &str) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar(
+    let raw: Option<String> = sqlx::query_scalar(
         "SELECT value FROM settings WHERE key = ? AND scope_kind = 'server' AND scope_id = 0",
     )
     .bind(key)
     .fetch_optional(conn)
-    .await
+    .await?;
+    Ok(raw.map(|v| serde_json::from_str::<String>(&v).unwrap_or(v)))
 }
 
 async fn write(
@@ -88,7 +90,7 @@ async fn write(
          updated_at = excluded.updated_at",
     )
     .bind(key)
-    .bind(value)
+    .bind(serde_json::to_string(value).expect("a string is JSON"))
     .bind(by_kind)
     .bind(by_id)
     .bind(now)
