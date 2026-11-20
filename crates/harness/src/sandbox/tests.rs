@@ -847,3 +847,22 @@ fn the_tls_config_is_readable_and_the_rest_of_etc_is_not() {
     assert!(!cat("/etc/hosts"), "the rest of /etc stays closed");
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// A heavy job's `cargo build` in `tiny-shop/` ran in the project root on Linux: bwrap's `--chdir`
+/// took `cwd` and ignored `process_dir` (e2e 2026-11-20). A dir outside the bound folder (a warm
+/// server's work root) is never chdir'd into: it is not mounted.
+#[test]
+fn the_sandbox_starts_in_the_jobs_own_folder_inside_the_project() {
+    let spec = |dir: Option<&str>| Spec {
+        cwd: PathBuf::from("/w/p/1"),
+        process_dir: dir.map(PathBuf::from),
+        ..Spec::default()
+    };
+    assert_eq!(
+        workdir(&spec(Some("/w/p/1/tiny-shop"))),
+        Path::new("/w/p/1/tiny-shop")
+    );
+    assert_eq!(workdir(&spec(None)), Path::new("/w/p/1"));
+    assert_eq!(workdir(&spec(Some("/w/work-root"))), Path::new("/w/p/1"));
+    assert_eq!(workdir(&spec(Some("/w/p/10"))), Path::new("/w/p/1"));
+}

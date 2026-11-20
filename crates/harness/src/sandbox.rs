@@ -391,6 +391,16 @@ pub(crate) fn command_expecting_refusal(program: &OsStr, args: &[String], spec: 
         Command::new("/nonexistent/ainkrad-sandbox-refused")
     })
 }
+/// Where the sandboxed process starts: its `process_dir` when that lies inside the bound `cwd`
+/// (a heavy job's folder below the project root), else `cwd`. bwrap's `--chdir` wins over the
+/// `current_dir` the caller sets, so without this every Linux job ran in the project root.
+fn workdir(spec: &Spec) -> &Path {
+    spec.process_dir
+        .as_deref()
+        .filter(|d| d.starts_with(&spec.cwd))
+        .unwrap_or(&spec.cwd)
+}
+
 fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command> {
     for path in [
         &spec.cwd,
@@ -598,7 +608,7 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         }
         c.args(["--remount-ro", "/dev", "--remount-ro", "/"])
             .arg("--chdir")
-            .arg(&spec.cwd)
+            .arg(workdir(spec))
             .arg("--");
     }
     let limits = |name, default: &str| {
