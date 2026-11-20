@@ -284,7 +284,6 @@ fn a_revoked_runner_exits_6() {
 /// `term new <runner> sh …` (a bare name, as typed), and that shell cannot read the runner's state:
 /// the sandbox is on, not silently skipped. Unit tests open `/bin/sh` through the driver only.
 #[test]
-#[ignore = "E6: a shell now starts in a private-root home that cannot write the test's output file outside it; rewrite the probe to write under $HOME and read it back, then run it by hand"]
 fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
     // Short: the host's socket path under macOS's long temp dir must fit in sun_path.
     let (core, url) = loopback_core("pty");
@@ -320,13 +319,22 @@ fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
     wait_online(&a, &id, true, Duration::from_secs(20));
     // Beside the runner's key, in the state dir the sandbox hides.
     std::fs::write(core.dir.join("vm/canary"), "RUNNER-STATE-CANARY-3317").unwrap();
-    let out = core.dir.join("shell.out");
+    // The shell starts in its private-root home (`<state>/sandbox/<user>`, E6), the one place it
+    // can write: the probe writes there and the test reads it back from the host side.
     let script = format!(
-        "cat {}/canary >{o} 2>&1; sleep 0 & wait && echo x >/dev/null && echo DEV-OK >>{o}; \
-         echo SHELL-DONE >>{o}",
+        "o=\"$HOME/shell.out\"; cat {}/canary >\"$o\" 2>&1; sleep 0 & wait && echo x >/dev/null && \
+         echo DEV-OK >>\"$o\"; echo SHELL-DONE >>\"$o\"",
         core.dir.join("vm").display(),
-        o = out.display()
     );
+    let homes = core.dir.join("vm/sandbox");
+    let read_out = || {
+        std::fs::read_dir(&homes)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .find_map(|h| std::fs::read_to_string(h.path().join("shell.out")).ok())
+            .unwrap_or_default()
+    };
     let log = || std::fs::read_to_string(core.dir.join("vm.log")).unwrap_or_default();
     // The CLI cannot unlock (a routine key must not), and says so plainly.
     let refused = ctl(&args(&[&a, &s(&["term", "new", &id, "sh", "-c", &script])]));
@@ -384,7 +392,7 @@ fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
     });
     let start = Instant::now();
     let seen = loop {
-        let seen = std::fs::read_to_string(&out).unwrap_or_default();
+        let seen = read_out();
         if seen.contains("SHELL-DONE") {
             break seen;
         }
