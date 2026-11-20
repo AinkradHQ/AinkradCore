@@ -49,6 +49,8 @@ if [ -z "$names" ]; then
   # shellcheck disable=SC2086  # $order is two words
   unzip -q -j "$tmp/$zipname" $order -d "$tmp/z" 2>/dev/null || die "$zipname does not hold $order"
 else
+  # The heavy-job shim (E15-3) goes beside the runner, where it looks for it; optional, so an older release still installs.
+  [ "$part" = core ] || ! echo "$names" | grep -qx "ainkrad-job-[0-9].*-$target" || order="$order ainkrad-job"
   # A release is all four: a set without the CLI (first-device step) or ptyhost (terminals) is refused, not half-installed.
   for b in $order; do
     echo "$names" | grep -qx "$b-[0-9].*-$target" || die "the signed sums have no $b for $target"
