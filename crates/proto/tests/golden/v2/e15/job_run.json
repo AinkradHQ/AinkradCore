@@ -1,0 +1,1 @@
+{"stream_id":1,"kind":"command","seq":0,"payload":{"argv":["cargo","build"],"cache":"c_core","cwd_rel":"","env":{"CARGO_TERM_COLOR":"always"},"job":"j_abc","need":{"os":"linux","toolchains":["rust"],"xcode":false},"op":"job.run","prepare":[["npm","ci"]],"project":3,"secrets":[{"lease":"l_x","name":"NPM_TOKEN"}],"timeout_ms":3600000}}

@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use ainkrad_proto::v2::{
     Body, Command, Control, Entry, EntryKind, Hash, MAX_FILE_BYTES, MAX_INLINE_BYTES, SyncDrop,
-    SyncEvent, SyncWatch,
+    SyncEvent, SyncWatch, TreeHash,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -30,9 +30,6 @@ use super::rules::Rules;
 use super::sync::{Source, SyncError, entry_of, manifest, pull, push};
 use crate::hub::Hub;
 
-/// What the Core grants a watch up front: an event with inline files is bigger than the 64 KiB
-/// window a stream starts with.
-const WATCH_WINDOW: u64 = 4 * 1024 * 1024;
 const RETRIES: u32 = 5;
 
 /// The live watches, by session id.
@@ -138,7 +135,17 @@ pub async fn apply_event(
         }
         inline.insert(f.path.as_str(), bytes);
     }
+    // Within one event the deletes apply before the puts (a folder that becomes a file).
     let mut refused = 0u64;
+    let mut removed = Vec::new();
+    for p in &ev.delete {
+        if check_path(p).is_err() || args.rules.sync_out(p).is_some() {
+            refused += 1;
+            continue;
+        }
+        tree.remove(p)?;
+        removed.push(p.clone());
+    }
     let mut done: Vec<Entry> = Vec::new();
     let mut to_pull: Vec<Entry> = Vec::new();
     let known = st.entries();
@@ -199,15 +206,6 @@ pub async fn apply_event(
         .await?;
         done.extend(to_pull);
     }
-    let mut removed = Vec::new();
-    for p in &ev.delete {
-        if check_path(p).is_err() || args.rules.sync_out(p).is_some() {
-            refused += 1;
-            continue;
-        }
-        tree.remove(p)?;
-        removed.push(p.clone());
-    }
     let mut g = st.inner.lock().unwrap();
     for e in done {
         g.entries.insert(e.path.clone(), e);
@@ -226,9 +224,9 @@ async fn run_once(hub: &Arc<Hub>, st: &Arc<WatchState>, tree: &Tree) -> Result<(
     let cmd = Command::SyncWatch(SyncWatch {
         session: a.session.clone(),
         lease: a.lease.clone(),
+        rules: a.rules.to_wire(),
     });
     let mut d = hub.dispatch_sync(&a.device, cmd)?;
-    d.grant_read(WATCH_WINDOW);
     {
         let mut g = st.inner.lock().unwrap();
         g.seq = 0;
@@ -356,9 +354,14 @@ pub async fn write_through(
     let mut entries = st.entries();
     let exec = exec.unwrap_or_else(|| entries.get(rel).is_some_and(|e| e.exec));
     let entry = entry_of(rel, data, exec);
-    let base = tree_hash(&entries);
+    // Per-file base (spec 4.6): the push conflicts only if THIS file changed on the runner since
+    // the Core last saw it (the zero hash: the Core saw none). The whole-tree base and
+    // `want_tree` are then unchecked (the zero tree), since other files move under a live session.
+    let base_files = vec![(
+        rel.to_owned(),
+        entries.get(rel).map(|e| e.hash).unwrap_or_default(),
+    )];
     entries.insert(rel.to_owned(), entry.clone());
-    let want = tree_hash(&entries);
     let mem = HashMap::from([(rel.to_owned(), data.to_vec())]);
     let delta = Delta {
         put: vec![entry.clone()],
@@ -369,9 +372,11 @@ pub async fn write_through(
         &a.device,
         a.project,
         &a.lease,
-        base,
+        TreeHash::default(),
         &delta,
-        want,
+        TreeHash::default(),
+        &a.rules,
+        base_files,
         &Source::Mem(&mem),
     )
     .await;
@@ -400,11 +405,10 @@ pub async fn delete_through(hub: &Arc<Hub>, st: &WatchState, rel: &str) -> Resul
     let a = &st.args;
     let _io = st.io.lock().await;
     let mut entries = st.entries();
-    let base = tree_hash(&entries);
-    if entries.remove(rel).is_none() {
+    let Some(seen) = entries.remove(rel) else {
         return Ok(());
-    }
-    let want = tree_hash(&entries);
+    };
+    let base_files = vec![(rel.to_owned(), seen.hash)];
     let delta = Delta {
         put: Vec::new(),
         delete: vec![rel.to_owned()],
@@ -415,9 +419,11 @@ pub async fn delete_through(hub: &Arc<Hub>, st: &WatchState, rel: &str) -> Resul
         &a.device,
         a.project,
         &a.lease,
-        base,
+        TreeHash::default(),
         &delta,
-        want,
+        TreeHash::default(),
+        &a.rules,
+        base_files,
         &Source::Mem(&none),
     )
     .await

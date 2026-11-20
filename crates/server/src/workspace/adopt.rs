@@ -240,3 +240,31 @@ pub fn baseline(session: String, folder: PathBuf) {
         }
     });
 }
+
+/// The folder an `agent.start` to `runner` names (`AgentStart::folder`): the session's place in the
+/// workspace when `runner` is the built-in one, else `None` and the runner picks its own.
+pub async fn core_folder(
+    pool: &SqlitePool,
+    session: &str,
+    runner: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    if !built_in(pool).await?.iter().any(|r| r == runner) {
+        return Ok(None);
+    }
+    let row: Option<(i64, Option<i64>)> =
+        sqlx::query_as("SELECT user_id, project_id FROM core_agent_sessions WHERE id = ?")
+            .bind(session)
+            .fetch_optional(pool)
+            .await?;
+    let Some((user, project)) = row else {
+        return Ok(None);
+    };
+    let key = SessionKey {
+        id: session,
+        user: UserId(user),
+        project,
+    };
+    Ok(workspace()
+        .session_dir(&key)
+        .map(|p| p.to_string_lossy().into_owned()))
+}

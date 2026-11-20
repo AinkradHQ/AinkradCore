@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use ainkrad_proto::v2::{
     Body, CHUNK_BYTES, Command, Entry, EntryKind, ErrorCode, Hash, MAX_FILE_BYTES, Output, Reply,
-    STREAM_WINDOW, StreamError, SyncManifest, SyncPull, SyncPush, TreeHash,
+    SYNC_FRAME_BYTES, SYNC_STREAM_WINDOW, StreamError, SyncManifest, SyncPull, SyncPush, TreeHash,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -28,9 +28,6 @@ use crate::hub::{Dispatched, Hub};
 
 /// A runner silent this long on a sync stream fails it.
 const STEP: Duration = Duration::from_secs(60);
-/// What the Core grants a pull up front: a chunk frame (1 MiB, 1.4 MiB as base64 text) is larger
-/// than the 64 KiB `STREAM_WINDOW` a stream starts with.
-const PULL_WINDOW: u64 = 4 * CHUNK_BYTES;
 /// The most entries one manifest may hold.
 const MAX_ENTRIES: usize = 1_000_000;
 
@@ -171,6 +168,7 @@ pub async fn manifest(
         project,
         lease: lease.to_owned(),
         rules_hash: Hash(rules.hash()),
+        rules: rules.to_wire(),
     });
     let Reply::SyncManifest(r) = last(hub.dispatch_sync(device, cmd)?).await? else {
         return Err(wrong());
@@ -207,6 +205,8 @@ pub async fn push(
     base: TreeHash,
     delta: &Delta,
     want: TreeHash,
+    rules: &Rules,
+    base_files: Vec<(String, Hash)>,
     src: &Source<'_>,
 ) -> Result<TreeHash, SyncError> {
     for e in &delta.put {
@@ -219,32 +219,37 @@ pub async fn push(
         put: delta.put.clone(),
         delete: delta.delete.clone(),
         want_tree: want,
+        rules: rules.to_wire(),
+        base_files,
     });
     let mut d = hub.dispatch_sync(device, cmd)?;
-    let mut window = STREAM_WINDOW;
+    let mut window = SYNC_STREAM_WINDOW;
     let mut reader = ChunkReader { src, open: None };
     for e in delta.put.iter().filter(|e| e.kind == EntryKind::File) {
         for i in 0..e.chunks.len() {
             let bytes = reader.chunk(e, i)?;
-            let n = bytes.len() as u64;
-            while window < n {
-                match next(&mut d).await? {
-                    Body::Credit(c) => window = window.saturating_add(c.bytes),
-                    Body::Error(e) => return Err(e.into()),
-                    Body::Result(_) => {
-                        return Err(SyncError::new(
-                            "runner_failed",
-                            "answered before the chunks",
-                        ));
+            // A chunk goes as frames of at most SYNC_FRAME_BYTES, never spanning two chunks.
+            for part in bytes.chunks(SYNC_FRAME_BYTES) {
+                let n = part.len() as u64;
+                while window < n {
+                    match next(&mut d).await? {
+                        Body::Credit(c) => window = window.saturating_add(c.bytes),
+                        Body::Error(e) => return Err(e.into()),
+                        Body::Result(_) => {
+                            return Err(SyncError::new(
+                                "runner_failed",
+                                "answered before the chunks",
+                            ));
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
+                window -= n;
+                let frame = Body::Output(Output {
+                    data: STANDARD.encode(part),
+                });
+                d.send(frame)?;
             }
-            window -= n;
-            let frame = Body::Output(Output {
-                data: STANDARD.encode(&bytes),
-            });
-            d.send(frame)?;
         }
     }
     match last(d).await? {
@@ -285,7 +290,6 @@ pub async fn pull(
         paths: wanted.iter().map(|e| (e.path.clone(), e.hash)).collect(),
     });
     let mut d = hub.dispatch_sync(device, cmd)?;
-    d.grant_read(PULL_WINDOW);
     let mut kept = 0u64;
     for e in wanted {
         let mut staged = match route(e) {
@@ -295,22 +299,30 @@ pub async fn pull(
         let mut whole = blake3::Hasher::new();
         let mut got = 0u64;
         for i in 0..e.chunks.len() {
-            let data = match next(&mut d).await? {
-                Body::Output(o) => o.data,
-                Body::Error(e) => return Err(e.into()),
-                _ => {
-                    return Err(SyncError::new(
-                        "runner_failed",
-                        "a pull ended before its chunks",
-                    ));
+            // One hashing chunk arrives as frames that never span two chunks.
+            let want = (e.size - i as u64 * CHUNK_BYTES).min(CHUNK_BYTES) as usize;
+            let mut bytes = Vec::with_capacity(want);
+            while bytes.len() < want {
+                let data = match next(&mut d).await? {
+                    Body::Output(o) => o.data,
+                    Body::Error(e) => return Err(e.into()),
+                    _ => {
+                        return Err(SyncError::new(
+                            "runner_failed",
+                            "a pull ended before its chunks",
+                        ));
+                    }
+                };
+                let part = STANDARD
+                    .decode(&data)
+                    .map_err(|_| SyncError::new("hash_mismatch", "a chunk that is not base64"))?;
+                if part.len() > SYNC_FRAME_BYTES || bytes.len() + part.len() > want {
+                    return Err(SyncError::new("hash_mismatch", "a frame over its chunk"));
                 }
-            };
-            let bytes = STANDARD
-                .decode(&data)
-                .map_err(|_| SyncError::new("hash_mismatch", "a chunk that is not base64"))?;
-            d.grant_read(bytes.len() as u64);
-            let ok = bytes.len() as u64 <= CHUNK_BYTES
-                && Hash(*blake3::hash(&bytes).as_bytes()) == e.chunks[i];
+                d.grant_read(part.len() as u64);
+                bytes.extend_from_slice(&part);
+            }
+            let ok = Hash(*blake3::hash(&bytes).as_bytes()) == e.chunks[i];
             if !ok {
                 return Err(SyncError::new(
                     "hash_mismatch",

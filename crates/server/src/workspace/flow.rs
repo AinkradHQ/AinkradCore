@@ -71,6 +71,8 @@ pub async fn sync_in(
             base,
             &delta,
             want,
+            rules,
+            Vec::new(),
             &Source::Tree(tree),
         )
         .await;

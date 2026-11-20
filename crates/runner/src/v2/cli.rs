@@ -413,7 +413,12 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         || args.chunks(2).any(|f| {
             !matches!(
                 f[0],
-                "--state" | "--ca" | "--terminal-hide" | "--terminal-user"
+                "--state"
+                    | "--ca"
+                    | "--terminal-hide"
+                    | "--terminal-user"
+                    // E15-4: the built-in runner over the canonical workspace (taken, not used yet).
+                    | ainkrad_proto::v2::RUNNER_FLAG_WORKSPACE_ROOT
             )
         })
         || args.iter().filter(|a| **a == "--terminal-user").count() > 1

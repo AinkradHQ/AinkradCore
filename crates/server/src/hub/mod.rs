@@ -825,7 +825,14 @@ impl Hub {
             slack: 0,
             next_sent: 0,
             received: 0,
-            credit: STREAM_WINDOW,
+            credit: if matches!(
+                command.op(),
+                OP_SYNC_MANIFEST | OP_SYNC_PUSH | OP_SYNC_PULL | OP_SYNC_WATCH | OP_SYNC_DROP
+            ) {
+                ainkrad_proto::v2::SYNC_STREAM_WINDOW
+            } else {
+                STREAM_WINDOW
+            },
             terminal,
             port: matches!(command.op(), ainkrad_proto::v2::OP_PORT_OPEN | OP_SYNC_PUSH),
             watch: command.op() == OP_SYNC_WATCH,

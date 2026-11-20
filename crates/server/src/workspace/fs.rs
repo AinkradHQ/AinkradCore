@@ -19,15 +19,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::revert::head_blob;
 pub use super::revert::{Plan, Reversal, reverse};
-use ainkrad_proto::v2::{FolderEntry, MAX_FOLDER_ENTRIES, RevertEdit, RevertResult};
+use ainkrad_proto::v2::{
+    FolderEntry, MAX_FOLDER_ENTRIES, RevertEdit, RevertResult, wire_path_problem,
+};
 use ainkrad_sys::{Kind, Stat};
 
-use super::rules::has_git;
-
 /// Longest path, component and depth a wire path may have (spec 4.3).
-pub const MAX_PATH: usize = 4096;
-pub const MAX_COMPONENT: usize = 255;
-pub const MAX_DEPTH: usize = 64;
+pub use ainkrad_proto::v2::{
+    WIRE_COMPONENT_MAX as MAX_COMPONENT, WIRE_DEPTH_MAX as MAX_DEPTH, WIRE_PATH_MAX as MAX_PATH,
+};
 /// The prefix of a temp file; manifests and listings ignore these.
 pub const TMP_PREFIX: &str = ".ainkrad-tmp-";
 
@@ -37,39 +37,16 @@ const READ_CAP: usize = 20_000;
 /// The biggest file the Core reads whole for a revert.
 const MAX_TEXT: u64 = 16 * 1024 * 1024;
 
-/// Checks a wire path (spec 4.3): relative UTF-8 with `/`, no `..`, `.`, empty part, NUL, `\` or
-/// control character, parts of at most 255 bytes, depth at most 64, at most 4096 bytes, and no
-/// `.git` part in any case. `Err` is the reason, for a `bad_path` answer.
+/// Checks a wire path (spec 4.3): the protocol's own check (`wire_path_problem`, shared with the
+/// runner) plus any control character. `Err` is the reason, for a `bad_path` answer.
 pub fn check_path(rel: &str) -> Result<(), &'static str> {
-    if rel.is_empty() {
-        return Err("empty path");
+    if let Some(why) = wire_path_problem(rel) {
+        return Err(why);
     }
-    if rel.len() > MAX_PATH {
-        return Err("path too long");
+    match rel.chars().any(char::is_control) {
+        true => Err("the path holds a control character"),
+        false => Ok(()),
     }
-    if rel.starts_with('/') {
-        return Err("absolute path");
-    }
-    if rel.chars().any(|c| c.is_control() || c == '\\') {
-        return Err("control character or backslash");
-    }
-    let mut depth = 0;
-    for p in rel.split('/') {
-        depth += 1;
-        match p {
-            "" => return Err("empty component"),
-            "." | ".." => return Err("`.` or `..` component"),
-            p if p.len() > MAX_COMPONENT => return Err("component too long"),
-            _ => {}
-        }
-    }
-    if depth > MAX_DEPTH {
-        return Err("path too deep");
-    }
-    if has_git(rel) {
-        return Err("inside .git");
-    }
-    Ok(())
 }
 
 fn refuse(why: &'static str) -> io::Error {

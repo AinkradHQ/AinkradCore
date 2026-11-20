@@ -14,6 +14,7 @@
 //! outputs = ["target/release/app"]            # build output that comes back
 //! ```
 
+use ainkrad_proto::v2::SyncRules;
 use serde::Deserialize;
 
 /// Directories that are build output, by name (any depth).
@@ -78,23 +79,29 @@ impl Rules {
         Self::new(parsed.sync)
     }
 
-    /// A hash of the effective rules, so both ends can tell their manifests were cut the same way.
-    pub fn hash(&self) -> [u8; 32] {
-        let mut h = blake3::Hasher::new();
-        for (tag, list) in [
-            ("i", &self.cfg.include),
-            ("e", &self.cfg.exclude),
-            ("o", &self.cfg.outputs),
-        ] {
-            let mut sorted: Vec<&String> = list.iter().collect();
-            sorted.sort();
-            for g in sorted {
-                h.update(tag.as_bytes());
-                h.update(&(g.len() as u64).to_le_bytes());
-                h.update(g.as_bytes());
-            }
+    /// The effective rules as they go on the wire (`SyncRules`, spec 4.4): the built-in excludes
+    /// (build directories as `name/`, the secret-shaped names) merged with the project's own.
+    /// `.git/` is left out of the list: both ends exclude it whatever the rules say.
+    pub fn to_wire(&self) -> SyncRules {
+        let built = BUILD_DIRS
+            .iter()
+            .map(|d| format!("{d}/"))
+            .chain(SECRET_NAMES.iter().map(|s| (*s).to_owned()));
+        SyncRules {
+            include: self.cfg.include.clone(),
+            exclude: built.chain(self.cfg.exclude.iter().cloned()).collect(),
+            outputs: self.cfg.outputs.clone(),
         }
-        *h.finalize().as_bytes()
+    }
+
+    /// The hash of the wire rules (`SyncManifest::rules_hash`), the same for the same rules in any order.
+    pub fn hash(&self) -> [u8; 32] {
+        let mut w = self.to_wire();
+        for list in [&mut w.include, &mut w.exclude, &mut w.outputs] {
+            list.sort();
+        }
+        let json = serde_json::to_vec(&w).expect("rules serialize");
+        *blake3::hash(&json).as_bytes()
     }
 
     fn listed(&self, rel: &str) -> bool {
@@ -279,5 +286,22 @@ mod tests {
             })
             .hash()
         );
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    #[test]
+    fn the_wire_rules_carry_the_built_ins_and_the_projects_own() {
+        let w = Rules::from_toml("[sync]\ninclude=[\".env.example\"]\nexclude=[\"big/**\"]\noutputs=[\"target/release/app\"]\n").to_wire();
+        assert!(
+            w.exclude.contains(&"target/".to_owned()) && w.exclude.contains(&".env.*".to_owned())
+        );
+        assert!(w.exclude.contains(&"big/**".to_owned()));
+        assert_eq!(w.include, [".env.example"]);
+        assert_eq!(w.outputs, ["target/release/app"]);
+        assert_eq!(Rules::default().hash(), Rules::default().hash());
     }
 }

@@ -83,7 +83,14 @@ pub struct PtyOpen {
     /// The Core user whose persistent sandbox home the shell gets (`[a-z0-9_-]{1,32}`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_user: Option<String>,
+    /// Why the terminal is opened (E15-4): `login` for the Accounts guided sign-in, the one
+    /// terminal a remote runner still opens ([`PTY_PURPOSE_LOGIN`]). Absent: a plain terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
 }
+
+/// [`PtyOpen::purpose`] of the guided sign-in terminal.
+pub const PTY_PURPOSE_LOGIN: &str = "login";
 
 /// The parsed [`PtyOpen::sandbox`]. Schema compatibility: both fields are optional and skipped
 /// when absent, so an old Core's `pty.open` still parses on a new runner (legacy behaviour) and a

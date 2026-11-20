@@ -13,6 +13,7 @@
 //! | `log_format` | `AINKRAD_LOG_FORMAT` | `text` or `json` (`serve --log-format`) |
 //! | `backup_recipient` | `AINKRAD_BACKUP_RECIPIENT` | the `age1…` public key backups are encrypted to |
 //! | `backup_keep_local` | `AINKRAD_BACKUP_KEEP_LOCAL` | encrypted snapshots kept in `<home>/backups` |
+//! | `workspace_root` | `AINKRAD_WORKSPACE_ROOT` | the canonical workspace (E15 §4.1), default `/var/lib/ainkrad-ws` (`workspace.root`) |
 //! | `modules` | `AINKRAD_MODULES` | module ids to mount (`serve --enable-module`); none by default. An id the binary does not carry stops the start |
 //!
 //! The bucket's endpoint and credentials are never in this file: they come only from the
@@ -42,6 +43,13 @@ pub struct Config {
     /// Module ids, the same path as `serve --enable-module` (checked against the binary at start).
     #[serde(default)]
     pub modules: Vec<String>,
+    /// The canonical workspace's root (E15 §4.1, the spec's `workspace.root`).
+    #[serde(default = "default_workspace_root")]
+    pub workspace_root: PathBuf,
+}
+
+fn default_workspace_root() -> PathBuf {
+    crate::workspace::paths::DEFAULT_ROOT.into()
 }
 
 fn default_listen() -> String {
@@ -126,6 +134,12 @@ impl Config {
             c.backup_keep_local = v
                 .parse()
                 .map_err(|_| format!("AINKRAD_BACKUP_KEEP_LOCAL={v:?} is not a count"))?;
+        }
+        if let Some(v) = env("AINKRAD_WORKSPACE_ROOT") {
+            c.workspace_root = v.into();
+        }
+        if !c.workspace_root.is_absolute() {
+            return Err("workspace_root must be an absolute path".into());
         }
         if let Some(v) = env("AINKRAD_MODULES") {
             c.modules = v.split(',').map(|m| m.trim().to_owned()).collect();
@@ -255,6 +269,14 @@ mod tests {
             Config::parse(&text, |n| (n == "AINKRAD_LOG_FORMAT").then(|| "xml".into())).is_err()
         );
         assert!(Config::parse("home = \"/x\"\nlisten_typo = 1\n", |_| None).is_err());
+        assert_eq!(plain.workspace_root, Path::new("/var/lib/ainkrad-ws"));
+        let ws = |v: &'static str| {
+            Config::parse(&text, move |n| {
+                (n == "AINKRAD_WORKSPACE_ROOT").then(|| v.into())
+            })
+        };
+        assert_eq!(ws("/srv/ws").unwrap().workspace_root, Path::new("/srv/ws"));
+        assert!(ws("rel/ws").is_err(), "a relative root is refused");
     }
 
     #[test]

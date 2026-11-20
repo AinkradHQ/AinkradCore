@@ -381,6 +381,7 @@ impl HarnessExecutor {
             instructions: files.instructions.clone(),
             mcp_config: files.mcp_config.clone(),
             backend: self.backend.clone(),
+            job_shims: None,
         };
         let reports = reports.clone();
         let _bridge = bridge; // held until the run ends
