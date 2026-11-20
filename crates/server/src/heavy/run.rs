@@ -14,7 +14,8 @@ use std::time::Duration;
 
 use ainkrad_core::ids::UserId;
 use ainkrad_proto::v2::{
-    Body, Close, Command, Control, JobNeed, JobRun, Os, Reply, RunSecret, SignalReq,
+    Body, Close, Command, Control, ErrorCode, JobNeed, JobRun, Os, Reply, RunSecret, SignalReq,
+    StreamError,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -233,14 +234,36 @@ struct End {
     signal: Option<String>,
     conflicts: u32,
     ms: u64,
-    /// The command ran: the shim is told its exit. Otherwise its stream just ends.
+    /// The shim is told an exit (the command's, or none for a refusal: it exits non-zero and
+    /// runs nothing here). Otherwise its stream just ends and it runs the command itself.
     ran: bool,
 }
 
-fn failed(why: &str) -> End {
+/// A job that will not run: the reason goes to the terminal (`ainkrad: …`) and the shim exits
+/// non-zero instead of quietly running the command on the Core.
+fn failed(live: &Live, why: &str) -> End {
     tracing::warn!(why, "a heavy job did not run");
+    let msg = format!("ainkrad: {why}\n");
+    live.push(json!({"t": "out", "fd": 2, "b64": B64.encode(msg)}));
     End {
         state: "failed",
+        ran: true,
+        ..End::default()
+    }
+}
+
+/// How a job ends when it gets no exit: `None` is `lost` (the runner went away, or could not
+/// take it now: the shim may run it here); `Some(why)` is a refusal, shown and failed.
+fn refusal(e: Option<&StreamError>) -> Option<String> {
+    match e.map(|e| (e.code, e)) {
+        None | Some((ErrorCode::Lost | ErrorCode::Offline | ErrorCode::Busy, _)) => None,
+        Some((_, e)) => Some(format!("the runner refused the job: {}", e.message)),
+    }
+}
+
+fn lost() -> End {
+    End {
+        state: "lost",
         ..End::default()
     }
 }
@@ -304,9 +327,7 @@ async fn execute(
     if run.s.session.is_none()
         && let Err(why) = crate::mirrors::ensure_main(app, run.s.project).await
     {
-        let msg = format!("ainkrad: {why}\n");
-        live.push(json!({"t": "out", "fd": 2, "b64": B64.encode(msg)}));
-        return failed(&why);
+        return failed(live, &why);
     }
     let mut sync = None;
     let _copy = match run.on_core {
@@ -317,7 +338,7 @@ async fn execute(
         set_state(app, &run.id, "syncing").await;
         live.push(json!({"t": "state", "state": "syncing"}));
         let Ok(tree) = Tree::open(&run.base) else {
-            return failed("the project folder cannot be opened");
+            return failed(live, "the project folder cannot be opened");
         };
         let jobs_toml = tokio::fs::read_to_string(ws.jobs_toml(run.s.project))
             .await
@@ -344,7 +365,7 @@ async fn execute(
         .await
         {
             Ok(synced) => sync = Some((tree, rules, lease, memo, synced.m0)),
-            Err(e) => return failed(&e.to_string()),
+            Err(e) => return failed(live, &e.to_string()),
         }
     }
     // The runner keeps a warm cache: the prepare step (a lockfile install) runs on its first sync
@@ -372,7 +393,7 @@ async fn execute(
                 name: var.clone(),
                 lease,
             }),
-            Err(e) => return failed(&format!("cannot lease the secret for {var}: {e}")),
+            Err(e) => return failed(live, &format!("cannot lease the secret for {var}: {e}")),
         }
     }
     let job = JobRun {
@@ -406,7 +427,12 @@ async fn execute(
     };
     let mut d = match app.hub.dispatch_job(&run.device, Command::JobRun(job)) {
         Ok(d) => d,
-        Err(e) => return failed(&e.message),
+        Err(e) => {
+            return match refusal(Some(&e)) {
+                Some(why) => failed(live, &why),
+                None => lost(),
+            };
+        }
     };
     set_running(app, &run.id).await;
     live.push(json!({"t": "state", "state": "running"}));
@@ -426,13 +452,16 @@ async fn execute(
                 Some(Body::Result(Reply::JobRun(done))) => break done,
                 // The runner went away, or refused: the stream ends with no exit, so the shim runs it here.
                 Some(Body::Error(e)) => {
-                    // Without this line a refused job.run is undiagnosable: the runner logs nothing and the job only says `lost`.
+                    // Without this line a refused job.run is undiagnosable: the runner logs nothing.
                     tracing::warn!(job = %run.id, device = %run.device, code = ?e.code, why = %e.message, "a heavy job was refused by its runner");
-                    return End { state: "lost", ..End::default() };
+                    return match refusal(Some(&e)) {
+                        Some(why) => failed(live, &why),
+                        None => lost(),
+                    };
                 }
                 None => {
                     tracing::warn!(job = %run.id, device = %run.device, "a heavy job's stream ended without an exit (runner gone)");
-                    return End { state: "lost", ..End::default() };
+                    return lost();
                 }
                 Some(_) => {}
             },
@@ -502,4 +531,67 @@ async fn execute(
         cache::remember(app, &run.device, run.s.project, &done.tree, prepared).await;
     }
     end
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    fn live() -> Live {
+        let (tx, _) = broadcast::channel(8);
+        let (ctl, _) = mpsc::unbounded_channel();
+        Live {
+            frames: Mutex::new((Vec::new(), 0)),
+            tx,
+            ctl,
+            done: AtomicBool::new(false),
+        }
+    }
+
+    /// A runner that refuses (a bad path, a failed toolchain install, any validation) fails the
+    /// job with its reason; the shim used to rerun it on the Core in silence (e2e 2026-11-20).
+    #[test]
+    fn a_refusal_fails_with_the_runners_reason() {
+        for code in [
+            ErrorCode::PathRefused,
+            ErrorCode::InvalidArgs,
+            ErrorCode::Internal,
+        ] {
+            let e = StreamError::new(code, "cwd_rel leaves the project");
+            let why = refusal(Some(&e)).expect("a refusal fails");
+            assert!(why.contains("cwd_rel leaves the project"), "{why}");
+        }
+    }
+
+    /// Only a runner that went away or could not take the job now is `lost`, which the shim may
+    /// run where it was typed.
+    #[test]
+    fn only_a_lost_or_unavailable_runner_is_lost() {
+        for code in [ErrorCode::Lost, ErrorCode::Offline, ErrorCode::Busy] {
+            assert_eq!(refusal(Some(&StreamError::new(code, "x"))), None);
+        }
+        assert_eq!(refusal(None), None);
+        assert_eq!(lost().state, "lost");
+        assert!(
+            !lost().ran,
+            "a lost job sends no exit: the shim runs it here"
+        );
+    }
+
+    /// The reason reaches the terminal and the shim is told an exit (no code: it exits non-zero).
+    #[test]
+    fn a_failed_job_shows_why_and_ends_the_shim() {
+        let l = live();
+        let end = failed(&l, "the runner refused the job: no such folder");
+        assert_eq!(end.state, "failed");
+        assert!(end.ran && end.exit.is_none());
+        let frames = l.frames.lock().unwrap().0.clone();
+        let f: Value = serde_json::from_str(frames[0].trim()).unwrap();
+        assert_eq!(f["fd"], 2);
+        let text = String::from_utf8(B64.decode(f["b64"].as_str().unwrap()).unwrap()).unwrap();
+        assert_eq!(
+            text,
+            "ainkrad: the runner refused the job: no such folder\n"
+        );
+    }
 }
