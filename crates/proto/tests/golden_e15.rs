@@ -105,7 +105,7 @@ fn e15_frames_are_pinned() {
                 ],
                 os: Some("macos".to_owned()),
                 arch: Some("aarch64".to_owned()),
-                capacity: Some(capacity()),
+                capacity: Some(Box::new(capacity())),
                 ..Default::default()
             })),
         ),

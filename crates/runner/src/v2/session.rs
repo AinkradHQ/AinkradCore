@@ -324,6 +324,9 @@ impl Session {
                 avg1: l.avg1,
                 cores: l.cores,
             }),
+            capacity: tokio::task::spawn_blocking(super::capacity::capacity)
+                .await
+                .ok(),
             ..RunnerHello::default()
         };
         let (welcome, core_spki) = handshake(&mut sink, &mut source, link, hello).await?;
@@ -407,7 +410,9 @@ impl Session {
                                 }),
                                 isolation: self.agent.as_ref().map(|a| a.isolation()),
                                 report: super::aitools::report(),
-                                capacity: None,
+                                capacity: tokio::task::spawn_blocking(super::capacity::capacity)
+                                    .await
+                                    .ok(),
                             }),
                         ),
                     )
@@ -612,7 +617,8 @@ impl Session {
             | Command::AgentFiles(_)
             | Command::AgentRevert(_)
             | Command::AgentWrite(_)
-            | Command::GatewayTest(_) => self.start_agent(stream, command),
+            | Command::GatewayTest(_)
+            | Command::GatewayCall(_) => self.start_agent(stream, command),
             Command::RunStart(_)
             | Command::RunStop(_)
             | Command::RunStatus(_)
@@ -654,19 +660,14 @@ impl Session {
             Command::RunnerPolicy(_) | Command::ToolsInstall(_) | Command::ToolsStatus(_) => {
                 self.start_control(stream, command)
             }
-            // The sign-in driver's, or (an op of a newer Core) `unsupported_command`.
-            // E15 (protocol 2.1): `job` and `sync` are E15-4's; `gateway-call` is E15-0's and is not
-            // offered by this runner yet.
+            // E15 (protocol 2.1): the `job` and `sync` drivers (E15-4). `gateway-call` is the agent's.
             Command::JobRun(_)
             | Command::SyncManifest(_)
             | Command::SyncPush(_)
             | Command::SyncPull(_)
             | Command::SyncWatch(_)
             | Command::SyncDrop(_) => self.start_e15(stream, command, h),
-            Command::GatewayCall(_) => Some(Body::Error(StreamError::new(
-                ErrorCode::UnsupportedCommand,
-                format!("{} is not offered by this runner", command.op()),
-            ))),
+            // The sign-in driver's, or (an op of a newer Core) `unsupported_command`.
             Command::LoginStart(_)
             | Command::LoginCode(_)
             | Command::LoginCancel(_)
@@ -970,6 +971,7 @@ impl Session {
                 Command::AgentLimit(req) => agent.limit(req).map(Reply::AgentLimit),
                 Command::AgentTools(req) => agent.tools(&req).await.map(Reply::AgentTools),
                 Command::GatewayTest(req) => agent.gateway_test(req).await.map(Reply::GatewayTest),
+                Command::GatewayCall(req) => agent.gateway_call(req).await.map(Reply::GatewayCall),
                 Command::PlanCheck(req) => agent.plan_check(req).await.map(Reply::PlanCheck),
                 Command::HistoryRead(req) => agent.history_read(req).await.map(Reply::HistoryRead),
                 _ => return,

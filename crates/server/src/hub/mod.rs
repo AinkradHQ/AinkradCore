@@ -29,16 +29,17 @@
 //! - **Health** ([`Hub::runners`]): online, degraded (silent past two heartbeats), last seen,
 //!   drivers, capacity and load, for the API (`api::v1::runners`) and the `runner.*` events.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, CAP_GATEWAY, CAP_LOGIN, Close, Command, Control, Credit, DriverInfo, ErrorCode,
+    Body, CAP_GATEWAY, CAP_LOGIN, Capacity, Close, Command, Control, Credit, DriverInfo, ErrorCode,
     FEATURE_PTY_SSH, Frame, Heartbeat, HostLoad, IsolationCaps, OP_AGENT_LIMIT, OP_AGENT_READ,
     OP_GATEWAY_TEST, OP_LOGIN_CANCEL, OP_LOGIN_CODE, OP_LOGIN_START, OP_PTY_ATTACH, OP_PTY_OPEN,
-    RunnerHello, STREAM_WINDOW, StreamError, StreamState,
+    OP_SYNC_DROP, OP_SYNC_MANIFEST, OP_SYNC_PULL, OP_SYNC_PUSH, OP_SYNC_WATCH, RunnerHello,
+    STREAM_WINDOW, StreamError, StreamState, SyncEvent,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -141,8 +142,11 @@ struct Pending {
     credit: u64,
     /// A `pty.open`/`pty.attach` stream: it may carry one `opened` and credited `snapshot`s.
     terminal: bool,
-    /// A `port.open` stream (P6-01): the runner's `credit` for the Core's bytes reaches the dispatcher.
+    /// A `port.open` stream (P6-01) or a `sync.push` (E15-2): the runner's `credit` for the Core's bytes
+    /// reaches the dispatcher.
     port: bool,
+    /// A `sync.watch` stream (E15-2): the runner's `sync_event` controls, metered like output.
+    watch: bool,
     opened: bool,
     /// The driver, when it declares its own `streams` (counted apart).
     own: Option<String>,
@@ -179,21 +183,85 @@ struct Runner {
     load: Option<HostLoad>,
     /// Unix seconds of the latest connection.
     since: i64,
+    /// What it last reported (hello or heartbeat); `None` from a runner before protocol 2.1.
+    capacity: Option<Capacity>,
+    /// (unix seconds, cpu %, free RAM %) of its last [`SAMPLES`] capacity reports.
+    samples: VecDeque<(i64, u8, u8)>,
+}
+
+/// Capacity reports kept per runner.
+const SAMPLES: usize = 8;
+/// The span `sustained_full` looks at, and the fewest reports that make a span.
+const FULL_WINDOW: i64 = 60;
+const FULL_MIN_SAMPLES: usize = 3;
+
+/// `capacity` as a sample at `now`: (cpu %, free RAM %).
+fn sample_of(c: &Capacity) -> (u8, u8) {
+    let free = if c.mem_total_mb == 0 {
+        100
+    } else {
+        u8::try_from((c.mem_free_mb.saturating_mul(100) / c.mem_total_mb).min(100)).unwrap_or(100)
+    };
+    (c.cpu_pct, free)
+}
+
+/// Whether every sample of the last 60 s shows cpu above 85 or free RAM below 15%, over at least
+/// three samples (one spike is not a full host).
+pub(crate) fn sustained_full(samples: &VecDeque<(i64, u8, u8)>, now: i64) -> bool {
+    let recent: Vec<_> = samples
+        .iter()
+        .filter(|s| now - s.0 <= FULL_WINDOW)
+        .collect();
+    recent.len() >= FULL_MIN_SAMPLES && recent.iter().all(|s| s.1 > 85 || s.2 < 15)
+}
+
+/// A runner as hardware sees it (`Hub::hardware`). Sessions and jobs live in the Core's tables;
+/// `hardware::view` adds them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HwState {
+    pub device: String,
+    pub name: String,
+    pub online: bool,
+    pub degraded: bool,
+    pub os: Option<String>,
+    pub arch: Option<String>,
+    pub capacity: Option<Capacity>,
+    pub sustained_full: bool,
 }
 
 /// Whether a driver's command `listed` offers `op`: itself, or (KAN-435) the `gateway` capability
-/// for the two ops that capability brings, `agent.limit` and `gateway.test`, or (KAN-441) the
+/// for the two ops that capability brings, `agent.limit` and `gateway.test`, `gateway-call` for
+/// `gateway.call` (E15-0), or (KAN-441) the
 /// `login` capability for the three `login.*` ops. A runner lists a capability beside the agent
 /// driver's five ops and never its ops by name, so matching the op's name alone would refuse them
 /// against every real runner.
 fn offers(listed: &str, op: &str) -> bool {
     listed == op
         || (listed == CAP_GATEWAY && matches!(op, OP_AGENT_LIMIT | OP_GATEWAY_TEST))
+        || (listed == ainkrad_proto::v2::CAP_GATEWAY_CALL
+            && op == ainkrad_proto::v2::OP_GATEWAY_CALL)
         || (listed == ainkrad_proto::v2::CAP_TOOLS && op == ainkrad_proto::v2::OP_AGENT_TOOLS)
         || (listed == ainkrad_proto::v2::CAP_PLAN_CHECK && op == ainkrad_proto::v2::OP_PLAN_CHECK)
         || (listed == ainkrad_proto::v2::CAP_HISTORY_READ
             && op == ainkrad_proto::v2::OP_HISTORY_READ)
         || (listed == CAP_LOGIN && matches!(op, OP_LOGIN_START | OP_LOGIN_CODE | OP_LOGIN_CANCEL))
+        || (listed == ainkrad_proto::v2::CAP_SYNC
+            && matches!(
+                op,
+                OP_SYNC_MANIFEST | OP_SYNC_PUSH | OP_SYNC_PULL | OP_SYNC_WATCH | OP_SYNC_DROP
+            ))
+}
+
+/// What a `sync_event` costs against its stream's credit: its paths and inline bytes, and a fixed
+/// 256 per entry. The same count grants it back when the dispatcher takes it.
+fn event_cost(e: &SyncEvent) -> u64 {
+    let paths = e.put.iter().map(|p| p.path.len() + 256).sum::<usize>()
+        + e.delete.iter().map(|p| p.len() + 64).sum::<usize>()
+        + e.inline
+            .iter()
+            .map(|i| i.path.len() + i.data.len())
+            .sum::<usize>();
+    paths as u64 + 64
 }
 
 impl Runner {
@@ -329,6 +397,11 @@ pub struct Hub {
     live: tokio::sync::watch::Sender<usize>,
     /// The one [`SshAgentLine`] was handed out.
     ssh_agent_taken: AtomicBool,
+    /// Workspace sync (E15-2): the leases and the live session watches.
+    pub sync: crate::workspace::sync::Registry,
+    /// Devices whose hardware view changed since the last flush (`hardware::changed_loop`).
+    hw_dirty: Mutex<HashSet<String>>,
+    hw_notify: Notify,
 }
 
 /// The only way to send `ssh.agent.load` / `ssh.agent.drop` (Leyline Mac-direct). It has no public
@@ -388,6 +461,9 @@ impl Dispatched {
         if let Some(data) = read {
             self.hub
                 .grant(&self.runner, self.stream, b64_len(data).unwrap_or(0));
+        }
+        if let Body::Control(Control::SyncEvent(e)) = &body {
+            self.hub.grant(&self.runner, self.stream, event_cost(e));
         }
         Some(body)
     }
@@ -456,7 +532,49 @@ impl Hub {
             streams: AtomicU64::new(1),
             live: tokio::sync::watch::Sender::new(0),
             ssh_agent_taken: AtomicBool::new(false),
+            sync: Default::default(),
+            hw_dirty: Mutex::default(),
+            hw_notify: Notify::new(),
         }
+    }
+
+    /// Marks `device`'s hardware view changed.
+    pub(crate) fn hw_touch(&self, device: &str) {
+        self.hw_dirty.lock().unwrap().insert(device.to_owned());
+        self.hw_notify.notify_one();
+    }
+
+    /// Waits for a hardware change.
+    pub async fn hw_changed(&self) {
+        self.hw_notify.notified().await;
+    }
+
+    /// The devices changed since the last call.
+    pub fn hw_take(&self) -> Vec<String> {
+        let mut d: Vec<_> = self.hw_dirty.lock().unwrap().drain().collect();
+        d.sort();
+        d
+    }
+
+    /// Every runner that connected since the Core started, as hardware.
+    pub fn hardware(&self) -> Vec<HwState> {
+        let now = unix_now();
+        let all = self.runners.lock().unwrap();
+        let mut out: Vec<_> = all
+            .iter()
+            .map(|(id, r)| HwState {
+                device: id.clone(),
+                name: r.name.clone(),
+                online: r.conn.is_some(),
+                degraded: r.conn.is_some() && r.degraded,
+                os: r.hello.os.clone(),
+                arch: r.hello.arch.clone(),
+                capacity: r.capacity.clone(),
+                sustained_full: r.conn.is_some() && sustained_full(&r.samples, now),
+            })
+            .collect();
+        out.sort_by(|a, b| a.device.cmp(&b.device));
+        out
     }
 
     /// Held by a runner connection task for its whole life.
@@ -682,6 +800,30 @@ impl Hub {
         self.send_command(runner, command)
     }
 
+    /// The `sync.*` ops (E15-2): a runner is only ever sent a project's own files, under a lease the
+    /// caller holds (`workspace::sync`); no program runs. Only these ops pass.
+    pub(crate) fn dispatch_sync(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+    ) -> Result<Dispatched, StreamError> {
+        let sync = matches!(
+            command,
+            Command::SyncManifest(_)
+                | Command::SyncPush(_)
+                | Command::SyncPull(_)
+                | Command::SyncWatch(_)
+                | Command::SyncDrop(_)
+        );
+        if !sync {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "only sync.* ops use the sync path",
+            ));
+        }
+        self.send_command(runner, command)
+    }
+
     /// Design helper ops (V6-01): the runner runs its own fixed `ainkrad-design` helper, or headless
     /// Chromium, in a sandbox with no network, on data the Core sends; no program or path the caller
     /// chooses runs. So a module may send them without a step-up. Only the design commands pass.
@@ -774,9 +916,17 @@ impl Hub {
             slack: 0,
             next_sent: 0,
             received: 0,
-            credit: STREAM_WINDOW,
+            credit: if matches!(
+                command.op(),
+                OP_SYNC_MANIFEST | OP_SYNC_PUSH | OP_SYNC_PULL | OP_SYNC_WATCH | OP_SYNC_DROP
+            ) {
+                ainkrad_proto::v2::SYNC_STREAM_WINDOW
+            } else {
+                STREAM_WINDOW
+            },
             terminal,
-            port: command.op() == ainkrad_proto::v2::OP_PORT_OPEN,
+            port: matches!(command.op(), ainkrad_proto::v2::OP_PORT_OPEN | OP_SYNC_PUSH),
+            watch: command.op() == OP_SYNC_WATCH,
             opened: false,
             own,
         };
@@ -916,6 +1066,8 @@ impl Hub {
             degraded: false,
             load: None,
             since: now,
+            capacity: None,
+            samples: VecDeque::new(),
         });
         if let Some(old) = r.conn.take() {
             old.replaced.notify_one();
@@ -965,11 +1117,18 @@ impl Hub {
         streams.sort_by_key(|s| s.stream_id);
         r.name = name.to_owned();
         r.load = hello.load;
+        r.capacity = hello.capacity.clone();
+        r.samples.clear();
+        if let Some(c) = &r.capacity {
+            let (cpu, free) = sample_of(c);
+            r.samples.push_back((now, cpu, free));
+        }
         r.hello = hello;
         r.epoch += 1;
         r.last_seen = now;
         r.since = now;
         r.degraded = false;
+        self.hw_touch(device);
         r.conn = Some(Conn {
             generation,
             out,
@@ -990,6 +1149,7 @@ impl Hub {
         }
         r.conn = None;
         r.last_seen = now;
+        self.hw_touch(device);
         if revoked {
             r.lose_all();
         }
@@ -1018,7 +1178,11 @@ impl Hub {
         };
         r.last_seen = r.last_seen.max(now);
         let turned = degraded && !r.degraded;
+        let flipped = degraded != r.degraded;
         r.degraded = degraded;
+        if flipped {
+            self.hw_touch(device);
+        }
         turned
     }
 
@@ -1028,6 +1192,15 @@ impl Hub {
         let Some(r) = all.get_mut(device) else { return };
         if let Some(load) = heartbeat.load {
             r.load = Some(load);
+        }
+        if let Some(c) = heartbeat.capacity {
+            let (cpu, free) = sample_of(&c);
+            r.samples.push_back((unix_now(), cpu, free));
+            while r.samples.len() > SAMPLES {
+                r.samples.pop_front();
+            }
+            r.capacity = Some(c);
+            self.hw_touch(device);
         }
         // The runner's latest word on what it offers replaces its hello's: a tier that went away
         // is gone from the next placement (E8a-09).
@@ -1117,6 +1290,11 @@ impl Hub {
                     }
                     None => Body::Error(err(ErrorCode::BadFrame, "a snapshot that is not base64")),
                 }
+            }
+            Body::Control(Control::SyncEvent(e)) if p.watch && event_cost(&e) <= p.credit => {
+                p.credit -= event_cost(&e);
+                let _ = p.to.send(Body::Control(Control::SyncEvent(e)));
+                return;
             }
             Body::Control(_) => {
                 tracing::warn!(device, stream, "a control frame this stream does not take");
@@ -1230,5 +1408,90 @@ mod report_tests {
                 .unwrap()
                 .contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
         );
+    }
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
+}
+
+#[cfg(test)]
+mod hardware_tests {
+    use super::*;
+
+    fn q(v: &[(i64, u8, u8)]) -> VecDeque<(i64, u8, u8)> {
+        v.iter().copied().collect()
+    }
+
+    #[test]
+    fn sustained_full_needs_every_recent_sample_full() {
+        let full = q(&[(100, 90, 50), (115, 95, 50), (130, 40, 10), (145, 99, 99)]);
+        assert!(sustained_full(&full, 150));
+        // One calm sample inside the minute breaks it.
+        let calm = q(&[(100, 90, 50), (115, 30, 50), (130, 90, 50), (145, 99, 99)]);
+        assert!(!sustained_full(&calm, 150));
+        // Samples older than a minute are ignored.
+        let old = q(&[(10, 5, 90), (100, 90, 50), (115, 95, 50), (130, 40, 10)]);
+        assert!(sustained_full(&old, 150));
+        // Too few samples: one spike is not a full host.
+        assert!(!sustained_full(&q(&[(145, 99, 5)]), 150));
+        assert!(!sustained_full(&q(&[]), 150));
+        // 85 and 15 are the edges: not above, not below.
+        assert!(!sustained_full(
+            &q(&[(100, 85, 15), (115, 85, 15), (130, 85, 15)]),
+            150
+        ));
+    }
+
+    #[test]
+    fn a_sample_is_cpu_and_free_ram_percent() {
+        let c = Capacity {
+            cpu_pct: 70,
+            mem_total_mb: 1000,
+            mem_free_mb: 125,
+            ..Capacity::default()
+        };
+        assert_eq!(sample_of(&c), (70, 12));
+        assert_eq!(sample_of(&Capacity::default()), (0, 100));
+    }
+
+    #[test]
+    fn hardware_lists_a_runner_with_its_capacity_and_marks_it_changed() {
+        let hub = Hub::new(HubConfig::default());
+        let hello = RunnerHello {
+            capacity: Some(Capacity {
+                cores: 8,
+                cpu_pct: 10,
+                job_slots: 2,
+                ..Capacity::default()
+            }),
+            os: Some("linux".into()),
+            ..RunnerHello::default()
+        };
+        let _rx = hub.fake_runner("d_a", hello);
+        let hw = hub.hardware();
+        assert_eq!(hw.len(), 1);
+        assert!(hw[0].online && !hw[0].sustained_full);
+        assert_eq!(hw[0].capacity.as_ref().map(|c| c.cores), Some(8));
+        assert_eq!(
+            hub.hw_take(),
+            vec!["d_a".to_owned()],
+            "a connection is a change"
+        );
+        hub.load(
+            "d_a",
+            Heartbeat {
+                capacity: Some(Capacity {
+                    cores: 8,
+                    cpu_pct: 50,
+                    ..Capacity::default()
+                }),
+                ..Heartbeat::default()
+            },
+        );
+        assert_eq!(hub.hw_take(), vec!["d_a".to_owned()]);
+        assert!(hub.hw_take().is_empty());
     }
 }

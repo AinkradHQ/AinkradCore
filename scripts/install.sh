@@ -38,7 +38,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 CORE_HOME=/var/lib/ainkrad/core ETC=/etc/ainkrad BIN=/usr/local/bin UNITS=/etc/systemd/system
 STAGING_DIR=https://acme-staging-v02.api.letsencrypt.org/directory
-NO_LOCAL_RUNNER=0 RUNNER_STATE=/var/lib/ainkrad-runner/core
+NO_LOCAL_RUNNER=0 RUNNER_STATE=/var/lib/ainkrad-runner/core WS_ROOT=/var/lib/ainkrad-ws
 DEMO='' HARDEN_REQ='' HARDEN_WARN='' HARDEN_STATE='' FW_CHOICE=yes MODE=install GUIDED=0 CONFIG='' DRY=0 PURGE=0 CHECK_BACKUP=no CLI_BINARY='' STAGE=''
 
 # say: a line that stays on the screen (in the guided install above the live progress line, so the two live lines stay at the bottom)
@@ -422,7 +422,7 @@ runner_online() { # the Core has seen this runner connect (its device was used);
 }
 # N8: the Core's own runner, on by default: terminals and agents, as the unprivileged ainkrad-runner user in its sandbox.
 local_runner() {
-  local a=(--binary "$STAGE/ainkrad-runner" --ptyhost "$STAGE/ainkrad-ptyhost" --pty --agents)
+  local a=(--binary "$STAGE/ainkrad-runner" --ptyhost "$STAGE/ainkrad-ptyhost" --pty --agents --workspace-root "$WS_ROOT")
   if [ "$A_ACME_ENV" = staging ]; then
     warn "the Core serves a staging certificate that a runner does not trust, so the built-in runner is not set up. Re-run with a production certificate."
     return 0
@@ -433,7 +433,7 @@ local_runner() {
     bash "$ROOT/deploy/install-linux.sh" "${a[@]}" --dry-run; return 0
   fi
   if ! ui_run "Installing Node $NODE_VERSION and Claude Code $CLAUDE_VERSION for agents" install_agent_tools; then
-    warn "the agent tools did not install (see above); the runner is set up with terminals only"; a=(--binary "$STAGE/ainkrad-runner" --ptyhost "$STAGE/ainkrad-ptyhost" --pty)
+    warn "the agent tools did not install (see above); the runner is set up with terminals only"; a=(--binary "$STAGE/ainkrad-runner" --ptyhost "$STAGE/ainkrad-ptyhost" --pty --workspace-root "$WS_ROOT")
   fi
   ui_run "Installing the runner service (unprivileged user, sandboxed)" bash "$ROOT/deploy/install-linux.sh" "${a[@]}" || { warn "the runner did not install; see the log"; return 0; }
   if ! ui_run "Enrolling this Core's own runner (no code needed)" enrol_local_runner; then

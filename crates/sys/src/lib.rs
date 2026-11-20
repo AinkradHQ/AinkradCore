@@ -8,6 +8,9 @@
 
 use std::io;
 
+mod beneath;
+pub use beneath::*;
+
 /// Every `unsafe` block in this crate, by function: what it calls and why it holds.
 pub const INVENTORY: &[(&str, &str)] = &[
     ("setsid", "libc::setsid: no arguments, no memory"),
@@ -63,6 +66,42 @@ pub const INVENTORY: &[(&str, &str)] = &[
     (
         "die_with_parent",
         "pre_exec closure: prctl(PR_SET_PDEATHSIG) and getppid, integer arguments only",
+    ),
+    (
+        "openat_nofollow",
+        "libc::openat on a borrowed descriptor and a NUL-terminated single component, O_NOFOLLOW forced",
+    ),
+    (
+        "openat2_beneath",
+        "raw openat2 syscall with RESOLVE_BENEATH|NO_SYMLINKS|NO_MAGICLINKS and an open_how we own",
+    ),
+    (
+        "mkdirat",
+        "libc::mkdirat on a borrowed descriptor and one component",
+    ),
+    (
+        "renameat",
+        "libc::renameat on two borrowed descriptors and two single components",
+    ),
+    (
+        "unlinkat",
+        "libc::unlinkat on a borrowed descriptor and one component",
+    ),
+    (
+        "symlinkat",
+        "libc::symlinkat with two NUL-terminated strings and a borrowed descriptor",
+    ),
+    (
+        "readlinkat",
+        "libc::readlinkat into a buffer we own, on a borrowed descriptor",
+    ),
+    (
+        "fstatat",
+        "libc::fstatat(AT_SYMLINK_NOFOLLOW) into a zeroed stat we own",
+    ),
+    (
+        "list_dir",
+        "fdopendir on a duplicated descriptor we own, readdir/closedir on that stream only",
     ),
 ];
 
@@ -573,7 +612,7 @@ mod tests {
     /// The unsafe inventory (E2-09.1's rule from the start): one entry per block.
     #[test]
     fn every_unsafe_block_is_in_the_inventory() {
-        let src = include_str!("lib.rs");
+        let src = concat!(include_str!("lib.rs"), include_str!("beneath.rs"));
         let blocks = src.matches(concat!("unsafe", " {")).count();
         let any = src.matches(concat!("unsafe", "{")).count()
             + src.matches(concat!("unsafe", " fn")).count()
