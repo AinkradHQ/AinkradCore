@@ -987,6 +987,20 @@ pub async fn wake_with(
 }
 
 /// Marks a just-created client session as a live conversation and gives it its title.
+/// Why the Core placed session `id` where it did (E15 `place_reason`).
+pub async fn set_place_reason(
+    pool: &SqlitePool,
+    id: &str,
+    reason: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE core_agent_sessions SET place_reason = ? WHERE id = ?")
+        .bind(reason)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map(drop)
+}
+
 pub async fn configure(
     pool: &SqlitePool,
     id: &str,

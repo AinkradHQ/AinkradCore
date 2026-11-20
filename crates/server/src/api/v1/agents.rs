@@ -187,6 +187,13 @@ pub struct AgentSession {
     /// Whether its effort can be set (`effort` on `createAgentSession` or `setAgentSessionMode`):
     /// its harness takes one (Claude, Codex) and its runner relays it.
     pub can_set_effort: Option<bool>,
+    /// Why the Core placed it where it runs (E15): `core`, `overflow` (the Core was full) or
+    /// `pinned` (a runner-bound login); absent for a session placed before E15.
+    #[schema(required = false)]
+    pub place_reason: Option<String>,
+    /// The name of the machine it runs on (`runner` is its id), for "Ran on X".
+    #[schema(required = false)]
+    pub placed_on: Option<String>,
 }
 
 impl From<Session> for AgentSession {
@@ -250,6 +257,8 @@ impl From<Session> for AgentSession {
             failed_over_to: None,
             failover_class: None,
             skip_pools: None,
+            place_reason: None,
+            placed_on: None,
         }
     }
 }
@@ -407,6 +416,17 @@ pub async fn create(
             ));
         }
     }
+    let draws_account = b.chain.is_some() || b.agent.is_some();
+    let placed = sched::place_new(
+        &app,
+        b.runner.as_deref(),
+        &b.harness,
+        b.policy.as_ref(),
+        &secrets,
+        draws_account,
+    )
+    .await?;
+    let runner = placed.device.clone();
     let mut policy = b.policy.unwrap_or_else(|| {
         serde_json::to_value(ainkrad_proto::runner::Policy::default()).expect("a policy serializes")
     });
@@ -435,7 +455,6 @@ pub async fn create(
     }
     // An account session (an `acct.*` secret, or a chain/agent the allocator draws one from) runs
     // sandboxed: the Core adds the floor instead of refusing a client that left it out.
-    let draws_account = b.chain.is_some() || b.agent.is_some();
     let policy =
         agents::with_account_floor(policy, draws_account || agents::holds_account(&secrets));
     let admin = me.device.scopes.iter().any(|scope| scope == "admin");
@@ -500,6 +519,7 @@ pub async fn create(
         }
         None => s,
     };
+    store::set_place_reason(&app.pool, &s.id, &placed.reason.as_str()).await?;
     // A live conversation, where the runner offers it; titled by its first message.
     let live = b.live.unwrap_or(true) && agents::offers_live(&app, &s.runner);
     let title = s.prompt.as_deref().and_then(store::title_of);

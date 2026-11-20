@@ -42,6 +42,7 @@ pub const PLATFORM_EVENT_KINDS: &[&str] = &[
     "alarm.raised",
     "audit",
     "connection.health",
+    "hardware.changed",
     "agent.approval_decided",
     "agent.approval_requested",
     "agent.created",
@@ -84,7 +85,10 @@ pub fn platform_scope(kind: &str) -> &'static str {
         "approve"
     } else if kind.starts_with("agent.") {
         "agent"
-    } else if kind.starts_with("runner.") || kind.starts_with("project.") {
+    } else if kind.starts_with("runner.")
+        || kind.starts_with("project.")
+        || kind.starts_with("hardware.")
+    {
         "read"
     } else if kind.starts_with("terminal.") {
         "terminal"
@@ -171,6 +175,8 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "device.enrolled",
     "device.last_admin_refused",
     "device.revoked",
+    "hardware.paused",
+    "hardware.resumed",
     "host.action_result",
     "host.helper_refused",
     "host.logs_read",
