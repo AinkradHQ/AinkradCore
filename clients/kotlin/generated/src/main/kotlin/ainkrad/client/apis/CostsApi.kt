@@ -17,6 +17,7 @@ package ainkrad.client.apis
 
 import ainkrad.client.models.AccountSpend
 import ainkrad.client.models.CostEvent
+import ainkrad.client.models.DayUsage
 import ainkrad.client.models.ErrorBody
 import ainkrad.client.models.LimitCleared
 import ainkrad.client.models.LimitSet
@@ -97,6 +98,41 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.DELETE,
             "/api/v1/accounts/{id}/limits/{unit}/{window_secs}".replace("{" + "id" + "}", "$id").replace("{" + "unit" + "}", "$unit").replace("{" + "window_secs" + "}", "$windowSecs"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/costs/series
+        * 
+        * 
+         * @param days Days back, today included (default 14, most 90). (optional)
+         * @return kotlin.collections.List<DayUsage>
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun costSeries(days: kotlin.Long?): HttpResponse<kotlin.collections.List<DayUsage>> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+            days?.apply { localVariableQuery["days"] = listOf("$days") }
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/costs/series",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

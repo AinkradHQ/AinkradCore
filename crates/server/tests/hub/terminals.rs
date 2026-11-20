@@ -83,7 +83,7 @@ fn spawn_daemon_with(
     let mut cfg = PtyConfig {
         enabled: true,
         grace: Duration::from_millis(200),
-        // A terminal opens in a private sandbox root (E6): the runner needs a place for its homes.
+        // D-17: a terminal with no `sandbox` is a private-root `home` shell; it needs this dir.
         sandbox_dir: Some(dir.join("sandbox")),
         ..PtyConfig::new(dir.to_owned())
     };
@@ -261,9 +261,9 @@ impl Fx {
     fn leftovers(&self) -> usize {
         let count = |d: &std::path::Path| std::fs::read_dir(d).map_or(0, |r| r.count());
         let sd = self.dir.join("scrollback");
-        // `sandbox` holds the runner's private homes (E6): they outlive a terminal by design.
-        let homes = usize::from(self.dir.join("sandbox").is_dir());
-        count(&self.dir) - usize::from(sd.is_dir()) - homes + count(&sd)
+        // The private-root sandbox homes (`sandbox`) persist by design: not a leftover.
+        let sb = usize::from(self.dir.join("sandbox").is_dir());
+        count(&self.dir) - usize::from(sd.is_dir()) - sb + count(&sd)
     }
 
     async fn count(&self, sql: &'static str) -> i64 {

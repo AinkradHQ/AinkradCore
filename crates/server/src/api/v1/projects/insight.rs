@@ -161,7 +161,7 @@ pub struct AuthorCount {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-pub struct Change {
+pub struct ProjectChange {
     pub who: String,
     /// `commit` or `session`.
     pub kind: String,
@@ -174,7 +174,7 @@ pub struct ProjectChanges {
     /// Commit authors and session titles (`AI sessions` when untitled), by count, most first.
     pub by_author: Vec<AuthorCount>,
     /// Newest first, at most 50.
-    pub recent: Vec<Change>,
+    pub recent: Vec<ProjectChange>,
 }
 
 /// Counts per author, most first, ties by name; and the newest `max` changes. Pure.
@@ -194,7 +194,7 @@ pub fn tally(mut all: Vec<(String, String, String, i64)>, max: usize) -> Project
         recent: all
             .into_iter()
             .take(max)
-            .map(|(who, kind, summary, at)| Change {
+            .map(|(who, kind, summary, at)| ProjectChange {
                 who,
                 kind,
                 summary,

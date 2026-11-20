@@ -675,7 +675,7 @@ RWQ+OaX8vBg2+zmrma/A8QI/+cL5wvvHoanVJv0v4xHp04w6zIgS/pDA'
     # address; a public server is not advertised. AINKRAD_MDNS=yes|no overrides. The decision is exported, so the installer
     # and the firewall step follow it: yes installs avahi-daemon, writes the service file and, on the iptables path, opens
     # UDP 5353 to the mDNS multicast groups. The ufw path is left alone (Ubuntu's before.rules already accept mDNS).
-    _ip=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1)
+    _ip=$(ip -4 route get 192.0.2.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1)
     # A cloud VM often has a private address too, so the vendor (DMI) counts first, then a public address that differs from
     # the local one (NAT: could be a cloud host or a home router) is asked about, default no; without a terminal it is no.
     _vend=$(cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/chassis_asset_tag /sys/class/dmi/id/product_name 2>/dev/null | tr '[:upper:]' '[:lower:]')

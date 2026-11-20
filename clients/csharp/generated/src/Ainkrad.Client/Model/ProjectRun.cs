@@ -40,6 +40,8 @@ namespace Ainkrad.Client.Model
         /// <summary>
         /// Initializes a new instance of the <see cref="ProjectRun" /> class.
         /// </summary>
+        /// <param name="configId">The run configuration it started from, when it did (Core 0.10)..</param>
+        /// <param name="varEnvironment">The environment it ran in..</param>
         /// <param name="error">What went wrong, for a failed run (redacted)..</param>
         /// <param name="id">id (required).</param>
         /// <param name="idleStopAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
@@ -51,7 +53,7 @@ namespace Ainkrad.Client.Model
         /// <param name="state">&#x60;starting&#x60;, &#x60;running&#x60;, &#x60;stopping&#x60;, &#x60;stopped&#x60; or &#x60;failed&#x60;. (required).</param>
         /// <param name="stopReason">Why it ended, or is ending: &#x60;user&#x60;, &#x60;idle&#x60;, &#x60;crash&#x60;, &#x60;runner_lost&#x60;, &#x60;replaced&#x60; or &#x60;start_failed&#x60;..</param>
         /// <param name="stoppedAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
-        public ProjectRun(string error = default, string id = default, DateTime idleStopAt = default, DateTime lastActivityAt = default, string runner = default, long specVersion = default, DateTime startedAt = default, string startedBy = default, string state = default, string stopReason = default, DateTime stoppedAt = default)
+        public ProjectRun(long? configId = default, string varEnvironment = default, string error = default, string id = default, DateTime idleStopAt = default, DateTime lastActivityAt = default, string runner = default, long specVersion = default, DateTime startedAt = default, string startedBy = default, string state = default, string stopReason = default, DateTime stoppedAt = default)
         {
             // to ensure "id" is required (not null)
             if (id == null)
@@ -79,12 +81,28 @@ namespace Ainkrad.Client.Model
                 throw new ArgumentNullException("state is a required property for ProjectRun and cannot be null");
             }
             this.State = state;
+            this.ConfigId = configId;
+            this.VarEnvironment = varEnvironment;
             this.Error = error;
             this.IdleStopAt = idleStopAt;
             this.LastActivityAt = lastActivityAt;
             this.StopReason = stopReason;
             this.StoppedAt = stoppedAt;
         }
+
+        /// <summary>
+        /// The run configuration it started from, when it did (Core 0.10).
+        /// </summary>
+        /// <value>The run configuration it started from, when it did (Core 0.10).</value>
+        [DataMember(Name = "config_id", EmitDefaultValue = true)]
+        public long? ConfigId { get; set; }
+
+        /// <summary>
+        /// The environment it ran in.
+        /// </summary>
+        /// <value>The environment it ran in.</value>
+        [DataMember(Name = "environment", EmitDefaultValue = true)]
+        public string VarEnvironment { get; set; }
 
         /// <summary>
         /// What went wrong, for a failed run (redacted).
@@ -168,6 +186,8 @@ namespace Ainkrad.Client.Model
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("class ProjectRun {\n");
+            sb.Append("  ConfigId: ").Append(ConfigId).Append("\n");
+            sb.Append("  VarEnvironment: ").Append(VarEnvironment).Append("\n");
             sb.Append("  Error: ").Append(Error).Append("\n");
             sb.Append("  Id: ").Append(Id).Append("\n");
             sb.Append("  IdleStopAt: ").Append(IdleStopAt).Append("\n");

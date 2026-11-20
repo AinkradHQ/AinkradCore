@@ -36,20 +36,26 @@ namespace Ainkrad.Client.Model
         /// Initializes a new instance of the <see cref="UpdateProject" /> class.
         /// </summary>
         /// <param name="cpuLimit">CPUs a run may use, 0.1 to 16..</param>
+        /// <param name="defaultEnvironment">One of the project&#39;s run environments; an empty string clears it..</param>
         /// <param name="description">description.</param>
         /// <param name="expose">expose.</param>
+        /// <param name="fetchIntervalMinutes">Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked..</param>
         /// <param name="idleMinutes">Idle stop, 5 to 1440 minutes..</param>
         /// <param name="memLimitMb">Memory a run may use, 64 to 32768 MB..</param>
         /// <param name="name">name.</param>
+        /// <param name="runner">Where it prefers to run: &#x60;auto&#x60;, &#x60;this_mac&#x60; or &#x60;home_server&#x60;..</param>
         /// <param name="slug">The link name (the slug); refused while the project runs or holds secrets..</param>
-        public UpdateProject(double? cpuLimit = default, string description = default, bool? expose = default, long? idleMinutes = default, long? memLimitMb = default, string name = default, string slug = default)
+        public UpdateProject(double? cpuLimit = default, string defaultEnvironment = default, string description = default, bool? expose = default, long? fetchIntervalMinutes = default, long? idleMinutes = default, long? memLimitMb = default, string name = default, string runner = default, string slug = default)
         {
             this.CpuLimit = cpuLimit;
+            this.DefaultEnvironment = defaultEnvironment;
             this.Description = description;
             this.Expose = expose;
+            this.FetchIntervalMinutes = fetchIntervalMinutes;
             this.IdleMinutes = idleMinutes;
             this.MemLimitMb = memLimitMb;
             this.Name = name;
+            this.Runner = runner;
             this.Slug = slug;
         }
 
@@ -59,6 +65,13 @@ namespace Ainkrad.Client.Model
         /// <value>CPUs a run may use, 0.1 to 16.</value>
         [DataMember(Name = "cpu_limit", EmitDefaultValue = true)]
         public double? CpuLimit { get; set; }
+
+        /// <summary>
+        /// One of the project&#39;s run environments; an empty string clears it.
+        /// </summary>
+        /// <value>One of the project&#39;s run environments; an empty string clears it.</value>
+        [DataMember(Name = "default_environment", EmitDefaultValue = true)]
+        public string DefaultEnvironment { get; set; }
 
         /// <summary>
         /// Gets or Sets Description
@@ -71,6 +84,13 @@ namespace Ainkrad.Client.Model
         /// </summary>
         [DataMember(Name = "expose", EmitDefaultValue = true)]
         public bool? Expose { get; set; }
+
+        /// <summary>
+        /// Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
+        /// </summary>
+        /// <value>Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.</value>
+        [DataMember(Name = "fetch_interval_minutes", EmitDefaultValue = true)]
+        public long? FetchIntervalMinutes { get; set; }
 
         /// <summary>
         /// Idle stop, 5 to 1440 minutes.
@@ -93,6 +113,13 @@ namespace Ainkrad.Client.Model
         public string Name { get; set; }
 
         /// <summary>
+        /// Where it prefers to run: &#x60;auto&#x60;, &#x60;this_mac&#x60; or &#x60;home_server&#x60;.
+        /// </summary>
+        /// <value>Where it prefers to run: &#x60;auto&#x60;, &#x60;this_mac&#x60; or &#x60;home_server&#x60;.</value>
+        [DataMember(Name = "runner", EmitDefaultValue = true)]
+        public string Runner { get; set; }
+
+        /// <summary>
         /// The link name (the slug); refused while the project runs or holds secrets.
         /// </summary>
         /// <value>The link name (the slug); refused while the project runs or holds secrets.</value>
@@ -108,11 +135,14 @@ namespace Ainkrad.Client.Model
             StringBuilder sb = new StringBuilder();
             sb.Append("class UpdateProject {\n");
             sb.Append("  CpuLimit: ").Append(CpuLimit).Append("\n");
+            sb.Append("  DefaultEnvironment: ").Append(DefaultEnvironment).Append("\n");
             sb.Append("  Description: ").Append(Description).Append("\n");
             sb.Append("  Expose: ").Append(Expose).Append("\n");
+            sb.Append("  FetchIntervalMinutes: ").Append(FetchIntervalMinutes).Append("\n");
             sb.Append("  IdleMinutes: ").Append(IdleMinutes).Append("\n");
             sb.Append("  MemLimitMb: ").Append(MemLimitMb).Append("\n");
             sb.Append("  Name: ").Append(Name).Append("\n");
+            sb.Append("  Runner: ").Append(Runner).Append("\n");
             sb.Append("  Slug: ").Append(Slug).Append("\n");
             sb.Append("}\n");
             return sb.ToString();

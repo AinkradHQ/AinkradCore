@@ -18,6 +18,9 @@ package ainkrad.client.apis
 import ainkrad.client.models.AgentApprovals
 import ainkrad.client.models.AgentAttachment
 import ainkrad.client.models.AgentDecision
+import ainkrad.client.models.AgentFileRevert
+import ainkrad.client.models.AgentFileWrite
+import ainkrad.client.models.AgentFolderListing
 import ainkrad.client.models.AgentMessage
 import ainkrad.client.models.AgentModeChange
 import ainkrad.client.models.AgentSession
@@ -25,6 +28,7 @@ import ainkrad.client.models.AgentTitle
 import ainkrad.client.models.AgentTranscript
 import ainkrad.client.models.AgentWake
 import ainkrad.client.models.AgentWakeRequest
+import ainkrad.client.models.ApprovalRule
 import ainkrad.client.models.ErrorBody
 import ainkrad.client.models.NewAgentAttachment
 import ainkrad.client.models.NewAgentSession
@@ -175,6 +179,41 @@ import io.ktor.http.ParametersBuilder
             )
 
             return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * DELETE /api/v1/projects/{id}/approval-rules/{rule}
+        * 
+        * 
+         * @param id The project&#39;s id 
+         * @param rule The rule&#39;s id 
+         * @return kotlin.collections.List<ApprovalRule>
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun deleteApprovalRule(id: kotlin.String, rule: kotlin.String): HttpResponse<kotlin.collections.List<ApprovalRule>> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.DELETE,
+            "/api/v1/projects/{id}/approval-rules/{rule}".replace("{" + "id" + "}", "$id").replace("{" + "rule" + "}", "$rule"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames
@@ -356,6 +395,42 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * GET /api/v1/agent-sessions/{id}/files
+        * 
+        * 
+         * @param id The session&#39;s id, &#x60;as_…&#x60; 
+         * @param dir A folder of the session, relative to its folder (no &#x60;..&#x60;); absent or empty, the folder itself. (optional)
+         * @return AgentFolderListing
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun listAgentSessionFiles(id: kotlin.String, dir: kotlin.String?): HttpResponse<AgentFolderListing> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+            dir?.apply { localVariableQuery["dir"] = listOf("$dir") }
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/agent-sessions/{id}/files".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * GET /api/v1/agent-sessions
         * 
         * 
@@ -382,6 +457,40 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.GET,
             "/api/v1/agent-sessions",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/projects/{id}/approval-rules
+        * 
+        * 
+         * @param id The project&#39;s id 
+         * @return kotlin.collections.List<ApprovalRule>
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun listApprovalRules(id: kotlin.String): HttpResponse<kotlin.collections.List<ApprovalRule>> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/projects/{id}/approval-rules".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
@@ -422,6 +531,40 @@ import io.ktor.http.ParametersBuilder
             )
 
             return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/agent-sessions/{id}/files/revert
+        * 
+        * 
+         * @param id The session&#39;s id, &#x60;as_…&#x60; 
+         * @param agentFileRevert  
+         * @return AgentSession
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun revertAgentFile(id: kotlin.String, agentFileRevert: AgentFileRevert): HttpResponse<AgentSession> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = agentFileRevert
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/agent-sessions/{id}/files/revert".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames
@@ -587,6 +730,40 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.POST,
             "/api/v1/agent-sessions/{id}/wake".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/agent-sessions/{id}/files/write
+        * 
+        * 
+         * @param id The session&#39;s id, &#x60;as_…&#x60; 
+         * @param agentFileWrite  
+         * @return AgentSession
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun writeAgentFile(id: kotlin.String, agentFileWrite: AgentFileWrite): HttpResponse<AgentSession> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = agentFileWrite
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/agent-sessions/{id}/files/write".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

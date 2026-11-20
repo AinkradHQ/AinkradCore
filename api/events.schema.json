@@ -80,6 +80,7 @@
     "project.archived",
     "project.created",
     "project.mirror_changed",
+    "project.run_gave_up",
     "project.run_started",
     "project.run_stopped",
     "project.spec_saved",

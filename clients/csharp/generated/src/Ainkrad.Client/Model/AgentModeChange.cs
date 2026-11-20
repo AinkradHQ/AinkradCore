@@ -35,13 +35,22 @@ namespace Ainkrad.Client.Model
         /// <summary>
         /// Initializes a new instance of the <see cref="AgentModeChange" /> class.
         /// </summary>
+        /// <param name="effort">How hard the harness thinks: &#x60;low&#x60;, &#x60;medium&#x60;, &#x60;high&#x60; or &#x60;max&#x60;; absent, unchanged. Takes effect at the next turn (the harness is restarted with it). 400 &#x60;effort_unsupported&#x60; for a harness that cannot (&#x60;can_set_effort&#x60;)..</param>
         /// <param name="plan">Plan mode on or off; absent, unchanged..</param>
         /// <param name="policy">&#x60;ask&#x60;, &#x60;accept_edits&#x60; or &#x60;sandboxed&#x60;; absent, unchanged..</param>
-        public AgentModeChange(bool? plan = default, string policy = default)
+        public AgentModeChange(string effort = default, bool? plan = default, string policy = default)
         {
+            this.Effort = effort;
             this.Plan = plan;
             this.Policy = policy;
         }
+
+        /// <summary>
+        /// How hard the harness thinks: &#x60;low&#x60;, &#x60;medium&#x60;, &#x60;high&#x60; or &#x60;max&#x60;; absent, unchanged. Takes effect at the next turn (the harness is restarted with it). 400 &#x60;effort_unsupported&#x60; for a harness that cannot (&#x60;can_set_effort&#x60;).
+        /// </summary>
+        /// <value>How hard the harness thinks: &#x60;low&#x60;, &#x60;medium&#x60;, &#x60;high&#x60; or &#x60;max&#x60;; absent, unchanged. Takes effect at the next turn (the harness is restarted with it). 400 &#x60;effort_unsupported&#x60; for a harness that cannot (&#x60;can_set_effort&#x60;).</value>
+        [DataMember(Name = "effort", EmitDefaultValue = true)]
+        public string Effort { get; set; }
 
         /// <summary>
         /// Plan mode on or off; absent, unchanged.
@@ -65,6 +74,7 @@ namespace Ainkrad.Client.Model
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("class AgentModeChange {\n");
+            sb.Append("  Effort: ").Append(Effort).Append("\n");
             sb.Append("  Plan: ").Append(Plan).Append("\n");
             sb.Append("  Policy: ").Append(Policy).Append("\n");
             sb.Append("}\n");

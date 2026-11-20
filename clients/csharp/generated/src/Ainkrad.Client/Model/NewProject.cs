@@ -42,8 +42,9 @@ namespace Ainkrad.Client.Model
         /// </summary>
         /// <param name="description">Default empty..</param>
         /// <param name="name">One line, 1-100 characters. (required).</param>
+        /// <param name="runner">&#x60;auto&#x60; (default), &#x60;this_mac&#x60; or &#x60;home_server&#x60;..</param>
         /// <param name="slug">See &#x60;ProjectInfo.slug&#x60;; it is the project&#39;s public host name. (required).</param>
-        public NewProject(string description = default, string name = default, string slug = default)
+        public NewProject(string description = default, string name = default, string runner = default, string slug = default)
         {
             // to ensure "name" is required (not null)
             if (name == null)
@@ -58,6 +59,7 @@ namespace Ainkrad.Client.Model
             }
             this.Slug = slug;
             this.Description = description;
+            this.Runner = runner;
         }
 
         /// <summary>
@@ -73,6 +75,13 @@ namespace Ainkrad.Client.Model
         /// <value>One line, 1-100 characters.</value>
         [DataMember(Name = "name", IsRequired = true, EmitDefaultValue = true)]
         public string Name { get; set; }
+
+        /// <summary>
+        /// &#x60;auto&#x60; (default), &#x60;this_mac&#x60; or &#x60;home_server&#x60;.
+        /// </summary>
+        /// <value>&#x60;auto&#x60; (default), &#x60;this_mac&#x60; or &#x60;home_server&#x60;.</value>
+        [DataMember(Name = "runner", EmitDefaultValue = true)]
+        public string Runner { get; set; }
 
         /// <summary>
         /// See &#x60;ProjectInfo.slug&#x60;; it is the project&#39;s public host name.
@@ -91,6 +100,7 @@ namespace Ainkrad.Client.Model
             sb.Append("class NewProject {\n");
             sb.Append("  Description: ").Append(Description).Append("\n");
             sb.Append("  Name: ").Append(Name).Append("\n");
+            sb.Append("  Runner: ").Append(Runner).Append("\n");
             sb.Append("  Slug: ").Append(Slug).Append("\n");
             sb.Append("}\n");
             return sb.ToString();

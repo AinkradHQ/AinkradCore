@@ -1015,6 +1015,13 @@
       },
       "AgentDecision": {
         "properties": {
+          "always": {
+            "description": "With `approved`: also allow this kind of call for every session of the session's project\nfrom now on (\"Always for this project\"). The Core stores a rule derived from the request\n(a safe shell command's first words, or a plain path prefix inside the project folder) and\napproves later matching requests itself, auditing each (`agent.approval_auto`). 400\n`rule_not_allowed` (nothing is decided) for a tool or command that can only be approved\nonce, or a session of no project. See `listApprovalRules`.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "approved": {
             "type": "boolean"
           },
@@ -1070,6 +1077,87 @@
         ],
         "type": "object"
       },
+      "AgentFileRevert": {
+        "description": "A file of a session's folder to put back as it was before the session's edits.",
+        "properties": {
+          "path": {
+            "description": "Inside the session's folder: absolute, or relative to it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "AgentFileWrite": {
+        "description": "A file to write into a session's folder.",
+        "properties": {
+          "content": {
+            "description": "The file's whole new text, at most 256 KiB.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Inside the session's folder: absolute, or relative to it. Not under `.git`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "AgentFolderEntry": {
+        "properties": {
+          "dir": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "description": "Bytes, for a file.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "dir"
+        ],
+        "type": "object"
+      },
+      "AgentFolderListing": {
+        "description": "One level of a session's folder.",
+        "properties": {
+          "dir": {
+            "description": "The folder listed, relative to the session's folder; empty for the folder itself.",
+            "type": "string"
+          },
+          "entries": {
+            "description": "Directories first, then by name; at most 500.",
+            "items": {
+              "$ref": "#/components/schemas/AgentFolderEntry"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "There were more than the entries shown.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "dir",
+          "entries",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "AgentMessage": {
         "properties": {
           "attachments": {
@@ -1095,6 +1183,13 @@
       "AgentModeChange": {
         "description": "A session's new mode: either field, or both.",
         "properties": {
+          "effort": {
+            "description": "How hard the harness thinks: `low`, `medium`, `high` or `max`; absent, unchanged. Takes\neffect at the next turn (the harness is restarted with it). 400 `effort_unsupported` for a\nharness that cannot (`can_set_effort`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "plan": {
             "description": "Plan mode on or off; absent, unchanged.",
             "type": [
@@ -1242,6 +1337,13 @@
               "null"
             ]
           },
+          "can_set_effort": {
+            "description": "Whether its effort can be set (`effort` on `createAgentSession` or `setAgentSessionMode`):\nits harness takes one (Claude, Codex) and its runner relays it.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "can_stop_subagents": {
             "description": "Whether one sub-agent of it (a running `Task`/`Agent` tool call) can be stopped on its own\nwith `stopAgentSubagent`: its harness can (Claude Code) and its runner relays it.",
             "type": [
@@ -1280,6 +1382,13 @@
           },
           "created_by": {
             "type": "string"
+          },
+          "effort": {
+            "description": "Its effort level now (`low`, `medium`, `high`, `max`), from the create or the latest\n`setAgentSessionMode`; absent: the harness's own default.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "ended_at": {
             "$ref": "#/components/schemas/Timestamp"
@@ -1561,7 +1670,7 @@
             "type": "integer"
           },
           "body": {
-            "description": "A harness event, or the session's own (`started`, `message`, `approval_request`,\n`approval_decided`, `interrupted`, `gap`, `ended`), redacted. A file edit's `tool_use` also\ncarries `edit` (`AgentEdit`).",
+            "description": "A harness event, or the session's own (`started`, `message`, `approval_request`,\n`approval_decided`, `interrupted`, `gap`, `ended`), redacted. A file edit's `tool_use` also\ncarries `edit` (`AgentEdit`). A harness that shows its reasoning (Claude Code's `thinking`\nblocks) adds `{\"type\": \"thinking\", \"text\": \"…\"}` entries, before the text or tool call they\nbelong to, at most 16 KiB each (cut with a `[cut]` marker); the other harnesses send none.\nAn `approval_decided` the Core made by a project's \"always\" rule carries `note` saying which.",
             "type": "object"
           },
           "seq": {
@@ -1907,6 +2016,33 @@
           }
         ]
       },
+      "ApprovalRule": {
+        "description": "An \"always for this project\" rule (see `AgentDecision.always`).",
+        "properties": {
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "pattern": {
+            "description": "What it covers: a shell command's first words (`cargo test`), or a path prefix inside the\nproject folder (`src/api/`, or one file's relative path).",
+            "type": "string"
+          },
+          "tool": {
+            "description": "The harness's tool name (`Bash`, `Edit`, `Write`, `MultiEdit`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tool",
+          "pattern",
+          "created_at"
+        ],
+        "type": "object"
+      },
       "ApprovalStatus": {
         "anyOf": [
           {
@@ -2147,10 +2283,15 @@
           "account.session_limits_set",
           "account.state_set",
           "account.tested",
+          "agent.approval_auto",
+          "agent.approval_rule_added",
+          "agent.approval_rule_removed",
           "agent.attachment_added",
           "agent.cancelled",
           "agent.created",
           "agent.decided",
+          "agent.file_reverted",
+          "agent.file_written",
           "agent.interrupted",
           "agent.killed",
           "agent.messaged",
@@ -2486,6 +2627,7 @@
           "project.repo_added",
           "project.repo_primary_set",
           "project.repo_removed",
+          "project.run_gave_up",
           "project.run_started",
           "project.run_stopped",
           "project.spec_saved",
@@ -2539,6 +2681,22 @@
         },
         "required": [
           "items"
+        ],
+        "type": "object"
+      },
+      "AuthorCount": {
+        "properties": {
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "who": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "who",
+          "count"
         ],
         "type": "object"
       },
@@ -2905,6 +3063,22 @@
         },
         "required": [
           "repo"
+        ],
+        "type": "object"
+      },
+      "BundledAttested": {
+        "description": "Who may be told apart as \"the runner bundled in this Mac's app\" (E6, L1): the pairing row of\n`runner` after the Mac app, which reads that runner's own enrolment file on its local disk\n(a remote runner has none there), attests it.",
+        "properties": {
+          "bundled": {
+            "type": "boolean"
+          },
+          "runner": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runner",
+          "bundled"
         ],
         "type": "object"
       },
@@ -3373,6 +3547,29 @@
           "issue_id",
           "author",
           "body"
+        ],
+        "type": "object"
+      },
+      "CommitInfo": {
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "author": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "author",
+          "message",
+          "at"
         ],
         "type": "object"
       },
@@ -4355,6 +4552,35 @@
         ],
         "type": "object"
       },
+      "DayUsage": {
+        "description": "One provider's day on the ledger.",
+        "properties": {
+          "cost_usd_micros": {
+            "description": "Millionths of a dollar (corrections included; unpriced events count 0).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "day": {
+            "description": "The UTC day, `YYYY-MM-DD`.",
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "total_tokens": {
+            "description": "Input, output and cache tokens.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "day",
+          "provider",
+          "total_tokens",
+          "cost_usd_micros"
+        ],
+        "type": "object"
+      },
       "Decision": {
         "properties": {
           "approve": {
@@ -4710,6 +4936,22 @@
         ],
         "type": "object"
       },
+      "EnvDiffRow": {
+        "properties": {
+          "change": {
+            "description": "`same`, `different`, `only_a` or `only_b`.",
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "change"
+        ],
+        "type": "object"
+      },
       "Environment": {
         "properties": {
           "deploy": {
@@ -4959,6 +5201,7 @@
           "project.archived",
           "project.created",
           "project.mirror_changed",
+          "project.run_gave_up",
           "project.run_started",
           "project.run_stopped",
           "project.spec_saved",
@@ -5002,6 +5245,7 @@
           "project.archived": "read",
           "project.created": "read",
           "project.mirror_changed": "read",
+          "project.run_gave_up": "read",
           "project.run_started": "read",
           "project.run_stopped": "read",
           "project.spec_saved": "read",
@@ -5536,6 +5780,54 @@
             "description": "Absent when no local runner is installed."
           }
         },
+        "type": "object"
+      },
+      "ImportEnv": {
+        "properties": {
+          "text": {
+            "description": "The `.env` file's text (`KEY=value` lines; `export`, quotes and `#` comments are read).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "ImportSkipped": {
+        "properties": {
+          "line": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "line",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "ImportedEnv": {
+        "properties": {
+          "imported": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "skipped": {
+            "description": "Lines that were not taken, with why (a bad name, or a value holding `${`).",
+            "items": {
+              "$ref": "#/components/schemas/ImportSkipped"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "imported",
+          "skipped"
+        ],
         "type": "object"
       },
       "InstallToolBody": {
@@ -6927,6 +7219,13 @@
               "null"
             ]
           },
+          "effort": {
+            "description": "How hard the harness thinks: `low`, `medium`, `high` or `max`. Claude (its `--effort`) and\nCodex (`model_reasoning_effort`) take it; 400 `effort_unsupported` for another harness, 409\n`unsupported_command` for a runner too old for it. Absent: the harness's own default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "harness": {
             "description": "`claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it\n(and `model`) when the session draws from a chain: the account the allocator picks sets them.",
             "type": "string"
@@ -7548,6 +7847,13 @@
             "description": "One line, 1-100 characters.",
             "type": "string"
           },
+          "runner": {
+            "description": "`auto` (default), `this_mac` or `home_server`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "slug": {
             "description": "See `ProjectInfo.slug`; it is the project's public host name.",
             "type": "string"
@@ -7783,6 +8089,18 @@
         ],
         "type": "object"
       },
+      "NewRunEnv": {
+        "properties": {
+          "name": {
+            "description": "1-40 characters on one line.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "NewRunSpec": {
         "properties": {
           "origin": {
@@ -7996,8 +8314,23 @@
               "null"
             ]
           },
+          "project": {
+            "description": "With `sandbox: real` only: start the shell in this project's folder (a cwd on the runner,\nnot a mount). A sandbox names its project in `sandbox` (400 otherwise).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "runner": {
             "type": "string"
+          },
+          "sandbox": {
+            "description": "Where the shell lives (D-17): `home` (the default: a private root with the caller's\npersistent sandbox home), `project:<id>` or `session:<id>` (that, plus the project's or\nsession's folder, which the Core resolves: no `cwd`), or `real` (the runner's host view,\nallowed only to the Mac that owns a macOS runner, over that Mac's own device key). 400\n`bad_request` for a bad value or a `cwd` with a private mode, 403 `real_terminal_refused`\nfor `real` from anyone else. 409 `runner_update_required` (\"Update this runner to open\nterminals\") when the runner predates sandboxes: no terminal opens on it.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "session": {
             "description": "Start in the folder of this AI session (`as_…`, its `AgentSession.folder`) without naming\nthe path: the Core resolves it. The session must be on `runner`, one the caller can see (and\nthe caller needs the `agent` scope), and its runner must have reported its folder. Not with\n`cwd`.",
@@ -9346,6 +9679,53 @@
         ],
         "type": "object"
       },
+      "ProjectChange": {
+        "properties": {
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "description": "`commit` or `session`.",
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "who": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "who",
+          "kind",
+          "summary",
+          "at"
+        ],
+        "type": "object"
+      },
+      "ProjectChanges": {
+        "properties": {
+          "by_author": {
+            "description": "Commit authors and session titles (`AI sessions` when untitled), by count, most first.",
+            "items": {
+              "$ref": "#/components/schemas/AuthorCount"
+            },
+            "type": "array"
+          },
+          "recent": {
+            "description": "Newest first, at most 50.",
+            "items": {
+              "$ref": "#/components/schemas/ProjectChange"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "by_author",
+          "recent"
+        ],
+        "type": "object"
+      },
       "ProjectFlow": {
         "properties": {
           "issues": {
@@ -9398,12 +9778,24 @@
           "created_at": {
             "$ref": "#/components/schemas/Timestamp"
           },
+          "default_environment": {
+            "description": "The run environment a Run button uses by default; one of the project's.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "description": {
             "type": "string"
           },
           "expose": {
             "description": "Whether the running project gets a public link.",
             "type": "boolean"
+          },
+          "fetch_interval_minutes": {
+            "description": "Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.",
+            "format": "int64",
+            "type": "integer"
           },
           "id": {
             "format": "int64",
@@ -9430,6 +9822,10 @@
           "room": {
             "$ref": "#/components/schemas/ProjectRoom",
             "description": "The linked Brain room; null when the Brain is off or the project has none."
+          },
+          "runner": {
+            "description": "Where it prefers to run: `auto`, `this_mac` or `home_server`.",
+            "type": "string"
           },
           "slug": {
             "description": "A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name.",
@@ -9586,6 +9982,21 @@
       },
       "ProjectRun": {
         "properties": {
+          "config_id": {
+            "description": "The run configuration it started from, when it did (Core 0.10).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "environment": {
+            "description": "The environment it ran in.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "error": {
             "description": "What went wrong, for a failed run (redacted).",
             "type": [
@@ -9788,6 +10199,48 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "ProjectUsage": {
+        "properties": {
+          "by_day": {
+            "description": "Cost per day, last 7 days, oldest first, USD micros.",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "prev_week_cost": {
+            "description": "The 7 days before that.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "sessions": {
+            "description": "The project's sessions, newest first (at most 30).",
+            "items": {
+              "$ref": "#/components/schemas/SessionUsage"
+            },
+            "type": "array"
+          },
+          "sessions_week": {
+            "description": "Sessions started in the last 7 days.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "week_cost": {
+            "description": "Cost of the last 7 days in USD micros (millionths), as the cost ledger stores it.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "week_cost",
+          "prev_week_cost",
+          "sessions_week",
+          "by_day",
+          "sessions"
+        ],
         "type": "object"
       },
       "ProposalDecision": {
@@ -10329,6 +10782,44 @@
         "required": [
           "name",
           "url"
+        ],
+        "type": "object"
+      },
+      "RepoCode": {
+        "properties": {
+          "ahead": {
+            "description": "Commits that branch has beyond the default branch.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "behind": {
+            "description": "Commits the default branch has beyond that branch.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "branch": {
+            "description": "The most recently updated branch (the default one when it is the only one).",
+            "type": "string"
+          },
+          "files": {
+            "description": "Files in the branch shown; 0 before the first fetch.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "last_commit": {
+            "$ref": "#/components/schemas/CommitInfo",
+            "description": "The branch's newest commit; null before the first fetch."
+          },
+          "repo": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo",
+          "files",
+          "branch",
+          "ahead",
+          "behind"
         ],
         "type": "object"
       },
@@ -10973,6 +11464,161 @@
         ],
         "type": "object"
       },
+      "RunConfig": {
+        "properties": {
+          "command": {
+            "description": "Run in the service's shell.",
+            "type": "string"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "port": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "restart": {
+            "description": "Come back after a crash: the Core restarts it after 2 s, 4 s, ... up to 60 s, at most 5\ntimes in 10 minutes, then gives up (event `project.run_gave_up`). A run a person stopped\ndoes not restart.",
+            "type": "boolean"
+          },
+          "runner": {
+            "description": "`automatic`, or the id of a runner.",
+            "type": "string"
+          },
+          "service": {
+            "description": "The service of the run spec it is laid over; none lets the Core pick (the first that\nmounts a repo).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "workdir": {
+            "description": "A folder in the service's repo checkout (`./app`), or an absolute path in the container.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "command",
+          "workdir",
+          "runner",
+          "restart",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "RunConfigBody": {
+        "properties": {
+          "command": {
+            "description": "Required to create.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Required to create.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "port": {
+            "description": "0 clears it.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "restart": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "runner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "service": {
+            "description": "Empty clears it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workdir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RunConfigDeleted": {
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "type": "object"
+      },
+      "RunConfigStart": {
+        "properties": {
+          "environment": {
+            "description": "The environment to run in; default the project's first.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replace": {
+            "description": "Stop this configuration's live run first (other configurations keep running); default\nfalse.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "RunEnvs": {
+        "properties": {
+          "environments": {
+            "description": "In order; the first is the default. A new project has `Development` and `Staging`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "environments"
+        ],
+        "type": "object"
+      },
       "RunLogLine": {
         "properties": {
           "at": {
@@ -11292,6 +11938,50 @@
         ],
         "type": "object"
       },
+      "RunVar": {
+        "description": "A variable, never its value.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "`plain` or `secret`.",
+            "type": "string"
+          },
+          "secret": {
+            "description": "For `secret`: the project secret it comes from. Its value is never returned.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size": {
+            "description": "For `plain`: the value's length in bytes (a client may draw dots); the value itself comes\nfrom the reveal route only.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "RunVarValue": {
+        "description": "A plain value, on request.",
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
       "Runner": {
         "description": "A paired runner and its live state.",
         "properties": {
@@ -11343,6 +12033,13 @@
               "null"
             ]
           },
+          "home": {
+            "description": "The folder its work happens in, as the runner reports it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "host_load": {
             "$ref": "#/components/schemas/RunnerHostLoad",
             "description": "The host's load as its runner last reported it (E2-15.2), if it has."
@@ -11354,6 +12051,13 @@
           "isolation": {
             "$ref": "#/components/schemas/RunnerIsolation",
             "description": "The isolation it offers now (E8a-09): absent until it reports, and then no tier can be\nassumed."
+          },
+          "last_error": {
+            "description": "Why it is not fully working, in words: its last-error note.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "last_seen": {
             "$ref": "#/components/schemas/Timestamp",
@@ -11420,6 +12124,10 @@
           "slots": {
             "$ref": "#/components/schemas/RunnerSlots",
             "description": "Sessions and terminals running now, and how many it takes."
+          },
+          "tool_install": {
+            "$ref": "#/components/schemas/RunnerToolInstall",
+            "description": "The AI tool install under way on its host, or the last one, as the runner reports it in\nits heartbeats (D-22). Absent until a runner of this version reports."
           },
           "tools": {
             "additionalProperties": {
@@ -11681,6 +12389,39 @@
         "required": [
           "agents_used",
           "terminals_used"
+        ],
+        "type": "object"
+      },
+      "RunnerToolInstall": {
+        "description": "An AI tool install as a runner reports it.",
+        "properties": {
+          "percent": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`running`, `done` or `failed`.",
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool",
+          "state",
+          "percent",
+          "step"
         ],
         "type": "object"
       },
@@ -12133,6 +12874,43 @@
         ],
         "type": "object"
       },
+      "SessionUsage": {
+        "properties": {
+          "cost": {
+            "description": "All-time cost in USD micros.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "spark": {
+            "description": "Cost per day, last 7 days, oldest first, USD micros.",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "state": {
+            "description": "`starting`, `running`, `interrupted`, `ended` or `lost`.",
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "cost",
+          "spark"
+        ],
+        "type": "object"
+      },
       "SetCap": {
         "properties": {
           "cap": {
@@ -12327,6 +13105,26 @@
         "required": [
           "value"
         ],
+        "type": "object"
+      },
+      "SetRunVar": {
+        "description": "A value to set. Deliberately no `Debug`.",
+        "properties": {
+          "secret": {
+            "description": "The name of one of the project's secrets: the value then comes from Secrets.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "description": "A plain value (not holding `${`). Give this or `secret`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "SetScopes": {
@@ -13274,6 +14072,13 @@
           "runner": {
             "type": "string"
           },
+          "sandbox": {
+            "description": "Where the shell lives (D-17): `home`, `project:<id>`, `session:<id>` or `real` (this Mac's\nown shell). Absent: a terminal opened before sandboxes, a host-view shell.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "seq": {
             "format": "int64",
             "minimum": 0,
@@ -13341,6 +14146,22 @@
             "type": "string"
           }
         ]
+      },
+      "TerminalTailView": {
+        "description": "The last rows of a terminal's screen.",
+        "properties": {
+          "lines": {
+            "description": "Plain text, oldest first; empty when the terminal is not running.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "lines"
+        ],
+        "type": "object"
       },
       "TerminateBody": {
         "properties": {
@@ -14101,6 +14922,13 @@
               "null"
             ]
           },
+          "default_environment": {
+            "description": "One of the project's run environments; an empty string clears it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "description": {
             "type": [
               "string",
@@ -14110,6 +14938,14 @@
           "expose": {
             "type": [
               "boolean",
+              "null"
+            ]
+          },
+          "fetch_interval_minutes": {
+            "description": "Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.",
+            "format": "int64",
+            "type": [
+              "integer",
               "null"
             ]
           },
@@ -14130,6 +14966,13 @@
             ]
           },
           "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runner": {
+            "description": "Where it prefers to run: `auto`, `this_mac` or `home_server`.",
             "type": [
               "string",
               "null"
@@ -16119,6 +16962,194 @@
               }
             },
             "description": "Its tool call in flight finishes, then it ends (killed after the runner's grace; audited as `agent.cancelled`)"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "agents"
+        ],
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/api/v1/agent-sessions/{id}/files": {
+      "get": {
+        "operationId": "listAgentSessionFiles",
+        "parameters": [
+          {
+            "description": "The session's id, `as_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A folder of the session, relative to its folder (no `..`); absent or empty, the folder itself.",
+            "in": "query",
+            "name": "dir",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentFolderListing"
+                }
+              }
+            },
+            "description": "One level of the session's folder on its runner: directories first, then by name, at most 500 (`truncated` says there were more); `.git`, `node_modules` and the like are left out, a symbolic link is listed as a file and never followed. Call again with `dir` for a folder's own entries. Read like the transcript (a session holding secrets answers only to its creator or an admin). 400 `bad_path` (`..`, outside the folder), 409 `session_folder_unknown`, `session_folder_gone`, `unsupported_command` (a runner too old), `runner_offline`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "agents"
+        ],
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/api/v1/agent-sessions/{id}/files/revert": {
+      "post": {
+        "operationId": "revertAgentFile",
+        "parameters": [
+          {
+            "description": "The session's id, `as_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentFileRevert"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSession"
+                }
+              }
+            },
+            "description": "Puts the file back as it was before the session's edits (audited as `agent.file_reverted`, the path and what was done). The session's recorded edits of that file (its `tool_use` entries' `edit`) are reverse-applied on the runner, newest first: no git needed, and only what the session did is undone; a file the session created is deleted (restored from git `HEAD` instead when git tracks it). Edits the record cannot reverse (a cut text, a removal inside the file) fall back to the file's git `HEAD` copy. 409 `revert_conflict` when the file no longer holds the recorded text (nothing is changed), `revert_impossible` (no usable record and git has no copy), `session_folder_unknown`, `session_folder_gone`, `unsupported_command` (a runner too old), `module_owned`; 400 `bad_path`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "agents"
+        ],
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/api/v1/agent-sessions/{id}/files/write": {
+      "post": {
+        "operationId": "writeAgentFile",
+        "parameters": [
+          {
+            "description": "The session's id, `as_…`",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentFileWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSession"
+                }
+              }
+            },
+            "description": "Writes `content` (at most 256 KiB) to the file `path` of the session's folder on its runner, creating the folders on the way inside it (audited as `agent.file_written`, the path and size, never the text). A symbolic link on the way, `..` or a path outside the folder is refused, and so is anything under `.git`. 400 `bad_path`; 413 `file_too_large`; 409 `session_folder_unknown`, `session_folder_gone`, `unsupported_command` (a runner too old), `module_owned`"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -19260,6 +20291,63 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/api/v1/costs/series": {
+      "get": {
+        "operationId": "costSeries",
+        "parameters": [
+          {
+            "description": "Days back, today included (default 14, most 90).",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DayUsage"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Daily spend and tokens per provider, summed from the ledger, oldest day first (needs `admin`). A day or provider with no events has no row"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "costs"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/devices": {
       "get": {
         "operationId": "listDevices",
@@ -20858,6 +21946,127 @@
         "x-ainkrad-scope": "admin"
       }
     },
+    "/api/v1/projects/{id}/approval-rules": {
+      "get": {
+        "operationId": "listApprovalRules",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ApprovalRule"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The \"always for this project\" rules, oldest first: what `decideAgentApproval` with `always` stored. Each covers later matching tool calls of every session of the project, which the Core approves itself (audited `agent.approval_auto`). 404 for no such project"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "agents"
+        ],
+        "x-ainkrad-scope": "agent"
+      }
+    },
+    "/api/v1/projects/{id}/approval-rules/{rule}": {
+      "delete": {
+        "operationId": "deleteApprovalRule",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The rule's id",
+            "in": "path",
+            "name": "rule",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ApprovalRule"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The rule is removed (audited `agent.approval_rule_removed`): later calls of its kind ask again. Returns the rules left. 404 for no such project or rule"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "agents"
+        ],
+        "x-ainkrad-scope": "approve"
+      }
+    },
     "/api/v1/projects/{id}/archive": {
       "post": {
         "operationId": "archiveProject",
@@ -20909,6 +22118,115 @@
           "projects"
         ],
         "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/changes": {
+      "get": {
+        "operationId": "getProjectChanges",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectChanges"
+                }
+              }
+            },
+            "description": "Who changed what in the last 7 days: commits on any branch of the Core's copies, plus each file an AI session edited (`who` is the session's title, `kind` `session`, one entry per session and file), newest first. 404 for no such project"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/projects/{id}/code": {
+      "get": {
+        "operationId": "getProjectCode",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RepoCode"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "One card per repo, primary first, read from the Core's copy with git plumbing (no checkout, no hook runs). A repo with no copy yet has zeros and no last commit. 404 for no such project"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/projects/{id}/repos": {
@@ -21213,6 +22531,1111 @@
         "x-ainkrad-scope": "read"
       }
     },
+    "/api/v1/projects/{id}/run-configs": {
+      "get": {
+        "operationId": "listRunConfigs",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RunConfig"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The project's run configurations in order. 404 for no such project"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "post": {
+        "operationId": "createRunConfig",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunConfigBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunConfig"
+                }
+              }
+            },
+            "description": "Created (audited as `project.updated`). 400 `bad_request`; 409 `conflict` for a name already used or an archived project; 409 `limit_reached` at 32; 404 for no such project"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/run-configs/{config}": {
+      "delete": {
+        "operationId": "deleteRunConfig",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The configuration's id",
+            "in": "path",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunConfigDeleted"
+                }
+              }
+            },
+            "description": "Deleted with its variables; a live run of it keeps running. 404 for no such project or configuration"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "get": {
+        "operationId": "getRunConfig",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The configuration's id",
+            "in": "path",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunConfig"
+                }
+              }
+            },
+            "description": "The configuration; 404 for no such project or configuration"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "patch": {
+        "operationId": "updateRunConfig",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The configuration's id",
+            "in": "path",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunConfigBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunConfig"
+                }
+              }
+            },
+            "description": "Changed: only the fields sent. Errors as create"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/run-configs/{config}/duplicate": {
+      "post": {
+        "operationId": "duplicateRunConfig",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The configuration's id",
+            "in": "path",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunConfig"
+                }
+              }
+            },
+            "description": "A copy named `<name> copy` with every variable, Secret links included. Errors as create"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/run-configs/{config}/env-diff": {
+      "get": {
+        "operationId": "diffRunEnvs",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The configuration's id",
+            "in": "path",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One environment.",
+            "in": "query",
+            "name": "a",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The one to compare it with.",
+            "in": "query",
+            "name": "b",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EnvDiffRow"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Every key of either environment, by name, with how it compares (a plain value against a Secret link, or two different values or secrets, is `different`). Values are never shown. 404 for no such environment"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/projects/{id}/run-configs/{config}/env/{env}": {
+      "get": {
+        "operationId": "listRunVars",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The configuration's id",
+            "in": "path",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The environment",
+            "in": "path",
+            "name": "env",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RunVar"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The variables by name, without values. 404 for no such configuration or environment"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/projects/{id}/run-configs/{config}/env/{env}/import": {
+      "post": {
+        "operationId": "importRunEnv",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The configuration's id",
+            "in": "path",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The environment",
+            "in": "path",
+            "name": "env",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportEnv"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportedEnv"
+                }
+              }
+            },
+            "description": "Read into the environment as plain values (a key already there is replaced). 409 `limit_reached` when it would pass 64 variables; the file is not applied then"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}": {
+      "delete": {
+        "operationId": "deleteRunVar",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The configuration's id",
+            "in": "path",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The environment",
+            "in": "path",
+            "name": "env",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The variable name",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunConfigDeleted"
+                }
+              }
+            },
+            "description": "Deleted; 404 for no such variable"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      },
+      "put": {
+        "operationId": "setRunVar",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The configuration's id",
+            "in": "path",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The environment",
+            "in": "path",
+            "name": "env",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The variable name",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetRunVar"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunVar"
+                }
+              }
+            },
+            "description": "Set or replaced (audited without the value). 400 `bad_request` for a bad name or value or neither/both; 400/409 `invalid_spec` when `secret` is not one of the project's; 409 `limit_reached` at 64"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}/value": {
+      "get": {
+        "operationId": "revealRunVar",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The configuration's id",
+            "in": "path",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The environment",
+            "in": "path",
+            "name": "env",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The variable name",
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunVarValue"
+                }
+              }
+            },
+            "description": "The plain value, for the Show button. 409 `conflict` for a variable linked to a Secret (it has no value to show); 404 for no such variable"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/run-configs/{config}/run": {
+      "post": {
+        "operationId": "startRunConfig",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The configuration's id",
+            "in": "path",
+            "name": "config",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunConfigStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRun"
+                }
+              }
+            },
+            "description": "The run, `starting` (as `startProjectRun`), with the configuration and environment laid over the spec: its command, folder and port, and the environment's variables (a Secret link is leased to the runner as `${secret:NAME}`, never sent as a value). The configuration's runner is used when it is online. 409 `conflict` while this configuration has a live run unless `replace`; 409 `no_runner`; 400/409 `invalid_spec` when the result is not a valid spec or links a Secret the project no longer has; 404 for no such configuration or environment"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/run-envs": {
+      "get": {
+        "operationId": "listRunEnvs",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunEnvs"
+                }
+              }
+            },
+            "description": "The project's environments. 404 for no such project"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
+      },
+      "post": {
+        "operationId": "addRunEnv",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRunEnv"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunEnvs"
+                }
+              }
+            },
+            "description": "Added at the end; the environments now. 409 `conflict` for a name in use; 409 `limit_reached` at 8"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/run-envs/{name}": {
+      "delete": {
+        "operationId": "deleteRunEnv",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The environment",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunEnvs"
+                }
+              }
+            },
+            "description": "Removed with every variable kept for it; the environments now. 409 `conflict` for the last one; 404 for no such environment"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/projects/{id}/run/activity": {
       "post": {
         "operationId": "touchProjectRun",
@@ -21308,6 +23731,15 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "description": "One of the project's live runs by id (a project can have one per configuration); default\nthe newest live run.",
+            "in": "query",
+            "name": "run",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -21390,6 +23822,15 @@
               "format": "int32",
               "minimum": 0,
               "type": "integer"
+            }
+          },
+          {
+            "description": "One of the project's live runs by id (a project can have one per configuration); default\nthe newest live run.",
+            "in": "query",
+            "name": "run",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -21487,6 +23928,15 @@
             "in": "path",
             "name": "id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of the project's live runs by id; default the newest live run.",
+            "in": "query",
+            "name": "run",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -21671,6 +24121,134 @@
               }
             },
             "description": "The run, `stopped` (audited and emitted as `project.run_stopped`). 404 for no such project or no live run; 502 `runner_error` when the runner refused: the run stays `stopping` and the Core retries"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/runs": {
+      "get": {
+        "operationId": "listProjectRuns",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many runs, newest first; default 20, at most 100.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectRun"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The project's runs, live or finished, newest first (Core 0.10). 404 for no such project"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
+    "/api/v1/projects/{id}/runs/{run}/stop": {
+      "post": {
+        "operationId": "stopProjectRunById",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The run's id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRun"
+                }
+              }
+            },
+            "description": "That run, `stopped` (as `stopProjectRun`, for one of several live runs). 404 for no such project or when the run is not a live run of it; 502 `runner_error` as `stopProjectRun`"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -22129,6 +24707,112 @@
         "x-ainkrad-scope": "read"
       }
     },
+    "/api/v1/projects/{id}/unarchive": {
+      "post": {
+        "operationId": "unarchiveProject",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectInfo"
+                }
+              }
+            },
+            "description": "Back to `active` (the undo of an archive; audited and emitted as `project.updated`). 404 for no such project; 409 `conflict` when it is not archived"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/projects/{id}/usage": {
+      "get": {
+        "operationId": "getProjectUsage",
+        "parameters": [
+          {
+            "description": "The project's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectUsage"
+                }
+              }
+            },
+            "description": "AI usage of the project: the cost ledger joined to its sessions. Money is USD micros. 404 for no such project"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "projects"
+        ],
+        "x-ainkrad-scope": "read"
+      }
+    },
     "/api/v1/push-token": {
       "delete": {
         "operationId": "clearPushToken",
@@ -22411,6 +25095,59 @@
         "x-ainkrad-scope": "read"
       }
     },
+    "/api/v1/runners/{id}/bundled": {
+      "post": {
+        "operationId": "attestBundledRunner",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundledAttested"
+                }
+              }
+            },
+            "description": "The runner is recorded as the one bundled with the calling Mac app, which alone can then be given a real shell. Only a macOS app device that minted the invite that enrolled the runner may say so (403 otherwise); the app does it only for the runner whose enrolment file it reads on its own disk. Needs `admin` and a step-up"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "pairing"
+        ],
+        "x-ainkrad-destructive": true,
+        "x-ainkrad-scope": "admin"
+      }
+    },
     "/api/v1/runners/{id}/noop": {
       "post": {
         "operationId": "runNoop",
@@ -22560,7 +25297,7 @@
                 }
               }
             },
-            "description": "The install started on the runner's host (audited as `runner.tool_install`). Follow it with `runner.tool_install` events (`op`, `runner`, `tool`, `state` `running`/`done`/`failed`, `percent`, `step`, `reason`, and on `done` the `tools` the runner found) or by polling `GET /runners/{id}/tools/operations/{op}`. A tool installs one at a time per runner; the runner reports it in `tools` when done. Linux runners set up by the installer only. 400 for a tool that is not listed; 409 `install_running`, `runner_offline`, `unsupported_command`; 503 `runner_busy`. Needs `admin` and a step-up"
+            "description": "The install started on the runner's host (audited as `runner.tool_install`). Follow it with `runner.tool_install` events (`op`, `runner`, `tool`, `state` `running`/`done`/`failed`, `percent`, `step`, `reason`, and on `done` the `tools` the runner found) or by polling `GET /runners/{id}/tools/operations/{op}`. A tool installs one at a time per runner; the runner reports it in `tools` when done. The AI tools (claude, codex, opencode, agy) install into the runner's own folder on any runner; the rest need a Linux runner set up by the installer. 400 for a tool that is not listed; 409 `install_running`, `runner_offline`, `unsupported_command`; 503 `runner_busy`. Needs `admin` and a step-up"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -24329,6 +27066,69 @@
         "responses": {
           "204": {
             "description": "The signal was delivered"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "terminals"
+        ],
+        "x-ainkrad-scope": "terminal"
+      }
+    },
+    "/api/v1/terminals/{id}/tail": {
+      "get": {
+        "operationId": "tailTerminal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "1 to 20, default 5",
+            "in": "query",
+            "name": "lines",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalTailView"
+                }
+              }
+            },
+            "description": "The last rows of the screen as text, for a live preview. The terminal scope and the caller's own terminal; no step-up"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

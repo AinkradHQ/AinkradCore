@@ -48,7 +48,7 @@ pub struct NewCompose {
     pub prompt: String,
 }
 
-#[derive(Serialize, Clone, ToSchema)]
+#[derive(Serialize, Deserialize, Clone, ToSchema)]
 pub struct Direction {
     pub name: String,
     pub summary: String,
@@ -139,8 +139,9 @@ pub(crate) fn prompt(user: &str) -> String {
 /// The first `{` to the last `}` of the answer (a model may still wrap it in a sentence or a fence).
 fn parse(answer: &str) -> Result<Vec<Dir>, String> {
     let (a, b) = (answer.find('{'), answer.rfind('}'));
-    let (Some(a), Some(b)) = (a, b).filter(|(a, b)| a < b) else {
-        return Err("the AI did not answer with a design".into());
+    let (a, b) = match (a, b) {
+        (Some(a), Some(b)) if a < b => (a, b),
+        _ => return Err("the AI did not answer with a design".into()),
     };
     let parsed: Answer = serde_json::from_str(&answer[a..=b])
         .map_err(|_| "the AI's answer was not in the expected shape".to_owned())?;

@@ -43,12 +43,14 @@ namespace Ainkrad.Client.Model
         /// <param name="account">The account the session holds, whatever its delivery (an API key or a subscription)..</param>
         /// <param name="agent">The opaque agent id the create named (the key of its chain binding)..</param>
         /// <param name="attempt">Which attempt of its run it is, from 0..</param>
+        /// <param name="canSetEffort">Whether its effort can be set (&#x60;effort&#x60; on &#x60;createAgentSession&#x60; or &#x60;setAgentSessionMode&#x60;): its harness takes one (Claude, Codex) and its runner relays it..</param>
         /// <param name="canStopSubagents">Whether one sub-agent of it (a running &#x60;Task&#x60;/&#x60;Agent&#x60; tool call) can be stopped on its own with &#x60;stopAgentSubagent&#x60;: its harness can (Claude Code) and its runner relays it..</param>
         /// <param name="chain">The chain as it was when the session began (an edit never moves a running run)..</param>
         /// <param name="chainId">The chain the run draws its accounts from; absent for a session that names its account itself or uses the runner&#39;s own login..</param>
         /// <param name="chainPos">The entry of &#x60;chain&#x60; the run sits on, from 0..</param>
         /// <param name="createdAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4). (required).</param>
         /// <param name="createdBy">createdBy (required).</param>
+        /// <param name="effort">Its effort level now (&#x60;low&#x60;, &#x60;medium&#x60;, &#x60;high&#x60;, &#x60;max&#x60;), from the create or the latest &#x60;setAgentSessionMode&#x60;; absent: the harness&#39;s own default..</param>
         /// <param name="endedAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
         /// <param name="failedOverTo">The attempt that replaced this one..</param>
         /// <param name="failoverClass">Why the run was moved off this attempt (&#x60;rate_limited&#x60;, &#x60;quota&#x60;, &#x60;auth&#x60;, &#x60;budget_pool&#x60;, …). An ended run&#39;s last attempt says in &#x60;outcome.failover&#x60; (&#x60;{result, why, reasons}&#x60;) why it could not move on. Admin only..</param>
@@ -81,7 +83,7 @@ namespace Ainkrad.Client.Model
         /// <param name="usage">usage.</param>
         /// <param name="waiting">Set while a chain session waits for an account: it stays &#x60;starting&#x60; until &#x60;until&#x60;, or until &#x60;scheduler.wait_max_secs&#x60; ends the run..</param>
         /// <param name="workspace">The repo and worktree it works in, as the create sent it (&#x60;{\&quot;repo\&quot;, \&quot;base\&quot;, \&quot;branch\&quot;, …}&#x60;); absent for a scratch dir..</param>
-        public AgentSession(long? account = default, string agent = default, long? attempt = default, bool? canStopSubagents = default, List<ChainEntry> chain = default, long? chainId = default, long? chainPos = default, DateTime createdAt = default, string createdBy = default, DateTime endedAt = default, string failedOverTo = default, string failoverClass = default, string failoverOf = default, string folder = default, string harness = default, string harnessSession = default, string id = default, DateTime idleSince = default, long? index = default, long lastSeq = default, bool? live = default, string model = default, Object outcome = default, bool? plan = default, string policy = default, long? projectId = default, long? repicked = default, long? resumes = default, string run = default, string runner = default, List<string> secrets = default, List<long> skipPools = default, string state = default, string title = default, bool? turnCostApproximate = default, long? turnCostUsdMicros = default, DateTime updatedAt = default, string upstreamClass = default, AgentUsage usage = default, AgentWaiting waiting = default, Object workspace = default)
+        public AgentSession(long? account = default, string agent = default, long? attempt = default, bool? canSetEffort = default, bool? canStopSubagents = default, List<ChainEntry> chain = default, long? chainId = default, long? chainPos = default, DateTime createdAt = default, string createdBy = default, string effort = default, DateTime endedAt = default, string failedOverTo = default, string failoverClass = default, string failoverOf = default, string folder = default, string harness = default, string harnessSession = default, string id = default, DateTime idleSince = default, long? index = default, long lastSeq = default, bool? live = default, string model = default, Object outcome = default, bool? plan = default, string policy = default, long? projectId = default, long? repicked = default, long? resumes = default, string run = default, string runner = default, List<string> secrets = default, List<long> skipPools = default, string state = default, string title = default, bool? turnCostApproximate = default, long? turnCostUsdMicros = default, DateTime updatedAt = default, string upstreamClass = default, AgentUsage usage = default, AgentWaiting waiting = default, Object workspace = default)
         {
             this.CreatedAt = createdAt;
             // to ensure "createdBy" is required (not null)
@@ -119,10 +121,12 @@ namespace Ainkrad.Client.Model
             this.Account = account;
             this.Agent = agent;
             this.Attempt = attempt;
+            this.CanSetEffort = canSetEffort;
             this.CanStopSubagents = canStopSubagents;
             this.Chain = chain;
             this.ChainId = chainId;
             this.ChainPos = chainPos;
+            this.Effort = effort;
             this.EndedAt = endedAt;
             this.FailedOverTo = failedOverTo;
             this.FailoverClass = failoverClass;
@@ -173,6 +177,13 @@ namespace Ainkrad.Client.Model
         public long? Attempt { get; set; }
 
         /// <summary>
+        /// Whether its effort can be set (&#x60;effort&#x60; on &#x60;createAgentSession&#x60; or &#x60;setAgentSessionMode&#x60;): its harness takes one (Claude, Codex) and its runner relays it.
+        /// </summary>
+        /// <value>Whether its effort can be set (&#x60;effort&#x60; on &#x60;createAgentSession&#x60; or &#x60;setAgentSessionMode&#x60;): its harness takes one (Claude, Codex) and its runner relays it.</value>
+        [DataMember(Name = "can_set_effort", EmitDefaultValue = true)]
+        public bool? CanSetEffort { get; set; }
+
+        /// <summary>
         /// Whether one sub-agent of it (a running &#x60;Task&#x60;/&#x60;Agent&#x60; tool call) can be stopped on its own with &#x60;stopAgentSubagent&#x60;: its harness can (Claude Code) and its runner relays it.
         /// </summary>
         /// <value>Whether one sub-agent of it (a running &#x60;Task&#x60;/&#x60;Agent&#x60; tool call) can be stopped on its own with &#x60;stopAgentSubagent&#x60;: its harness can (Claude Code) and its runner relays it.</value>
@@ -212,6 +223,13 @@ namespace Ainkrad.Client.Model
         /// </summary>
         [DataMember(Name = "created_by", IsRequired = true, EmitDefaultValue = true)]
         public string CreatedBy { get; set; }
+
+        /// <summary>
+        /// Its effort level now (&#x60;low&#x60;, &#x60;medium&#x60;, &#x60;high&#x60;, &#x60;max&#x60;), from the create or the latest &#x60;setAgentSessionMode&#x60;; absent: the harness&#39;s own default.
+        /// </summary>
+        /// <value>Its effort level now (&#x60;low&#x60;, &#x60;medium&#x60;, &#x60;high&#x60;, &#x60;max&#x60;), from the create or the latest &#x60;setAgentSessionMode&#x60;; absent: the harness&#39;s own default.</value>
+        [DataMember(Name = "effort", EmitDefaultValue = true)]
+        public string Effort { get; set; }
 
         /// <summary>
         /// RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4).
@@ -445,12 +463,14 @@ namespace Ainkrad.Client.Model
             sb.Append("  Account: ").Append(Account).Append("\n");
             sb.Append("  Agent: ").Append(Agent).Append("\n");
             sb.Append("  Attempt: ").Append(Attempt).Append("\n");
+            sb.Append("  CanSetEffort: ").Append(CanSetEffort).Append("\n");
             sb.Append("  CanStopSubagents: ").Append(CanStopSubagents).Append("\n");
             sb.Append("  Chain: ").Append(Chain).Append("\n");
             sb.Append("  ChainId: ").Append(ChainId).Append("\n");
             sb.Append("  ChainPos: ").Append(ChainPos).Append("\n");
             sb.Append("  CreatedAt: ").Append(CreatedAt).Append("\n");
             sb.Append("  CreatedBy: ").Append(CreatedBy).Append("\n");
+            sb.Append("  Effort: ").Append(Effort).Append("\n");
             sb.Append("  EndedAt: ").Append(EndedAt).Append("\n");
             sb.Append("  FailedOverTo: ").Append(FailedOverTo).Append("\n");
             sb.Append("  FailoverClass: ").Append(FailoverClass).Append("\n");

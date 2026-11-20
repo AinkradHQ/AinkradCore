@@ -83,8 +83,8 @@ async fn a_terminal_for_a_session_starts_in_the_sessions_folder() {
     assert!(out.contains("WORKCANARY-1187"), "{out}");
     assert!(!out.contains("KEYCANARY-6620"), "{out}");
 
-    // The same folder named as a plain `cwd` is refused: a sandboxed terminal takes no cwd, only
-    // the Core's session path reveals a folder.
+    // The same folder named as a plain `cwd` is refused (D-17): a sandboxed shell starts only in a
+    // folder the Core resolves from a session or project, never in a path the client names.
     let body = json!({"runner": fx.runner, "cwd": folder, "program": "/bin/sh",
         "size": {"rows": 24, "cols": 80}});
     let (status, t) = fx.call(&dev, "POST", "/api/v1/terminals", Some(body)).await;

@@ -24,6 +24,7 @@ import kotlinx.serialization.Contextual
  * 
  *
  * @param approved 
+ * @param always With `approved`: also allow this kind of call for every session of the session's project from now on (\"Always for this project\"). The Core stores a rule derived from the request (a safe shell command's first words, or a plain path prefix inside the project folder) and approves later matching requests itself, auditing each (`agent.approval_auto`). 400 `rule_not_allowed` (nothing is decided) for a tool or command that can only be approved once, or a session of no project. See `listApprovalRules`.
  * @param reply Told to the agent; a denial's reason.
  */
 @Serializable
@@ -32,6 +33,10 @@ data class AgentDecision (
 
     @SerialName(value = "approved")
     val approved: kotlin.Boolean,
+
+    /* With `approved`: also allow this kind of call for every session of the session's project from now on (\"Always for this project\"). The Core stores a rule derived from the request (a safe shell command's first words, or a plain path prefix inside the project folder) and approves later matching requests itself, auditing each (`agent.approval_auto`). 400 `rule_not_allowed` (nothing is decided) for a tool or command that can only be approved once, or a session of no project. See `listApprovalRules`. */
+    @SerialName(value = "always")
+    val always: kotlin.Boolean? = null,
 
     /* Told to the agent; a denial's reason. */
     @SerialName(value = "reply")
