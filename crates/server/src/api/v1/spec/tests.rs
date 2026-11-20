@@ -43,6 +43,10 @@ fn the_contract_lists_registered_kinds_and_actions() {
             "alarm.raised",
             "audit",
             "connection.health",
+            "hardware.changed",
+            "job.ended",
+            "job.queued",
+            "job.started",
             "notify.delivery",
             "project.archived",
             "project.created",
@@ -69,20 +73,23 @@ fn the_contract_lists_registered_kinds_and_actions() {
     // A module's kinds default to its route scope (`admin`); runner presence is `read`.
     assert_eq!(
         s["Event"]["x-event-scopes"],
-        json!({"account.budget": "admin", "account.expired": "admin", "account.failover": "admin",
+        serde_json::from_str::<Value>(
+            r#"{"account.budget": "admin", "account.expired": "admin", "account.failover": "admin",
             "account.health": "admin", "account.limited": "admin",
             "account.login.done": "admin", "account.login.failed": "admin",
             "account.login.started": "admin", "account.login.url": "admin",
             "agent.approval_decided": "approve", "agent.approval_requested": "approve",
             "agent.created": "agent", "agent.ended": "agent", "agent.message": "agent",
             "agent.state": "agent", "agent.transcript": "agent",
-            "alarm.cleared": "admin", "alarm.raised": "admin", "audit": "admin", "connection.health": "admin", "notify.delivery": "admin", "project.archived": "read", "project.created": "read", "project.mirror_changed": "read", "project.run_gave_up": "read", "project.run_started": "read", "project.run_stopped": "read", "project.spec_saved": "read", "project.updated": "read", "runner.connected": "read",
+            "alarm.cleared": "admin", "alarm.raised": "admin", "audit": "admin", "connection.health": "admin", "hardware.changed": "read", "job.ended": "read", "job.queued": "read", "job.started": "read", "notify.delivery": "admin", "project.archived": "read", "project.created": "read", "project.mirror_changed": "read", "project.run_gave_up": "read", "project.run_started": "read", "project.run_stopped": "read", "project.spec_saved": "read", "project.updated": "read", "runner.connected": "read",
             "runner.degraded": "read", "runner.disconnected": "read",
             "runner.policy": "read", "runner.tool_install": "read",
             "terminal.attached": "terminal", "terminal.closed": "terminal",
             "terminal.detached": "terminal", "terminal.exited": "terminal",
             "terminal.opened": "terminal", "terminal.reap_warning": "terminal",
-            "toy.line": "admin"})
+            "toy.line": "admin"}"#
+        )
+        .unwrap()
     );
     let actions = s["AuditEntry"]["x-audit-actions"].as_array().unwrap();
     assert!(actions.contains(&json!("toy.made")) && actions.contains(&json!("setting.set")));
@@ -110,6 +117,10 @@ fn the_contract_lists_registered_kinds_and_actions() {
             "alarm.raised",
             "audit",
             "connection.health",
+            "hardware.changed",
+            "job.ended",
+            "job.queued",
+            "job.started",
             "notify.delivery",
             "project.archived",
             "project.created",

@@ -299,6 +299,17 @@ async fn a_disabled_consumer_and_no_provider_go_straight_to_the_fallback() {
     assert_eq!(got[0].source, Source::Fallback("disabled"));
     assert_eq!(p.calls.load(Ordering::Relaxed), 0);
 
+    // Enabled again, but with no provider at all.
+    settings::set(
+        &db.0,
+        SettingKey::DecisionsHeavyJobEnabled,
+        Scope::Server,
+        "1",
+        BY,
+        NOW,
+    )
+    .await
+    .unwrap();
     let none = Service::new(
         db.0.clone(),
         Arc::new(Fixed),
