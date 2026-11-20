@@ -70,6 +70,29 @@ pub(super) async fn built_in(app: &App, caller: &Caller) -> Result<(), ApiError>
     })
 }
 
+/// The session folder a sandboxed `project:<id>` terminal was opened in (`sandbox::plan`), found
+/// the same way; `None` for any other terminal.
+async fn terminal_session(app: &App, terminal: &str) -> Result<Option<String>, ApiError> {
+    let row: Option<(Option<String>, String, Option<String>)> =
+        sqlx::query_as("SELECT sandbox, runner, opened_by FROM core_terminals WHERE id = ?")
+            .bind(terminal)
+            .fetch_optional(&app.pool)
+            .await?;
+    let Some((Some(sandbox), runner, Some(by))) = row else {
+        return Ok(None);
+    };
+    let Some(project) = sandbox
+        .strip_prefix("project:")
+        .and_then(|p| p.parse::<i64>().ok())
+    else {
+        return Ok(None);
+    };
+    Ok(
+        super::super::terminals::sandbox::live_project_session(&app.pool, project, &runner, &by)
+            .await?,
+    )
+}
+
 /// Tiers 0 to 3 for one request. Placing and running a heavy job is `heavy/run.rs` (step 2).
 pub(super) async fn answer(app: &App, a: Asked, from_runner: bool) -> Result<Response, ApiError> {
     if a.argv.is_empty() || a.argv.len() > 256 || a.argv[0].is_empty() {
@@ -84,6 +107,13 @@ pub(super) async fn answer(app: &App, a: Asked, from_runner: bool) -> Result<Res
     if a.net == JobNet::Deny {
         return Ok(local("network_deny", false));
     }
+    // A `project:<id>` terminal works in that project's session folder, and the shim's `cwd_rel`
+    // is relative to it: the job must sync that folder, not the main copy.
+    let session = match (&a.session, &a.terminal) {
+        (None, Some(t)) => terminal_session(app, t).await?,
+        (s, _) => s.clone(),
+    };
+    let a = Asked { session, ..a };
     // A session's commands belong to the project the session is in.
     let project = match (a.project, &a.session) {
         (None, Some(session)) => sqlx::query_scalar::<_, Option<i64>>(
@@ -203,6 +233,69 @@ fn ndjson(id: &str, device_name: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::JobNet;
+
+    /// A `project:<id>` terminal works in the project's session folder, and its shim sends
+    /// `cwd_rel` relative to it. With no session the job synced the main copy instead, so on the
+    /// runner the folder was not there and the job was refused (`cwd_rel leaves the project`,
+    /// e2e 2026-11-20). The job now names the session its terminal opened in, found as the open
+    /// found it; any other terminal keeps none.
+    #[tokio::test]
+    async fn a_project_terminals_job_works_in_the_session_folder_the_terminal_opened_in() {
+        let fx = crate::api::v1::tests::fx().await;
+        let (pool, dev) = (&fx.app.pool, fx.dev.id.as_str());
+        sqlx::query(
+            "INSERT INTO core_projects (id, slug, name, source, created_at, updated_at) \
+             VALUES (7, 'shop', 'Shop', 'manual', 'n', 'n')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        for (id, at) in [("as_old", "2026-01-01"), ("as_new", "2026-01-02")] {
+            sqlx::query(
+                "INSERT INTO core_agent_sessions (id, runner, harness, state, created_by, created_at, \
+                 updated_at, project_id, folder) VALUES (?, ?, 'claude', 'running', ?, ?, ?, 7, '/w')",
+            )
+            .bind(id)
+            .bind(dev)
+            .bind(dev)
+            .bind(at)
+            .bind(at)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        for (t, sandbox) in [
+            ("t_proj", Some("project:7")),
+            ("t_home", Some("home")),
+            ("t_old", None),
+        ] {
+            sqlx::query(
+                "INSERT INTO core_terminals (id, runner, status, rows, cols, opened_by, created_at, \
+                 last_activity, sandbox) VALUES (?, ?, 'running', 40, 80, ?, 'n', 0, ?)",
+            )
+            .bind(t)
+            .bind(dev)
+            .bind(dev)
+            .bind(sandbox)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        // The same session the terminal open picks (`sandbox::plan`): the newest live one.
+        let opened = crate::api::v1::terminals::sandbox::live_project_session(pool, 7, dev, dev)
+            .await
+            .unwrap();
+        assert_eq!(opened.as_deref(), Some("as_new"));
+        let got = super::terminal_session(&fx.app, "t_proj").await.unwrap();
+        assert_eq!(got, opened);
+        for t in ["t_home", "t_old", "t_unknown"] {
+            assert_eq!(
+                super::terminal_session(&fx.app, t).await.unwrap(),
+                None,
+                "{t}"
+            );
+        }
+    }
 
     #[test]
     fn a_job_never_gets_more_network_than_the_sandbox_that_asked() {

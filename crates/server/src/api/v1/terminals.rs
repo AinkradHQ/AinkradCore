@@ -27,7 +27,7 @@ use std::time::Instant;
 use utoipa::ToSchema;
 
 mod local;
-mod sandbox;
+pub(crate) mod sandbox;
 pub use local::*;
 mod ssh_ops;
 pub use ssh_ops::{MAX_SMALL_FILE, MAX_UPLOAD, SftpJob, sftp_job, type_into};

@@ -234,9 +234,18 @@ impl Toolchains {
     }
 }
 
+/// The name a download is saved under. rustup is a multi-call binary that picks its role from its
+/// file name: saved under any other name it answers "unknown proxy name" and installs nothing.
+fn download_name(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Installer => "rustup-init",
+        Kind::Tarball => ".download",
+    }
+}
+
 /// Fetches, checks and unpacks (or runs) one build into the empty `dir`.
 async fn install(p: &Pin, build: &Build, dir: &Path) -> Result<(), String> {
-    let file = dir.join(".download");
+    let file = dir.join(download_name(p.kind));
     download(build, &file).await?;
     match p.kind {
         Kind::Tarball => {
@@ -261,42 +270,58 @@ async fn install(p: &Pin, build: &Build, dir: &Path) -> Result<(), String> {
                 .ok_or("could not unpack the download".to_owned())
         }
         Kind::Installer => {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o700))
-                .map_err(|e| e.to_string())?;
-            let home = dir.join("home");
-            std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
-            // An empty environment: only what rustup-init needs, all of it inside `dir`.
-            let status = tokio::process::Command::new(&file)
-                .args([
-                    "-y",
-                    "--no-modify-path",
-                    "--profile",
-                    "minimal",
-                    "--default-toolchain",
-                ])
-                .arg(p.version)
-                .args(["--default-host", build.triple])
-                .env_clear()
-                .env("PATH", "/usr/bin:/bin")
-                .env("HOME", &home)
-                .env("TMPDIR", &home)
-                .env("RUSTUP_HOME", dir.join("rustup"))
-                .env("CARGO_HOME", dir.join("cargo"))
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await
-                .map_err(|e| format!("could not run rustup-init: {e}"))?;
+            let done = run_installer(&file, p.version, build.triple, dir).await;
             let _ = std::fs::remove_file(&file);
-            let _ = std::fs::remove_dir_all(&home);
-            status
-                .success()
-                .then_some(())
-                .ok_or("rustup-init failed".to_owned())
+            done
         }
     }
+}
+
+/// Runs the downloaded `rustup-init` at `file` to install `version` for `triple` into `dir`.
+async fn run_installer(file: &Path, version: &str, triple: &str, dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| e.to_string())?;
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+    // An empty environment: only what rustup-init needs, all of it inside `dir`.
+    let out = tokio::process::Command::new(file)
+        .args([
+            "-y",
+            "--no-modify-path",
+            "--profile",
+            "minimal",
+            "--default-toolchain",
+        ])
+        .arg(version)
+        .args(["--default-host", triple])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", &home)
+        .env("TMPDIR", &home)
+        .env("RUSTUP_HOME", dir.join("rustup"))
+        .env("CARGO_HOME", dir.join("cargo"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| format!("could not run rustup-init: {e}"))?;
+    let _ = std::fs::remove_dir_all(&home);
+    if out.status.success() {
+        return Ok(());
+    }
+    // Its last line says why; without it a failed install is undiagnosable.
+    let err = String::from_utf8_lossy(&out.stderr);
+    let why: String = err
+        .trim()
+        .lines()
+        .last()
+        .unwrap_or("")
+        .chars()
+        .take(200)
+        .collect();
+    Err(format!("rustup-init failed: {why}"))
 }
 
 fn hex_of(bytes: &[u8]) -> String {
