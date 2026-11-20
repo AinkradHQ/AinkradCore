@@ -222,6 +222,9 @@ pub struct PrivateSpec<'a> {
     pub env: &'a BTreeMap<String, String>,
     /// More paths to hide (`--terminal-hide`, the launcher directories), beside [`ALWAYS_HIDDEN`].
     pub hide: &'a [PathBuf],
+    /// Heavy-job shims (E15-3): the directory of the shim links and the directory of this
+    /// terminal's job socket (`job.sock`). Both are readable and read-only; the socket connects.
+    pub jobs: Option<(&'a Path, &'a Path)>,
 }
 
 /// `program args` in a private root: `home` writable and `folder` added when given. `cwd` is the
@@ -256,7 +259,10 @@ pub fn wrap_private(p: &PrivateSpec) -> Result<Boxed, String> {
         let scratch = scratch_dir(p.base, p.user, p.terminal)?;
         env.insert("HOME".to_owned(), h(home));
         env.insert("TMPDIR".to_owned(), h(&scratch));
-        let profile = seatbelt_profile(home, folder, &scratch, net, &hidden);
+        let mut profile = seatbelt_profile(home, folder, &scratch, net, &hidden);
+        if let Some((bin, sock_dir)) = p.jobs {
+            profile.push_str(&jobs_rules(bin, sock_dir));
+        }
         let mut out = vec!["-p".to_owned(), profile, "--".to_owned()];
         // The shell's variables travel in `sandbox-exec`'s own environment, never its argv (a
         // process listing shows every argument): it is a SIP platform binary, which drops
@@ -324,6 +330,11 @@ pub fn wrap_private(p: &PrivateSpec) -> Result<Boxed, String> {
         }
         None => BOX_HOME.to_owned(),
     };
+    if let Some((bin, sock_dir)) = p.jobs {
+        for d in [bin, sock_dir] {
+            out.extend(["--ro-bind".to_owned(), h(d), h(d)]);
+        }
+    }
     for (k, v) in &env {
         out.extend(["--setenv".to_owned(), k.clone(), v.clone()]);
     }
@@ -430,6 +441,26 @@ pub fn seatbelt_profile(
         p.push_str("(allow network-outbound (remote ip \"*:*\") (literal \"/private/var/run/mDNSResponder\"))\n(allow network-bind (local ip \"*:*\"))\n(allow network-inbound (local ip \"*:*\"))\n(deny network-outbound (remote ip \"localhost:*\"))\n(deny network-inbound (local ip \"localhost:*\"))\n");
     }
     p
+}
+
+/// Seatbelt rules for the heavy-job shims: read the shim directory and the socket's, and connect to
+/// `job.sock` only. Appended last, so they win over the hidden state they lie in.
+fn jobs_rules(bin: &Path, sock_dir: &Path) -> String {
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_owned());
+    let (bin, dir) = (real(bin), real(sock_dir));
+    let mut r = format!(
+        "(allow file-read* (subpath \"{}\") (subpath \"{}\"))\n(allow network-outbound (literal \"{}\"))\n",
+        quote(&bin),
+        quote(&dir),
+        quote(&dir.join("job.sock"))
+    );
+    for a in bin.ancestors().skip(1).chain(dir.ancestors().skip(1)) {
+        r.push_str(&format!(
+            "(allow file-read-metadata (literal \"{}\"))\n",
+            quote(a)
+        ));
+    }
+    r
 }
 
 /// `env K=V…` for a command a host-view launcher starts, with the launcher itself left clean: on

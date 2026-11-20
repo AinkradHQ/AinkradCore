@@ -209,6 +209,16 @@ pub trait Executor: Send + Sync + 'static {
         let _ = up;
     }
 
+    /// The Core's own runner serves heavy-job shims to its sessions (E15-3): `bin` is the shim
+    /// directory, `socks` serves each session's socket.
+    fn set_job_shims(
+        &self,
+        socks: std::sync::Arc<crate::v2::jobsock::JobSocks>,
+        bin: std::path::PathBuf,
+    ) {
+        let _ = (socks, bin);
+    }
+
     /// Removes all worktrees owned by an agent session.
     fn cleanup_agent_workspace(
         &self,

@@ -2,7 +2,7 @@
 # Installs the ainkrad-runner systemd unit (E1-12.3; protocol v2 since E1-14.5; terminals and pairing E2-15).
 # Idempotent; does not start unless --start or --pair. Works on the Core's own host and on a remote Linux host.
 #   install-linux.sh [--binary PATH] [--ptyhost PATH] [--pty] [--ca PEM]
-#                    [--agents] [--exec] [--root] [--with-run] [--design] [--pair https://<core> --code - | --invite -] [--start]
+#                    [--agents] [--job-shims] [--exec] [--root] [--with-run] [--design] [--pair https://<core> --code - | --invite -] [--start]
 #                    [--prefix DIR] [--dry-run]
 # --pty      offer terminals (--enable-pty); needs ainkrad-ptyhost (--ptyhost, default: beside --binary). The shell
 #            runs as the unprivileged ainkrad-runner user inside the unit's sandbox. Off unless asked. Also installs zsh
@@ -38,7 +38,7 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-binary="$HERE/../target/release/ainkrad-runner" design=0 design_helper='' ptyhost='' with_run=0 pty=0 agents=0 ca='' pair='' code='' invite='' prefix='' start=0 dry=0 exec_on=0 root=0 ws_root=''
+binary="$HERE/../target/release/ainkrad-runner" design=0 design_helper='' ptyhost='' with_run=0 pty=0 agents=0 ca='' pair='' code='' invite='' prefix='' start=0 dry=0 exec_on=0 root=0 ws_root='' job_shims=0
 run() { printf '+ %s\n' "$*"; [ "$dry" = 1 ] || "$@"; }
 WAS_ACTIVE=1
 # Demoting a root runner: its terminal hosts (ptyhosts, started as root; KillMode=process keeps them alive across a restart)
@@ -179,6 +179,7 @@ while [ $# -gt 0 ]; do
     --pty) pty=1; shift ;;
     --exec) exec_on=1; shift ;;
     --agents) agents=1; shift ;;
+    --job-shims) job_shims=1; shift ;;
     --root) root=1; shift ;;
     --workspace-root) ws_root=${2:?}; shift 2 ;;
     --with-run) with_run=1; shift ;;
@@ -236,6 +237,8 @@ install_bin "$binary" "$prefix/usr/local/bin/ainkrad-runner"
 # Beside the runner, where it looks first. Installed whenever it is at hand, so enabling pty later needs no re-install.
 [ -n "$ptyhost" ] || [ ! -x "$(dirname "$binary")/ainkrad-ptyhost" ] || ptyhost=$(dirname "$binary")/ainkrad-ptyhost
 [ -z "$ptyhost" ] || install_bin "$ptyhost" "$prefix/usr/local/bin/ainkrad-ptyhost"
+# The heavy-job shim (E15-3), the same way: the runner links it as cargo, npm, make and the other build tools.
+[ ! -x "$(dirname "$binary")/ainkrad-job" ] || install_bin "$(dirname "$binary")/ainkrad-job" "$prefix/usr/local/bin/ainkrad-job"
 # The design helper (V6-01), the same way: beside the runner, where it looks first.
 [ -n "$design_helper" ] || [ ! -x "$(dirname "$binary")/ainkrad-design" ] || design_helper=$(dirname "$binary")/ainkrad-design
 [ -z "$design_helper" ] || install_bin "$design_helper" "$prefix/usr/local/bin/ainkrad-design"
@@ -248,6 +251,8 @@ args=''
 [ "$pty" = 1 ] && args="--enable-pty"
 [ "$agents" = 0 ] || args="${args:+$args }--enable-agents"
 [ "$exec_on" = 1 ] && args="${args:+$args }--enable-exec"
+# The Core's own runner only (E15-3): terminals get the heavy-job shims (needs ainkrad-job beside the runner).
+[ "$job_shims" = 0 ] || args="${args:+$args }--job-shims"
 [ -z "$ca" ] || args="${args:+$args }--ca $ca"
 [ -z "$ws_root" ] || args="${args:+$args }--workspace-root $ws_root"
 if [ -n "$prefix" ]; then run install -d "$prefix/etc/ainkrad-runner"; fi

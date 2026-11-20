@@ -143,6 +143,7 @@ pub async fn run_with_defaults(available: Vec<Arc<dyn Module>>, default_on: &[&s
         ["serve", "--config", file, given @ ..] => {
             match ainkrad_core_server::ops::config::Config::load(Path::new(file)) {
                 Ok(config) => {
+                    ainkrad_core_server::heavy::set_workspace_root(config.workspace_root.clone());
                     let flags = config.serve_flags(given);
                     let flags: Vec<&str> = flags.iter().map(String::as_str).collect();
                     match serve_flags(&flags) {

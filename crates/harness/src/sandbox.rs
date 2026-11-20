@@ -582,6 +582,20 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         }
         // The session's connection tools socket (C4b), whatever the network mode.
         tools::apply(&mut c, spec, &mut bound)?;
+        // The heavy-job shims (E15-3): their links and the session's own socket directory,
+        // read-only; connecting to the socket needs no write access.
+        if let Some(j) = &spec.job_shims {
+            let dir = j.socket.parent().filter(|d| d.is_absolute());
+            let (Some(dir), true) = (dir, j.bin_dir.is_absolute()) else {
+                return Err(io::Error::other("the job shims slot needs absolute paths"));
+            };
+            for d in [j.bin_dir.as_path(), dir] {
+                if !d.is_dir() {
+                    return Err(io::Error::other("the job shims slot needs its directories"));
+                }
+                c.arg("--ro-bind").arg(d).arg(d);
+            }
+        }
         c.args(["--remount-ro", "/dev", "--remount-ro", "/"])
             .arg("--chdir")
             .arg(&spec.cwd)

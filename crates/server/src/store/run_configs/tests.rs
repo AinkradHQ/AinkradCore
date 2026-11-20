@@ -28,6 +28,7 @@ fn cfg() -> Config {
         service: None,
         port: Some(3000),
         restart: false,
+        kind: "service".into(),
         position: 0,
         created_at: String::new(),
         updated_at: String::new(),

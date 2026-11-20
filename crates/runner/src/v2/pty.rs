@@ -81,6 +81,9 @@ pub struct PtyConfig {
     /// Whether this runner may open a host-view (`real`, or no `sandbox` at all) shell: only the
     /// runner started with `--bundled`, a flag only the Mac app's LaunchAgent sets (M4).
     pub allow_real: bool,
+    /// The Core's own runner (`--job-shims`, E15-3): private-root terminals get the heavy-job shims
+    /// first on `PATH` and a job socket (`jobsock`). Never the host-view shell of This Mac.
+    pub job_shims: bool,
 }
 
 /// The `slots` key a runner that honours `PtyOpen::sandbox` advertises (D-17).
@@ -113,6 +116,25 @@ impl PtyConfig {
             sandbox_dir: None,
             private_net: super::termbox::Net::Host,
             allow_real: true,
+            job_shims: false,
+        }
+    }
+}
+
+/// The shims and sockets of a runner that serves heavy jobs.
+struct Jobs {
+    socks: Arc<super::jobsock::JobSocks>,
+    /// `<state>/shims/bin`.
+    bin: PathBuf,
+}
+
+/// Closes a terminal's job socket unless the terminal started.
+pub(crate) struct JobGuard(pub(crate) Option<(Arc<super::jobsock::JobSocks>, String)>);
+
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        if let Some((socks, id)) = self.0.take() {
+            socks.close(&id);
         }
     }
 }
@@ -149,6 +171,8 @@ pub struct PtyDriver {
     trust: Mutex<Option<(Vec<u8>, String)>>,
     /// Ssh terminals whose keys are being redeemed (see `check_ssh`): they count against capacity.
     reserved: Arc<AtomicUsize>,
+    /// Set once by `start_jobs`, when the runner is the Core's and the shim binary is installed.
+    jobs: std::sync::OnceLock<Jobs>,
     /// Whether this runner opens terminals of any purpose: the Core host's built-in runner
     /// (`--workspace-root`) and This Mac (`--bundled`). A remote runner opens only the guided
     /// sign-in (`PtyOpen::purpose = login`); any other open is `terminal_target_removed` (E15-4).
@@ -264,7 +288,44 @@ impl PtyDriver {
             clients: Mutex::default(),
             trust: Mutex::default(),
             reserved: Arc::default(),
+            jobs: std::sync::OnceLock::new(),
             local: true,
+        }
+    }
+
+    /// Whether this runner was started with `--job-shims`.
+    pub fn wants_jobs(&self) -> bool {
+        self.config.job_shims
+    }
+
+    /// Installs the shims under `state` and serves terminals' job sockets through `up`. Quietly
+    /// does nothing when the `ainkrad-job` binary is not next to this one: terminals then run
+    /// every command locally, as before.
+    pub fn start_jobs(
+        &self,
+        state: &Path,
+        up: crate::workspace::relay::Upstream,
+    ) -> Option<(Arc<super::jobsock::JobSocks>, PathBuf)> {
+        let Some(shim) = std::env::current_exe()
+            .ok()
+            .and_then(|e| super::jobsock::shim_binary(&e))
+        else {
+            tracing::warn!("ainkrad-job is not installed next to the runner: no job shims");
+            return None;
+        };
+        match super::jobsock::install_shims(state, &shim) {
+            Ok(bin) => {
+                let socks = super::jobsock::JobSocks::new(state.join("jobsock"), up);
+                let _ = self.jobs.set(Jobs {
+                    socks: Arc::clone(&socks),
+                    bin: bin.clone(),
+                });
+                Some((socks, bin))
+            }
+            Err(e) => {
+                tracing::warn!("could not install the job shims: {e}");
+                None
+            }
         }
     }
 
@@ -577,9 +638,41 @@ impl PtyDriver {
             return Err(invalid("a terminal network needs the terminal sandbox"));
         }
         let id = new_id().map_err(|e| err(ErrorCode::Internal, e.to_string()))?;
+        // Heavy jobs (E15-3): a private-root shell gets the shims and a socket of its own.
+        let mut job_guard = JobGuard(None);
+        let mut job_mount: Option<(PathBuf, PathBuf)> = None;
+        if private && let Some(j) = self.jobs.get() {
+            use ainkrad_proto::v2::SandboxMode as M;
+            let (session, project) = match &mode {
+                Some(M::Session(s)) => (Some(s.clone()), None),
+                // `p_<number>`; anything else leaves the Core to find the project from the terminal.
+                Some(M::Project(p)) => (None, p.trim_start_matches("p_").parse().ok()),
+                _ => (None, None),
+            };
+            let origin = super::jobsock::Origin {
+                terminal: Some(id.clone()),
+                session,
+                project,
+                // A home terminal has no folder: its commands stay local.
+                folder: matches!(&mode, Some(M::Session(_) | M::Project(_)))
+                    .then(|| req.cwd.clone().map(PathBuf::from))
+                    .flatten(),
+            };
+            match j.socks.open(&id, origin).await {
+                Ok(sock) => {
+                    let path = spec.env.get("PATH").cloned();
+                    spec.env
+                        .extend(super::jobsock::shim_env(path.as_deref(), &j.bin, &sock));
+                    job_mount = Some((j.bin.clone(), j.socks.dir_of(&id)));
+                    job_guard = JobGuard(Some((Arc::clone(&j.socks), id.clone())));
+                }
+                Err(e) => tracing::warn!("no job socket for terminal {id}: {e}"),
+            }
+        }
         if private {
             self.reap_scratch().await;
-            self.private_shell(mode.as_ref().expect("private"), req, &mut spec, &id)
+            let jobs = job_mount.as_ref().map(|(b, d)| (b.as_path(), d.as_path()));
+            self.private_shell(mode.as_ref().expect("private"), req, &mut spec, &id, jobs)
                 .map_err(|m| invalid(&m))?;
         } else if self.config.hide.is_some() || self.config.user.is_some() {
             // The shell the host would start by default is named here, so the wrapper can run it.
@@ -688,6 +781,8 @@ impl PtyDriver {
             tracing::error!(host = %host.display(), error = %m, "could not start a terminal");
             return Err(err(ErrorCode::SpawnFailed, m));
         }
+        // Started: the socket now lives as long as the terminal (swept once it is gone).
+        job_guard.0 = None;
         Ok(id)
     }
 
@@ -702,6 +797,9 @@ impl PtyDriver {
             .iter()
             .map(|h| h.id.clone())
             .collect();
+        if let Some(j) = self.jobs.get() {
+            j.socks.sweep(&live);
+        }
         let _ =
             tokio::task::spawn_blocking(move || super::termbox::reap_scratch(&base, &live)).await;
     }
@@ -714,6 +812,7 @@ impl PtyDriver {
         req: &PtyOpen,
         spec: &mut Spec,
         id: &str,
+        jobs: Option<(&Path, &Path)>,
     ) -> Result<(), String> {
         use super::termbox as tb;
         use ainkrad_proto::v2::SandboxMode as M;
@@ -795,6 +894,7 @@ impl PtyDriver {
             terminal: id,
             env: &shell_env,
             hide: &hide,
+            jobs,
         })?;
         if let Some((f, was)) = &folder {
             tb::recheck_folder(f, *was)?;

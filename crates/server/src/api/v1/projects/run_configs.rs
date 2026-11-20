@@ -36,6 +36,10 @@ pub struct RunConfig {
     /// times in 10 minutes, then gives up (event `project.run_gave_up`). A run a person stopped
     /// does not restart.
     pub restart: bool,
+    /// `service` (a container that keeps running) or `task` (runs as a heavy job on the hardware
+    /// `place_job` picks, with the environment's variables as leased env). Absent: `service`.
+    #[schema(required = false)]
+    pub kind: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -51,6 +55,7 @@ impl From<Config> for RunConfig {
             service: c.service,
             port: c.port,
             restart: c.restart,
+            kind: Some(c.kind),
             created_at: ts(&c.created_at),
             updated_at: ts(&c.updated_at),
         }
@@ -70,6 +75,8 @@ pub struct RunConfigBody {
     /// 0 clears it.
     pub port: Option<i64>,
     pub restart: Option<bool>,
+    /// `service` or `task`.
+    pub kind: Option<String>,
 }
 
 impl From<RunConfigBody> for Input {
@@ -82,6 +89,7 @@ impl From<RunConfigBody> for Input {
             service: b.service,
             port: b.port,
             restart: b.restart,
+            kind: b.kind,
         }
     }
 }

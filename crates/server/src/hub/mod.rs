@@ -824,6 +824,22 @@ impl Hub {
         self.send_command(runner, command)
     }
 
+    /// `job.run` (E15-3): the Core runs a heavy job on a runner, in a cache the sync ops filled (or,
+    /// on the Core's own runner, in the workspace). Only that op passes.
+    pub(crate) fn dispatch_job(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+    ) -> Result<Dispatched, StreamError> {
+        if !matches!(command, Command::JobRun(_)) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "only job.run uses the job path",
+            ));
+        }
+        self.send_command(runner, command)
+    }
+
     /// Design helper ops (V6-01): the runner runs its own fixed `ainkrad-design` helper, or headless
     /// Chromium, in a sandbox with no network, on data the Core sends; no program or path the caller
     /// chooses runs. So a module may send them without a step-up. Only the design commands pass.

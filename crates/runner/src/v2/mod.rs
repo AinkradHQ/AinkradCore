@@ -38,6 +38,7 @@ mod facts;
 mod flow;
 pub mod hwgate;
 pub mod hwsource;
+pub mod jobsock;
 pub mod job;
 pub mod key;
 pub mod login;

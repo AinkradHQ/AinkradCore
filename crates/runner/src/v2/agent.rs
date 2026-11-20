@@ -204,6 +204,7 @@ trait Harness: Send + Sync {
     fn cleanup_agent_workspace<'a>(&'a self, session: &'a str, generation: i64) -> Fut<'a, ()>;
     fn discard_agent_workspaces(&self, name: &str, prefix: bool, keep: &[String]);
     fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream);
+    fn set_job_shims(&self, socks: Arc<super::jobsock::JobSocks>, bin: PathBuf);
     fn work_dir(&self, job: &Job) -> Option<PathBuf>;
 }
 
@@ -253,6 +254,9 @@ impl<E: Executor> Harness for E {
     }
     fn set_mirror_upstream(&self, up: crate::workspace::relay::Upstream) {
         Executor::set_mirror_upstream(self, up);
+    }
+    fn set_job_shims(&self, socks: Arc<super::jobsock::JobSocks>, bin: PathBuf) {
+        Executor::set_job_shims(self, socks, bin);
     }
     fn work_dir(&self, job: &Job) -> Option<PathBuf> {
         Executor::work_dir(self, job)
@@ -398,6 +402,12 @@ impl AgentDriver {
     /// How a project repo's copy on the Core is read (`mirror::http_upstream`).
     pub fn with_mirror(self, up: crate::workspace::relay::Upstream) -> Self {
         self.harness.set_mirror_upstream(up);
+        self
+    }
+
+    /// The Core's own runner: sessions get the heavy-job shims (`jobsock`).
+    pub fn with_job_shims(self, socks: Arc<super::jobsock::JobSocks>, bin: PathBuf) -> Self {
+        self.harness.set_job_shims(socks, bin);
         self
     }
 
