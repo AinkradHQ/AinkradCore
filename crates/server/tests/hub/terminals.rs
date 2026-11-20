@@ -136,6 +136,13 @@ impl Fx {
         let base = format!("http://{}", core.host);
         let st = state(name);
         let e = paired(&core, &base, None, &st).await;
+        // Terminals open on the Core's own runner only (E15 M6, spec §9): this one stands in for it.
+        sqlx::query("UPDATE core_pairings SET sas = ? WHERE device_id = ?")
+            .bind(ainkrad_core_server::store::gov::LOCAL_ENROL_SAS)
+            .bind(&e.device_id)
+            .execute(&core.app.pool)
+            .await
+            .unwrap();
         let dir = PathBuf::from(format!("/tmp/ath-{name}-{}", std::process::id() % 100_000));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
