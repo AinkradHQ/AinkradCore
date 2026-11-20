@@ -173,7 +173,8 @@ async fn update_runs_the_same_rules_and_keeps_the_old_list_when_refused() {
         pool(&fx, "s2", "claude-sub").await,
     );
     let c = make(&fx, "main", &[s1, a]).await;
-    let bad = [spec(s1), spec(s2)];
+    // A pool is in a chain once (several subscriptions are fine since E7: D-18).
+    let bad = [spec(s1), spec(s1)];
     assert_eq!(
         code(ch::update(p, c.id, "main", &bad, "d_x", BY, NOW).await),
         "bad_request"

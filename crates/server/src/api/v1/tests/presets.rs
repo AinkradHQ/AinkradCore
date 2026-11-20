@@ -164,7 +164,8 @@ async fn a_preset_account_needs_no_key_prefix_and_is_bound_to_its_frozen_host() 
 async fn placed(fx: &Fx, s: &crate::ops::secretbox::SecretBox, provider: &str, key: &str) -> i64 {
     let new = acc::NewAccount {
         provider,
-        label: "acct",
+        // The label is unique across providers.
+        label: provider,
         value: key,
         runners: &[],
         cap: None,

@@ -161,7 +161,7 @@ async fn fast(mut fx: Fx) -> Fx {
 }
 
 /// The contract: all the routes are `admin`; only the restart, the runner and backup logs and the
-/// backup retention write are destructive (D4, D-4).
+/// backup retention write and the Core update are destructive (D4, D-4).
 #[tokio::test]
 async fn the_contract_declares_admin_everywhere_and_step_up_only_where_d4_says() {
     let spec: Value = serde_json::from_str(&super::super::spec::json()).unwrap();
@@ -184,7 +184,8 @@ async fn the_contract_declares_admin_everywhere_and_step_up_only_where_d4_says()
             "/api/v1/system/backups/retention",
             "/api/v1/system/logs/backup",
             "/api/v1/system/logs/runner",
-            "/api/v1/system/restart"
+            "/api/v1/system/restart",
+            "/api/v1/system/update"
         ]
     );
     let n = spec["paths"]

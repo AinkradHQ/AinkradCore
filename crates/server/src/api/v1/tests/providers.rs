@@ -174,7 +174,7 @@ async fn the_built_ins_are_fixed_and_a_user_definition_is_stored_audited_and_ver
     prov::delete(p, "router", "d_x", BY).await.unwrap();
     assert_eq!(
         prov::list(p).await.unwrap().len(),
-        4 + prov::presets().len()
+        prov::built_in().len() + prov::presets().len()
     );
     let actions: Vec<String> = sqlx::query_scalar(
         "SELECT action FROM audit_events WHERE action LIKE 'provider.%' ORDER BY seq",
