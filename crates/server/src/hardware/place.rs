@@ -98,6 +98,18 @@ fn core_full(c: &HwView) -> bool {
     c.sustained_full || c.sessions >= (cores / 2).max(1)
 }
 
+/// Why a session may not be pinned to `device` (E15 security review M9): it is not online, or
+/// it is paused or degraded. Pause is the user's "keep work off this box"; no path skips it.
+pub fn pin_refusal(hw: &[HwView], device: &str) -> Option<&'static str> {
+    match hw.iter().find(|h| h.device == device) {
+        None => Some("offline"),
+        Some(h) if !h.online => Some("offline"),
+        Some(h) if h.paused => Some("paused"),
+        Some(h) if h.degraded => Some("degraded"),
+        Some(_) => None,
+    }
+}
+
 /// The placement of a session pinned to `device` (a runner-bound login: codex-sub, Antigravity).
 pub fn pinned(device: &str) -> Placed {
     Placed {

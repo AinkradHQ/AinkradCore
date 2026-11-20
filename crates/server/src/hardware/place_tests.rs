@@ -362,3 +362,19 @@ fn no_hardware_at_all_is_the_core_or_an_empty_device() {
         "core_no_fit:xcode"
     );
 }
+
+#[test]
+fn a_session_is_never_pinned_to_a_paused_degraded_or_offline_runner() {
+    // M9: both pinning paths (a runner-bound login, and no hardware fits) ask this first.
+    let hw = [
+        hw("ok", HwKind::Runner),
+        with(hw("p", HwKind::Runner), |h| h.paused = true),
+        with(hw("d", HwKind::Runner), |h| h.degraded = true),
+        with(hw("o", HwKind::Runner), |h| h.online = false),
+    ];
+    assert_eq!(pin_refusal(&hw, "ok"), None);
+    assert_eq!(pin_refusal(&hw, "p"), Some("paused"));
+    assert_eq!(pin_refusal(&hw, "d"), Some("degraded"));
+    assert_eq!(pin_refusal(&hw, "o"), Some("offline"));
+    assert_eq!(pin_refusal(&hw, "gone"), Some("offline"));
+}
