@@ -258,15 +258,15 @@ pub fn wrap_private(p: &PrivateSpec) -> Result<Boxed, String> {
         env.insert("TMPDIR".to_owned(), h(&scratch));
         let profile = seatbelt_profile(home, folder, &scratch, net, &hidden);
         let mut out = vec!["-p".to_owned(), profile, "--".to_owned()];
-        // `env` sets the shell's variables: the launcher's own environment stays clean.
-        out.push("/usr/bin/env".to_owned());
-        out.extend(env.iter().map(|(k, v)| format!("{k}={v}")));
+        // The shell's variables travel in `sandbox-exec`'s own environment, never its argv (a
+        // process listing shows every argument): it is a SIP platform binary, which drops
+        // `DYLD_*`, and the API already refuses loader variables.
         out.push(program.to_owned());
         out.extend(args.iter().cloned());
         return Ok(Boxed {
             launcher: SANDBOX_EXEC.to_owned(),
             args: out,
-            env: launch_env,
+            env: env.into_iter().collect(),
             cwd: h(folder.unwrap_or(home)),
         });
     }
@@ -436,22 +436,52 @@ pub fn seatbelt_profile(
 /// Linux each variable becomes a `--setenv` before `--chdir`, on macOS the program is run through
 /// `/usr/bin/env` after `--`. Returns the argv unchanged when there is nothing to set.
 pub fn inject_env(args: &mut Vec<String>, env: &BTreeMap<String, String>) {
-    if env.is_empty() {
+    // macOS: the variables stay in `sandbox-exec`'s own environment (see `wrap_private`).
+    if cfg!(target_os = "macos") || env.is_empty() {
         return;
     }
-    if cfg!(target_os = "macos") {
-        if let Some(at) = args.iter().position(|a| a == "--") {
-            let mut ins = vec!["/usr/bin/env".to_owned()];
-            ins.extend(env.iter().map(|(k, v)| format!("{k}={v}")));
-            args.splice(at + 1..at + 1, ins);
-        }
-    } else if let Some(at) = args.iter().position(|a| a == "--chdir") {
+    if let Some(at) = args.iter().position(|a| a == "--chdir") {
         let ins: Vec<String> = env
             .iter()
             .flat_map(|(k, v)| ["--setenv".to_owned(), k.clone(), v.clone()])
             .collect();
         args.splice(at..at, ins);
     }
+}
+
+/// Moves every `--setenv K V` of bubblewrap's argv into the bytes of a pipe, so no variable (a
+/// terminal's secret) is in the process listing: `/proc/<pid>/cmdline` is world-readable, a pipe is
+/// not. The first one is replaced by `--args 3` (bubblewrap reads its options from descriptor 3
+/// there, in order, so `--clearenv` still comes first). The bytes are NUL-terminated arguments;
+/// `None` when there is nothing to move or the launcher is not bubblewrap (macOS: `sandbox-exec`
+/// has no such option, its variables travel in its environment). The caller hands them to the host
+/// as `Spec::fd3`.
+pub fn setenv_to_fd(args: &mut Vec<String>) -> Option<Vec<u8>> {
+    if cfg!(target_os = "macos") {
+        return None;
+    }
+    let first = args.iter().position(|a| a == "--setenv")?;
+    let mut bytes = Vec::new();
+    let mut kept = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--setenv" && i + 2 < args.len() {
+            for a in &args[i..i + 3] {
+                bytes.extend_from_slice(a.as_bytes());
+                bytes.push(0);
+            }
+            if i == first {
+                kept.push("--args".to_owned());
+                kept.push("3".to_owned());
+            }
+            i += 3;
+        } else {
+            kept.push(args[i].clone());
+            i += 1;
+        }
+    }
+    *args = kept;
+    Some(bytes)
 }
 
 /// The environment a host-view launcher gets itself.

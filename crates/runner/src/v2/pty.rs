@@ -117,6 +117,26 @@ impl PtyConfig {
     }
 }
 
+/// Moves the launcher's `--setenv` pairs (the shell's environment, secrets included) out of `args`
+/// and into `spec.fd3`, which the host hands the launcher as `--args 3` (never argv, env or disk).
+fn fd3_from_args(spec: &mut Spec, args: &mut Vec<String>) -> Result<(), String> {
+    // An ssh terminal's descriptor 3 already carries its key handoff, and it takes no env of the
+    // client's: its few variables (no secrets) stay in the argv.
+    if spec.fd3.is_some() {
+        return Ok(());
+    }
+    if let Some(mut bytes) = super::termbox::setenv_to_fd(args) {
+        let too_big = bytes.len() > ainkrad_ptyhost::pty::FD3_MAX / 4 * 3 - 64;
+        if !too_big {
+            spec.fd3 = Some(ainkrad_ptyhost::pty::Hidden(STANDARD.encode(&bytes)));
+        }
+        zeroize::Zeroize::zeroize(&mut bytes);
+        if too_big {
+            return Err("the terminal's environment is too large (at most about 9 KiB)".to_owned());
+        }
+    }
+    Ok(())
+}
 pub struct PtyDriver {
     config: PtyConfig,
     /// The scrollback disk budget across this runner's terminals (E2-06.2), in bytes.
@@ -575,8 +595,16 @@ impl PtyDriver {
                 // The launcher (bwrap, sandbox-exec) starts with a clean environment; the shell's
                 // variables reach it only through the launcher's own options, so a client's
                 // `LD_PRELOAD` cannot load into the launcher outside the sandbox.
-                super::termbox::inject_env(&mut args, &spec.env);
-                spec.env = super::termbox::launcher_env();
+                if cfg!(target_os = "macos") {
+                    // `sandbox-exec` gets the variables as its own environment (SIP: no DYLD_*).
+                } else {
+                    super::termbox::inject_env(&mut args, &spec.env);
+                    spec.env = super::termbox::launcher_env();
+                    // Not in argv: a process listing shows every argument, to every user.
+                    if self.config.user.is_none() {
+                        fd3_from_args(&mut spec, &mut args).map_err(|e| invalid(&e))?;
+                    }
+                }
             }
             if let Some(user) = &self.config.user {
                 if !super::termbox::valid_user(user) || !launcher.starts_with('/') {
@@ -747,7 +775,9 @@ impl PtyDriver {
         }
         spec.env = b.env.into_iter().collect();
         spec.program = Some(b.launcher);
-        spec.args = b.args;
+        let mut args = b.args;
+        fd3_from_args(spec, &mut args)?;
+        spec.args = args;
         spec.cwd = Some(b.cwd);
         Ok(())
     }
