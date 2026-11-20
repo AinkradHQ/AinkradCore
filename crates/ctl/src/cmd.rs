@@ -142,9 +142,9 @@ pub const USAGE: &str =
       One signed request for a route with no command of its own (e.g. /api/v1/hardware,
       /api/v1/jobs); prints the answer's JSON as is. Scopes and step-up apply as usual.
   term ... --unlock  |  api ... --unlock
-      Opens the app unlock first, for this one command (terminals and job writes need it): the
-      step-up key and its passphrase sign it, as the app does with Touch ID; the token is kept
-      in memory only. Audited as auth.unlock.
+      Test builds only (--features test-support, the e2e kit): opens the app unlock first, for
+      this one command, with the step-up key and its passphrase; the token is kept in memory
+      only. A shipped ctl refuses the flag.
   events tail [--after <seq>] [--no-follow]
       Events after <seq> (default: from now), one JSON object per line (every kind this
       device may see, runner.connected/.disconnected/.degraded included); follows the live
@@ -317,11 +317,18 @@ impl Args {
     }
 
     /// A client for the paired device in the keystore.
-    /// `client`, unlocked first when `--unlock` is given (terminals and `api` only).
+    /// `client`, unlocked first when `--unlock` is given (terminals and `api` only; a ctl built
+    /// with `test-support`, the e2e kit's: a shipped one refuses the flag).
     async fn unlocked_client(&self) -> Result<Client, Error> {
+        #[allow(unused_mut)]
         let mut c = self.client()?;
         if self.on("--unlock") {
+            #[cfg(feature = "test-support")]
             c.unlock().await?;
+            #[cfg(not(feature = "test-support"))]
+            return Err(Error::Usage(
+                "--unlock exists only in a test build (--features test-support); terminals open from the Ainkrad app".into(),
+            ));
         }
         Ok(c)
     }

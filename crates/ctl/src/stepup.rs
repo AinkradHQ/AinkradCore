@@ -33,7 +33,8 @@ pub fn message(core_fp: &str, device: &str, session: &str, challenge: &str) -> V
 }
 
 /// What the step-up key signs for a **session** proof (the app unlock): V2 and the purpose.
-/// The CLI makes one only for `--unlock`, with the step-up key (a routine key never unlocks).
+/// The CLI makes one only for `--unlock` in a `test-support` build, with the step-up key (a
+/// routine key never unlocks).
 pub fn message_v2(
     core_fp: &str,
     device: &str,

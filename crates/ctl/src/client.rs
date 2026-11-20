@@ -52,9 +52,9 @@ pub struct Client {
     pub clock_offset: i64,
     /// The step-up key's file (beside the keystore) and where its passphrase comes from.
     pub stepup_file: Option<std::path::PathBuf>,
-    /// The app-unlock token, set by `Client::unlock_with`: `--unlock` (with the step-up key, for
-    /// this one command) or a test fixture. Without it, commands that need the unlock are
-    /// refused with a plain message.
+    /// The app-unlock token, set by `Client::unlock_with` (a test fixture, or `--unlock` in a
+    /// `test-support` build such as the e2e kit's). A shipped CLI does not unlock: commands that
+    /// need the unlock are refused with a plain message.
     pub unlock_token: Option<String>,
     pub passphrase: Passphrase,
     /// The `Retry-After` seconds of the last refused request that carried one (a 429's pacing).
@@ -415,9 +415,11 @@ impl Client {
         .await
     }
 
-    /// The app unlock for this command only (`--unlock`): the same step-up key and passphrase as
-    /// `elevate`, signing the V2 message with purpose `session`, as the app does with its own key.
-    /// The token lives in this process and is gone when it exits.
+    /// The app unlock for this command only (`--unlock`, test builds only: `test-support`): the
+    /// same step-up key and passphrase as `elevate`, signing the V2 message with purpose `session`,
+    /// as the app does with its own key. The token lives in this process and is gone when it exits.
+    /// A shipped ctl has no unlock at all.
+    #[cfg(feature = "test-support")]
     pub async fn unlock(&mut self) -> Result<(), Error> {
         let path = self.stepup_file.clone().ok_or_else(|| {
             Error::StepUp("this device has no step-up key, so it cannot unlock".into())
