@@ -265,6 +265,6 @@ pub async fn history(
     drop(conn);
     let all = store::recent(&app.pool, id, q.limit.unwrap_or(20).clamp(1, 100)).await?;
     Ok(Json(
-        all.into_iter().map(|r| view(r, p.idle_minutes)).collect(),
+        all.into_iter().map(|r| view(r, (!p.idle_never).then_some(p.idle_minutes))).collect(),
     ))
 }

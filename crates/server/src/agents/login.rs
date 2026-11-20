@@ -241,7 +241,7 @@ async fn run_start(app: App, l: Login, harness: String, bound: bool) {
                 && u.code.as_deref().is_none_or(device_code_ok) =>
         {
             let change = Change {
-                url: Some(&u.url).filter(|u| !u.is_empty()),
+                url: Some(u.url.as_str()).filter(|u| !u.is_empty()),
                 code: u.code.as_deref(),
                 ..Change::default()
             };

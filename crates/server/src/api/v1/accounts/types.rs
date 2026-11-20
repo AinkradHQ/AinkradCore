@@ -160,6 +160,7 @@ impl ProviderAccount {
 impl From<acc::Account> for ProviderAccount {
     fn from(a: acc::Account) -> Self {
         let models_enforced = !crate::store::account_keys::subscription_provider(&a.provider);
+        let agy_sub = a.provider == "agy-sub";
         Self {
             id: a.id,
             provider: a.provider,
@@ -190,7 +191,7 @@ impl From<acc::Account> for ProviderAccount {
             usage: None,
             runner: None,
             models_enforced,
-            wipe_note: (a.provider == "agy-sub").then(|| {
+            wipe_note: agy_sub.then(|| {
                 "Removing this account cannot clear its login from the runner's keyring. Sign out in Antigravity on that runner.".to_owned()
             }),
         }

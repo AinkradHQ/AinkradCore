@@ -525,7 +525,7 @@ pub struct UpdateEvent {
     pub text: String,
 }
 
-#[derive(Debug, Serialize, ToSchema, PartialEq, Eq)]
+#[derive(Debug, Serialize, ToSchema, PartialEq)]
 pub struct UpdateStatus {
     /// What runs now (this process's version).
     pub current: String,
