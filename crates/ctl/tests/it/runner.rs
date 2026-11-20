@@ -50,14 +50,21 @@ pub fn loopback_core_at(name: &str, port: u16, public: u16) -> Core {
 /// The Core's built-in runner, enrolled as the installer does (`runner-enroll-local`): its state
 /// under `<dir>/<name>`. Returns its device id.
 pub fn enroll_local_runner(core: &Core, url: &str, name: &str) -> String {
+    // It takes the Core's https address only; the rig's Core is plain loopback, so the enrolment is
+    // pointed at that one afterwards.
+    let state = core.dir.join(name);
     let o = Command::new(server_bin())
         .arg("runner-enroll-local")
         .arg(&core.db)
-        .arg(core.dir.join(name))
-        .arg(url)
+        .arg(&state)
+        .arg("https://localhost")
         .output()
         .unwrap();
     assert!(o.status.success(), "{o:?}");
+    let file = state.join("enrolment.json");
+    let mut e: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    e["url"] = Value::from(url);
+    std::fs::write(&file, serde_json::to_vec(&e).unwrap()).unwrap();
     String::from_utf8(o.stdout).unwrap().trim().to_owned()
 }
 

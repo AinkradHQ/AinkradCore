@@ -152,8 +152,11 @@ rig_up() { # Core, device A (admin) and B (terminal+agent), a runner with pty an
   wait "$pb" || { EV="B's pairing failed"; return 1; }
   # Terminals open on the Core's own runner only (E15 M6, spec 9): the rig's runner is the built-in one, enrolled as
   # the installer does it and run with the Core's workspace root.
-  RID=$("$SRV" runner-enroll-local "$DB" "$RSTATE" "$URL" 2>"$W/enrol-r.err") ||
+  # It takes the Core's https address only; the rig's Core is plain loopback, so the enrolment is pointed there after.
+  RID=$("$SRV" runner-enroll-local "$DB" "$RSTATE" "https://localhost" 2>"$W/enrol-r.err") ||
     { EV="enrolling the built-in runner failed: $(cat "$W/enrol-r.err")"; return 1; }
+  jq --arg u "$URL" '.url = $u' "$RSTATE/enrolment.json" >"$W/enrolment.json" && cat "$W/enrolment.json" >"$RSTATE/enrolment.json" ||
+    { EV="pointing the runner at the rig's Core failed"; return 1; }
   fake_claude
   start_runner || { EV="the runner did not come online: $(tail -n3 "$RLOG")"; return 1; }
   out=$(a --json runner show "$RID")
