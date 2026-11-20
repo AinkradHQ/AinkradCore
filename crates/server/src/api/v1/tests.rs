@@ -135,6 +135,7 @@ mod scopes;
 mod secret_kinds;
 mod secrets;
 mod secrets_runners;
+mod session_default_chain;
 mod sessions;
 mod settings;
 mod signed;
