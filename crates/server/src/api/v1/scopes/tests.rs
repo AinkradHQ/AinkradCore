@@ -38,6 +38,16 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
     const PLAIN: &[(&str, &str, &str)] = &[
         (
             "PUT",
+            "/api/v1/core/prefs",
+            "the update schedule and notice prefs only; installing an update is its own danger route",
+        ),
+        (
+            "POST",
+            "/api/v1/core/update/check",
+            "asks the release feed whether a newer version exists and changes nothing",
+        ),
+        (
+            "PUT",
             "/api/v1/settings/{scope}/{key}",
             "a setting that is not `auth.*` (those are danger by key, in the handler)",
         ),
@@ -473,6 +483,11 @@ fn the_danger_list_is_the_d4_list() {
         // E6: only the Mac app that enrolled a runner may call it the bundled one, which alone can
         // be given a real shell; a live step-up keeps a stolen routine key from claiming it.
         ("POST", "/api/v1/runners/{id}/bundled"),
+        // E7/E8/E12: the retention write, a Core update, a runner update and an export of secret values.
+        ("PUT", "/api/v1/system/backups/retention"),
+        ("POST", "/api/v1/system/update"),
+        ("POST", "/api/v1/runners/{id}/update"),
+        ("POST", "/api/v1/secrets/export"),
     ];
     want.sort();
     assert_eq!(have, want);

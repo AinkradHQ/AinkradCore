@@ -230,6 +230,15 @@ mod tests {
                 ("GET", "/api/v1/bindings"),
                 ("PUT", "/api/v1/bindings"),
                 ("DELETE", "/api/v1/bindings/{agent}/{provider}"),
+                ("POST", "/api/v1/pools"),
+                ("DELETE", "/api/v1/pools/{id}"),
+                ("PUT", "/api/v1/pools/{id}/members/{account}"),
+                ("DELETE", "/api/v1/pools/{id}/members/{account}"),
+                ("PUT", "/api/v1/pools/{id}/default"),
+                ("POST", "/api/v1/chains"),
+                ("PUT", "/api/v1/chains/{id}"),
+                ("DELETE", "/api/v1/chains/{id}"),
+                ("PUT", "/api/v1/chains/{id}/default"),
             ]
         );
         assert!(DEPRECATED.iter().all(|d| d.sunset > d.deprecated_at));
