@@ -866,3 +866,15 @@ fn the_sandbox_starts_in_the_jobs_own_folder_inside_the_project() {
     assert_eq!(workdir(&spec(Some("/w/work-root"))), Path::new("/w/p/1"));
     assert_eq!(workdir(&spec(Some("/w/p/10"))), Path::new("/w/p/1"));
 }
+
+/// `/usr/bin/cc` reaches gcc through /etc/alternatives on Debian and Ubuntu: the sandbox must
+/// mount it, or a Rust job has no linker. It never mounts /etc itself.
+#[test]
+fn the_sandbox_reads_etc_alternatives_but_never_all_of_etc() {
+    assert!(ETC_READ.contains(&"/etc/alternatives"));
+    assert!(
+        ETC_READ
+            .iter()
+            .all(|p| p.starts_with("/etc/") && *p != "/etc/")
+    );
+}
