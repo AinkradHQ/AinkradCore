@@ -71,6 +71,17 @@ pub fn mcp_config(url: &str, token: &str) -> Value {
         "http_headers": {"Authorization": format!("Bearer {token}")}}})
 }
 
+/// Codex's `model_reasoning_effort` for an API effort: its top level is `xhigh`.
+fn reasoning_effort(effort: &str) -> Option<&'static str> {
+    match effort {
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        "max" => Some("xhigh"),
+        _ => None,
+    }
+}
+
 /// `thread/start` (or, with `resume`, `thread/resume`) params. The spec's instructions and MCP
 /// servers are read from their files and sent in the params, never in argv.
 pub fn thread_params(spec: &Spec, resume: Option<&str>) -> io::Result<Value> {
@@ -87,6 +98,9 @@ pub fn thread_params(spec: &Spec, resume: Option<&str>) -> io::Result<Value> {
     if let Some(file) = &spec.mcp_config {
         let servers: Value = serde_json::from_slice(&std::fs::read(file)?)?;
         params["config"] = json!({"mcp_servers": servers});
+    }
+    if let Some(level) = spec.effort.as_deref().and_then(reasoning_effort) {
+        params["config"]["model_reasoning_effort"] = level.into();
     }
     if let Some(thread) = resume {
         params["threadId"] = thread.into();

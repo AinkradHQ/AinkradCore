@@ -465,6 +465,40 @@ pub async fn list(
     .collect()
 }
 
+/// One day of one provider's ledger: tokens (input, output and cache) and dollars.
+#[derive(Debug, PartialEq)]
+pub struct DayUsage {
+    pub day: String,
+    pub provider: String,
+    pub total_tokens: i64,
+    pub cost_usd_micros: i64,
+}
+
+/// Per UTC day and provider, from the day `days - 1` before `now` to today, oldest first. Summed in SQL.
+pub async fn series(pool: &SqlitePool, now: &str, days: i64) -> Result<Vec<DayUsage>, sqlx::Error> {
+    sqlx::query(
+        "SELECT substr(occurred_at, 1, 10) AS day, provider, \
+         coalesce(sum(input_tokens + output_tokens + cache_tokens), 0) AS tokens, \
+         coalesce(sum(cost_usd_micros), 0) AS cost \
+         FROM core_cost_events WHERE substr(occurred_at, 1, 10) >= date(?1, ?2) \
+         GROUP BY day, provider ORDER BY day, provider",
+    )
+    .bind(now)
+    .bind(format!("-{} days", days - 1))
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(|r| {
+        Ok(DayUsage {
+            day: r.try_get("day")?,
+            provider: r.try_get("provider")?,
+            total_tokens: r.try_get("tokens")?,
+            cost_usd_micros: r.try_get("cost")?,
+        })
+    })
+    .collect()
+}
+
 /// The whole ledger's totals (corrections included in the dollars).
 pub async fn totals(conn: &mut SqliteConnection) -> Result<Totals, sqlx::Error> {
     let (events, tokens, cost, unpriced): (i64, i64, i64, i64) = sqlx::query_as(

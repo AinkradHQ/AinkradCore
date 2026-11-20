@@ -269,4 +269,34 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0044_pairing_bundled_e6.up.sql"),
         down: include_str!("../../../migrations/0044_pairing_bundled_e6.down.sql"),
     },
+    Migration {
+        version: 45,
+        name: "approval_rules",
+        up: include_str!("../../../migrations/0045_approval_rules.up.sql"),
+        down: include_str!("../../../migrations/0045_approval_rules.down.sql"),
+    },
+    Migration {
+        version: 46,
+        name: "project_runner_pref",
+        up: include_str!("../../../migrations/0046_project_runner_pref.up.sql"),
+        down: include_str!("../../../migrations/0046_project_runner_pref.down.sql"),
+    },
+    Migration {
+        version: 47,
+        name: "run_configs",
+        up: include_str!("../../../migrations/0047_run_configs.up.sql"),
+        down: include_str!("../../../migrations/0047_run_configs.down.sql"),
+    },
+    Migration {
+        version: 48,
+        name: "project_data",
+        up: include_str!("../../../migrations/0048_project_data.up.sql"),
+        down: include_str!("../../../migrations/0048_project_data.down.sql"),
+    },
+    Migration {
+        version: 49,
+        name: "concurrent_runs",
+        up: include_str!("../../../migrations/0049_concurrent_runs.up.sql"),
+        down: include_str!("../../../migrations/0049_concurrent_runs.down.sql"),
+    },
 ];

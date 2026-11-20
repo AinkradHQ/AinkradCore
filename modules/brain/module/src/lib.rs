@@ -23,13 +23,16 @@ use sqlx::SqliteConnection;
 use utoipa::{OpenApi, ToSchema};
 
 mod access;
+mod activity;
 mod ai;
 mod ai_propose;
 mod ai_semantic;
 mod aliases;
 mod answer;
 mod answer_turns;
+mod areas;
 mod auto_distil;
+mod auto_import;
 mod backfill;
 pub mod card;
 mod change_routes;
@@ -51,6 +54,7 @@ mod inbox;
 mod index;
 mod judge;
 pub mod key;
+mod learning;
 mod loaded;
 mod lore;
 pub mod me_card;
@@ -167,6 +171,9 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports/{run}/commit"),
     ("PATCH", "/rules/{id}"),
     ("POST", "/rooms/{room}/redistil"),
+    ("POST", "/rooms/{room}/records/{id}/restore"),
+    ("POST", "/rooms/{room}/records/{id}/archive"),
+    ("POST", "/auto-imports/{run}/undo"),
     ("POST", "/imports"),
     ("POST", "/imports/{run}/items"),
     ("POST", "/imports/{run}/collected"),
@@ -231,6 +238,7 @@ const SETTINGS: &[ModuleSetting] = &[
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/status", "read"),
     ("GET", "/imports/{run}", "read"),
+    ("GET", "/imports/{run}/learning", "read"),
     ("GET", "/rooms", "read"),
     ("GET", "/sync", "read"),
     ("GET", "/rooms/{room}/search", "read"),
@@ -241,6 +249,12 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/rooms/{room}/inbox", "read"),
     ("GET", "/rooms/{room}/overview", "read"),
     ("GET", "/overview/progress", "read"),
+    ("GET", "/activity", "read"),
+    ("GET", "/areas", "read"),
+    ("GET", "/learned", "read"),
+    ("GET", "/rooms/{room}/sources/{item}/trace", "read"),
+    ("GET", "/auto-imports", "read"),
+    ("GET", "/areas/{area}", "read"),
     ("GET", "/rooms/{room}/access", "read"),
     // Code Mode (E4): a session acts as its creator without `admin`, so these name the scopes a
     // creator holds. They answer only a session's own calls (`ai::session_of`).
@@ -597,6 +611,16 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         overview::write,
         overview::write_all,
         overview::progress_route,
+        activity::get,
+        areas::summary,
+        areas::records,
+        areas::learned,
+        areas::archive,
+        areas::trace,
+        areas::restore,
+        auto_import::list,
+        learning::get,
+        auto_import::undo,
         overview::instructions,
         policy::get,
         card::get,
@@ -617,6 +641,22 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
     ),
     components(schemas(
         BrainStatus,
+        activity::BrainActivity,
+        activity::Need,
+        areas::Areas,
+        areas::AreaSummary,
+        areas::AreaRecord,
+        areas::AreaPage,
+        areas::Learned,
+        areas::Archived,
+        areas::SourceTrace,
+        areas::TraceRecord,
+        areas::TraceStep,
+        areas::Restored,
+        auto_import::AutoImport,
+        learning::Learning,
+        learning::LearningPlace,
+        auto_import::Undone,
         imports::StartRun,
         imports::RunId,
         imports::Batch,
@@ -790,6 +830,16 @@ impl Module for Brain {
             )
             .route("/overview/write-all", post(overview::write_all))
             .route("/overview/progress", get(overview::progress_route))
+            .route("/activity", get(activity::get))
+            .route("/areas", get(areas::summary))
+            .route("/areas/{area}", get(areas::records))
+            .route("/learned", get(areas::learned))
+            .route("/rooms/{room}/sources/{item}/trace", get(areas::trace))
+            .route("/rooms/{room}/records/{id}/restore", post(areas::restore))
+            .route("/rooms/{room}/records/{id}/archive", post(areas::archive))
+            .route("/imports/{run}/learning", get(learning::get))
+            .route("/auto-imports", get(auto_import::list))
+            .route("/auto-imports/{run}/undo", post(auto_import::undo))
             .route(
                 "/rooms/{room}/policy",
                 get(policy::get).patch(policy::patch),
@@ -924,6 +974,7 @@ impl Module for Brain {
             index::job(self),
             distil::job(self),
             auto_distil::job(self),
+            auto_import::job(self),
             overview::job(self),
             project_rooms::job(self),
             changes::job(self),

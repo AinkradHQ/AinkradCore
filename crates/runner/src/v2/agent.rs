@@ -43,8 +43,10 @@ use tokio::sync::{Notify, mpsc};
 use crate::{Answer, Control, Executor, Job, Report};
 
 mod attach;
+mod files;
 pub mod secrets;
 use secrets::{Delivered, Redeem};
+mod docs;
 mod front;
 mod gw;
 mod history;
@@ -333,10 +335,16 @@ pub struct AgentDriver {
     /// Woken on every new entry or state change, for reads.
     changed: Notify,
     next_run: Mutex<i64>,
+    /// Per session, the `.md` files its folder held when its harness started (size, mtime in ns), so
+    /// `agent.docs` lists only what the session made or changed. Also saved in the session's dir
+    /// (`docs-base.json`), so a runner restart keeps it.
+    docs_base: Mutex<HashMap<String, DocsBase>>,
     /// Harness name to version, as probed at start; reported to the Core as `RunnerFacts.tools`.
     versions: BTreeMap<String, String>,
 }
 
+/// A session folder's .md files as (size, mtime ns), by path.
+type DocsBase = HashMap<String, (u64, i64)>;
 /// The one harness with a plan mode (Claude Code's `--permission-mode plan`).
 const PLAN_HARNESS: &str = "claude";
 const NO_PLAN: &str = "only claude has a plan mode";
@@ -376,6 +384,7 @@ impl AgentDriver {
             // Unique across runner processes: a harness names its scratch dirs `run-<id>`, and a
             // run after a restart must never land in a dead session's.
             next_run: Mutex::new(now_ms()),
+            docs_base: Mutex::new(HashMap::new()),
             versions: BTreeMap::new(),
         })
     }
@@ -440,7 +449,12 @@ impl AgentDriver {
                     &CAP_LIVE,
                     &ainkrad_proto::v2::OP_AGENT_MODE,
                     &ainkrad_proto::v2::OP_AGENT_ATTACH,
+                    &ainkrad_proto::v2::OP_AGENT_DOCS,
                     &ainkrad_proto::v2::OP_AGENT_SUBAGENT_STOP,
+                    &ainkrad_proto::v2::OP_AGENT_FILES,
+                    &ainkrad_proto::v2::OP_AGENT_REVERT,
+                    &ainkrad_proto::v2::OP_AGENT_WRITE,
+                    &ainkrad_proto::v2::CAP_EFFORT,
                 ])
                 .chain(
                     self.config
@@ -762,6 +776,8 @@ impl AgentDriver {
                 .stopped_before_start(&session, run, workspace_prepared)
                 .await;
         }
+        self.take_docs_baseline(&session, self.harness.work_dir(&job))
+            .await;
         self.harness.session_env(run, Some(env));
         let started = match self.harness.start(&job).await {
             Ok(id) => id,
@@ -811,6 +827,9 @@ impl AgentDriver {
             self.report(&session, r);
         }
         self.harness.session_env(run, None);
+        // The folder goes next: keep what the session wrote for a last import (`agent.docs` serves it).
+        self.keep_final_docs(&session, self.harness.work_dir(&job))
+            .await;
         self.harness.cleanup_agent_workspace(&session, run).await;
         drop(delivered);
         self.end(&session, outcome);
@@ -980,8 +999,14 @@ impl AgentDriver {
                 approved: req.approved,
                 reply: req.reply.clone(),
             });
-            let entry = json!({"type": "approval_decided", "id": req.request,
+            let mut entry = json!({"type": "approval_decided", "id": req.request,
                                "approved": req.approved});
+            // The Core approving by a project rule says which: kept as the entry's note.
+            if req.approved
+                && let Some(note) = &req.reply
+            {
+                entry["note"] = note.clone().into();
+            }
             push(cfg, &req.session, live, entry);
             Ok(())
         })
@@ -1009,8 +1034,11 @@ impl AgentDriver {
                     "the policy needs more isolation than the session started with",
                 ));
             }
-            let entry = json!({"type": "mode_changed", "mode": req.policy.mode.as_str(),
+            let mut entry = json!({"type": "mode_changed", "mode": req.policy.mode.as_str(),
                                "plan": req.policy.plan});
+            if let Some(effort) = &req.policy.effort {
+                entry["effort"] = effort.clone().into();
+            }
             self.harness
                 .control(live.run, Control::Policy(req.policy.clone()));
             push(cfg, &req.session, live, entry);

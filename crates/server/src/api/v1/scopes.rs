@@ -165,6 +165,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
         "admin",
     ),
     ("GET", "/api/v1/costs", "admin"),
+    ("GET", "/api/v1/costs/series", "admin"),
     ("GET", "/api/v1/prices", "read"),
     ("GET", "/api/v1/budgets", "read"),
     ("PUT", "/api/v1/budgets", "admin"),
@@ -179,6 +180,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/api/v1/projects/{id}", "read"),
     ("PATCH", "/api/v1/projects/{id}", "admin"),
     ("POST", "/api/v1/projects/{id}/archive", "admin"),
+    ("POST", "/api/v1/projects/{id}/unarchive", "admin"),
     ("POST", "/api/v1/projects/{id}/repos", "admin"),
     ("DELETE", "/api/v1/projects/{id}/repos/{repo}", "admin"),
     (
@@ -208,6 +210,68 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/run/stop", "admin"),
     ("POST", "/api/v1/projects/{id}/run/restart", "admin"),
     ("POST", "/api/v1/projects/{id}/run/activity", "read"),
+    // Run configurations and environments (Core 0.10, E11-3): values never leave except `value`.
+    ("GET", "/api/v1/projects/{id}/runs", "read"),
+    ("POST", "/api/v1/projects/{id}/runs/{run}/stop", "admin"),
+    ("GET", "/api/v1/projects/{id}/code", "read"),
+    ("GET", "/api/v1/projects/{id}/usage", "read"),
+    ("GET", "/api/v1/projects/{id}/changes", "read"),
+    ("GET", "/api/v1/projects/{id}/run-configs", "read"),
+    ("POST", "/api/v1/projects/{id}/run-configs", "admin"),
+    ("GET", "/api/v1/projects/{id}/run-configs/{config}", "read"),
+    (
+        "PATCH",
+        "/api/v1/projects/{id}/run-configs/{config}",
+        "admin",
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/run-configs/{config}",
+        "admin",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/run-configs/{config}/duplicate",
+        "admin",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/run-configs/{config}/run",
+        "admin",
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/run-configs/{config}/env-diff",
+        "read",
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}",
+        "read",
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}/import",
+        "admin",
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}",
+        "admin",
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}",
+        "admin",
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}/value",
+        "admin",
+    ),
+    ("GET", "/api/v1/projects/{id}/run-envs", "read"),
+    ("POST", "/api/v1/projects/{id}/run-envs", "admin"),
+    ("DELETE", "/api/v1/projects/{id}/run-envs/{name}", "admin"),
     ("GET", "/api/v1/projects/{id}/run/services", "read"),
     // Logs are what the project's code printed (redacted, but still its own words): admin.
     ("GET", "/api/v1/projects/{id}/run/logs", "admin"),
@@ -256,6 +320,18 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
         "agent",
     ),
     ("POST", "/api/v1/agent-sessions/{id}/mode", "agent"),
+    // A session's folder (E14): the listing is read like the transcript; a revert and a write
+    // change files on the runner.
+    ("GET", "/api/v1/agent-sessions/{id}/files", "agent"),
+    ("POST", "/api/v1/agent-sessions/{id}/files/revert", "agent"),
+    ("POST", "/api/v1/agent-sessions/{id}/files/write", "agent"),
+    // "Always for this project" rules (E14).
+    ("GET", "/api/v1/projects/{id}/approval-rules", "agent"),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/approval-rules/{rule}",
+        "approve",
+    ),
     ("POST", "/api/v1/agent-sessions/{id}/cancel", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/kill", "agent"),
     ("POST", "/api/v1/agent-sessions/{id}/resume", "agent"),
@@ -319,6 +395,11 @@ pub const UNLOCKED: &[(&str, &str)] = &[
         "/api/v1/agent-sessions/{id}/subagents/{tool_use_id}/stop",
     ),
     ("POST", "/api/v1/agent-sessions/{id}/mode"),
+    // They change files on the runner, as a message could.
+    ("POST", "/api/v1/agent-sessions/{id}/files/revert"),
+    ("POST", "/api/v1/agent-sessions/{id}/files/write"),
+    // Removing a rule makes later calls ask again; it is a deletion like any other.
+    ("DELETE", "/api/v1/projects/{id}/approval-rules/{rule}"),
     ("POST", "/api/v1/agent-sessions/{id}/cancel"),
     ("POST", "/api/v1/agent-sessions/{id}/kill"),
     ("POST", "/api/v1/agent-sessions/{id}/resume"),
@@ -331,6 +412,9 @@ pub const UNLOCKED: &[(&str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/run/start"),
     ("POST", "/api/v1/projects/{id}/run/stop"),
     ("POST", "/api/v1/projects/{id}/run/restart"),
+    // A run configuration starts a container on a runner, as the project run does (E11-3).
+    ("POST", "/api/v1/projects/{id}/run-configs/{config}/run"),
+    ("POST", "/api/v1/projects/{id}/runs/{run}/stop"),
 ];
 
 /// Whether `path` fits `template` segment by segment.

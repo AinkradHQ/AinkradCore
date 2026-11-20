@@ -694,6 +694,19 @@ async fn touch(app: &App, id: &str) {
         .await;
 }
 
+/// A shell with no recorded sandbox is a host-view shell opened before sandboxes (E6 L3): nothing
+/// attaches to it, and the sweep closes it.
+fn refuse_unsandboxed(t: &Terminal) -> Result<(), ApiError> {
+    if t.sandbox.is_none() {
+        return Err(ApiError::new(
+            axum::http::StatusCode::CONFLICT,
+            "terminal_unsandboxed",
+            "this terminal has no sandbox and is being closed",
+        ));
+    }
+    Ok(())
+}
+
 /// Running terminals with no recorded mode: opened before sandboxes existed.
 pub(crate) async fn unsandboxed(pool: &sqlx::SqlitePool) -> Vec<(String, String)> {
     sqlx::query_as::<_, (String, String)>(
@@ -707,6 +720,11 @@ pub(crate) async fn unsandboxed(pool: &sqlx::SqlitePool) -> Vec<(String, String)
 /// Closes every running terminal nobody has been attached to for `terminal.idle_secs`
 /// (0 turns it off). A runner that is offline is tried again at the next pass.
 pub async fn sweep(app: &App) {
+    // A shell opened before sandboxes (no mode recorded) is a host-view shell this Core no longer
+    // opens; every terminal opened since records its mode (an SSH terminal records `ssh`).
+    for (id, runner) in unsandboxed(&app.pool).await {
+        hang_up(app, &id, &runner, "sandbox_upgrade").await;
+    }
     local::lapse(app).await;
     ack_exited(app).await;
     sweep_orphans(app).await;
@@ -852,12 +870,6 @@ async fn ack_exited(app: &App) {
 
 /// `sweep` every `SWEEP_EVERY` until the Core stops.
 pub async fn sweep_loop(app: App) {
-    // Once, at start: a shell opened before sandboxes (no mode recorded) is a host-view shell this
-    // Core no longer opens, so none outlives the upgrade. Not every sweep: every terminal opened
-    // since records its mode (an SSH terminal records `ssh`).
-    for (id, runner) in unsandboxed(&app.pool).await {
-        hang_up(&app, &id, &runner, "sandbox_upgrade").await;
-    }
     let mut closing = app.closing.subscribe();
     let mut tick = tokio::time::interval(SWEEP_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1380,6 +1392,9 @@ pub async fn signal(
     if !ainkrad_proto::v2::SIGNALS.contains(&req.signal.as_str()) {
         return ApiError::bad_request("unknown signal").into_response();
     }
+    if let Err(e) = refuse_unsandboxed(&t) {
+        return e.into_response();
+    }
     ensure_monitor(&app, &t);
     let mut d = match app.hub.dispatch_elevated(
         &t.runner,
@@ -1457,6 +1472,9 @@ pub async fn attach(
         Ok(t) => t,
         Err(e) => return e.into_response(),
     };
+    if let Err(e) = refuse_unsandboxed(&t) {
+        return e.into_response();
+    }
     let Some(slot) = app.terminals.reserve(&id, &me.device.id) else {
         return ApiError::new(
             axum::http::StatusCode::TOO_MANY_REQUESTS,

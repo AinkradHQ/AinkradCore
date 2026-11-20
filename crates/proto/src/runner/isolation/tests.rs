@@ -177,3 +177,23 @@ fn the_required_tier_is_one_definition_for_every_way_a_policy_asks_for_a_sandbox
         assert_eq!(p.required_tier(), Some(Isolation::Microvm));
     }
 }
+
+/// E14: an effort is one of the four levels, and an absent one is not written (an older runner
+/// refuses a policy field it does not know).
+#[test]
+fn effort_is_one_of_four_levels_and_absent_is_not_serialised() {
+    for level in ["low", "medium", "high", "max"] {
+        let p = Policy {
+            effort: Some(level.to_owned()),
+            ..Policy::default()
+        };
+        assert_eq!(p.problem(), None, "{level}");
+    }
+    let bad = Policy {
+        effort: Some("turbo".to_owned()),
+        ..Policy::default()
+    };
+    assert!(bad.problem().unwrap().contains("effort"));
+    let none = serde_json::to_value(Policy::default()).unwrap();
+    assert!(none.get("effort").is_none());
+}

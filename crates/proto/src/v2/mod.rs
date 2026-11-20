@@ -44,6 +44,8 @@ mod auth;
 mod command;
 mod control;
 mod design;
+mod docs;
+mod files;
 mod gateway;
 mod history;
 pub mod local;
@@ -64,6 +66,8 @@ pub use auth::*;
 pub use command::*;
 pub use control::*;
 pub use design::*;
+pub use docs::*;
+pub use files::*;
 pub use gateway::*;
 pub use history::*;
 pub use login::*;
@@ -313,6 +317,8 @@ impl IsolationCaps {
 
 /// A frame's payload, typed.
 #[derive(Debug, Clone, PartialEq)]
+// A frame is built once and moved once; boxing Command would touch every match site.
+#[allow(clippy::large_enum_variant)]
 pub enum Body {
     Control(Control),
     Command(Command),

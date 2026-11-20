@@ -39,6 +39,7 @@ const PATHS: &[(&str, How)] = &[
     ("ops_catalog/call.rs", How::Explicit),
     ("push.rs", How::Background),
     ("store/accounts.rs", How::Ambient),
+    ("store/approval_rules.rs", How::Ambient),
     ("store/agents.rs", How::Session),
     ("store/budgets.rs", How::Ambient),
     ("store/budgets/write.rs", How::Ambient),

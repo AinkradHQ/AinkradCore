@@ -34,6 +34,7 @@ mod launch;
 pub(crate) mod live;
 pub mod login;
 pub mod plan_check;
+pub mod rules;
 pub mod subscription;
 mod topup;
 pub mod wake;
@@ -959,7 +960,17 @@ async fn read(app: &App, s: &Session, cfg: &AgentsConfig) -> Result<(), Refusal>
         }
         Err(e) => return Err(e.into()),
     };
-    let held = store::apply(&app.pool, &s.id, &ev, &app.clock.now()).await?;
+    // A request a project's "always" rule covers is decided here and never raised to a person.
+    let fresh: Vec<_> = ev
+        .entries
+        .iter()
+        .filter(|e| e.seq > after)
+        .cloned()
+        .collect();
+    let hits = rules::matching(app, s, &fresh).await;
+    let quiet = rules::quiet(&hits);
+    let held = store::apply_quiet(&app.pool, &s.id, &ev, &app.clock.now(), &quiet).await?;
+    rules::decide(app, s, hits).await;
     // Reports this answer moved the ledger's cursor over: more may be waiting (the runner sends a
     // batch at a time), so a session is not over for the Core until a read brings none that
     // advance it. A hole that never fills does not hold a session open: it is logged and passed.

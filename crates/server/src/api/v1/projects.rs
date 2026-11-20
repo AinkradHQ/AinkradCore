@@ -5,6 +5,8 @@
 //! read-only here; the mirror scheduler writes it (P3-01). Every remote goes through
 //! `repo_url_problem` here and again in the store, so no credential or odd scheme gets in.
 
+pub mod insight;
+pub mod run_configs;
 pub mod run_logs;
 pub mod run_spec;
 pub mod runs;
@@ -103,6 +105,15 @@ pub struct ProjectInfo {
     pub idle_minutes: i64,
     pub cpu_limit: f64,
     pub mem_limit_mb: i64,
+    /// Where it prefers to run: `auto`, `this_mac` or `home_server`.
+    #[schema(required = false)]
+    pub runner: String,
+    /// Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
+    #[schema(required = false)]
+    pub fetch_interval_minutes: i64,
+    /// The run environment a Run button uses by default; one of the project's.
+    #[schema(required = false)]
+    pub default_environment: Option<String>,
     /// The primary repo first, then by name.
     pub repos: Vec<ProjectRepo>,
     /// The linked Brain room; null when the Brain is off or the project has none.
@@ -146,6 +157,9 @@ pub(super) async fn info(app: &App, p: Project) -> Result<ProjectInfo, ApiError>
         idle_minutes: p.idle_minutes,
         cpu_limit: p.cpu_limit,
         mem_limit_mb: p.mem_limit_mb,
+        runner: p.runner_pref.clone(),
+        fetch_interval_minutes: p.fetch_interval_minutes,
+        default_environment: p.default_environment.clone(),
         repos,
         room,
         created_at: ts(&p.created_at),
@@ -214,6 +228,8 @@ pub struct NewProject {
     pub name: String,
     /// Default empty.
     pub description: Option<String>,
+    /// `auto` (default), `this_mac` or `home_server`.
+    pub runner: Option<String>,
 }
 
 #[utoipa::path(post, path = "/api/v1/projects", operation_id = "createProject", tag = "projects",
@@ -236,6 +252,16 @@ pub async fn create(
         who(&me, &now),
     )
     .await?;
+    let p = match b.runner.as_deref() {
+        Some(r) => {
+            let c = store::Change {
+                runner: Some(r),
+                ..store::Change::default()
+            };
+            store::change(&app.pool, p.id, &c, who(&me, &now)).await?
+        }
+        None => p,
+    };
     Ok(Json(info(&app, p).await?))
 }
 
@@ -253,6 +279,14 @@ pub struct UpdateProject {
     pub cpu_limit: Option<f64>,
     /// Memory a run may use, 64 to 32768 MB.
     pub mem_limit_mb: Option<i64>,
+    /// Where it prefers to run: `auto`, `this_mac` or `home_server`.
+    pub runner: Option<String>,
+    /// Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
+    #[schema(required = false)]
+    pub fetch_interval_minutes: Option<i64>,
+    /// One of the project's run environments; an empty string clears it.
+    #[schema(required = false)]
+    pub default_environment: Option<String>,
 }
 
 #[utoipa::path(patch, path = "/api/v1/projects/{id}", operation_id = "updateProject",
@@ -276,6 +310,9 @@ pub async fn update(
         idle_minutes: b.idle_minutes,
         cpu_limit: b.cpu_limit,
         mem_limit_mb: b.mem_limit_mb,
+        runner: b.runner.as_deref(),
+        fetch_interval_minutes: b.fetch_interval_minutes,
+        default_environment: b.default_environment.as_deref(),
     };
     let p = store::change(&app.pool, num(&id, "project")?, &c, who(&me, &now)).await?;
     Ok(Json(info(&app, p).await?))
@@ -293,6 +330,21 @@ pub async fn archive(
 ) -> ApiResult<ProjectInfo> {
     let now = app.clock.now();
     let p = store::archive(&app.pool, num(&id, "project")?, who(&me, &now)).await?;
+    Ok(Json(info(&app, p).await?))
+}
+
+#[utoipa::path(post, path = "/api/v1/projects/{id}/unarchive", operation_id = "unarchiveProject",
+    tag = "projects", params(("id" = String, Path, description = "The project's id")),
+    responses((status = 200, description = "Back to `active` (the undo of an archive; audited \
+        and emitted as `project.updated`). 404 for no such project; 409 `conflict` when it is \
+        not archived", body = ProjectInfo)))]
+pub async fn unarchive(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<ProjectInfo> {
+    let now = app.clock.now();
+    let p = store::unarchive(&app.pool, num(&id, "project")?, who(&me, &now)).await?;
     Ok(Json(info(&app, p).await?))
 }
 

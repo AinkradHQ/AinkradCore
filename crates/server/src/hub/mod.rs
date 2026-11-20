@@ -486,6 +486,12 @@ impl Hub {
         Elevated(())
     }
 
+    /// The step-up proof for restarting a crashed run of a configuration a person started
+    /// (`runs::restart`): it starts only that configuration again, in its environment.
+    pub(crate) fn continue_run_elevation(&self) -> Elevated {
+        Elevated(())
+    }
+
     /// Mint the terminal capability after the API gate has verified route scope and step-up
     /// (`POST /terminals`, its `ws`, `signal` and `DELETE`, all `DESTRUCTIVE`).
     pub(crate) fn terminal_elevation(&self, caller: &crate::api::v1::Caller) -> Elevated {
@@ -605,8 +611,9 @@ impl Hub {
         })
     }
 
-    /// The sole non-code agent operation. Transcript reads do not need elevation, but are
-    /// still restricted to the agent driver and cannot be smuggled through plain dispatch.
+    /// The non-code agent reads: transcript reads and a session's folder listing (`agent.files`:
+    /// names and sizes inside the session's own folder, read like the transcript). They need no
+    /// elevation, but are still restricted to these ops and cannot be smuggled through plain dispatch.
     pub fn dispatch_agent_read(
         self: &Arc<Self>,
         runner: &str,
@@ -614,11 +621,11 @@ impl Hub {
     ) -> Result<Dispatched, StreamError> {
         if !matches!(
             command.op(),
-            OP_AGENT_READ | ainkrad_proto::v2::OP_AGENT_TOOLS
+            OP_AGENT_READ | ainkrad_proto::v2::OP_AGENT_TOOLS | ainkrad_proto::v2::OP_AGENT_FILES
         ) {
             return Err(err(
                 ErrorCode::InvalidArgs,
-                "only agent.read and agent.tools use the read path",
+                "only agent.read, agent.tools and agent.files use the read path",
             ));
         }
         self.send_command(runner, command)
@@ -653,6 +660,23 @@ impl Hub {
             return Err(err(
                 ErrorCode::InvalidArgs,
                 "only the reading sftp ops use this path",
+            ));
+        }
+        self.send_command(runner, command)
+    }
+
+    /// `agent.docs` (E10-2): list, read and write the `.md` files of a session's own folder. The runner
+    /// scopes every path to the folder it recorded for the session, refuses symlinks and instruction
+    /// files, and runs nothing, so Lore may send it without a step-up. Only that op passes.
+    pub fn dispatch_agent_docs(
+        self: &Arc<Self>,
+        runner: &str,
+        command: Command,
+    ) -> Result<Dispatched, StreamError> {
+        if !matches!(command, Command::AgentDocs(_)) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "only agent.docs uses the docs path",
             ));
         }
         self.send_command(runner, command)

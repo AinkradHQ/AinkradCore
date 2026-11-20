@@ -43,6 +43,7 @@ namespace Ainkrad.Client.Model
         /// <param name="agent">An opaque agent id (1 to 64 of &#x60;[A-Za-z0-9._:-]&#x60;): its bound chain, else the user&#39;s default chain, serves the session. Needs &#x60;admin&#x60;. With no chain either way the session runs as a plain one and names its harness..</param>
         /// <param name="chain">A fallback chain&#39;s id: the session draws its account from it, one at a time. Needs &#x60;admin&#x60;. It must not come with a harness, a model or an &#x60;acct.*&#x60; secret..</param>
         /// <param name="connectionAccess">Capability names the session may call through its connections (&#x60;read_repo&#x60;, &#x60;issues_write&#x60;, &#x60;read_issues&#x60;, ...; see &#x60;listConnectionKinds&#x60;). Needs &#x60;admin&#x60;. Absent: the default, read-class capabilities only (write is an explicit grant); an agent&#39;s session with none has no connection tools. An empty list is refused (400 &#x60;empty_allowlist&#x60;), and so are operation names and &#x60;*&#x60; (400)..</param>
+        /// <param name="effort">How hard the harness thinks: &#x60;low&#x60;, &#x60;medium&#x60;, &#x60;high&#x60; or &#x60;max&#x60;. Claude (its &#x60;- -effort&#x60;) and Codex (&#x60;model_reasoning_effort&#x60;) take it; 400 &#x60;effort_unsupported&#x60; for another harness, 409 &#x60;unsupported_command&#x60; for a runner too old for it. Absent: the harness&#39;s own default..</param>
         /// <param name="harness">&#x60;claude&#x60;, &#x60;codex&#x60;, &#x60;opencode&#x60;, &#x60;agy&#x60; (what the runner&#39;s &#x60;agent&#x60; driver takes). Omit it (and &#x60;model&#x60;) when the session draws from a chain: the account the allocator picks sets them..</param>
         /// <param name="live">One live conversation (default &#x60;true&#x60;): the harness stays up after each answer, the state is &#x60;waiting&#x60; until the next &#x60;sendAgentMessage&#x60;, and the session ends only on &#x60;cancel&#x60;, &#x60;kill&#x60;, the idle end (&#x60;agents.idle_end_secs&#x60;) or when the CLI exits by itself. &#x60;false&#x60;, or a runner that does not offer it (the answer&#39;s &#x60;live&#x60; says), runs one answer and ends..</param>
         /// <param name="model">The model id as the provider names it. For a session served by the auth gateway it must be one of the ids priced for its provider, exactly: the gateway resolves no alias..</param>
@@ -53,7 +54,7 @@ namespace Ainkrad.Client.Model
         /// <param name="runner">The runner&#39;s device id, &#x60;d_…&#x60;. (required).</param>
         /// <param name="secrets">At most 16. Each is leased to the runner at each start (secrets broker, gate G-SEC)..</param>
         /// <param name="workspace">The repo and worktree to work in (&#x60;{\&quot;repo_url\&quot;, \&quot;base_branch\&quot;, \&quot;branch\&quot;, …}&#x60;); absent, a scratch dir..</param>
-        public NewAgentSession(string agent = default, long? chain = default, List<string> connectionAccess = default, string harness = default, bool? live = default, string model = default, bool? plan = default, Object policy = default, long? projectId = default, string prompt = default, string runner = default, List<AgentSecret> secrets = default, Object workspace = default)
+        public NewAgentSession(string agent = default, long? chain = default, List<string> connectionAccess = default, string effort = default, string harness = default, bool? live = default, string model = default, bool? plan = default, Object policy = default, long? projectId = default, string prompt = default, string runner = default, List<AgentSecret> secrets = default, Object workspace = default)
         {
             // to ensure "runner" is required (not null)
             if (runner == null)
@@ -64,6 +65,7 @@ namespace Ainkrad.Client.Model
             this.Agent = agent;
             this.Chain = chain;
             this.ConnectionAccess = connectionAccess;
+            this.Effort = effort;
             this.Harness = harness;
             this.Live = live;
             this.Model = model;
@@ -95,6 +97,13 @@ namespace Ainkrad.Client.Model
         /// <value>Capability names the session may call through its connections (&#x60;read_repo&#x60;, &#x60;issues_write&#x60;, &#x60;read_issues&#x60;, ...; see &#x60;listConnectionKinds&#x60;). Needs &#x60;admin&#x60;. Absent: the default, read-class capabilities only (write is an explicit grant); an agent&#39;s session with none has no connection tools. An empty list is refused (400 &#x60;empty_allowlist&#x60;), and so are operation names and &#x60;*&#x60; (400).</value>
         [DataMember(Name = "connection_access", EmitDefaultValue = true)]
         public List<string> ConnectionAccess { get; set; }
+
+        /// <summary>
+        /// How hard the harness thinks: &#x60;low&#x60;, &#x60;medium&#x60;, &#x60;high&#x60; or &#x60;max&#x60;. Claude (its &#x60;- -effort&#x60;) and Codex (&#x60;model_reasoning_effort&#x60;) take it; 400 &#x60;effort_unsupported&#x60; for another harness, 409 &#x60;unsupported_command&#x60; for a runner too old for it. Absent: the harness&#39;s own default.
+        /// </summary>
+        /// <value>How hard the harness thinks: &#x60;low&#x60;, &#x60;medium&#x60;, &#x60;high&#x60; or &#x60;max&#x60;. Claude (its &#x60;- -effort&#x60;) and Codex (&#x60;model_reasoning_effort&#x60;) take it; 400 &#x60;effort_unsupported&#x60; for another harness, 409 &#x60;unsupported_command&#x60; for a runner too old for it. Absent: the harness&#39;s own default.</value>
+        [DataMember(Name = "effort", EmitDefaultValue = true)]
+        public string Effort { get; set; }
 
         /// <summary>
         /// &#x60;claude&#x60;, &#x60;codex&#x60;, &#x60;opencode&#x60;, &#x60;agy&#x60; (what the runner&#39;s &#x60;agent&#x60; driver takes). Omit it (and &#x60;model&#x60;) when the session draws from a chain: the account the allocator picks sets them.
@@ -177,6 +186,7 @@ namespace Ainkrad.Client.Model
             sb.Append("  Agent: ").Append(Agent).Append("\n");
             sb.Append("  Chain: ").Append(Chain).Append("\n");
             sb.Append("  ConnectionAccess: ").Append(ConnectionAccess).Append("\n");
+            sb.Append("  Effort: ").Append(Effort).Append("\n");
             sb.Append("  Harness: ").Append(Harness).Append("\n");
             sb.Append("  Live: ").Append(Live).Append("\n");
             sb.Append("  Model: ").Append(Model).Append("\n");

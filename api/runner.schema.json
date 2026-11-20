@@ -112,6 +112,44 @@
       ],
       "type": "object"
     },
+    "AgentDocs": {
+      "description": "Core to runner.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/DocsAction"
+        },
+        "base": {
+          "description": "`write`: the sha-256 (lowercase hex) the file must have now; absent, the file must not exist.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "`read` and `write`: a path from `valid_doc_path`, relative to the session's folder.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "description": "The Core's session id, `as_…`.",
+          "type": "string"
+        },
+        "text": {
+          "description": "`write`: the new text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "session",
+        "action"
+      ],
+      "type": "object"
+    },
     "AgentEvents": {
       "description": "Runner to Core: a session's state, and (for `agent.read`) its entries after `after`.",
       "properties": {
@@ -191,6 +229,50 @@
         "session",
         "state",
         "last_seq"
+      ],
+      "type": "object"
+    },
+    "AgentFiles": {
+      "description": "Core to runner: the entries of `dir` of session `session`'s folder.",
+      "properties": {
+        "dir": {
+          "description": "Relative to the folder; empty is the folder itself.",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "dir"
+      ],
+      "type": "object"
+    },
+    "AgentFolder": {
+      "description": "Runner to Core: one level of a folder, directories first, then by name, at most\n[`MAX_FOLDER_ENTRIES`].",
+      "properties": {
+        "dir": {
+          "type": "string"
+        },
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/FolderEntry"
+          },
+          "type": "array"
+        },
+        "session": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "session",
+        "dir",
+        "entries",
+        "truncated"
       ],
       "type": "object"
     },
@@ -284,6 +366,61 @@
       "required": [
         "session",
         "after"
+      ],
+      "type": "object"
+    },
+    "AgentRevert": {
+      "description": "Core to runner: put `path` back as it was before the session's edits. `edits` are the recorded\nones, newest first, which the runner reverse-applies (`new` back to `old`); `truncated` says a\nrecorded text was cut, so they cannot be reversed and the file is restored from git `HEAD`\ninstead. No `Debug` of the texts: they are the user's own.",
+      "properties": {
+        "edits": {
+          "items": {
+            "$ref": "#/$defs/RevertEdit"
+          },
+          "type": "array"
+        },
+        "path": {
+          "description": "Relative to the folder.",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "session",
+        "path",
+        "edits"
+      ],
+      "type": "object"
+    },
+    "AgentReverted": {
+      "description": "Runner to Core: the outcome of an `agent.revert`.",
+      "properties": {
+        "detail": {
+          "description": "Why, for a refusal.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/RevertResult"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "path",
+        "result"
       ],
       "type": "object"
     },
@@ -456,6 +593,48 @@
       "required": [
         "session",
         "tool_use_id"
+      ],
+      "type": "object"
+    },
+    "AgentWrite": {
+      "description": "Core to runner: write `content` to `path` of session `session`'s folder (parent folders are\ncreated inside it). No `Debug` of the text.",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "path",
+        "content"
+      ],
+      "type": "object"
+    },
+    "AgentWritten": {
+      "description": "Runner to Core: the file was written.",
+      "properties": {
+        "bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "path",
+        "bytes"
       ],
       "type": "object"
     },
@@ -1122,6 +1301,59 @@
           "properties": {
             "op": {
               "const": "port.open",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentDocs",
+          "description": "Session documents (E10-2): list, read or write the `.md` files of a session's folder.",
+          "properties": {
+            "op": {
+              "const": "agent.docs",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentFiles",
+          "properties": {
+            "op": {
+              "const": "agent.files",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentRevert",
+          "properties": {
+            "op": {
+              "const": "agent.revert",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentWrite",
+          "properties": {
+            "op": {
+              "const": "agent.write",
               "type": "string"
             }
           },
@@ -2001,6 +2233,61 @@
       ],
       "type": "object"
     },
+    "DocFile": {
+      "description": "One file of a `list`.",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "description": "Lowercase hex sha-256 of the bytes.",
+          "type": "string"
+        },
+        "size": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "size",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "DocsAction": {
+      "enum": [
+        "list",
+        "read",
+        "write"
+      ],
+      "type": "string"
+    },
+    "DocsReply": {
+      "description": "Runner to Core. `list` fills `files`; `read` fills `text` and `sha256`; `write` fills `sha256` (the new one).",
+      "properties": {
+        "files": {
+          "items": {
+            "$ref": "#/$defs/DocFile"
+          },
+          "type": "array"
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "DriverInfo": {
       "description": "A driver a runner offers (`exec`, `agent`; `pty` later).",
       "properties": {
@@ -2289,6 +2576,31 @@
       },
       "required": [
         "program"
+      ],
+      "type": "object"
+    },
+    "FolderEntry": {
+      "description": "One entry of a folder.",
+      "properties": {
+        "dir": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "description": "Bytes, for a file.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "dir"
       ],
       "type": "object"
     },
@@ -3302,6 +3614,13 @@
             "null"
           ]
         },
+        "effort": {
+          "description": "How hard the harness thinks: `low`, `medium`, `high` or `max` (Claude's `--effort`, Codex's\n`model_reasoning_effort`). Absent: the harness's own default. Only a runner that lists\n`CAP_EFFORT` takes it; an older runner refuses the field.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "egress": {
           "anyOf": [
             {
@@ -4249,6 +4568,59 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/DocsReply",
+          "description": "The answer to `agent.docs`.",
+          "properties": {
+            "op": {
+              "const": "agent.docs",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentFolder",
+          "properties": {
+            "op": {
+              "const": "agent.files",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentReverted",
+          "properties": {
+            "op": {
+              "const": "agent.revert",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/AgentWritten",
+          "properties": {
+            "op": {
+              "const": "agent.write",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
           "description": "An op from a newer runner. Never sent.",
           "properties": {
             "op": {
@@ -4295,6 +4667,57 @@
         "deletions"
       ],
       "type": "object"
+    },
+    "RevertEdit": {
+      "description": "One recorded edit of a file: the text it took out and the text it put in.",
+      "properties": {
+        "new": {
+          "type": "string"
+        },
+        "old": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "old",
+        "new"
+      ],
+      "type": "object"
+    },
+    "RevertResult": {
+      "description": "What a revert did.",
+      "oneOf": [
+        {
+          "const": "reverted",
+          "description": "The recorded edits were reversed in the file.",
+          "type": "string"
+        },
+        {
+          "const": "deleted",
+          "description": "The file was created by the session: it is deleted.",
+          "type": "string"
+        },
+        {
+          "const": "restored",
+          "description": "The file was restored from git `HEAD` (edits that cannot be reversed).",
+          "type": "string"
+        },
+        {
+          "const": "conflict",
+          "description": "The file no longer holds the recorded text; nothing was changed.",
+          "type": "string"
+        },
+        {
+          "const": "impossible",
+          "description": "Nothing can revert it (no usable edits, and not tracked in git); nothing was changed.",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "A result from a newer runner. Never sent.",
+          "type": "string"
+        }
+      ]
     },
     "Rotation": {
       "description": "Core to runner: move the pin from `old_fp` to `new_fp`.",

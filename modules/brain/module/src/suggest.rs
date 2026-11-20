@@ -685,6 +685,25 @@ pub(crate) async fn get(
     Ok(Json(v))
 }
 
+/// The "closest room" hints of a run whose semantic step is ready, still valid for the rooms as they are now
+/// (E9-5 files them by itself). Empty while the step is pending, off or has nothing.
+pub(crate) async fn ready_closest(
+    app: &App,
+    b: &Brain,
+    st: &SqlitePool,
+    run: &str,
+) -> Result<Vec<ClosestHint>, ApiError> {
+    if status(app, st, b, run).await? != "ready" {
+        return Ok(vec![]);
+    }
+    let body: String = sqlx::query_scalar("SELECT body FROM semantic WHERE id = 1")
+        .fetch_one(st)
+        .await?;
+    let mut v: SemanticView = serde_json::from_str(&body).unwrap_or_default();
+    prune(st, &mut v).await?;
+    Ok(v.closest)
+}
+
 /// Drops what the user's own edits since the step ran made stale: refused items, items moved out
 /// of Unsorted, rooms merged away.
 async fn prune(st: &SqlitePool, v: &mut SemanticView) -> Result<(), ApiError> {

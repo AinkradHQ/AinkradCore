@@ -40,13 +40,22 @@ namespace Ainkrad.Client.Model
         /// <summary>
         /// Initializes a new instance of the <see cref="AgentDecision" /> class.
         /// </summary>
+        /// <param name="always">With &#x60;approved&#x60;: also allow this kind of call for every session of the session&#39;s project from now on (\&quot;Always for this project\&quot;). The Core stores a rule derived from the request (a safe shell command&#39;s first words, or a plain path prefix inside the project folder) and approves later matching requests itself, auditing each (&#x60;agent.approval_auto&#x60;). 400 &#x60;rule_not_allowed&#x60; (nothing is decided) for a tool or command that can only be approved once, or a session of no project. See &#x60;listApprovalRules&#x60;..</param>
         /// <param name="approved">approved (required).</param>
         /// <param name="reply">Told to the agent; a denial&#39;s reason..</param>
-        public AgentDecision(bool approved = default, string reply = default)
+        public AgentDecision(bool? always = default, bool approved = default, string reply = default)
         {
             this.Approved = approved;
+            this.Always = always;
             this.Reply = reply;
         }
+
+        /// <summary>
+        /// With &#x60;approved&#x60;: also allow this kind of call for every session of the session&#39;s project from now on (\&quot;Always for this project\&quot;). The Core stores a rule derived from the request (a safe shell command&#39;s first words, or a plain path prefix inside the project folder) and approves later matching requests itself, auditing each (&#x60;agent.approval_auto&#x60;). 400 &#x60;rule_not_allowed&#x60; (nothing is decided) for a tool or command that can only be approved once, or a session of no project. See &#x60;listApprovalRules&#x60;.
+        /// </summary>
+        /// <value>With &#x60;approved&#x60;: also allow this kind of call for every session of the session&#39;s project from now on (\&quot;Always for this project\&quot;). The Core stores a rule derived from the request (a safe shell command&#39;s first words, or a plain path prefix inside the project folder) and approves later matching requests itself, auditing each (&#x60;agent.approval_auto&#x60;). 400 &#x60;rule_not_allowed&#x60; (nothing is decided) for a tool or command that can only be approved once, or a session of no project. See &#x60;listApprovalRules&#x60;.</value>
+        [DataMember(Name = "always", EmitDefaultValue = true)]
+        public bool? Always { get; set; }
 
         /// <summary>
         /// Gets or Sets Approved
@@ -69,6 +78,7 @@ namespace Ainkrad.Client.Model
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("class AgentDecision {\n");
+            sb.Append("  Always: ").Append(Always).Append("\n");
             sb.Append("  Approved: ").Append(Approved).Append("\n");
             sb.Append("  Reply: ").Append(Reply).Append("\n");
             sb.Append("}\n");

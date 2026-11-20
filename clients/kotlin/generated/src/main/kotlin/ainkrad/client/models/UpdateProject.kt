@@ -24,11 +24,14 @@ import kotlinx.serialization.Contextual
  * What changes; an omitted field is kept.
  *
  * @param cpuLimit CPUs a run may use, 0.1 to 16.
+ * @param defaultEnvironment One of the project's run environments; an empty string clears it.
  * @param description 
  * @param expose 
+ * @param fetchIntervalMinutes Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
  * @param idleMinutes Idle stop, 5 to 1440 minutes.
  * @param memLimitMb Memory a run may use, 64 to 32768 MB.
  * @param name 
+ * @param runner Where it prefers to run: `auto`, `this_mac` or `home_server`.
  * @param slug The link name (the slug); refused while the project runs or holds secrets.
  */
 @Serializable
@@ -39,11 +42,19 @@ data class UpdateProject (
     @SerialName(value = "cpu_limit")
     val cpuLimit: kotlin.Double? = null,
 
+    /* One of the project's run environments; an empty string clears it. */
+    @SerialName(value = "default_environment")
+    val defaultEnvironment: kotlin.String? = null,
+
     @SerialName(value = "description")
     val description: kotlin.String? = null,
 
     @SerialName(value = "expose")
     val expose: kotlin.Boolean? = null,
+
+    /* Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked. */
+    @SerialName(value = "fetch_interval_minutes")
+    val fetchIntervalMinutes: kotlin.Long? = null,
 
     /* Idle stop, 5 to 1440 minutes. */
     @SerialName(value = "idle_minutes")
@@ -55,6 +66,10 @@ data class UpdateProject (
 
     @SerialName(value = "name")
     val name: kotlin.String? = null,
+
+    /* Where it prefers to run: `auto`, `this_mac` or `home_server`. */
+    @SerialName(value = "runner")
+    val runner: kotlin.String? = null,
 
     /* The link name (the slug); refused while the project runs or holds secrets. */
     @SerialName(value = "slug")

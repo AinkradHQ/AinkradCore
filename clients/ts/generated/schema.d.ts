@@ -356,6 +356,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agent-sessions/{id}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAgentSessionFiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-sessions/{id}/files/revert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["revertAgentFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-sessions/{id}/files/write": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["writeAgentFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent-sessions/{id}/interrupt": {
         parameters: {
             query?: never;
@@ -1031,6 +1079,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/costs/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["costSeries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/devices": {
         parameters: {
             query?: never;
@@ -1384,6 +1448,38 @@ export interface paths {
         patch: operations["updateProject"];
         trace?: never;
     };
+    "/api/v1/projects/{id}/approval-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listApprovalRules"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/approval-rules/{rule}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteApprovalRule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/archive": {
         parameters: {
             query?: never;
@@ -1394,6 +1490,38 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["archiveProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getProjectChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getProjectCode"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1475,6 +1603,182 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run-configs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listRunConfigs"];
+        put?: never;
+        post: operations["createRunConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run-configs/{config}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRunConfig"];
+        put?: never;
+        post?: never;
+        delete: operations["deleteRunConfig"];
+        options?: never;
+        head?: never;
+        patch: operations["updateRunConfig"];
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run-configs/{config}/duplicate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["duplicateRunConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run-configs/{config}/env-diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["diffRunEnvs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run-configs/{config}/env/{env}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listRunVars"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run-configs/{config}/env/{env}/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["importRunEnv"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["setRunVar"];
+        post?: never;
+        delete: operations["deleteRunVar"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run-configs/{config}/env/{env}/{key}/value": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["revealRunVar"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run-configs/{config}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["startRunConfig"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run-envs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listRunEnvs"];
+        put?: never;
+        post: operations["addRunEnv"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/run-envs/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteRunEnv"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1608,6 +1912,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listProjectRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/runs/{run}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["stopProjectRunById"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/secrets": {
         parameters: {
             query?: never;
@@ -1680,6 +2016,38 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getProjectSpecVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/unarchive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["unarchiveProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getProjectUsage"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2552,6 +2920,15 @@ export interface components {
             size: number;
         };
         AgentDecision: {
+            /**
+             * @description With `approved`: also allow this kind of call for every session of the session's project
+             *     from now on ("Always for this project"). The Core stores a rule derived from the request
+             *     (a safe shell command's first words, or a plain path prefix inside the project folder) and
+             *     approves later matching requests itself, auditing each (`agent.approval_auto`). 400
+             *     `rule_not_allowed` (nothing is decided) for a tool or command that can only be approved
+             *     once, or a session of no project. See `listApprovalRules`.
+             */
+            always?: boolean | null;
             approved: boolean;
             /** @description Told to the agent; a denial's reason. */
             reply?: string | null;
@@ -2575,6 +2952,36 @@ export interface components {
             old: string;
             path: string;
         };
+        /** @description A file of a session's folder to put back as it was before the session's edits. */
+        AgentFileRevert: {
+            /** @description Inside the session's folder: absolute, or relative to it. */
+            path: string;
+        };
+        /** @description A file to write into a session's folder. */
+        AgentFileWrite: {
+            /** @description The file's whole new text, at most 256 KiB. */
+            content: string;
+            /** @description Inside the session's folder: absolute, or relative to it. Not under `.git`. */
+            path: string;
+        };
+        AgentFolderEntry: {
+            dir: boolean;
+            name: string;
+            /**
+             * Format: int64
+             * @description Bytes, for a file.
+             */
+            size?: number | null;
+        };
+        /** @description One level of a session's folder. */
+        AgentFolderListing: {
+            /** @description The folder listed, relative to the session's folder; empty for the folder itself. */
+            dir: string;
+            /** @description Directories first, then by name; at most 500. */
+            entries: components["schemas"]["AgentFolderEntry"][];
+            /** @description There were more than the entries shown. */
+            truncated: boolean;
+        };
         AgentMessage: {
             /**
              * @description Files added with `addAgentAttachment` (`at_…`, at most 16): written into the session's
@@ -2586,6 +2993,12 @@ export interface components {
         };
         /** @description A session's new mode: either field, or both. */
         AgentModeChange: {
+            /**
+             * @description How hard the harness thinks: `low`, `medium`, `high` or `max`; absent, unchanged. Takes
+             *     effect at the next turn (the harness is restarted with it). 400 `effort_unsupported` for a
+             *     harness that cannot (`can_set_effort`).
+             */
+            effort?: string | null;
             /** @description Plan mode on or off; absent, unchanged. */
             plan?: boolean | null;
             /** @description `ask`, `accept_edits` or `sandboxed`; absent, unchanged. */
@@ -2615,6 +3028,11 @@ export interface components {
              */
             attempt?: number | null;
             /**
+             * @description Whether its effort can be set (`effort` on `createAgentSession` or `setAgentSessionMode`):
+             *     its harness takes one (Claude, Codex) and its runner relays it.
+             */
+            can_set_effort?: boolean | null;
+            /**
              * @description Whether one sub-agent of it (a running `Task`/`Agent` tool call) can be stopped on its own
              *     with `stopAgentSubagent`: its harness can (Claude Code) and its runner relays it.
              */
@@ -2634,6 +3052,11 @@ export interface components {
             chain_pos?: number | null;
             created_at: components["schemas"]["Timestamp"];
             created_by: string;
+            /**
+             * @description Its effort level now (`low`, `medium`, `high`, `max`), from the create or the latest
+             *     `setAgentSessionMode`; absent: the harness's own default.
+             */
+            effort?: string | null;
             ended_at?: components["schemas"]["Timestamp"];
             /** @description The attempt that replaced this one. */
             failed_over_to?: string | null;
@@ -2774,7 +3197,10 @@ export interface components {
             /**
              * @description A harness event, or the session's own (`started`, `message`, `approval_request`,
              *     `approval_decided`, `interrupted`, `gap`, `ended`), redacted. A file edit's `tool_use` also
-             *     carries `edit` (`AgentEdit`).
+             *     carries `edit` (`AgentEdit`). A harness that shows its reasoning (Claude Code's `thinking`
+             *     blocks) adds `{"type": "thinking", "text": "…"}` entries, before the text or tool call they
+             *     belong to, at most 16 KiB each (cut with a `[cut]` marker); the other harnesses send none.
+             *     An `approval_decided` the Core made by a project's "always" rule carries `note` saying which.
              */
             body: Record<string, never>;
             /**
@@ -2836,6 +3262,19 @@ export interface components {
              */
             minor: number;
         };
+        /** @description An "always for this project" rule (see `AgentDecision.always`). */
+        ApprovalRule: {
+            created_at: components["schemas"]["Timestamp"];
+            /** Format: int64 */
+            id: number;
+            /**
+             * @description What it covers: a shell command's first words (`cargo test`), or a path prefix inside the
+             *     project folder (`src/api/`, or one file's relative path).
+             */
+            pattern: string;
+            /** @description The harness's tool name (`Bash`, `Edit`, `Write`, `MultiEdit`). */
+            tool: string;
+        };
         ApproveBody: {
             /** @description The SAS shown on both screens. */
             sas: string;
@@ -2870,6 +3309,11 @@ export interface components {
             items: components["schemas"]["AuditEntry"][];
             /** Format: int64 */
             next_before?: number | null;
+        };
+        AuthorCount: {
+            /** Format: int64 */
+            count: number;
+            who: string;
         };
         BindChain: {
             /**
@@ -3019,6 +3463,12 @@ export interface components {
         };
         Cleared: {
             key: string;
+        };
+        CommitInfo: {
+            at: components["schemas"]["Timestamp"];
+            author: string;
+            message: string;
+            sha: string;
         };
         /** @description A connection: never its credential. */
         Connection: {
@@ -3245,6 +3695,22 @@ export interface components {
             provider: string;
             session: string;
         };
+        /** @description One provider's day on the ledger. */
+        DayUsage: {
+            /**
+             * Format: int64
+             * @description Millionths of a dollar (corrections included; unpriced events count 0).
+             */
+            cost_usd_micros: number;
+            /** @description The UTC day, `YYYY-MM-DD`. */
+            day: string;
+            provider: string;
+            /**
+             * Format: int64
+             * @description Input, output and cache tokens.
+             */
+            total_tokens: number;
+        };
         DefaultConnection: {
             /**
              * Format: int64
@@ -3319,6 +3785,11 @@ export interface components {
             /** @description The kind of the first link of the chain. */
             root_kind: string;
             root_reference?: string | null;
+        };
+        EnvDiffRow: {
+            /** @description `same`, `different`, `only_a` or `only_b`. */
+            change: string;
+            key: string;
         };
         /** @description A JSON error: a stable `code` and a message for people. */
         ErrorBody: {
@@ -3542,6 +4013,21 @@ export interface components {
             core?: components["schemas"]["HostUnit"];
             /** @description Absent when no local runner is installed. */
             runner?: components["schemas"]["HostUnit"];
+        };
+        ImportEnv: {
+            /** @description The `.env` file's text (`KEY=value` lines; `export`, quotes and `#` comments are read). */
+            text: string;
+        };
+        ImportSkipped: {
+            /** Format: int64 */
+            line: number;
+            reason: string;
+        };
+        ImportedEnv: {
+            /** Format: int64 */
+            imported: number;
+            /** @description Lines that were not taken, with why (a bad name, or a value holding `${`). */
+            skipped: components["schemas"]["ImportSkipped"][];
         };
         InstallToolBody: {
             /** @description `claude`, `codex`, `node`, `git`, `python`, `go`, `rust` or `docker`. */
@@ -3791,6 +4277,12 @@ export interface components {
              */
             connection_access?: string[] | null;
             /**
+             * @description How hard the harness thinks: `low`, `medium`, `high` or `max`. Claude (its `--effort`) and
+             *     Codex (`model_reasoning_effort`) take it; 400 `effort_unsupported` for another harness, 409
+             *     `unsupported_command` for a runner too old for it. Absent: the harness's own default.
+             */
+            effort?: string | null;
+            /**
              * @description `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it
              *     (and `model`) when the session draws from a chain: the account the allocator picks sets them.
              */
@@ -3975,6 +4467,8 @@ export interface components {
             description?: string | null;
             /** @description One line, 1-100 characters. */
             name: string;
+            /** @description `auto` (default), `this_mac` or `home_server`. */
+            runner?: string | null;
             /** @description See `ProjectInfo.slug`; it is the project's public host name. */
             slug: string;
         };
@@ -4020,6 +4514,10 @@ export interface components {
             runners?: string[] | null;
             /** @description The API key; written, never read back. */
             value: string;
+        };
+        NewRunEnv: {
+            /** @description 1-40 characters on one line. */
+            name: string;
         };
         NewRunSpec: {
             /** @description Where it came from; default `manual`. */
@@ -4228,13 +4726,33 @@ export interface components {
             /** Format: int64 */
             version: number;
         };
+        ProjectChange: {
+            at: components["schemas"]["Timestamp"];
+            /** @description `commit` or `session`. */
+            kind: string;
+            summary: string;
+            who: string;
+        };
+        ProjectChanges: {
+            /** @description Commit authors and session titles (`AI sessions` when untitled), by count, most first. */
+            by_author: components["schemas"]["AuthorCount"][];
+            /** @description Newest first, at most 50. */
+            recent: components["schemas"]["ProjectChange"][];
+        };
         ProjectInfo: {
             /** Format: double */
             cpu_limit: number;
             created_at: components["schemas"]["Timestamp"];
+            /** @description The run environment a Run button uses by default; one of the project's. */
+            default_environment?: string | null;
             description: string;
             /** @description Whether the running project gets a public link. */
             expose: boolean;
+            /**
+             * Format: int64
+             * @description Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
+             */
+            fetch_interval_minutes?: number;
             /** Format: int64 */
             id: number;
             /** Format: int64 */
@@ -4246,6 +4764,8 @@ export interface components {
             repos: components["schemas"]["ProjectRepo"][];
             /** @description The linked Brain room; null when the Brain is off or the project has none. */
             room?: components["schemas"]["ProjectRoom"];
+            /** @description Where it prefers to run: `auto`, `this_mac` or `home_server`. */
+            runner?: string;
             /** @description A DNS label, 2-40 of `a-z0-9-`, starting with a letter; not a reserved name. */
             slug: string;
             /** @description `manual` or `github`. */
@@ -4272,6 +4792,13 @@ export interface components {
             room_id: string;
         };
         ProjectRun: {
+            /**
+             * Format: int64
+             * @description The run configuration it started from, when it did (Core 0.10).
+             */
+            config_id?: number | null;
+            /** @description The environment it ran in. */
+            environment?: string | null;
             /** @description What went wrong, for a failed run (redacted). */
             error?: string | null;
             id: string;
@@ -4319,6 +4846,27 @@ export interface components {
              * @description 1 when stored, one more per rotation.
              */
             version: number;
+        };
+        ProjectUsage: {
+            /** @description Cost per day, last 7 days, oldest first, USD micros. */
+            by_day: number[];
+            /**
+             * Format: int64
+             * @description The 7 days before that.
+             */
+            prev_week_cost: number;
+            /** @description The project's sessions, newest first (at most 30). */
+            sessions: components["schemas"]["SessionUsage"][];
+            /**
+             * Format: int64
+             * @description Sessions started in the last 7 days.
+             */
+            sessions_week: number;
+            /**
+             * Format: int64
+             * @description Cost of the last 7 days in USD micros (millionths), as the cost ledger stores it.
+             */
+            week_cost: number;
         };
         /** @description A provider definition: a built-in, or user data validated before it is stored. */
         Provider: {
@@ -4462,6 +5010,28 @@ export interface components {
             runners?: string[] | null;
             value: string;
         };
+        RepoCode: {
+            /**
+             * Format: int64
+             * @description Commits that branch has beyond the default branch.
+             */
+            ahead: number;
+            /**
+             * Format: int64
+             * @description Commits the default branch has beyond that branch.
+             */
+            behind: number;
+            /** @description The most recently updated branch (the default one when it is the only one). */
+            branch: string;
+            /**
+             * Format: int64
+             * @description Files in the branch shown; 0 before the first fetch.
+             */
+            files: number;
+            /** @description The branch's newest commit; null before the first fetch. */
+            last_commit?: components["schemas"]["CommitInfo"];
+            repo: string;
+        };
         RestartBody: {
             /** @description `core` or `runner` (the local runner). */
             target: string;
@@ -4486,6 +5056,64 @@ export interface components {
             kind?: string | null;
             runners?: string[] | null;
             value: string;
+        };
+        RunConfig: {
+            /** @description Run in the service's shell. */
+            command: string;
+            created_at: components["schemas"]["Timestamp"];
+            /** Format: int64 */
+            id: number;
+            name: string;
+            /** Format: int64 */
+            port?: number | null;
+            /**
+             * @description Come back after a crash: the Core restarts it after 2 s, 4 s, ... up to 60 s, at most 5
+             *     times in 10 minutes, then gives up (event `project.run_gave_up`). A run a person stopped
+             *     does not restart.
+             */
+            restart: boolean;
+            /** @description `automatic`, or the id of a runner. */
+            runner: string;
+            /**
+             * @description The service of the run spec it is laid over; none lets the Core pick (the first that
+             *     mounts a repo).
+             */
+            service?: string | null;
+            updated_at: components["schemas"]["Timestamp"];
+            /** @description A folder in the service's repo checkout (`./app`), or an absolute path in the container. */
+            workdir: string;
+        };
+        RunConfigBody: {
+            /** @description Required to create. */
+            command?: string | null;
+            /** @description Required to create. */
+            name?: string | null;
+            /**
+             * Format: int64
+             * @description 0 clears it.
+             */
+            port?: number | null;
+            restart?: boolean | null;
+            runner?: string | null;
+            /** @description Empty clears it. */
+            service?: string | null;
+            workdir?: string | null;
+        };
+        RunConfigDeleted: {
+            deleted: boolean;
+        };
+        RunConfigStart: {
+            /** @description The environment to run in; default the project's first. */
+            environment?: string | null;
+            /**
+             * @description Stop this configuration's live run first (other configurations keep running); default
+             *     false.
+             */
+            replace?: boolean | null;
+        };
+        RunEnvs: {
+            /** @description In order; the first is the default. A new project has `Development` and `Staging`. */
+            environments: string[];
         };
         RunLogLine: {
             /** @description When the container wrote it (RFC 3339). */
@@ -4558,6 +5186,24 @@ export interface components {
              * @description 1 for the first save, then one more each time.
              */
             version: number;
+        };
+        /** @description A variable, never its value. */
+        RunVar: {
+            key: string;
+            /** @description `plain` or `secret`. */
+            kind: string;
+            /** @description For `secret`: the project secret it comes from. Its value is never returned. */
+            secret?: string | null;
+            /**
+             * Format: int64
+             * @description For `plain`: the value's length in bytes (a client may draw dots); the value itself comes
+             *     from the reveal route only.
+             */
+            size?: number | null;
+        };
+        /** @description A plain value, on request. */
+        RunVarValue: {
+            value: string;
         };
         /** @description A paired runner and its live state. */
         Runner: {
@@ -4894,6 +5540,19 @@ export interface components {
             /** @description A live challenge issued for the signing device. */
             challenge: string;
         };
+        SessionUsage: {
+            /**
+             * Format: int64
+             * @description All-time cost in USD micros.
+             */
+            cost: number;
+            id: string;
+            /** @description Cost per day, last 7 days, oldest first, USD micros. */
+            spark: number[];
+            /** @description `starting`, `running`, `interrupted`, `ended` or `lost`. */
+            state: string;
+            title?: string | null;
+        };
         SetCap: {
             /** Format: int64 */
             cap: number;
@@ -4974,6 +5633,13 @@ export interface components {
              *     decoded); written, never read back.
              */
             value: string;
+        };
+        /** @description A value to set. Deliberately no `Debug`. */
+        SetRunVar: {
+            /** @description The name of one of the project's secrets: the value then comes from Secrets. */
+            secret?: string | null;
+            /** @description A plain value (not holding `${`). Give this or `secret`. */
+            value?: string | null;
         };
         /** @description A device's new scopes. */
         SetScopes: {
@@ -5224,8 +5890,15 @@ export interface components {
              * @description CPUs a run may use, 0.1 to 16.
              */
             cpu_limit?: number | null;
+            /** @description One of the project's run environments; an empty string clears it. */
+            default_environment?: string | null;
             description?: string | null;
             expose?: boolean | null;
+            /**
+             * Format: int64
+             * @description Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
+             */
+            fetch_interval_minutes?: number | null;
             /**
              * Format: int64
              * @description Idle stop, 5 to 1440 minutes.
@@ -5237,6 +5910,8 @@ export interface components {
              */
             mem_limit_mb?: number | null;
             name?: string | null;
+            /** @description Where it prefers to run: `auto`, `this_mac` or `home_server`. */
+            runner?: string | null;
             /** @description The link name (the slug); refused while the project runs or holds secrets. */
             slug?: string | null;
         };
@@ -6295,6 +6970,107 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Its tool call in flight finishes, then it ends (killed after the runner's grace; audited as `agent.cancelled`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAgentSessionFiles: {
+        parameters: {
+            query?: {
+                /** @description A folder of the session, relative to its folder (no `..`); absent or empty, the folder itself. */
+                dir?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One level of the session's folder on its runner: directories first, then by name, at most 500 (`truncated` says there were more); `.git`, `node_modules` and the like are left out, a symbolic link is listed as a file and never followed. Call again with `dir` for a folder's own entries. Read like the transcript (a session holding secrets answers only to its creator or an admin). 400 `bad_path` (`..`, outside the folder), 409 `session_folder_unknown`, `session_folder_gone`, `unsupported_command` (a runner too old), `runner_offline` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentFolderListing"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    revertAgentFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentFileRevert"];
+            };
+        };
+        responses: {
+            /** @description Puts the file back as it was before the session's edits (audited as `agent.file_reverted`, the path and what was done). The session's recorded edits of that file (its `tool_use` entries' `edit`) are reverse-applied on the runner, newest first: no git needed, and only what the session did is undone; a file the session created is deleted (restored from git `HEAD` instead when git tracks it). Edits the record cannot reverse (a cut text, a removal inside the file) fall back to the file's git `HEAD` copy. 409 `revert_conflict` when the file no longer holds the recorded text (nothing is changed), `revert_impossible` (no usable record and git has no copy), `session_folder_unknown`, `session_folder_gone`, `unsupported_command` (a runner too old), `module_owned`; 400 `bad_path` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSession"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    writeAgentFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id, `as_…` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentFileWrite"];
+            };
+        };
+        responses: {
+            /** @description Writes `content` (at most 256 KiB) to the file `path` of the session's folder on its runner, creating the folders on the way inside it (audited as `agent.file_written`, the path and size, never the text). A symbolic link on the way, `..` or a path outside the folder is refused, and so is anything under `.git`. 400 `bad_path`; 413 `file_too_large`; 409 `session_folder_unknown`, `session_folder_gone`, `unsupported_command` (a runner too old), `module_owned` */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8041,6 +8817,36 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    costSeries: {
+        parameters: {
+            query?: {
+                /** @description Days back, today included (default 14, most 90). */
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Daily spend and tokens per provider, summed from the ledger, oldest day first (needs `admin`). A day or provider with no events has no row */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DayUsage"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listDevices: {
         parameters: {
             query?: never;
@@ -8936,6 +9742,68 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    listApprovalRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The "always for this project" rules, oldest first: what `decideAgentApproval` with `always` stored. Each covers later matching tool calls of every session of the project, which the Core approves itself (audited `agent.approval_auto`). 404 for no such project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalRule"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteApprovalRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The rule's id */
+                rule: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The rule is removed (audited `agent.approval_rule_removed`): later calls of its kind ask again. Returns the rules left. 404 for no such project or rule */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalRule"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     archiveProject: {
         parameters: {
             query?: never;
@@ -8955,6 +9823,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getProjectChanges: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Who changed what in the last 7 days: commits on any branch of the Core's copies, plus each file an AI session edited (`who` is the session's title, `kind` `session`, one entry per session and file), newest first. 404 for no such project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectChanges"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getProjectCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One card per repo, primary first, read from the Core's copy with git plumbing (no checkout, no hook runs). A repo with no copy yet has zeros and no last commit. 404 for no such project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepoCode"][];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -9126,6 +10054,555 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    listRunConfigs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's run configurations in order. 404 for no such project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConfig"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createRunConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunConfigBody"];
+            };
+        };
+        responses: {
+            /** @description Created (audited as `project.updated`). 400 `bad_request`; 409 `conflict` for a name already used or an archived project; 409 `limit_reached` at 32; 404 for no such project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConfig"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getRunConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The configuration's id */
+                config: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The configuration; 404 for no such project or configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConfig"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteRunConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The configuration's id */
+                config: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted with its variables; a live run of it keeps running. 404 for no such project or configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConfigDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateRunConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The configuration's id */
+                config: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunConfigBody"];
+            };
+        };
+        responses: {
+            /** @description Changed: only the fields sent. Errors as create */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConfig"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    duplicateRunConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The configuration's id */
+                config: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A copy named `<name> copy` with every variable, Secret links included. Errors as create */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConfig"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    diffRunEnvs: {
+        parameters: {
+            query: {
+                /** @description One environment. */
+                a: string;
+                /** @description The one to compare it with. */
+                b: string;
+            };
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The configuration's id */
+                config: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every key of either environment, by name, with how it compares (a plain value against a Secret link, or two different values or secrets, is `different`). Values are never shown. 404 for no such environment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnvDiffRow"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listRunVars: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The configuration's id */
+                config: string;
+                /** @description The environment */
+                env: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The variables by name, without values. 404 for no such configuration or environment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunVar"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    importRunEnv: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The configuration's id */
+                config: string;
+                /** @description The environment */
+                env: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportEnv"];
+            };
+        };
+        responses: {
+            /** @description Read into the environment as plain values (a key already there is replaced). 409 `limit_reached` when it would pass 64 variables; the file is not applied then */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportedEnv"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    setRunVar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The configuration's id */
+                config: string;
+                /** @description The environment */
+                env: string;
+                /** @description The variable name */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetRunVar"];
+            };
+        };
+        responses: {
+            /** @description Set or replaced (audited without the value). 400 `bad_request` for a bad name or value or neither/both; 400/409 `invalid_spec` when `secret` is not one of the project's; 409 `limit_reached` at 64 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunVar"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteRunVar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The configuration's id */
+                config: string;
+                /** @description The environment */
+                env: string;
+                /** @description The variable name */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted; 404 for no such variable */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunConfigDeleted"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    revealRunVar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The configuration's id */
+                config: string;
+                /** @description The environment */
+                env: string;
+                /** @description The variable name */
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plain value, for the Show button. 409 `conflict` for a variable linked to a Secret (it has no value to show); 404 for no such variable */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunVarValue"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    startRunConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The configuration's id */
+                config: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunConfigStart"];
+            };
+        };
+        responses: {
+            /** @description The run, `starting` (as `startProjectRun`), with the configuration and environment laid over the spec: its command, folder and port, and the environment's variables (a Secret link is leased to the runner as `${secret:NAME}`, never sent as a value). The configuration's runner is used when it is online. 409 `conflict` while this configuration has a live run unless `replace`; 409 `no_runner`; 400/409 `invalid_spec` when the result is not a valid spec or links a Secret the project no longer has; 404 for no such configuration or environment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRun"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listRunEnvs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's environments. 404 for no such project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunEnvs"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    addRunEnv: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewRunEnv"];
+            };
+        };
+        responses: {
+            /** @description Added at the end; the environments now. 409 `conflict` for a name in use; 409 `limit_reached` at 8 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunEnvs"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteRunEnv: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The environment */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed with every variable kept for it; the environments now. 409 `conflict` for the last one; 404 for no such environment */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunEnvs"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     touchProjectRun: {
         parameters: {
             query?: never;
@@ -9165,6 +10642,11 @@ export interface operations {
                 after?: number;
                 /** @description At most this many (default and most 500); the WebSocket ignores it. */
                 limit?: number;
+                /**
+                 * @description One of the project's live runs by id (a project can have one per configuration); default
+                 *     the newest live run.
+                 */
+                run?: string;
             };
             header?: never;
             path: {
@@ -9202,6 +10684,11 @@ export interface operations {
                 after?: number;
                 /** @description At most this many (default and most 500); the WebSocket ignores it. */
                 limit?: number;
+                /**
+                 * @description One of the project's live runs by id (a project can have one per configuration); default
+                 *     the newest live run.
+                 */
+                run?: string;
             };
             header?: never;
             path: {
@@ -9260,7 +10747,10 @@ export interface operations {
     };
     getProjectRunServices: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description One of the project's live runs by id; default the newest live run. */
+                run?: string;
+            };
             header?: never;
             path: {
                 /** @description The project's id */
@@ -9365,6 +10855,71 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description The run, `stopped` (audited and emitted as `project.run_stopped`). 404 for no such project or no live run; 502 `runner_error` when the runner refused: the run stays `stopping` and the Core retries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRun"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listProjectRuns: {
+        parameters: {
+            query?: {
+                /** @description How many runs, newest first; default 20, at most 100. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's runs, live or finished, newest first (Core 0.10). 404 for no such project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectRun"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    stopProjectRunById: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+                /** @description The run's id */
+                run: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description That run, `stopped` (as `stopProjectRun`, for one of several live runs). 404 for no such project or when the run is not a live run of it; 502 `runner_error` as `stopProjectRun` */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -9598,6 +11153,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunSpecVersion"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    unarchiveProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Back to `active` (the undo of an archive; audited and emitted as `project.updated`). 404 for no such project; 409 `conflict` when it is not archived */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectInfo"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getProjectUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description AI usage of the project: the cost ledger joined to its sessions. Money is USD micros. 404 for no such project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectUsage"];
                 };
             };
             400: components["responses"]["BadRequest"];

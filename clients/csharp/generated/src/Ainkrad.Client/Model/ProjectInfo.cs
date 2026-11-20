@@ -42,19 +42,22 @@ namespace Ainkrad.Client.Model
         /// </summary>
         /// <param name="cpuLimit">cpuLimit (required).</param>
         /// <param name="createdAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4). (required).</param>
+        /// <param name="defaultEnvironment">The run environment a Run button uses by default; one of the project&#39;s..</param>
         /// <param name="description">description (required).</param>
         /// <param name="expose">Whether the running project gets a public link. (required).</param>
+        /// <param name="fetchIntervalMinutes">Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked..</param>
         /// <param name="id">id (required).</param>
         /// <param name="idleMinutes">idleMinutes (required).</param>
         /// <param name="memLimitMb">memLimitMb (required).</param>
         /// <param name="name">name (required).</param>
         /// <param name="repos">The primary repo first, then by name. (required).</param>
         /// <param name="room">The linked Brain room; null when the Brain is off or the project has none..</param>
+        /// <param name="runner">Where it prefers to run: &#x60;auto&#x60;, &#x60;this_mac&#x60; or &#x60;home_server&#x60;..</param>
         /// <param name="slug">A DNS label, 2-40 of &#x60;a-z0-9-&#x60;, starting with a letter; not a reserved name. (required).</param>
         /// <param name="source">&#x60;manual&#x60; or &#x60;github&#x60;. (required).</param>
         /// <param name="state">&#x60;active&#x60; or &#x60;archived&#x60;. (required).</param>
         /// <param name="updatedAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4). (required).</param>
-        public ProjectInfo(double cpuLimit = default, DateTime createdAt = default, string description = default, bool expose = default, long id = default, long idleMinutes = default, long memLimitMb = default, string name = default, List<ProjectRepo> repos = default, ProjectRoom room = default, string slug = default, string source = default, string state = default, DateTime updatedAt = default)
+        public ProjectInfo(double cpuLimit = default, DateTime createdAt = default, string defaultEnvironment = default, string description = default, bool expose = default, long fetchIntervalMinutes = default, long id = default, long idleMinutes = default, long memLimitMb = default, string name = default, List<ProjectRepo> repos = default, ProjectRoom room = default, string runner = default, string slug = default, string source = default, string state = default, DateTime updatedAt = default)
         {
             this.CpuLimit = cpuLimit;
             this.CreatedAt = createdAt;
@@ -99,7 +102,10 @@ namespace Ainkrad.Client.Model
             }
             this.State = state;
             this.UpdatedAt = updatedAt;
+            this.DefaultEnvironment = defaultEnvironment;
+            this.FetchIntervalMinutes = fetchIntervalMinutes;
             this.Room = room;
+            this.Runner = runner;
         }
 
         /// <summary>
@@ -116,6 +122,13 @@ namespace Ainkrad.Client.Model
         public DateTime CreatedAt { get; set; }
 
         /// <summary>
+        /// The run environment a Run button uses by default; one of the project&#39;s.
+        /// </summary>
+        /// <value>The run environment a Run button uses by default; one of the project&#39;s.</value>
+        [DataMember(Name = "default_environment", EmitDefaultValue = true)]
+        public string DefaultEnvironment { get; set; }
+
+        /// <summary>
         /// Gets or Sets Description
         /// </summary>
         [DataMember(Name = "description", IsRequired = true, EmitDefaultValue = true)]
@@ -127,6 +140,13 @@ namespace Ainkrad.Client.Model
         /// <value>Whether the running project gets a public link.</value>
         [DataMember(Name = "expose", IsRequired = true, EmitDefaultValue = true)]
         public bool Expose { get; set; }
+
+        /// <summary>
+        /// Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.
+        /// </summary>
+        /// <value>Minutes between automatic fetches: 10, 15, 60, or 0 for only when asked.</value>
+        [DataMember(Name = "fetch_interval_minutes", EmitDefaultValue = false)]
+        public long FetchIntervalMinutes { get; set; }
 
         /// <summary>
         /// Gets or Sets Id
@@ -167,6 +187,13 @@ namespace Ainkrad.Client.Model
         public ProjectRoom Room { get; set; }
 
         /// <summary>
+        /// Where it prefers to run: &#x60;auto&#x60;, &#x60;this_mac&#x60; or &#x60;home_server&#x60;.
+        /// </summary>
+        /// <value>Where it prefers to run: &#x60;auto&#x60;, &#x60;this_mac&#x60; or &#x60;home_server&#x60;.</value>
+        [DataMember(Name = "runner", EmitDefaultValue = false)]
+        public string Runner { get; set; }
+
+        /// <summary>
         /// A DNS label, 2-40 of &#x60;a-z0-9-&#x60;, starting with a letter; not a reserved name.
         /// </summary>
         /// <value>A DNS label, 2-40 of &#x60;a-z0-9-&#x60;, starting with a letter; not a reserved name.</value>
@@ -204,14 +231,17 @@ namespace Ainkrad.Client.Model
             sb.Append("class ProjectInfo {\n");
             sb.Append("  CpuLimit: ").Append(CpuLimit).Append("\n");
             sb.Append("  CreatedAt: ").Append(CreatedAt).Append("\n");
+            sb.Append("  DefaultEnvironment: ").Append(DefaultEnvironment).Append("\n");
             sb.Append("  Description: ").Append(Description).Append("\n");
             sb.Append("  Expose: ").Append(Expose).Append("\n");
+            sb.Append("  FetchIntervalMinutes: ").Append(FetchIntervalMinutes).Append("\n");
             sb.Append("  Id: ").Append(Id).Append("\n");
             sb.Append("  IdleMinutes: ").Append(IdleMinutes).Append("\n");
             sb.Append("  MemLimitMb: ").Append(MemLimitMb).Append("\n");
             sb.Append("  Name: ").Append(Name).Append("\n");
             sb.Append("  Repos: ").Append(Repos).Append("\n");
             sb.Append("  Room: ").Append(Room).Append("\n");
+            sb.Append("  Runner: ").Append(Runner).Append("\n");
             sb.Append("  Slug: ").Append(Slug).Append("\n");
             sb.Append("  Source: ").Append(Source).Append("\n");
             sb.Append("  State: ").Append(State).Append("\n");

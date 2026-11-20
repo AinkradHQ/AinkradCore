@@ -141,7 +141,12 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (41, "project_runs"),
             (42, "mirror_state"),
             (43, "terminal_sandbox_e6"),
-            (44, "pairing_bundled_e6")
+            (44, "pairing_bundled_e6"),
+            (45, "approval_rules"),
+            (46, "project_runner_pref"),
+            (47, "run_configs"),
+            (48, "project_data"),
+            (49, "concurrent_runs")
         ]
     );
     let sum: Vec<u8> =
@@ -405,12 +410,17 @@ fn the_schema_diff_flags_objects_outside_the_prefix() {
 /// the platform's schema and a module's, so a module table is held to it too.
 #[tokio::test]
 async fn user_owned_tables_carry_user_id() {
-    const NOT_USER_OWNED: [&str; 14] = [
+    const NOT_USER_OWNED: [&str; 18] = [
         // Each describes a project, which carries its own user.
         "core_project_repos",
         "core_project_mirrors",
         "core_project_run_specs",
         "core_project_runs",
+        // Each belongs to a project (rules, run configs and their envs and vars), which carries its own user.
+        "core_approval_rules",
+        "core_run_configs",
+        "core_run_envs",
+        "core_run_vars",
         // A registered name belongs to the platform or a module, not to a user.
         "event_kinds",
         "audit_actions",

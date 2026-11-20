@@ -2949,6 +2949,7 @@ dependencies = [
  "ainkrad-core",
  "ainkrad-core-server",
  "ainkrad-embed",
+ "ainkrad-proto",
  "axum",
  "diffy",
  "futures-util",

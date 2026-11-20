@@ -23,12 +23,17 @@ import kotlinx.serialization.Contextual
 /**
  * A session's new mode: either field, or both.
  *
+ * @param effort How hard the harness thinks: `low`, `medium`, `high` or `max`; absent, unchanged. Takes effect at the next turn (the harness is restarted with it). 400 `effort_unsupported` for a harness that cannot (`can_set_effort`).
  * @param plan Plan mode on or off; absent, unchanged.
  * @param policy `ask`, `accept_edits` or `sandboxed`; absent, unchanged.
  */
 @Serializable
 
 data class AgentModeChange (
+
+    /* How hard the harness thinks: `low`, `medium`, `high` or `max`; absent, unchanged. Takes effect at the next turn (the harness is restarted with it). 400 `effort_unsupported` for a harness that cannot (`can_set_effort`). */
+    @SerialName(value = "effort")
+    val effort: kotlin.String? = null,
 
     /* Plan mode on or off; absent, unchanged. */
     @SerialName(value = "plan")
