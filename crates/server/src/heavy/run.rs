@@ -6,19 +6,23 @@
 //! one. A job that cannot start, or whose runner is lost, ends its stream with no `exit` frame:
 //! the shim then runs the command where it was typed, which is the Core.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ainkrad_core::ids::UserId;
-use ainkrad_proto::v2::{Body, Close, Command, Control, JobNeed, JobRun, Os, Reply, SignalReq};
+use ainkrad_proto::v2::{
+    Body, Close, Command, Control, JobNeed, JobRun, Os, Reply, RunSecret, SignalReq,
+};
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
 
-use super::history;
+use super::live::{Ctl, registry};
+pub use super::live::{Live, cancel, get, lines, signal};
 use super::rules::Row;
+use super::{cache, history};
 use crate::api::App;
 use crate::auth::crypto::random_id;
 use crate::hardware::place::{PlaceReason, place_job};
@@ -27,10 +31,8 @@ use crate::workspace::flow;
 use crate::workspace::fs::Tree;
 use crate::workspace::manifest::Memo;
 use crate::workspace::paths::SessionKey;
-use crate::workspace::rules::Rules;
+use crate::workspace::rules as sync_rules;
 
-/// Frames kept for a late follower, at most.
-const REPLAY_BYTES: usize = 4 * 1024 * 1024;
 /// A job's frames stay available this long after it ends.
 const KEEP: Duration = Duration::from_secs(300);
 /// A cancel is TERM, then KILL after this.
@@ -51,6 +53,11 @@ pub struct Start {
     pub row: Row,
     /// `rule`, `history`, `decision` or `config`.
     pub tier: &'static str,
+    /// `(variable, stored secret name)`: leased to the device the job lands on, redeemed once there
+    /// into the variable (a task run configuration's Secret links).
+    pub secrets: Vec<(String, String)>,
+    /// The device that started it (the lease audit's `by`).
+    pub by: String,
 }
 
 #[derive(Debug)]
@@ -59,71 +66,6 @@ pub enum Started {
     Job { id: String, device_name: String },
     /// Nothing better than where it was typed (`core`, `core_no_fit:…`): run it there.
     Local(String),
-}
-
-/// What a follower may ask of a job.
-enum Ctl {
-    Signal(&'static str),
-    Cancel,
-}
-
-/// One live job's frames and controls.
-pub struct Live {
-    frames: Mutex<(Vec<String>, usize)>,
-    tx: broadcast::Sender<String>,
-    ctl: mpsc::UnboundedSender<Ctl>,
-    done: AtomicBool,
-}
-
-impl Live {
-    fn push(&self, v: Value) {
-        let line = format!("{v}\n");
-        let mut f = self.frames.lock().unwrap();
-        f.1 += line.len();
-        f.0.push(line.clone());
-        while f.1 > REPLAY_BYTES && f.0.len() > 1 {
-            let gone = f.0.remove(0);
-            f.1 -= gone.len();
-        }
-        // Sent under the lock so a follower's replay and subscription meet without a gap.
-        let _ = self.tx.send(line);
-    }
-
-    /// The frames so far, and a receiver for the rest.
-    pub fn subscribe(&self) -> (Vec<String>, broadcast::Receiver<String>) {
-        let f = self.frames.lock().unwrap();
-        (f.0.clone(), self.tx.subscribe())
-    }
-
-    /// Whether the job has ended (its frames are final).
-    pub fn is_done(&self) -> bool {
-        self.done.load(Ordering::SeqCst)
-    }
-}
-
-fn registry() -> &'static Mutex<HashMap<String, Arc<Live>>> {
-    static R: OnceLock<Mutex<HashMap<String, Arc<Live>>>> = OnceLock::new();
-    R.get_or_init(Mutex::default)
-}
-
-/// A job's frames, while it runs and shortly after.
-pub fn get(id: &str) -> Option<Arc<Live>> {
-    registry().lock().unwrap().get(id).cloned()
-}
-
-/// Sends `INT`, `TERM`, `HUP` (as TERM) or `KILL` to a live job. `false`: no such live job.
-pub fn signal(id: &str, sig: &str) -> bool {
-    let sig = match sig {
-        "INT" => "INT",
-        "KILL" => "KILL",
-        _ => "TERM",
-    };
-    get(id).is_some_and(|l| !l.is_done() && l.ctl.send(Ctl::Signal(sig)).is_ok())
-}
-
-/// Cancels a live job: TERM, then KILL after ten seconds; nothing is synced back.
-pub fn cancel(id: &str) -> bool {
-    get(id).is_some_and(|l| !l.is_done() && l.ctl.send(Ctl::Cancel).is_ok())
 }
 
 /// What a job needs of its hardware, from its rule row.
@@ -363,7 +305,7 @@ async fn execute(
         let jobs_toml = tokio::fs::read_to_string(ws.jobs_toml(run.s.project))
             .await
             .unwrap_or_default();
-        let rules = Rules::from_toml(&jobs_toml);
+        let rules = sync_rules::from_toml(&jobs_toml);
         let lease =
             app.hub
                 .sync
@@ -388,8 +330,34 @@ async fn execute(
             Err(e) => return failed(&e.to_string()),
         }
     }
-    // The runner keeps a warm cache: the prepare step (a lockfile install) is for its first sync.
-    let first = !run.on_core && !cached(app, &run.device, run.s.project).await;
+    // The runner keeps a warm cache: the prepare step (a lockfile install) runs on its first sync
+    // and again whenever the lockfiles changed since it last ran.
+    let lock = sync.as_ref().map(|s| cache::lock_hash(&s.4));
+    let first = match &lock {
+        Some(l) => !cache::prepared(app, &run.device, run.s.project, l).await,
+        None => false,
+    };
+    let mut secrets = Vec::new();
+    for (var, stored) in &run.s.secrets {
+        let leased = crate::store::secrets::lease(
+            &app.pool,
+            stored,
+            &run.device,
+            None,
+            &run.s.by,
+            ainkrad_core::audit::AuditActor::System,
+            &app.clock.now(),
+            app.clock.unix(),
+        )
+        .await;
+        match leased {
+            Ok((lease, _)) => secrets.push(RunSecret {
+                name: var.clone(),
+                lease,
+            }),
+            Err(e) => return failed(&format!("cannot lease the secret for {var}: {e}")),
+        }
+    }
     let job = JobRun {
         job: run.id.clone(),
         project: run.s.project,
@@ -401,7 +369,7 @@ async fn execute(
         argv: run.s.argv.clone(),
         cwd_rel: run.s.cwd_rel.clone(),
         env: run.s.env.clone(),
-        secrets: Vec::new(),
+        secrets,
         prepare: run
             .s
             .row
@@ -498,57 +466,9 @@ async fn execute(
                 end.state = "failed";
             }
         }
-        remember(app, &run.device, run.s.project, &done.tree).await;
+        let ran_prepare = first && run.s.row.prepare.is_some() && done.exit_code == Some(0);
+        let prepared = lock.filter(|_| ran_prepare);
+        cache::remember(app, &run.device, run.s.project, &done.tree, prepared).await;
     }
     end
-}
-
-/// Whether the device holds a warm cache of the project already.
-async fn cached(app: &App, device: &str, project: i64) -> bool {
-    sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM core_hw_cache WHERE device_id = ? AND project_id = ?",
-    )
-    .bind(device)
-    .bind(project)
-    .fetch_one(&app.pool)
-    .await
-    .is_ok_and(|n| n > 0)
-}
-
-/// Records the tree the device's cache is at after the job.
-async fn remember(app: &App, device: &str, project: i64, tree: &ainkrad_proto::v2::TreeHash) {
-    let _ = sqlx::query(
-        "INSERT INTO core_hw_cache (device_id, project_id, tree_hash, synced_at) VALUES (?, ?, ?, ?) \
-         ON CONFLICT (device_id, project_id) DO UPDATE SET tree_hash = excluded.tree_hash, synced_at = excluded.synced_at",
-    )
-    .bind(device)
-    .bind(project)
-    .bind(tree.0.to_vec())
-    .bind(app.clock.now())
-    .execute(&app.pool)
-    .await;
-}
-
-/// A job's frames as lines: `head` first (what a late follower missed, or the verdict), then every
-/// frame as it arrives, ending after the last one once the job is done.
-pub fn lines(live: Arc<Live>, head: Vec<String>) -> impl futures_util::Stream<Item = String> {
-    let (replay, rx) = live.subscribe();
-    let queue: std::collections::VecDeque<String> = head.into_iter().chain(replay).collect();
-    futures_util::stream::unfold((queue, rx, live), |(mut q, mut rx, live)| async move {
-        loop {
-            if let Some(l) = q.pop_front() {
-                return Some((l, (q, rx, live)));
-            }
-            match rx.try_recv() {
-                Ok(l) => return Some((l, (q, rx, live))),
-                Err(broadcast::error::TryRecvError::Empty) if live.is_done() => return None,
-                Err(broadcast::error::TryRecvError::Closed) => return None,
-                // Behind: the next frames are the ones that are left.
-                Err(broadcast::error::TryRecvError::Lagged(_)) => {}
-                Err(broadcast::error::TryRecvError::Empty) => {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-            }
-        }
-    })
 }

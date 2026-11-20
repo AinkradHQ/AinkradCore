@@ -230,7 +230,10 @@ pub struct RunConfigStart {
         never sent as a value). The configuration's runner is used when it is online. 409 \
         `conflict` while this configuration has a live run unless `replace`; 409 `no_runner`; 400/409 \
         `invalid_spec` when the result is not a valid spec or links a Secret the project no \
-        longer has; 404 for no such configuration or environment", body = ProjectRun)))]
+        longer has; 404 for no such configuration or environment. A `task` configuration (E15-3) \
+        starts as a heavy job instead: the answer carries the job's id in `job`, the variables \
+        travel as the job's environment (a Secret leased to the device it lands on, redeemed once \
+        there), and `replace` does not apply", body = ProjectRun)))]
 pub async fn run(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -238,19 +241,19 @@ pub async fn run(
     body: Option<Json<RunConfigStart>>,
 ) -> ApiResult<ProjectRun> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
+    let (project, config) = (num(&id, "project")?, num(&cid, "configuration")?);
+    let cfg = store::get(&app.pool, project, config).await?;
+    if cfg.kind == "task" {
+        return Ok(Json(
+            super::run_task::start(&app, &me, project, &cfg, b.environment).await?,
+        ));
+    }
     let opts = StartOpts {
-        config: Some(num(&cid, "configuration")?),
+        config: Some(config),
         environment: b.environment,
     };
     Ok(Json(
-        start_with(
-            &app,
-            &me,
-            num(&id, "project")?,
-            &opts,
-            b.replace.unwrap_or(false),
-        )
-        .await?,
+        start_with(&app, &me, project, &opts, b.replace.unwrap_or(false)).await?,
     ))
 }
 

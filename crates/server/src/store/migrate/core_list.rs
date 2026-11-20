@@ -317,4 +317,10 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0052_decisions.up.sql"),
         down: include_str!("../../../migrations/0052_decisions.down.sql"),
     },
+    Migration {
+        version: 53,
+        name: "hw_cache_prepared",
+        up: include_str!("../../../migrations/0053_hw_cache_prepared.up.sql"),
+        down: include_str!("../../../migrations/0053_hw_cache_prepared.down.sql"),
+    },
 ];
