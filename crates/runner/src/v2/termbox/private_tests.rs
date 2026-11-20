@@ -31,6 +31,7 @@ fn spec<'a>(
         terminal: "t_1",
         env,
         hide: &[],
+        jobs: None,
     }
 }
 

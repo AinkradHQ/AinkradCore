@@ -34,6 +34,7 @@ mod design;
 pub mod dial;
 mod exec;
 mod facts;
+pub mod jobsock;
 pub mod key;
 pub mod login;
 pub mod mirror;

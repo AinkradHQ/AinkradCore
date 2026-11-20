@@ -258,6 +258,15 @@ pub async fn from_state(
         });
         agent
     });
+    // The Core's own runner: terminals get the heavy-job shims, asking the Core with a signed request.
+    if let Some(p) = pty.as_ref().filter(|p| p.wants_jobs())
+        && let Ok(c) = Client::new(&url, tls.clone())
+    {
+        p.start_jobs(
+            &state.0,
+            super::mirror::http_upstream(Arc::new(c), Arc::clone(&key), Arc::clone(&enrolment)),
+        );
+    }
     // Whatever is enabled, a crash may have left a sign-in's scratch HOME behind.
     super::login::sweep(&state.0);
     let login = match agents.is_some() {

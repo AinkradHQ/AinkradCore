@@ -245,7 +245,7 @@ pub const CONNECT_USAGE: &str = "usage:
   ainkrad-runner connect [--state <dir>] [--ca <pem>] [--enable-exec] [--enable-pty]
                          [--enable-agents] [--share-history] [--terminal-sandbox=on|off]
                          [--terminal-hide <path>]… [--terminal-user <account>]
-                         [--terminal-network=host|none|filtered]
+                         [--terminal-network=host|none|filtered] [--job-shims]
 
 Serves the Core it paired with (`ainkrad-runner pair`) over protocol v2, reconnecting with a
 jittered backoff and resuming commands in flight. Stops on SIGTERM or Ctrl-C; commands still
@@ -369,6 +369,8 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
     let pty_flag = args.contains(&"--enable-pty");
     // Set only by the Mac app's LaunchAgent: this runner may open a real (host-view) shell.
     let bundled = args.contains(&"--bundled");
+    // Set only on the Core's own runner (E15-3): its terminals get the heavy-job shims.
+    let job_shims = args.contains(&"--job-shims") && !bundled;
     let agents_flag = agents_enabled(args);
     // Off unless asked: the Brain may then read this runner's harness history (`history.read`).
     let share_history = args.contains(&"--share-history");
@@ -404,6 +406,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
                     | "--enable-agents"
                     | "--share-history"
                     | "--bundled"
+                    | "--job-shims"
             ) && !a.starts_with("--terminal-sandbox=")
                 && !a.starts_with("--terminal-network=")
         })
@@ -561,6 +564,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
                 net.clone()
             },
             allow_real: bundled,
+            job_shims,
             ..super::PtyConfig::new(state.0.join("terminals"))
         }));
         d.spawn_budget_loop();
