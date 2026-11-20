@@ -30,6 +30,7 @@ import ainkrad.client.models.SecretDeleted
 import ainkrad.client.models.SecretGroupDeleted
 import ainkrad.client.models.SecretGroupInfo
 import ainkrad.client.models.SecretInfo
+import ainkrad.client.models.SecretsExport
 import ainkrad.client.models.UpdateSecretGroup
 
 import ainkrad.client.infrastructure.*
@@ -170,6 +171,39 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.DELETE,
             "/api/v1/secret-groups/{id}".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/secrets/export
+        * 
+        * 
+         * @return SecretsExport
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun exportSecrets(): HttpResponse<SecretsExport> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/secrets/export",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

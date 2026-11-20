@@ -658,7 +658,10 @@ impl Session {
                 });
                 None
             }
-            Command::RunnerPolicy(_) | Command::ToolsInstall(_) | Command::ToolsStatus(_) => {
+            Command::RunnerPolicy(_)
+            | Command::ToolsInstall(_)
+            | Command::ToolsStatus(_)
+            | Command::RunnerUpdate(_) => {
                 self.start_control(stream, command)
             }
             // E15 (protocol 2.1): the `job` and `sync` drivers (E15-4). `gateway-call` is the agent's.
@@ -672,6 +675,10 @@ impl Session {
             Command::LoginStart(_)
             | Command::LoginCode(_)
             | Command::LoginCancel(_)
+            | Command::LoginWait(_)
+            | Command::LoginInput(_)
+            | Command::LoginScreen(_)
+            | Command::LoginWipe(_)
             | Command::Unknown => {
                 super::login::dispatch(self.login.as_ref(), stream, command, &self.done_tx)
             }
@@ -931,6 +938,7 @@ impl Session {
                 Command::ToolsStatus(r) => {
                     control.tools.status(&r.operation).map(Reply::ToolsStatus)
                 }
+                Command::RunnerUpdate(r) => control.update(&r).map(Reply::RunnerUpdate),
                 _ => return,
             };
             let body = match answer {

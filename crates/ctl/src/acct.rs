@@ -1,4 +1,4 @@
-//! `account add | login | state | rm | cap | limit | session-limits | rotate | test | providers |
+//! `account add | login | state | rm | cap | session-limits | rotate | test | providers |
 //! usage | costs` (the write and read routes of the contract's accounts surface, scope `admin`;
 //! every write needs a step-up, which `Client::call` does once when the Core asks). `ls` and
 //! `show` stay in [`crate::accounts`]; pools are in [`crate::pools`], budgets in
@@ -92,7 +92,7 @@ impl<'a> Opts<'a> {
     }
 }
 
-pub const USAGE: &str = "account ls | show <id> | providers | add <provider> [--label l] [--cap n] [--runners id,...] | login <provider> [--label l] [--runner id] | state <id> <state> [--reason r] [--until t] | cap <id> <n> | limit set <id> <tokens|messages> <window-secs> <cap> [--warn-percent n] | limit clear <id> <unit> <window-secs> | session-limits <id> [--max-tokens n] [--max-usd-micros n] | rotate <id> [--runners id,...] | test <id> | rm <id> | usage | costs [--account id] [--session id] [--limit n]";
+pub const USAGE: &str = "account ls | show <id> | providers | add <provider> [--label l] [--cap n] [--runners id,...] | login <provider> [--label l] [--runner id] | state <id> <state> [--reason r] [--until t] | cap <id> <n> | session-limits <id> [--max-tokens n] [--max-usd-micros n] | rotate <id> [--runners id,...] | test <id> | rm <id> | usage | costs [--account id] [--session id] [--limit n]";
 
 /// A number flag: a whole number, not negative.
 pub fn num(name: &str, v: Option<&str>) -> Result<Option<i64>, Error> {
@@ -262,67 +262,6 @@ pub async fn account(
             )
             .await?;
             row_or_json(&v, json, out)
-        }
-        ["limit", "set", i, unit, window, cap] => {
-            let i = id("an account", i)?;
-            let mut body = json!({"unit": word("a unit (tokens or messages)", unit, 16)?,
-                "window_secs": count("the window", window)?, "cap": count("the cap", cap)?});
-            if let Some(w) = num("--warn-percent", o.warn_percent)? {
-                body["warn_percent"] = json!(w);
-            }
-            let path = format!("/api/v1/accounts/{i}/limits");
-            let v = send(
-                c,
-                "PUT",
-                &path,
-                "",
-                Some(&body),
-                &format!("setting a limit on account {i}"),
-                &[],
-            )
-            .await?;
-            match json {
-                true => print(out, v),
-                false => print(
-                    out,
-                    format_args!(
-                        "account {i} limit {}/{} s cap {} warn {}%",
-                        s(&v["unit"]),
-                        v["window_secs"],
-                        v["cap"],
-                        v["warn_percent"].as_i64().unwrap_or(80)
-                    ),
-                ),
-            }
-        }
-        ["limit", "clear", i, unit, window] => {
-            let i = id("an account", i)?;
-            let (unit, window) = (
-                word("a unit (tokens or messages)", unit, 16)?,
-                count("the window", window)?,
-            );
-            let path = format!("/api/v1/accounts/{i}/limits/{unit}/{window}");
-            let v = send(
-                c,
-                "DELETE",
-                &path,
-                "",
-                None,
-                &format!("clearing a limit on account {i}"),
-                &[],
-            )
-            .await?;
-            match (json, v["cleared"].as_bool() == Some(true)) {
-                (true, _) => print(out, v),
-                (_, true) => print(
-                    out,
-                    format_args!("cleared account {i} limit {unit}/{window} s"),
-                ),
-                _ => print(
-                    out,
-                    format_args!("account {i} had no limit {unit}/{window} s"),
-                ),
-            }
         }
         ["session-limits", i] => {
             let i = id("an account", i)?;

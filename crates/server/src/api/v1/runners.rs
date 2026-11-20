@@ -81,6 +81,13 @@ pub struct Runner {
     pub connected_since: Option<Timestamp>,
     /// This Core's own version is newer than the runner's `version`. Absent until it connected.
     pub update_available: Option<bool>,
+    /// E12-4: asked to update in the last 15 minutes (it restarts and reconnects on the new version). Absent when not.
+    #[schema(required = false)]
+    pub updating: Option<bool>,
+    /// E12-5: the runner is older than the oldest this Core works with (`GET /core/health` `min_runner`), so the app asks
+    /// to update it before relying on it. Absent until it connected.
+    #[schema(required = false)]
+    pub update_required: Option<bool>,
     /// Whether it can serve the accounts' kinds of key, with the reason when it cannot.
     pub accounts: Option<RunnerAccounts>,
     /// Sessions and terminals running now, and how many it takes.
@@ -302,6 +309,12 @@ fn of(d: gov::Device, live: Option<&RunnerState>, x: &Extra) -> Runner {
             .and_then(semver)
             .zip(semver(env!("CARGO_PKG_VERSION")))
             .map(|(runner, core)| core > runner),
+        updating: crate::runner_update::is_updating(&d.id, crate::runner_update::unix_now())
+            .then_some(true),
+        update_required: version
+            .as_deref()
+            .map(crate::runner_update::runner_too_old)
+            .filter(|t| *t),
         built_in: Some(x.built_in),
         policy: facts.and_then(|f| f.policy).map(Into::into),
         tool_install: facts
@@ -365,7 +378,7 @@ fn extra(
 
 /// A runner device that may connect: approved and not revoked (a pending, rejected or expired
 /// claimant is not a runner yet).
-fn listed(d: &gov::Device) -> bool {
+pub(super) fn listed(d: &gov::Device) -> bool {
     d.kind == "runner" && d.usable()
 }
 

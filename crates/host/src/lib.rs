@@ -18,6 +18,7 @@
 //! `systemctl` and `journalctl`, with fixed argv and an empty environment (`exec.rs`).
 
 mod actlog;
+mod backup;
 mod exec;
 mod limits;
 mod logs;
@@ -43,6 +44,7 @@ const READ_DEADLINE: Duration = Duration::from_secs(2);
 const WRITE_DEADLINE: Duration = Duration::from_secs(5);
 const STATE_DIR: &str = "/var/lib/ainkrad-host";
 const BIN_DIR: &str = "/usr/local/bin";
+const BACKUPS_DIR: &str = "/var/lib/ainkrad/core/backups";
 const LOCK: &str = "lock";
 
 /// Everything the helper reads from outside. `production()` is the only constructor the binary
@@ -50,6 +52,8 @@ const LOCK: &str = "lock";
 pub struct Ctx {
     pub state_dir: PathBuf,
     pub bin_dir: PathBuf,
+    /// The Core's `<home>/backups`: only the metadata of its `*.age` files is read.
+    pub backups_dir: PathBuf,
     /// The uid of `ainkrad`; `None` (user missing, or uid 0) refuses every peer.
     pub ainkrad_uid: Option<u32>,
     /// Who must own the binaries and the bin dir (root).
@@ -65,6 +69,7 @@ impl Ctx {
         Self {
             state_dir: STATE_DIR.into(),
             bin_dir: BIN_DIR.into(),
+            backups_dir: BACKUPS_DIR.into(),
             ainkrad_uid: passwd_uid("ainkrad"),
             owner_uid: 0,
             exec: Box::new(Real),
@@ -268,6 +273,7 @@ fn handle(ctx: &Ctx, trail: &Trail, req: &Request, stream: &mut UnixStream) {
     let result = match &req.action {
         Action::Status => status::status(ctx),
         Action::Logs(l) => logs::logs(ctx, l),
+        Action::BackupInfo => backup::info(ctx),
         _ => Err(Code::UnknownAction),
     };
     respond(
@@ -310,7 +316,7 @@ fn read_limit(ctx: &Ctx, action: &str) -> Result<(), u64> {
     Ok(())
 }
 
-/// `restart_core` and `restart_runner`: lock, fail-closed limits, dedupe, rate limit, log, then
+/// `restart_core`, `restart_runner` and `backup_now`: lock, fail-closed limits, dedupe, rate limit, log, then
 /// **answer, then act**: `{"accepted":true}` is written before `systemctl` is run, so the answer
 /// reaches the client even when the restart tears the Core down. If systemctl then fails, the
 /// failure is logged and a repeat of the same id answers `failed`.
@@ -355,6 +361,13 @@ fn mutate(ctx: &Ctx, trail: &Trail, req: &Request, stream: &mut UnixStream) {
             None => return say(stream, refuse(trail, req, Code::Failed, None)),
         }
     }
+    if name == "backup_now" {
+        match status::unit_installed(ctx, backup::SERVICE) {
+            Some(true) => {}
+            Some(false) => return say(stream, refuse(trail, req, Code::NotInstalled, None)),
+            None => return say(stream, refuse(trail, req, Code::Failed, None)),
+        }
+    }
     if let Err(wait) = limits.check(name, now) {
         return say(stream, refuse(trail, req, Code::RateLimited, Some(wait)));
     }
@@ -388,12 +401,14 @@ fn mutate(ctx: &Ctx, trail: &Trail, req: &Request, stream: &mut UnixStream) {
     limits.mark_accepted(&req.id);
     let _ = limits::save(&ctx.state_dir, &limits);
     say(stream, wire::ok(&req.id, json!({"accepted": true})));
-    let unit = if name == "restart_core" {
-        "ainkrad-core.service"
-    } else {
-        "ainkrad-runner.service"
+    // `update` uses `start`, never `restart`: an update already running must not be killed halfway.
+    let (verb, unit) = match name {
+        "restart_core" => ("restart", "ainkrad-core.service"),
+        "restart_runner" => ("restart", "ainkrad-runner.service"),
+        "update" => ("start", "ainkrad-update@now.service"),
+        _ => ("start", backup::SERVICE),
     };
-    let args = ["--no-block", "--no-ask-password", "restart", unit].map(String::from);
+    let args = ["--no-block", "--no-ask-password", verb, unit].map(String::from);
     if !ctx.exec.run(SYSTEMCTL, &args, 4096).is_ok_and(|o| o.ok) {
         limits.mark_failed(&req.id);
         let _ = limits::save(&ctx.state_dir, &limits);

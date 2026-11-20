@@ -189,35 +189,6 @@ fn write_commands_send_what_was_asked_and_say_what_they_did() {
         "9\tanthropic\twork\tactive\tlive 0/-\tfail 0 auth 0\n"
     );
     assert_eq!(sent("put /api/v1/accounts/9/cap ", 0), json!({"cap": 0}));
-    assert_eq!(
-        ok(
-            &ks,
-            &[
-                "account",
-                "limit",
-                "set",
-                "9",
-                "tokens",
-                "18000",
-                "100000",
-                "--warn-percent",
-                "90"
-            ]
-        ),
-        "account 9 limit tokens/18000 s cap 100000 warn 90%\n"
-    );
-    assert_eq!(
-        sent("put /api/v1/accounts/9/limits ", 0),
-        json!({"unit": "tokens", "window_secs": 18000, "cap": 100000, "warn_percent": 90})
-    );
-    assert_eq!(
-        ok(&ks, &["account", "limit", "clear", "9", "tokens", "18000"]),
-        "cleared account 9 limit tokens/18000 s\n"
-    );
-    assert_eq!(
-        ok(&ks, &["account", "limit", "clear", "9", "messages", "60"]),
-        "account 9 had no limit messages/60 s\n"
-    );
     ok(
         &ks,
         &[
@@ -422,11 +393,6 @@ fn every_call_is_in_the_contract_with_its_scope() {
         ("post", "/api/v1/accounts/logins/{id}/code"),
         ("put", "/api/v1/accounts/{id}/state"),
         ("put", "/api/v1/accounts/{id}/cap"),
-        ("put", "/api/v1/accounts/{id}/limits"),
-        (
-            "delete",
-            "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
-        ),
         ("put", "/api/v1/accounts/{id}/session-limits"),
         ("put", "/api/v1/accounts/{id}/secret"),
         ("post", "/api/v1/accounts/{id}/test"),

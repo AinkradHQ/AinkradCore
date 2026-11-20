@@ -63,6 +63,9 @@ pub struct Session {
     pub expires: i64,
     /// Until when (unix seconds) the session is elevated by a step-up (§8, `stepup`).
     pub elevated_until: Option<i64>,
+    /// When the step-up that elevated it was proved, until a route that wants a fresh one takes it
+    /// (`Auth::take_fresh`). An elevation carried over to a new session is never fresh.
+    pub elevated_at: Option<i64>,
     /// The session's one live step-up challenge and its expiry; a new one replaces it.
     pub stepup_challenge: Option<(String, i64)>,
     /// A web session's request key (spec §9): the browser's WebCrypto P-256 key as an SPKI,
@@ -214,6 +217,7 @@ impl Auth {
             created: now,
             expires,
             elevated_until,
+            elevated_at: None,
             stepup_challenge: None,
             key,
         };

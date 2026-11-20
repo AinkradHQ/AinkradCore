@@ -34,6 +34,17 @@ async fn a_cloud_room_claims_a_chain_of_approved_providers() {
 }
 
 #[tokio::test]
+async fn a_cloud_room_claims_a_chain_of_any_accounts() {
+    // E7-7, D-27: no provider list. An OpenAI or Google key claims a room like an Anthropic one.
+    let fx = fx().await;
+    let room = committed_room(&fx, &[("A", "alpha text")]).await;
+    let s = chain_session(&fx, &["openai", "google", "anthropic"]).await;
+    let (st, v) = claim(&fx, &room, &s).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["entries"], 3);
+}
+
+#[tokio::test]
 async fn one_entry_outside_the_policy_refuses_the_whole_claim_and_names_it() {
     let fx = fx().await;
     let room = committed_room(&fx, &[("A", "alpha text")]).await;

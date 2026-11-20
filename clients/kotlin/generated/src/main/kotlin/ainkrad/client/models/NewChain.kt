@@ -22,7 +22,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
 
 /**
- * A chain to write: `[a-z][a-z0-9._-]{0,63}` and 1 to 4 entries, at most one of them a subscription. For an edit this replaces the name and the whole list.
+ * A chain to write: `[a-z][a-z0-9._-]{0,63}` and 1 to 16 entries. For an edit this replaces the name and the whole list.
  *
  * @param propertyEntries 
  * @param name 

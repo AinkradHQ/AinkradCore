@@ -1,6 +1,7 @@
 //! A room's model policy (E6-3) and auto-accept rules (E6-4). Cloud is the default: every room may
-//! use the approved cloud provider (plan section 12, answer 4). A room set to local-only never
-//! claims a cloud account; its distillation waits as "Needs a local model".
+//! use ANY of the user's accounts (E7-7, D-27: no provider list and no employer-room restriction;
+//! the user's AI order decides which one runs, subscription accounts first). A room set to
+//! local-only never claims a cloud account; its distillation waits as "Needs a local model".
 
 use ainkrad_core_server::api::App;
 use ainkrad_core_server::api::v1::{ApiError, ApiResult, Caller};
@@ -14,10 +15,8 @@ use utoipa::ToSchema;
 
 use crate::{Brain, record};
 
-/// The cloud providers Ahmed approved for the Brain (the Anthropic account, 2026-11-11).
-/// ponytail: a constant; a setting when a second provider is approved.
-pub const APPROVED_CLOUD: &[&str] = &["anthropic", "claude-sub"];
-/// The class a policy names for the approved cloud providers.
+/// The class a policy names for the user's accounts: any provider that is not local (D-27). The
+/// name stays `approved_cloud` so stored policies keep reading as cloud.
 pub const CLOUD: &str = "approved_cloud";
 /// The class for a runner's declared local model (Q-51). No provider is local yet, so a local-only
 /// room matches no chain entry.
@@ -57,7 +56,7 @@ impl Policy {
     pub fn allows(&self, provider: &str) -> bool {
         self.allowed.iter().any(|a| match a.as_str() {
             // D-27: any account may serve any room; only `local` is a class of its own.
-            CLOUD => !provider.starts_with("local") || APPROVED_CLOUD.contains(&provider),
+            CLOUD => !provider.starts_with("local"),
             LOCAL => provider.starts_with("local"),
             other => other == provider,
         })
@@ -93,7 +92,7 @@ pub(crate) async fn load(app: &App, room: &str) -> Result<Policy, ApiError> {
 #[derive(Serialize, ToSchema)]
 pub struct PolicyView {
     pub room: String,
-    /// `cloud` (the approved provider) or `local_only`.
+    /// `cloud` (any of the user's accounts) or `local_only`.
     pub model: String,
     pub allowed_providers: Vec<String>,
     /// Candidate kinds accepted without a review; empty (off) by default.

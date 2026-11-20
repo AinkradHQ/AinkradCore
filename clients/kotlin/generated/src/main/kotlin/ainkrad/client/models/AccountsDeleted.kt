@@ -24,13 +24,18 @@ import kotlinx.serialization.Contextual
  * 
  *
  * @param deleted 
+ * @param undoUntil Only for `deleteAccount`: when its Undo window ends (RFC 3339, UTC).
  */
 @Serializable
 
 data class AccountsDeleted (
 
     @SerialName(value = "deleted")
-    val deleted: kotlin.Boolean
+    val deleted: kotlin.Boolean,
+
+    /* Only for `deleteAccount`: when its Undo window ends (RFC 3339, UTC). */
+    @SerialName(value = "undo_until")
+    val undoUntil: kotlin.String? = null
 
 ) {
 

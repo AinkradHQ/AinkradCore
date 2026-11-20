@@ -41,6 +41,8 @@ pub(super) mod apps;
 pub(super) mod flows;
 pub(super) mod grants_api;
 pub(super) mod manage;
+mod plain;
+pub(super) mod resources;
 mod types;
 use types::*;
 
@@ -56,6 +58,7 @@ use types::*;
     manage::replace_credential,
     manage::test,
     activity,
+    resources::list,
     flows::start,
     flows::get,
     flows::cancel,
@@ -199,6 +202,7 @@ pub async fn list_kinds(State(app): State<App>) -> ApiResult<Vec<ConnectionKind>
                         title: c.title.to_owned(),
                         class: if c.write { "write" } else { "read" }.to_owned(),
                         write: c.write,
+                        summary: Some(plain::summary(d.kind, c.name, c.write).to_owned()),
                     })
                     .collect(),
                 limits: d
@@ -407,7 +411,10 @@ pub async fn delete(
     let user = workspace(&app, &me).await?;
     let now = app.clock.now();
     store::delete(&app.pool, num(&id)?, who(&me, user, &now)).await?;
-    Ok(Json(AccountsDeleted { deleted: true }))
+    Ok(Json(AccountsDeleted {
+        deleted: true,
+        undo_until: None,
+    }))
 }
 
 #[derive(Debug, Default, Deserialize, IntoParams)]

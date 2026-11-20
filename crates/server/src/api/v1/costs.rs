@@ -1,11 +1,11 @@
 //! The cost ledger, prices and account usage over the API (KAN-449; design
 //! `2026-11-02-ai-provider-accounts` §7, §10, §12d). Reading the price list is `read`; the ledger and the usage report are `admin`
-//! (they show who spent what, per company) but name no key, no secret and no runner. Changing a price or an account's limit is `admin` and
+//! (they show who spent what, per company) but name no key, no secret and no runner. Changing a price is `admin` and
 //! destructive (a step-up). There is NO route that writes the ledger: the run engine and Citadel
 //! record through `store::costs`, so a device cannot forge a cost.
 
 use axum::Json;
-use axum::extract::{Extension, Path, Query, State};
+use axum::extract::{Extension, Query, State};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -245,27 +245,12 @@ pub struct UsageByCompany {
     pub seven_days: UsageWindow,
 }
 
-/// A limit and how much of it is used.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct LimitStanding {
-    /// `tokens` or `messages`.
-    pub unit: String,
-    pub window_secs: i64,
-    pub cap: i64,
-    pub used: i64,
-    pub warn_percent: i64,
-    pub exhausted: bool,
-}
-
 /// One account's usage. No key, secret name, delivery or runner: it is for a `read` device.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AccountSpend {
     pub account_id: i64,
     pub five_hours: UsageWindow,
     pub seven_days: UsageWindow,
-    pub limits: Vec<LimitStanding>,
-    /// The highest used/cap of any limit, in basis points (10000 is at the cap).
-    pub max_utilisation_bps: i64,
     /// Provider drops in the last hour.
     pub recent_drops: i64,
     pub by_company: Vec<UsageByCompany>,
@@ -277,19 +262,6 @@ impl From<usage::AccountUsage> for AccountSpend {
             account_id: u.account_id,
             five_hours: u.five_hours.into(),
             seven_days: u.seven_days.into(),
-            limits: u
-                .limits
-                .into_iter()
-                .map(|s| LimitStanding {
-                    unit: s.unit,
-                    window_secs: s.window_secs,
-                    cap: s.cap,
-                    used: s.used,
-                    warn_percent: s.warn_percent,
-                    exhausted: s.exhausted,
-                })
-                .collect(),
-            max_utilisation_bps: u.max_utilisation_bps,
             recent_drops: u.recent_drops,
             by_company: u
                 .by_company
@@ -306,99 +278,10 @@ impl From<usage::AccountUsage> for AccountSpend {
 
 #[utoipa::path(get, path = "/api/v1/accounts/usage", operation_id = "accountsUsage", tag = "costs",
     responses((status = 200, description = "Needs `admin`. Every account's tokens, messages and dollars over the \
-        last five hours and seven days, its limits with their use, and its recent drops. Events that \
+        last five hours and seven days, and its recent drops. Events that \
         carry only a `legacy_account_id` (Citadel's old account id) are not counted here until the \
         account port lands", body = Vec<AccountSpend>)))]
 pub async fn accounts_usage(State(app): State<App>) -> ApiResult<Vec<AccountSpend>> {
     let all = usage::report(&app.pool, None, &app.clock.now()).await?;
     Ok(Json(all.into_iter().map(Into::into).collect()))
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct SetLimit {
-    /// `tokens` or `messages`.
-    pub unit: String,
-    /// 1 to 31622400 seconds.
-    pub window_secs: i64,
-    pub cap: i64,
-    /// Warn at this percent of the cap (1 to 100); default 80.
-    pub warn_percent: Option<i64>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct LimitSet {
-    pub account_id: i64,
-    pub unit: String,
-    pub window_secs: i64,
-    pub cap: i64,
-    pub warn_percent: Option<i64>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct LimitCleared {
-    pub cleared: bool,
-}
-
-fn account_id(s: &str) -> Result<i64, ApiError> {
-    s.parse::<u64>()
-        .ok()
-        .and_then(|n| i64::try_from(n).ok())
-        .ok_or_else(|| ApiError::not_found("no such account"))
-}
-
-#[utoipa::path(put, path = "/api/v1/accounts/{id}/limits", operation_id = "setAccountLimit",
-    tag = "costs", params(("id" = String, Path, description = "The account's id")),
-    request_body = SetLimit,
-    responses((status = 200, description = "The limit set or changed (audited as \
-        `account.limit_set`); 404 for no such account", body = LimitSet)))]
-pub async fn set_limit(
-    State(app): State<App>,
-    Extension(me): Extension<Caller>,
-    Path(id): Path<String>,
-    Json(b): Json<SetLimit>,
-) -> ApiResult<LimitSet> {
-    let l = usage::set_limit(
-        &app.pool,
-        account_id(&id)?,
-        &b.unit,
-        b.window_secs,
-        b.cap,
-        b.warn_percent,
-        &me.device.id,
-        BY,
-    )
-    .await
-    .map_err(ApiError::from)?;
-    Ok(Json(LimitSet {
-        account_id: l.account_id,
-        unit: l.unit,
-        window_secs: l.window_secs,
-        cap: l.cap,
-        warn_percent: l.warn_percent,
-    }))
-}
-
-#[utoipa::path(delete, path = "/api/v1/accounts/{id}/limits/{unit}/{window_secs}",
-    operation_id = "clearAccountLimit", tag = "costs",
-    params(("id" = String, Path, description = "The account's id"),
-           ("unit" = String, Path, description = "`tokens` or `messages`"),
-           ("window_secs" = i64, Path, description = "The limit's window")),
-    responses((status = 200, description = "Cleared (audited as `account.limit_cleared`); \
-        `cleared` is false when there was no such limit; 404 for no such account", body = LimitCleared)))]
-pub async fn clear_limit(
-    State(app): State<App>,
-    Extension(me): Extension<Caller>,
-    Path((id, unit, window)): Path<(String, String, i64)>,
-) -> ApiResult<LimitCleared> {
-    let cleared = usage::clear_limit(
-        &app.pool,
-        account_id(&id)?,
-        &unit,
-        window,
-        &me.device.id,
-        BY,
-    )
-    .await
-    .map_err(ApiError::from)?;
-    Ok(Json(LimitCleared { cleared }))
 }

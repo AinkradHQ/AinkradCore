@@ -40,8 +40,9 @@ const BANNER: Duration = Duration::from_secs(4);
 /// Probes at once in a round.
 const AT_ONCE: usize = 4;
 
-/// A failed check is answered this long after it began, whatever the cause.
-const FAIL_AFTER: Duration = Duration::from_secs(5);
+/// A failed check is answered this long after it began, whatever the cause: above the worst case
+/// (resolve + connect + banner), so the timing never says which step failed.
+const FAIL_AFTER: Duration = Duration::from_secs(14);
 
 /// An address the Core never probes (it is this machine): not marked down, simply not checked.
 pub(crate) fn is_local(address: &str) -> bool {

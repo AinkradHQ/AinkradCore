@@ -181,6 +181,7 @@ async fn the_hold_of_a_pool_the_account_left_does_not_outlive_a_new_reserve() {
     .unwrap();
     let subject = pool.id.to_string();
     let b = crate::store::budgets::NewBudget {
+        message_cap: None,
         kind: "pool",
         subject: &subject,
         company: None,

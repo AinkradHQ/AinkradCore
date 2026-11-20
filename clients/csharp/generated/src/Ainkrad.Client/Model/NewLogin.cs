@@ -41,8 +41,8 @@ namespace Ainkrad.Client.Model
         /// Initializes a new instance of the <see cref="NewLogin" /> class.
         /// </summary>
         /// <param name="label">The new account&#39;s label. (required).</param>
-        /// <param name="provider">A subscription provider: &#x60;claude-sub&#x60;. (required).</param>
-        /// <param name="runner">A runner device id; absent, the best ready runner that has the provider&#39;s harness..</param>
+        /// <param name="provider">A subscription provider: &#x60;claude-sub&#x60; (a pasted approval code), or the runner-bound &#x60;codex-sub&#x60; (a device code; the login stays on that runner and no token comes back). (required).</param>
+        /// <param name="runner">A runner device id; absent, the best ready runner that has the provider&#39;s harness. A runner-bound provider keeps the login on the runner it runs on: the account is pinned to it..</param>
         public NewLogin(string label = default, string provider = default, string runner = default)
         {
             // to ensure "label" is required (not null)
@@ -68,16 +68,16 @@ namespace Ainkrad.Client.Model
         public string Label { get; set; }
 
         /// <summary>
-        /// A subscription provider: &#x60;claude-sub&#x60;.
+        /// A subscription provider: &#x60;claude-sub&#x60; (a pasted approval code), or the runner-bound &#x60;codex-sub&#x60; (a device code; the login stays on that runner and no token comes back).
         /// </summary>
-        /// <value>A subscription provider: &#x60;claude-sub&#x60;.</value>
+        /// <value>A subscription provider: &#x60;claude-sub&#x60; (a pasted approval code), or the runner-bound &#x60;codex-sub&#x60; (a device code; the login stays on that runner and no token comes back).</value>
         [DataMember(Name = "provider", IsRequired = true, EmitDefaultValue = true)]
         public string Provider { get; set; }
 
         /// <summary>
-        /// A runner device id; absent, the best ready runner that has the provider&#39;s harness.
+        /// A runner device id; absent, the best ready runner that has the provider&#39;s harness. A runner-bound provider keeps the login on the runner it runs on: the account is pinned to it.
         /// </summary>
-        /// <value>A runner device id; absent, the best ready runner that has the provider&#39;s harness.</value>
+        /// <value>A runner device id; absent, the best ready runner that has the provider&#39;s harness. A runner-bound provider keeps the login on the runner it runs on: the account is pinned to it.</value>
         [DataMember(Name = "runner", EmitDefaultValue = true)]
         public string Runner { get; set; }
 

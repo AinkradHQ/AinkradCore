@@ -97,7 +97,7 @@ pub use ceiling::*;
 pub use reports::*;
 pub use signals::*;
 
-/// The budgets' subjects of an account: itself and every pool it is in.
+/// The budgets' subjects of an account: itself, its provider and every pool it is in.
 pub(super) async fn subjects_of(
     conn: &mut SqliteConnection,
     account: i64,
@@ -108,7 +108,14 @@ pub(super) async fn subjects_of(
     .bind(account)
     .fetch_all(&mut *conn)
     .await?;
+    let provider: Option<String> =
+        sqlx::query_scalar("SELECT provider FROM core_accounts WHERE id = ?")
+            .bind(account)
+            .fetch_optional(&mut *conn)
+            .await?;
     let mut out = vec![("account".to_owned(), account.to_string())];
+    // A provider's budget counts every account of that provider.
+    out.extend(provider.map(|p| ("provider".to_owned(), p)));
     out.extend(
         pools
             .into_iter()

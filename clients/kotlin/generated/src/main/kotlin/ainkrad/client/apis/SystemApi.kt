@@ -15,12 +15,21 @@
 
 package ainkrad.client.apis
 
+import ainkrad.client.models.BackupRetention
+import ainkrad.client.models.BackupStarted
+import ainkrad.client.models.BackupStatus
 import ainkrad.client.models.CoreHealth
+import ainkrad.client.models.CorePrefs
+import ainkrad.client.models.CoreStorage
 import ainkrad.client.models.ErrorBody
 import ainkrad.client.models.HostStatus
 import ainkrad.client.models.LogPage
 import ainkrad.client.models.RestartBody
 import ainkrad.client.models.Restarted
+import ainkrad.client.models.SetCorePrefs
+import ainkrad.client.models.SetRetention
+import ainkrad.client.models.UpdateCheck
+import ainkrad.client.models.UpdateStatus
 
 import ainkrad.client.infrastructure.*
 import io.ktor.client.HttpClientConfig
@@ -37,6 +46,39 @@ import io.ktor.http.ParametersBuilder
         httpClientEngine,
         httpClientConfig,
     ) {
+
+        /**
+        * POST /api/v1/core/update/check
+        * 
+        * 
+         * @return UpdateCheck
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun checkCoreUpdate(): HttpResponse<UpdateCheck> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/core/update/check",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
 
         /**
         * GET /api/v1/system/logs/backup
@@ -63,6 +105,72 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.GET,
             "/api/v1/system/logs/backup",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/system/backups/retention
+        * 
+        * 
+         * @return BackupRetention
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getBackupRetention(): HttpResponse<BackupRetention> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/system/backups/retention",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/system/backups
+        * 
+        * 
+         * @return BackupStatus
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getBackups(): HttpResponse<BackupStatus> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/system/backups",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
@@ -133,6 +241,105 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.GET,
             "/api/v1/system/logs/core",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/core/prefs
+        * 
+        * 
+         * @return CorePrefs
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getCorePrefs(): HttpResponse<CorePrefs> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/core/prefs",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/core/storage
+        * 
+        * 
+         * @return CoreStorage
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getCoreStorage(): HttpResponse<CoreStorage> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/core/storage",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/system/update
+        * 
+        * 
+         * @return UpdateStatus
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun getCoreUpdate(): HttpResponse<UpdateStatus> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/system/update",
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,
@@ -279,6 +486,138 @@ import io.ktor.http.ParametersBuilder
             )
 
             return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * PUT /api/v1/system/backups/retention
+        * 
+        * 
+         * @param setRetention  
+         * @return BackupRetention
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun setBackupRetention(setRetention: SetRetention): HttpResponse<BackupRetention> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = setRetention
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/system/backups/retention",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * PUT /api/v1/core/prefs
+        * 
+        * 
+         * @param setCorePrefs  
+         * @return CorePrefs
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun setCorePrefs(setCorePrefs: SetCorePrefs): HttpResponse<CorePrefs> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = setCorePrefs
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/core/prefs",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/system/backup
+        * 
+        * 
+         * @return BackupStarted
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun startBackup(): HttpResponse<BackupStarted> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/system/backup",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/system/update
+        * 
+        * 
+         * @return Restarted
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun startCoreUpdate(): HttpResponse<Restarted> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/system/update",
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames

@@ -34,7 +34,7 @@ pub async fn create_by(
     actor: AuditActor,
     now: &str,
 ) -> Result<Account, Error> {
-    create_inner(pool, sealer, new, method, owner, actor, now, None)
+    create_inner(pool, sealer, new, method, owner, actor, now, None, None)
         .await
         .map(|(a, _)| a)
 }
@@ -61,9 +61,49 @@ pub async fn create_placed(
         actor,
         now,
         Some(placement),
+        None,
     )
     .await?;
     Ok((a, placed.expect("a placement was asked for")))
+}
+
+/// A runner-bound subscription account (E7-4): [`create_placed`], and in the same transaction the
+/// record of the runner and home that hold its login. `new.value` is the non-secret marker
+/// [`bound_marker`], `new.runners` is that one runner, and the cap is one session at a time: a
+/// rotating `auth.json` is never refreshed by two sessions at once.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_bound(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    new: &NewAccount<'_>,
+    (runner, home): (&str, &str),
+    owner: &str,
+    actor: AuditActor,
+    now: &str,
+    placement: &Placement,
+) -> Result<(Account, (i64, Option<i64>)), Error> {
+    let (a, placed) = create_inner(
+        pool,
+        sealer,
+        &NewAccount {
+            runners: &[runner.to_owned()],
+            cap: Some(1),
+            ..*new
+        },
+        "subscription",
+        owner,
+        actor,
+        now,
+        Some(placement),
+        Some((runner, home)),
+    )
+    .await?;
+    Ok((a, placed.expect("a placement was asked for")))
+}
+
+/// What a bound account's broker secret holds: a marker, never a credential.
+pub fn bound_marker(home: &str) -> String {
+    format!("ainkrad-bound:{home}")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -76,6 +116,7 @@ async fn create_inner(
     actor: AuditActor,
     now: &str,
     placement: Option<&Placement>,
+    bound: Option<(&str, &str)>,
 ) -> Result<(Account, Option<(i64, Option<i64>)>), Error> {
     if !valid_label(new.label) {
         return refused("bad_request", "a label is [a-z][a-z0-9._-]{0,63}");
@@ -136,6 +177,17 @@ async fn create_inner(
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    if let Some((runner, home)) = bound {
+        sqlx::query(
+            "INSERT INTO core_account_bound (account_id, runner, home, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(runner)
+        .bind(home)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
     audit(
         &mut tx,
         actor,
@@ -143,7 +195,7 @@ async fn create_inner(
         id,
         json!({"provider": new.provider, "label": new.label, "cap": cap,
                "base_url": base_url, "runners": new.runners, "by_device": owner,
-               "method": method}),
+               "method": method, "bound_runner": bound.map(|b| b.0)}),
     )
     .await?;
     let a = find(&mut tx, id).await?;

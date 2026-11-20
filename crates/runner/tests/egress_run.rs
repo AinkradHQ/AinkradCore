@@ -128,6 +128,7 @@ fn start_request() -> AgentStart {
         epoch: 0,
         live: false,
         folder: None,
+        home: None,
     }
 }
 

@@ -18,18 +18,29 @@ use crate::store::budgets::{self, guard};
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SubjectBudget {
     pub id: i64,
-    /// `account`, `pool`, `agent`, `company`, `department`, `project`, `sprint` or `issue`.
+    /// `account`, `pool`, `provider`, `agent`, `company`, `department`, `project`, `sprint` or `issue`.
     pub kind: String,
-    /// The subject's id: an account or pool id, or the owning module's opaque id.
+    /// The subject's id: an account or pool id, a provider id (`anthropic`, `openrouter`, `claude-sub`), or the owning module's opaque id.
     pub subject: String,
     /// The owner's company binding (a company budget's is its subject).
     pub company: Option<String>,
-    /// `day`, `week` (from Monday), `month` or `total`.
+    /// `hour5` (fixed 5-hour UTC buckets from the Unix epoch), `day`, `week` (from Monday), `month` or
+    /// `total`.
     pub period: String,
-    /// Tokens per period; 0 with a dollar cap is a dollars-only budget.
+    /// Tokens per period; 0 with a dollar or message cap is a budget with no token limit.
     pub token_cap: i64,
     /// Millionths of a dollar per period.
     pub usd_cap_micros: Option<i64>,
+    /// Messages per period (one cost event is one message); absent is no message limit.
+    #[schema(required = false)]
+    pub message_cap: Option<i64>,
+    /// Messages counted in this period.
+    #[schema(required = false)]
+    pub messages: Option<i64>,
+    /// When this period ends and the counters start again; absent for `total`. The standing was
+    /// read at the time the route answered.
+    #[schema(required = false)]
+    pub period_ends_at: Option<Timestamp>,
     pub warn_at_percent: i64,
     /// Stops new sessions, and a running one, at the cap; else it only warns.
     pub hard_stop: bool,
@@ -52,6 +63,7 @@ pub struct SubjectBudget {
 impl From<budgets::Standing> for SubjectBudget {
     fn from(s: budgets::Standing) -> Self {
         let exhausted = s.exhausted();
+        let ends = budgets::period_end(&s.budget.period, &s.period_start());
         let b = s.budget;
         Self {
             id: b.id,
@@ -61,6 +73,9 @@ impl From<budgets::Standing> for SubjectBudget {
             period: b.period,
             token_cap: b.token_cap,
             usd_cap_micros: b.usd_cap_micros,
+            message_cap: b.message_cap,
+            messages: Some(s.messages),
+            period_ends_at: ends.as_deref().map(ts),
             warn_at_percent: b.warn_at_percent,
             hard_stop: b.hard_stop,
             period_key: s.period_key,
@@ -114,8 +129,14 @@ pub struct SetSubjectBudget {
     /// The owner's company binding; for a company budget it must be the subject (or absent).
     pub company: Option<String>,
     pub period: String,
+    /// Default 0: with no token cap a dollar or message cap is needed.
+    #[serde(default)]
+    #[schema(required = false)]
     pub token_cap: i64,
     pub usd_cap_micros: Option<i64>,
+    /// Messages per period, 1 or more; a request or turn is one message.
+    #[schema(required = false)]
+    pub message_cap: Option<i64>,
     /// Default 80.
     pub warn_at_percent: Option<i64>,
     /// Default true.
@@ -125,7 +146,7 @@ pub struct SetSubjectBudget {
 #[utoipa::path(put, path = "/api/v1/budgets", operation_id = "setBudget", tag = "budgets",
     request_body = SetSubjectBudget,
     responses((status = 200, description = "Created, or its caps changed (audited as `budget.created` \
-        or `budget.set`), with the period's spend counted from the ledger. 404 for an account or pool \
+        or `budget.set`), with the period's spend counted from the ledger. 404 for an account, pool or provider \
         that does not exist; 400 for a bad kind, subject, period or cap", body = SubjectBudget)))]
 pub async fn set(
     State(app): State<App>,
@@ -139,6 +160,7 @@ pub async fn set(
         period: &b.period,
         token_cap: b.token_cap,
         usd_cap_micros: b.usd_cap_micros,
+        message_cap: b.message_cap,
         warn_at_percent: b.warn_at_percent,
         hard_stop: b.hard_stop.unwrap_or(true),
     };
