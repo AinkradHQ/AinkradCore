@@ -231,8 +231,11 @@ pub struct AgentSecret {
 /// A session to start. No `Debug`: the prompt is the caller's.
 #[derive(Deserialize, ToSchema)]
 pub struct NewAgentSession {
-    /// The runner's device id, `d_…`.
-    pub runner: String,
+    /// Deprecated (E15): the Core places every session. Absent: the Core's built-in runner (until
+    /// E15-1 places by load, after which a given runner is ignored).
+    #[serde(default)]
+    #[schema(required = false, deprecated)]
+    pub runner: Option<String>,
     /// `claude`, `codex`, `opencode`, `agy` (what the runner's `agent` driver takes). Omit it
     /// (and `model`) when the session draws from a chain: the account the allocator picks sets them.
     #[serde(default)]

@@ -249,8 +249,10 @@ pub struct RunnerJobReport {
 #[utoipa::path(post, path = "/api/v1/runner/jobs", operation_id = "runnerCreateJob", tag = "jobs",
     request_body = RunnerNewJob,
     responses(
-        (status = 201, description = "Placed on other hardware. Only the built-in runner may call it \
-            (`runner` scope)", body = Job),
+        (status = 201, description = "Placed on other hardware: the body is an NDJSON stream \
+            (`application/x-ndjson`), one JSON object per line: the remote `ShimVerdict` line, then \
+            `state`, `out` and `exit` frames (`ShimFrame`, runner protocol) until the job ends. Only \
+            the built-in runner may call it (`runner` scope)"),
         (status = 200, description = "Run it locally, and why", body = JobLocal),
         (status = 409, description = "`interactive`")))]
 pub async fn runner_create(

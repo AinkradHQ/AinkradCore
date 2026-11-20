@@ -99,7 +99,8 @@ pub struct HardwarePool {
     pub paused: bool,
 }
 
-/// `PUT …/pause`: until when; `null` lifts the pause.
+/// `PUT …/pause`: until when; `null` lifts the pause, and any time in the year 2100 or later means
+/// indefinitely.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct HardwarePause {
     pub until: Option<Timestamp>,

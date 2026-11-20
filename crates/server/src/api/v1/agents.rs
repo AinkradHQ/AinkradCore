@@ -375,6 +375,20 @@ pub async fn create(
     body: Bytes,
 ) -> ApiResult<AgentSession> {
     let b: NewAgentSession = parse(&body)?;
+    // E15: `runner` is deprecated; absent, the built-in runner (E15-1 places by load).
+    let runner = match b.runner.clone() {
+        Some(r) => r,
+        None => sqlx::query_scalar::<_, String>(
+            "SELECT device_id FROM core_pairings WHERE kind = 'runner' AND sas = ? \
+             AND device_id IS NOT NULL LIMIT 1",
+        )
+        .bind(crate::store::gov::LOCAL_ENROL_SAS)
+        .fetch_optional(&app.pool)
+        .await?
+        .ok_or_else(|| {
+            ApiError::bad_request("no runner given and the Core has no built-in runner")
+        })?,
+    };
     let secrets: Vec<SessionSecret> = b
         .secrets
         .unwrap_or_default()
@@ -402,7 +416,7 @@ pub async fn create(
         m.insert("plan".into(), true.into());
     }
     if let Some(level) = b.effort.as_deref() {
-        effort_ok(&app, &b.runner, &b.harness, level)?;
+        effort_ok(&app, &runner, &b.harness, level)?;
         if let Some(m) = policy.as_object_mut() {
             m.insert("effort".into(), level.into());
         }
@@ -411,7 +425,7 @@ pub async fn create(
         if b.harness != PLAN_HARNESS {
             return Err(no_plan());
         }
-        if !agents::offers(&app, &b.runner, ainkrad_proto::v2::OP_AGENT_MODE) {
+        if !agents::offers(&app, &runner, ainkrad_proto::v2::OP_AGENT_MODE) {
             return Err(ApiError::new(
                 StatusCode::CONFLICT,
                 "unsupported_command",
@@ -450,7 +464,7 @@ pub async fn create(
         }
     };
     let new = store::NewSession {
-        runner: &b.runner,
+        runner: &runner,
         harness: &b.harness,
         model: b.model.as_deref(),
         // No first message (absent or empty): the session starts waiting for one.
@@ -470,8 +484,8 @@ pub async fn create(
                 ApiError::new(StatusCode::FORBIDDEN, "forbidden_scope", why)
             }
         })?;
-        agents::admit_holding(&app, &b.runner, &b.harness, &policy, &secrets).await?;
-        if let Some(e) = sched::no_account(&new, sched::own_login(&app, &b.runner, &b.harness)) {
+        agents::admit_holding(&app, &runner, &b.harness, &policy, &secrets).await?;
+        if let Some(e) = sched::no_account(&new, sched::own_login(&app, &runner, &b.harness)) {
             return Err(e);
         }
         store::create(&app.pool, &new, BY, &app.clock.now()).await?
