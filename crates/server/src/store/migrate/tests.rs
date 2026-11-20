@@ -141,7 +141,12 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (41, "project_runs"),
             (42, "mirror_state"),
             (43, "terminal_sandbox_e6"),
-            (44, "pairing_bundled_e6")
+            (44, "pairing_bundled_e6"),
+            (45, "approval_rules"),
+            (46, "project_runner_pref"),
+            (47, "run_configs"),
+            (48, "project_data"),
+            (49, "concurrent_runs")
         ]
     );
     let sum: Vec<u8> =
