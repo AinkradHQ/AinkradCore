@@ -19,6 +19,7 @@
 //! The Core's side is G5.
 
 mod body;
+pub mod call;
 mod charge;
 pub mod check;
 pub mod dial;

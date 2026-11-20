@@ -1336,6 +1336,7 @@
           "connection.unbound",
           "connection.updated",
           "connection.used",
+          "decision.asked",
           "device.enrolled",
           "device.last_admin_refused",
           "device.renamed",

@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    Body, CONTROL_STREAM, Command, Control, CoreWelcome, ErrorCode, Frame, GatewayTest, Heartbeat,
-    PROTOCOL_VERSION, RunnerHello, StreamError, close_code,
+    Body, CONTROL_STREAM, Command, Control, CoreWelcome, ErrorCode, Frame, GatewayCall,
+    GatewayTest, Heartbeat, PROTOCOL_VERSION, RunnerHello, StreamError, close_code,
 };
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use tokio::sync::{Notify, mpsc};
@@ -266,6 +266,17 @@ impl Hub {
         test: GatewayTest,
     ) -> Result<Dispatched, StreamError> {
         self.send_command(runner, Command::GatewayTest(test))
+    }
+
+    /// The Decisions service's one request through a lease (E15-0): sent to the built-in runner
+    /// only, by the caller in `decisions::provider`. Like `gateway.test` it runs no code and
+    /// the runner dials only the host the leased key was bound to.
+    pub(crate) fn dispatch_gateway_call(
+        self: &Arc<Self>,
+        runner: &str,
+        call: GatewayCall,
+    ) -> Result<Dispatched, StreamError> {
+        self.send_command(runner, Command::GatewayCall(call))
     }
 
     /// The plan check (N36): it builds the one op itself, so the route can send `plan.check` and
