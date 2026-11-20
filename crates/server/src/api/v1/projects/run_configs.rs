@@ -154,7 +154,7 @@ pub async fn update(
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-pub struct Deleted {
+pub struct RunConfigDeleted {
     pub deleted: bool,
 }
 
@@ -163,12 +163,12 @@ pub struct Deleted {
     params(("id" = String, Path, description = "The project's id"),
            ("config" = String, Path, description = "The configuration's id")),
     responses((status = 200, description = "Deleted with its variables; a live run of it keeps \
-        running. 404 for no such project or configuration", body = Deleted)))]
+        running. 404 for no such project or configuration", body = RunConfigDeleted)))]
 pub async fn delete(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path((id, cid)): Path<(String, String)>,
-) -> ApiResult<Deleted> {
+) -> ApiResult<RunConfigDeleted> {
     let now = app.clock.now();
     store::delete(
         &app.pool,
@@ -177,7 +177,7 @@ pub async fn delete(
         who(&me, &now),
     )
     .await?;
-    Ok(Json(Deleted { deleted: true }))
+    Ok(Json(RunConfigDeleted { deleted: true }))
 }
 
 #[utoipa::path(post, path = "/api/v1/projects/{id}/run-configs/{config}/duplicate",
@@ -406,16 +406,16 @@ pub async fn set_var(
            ("config" = String, Path, description = "The configuration's id"),
            ("env" = String, Path, description = "The environment"),
            ("key" = String, Path, description = "The variable name")),
-    responses((status = 200, description = "Deleted; 404 for no such variable", body = Deleted)))]
+    responses((status = 200, description = "Deleted; 404 for no such variable", body = RunConfigDeleted)))]
 pub async fn delete_var(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
     Path((id, cid, env, key)): Path<(String, String, String, String)>,
-) -> ApiResult<Deleted> {
+) -> ApiResult<RunConfigDeleted> {
     let (p, c) = ids(&id, &cid)?;
     let now = app.clock.now();
     store::delete_var(&app.pool, p, c, &env, &key, who(&me, &now)).await?;
-    Ok(Json(Deleted { deleted: true }))
+    Ok(Json(RunConfigDeleted { deleted: true }))
 }
 
 /// A plain value, on request.
