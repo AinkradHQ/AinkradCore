@@ -99,10 +99,12 @@ async fn project_session(
     })
 }
 
-/// Whether `runner`'s hello says it honours `PtyOpen::sandbox`.
-fn runner_supports(app: &App, runner: &str) -> bool {
+/// Whether a runner the hub knows has a hello that does NOT say it honours `PtyOpen::sandbox`. A
+/// runner the hub does not know is not this check's to refuse: the open answers it (no such
+/// runner) once the request is validated.
+fn runner_predates_sandboxes(app: &App, runner: &str) -> bool {
     app.hub.runners().get(runner).is_some_and(|r| {
-        r.drivers
+        !r.drivers
             .iter()
             .any(|d| d.name == "pty" && d.slots.contains_key("sandbox"))
     })
@@ -119,7 +121,7 @@ pub(super) async fn plan(
 ) -> Result<Plan, ApiError> {
     // A runner that predates sandboxes would ignore the fields and start a host-view shell: no
     // terminal opens on it, whatever was asked (E12 updates runners on its own).
-    if !runner_supports(app, runner) {
+    if runner_predates_sandboxes(app, runner) {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             "runner_update_required",

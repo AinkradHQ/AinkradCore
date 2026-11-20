@@ -188,7 +188,7 @@ pub fn tally(mut all: Vec<(String, String, String, i64)>, max: usize) -> Project
         .map(|(who, count)| AuthorCount { who, count })
         .collect();
     by_author.sort_by(|a, b| b.count.cmp(&a.count).then(a.who.cmp(&b.who)));
-    all.sort_by(|a, b| b.3.cmp(&a.3));
+    all.sort_by_key(|a| std::cmp::Reverse(a.3));
     ProjectChanges {
         by_author,
         recent: all

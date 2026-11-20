@@ -337,7 +337,10 @@ fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
     );
     // The fixture unlocks the device for real, with its step-up key (the V2 session proof), and
     // opens the terminal in-process with the token; the gate is the production one.
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     let (mut client, term) = rt.block_on(async {
         use ainkrad_ctl::client::Client;
         use ainkrad_ctl::keystore::Keystore;
@@ -361,10 +364,21 @@ fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
         .await
         .unwrap();
         let mut out = Vec::new();
-        let opts = Options { rows: None, cols: None, cwd: None, signal: None };
-        terminal(&mut c, &["new", &id, "sh", "-c", &script], &opts, false, &mut out)
-            .await
-            .unwrap();
+        let opts = Options {
+            rows: None,
+            cols: None,
+            cwd: None,
+            signal: None,
+        };
+        terminal(
+            &mut c,
+            &["new", &id, "sh", "-c", &script],
+            &opts,
+            false,
+            &mut out,
+        )
+        .await
+        .unwrap();
         (c, String::from_utf8(out).unwrap().trim().to_owned())
     });
     let start = Instant::now();
@@ -383,7 +397,12 @@ fn a_real_runner_opens_a_bare_named_shell_inside_its_terminal_sandbox() {
     // Closed, so the host (which keeps an exited terminal until it is acknowledged) goes too.
     rt.block_on(async {
         use ainkrad_ctl::terminals::{Options, terminal};
-        let opts = Options { rows: None, cols: None, cwd: None, signal: None };
+        let opts = Options {
+            rows: None,
+            cols: None,
+            cwd: None,
+            signal: None,
+        };
         terminal(&mut client, &["kill", &term], &opts, false, &mut Vec::new())
             .await
             .unwrap();

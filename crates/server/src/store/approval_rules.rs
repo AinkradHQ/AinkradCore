@@ -30,9 +30,9 @@ const COLS: &str = "id, project_id, tool, pattern, created_at";
 
 /// The project's rules, oldest first.
 pub async fn list(pool: &SqlitePool, project: i64) -> Result<Vec<Rule>, sqlx::Error> {
-    let rows = sqlx::query(&format!(
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {COLS} FROM core_approval_rules WHERE project_id = ? ORDER BY id"
-    ))
+    )))
     .bind(project)
     .fetch_all(pool)
     .await?;
@@ -61,9 +61,9 @@ pub async fn add(
     .execute(&mut *tx)
     .await?
     .rows_affected();
-    let row = sqlx::query(&format!(
+    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {COLS} FROM core_approval_rules WHERE project_id = ? AND tool = ? AND pattern = ?"
-    ))
+    )))
     .bind(project)
     .bind(tool)
     .bind(pattern)

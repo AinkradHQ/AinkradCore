@@ -362,8 +362,8 @@ async fn download(
             let _ = std::fs::remove_file(file);
             return Err("the download grew past the size limit, so it was stopped".to_owned());
         }
-        if total > 0 {
-            let p = (got * 100 / total).min(100) as u8;
+        if let Some(p) = (got * 100).checked_div(total) {
+            let p = p.min(100) as u8;
             if p != last {
                 last = p;
                 progress(p);

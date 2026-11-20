@@ -44,6 +44,7 @@ mod auth;
 mod command;
 mod control;
 mod design;
+mod docs;
 mod files;
 mod gateway;
 mod history;
@@ -59,7 +60,6 @@ mod ssh_agent;
 mod subscription;
 mod terminal;
 mod tools;
-mod docs;
 pub use agent::*;
 pub use attach::*;
 pub use auth::*;
@@ -317,6 +317,8 @@ impl IsolationCaps {
 
 /// A frame's payload, typed.
 #[derive(Debug, Clone, PartialEq)]
+// A frame is built once and moved once; boxing Command would touch every match site.
+#[allow(clippy::large_enum_variant)]
 pub enum Body {
     Control(Control),
     Command(Command),

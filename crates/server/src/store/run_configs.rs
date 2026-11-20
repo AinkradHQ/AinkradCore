@@ -248,13 +248,13 @@ pub fn overlay(spec: &mut RunSpec, cfg: &Config, vars: &[Var]) -> Result<(), Str
             false => format!("/repo/{repo}/{rel}"),
         });
     }
-    if let Some(p) = cfg.port.and_then(|p| u16::try_from(p).ok()) {
-        if !s.ports.iter().any(|x| x.port == p) {
-            s.ports.push(Port {
-                port: p,
-                expose: false,
-            });
-        }
+    if let Some(p) = cfg.port.and_then(|p| u16::try_from(p).ok())
+        && !s.ports.iter().any(|x| x.port == p)
+    {
+        s.ports.push(Port {
+            port: p,
+            expose: false,
+        });
     }
     for v in vars {
         let val = match (&v.value, &v.secret) {
@@ -409,26 +409,27 @@ fn check(i: &Input) -> Result<(), Error> {
     if let Some(c) = &i.command {
         line(c, 512, "a command")?;
     }
-    if let Some(d) = &i.workdir {
-        if d.len() > 200 || d.contains(['\n', '\r', '\0']) || d.split('/').any(|p| p == "..") {
-            return refused(
-                "bad_request",
-                "a folder is a path of at most 200 characters, without ..",
-            );
-        }
+    if let Some(d) = &i.workdir
+        && (d.len() > 200 || d.contains(['\n', '\r', '\0']) || d.split('/').any(|p| p == ".."))
+    {
+        return refused(
+            "bad_request",
+            "a folder is a path of at most 200 characters, without ..",
+        );
     }
     if let Some(r) = &i.runner {
         line(r, 80, "a runner")?;
     }
-    if let Some(s) = &i.service {
-        if !s.is_empty() && !spec::service_name_ok(s) {
-            return refused("bad_request", "not a service name");
-        }
+    if let Some(s) = &i.service
+        && !s.is_empty()
+        && !spec::service_name_ok(s)
+    {
+        return refused("bad_request", "not a service name");
     }
-    if let Some(p) = i.port {
-        if !(0..=65535).contains(&p) {
-            return refused("bad_request", "a port is 1-65535");
-        }
+    if let Some(p) = i.port
+        && !(0..=65535).contains(&p)
+    {
+        return refused("bad_request", "a port is 1-65535");
     }
     Ok(())
 }

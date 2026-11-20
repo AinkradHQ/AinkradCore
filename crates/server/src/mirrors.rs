@@ -919,7 +919,7 @@ mod due_tests {
     #[test]
     fn a_project_is_due_after_its_own_interval_and_never_at_zero() {
         let t0 = Instant::now();
-        let later = |m| t0 + Duration::from_secs(m * 60);
+        let later = |m: u64| t0 + Duration::from_secs(m * 60);
         assert!(due(15, None, t0));
         assert!(!due(15, Some(t0), later(14)));
         assert!(due(15, Some(t0), later(15)));
