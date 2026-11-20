@@ -187,6 +187,7 @@ dependencies = [
 name = "ainkrad-ctl"
 version = "0.9.0"
 dependencies = [
+ "ainkrad-ctl",
  "base64 0.22.1",
  "futures-util",
  "http-body-util",

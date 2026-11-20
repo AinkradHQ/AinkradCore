@@ -442,6 +442,20 @@ mod tests {
         assert_eq!(network_for(None, false, true, true), Ok("deny"));
     }
 
+    /// The 0.10 decision: every runner the installers set up runs agent sessions `filtered` (no
+    /// host loopback, see the harness's profile tests); `allow` stays a by-hand stage-1 choice.
+    #[test]
+    fn the_installed_runners_default_agent_sessions_to_filtered() {
+        let plist = include_str!("../../../../deploy/launchd/io.ainkrad.runner.plist");
+        assert!(
+            plist.contains("<key>AINKRAD_AGENT_NETWORK</key>\n\t\t<string>filtered</string>"),
+            "the macOS runner plist"
+        );
+        let linux = include_str!("../../../../deploy/install-linux.sh");
+        assert!(linux.contains("printf 'AINKRAD_AGENT_NETWORK=filtered\\n"));
+        assert!(!plist.contains("<string>allow</string>") && !linux.contains("NETWORK=allow"));
+    }
+
     #[test]
     fn the_capability_is_advertised_only_when_proven() {
         let sandbox = ProcessSandbox::new("/state".into(), "/secrets".into());
