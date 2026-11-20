@@ -76,6 +76,17 @@ async fn present(app: &App, v: &Viewer, s: Session) -> Result<Option<AgentSessio
         out.failover_class = sched.failover_class;
         out.skip_pools = Some(sched.skip_pools);
     }
+    let placed: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT s.place_reason, d.name FROM core_agent_sessions s \
+         LEFT JOIN core_devices d ON d.id = s.runner WHERE s.id = ?",
+    )
+    .bind(&out.id)
+    .fetch_optional(&app.pool)
+    .await?;
+    if let Some((reason, name)) = placed {
+        out.place_reason = reason;
+        out.placed_on = name;
+    }
     out.run = Some(sched.run);
     out.attempt = Some(sched.attempt);
     out.failover_of = sched.failover_of;

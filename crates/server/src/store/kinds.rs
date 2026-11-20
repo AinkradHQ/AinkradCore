@@ -175,6 +175,8 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "device.enrolled",
     "device.last_admin_refused",
     "device.revoked",
+    "hardware.paused",
+    "hardware.resumed",
     "host.action_result",
     "host.helper_refused",
     "host.logs_read",

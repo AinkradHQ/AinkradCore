@@ -3,21 +3,23 @@
 //! `admin`. Events: `hardware.changed {id}` (debounced to 5 s).
 //!
 //! Filled (E15-1) from `Hub::hardware()` joined with `core_hardware_prefs` (`hardware::view`).
-//! Pause-all writes a pause for every paired machine but the Core host; a runner paired after it
-//! is not paused. ponytail: one row per device keeps the table as frozen, a pool flag if it matters.
+//! Pause-all writes a pause for every paired machine but the Core host, and the same pause on the
+//! Core host's own row, which is the pool's pause and so reaches a runner paired later (the Core is
+//! never paused itself; its row has no other meaning). Pause and resume are audited.
 
 use std::collections::BTreeMap;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use ainkrad_core::audit::{AuditEntity, NewAuditEvent};
 use ainkrad_proto::v2::{Gate, HwKind, Os};
 
 use super::types::{Timestamp, ts};
-use super::{ApiError, ApiResult};
+use super::{ApiError, ApiResult, BY, Caller};
 use crate::api::App;
 use crate::hardware::view::{self, Machine};
 use crate::scheduler::{iso_of_unix, unix_secs};
@@ -132,7 +134,12 @@ fn shown(m: Machine) -> Hardware {
         },
         online: v.online,
         degraded: v.degraded,
-        paused_until: m.paused_until.as_deref().map(ts),
+        // The Core row's pause is the pool's, shown by `/hardware/pool`.
+        paused_until: m
+            .paused_until
+            .as_deref()
+            .filter(|_| v.kind != HwKind::Core)
+            .map(ts),
         gate: match (v.online, c.gate) {
             (false, _) => HardwareGate::Off,
             (_, Gate::Open) => HardwareGate::Open,
@@ -179,6 +186,9 @@ fn pool_of(machines: &[Machine]) -> HardwarePool {
         .iter()
         .filter(|m| m.view.kind != HwKind::Core)
         .collect();
+    let global = machines
+        .iter()
+        .any(|m| m.view.kind == HwKind::Core && m.paused_until.is_some());
     HardwarePool {
         load_pct: if slots == 0 {
             0
@@ -187,7 +197,7 @@ fn pool_of(machines: &[Machine]) -> HardwarePool {
         },
         jobs,
         sessions: machines.iter().map(|m| m.view.sessions).sum(),
-        paused: !remote.is_empty() && remote.iter().all(|m| m.paused_until.is_some()),
+        paused: global || (!remote.is_empty() && remote.iter().all(|m| m.paused_until.is_some())),
     }
 }
 
@@ -218,6 +228,36 @@ fn until_of(app: &App, p: &HardwarePause) -> Result<Option<String>, ApiError> {
     }
 }
 
+/// `hardware.paused` or `hardware.resumed`, for one device (`Some(id, seq)`) or the pool (`None`).
+async fn audit_pause(
+    app: &App,
+    me: &Caller,
+    device: Option<(&str, i64)>,
+    until: Option<&str>,
+) -> Result<(), ApiError> {
+    let event = NewAuditEvent {
+        actor: BY,
+        action: if until.is_some() {
+            "hardware.paused"
+        } else {
+            "hardware.resumed"
+        }
+        .to_owned(),
+        entity: device.map(|(_, seq)| AuditEntity {
+            kind: "device".to_owned(),
+            id: seq,
+        }),
+        details: serde_json::json!({
+            "device": device.map_or("all", |d| d.0),
+            "until": until,
+            "by_device": me.device.id,
+        })
+        .to_string(),
+    };
+    crate::store::audit::append_one(&app.pool, &event).await?;
+    Ok(())
+}
+
 async fn set_pause(app: &App, ids: &[String], until: Option<&str>) -> Result<(), ApiError> {
     let mut tx = crate::store::begin_write(&app.pool).await?;
     for id in ids {
@@ -245,6 +285,7 @@ async fn set_pause(app: &App, ids: &[String], until: Option<&str>) -> Result<(),
         404 for no such machine. Needs `admin`", body = Hardware)))]
 pub async fn pause(
     State(app): State<App>,
+    Extension(me): Extension<Caller>,
     Path(id): Path<String>,
     Json(p): Json<HardwarePause>,
 ) -> ApiResult<Hardware> {
@@ -258,6 +299,10 @@ pub async fn pause(
         Some(_) => {}
     }
     set_pause(&app, &[id.clone()], until.as_deref()).await?;
+    let seq = crate::store::gov::get_device(&app.pool, &id)
+        .await?
+        .map_or(0, |d| d.seq);
+    audit_pause(&app, &me, Some((&id, seq)), until.as_deref()).await?;
     let m = view::machines(&app)
         .await?
         .into_iter()
@@ -272,16 +317,18 @@ pub async fn pause(
         `until` (`null` lifts it). Needs `admin`", body = HardwarePool)))]
 pub async fn pause_all(
     State(app): State<App>,
+    Extension(me): Extension<Caller>,
     Json(p): Json<HardwarePause>,
 ) -> ApiResult<HardwarePool> {
     let until = until_of(&app, &p)?;
     let ids: Vec<String> = view::machines(&app)
         .await?
         .into_iter()
-        .filter(|m| m.view.kind != HwKind::Core)
         .map(|m| m.view.device)
         .collect();
+    // The Core host's row is the pool's pause: it reaches a runner paired later too.
     set_pause(&app, &ids, until.as_deref()).await?;
+    audit_pause(&app, &me, None, until.as_deref()).await?;
     Ok(Json(pool_of(&view::machines(&app).await?)))
 }
 
@@ -333,6 +380,8 @@ mod tests {
             "no remote is not a pause"
         );
         assert_eq!(pool_of(&[]).load_pct, 0);
+        // The pool's pause (the Core row) holds with no runner at all.
+        assert!(pool_of(&[m(HwKind::Core, 0, 1, true, true)]).paused);
         assert_eq!(pool_of(&[m(HwKind::Core, 9, 2, true, false)]).load_pct, 100);
     }
 }

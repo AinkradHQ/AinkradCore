@@ -23,6 +23,8 @@ pub struct LiveJob {
 /// One machine: the placement view plus what the API shows beyond it.
 pub struct Machine {
     pub view: HwView,
+    /// A pause in effect: its own or the pool's. On the Core host: the pool's (pause-all), which
+    /// the Core row carries so it applies to runners paired later (the Core itself is never paused).
     pub paused_until: Option<String>,
     pub jobs: Vec<LiveJob>,
 }
@@ -49,6 +51,14 @@ fn kind_of(sas: &str, bundled: bool) -> HwKind {
         HwKind::Mac
     } else {
         HwKind::Runner
+    }
+}
+
+/// The later of two pause times.
+fn later(a: Option<String>, b: Option<String>) -> Option<String> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
     }
 }
 
@@ -119,13 +129,25 @@ pub async fn machines(app: &App) -> Result<Vec<Machine>, sqlx::Error> {
             started_at: started.unwrap_or(created),
         });
     }
+    let pool_pause = kinds
+        .iter()
+        .find(|(_, k)| **k == HwKind::Core)
+        .and_then(|(d, _)| prefs.get(d))
+        .and_then(|(p, _)| p.clone())
+        .filter(|p| p.as_str() > now.as_str());
     Ok(app
         .hub
         .hardware()
         .into_iter()
         .map(|h| {
             let kind = kinds.get(&h.device).copied().unwrap_or(HwKind::Runner);
-            let (until, slots) = prefs.get(&h.device).cloned().unwrap_or_default();
+            let (own, slots) = prefs.get(&h.device).cloned().unwrap_or_default();
+            // The later of the two pauses holds; the Core's row is the pool's, not its own.
+            let until = if kind == HwKind::Core {
+                None
+            } else {
+                later(own, pool_pause.clone())
+            };
             let live = jobs.remove(&h.device).unwrap_or_default();
             let n_sessions =
                 u32::try_from(sessions.get(&h.device).copied().unwrap_or(0)).unwrap_or(0);
@@ -139,7 +161,11 @@ pub async fn machines(app: &App) -> Result<Vec<Machine>, sqlx::Error> {
             );
             Machine {
                 view,
-                paused_until: until.filter(|u| u.as_str() > now.as_str()),
+                paused_until: if kind == HwKind::Core {
+                    pool_pause.clone()
+                } else {
+                    until.filter(|u| u.as_str() > now.as_str())
+                },
                 jobs: live,
             }
         })
@@ -176,6 +202,17 @@ mod tests {
         assert!(!is_paused(Some(now), now));
         assert!(!is_paused(None, now));
         assert!(is_paused(Some("9999-12-31T00:00:00.000Z"), now));
+    }
+
+    #[test]
+    fn the_later_pause_holds() {
+        let (a, b) = (
+            "2026-11-21T00:00:00.000Z".to_owned(),
+            "2026-11-22T00:00:00.000Z".to_owned(),
+        );
+        assert_eq!(later(Some(a.clone()), Some(b.clone())), Some(b.clone()));
+        assert_eq!(later(Some(a.clone()), None), Some(a));
+        assert_eq!(later(None, None), None);
     }
 
     #[test]

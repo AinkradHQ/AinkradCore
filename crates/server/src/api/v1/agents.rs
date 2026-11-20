@@ -187,6 +187,13 @@ pub struct AgentSession {
     /// Whether its effort can be set (`effort` on `createAgentSession` or `setAgentSessionMode`):
     /// its harness takes one (Claude, Codex) and its runner relays it.
     pub can_set_effort: Option<bool>,
+    /// Why the Core placed it where it runs (E15): `core`, `overflow` (the Core was full) or
+    /// `pinned` (a runner-bound login); absent for a session placed before E15.
+    #[schema(required = false)]
+    pub place_reason: Option<String>,
+    /// The name of the machine it runs on (`runner` is its id), for "Ran on X".
+    #[schema(required = false)]
+    pub placed_on: Option<String>,
 }
 
 impl From<Session> for AgentSession {
@@ -250,6 +257,8 @@ impl From<Session> for AgentSession {
             failed_over_to: None,
             failover_class: None,
             skip_pools: None,
+            place_reason: None,
+            placed_on: None,
         }
     }
 }
