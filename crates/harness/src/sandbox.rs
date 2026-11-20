@@ -391,6 +391,28 @@ pub(crate) fn command_expecting_refusal(program: &OsStr, args: &[String], spec: 
         Command::new("/nonexistent/ainkrad-sandbox-refused")
     })
 }
+/// The parts of /etc a Linux sandbox reads, never all of it (it can hold credentials): resolver
+/// and CA data, the loader cache, and `alternatives`, the symlinks Debian and Ubuntu put
+/// `/usr/bin/cc`, `c++` and `editor` through (without it `cc` is a dead link: "linker `cc` not
+/// found" in every Rust job, e2e 2026-11-20).
+const ETC_READ: [&str; 5] = [
+    "/etc/resolv.conf",
+    "/etc/hosts",
+    "/etc/ssl/certs",
+    "/etc/ld.so.cache",
+    "/etc/alternatives",
+];
+
+/// Where the sandboxed process starts: its `process_dir` when that lies inside the bound `cwd`
+/// (a heavy job's folder below the project root), else `cwd`. bwrap's `--chdir` wins over the
+/// `current_dir` the caller sets, so without this every Linux job ran in the project root.
+fn workdir(spec: &Spec) -> &Path {
+    spec.process_dir
+        .as_deref()
+        .filter(|d| d.starts_with(&spec.cwd))
+        .unwrap_or(&spec.cwd)
+}
+
 fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command> {
     for path in [
         &spec.cwd,
@@ -470,12 +492,7 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         // Only resolver/CA data, never all of /etc (which can contain credentials). A filtered
         // sandbox gets no resolver config: names are resolved by the egress proxy, outside.
         let filtered = env(spec, "AINKRAD_SANDBOX_NETWORK") == "filtered";
-        for p in [
-            "/etc/resolv.conf",
-            "/etc/hosts",
-            "/etc/ssl/certs",
-            "/etc/ld.so.cache",
-        ] {
+        for p in ETC_READ {
             if filtered && matches!(p, "/etc/resolv.conf" | "/etc/hosts") {
                 continue;
             }
@@ -598,7 +615,7 @@ fn compile(program: &OsStr, args: &[String], spec: &Spec) -> io::Result<Command>
         }
         c.args(["--remount-ro", "/dev", "--remount-ro", "/"])
             .arg("--chdir")
-            .arg(&spec.cwd)
+            .arg(workdir(spec))
             .arg("--");
     }
     let limits = |name, default: &str| {

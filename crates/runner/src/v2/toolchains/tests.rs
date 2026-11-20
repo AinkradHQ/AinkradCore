@@ -83,3 +83,35 @@ fn a_job_sees_installs_read_only_and_its_caches_in_its_own_home() {
     );
     let _ = std::fs::remove_dir_all(&state);
 }
+
+/// A stand-in for rustup-init, which like the real one refuses to install unless its file is
+/// named `rustup-init` (it is a multi-call binary): the name `.download` made every runner's Rust
+/// install fail at once, and so every remote `cargo` job (e2e 2026-11-20).
+#[tokio::test]
+async fn the_rust_installer_runs_under_its_own_name_and_says_why_it_failed() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = std::env::temp_dir().join(format!("tc-installer-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let fake = "#!/bin/sh\n\
+        case \"$(basename \"$0\")\" in rustup-init) ;; *) echo \"error: unknown proxy name: '$(basename \"$0\")'\" >&2; exit 1 ;; esac\n\
+        mkdir -p \"$CARGO_HOME/bin\" && touch \"$CARGO_HOME/bin/cargo\"\n";
+    let put = |name: &str| {
+        let f = base.as_path().join(name);
+        std::fs::write(&f, fake).unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o700)).unwrap();
+        f
+    };
+    let f = put(download_name(Kind::Installer));
+    run_installer(&f, "1.100.0", "x86_64-unknown-linux-gnu", base.as_path())
+        .await
+        .unwrap();
+    assert!(base.as_path().join("cargo/bin/cargo").is_file());
+    // Under another name it fails, and the error carries the installer's own reason.
+    let f = put(".download");
+    let e = run_installer(&f, "1.100.0", "x86_64-unknown-linux-gnu", base.as_path())
+        .await
+        .unwrap_err();
+    assert!(e.contains("unknown proxy name"), "{e}");
+    let _ = std::fs::remove_dir_all(&base);
+}

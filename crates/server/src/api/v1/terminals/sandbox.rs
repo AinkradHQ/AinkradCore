@@ -79,24 +79,37 @@ async fn project_session(
     runner: &str,
     id: i64,
 ) -> Result<String, ApiError> {
-    // Only the caller's own sessions: another device's worktree is not theirs to open a shell in.
+    live_project_session(&app.pool, id, runner, &me.device.id)
+        .await?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "project_folder_unknown",
+                "the project has no live session folder on this runner",
+            )
+        })
+}
+
+/// The session folder a `project:<id>` terminal of `device` on `runner` works in: that device's
+/// newest live session of the project there. Only the device's own sessions: another device's
+/// worktree is not theirs to open a shell in. Heavy jobs from that terminal resolve the same way
+/// (`jobs::answer`), so the folder they sync is the one the shell is in.
+pub(crate) async fn live_project_session(
+    pool: &sqlx::SqlitePool,
+    project: i64,
+    runner: &str,
+    device: &str,
+) -> Result<Option<String>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT id FROM core_agent_sessions WHERE project_id = ? AND runner = ? AND created_by = ? \
          AND state IN ('starting', 'running', 'interrupted') AND folder IS NOT NULL \
          ORDER BY created_at DESC LIMIT 1",
     )
-    .bind(id)
+    .bind(project)
     .bind(runner)
-    .bind(&me.device.id)
-    .fetch_optional(&app.pool)
-    .await?
-    .ok_or_else(|| {
-        ApiError::new(
-            StatusCode::CONFLICT,
-            "project_folder_unknown",
-            "the project has no live session folder on this runner",
-        )
-    })
+    .bind(device)
+    .fetch_optional(pool)
+    .await
 }
 
 /// Whether `runner` is connected with a hello that does NOT say it honours `PtyOpen::sandbox`.
