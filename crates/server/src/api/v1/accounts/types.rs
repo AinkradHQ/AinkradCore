@@ -10,6 +10,10 @@ pub struct ProviderAccount {
     /// `anthropic`, `openai`, `google` or a user definition's id.
     pub provider: String,
     pub label: String,
+    /// The free-text name a person gave it (`Work Claude`); absent: show the provider's name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub display_name: Option<String>,
     /// The key's last four characters; empty for a key too short to show any.
     pub masked_tail: String,
     /// The provider's base URL when the account was stored.
@@ -165,6 +169,7 @@ impl From<acc::Account> for ProviderAccount {
             id: a.id,
             provider: a.provider,
             label: a.label,
+            display_name: a.display_name,
             masked_tail: a.masked_tail,
             base_url: a.base_url,
             state: a.state,
@@ -229,6 +234,9 @@ impl From<acc::Account> for AccountDetail {
 pub struct NewProviderAccount {
     pub provider: String,
     pub label: String,
+    /// A free-text name, trimmed, at most 64 characters, no control characters; default none.
+    #[serde(default)]
+    pub display_name: Option<String>,
     /// The API key; written, never read back.
     #[schema(value_type = String)]
     pub value: Zeroizing<String>,
@@ -268,6 +276,13 @@ pub struct SetState {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SetCap {
     pub cap: i64,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetName {
+    /// Trimmed, at most 64 characters, no control characters; `null` or blank clears it.
+    pub display_name: Option<String>,
 }
 
 /// What one session may spend through an account. A dimension left out is not limited by the

@@ -31,6 +31,7 @@ async fn mk(w: &W, label: &str, provider: &str, value: &str) -> Result<accounts:
         value,
         runners: &runners,
         cap: None,
+        display_name: None,
     };
     let sealer = w.core.app.secrets.as_deref().unwrap();
     let now = w.core.app.clock.now();

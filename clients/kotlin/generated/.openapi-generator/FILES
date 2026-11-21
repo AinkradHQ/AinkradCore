@@ -288,6 +288,7 @@ src/main/kotlin/ainkrad/client/models/SetConnectionGrant.kt
 src/main/kotlin/ainkrad/client/models/SetCorePrefs.kt
 src/main/kotlin/ainkrad/client/models/SetDefaultConnection.kt
 src/main/kotlin/ainkrad/client/models/SetModelAllowed.kt
+src/main/kotlin/ainkrad/client/models/SetName.kt
 src/main/kotlin/ainkrad/client/models/SetPrice.kt
 src/main/kotlin/ainkrad/client/models/SetProjectDefaults.kt
 src/main/kotlin/ainkrad/client/models/SetProjectSecret.kt

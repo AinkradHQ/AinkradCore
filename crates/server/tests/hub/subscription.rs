@@ -73,6 +73,7 @@ pub(super) async fn up_with(name: &str, plan_check: bool) -> S {
         value: TOKEN,
         runners: &runners,
         cap: None,
+        display_name: None,
     };
     let sealer = core.app.secrets.as_deref().unwrap();
     let account = accounts::create_by(

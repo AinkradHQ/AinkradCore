@@ -22,6 +22,7 @@ async fn add(fx: &Fx, provider: &str, label: &str, p: Placement) -> (i64, i64, O
         },
         runners: &[],
         cap: None,
+        display_name: None,
     };
     let (a, (pool, chain)) =
         acc::create_placed(&fx.app.pool, &s, &new, "key", &fx.dev.id, BY, NOW, &p)
@@ -180,6 +181,7 @@ async fn a_failed_placement_leaves_no_account() {
         value: "throwaway-placement-value-5a91c3d4",
         runners: &[],
         cap: None,
+        display_name: None,
     };
     let bad = Placement {
         user: 1,

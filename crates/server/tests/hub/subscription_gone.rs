@@ -209,6 +209,7 @@ async fn deleting_a_gateway_account_kills_the_live_sessions_holding_its_key() {
         value: "throwaway-gateway-value-3c9e1a",
         runners: &runners,
         cap: None,
+        display_name: None,
     };
     let sealer = w.core.app.secrets.as_deref().unwrap();
     let key = ainkrad_core_server::store::accounts::create_by(

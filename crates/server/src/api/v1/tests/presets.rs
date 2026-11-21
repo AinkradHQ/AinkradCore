@@ -34,6 +34,7 @@ async fn store(
         value,
         runners: &[],
         cap: None,
+        display_name: None,
     };
     acc::create(&fx.app.pool, s, &new, &fx.dev.id, BY, NOW).await
 }
@@ -169,6 +170,7 @@ async fn placed(fx: &Fx, s: &crate::ops::secretbox::SecretBox, provider: &str, k
         value: key,
         runners: &[],
         cap: None,
+        display_name: None,
     };
     let place = crate::store::placement::Placement {
         user: 1,

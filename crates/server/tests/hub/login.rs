@@ -99,7 +99,12 @@ pub(super) async fn until(w: &W, id: &str, want: &str) -> logins::Login {
 
 /// Starts a sign-in and answers the runner's `login.start` with a URL; returns the login at `open_url`.
 pub(super) async fn to_open_url(w: &mut W, label: &str) -> logins::Login {
-    let l = login::start(&w.core.app, &w.who, "claude-sub", label, None)
+    to_open_url_as(w, label, None).await
+}
+
+/// [`to_open_url`], naming the account it makes.
+async fn to_open_url_as(w: &mut W, label: &str, name: Option<&str>) -> logins::Login {
+    let l = login::start(&w.core.app, &w.who, "claude-sub", label, name, None)
         .await
         .unwrap_or_else(|e| panic!("{:?}", refusal::<()>(Err(e))));
     assert_eq!(l.state, "starting");
@@ -152,7 +157,13 @@ async fn a_sign_in_runs_from_the_url_to_a_stored_account_and_no_token_leaks() {
     let mut w = up("login-ok", true, true).await;
     // A second, offline runner: a subscription account is usable on every allowed runner.
     let second = w.core.runner().await.id;
-    let l = to_open_url(&mut w, "claude-me").await;
+    let bad = login::start(&w.core.app, &w.who, "claude-sub", "x", Some("a\nb"), None).await;
+    assert_eq!(
+        refusal(bad).0,
+        "bad_request",
+        "a name with a control character"
+    );
+    let l = to_open_url_as(&mut w, "claude-me", Some(" Work Claude ")).await;
     assert_eq!(l.runner, w.runner);
     assert!(l.url.as_deref().unwrap().starts_with("https://claude.ai/"));
     // The code is taken once, in `open_url`, and goes to the runner.
@@ -190,6 +201,11 @@ async fn a_sign_in_runs_from_the_url_to_a_stored_account_and_no_token_leaks() {
     assert_eq!(
         (account.provider.as_str(), account.label.as_str()),
         ("claude-sub", "claude-me")
+    );
+    assert_eq!(
+        account.display_name.as_deref(),
+        Some("Work Claude"),
+        "the sign-in's name"
     );
     let mut want = vec![w.runner.clone(), second];
     want.sort();
@@ -239,7 +255,7 @@ async fn a_sign_in_runs_from_the_url_to_a_stored_account_and_no_token_leaks() {
 #[tokio::test]
 async fn the_state_machine_refuses_out_of_order_and_foreign_requests() {
     let mut w = up("login-order", true, true).await;
-    let l = login::start(&w.core.app, &w.who, "claude-sub", "early", None)
+    let l = login::start(&w.core.app, &w.who, "claude-sub", "early", None, None)
         .await
         .unwrap();
     // A code before the URL, and one of the wrong shape, never reach the runner.
@@ -312,11 +328,11 @@ async fn the_state_machine_refuses_out_of_order_and_foreign_requests() {
     assert!(matches!(cmd, Command::LoginCancel(x) if x.login_id == l.id));
     assert_eq!(refusal(send_code(&w, &l.id, CODE).await).0, "login_state");
     // The label is free again; a second open sign-in of one label is not.
-    let again = login::start(&w.core.app, &w.who, "claude-sub", "early", None)
+    let again = login::start(&w.core.app, &w.who, "claude-sub", "early", None, None)
         .await
         .unwrap();
     assert_eq!(
-        refusal(login::start(&w.core.app, &w.who, "claude-sub", "early", None).await).0,
+        refusal(login::start(&w.core.app, &w.who, "claude-sub", "early", None, None).await).0,
         "conflict"
     );
     let _ = again;
@@ -397,18 +413,26 @@ async fn a_sign_in_past_its_expiry_has_failed() {
 async fn a_start_is_refused_where_a_sign_in_cannot_go_or_a_gate_is_closed() {
     // No runner lists the `login` command.
     let w = up("login-norunner", false, true).await;
-    let r = login::start(&w.core.app, &w.who, "claude-sub", "x", None).await;
+    let r = login::start(&w.core.app, &w.who, "claude-sub", "x", None, None).await;
     assert_eq!(refusal(r).0, "no_runner");
-    let r = login::start(&w.core.app, &w.who, "claude-sub", "x", Some(&w.runner)).await;
+    let r = login::start(
+        &w.core.app,
+        &w.who,
+        "claude-sub",
+        "x",
+        None,
+        Some(&w.runner),
+    )
+    .await;
     assert_eq!(refusal(r).0, "no_runner");
     // Not a subscription provider, a bad label.
-    let r = login::start(&w.core.app, &w.who, "anthropic", "x", None).await;
+    let r = login::start(&w.core.app, &w.who, "anthropic", "x", None, None).await;
     assert_eq!(refusal(r).0, "bad_request");
-    let r = login::start(&w.core.app, &w.who, "claude-sub", "Bad Label", None).await;
+    let r = login::start(&w.core.app, &w.who, "claude-sub", "Bad Label", None, None).await;
     assert_eq!(refusal(r).0, "bad_request");
     // The narrow gate is off: a real token would be refused at the store, so the sign-in does not start.
     let w = up("login-gate", true, false).await;
-    let r = login::start(&w.core.app, &w.who, "claude-sub", "x", None).await;
+    let r = login::start(&w.core.app, &w.who, "claude-sub", "x", None, None).await;
     assert_eq!(refusal(r).0, "real_secret_refused");
     // `secrets.mode` 0 refuses all of it.
     let now = w.core.app.clock.now();
@@ -422,7 +446,7 @@ async fn a_start_is_refused_where_a_sign_in_cannot_go_or_a_gate_is_closed() {
     )
     .await
     .unwrap();
-    let r = login::start(&w.core.app, &w.who, "claude-sub", "x", None).await;
+    let r = login::start(&w.core.app, &w.who, "claude-sub", "x", None, None).await;
     assert_eq!(refusal(r).0, "secrets_disabled");
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM core_account_logins")
@@ -517,6 +541,7 @@ async fn a_stuck_login_whose_account_exists_resolves_to_done() {
         value: super::login::TOKEN,
         runners: std::slice::from_ref(&w.runner),
         cap: None,
+        display_name: None,
     };
     let sealer = w.core.app.secrets.as_deref().unwrap();
     let now = w.core.app.clock.now();

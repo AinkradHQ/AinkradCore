@@ -71,6 +71,7 @@ async fn m() -> M {
         value: TOKEN,
         runners: std::slice::from_ref(&vm.id),
         cap: None,
+        display_name: None,
     };
     let account = acc::create_by(
         &fx.app.pool,

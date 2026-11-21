@@ -28,6 +28,7 @@ import kotlinx.serialization.Contextual
  * @param `value` The API key; written, never read back.
  * @param cap Default 4; 0 is no cap.
  * @param chain An existing chain to put the pool in; default: the user's default chain (made if missing).
+ * @param displayName A free-text name, trimmed, at most 64 characters, no control characters; default none.
  * @param monthlyLimitUsdMicros The monthly dollar limit in micro-dollars; default 20000000 ($20); 0 is no limit.
  * @param pool An existing pool of the provider to join; default: the provider's default pool (made if missing).
  * @param position 0-based seat of the pool in the chain; default: last.
@@ -54,6 +55,10 @@ data class NewProviderAccount (
     /* An existing chain to put the pool in; default: the user's default chain (made if missing). */
     @SerialName(value = "chain")
     val chain: kotlin.Long? = null,
+
+    /* A free-text name, trimmed, at most 64 characters, no control characters; default none. */
+    @SerialName(value = "display_name")
+    val displayName: kotlin.String? = null,
 
     /* The monthly dollar limit in micro-dollars; default 20000000 ($20); 0 is no limit. */
     @SerialName(value = "monthly_limit_usd_micros")

@@ -36,6 +36,7 @@ import kotlinx.serialization.Contextual
  * @param provider `anthropic`, `openai`, `google` or a user definition's id.
  * @param state `active`, `cooling`, `limited`, `unhealthy` or `disabled`.
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
+ * @param displayName The free-text name a person gave it (`Work Claude`); absent: show the provider's name.
  * @param health What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason` and `state_until` (a cooldown's end) are above.
  * @param lastTest The last one-shot test of the key; absent when it was never tested.
  * @param lastUsedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
@@ -87,6 +88,10 @@ data class ProviderAccount (
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "updated_at")
     val updatedAt: java.time.OffsetDateTime,
+
+    /* The free-text name a person gave it (`Work Claude`); absent: show the provider's name. */
+    @SerialName(value = "display_name")
+    val displayName: kotlin.String? = null,
 
     /* What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason` and `state_until` (a cooldown's end) are above. */
     @SerialName(value = "health")
