@@ -416,8 +416,12 @@ mod tests {
         // The alias: both employers' sessions in one room, never split by the employer guard.
         assert_eq!(room("HarborMotors").item_ids.len(), 800);
         assert!(p.rooms.iter().all(|r| r.name != "harborauto"));
-        // Only the vault's own notes are filed under its name.
-        assert!(room("Ainkrad").item_ids.len() <= 4);
+        // Only the vault's own notes are filed under its name, and four are too few to be a place.
+        assert!(
+            p.rooms
+                .iter()
+                .all(|r| r.name != "Ainkrad" || r.item_ids.len() <= 4)
+        );
         // Exactly one near-copy: the plan, never a transcript.
         let dups: Vec<&TidyChange> = p.changes.iter().filter(|c| c.kind == "duplicate").collect();
         assert_eq!(dups.len(), 1, "{dups:?}");

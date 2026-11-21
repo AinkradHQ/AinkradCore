@@ -1,15 +1,17 @@
-//! Autonomy for the import (E9-5, D-26): the rooms an import sorted are accepted and imported by
-//! the Core itself, once the semantic step is done (or off). Nothing is asked; the person can undo.
+//! The import's preparation (E9-5, D-26; "review before filing", 2026-11-21): the Core gets every
+//! run in review ready for the person, and files nothing by itself. Nothing reaches the Brain until
+//! the person imports through the review routes (accept, rename, merge, commit).
 //!
 //! Policy, all of it here:
-//! - Every run in review is looked at: a new room of a later (incremental) run is accepted too. A run stays
-//!   in review while Unsorted holds items, which are re-filed into the closest room as the model finds it.
-//! - Unsorted, a room that mixes two employers and a merged room are never accepted by this step:
-//!   they stay `proposed`, exactly as when a person leaves them out.
-//! - The step waits while the local model's suggestions are `pending`.
-//! - Undo puts the sort back to one pile: the rooms the run made are archived (their files and sources
-//!   stay, nothing is deleted) and the run's staged items return to Unsorted in a run open for review
-//!   again, which this step then leaves to the person. Only an auto-accepted run can be undone.
+//! - Every run in review is looked at. The step waits while the local model's suggestions are `pending`.
+//! - With the model's step `off` (no model installed, or switched off) the Core tidies the proposal by
+//!   names and sizes alone (`tidy::prepare`): one room per product, tiny rooms to Unsorted. With the
+//!   model the semantic step has tidied it already. Either tidy is undone by `POST /imports/{run}/semantic/undo`.
+//! - What waits in Unsorted is re-filed into the room the local model found closest (staging only).
+//! - Runs the Core accepted by itself before 0.10.2 keep their Undo: it puts the sort back to one pile —
+//!   the rooms the run made are archived (their files and sources stay, nothing is deleted) and the
+//!   run's staged items return to Unsorted in a run open for review again, which this step then leaves
+//!   to the person.
 
 use std::sync::Arc;
 
@@ -24,15 +26,14 @@ use serde::Serialize;
 use sqlx::Row;
 use utoipa::ToSchema;
 
-use crate::review::mixed;
 use crate::{Brain, code, record};
 
 const EVERY_SECS: u64 = 30;
 
 /// Files what waits in Unsorted into the rooms the local model found closest (E9-5: Unsorted is a quiet
 /// bucket that keeps re-sorting). A hint already passed the model's strength and margin. A room of this
-/// run takes the item as it is; a committed room gets a proposal of its name, which `route_known` then
-/// commits into it. Returns the items moved.
+/// run takes the item as it is; a committed room gets a proposal of its name, which the person's
+/// import then files into it. Staging only. Returns the items moved.
 async fn resort_unsorted(
     app: &App,
     b: &Brain,
@@ -62,7 +63,8 @@ async fn resort_unsorted(
     Ok(moved)
 }
 
-/// Accepts and imports every sortable room of each run in review, and re-sorts Unsorted. Returns the rooms made.
+/// Prepares every run in review for the person: the tidy without a model, and Unsorted re-filed.
+/// Accepts and commits nothing. Returns how many runs or items it changed.
 pub(crate) async fn step(app: &App, b: &Brain) -> Result<usize, ApiError> {
     if b.key(app).await.is_err() {
         return Ok(0);
@@ -74,56 +76,23 @@ pub(crate) async fn step(app: &App, b: &Brain) -> Result<usize, ApiError> {
     )
     .fetch_all(&app.pool)
     .await?;
-    let mut made = 0;
+    let mut changed = 0;
     for run in runs {
         let st = crate::imports::staging(app, b, &run, false).await?;
-        let semantic: Option<String> =
-            sqlx::query_scalar("SELECT state FROM semantic WHERE id = 1")
-                .fetch_optional(&st)
-                .await
-                .unwrap_or(None);
-        if semantic.as_deref() == Some("pending") {
+        let state = crate::suggest::status(app, &st, b, &run).await?;
+        if state == "pending" {
             st.close().await;
             continue;
         }
-        let moved = resort_unsorted(app, b, &run, &st).await?;
-        let ids: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM proposals WHERE state = 'proposed' ORDER BY id")
-                .fetch_all(&st)
-                .await?;
-        for id in ids.iter().filter(|i| i.as_str() != UNSORTED) {
-            if !mixed(&st, id).await? {
-                sqlx::query("UPDATE proposals SET state = 'accepted' WHERE id = ?")
-                    .bind(id)
-                    .execute(&st)
-                    .await?;
-            }
+        // Without the model, or when the model's own tidy was declined as unbelievable, the Core still
+        // tidies by names and sizes: the person never gets the raw folder list.
+        if crate::tidy::prepare(b, &st, &run).await? {
+            changed += 1;
         }
-        let out = crate::commit::commit_accepted(app, b, &run, st, true).await?;
-        if out.rooms.is_empty() && moved == 0 {
-            continue;
-        }
-        // Undo only covers rooms this step made, never a room that took re-sorted items.
-        let rooms: Vec<&str> = out
-            .rooms
-            .iter()
-            .filter(|r| r.created)
-            .map(|r| r.room.as_str())
-            .collect();
-        made += rooms.len();
-        if !rooms.is_empty() {
-            let mut tx = begin_write(&app.pool).await?;
-            record(
-                &mut tx,
-                "brain.import.auto_accepted",
-                serde_json::json!({"run": run, "rooms": rooms}),
-                None,
-            )
-            .await?;
-            tx.commit().await?;
-        }
+        changed += resort_unsorted(app, b, &run, &st).await?;
+        st.close().await;
     }
-    Ok(made)
+    Ok(changed)
 }
 
 #[derive(Serialize, ToSchema)]
@@ -136,7 +105,7 @@ pub struct AutoImport {
 }
 
 #[utoipa::path(get, path = "/auto-imports", operation_id = "brainAutoImports", tag = "brain",
-    responses((status = 200, description = "Imports the Core accepted by itself in the last 7 days that still have an active room, newest first, each with its Undo (`POST /auto-imports/{run}/undo`)", body = Vec<AutoImport>)))]
+    responses((status = 200, description = "Imports the Core accepted by itself (before 0.10.2; it no longer does) in the last 7 days that still have an active room, newest first, each with its Undo (`POST /auto-imports/{run}/undo`)", body = Vec<AutoImport>)))]
 pub(crate) async fn list(State(app): State<App>) -> ApiResult<Vec<AutoImport>> {
     let rows = sqlx::query(
         "SELECT json_extract(a.details, '$.run') AS run, a.at AS at, \
@@ -291,8 +260,8 @@ pub(crate) fn job(b: &Brain) -> Job {
 }
 
 impl Brain {
-    /// Accepts and imports the full runs in review now (the `brain_auto_import` job does this every
-    /// 30 s). Returns how many rooms were made.
+    /// Prepares the runs in review now (the `brain_auto_import` job does this every 30 s); files
+    /// nothing. Returns how many runs or items it changed.
     pub async fn auto_import_step(&self) -> Result<usize, ApiError> {
         match self.inner.app.get() {
             Some(app) => step(app, self).await,

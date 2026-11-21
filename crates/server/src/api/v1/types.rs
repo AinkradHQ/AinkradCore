@@ -336,6 +336,11 @@
 ///    characters; absent when unnamed), `display_name` on `NewProviderAccount` (`createAccount`) and `NewLogin`
 ///    (`startAccountLogin`, it lands on the account the sign-in makes), and `PUT /accounts/{id}/name` (`setAccountName`,
 ///    body `SetName {display_name}`, `admin`, not destructive, audit `account.renamed`). Migration 64.
+/// 96 (also, Brain review before filing; same 0.10.2 milestone): the Brain module's `LearningPlace` gains `left`, `retry_at`
+///    and `failure` and the state `failed`; `TidySummary.rooms_to_unsorted`; `SemanticView.ai_tidy` is also set when the step
+///    is `off` (the Core's tidy by names and sizes); `GET /imports` (`brainImports`, `?state=`, `[RunSummary]`, `read`) and
+///    `POST /imports/{run}/proposals/{p}/to-unsorted` (`brainProposalToUnsorted`, `Moved {items}`); `GET /auto-imports` lists
+///    only runs auto-accepted before (no new ones).
 pub const API_MINOR: u32 = 96;
 
 use serde::{Deserialize, Serialize};

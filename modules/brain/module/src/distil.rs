@@ -43,6 +43,9 @@ pub const DISTIL_EVERY_SECS: u64 = 60;
 /// Sources in one run, and their text in one prompt.
 const MAX_SOURCES: i64 = 30;
 const MAX_PROMPT_BYTES: usize = 120_000;
+/// Distil sessions at once across rooms: an import's rooms are learned a few at a time, never all
+/// started in one tick on one account (18 started together and all ended unanswered, 2026-11-21).
+const MAX_RUNNING: i64 = 3;
 #[derive(Serialize, ToSchema)]
 pub struct DistilView {
     pub id: String,
@@ -230,6 +233,14 @@ async fn advance_inner(app: &App, b: &Brain) -> Result<(), ApiError> {
         let step = if d.state == "running" {
             finish(app, b, &d).await
         } else {
+            let running: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM brain_distils WHERE state = 'running'")
+                    .fetch_one(&app.pool)
+                    .await?;
+            if running >= MAX_RUNNING {
+                // Waits its turn as it is: the next tick launches it once a running one ends.
+                continue;
+            }
             launch(app, b, &d, &by).await
         };
         if let Err(e) = step {
@@ -538,32 +549,31 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     let (taken, shown) = taken_shown(&pool, &d.id).await?;
     let known = known_of(&taken, &shown);
     let parsed = match output.as_deref() {
-        None => Err("the AI session gave no answer".to_owned()),
+        None => Err(no_answer(&s)),
         Some(o) => parse_output(o, &known),
     };
     let out = match parsed {
         Err(why) => {
-            // Rejected: nothing of the answer is stored, the sources go back to be read again.
+            // Rejected, or never answered: nothing is stored, the sources go back to be read
+            // again, and the room is tried again after a short, growing wait (`retry`).
             pool.close().await;
             give_back(app, b, d).await?;
             ainkrad_core_server::store::agents::seal(&app.pool, &s.id).await?;
-            let mut tx = begin_write(&app.pool).await?;
-            record(
-                &mut tx,
-                "brain.distil.rejected",
-                json!({"room": d.room, "distil": d.id}),
-                None,
-            )
-            .await?;
-            tx.commit().await?;
-            return Ok(set_state(
-                app,
-                &d.id,
-                "failed",
-                &format!("answer rejected: {why}"),
-                None,
-            )
-            .await?);
+            let detail = if output.is_some() {
+                let mut tx = begin_write(&app.pool).await?;
+                record(
+                    &mut tx,
+                    "brain.distil.rejected",
+                    json!({"room": d.room, "distil": d.id}),
+                    None,
+                )
+                .await?;
+                tx.commit().await?;
+                format!("answer rejected: {why}")
+            } else {
+                why
+            };
+            return Ok(set_state(app, &d.id, "failed", &detail, None).await?);
         }
         Ok(c) => c,
     };
@@ -622,6 +632,20 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     }
     let detail = json!({"distil": d.id, "session": s.id, "answer": output});
     save(app, b, d, pool, &s.id, staged.keep, dropped, &by, detail).await
+}
+
+/// Why a session that ended said nothing: the model gave no answer, or the session ended before
+/// it could (a harness that failed to start, a lost runner, a cancel), with its outcome.
+fn no_answer(s: &ainkrad_core_server::store::agents::Session) -> String {
+    let o = s.outcome.clone().unwrap_or_default();
+    let kind = o["kind"].as_str().unwrap_or(s.state.as_str());
+    if kind == "succeeded" {
+        return "the AI session gave no answer".to_owned();
+    }
+    match o["reason"].as_str().filter(|r| !r.is_empty()) {
+        Some(r) => format!("the AI session ended before it answered ({kind}: {r})"),
+        None => format!("the AI session ended before it answered ({kind})"),
+    }
 }
 
 /// The sources a distil took `(item id, kind, text)` and its `distil.shown` audit: what the answer

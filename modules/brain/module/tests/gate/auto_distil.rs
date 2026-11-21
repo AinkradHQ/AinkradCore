@@ -448,21 +448,46 @@ async fn the_distil_runs_as_the_most_recent_manual_requester_with_a_write_scope(
 }
 
 #[tokio::test]
-async fn a_room_whose_distil_failed_is_skipped_for_six_hours() {
+async fn a_room_whose_distil_failed_is_tried_again_after_a_short_growing_wait() {
     let fx = fx().await;
     let (room, now) = quiet_room(&fx).await;
-    put(&fx, "dst-f", &room, "failed", "x", &iso_of_unix(now - 3600))
+    unread(&fx, &room, 1, "2020-01-01T00:00:00Z").await;
+    // One failure: two minutes. The sweep looks every 60 s, so each step is a minute or more apart.
+    put(&fx, "dst-f1", &room, "failed", "x", &iso_of_unix(now))
         .await
         .unwrap();
-    unread(&fx, &room, 1, "2020-01-01T00:00:00Z").await;
-    assert_eq!(fx.brain.auto_distil_step_at(now + 400).await.unwrap(), 0);
+    assert_eq!(fx.brain.auto_distil_step_at(now + 61).await.unwrap(), 0);
+    assert_eq!(fx.brain.auto_distil_step_at(now + 125).await.unwrap(), 1);
+    // Three in a row: fifteen minutes from the latest.
+    let t = now + 200;
+    sqlx::query("DELETE FROM brain_distils WHERE state != 'failed'")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    put(&fx, "dst-f2", &room, "failed", "x", &iso_of_unix(t - 10))
+        .await
+        .unwrap();
+    put(&fx, "dst-f3", &room, "failed", "x", &iso_of_unix(t))
+        .await
+        .unwrap();
+    assert_eq!(fx.brain.auto_distil_step_at(t + 10 * 60).await.unwrap(), 0);
     assert_eq!(
-        fx.brain
-            .auto_distil_step_at(now + 6 * 3600 + 400)
-            .await
-            .unwrap(),
+        fx.brain.auto_distil_step_at(t + 15 * 60 + 5).await.unwrap(),
         1
     );
+    // A finished distil ends the run of failures: the next failure waits two minutes again.
+    let t = t + 3600;
+    sqlx::query("DELETE FROM brain_distils WHERE state != 'failed'")
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    put(&fx, "dst-d", &room, "done", "x", &iso_of_unix(t - 10))
+        .await
+        .unwrap();
+    put(&fx, "dst-f4", &room, "failed", "x", &iso_of_unix(t))
+        .await
+        .unwrap();
+    assert_eq!(fx.brain.auto_distil_step_at(t + 125).await.unwrap(), 1);
 }
 
 #[tokio::test]

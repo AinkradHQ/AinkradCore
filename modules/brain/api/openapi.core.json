@@ -6250,10 +6250,25 @@
             "format": "int64",
             "type": "integer"
           },
+          "failure": {
+            "description": "When `failed`: why the latest distil failed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "learned": {
             "description": "Records proposed by finished distils.",
             "format": "int64",
             "type": "integer"
+          },
+          "left": {
+            "description": "Sources of the room still to read; absent when the room file cannot be read now.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "name": {
             "type": "string"
@@ -6270,6 +6285,13 @@
             "format": "int64",
             "type": "integer"
           },
+          "retry_at": {
+            "description": "When `failed`: when the Core tries the place again (2, 5, 15, 60 minutes, then 6 hours\nafter the latest failure, by how many failed in a row). In the past: on its next sweep.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "room": {
             "type": "string"
           },
@@ -6279,7 +6301,7 @@
             "type": "integer"
           },
           "state": {
-            "description": "`pending`, `learning`, `waiting` (needs an account or a runner) or `done`.",
+            "description": "`pending`, `learning`, `waiting` (needs an account or a runner), `failed` (the latest\ndistil failed; tried again at `retry_at`) or `done` (every source read, nothing open).",
             "type": "string"
           }
         },
@@ -6682,6 +6704,19 @@
           "id",
           "input_per_mtok_micro",
           "output_per_mtok_micro"
+        ],
+        "type": "object"
+      },
+      "Moved": {
+        "properties": {
+          "items": {
+            "description": "Items moved to Unsorted.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -10455,6 +10490,45 @@
         ],
         "type": "object"
       },
+      "RunSummary": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "places": {
+            "description": "For a run in review: its places (Unsorted and merged-away rooms not counted).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "run": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "unsorted": {
+            "description": "For a run in review: the items waiting in Unsorted.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "run",
+          "kind",
+          "state",
+          "started_at"
+        ],
+        "type": "object"
+      },
       "RunVar": {
         "description": "A variable, never its value.",
         "properties": {
@@ -11365,7 +11439,7 @@
         "properties": {
           "ai_tidy": {
             "$ref": "#/components/schemas/AiTidy",
-            "description": "When `ready`: what the local model changed by itself in the proposal (duplicates merged,\nrooms merged or folded, items moved), with the link to the list of changes. Absent before."
+            "description": "When `ready`: what the local model changed by itself in the proposal (duplicates merged,\nrooms merged or folded, items moved), with the link to the list of changes. When `off`: what\nthe Core changed by names and sizes alone (one room per product, tiny rooms to Unsorted).\nAbsent before."
           },
           "closest": {
             "description": "Unsorted items that look like they belong in an existing room. Never filed on their own.",
@@ -12959,6 +13033,12 @@
           },
           "rooms_merged": {
             "description": "Rooms merged into another: one name spelled two ways (case, spacing, punctuation, plural), or\na small repo room into the project it is named after (`KestrelBackend` into `Kestrel`).",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rooms_to_unsorted": {
+            "description": "Of `rooms_folded`, the rooms sent to Unsorted (no room was clearly closer); the rest went into a room.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -28658,7 +28738,7 @@
                 }
               }
             },
-            "description": "Imports the Core accepted by itself in the last 7 days that still have an active room, newest first, each with its Undo (`POST /auto-imports/{run}/undo`)"
+            "description": "Imports the Core accepted by itself (before 0.10.2; it no longer does) in the last 7 days that still have an active room, newest first, each with its Undo (`POST /auto-imports/{run}/undo`)"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -28742,6 +28822,63 @@
       }
     },
     "/modules/brain/v1/imports": {
+      "get": {
+        "operationId": "brainImports",
+        "parameters": [
+          {
+            "description": "Only runs in this state (`review`, `committed`, ...); all runs when absent.",
+            "in": "path",
+            "name": "state",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RunSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The newest 50 import runs, newest first; `?state=review` lists the runs waiting for the person's review"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "read"
+      },
       "post": {
         "operationId": "brainStartImport",
         "requestBody": {
@@ -29609,6 +29746,68 @@
               }
             },
             "description": "The new room"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "brain"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/modules/brain/v1/imports/{run}/proposals/{p}/to-unsorted": {
+      "post": {
+        "operationId": "brainProposalToUnsorted",
+        "parameters": [
+          {
+            "description": "Run id",
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Proposal id",
+            "in": "path",
+            "name": "p",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Moved"
+                }
+              }
+            },
+            "description": "Moves every item of the place to Unsorted. The emptied place is dropped silently at commit (never imported, never refused). 409 when the run is not in review or the place is imported or merged"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

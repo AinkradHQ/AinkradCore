@@ -152,8 +152,8 @@ async fn the_tidy_merges_copies_and_one_name_moves_unsorted_items_and_keeps_ever
     assert_eq!(t["state"], "applied", "{v}");
     assert_eq!(
         t["summary"],
-        json!({"duplicates_merged": 1, "rooms_merged": 1, "rooms_folded": 0, "items_moved": 1,
-               "rooms_before": 8, "rooms_after": 7})
+        json!({"duplicates_merged": 1, "rooms_merged": 1, "rooms_folded": 0, "rooms_to_unsorted": 0,
+               "items_moved": 1, "rooms_before": 8, "rooms_after": 7})
     );
     assert_eq!(
         t["changes_url"],

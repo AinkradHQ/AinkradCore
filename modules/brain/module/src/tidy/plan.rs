@@ -92,12 +92,17 @@ fn name_pair(live: &BTreeMap<String, RoomIn>) -> Option<(String, String)> {
     None
 }
 
+/// A room with fewer items, once its product's repos are merged into it, is not a place of its own:
+/// its items go to the closest room when that is clear, else to Unsorted.
+pub(crate) const MIN_ROOM_ITEMS: usize = 15;
+/// Below this many items in the run, small rooms are most of it and stay as they are.
+pub(crate) const MIN_RUN_ITEMS: usize = 200;
 /// A room this small may be one of a bigger room's repos.
 const REPO_MAX: usize = 30;
 /// Prefixes a repo name puts before its project's (`FE-Workan.space`).
-const REPO_PREFIXES: &[&str] = &["fe", "be", "api", "web", "app"];
+pub(super) const REPO_PREFIXES: &[&str] = &["fe", "be", "api", "web", "app"];
 /// Words a repo name puts after its project's (`OptimusBackend`, `tree-cp`).
-const REPO_WORDS: &[&str] = &[
+pub(super) const REPO_WORDS: &[&str] = &[
     "backend",
     "frontend",
     "api",
@@ -200,8 +205,8 @@ fn mean(ids: &[String], vecs: &HashMap<String, Vec<f32>>) -> Option<Vec<f32>> {
 /// The tidy, as a pure function of the rooms, the Unsorted items, the vectors (unit, by item id)
 /// and the suggestions: (a) near-copies merged into the newest, (b) rooms that are one name merged
 /// smaller into larger, (c) junk-named rooms folded into the closest room or Unsorted, (d) Unsorted
-/// items moved to the room they clearly belong in. A room with a real name is never merged into a
-/// room of another name, however alike their items read.
+/// items moved to the room they clearly belong in. Rooms merge by name only (one name, one product
+/// stem, a repo of a project), never because their items read alike.
 pub(crate) fn plan(
     rooms: Vec<RoomIn>,
     unsorted: &[String],
@@ -256,14 +261,27 @@ pub(crate) fn plan(
     while let Some((a, b)) = name_pair(&live) {
         merge_rooms(&mut live, &mut alias, &mut out, a, b, 1.0, false);
     }
+    // (b1) One product's rooms by name stem (`Optimus` / `OptimusBackend`, `tree` / `tree-cp`), whatever
+    // their sizes: into the room named just the product, else the biggest.
+    let named: Vec<(String, String, usize)> = live
+        .values()
+        .map(|r| (r.id.clone(), r.name.clone(), r.items.len()))
+        .collect();
+    for (from, into) in super::stem::stem_merges(&named) {
+        let (from, into) = (resolve(&alias, from), resolve(&alias, into));
+        merge_rooms(&mut live, &mut alias, &mut out, from, into, 1.0, true);
+    }
     // (b2) A project's repo rooms ("OptimusBackend", "FE-Workan.space", "tree-app"): into the project.
     while let Some((a, b)) = repo_pair(&live) {
         merge_rooms(&mut live, &mut alias, &mut out, a, b, 1.0, true);
     }
 
-    // (c) Junk-named rooms (`AI-5`): into the closest real room when it is clear, else Unsorted. A
-    // small room with a real name is a project of its own and stays.
-    let tiny = |r: &RoomIn| junk_name(&r.name);
+    // (c) Junk-named rooms (`AI-5`) and, in a run of `MIN_RUN_ITEMS` or more, rooms under
+    // `MIN_ROOM_ITEMS`: into the closest real room when it is clear, else Unsorted.
+    let run_items: usize = live.values().map(|r| r.items.len()).sum::<usize>() + loose.len();
+    let tiny = |r: &RoomIn| {
+        junk_name(&r.name) || (run_items >= MIN_RUN_ITEMS && r.items.len() < MIN_ROOM_ITEMS)
+    };
     let targets: Vec<RoomVec> = live
         .values()
         .filter(|r| !tiny(r))
@@ -365,22 +383,27 @@ mod tests {
     }
 
     #[test]
-    fn a_junk_name_folds_into_the_clear_room_and_a_tiny_named_room_stays() {
+    fn a_junk_name_folds_into_the_clear_room_and_a_tiny_named_room_of_a_small_run_stays() {
         let v = |x: f32, y: f32| normalized(vec![x, y, 0.0]);
-        let vecs: HashMap<String, Vec<f32>> = [
-            ("a1", v(1.0, 0.0)),
-            ("a2", v(1.0, 0.1)),
-            ("a3", v(1.0, -0.1)),
-            ("j1", v(1.0, 0.05)),
-            ("j2", v(1.0, 0.02)),
-            ("j3", v(1.0, -0.05)),
-            ("t1", v(0.0, 1.0)),
-        ]
-        .into_iter()
-        .map(|(k, x)| (k.to_owned(), x))
-        .collect();
+        let garden: Vec<String> = (0..MIN_ROOM_ITEMS).map(|i| format!("a{i}")).collect();
+        let mut vecs: HashMap<String, Vec<f32>> = garden
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (k.clone(), v(1.0, (i as f32 - 7.0) / 70.0)))
+            .collect();
+        vecs.extend(
+            [
+                ("j1", v(1.0, 0.05)),
+                ("j2", v(1.0, 0.02)),
+                ("j3", v(1.0, -0.05)),
+                ("t1", v(0.0, 1.0)),
+            ]
+            .into_iter()
+            .map(|(k, x)| (k.to_owned(), x)),
+        );
+        let g: Vec<&str> = garden.iter().map(String::as_str).collect();
         let rooms = vec![
-            room("p-a", "Garden", &["a1", "a2", "a3"]),
+            room("p-a", "Garden", &g),
             room("p-j", "AI-5", &["j1", "j2", "j3"]),
             room("p-t", "Kites", &["t1"]),
         ];
@@ -396,7 +419,7 @@ mod tests {
         assert_eq!(
             got,
             [("fold", Some("p-j"), "p-a")],
-            "Kites is a project: it stays"
+            "Kites is a project, and in a run this small its size says nothing"
         );
     }
 
@@ -450,18 +473,21 @@ mod tests {
             .iter()
             .map(|c| (c.from.as_deref().unwrap(), c.to.as_str()))
             .collect();
-        assert!(ch.iter().all(|c| c.kind == "merge"));
         assert_eq!(
             got,
             [
                 ("p-fb", "p-b"),
-                ("p-kb", "p-k"),
-                ("p-lc", "p-l"),
                 ("p-ta", "p-t"),
                 ("p-tc", "p-t"),
+                ("p-kb", "p-k"),
+                ("p-lc", "p-l"),
+                ("p-tz", UNSORTED),
+                ("p-kx", UNSORTED),
             ],
-            "KestrelPortal is another employer's; treehouse has no boundary; Larkspur is too big"
+            "KestrelPortal is another employer's and treehouse has no boundary: both too small to \
+             stay; Larkspur is too big to be a repo"
         );
+        assert_eq!(ch.iter().filter(|c| c.kind == "merge").count(), 5);
         assert_eq!(
             after_project("OptimusPrime", "Optimus").as_deref(),
             Some("prime")
@@ -478,14 +504,22 @@ mod tests {
     fn rooms_whose_items_read_alike_stay_apart_and_the_guard_trips_on_a_collapse() {
         // Three named projects whose items all read the same (one preamble): nothing merges.
         let v = normalized(vec![1.0, 0.0, 0.0]);
-        let vecs: HashMap<String, Vec<f32>> = ["a1", "a2", "b1", "b2", "c1", "c2"]
+        let ids =
+            |p: &str| -> Vec<String> { (0..MIN_ROOM_ITEMS).map(|i| format!("{p}{i}")).collect() };
+        let (a, b, c) = (ids("a"), ids("b"), ids("c"));
+        let vecs: HashMap<String, Vec<f32>> = a
             .iter()
-            .map(|k| ((*k).to_owned(), v.clone()))
+            .chain(&b)
+            .chain(&c)
+            .map(|k| (k.clone(), v.clone()))
             .collect();
+        fn refs(x: &[String]) -> Vec<&str> {
+            x.iter().map(String::as_str).collect()
+        }
         let rooms = vec![
-            room("p-a", "Kestrel", &["a1", "a2"]),
-            room("p-b", "Bramble", &["b1", "b2"]),
-            room("p-c", "Larkspur", &["c1", "c2"]),
+            room("p-a", "Kestrel", &refs(&a)),
+            room("p-b", "Bramble", &refs(&b)),
+            room("p-c", "Larkspur", &refs(&c)),
         ];
         let h = Hints {
             duplicates: &[],
