@@ -19,7 +19,7 @@ cmd="cargo build --profile dist --locked -p ainkrad-core-server -p ainkrad-runne
 # It carries `semantic` (R2-02: the local e5 model for Lore search and Brain sorting; it stays off at runtime until the
 # model files are installed). On arm64 candle's gemm-f16 needs the `fp16` CPU feature, set for this build only.
 fp16=; [ "$target" = linux-arm64 ] && fp16=" -C target-feature=+fp16"
-lcmd="cargo build --profile dist --locked -p ainkrad-runner -p ainkrad-ctl -p ainkrad-ptyhost $feat && CARGO_TARGET_DIR=\$CARGO_TARGET_DIR-brain cargo build --profile dist --locked --manifest-path modules/brain/Cargo.toml -p ainkrad-core-brain --features semantic"
+lcmd="cargo build --profile dist --locked -p ainkrad-runner -p ainkrad-ctl -p ainkrad-ptyhost -p ainkrad-host $feat && CARGO_TARGET_DIR=\$CARGO_TARGET_DIR-brain cargo build --profile dist --locked --manifest-path modules/brain/Cargo.toml -p ainkrad-core-brain --features semantic"
 mkdir -p "$out/$target"
 case $target in
 macos-arm64)
@@ -43,6 +43,6 @@ linux-*)
     -v ainkrad-core-cargo:/usr/local/cargo/registry -v "$vol:/cache" \
     -e CARGO_TARGET_DIR=/cache/dist-$tag -e SOURCE_DATE_EPOCH -e CITADEL_GIT_SHA -e CARGO_PROFILE_DIST_STRIP \
     -e RUSTFLAGS="--remap-path-prefix=/src=. --remap-path-prefix=/usr/local/cargo=/cargo --remap-path-prefix=/usr/local/rustup=/rustup$fp16" \
-    "$image" sh -c "rustup show >/dev/null && $lcmd && for b in ainkrad-runner ainkradctl ainkrad-ptyhost ainkrad-job; do cp /cache/dist-$tag/dist/\$b /out/$target/\$b; done && cp /cache/dist-$tag-brain/dist/ainkrad-core-brain /out/$target/ainkrad-core-server" ;;
+    "$image" sh -c "rustup show >/dev/null && $lcmd && for b in ainkrad-runner ainkradctl ainkrad-ptyhost ainkrad-job ainkrad-host; do cp /cache/dist-$tag/dist/\$b /out/$target/\$b; done && cp /cache/dist-$tag-brain/dist/ainkrad-core-brain /out/$target/ainkrad-core-server" ;;
 *) echo "unknown target $target" >&2; exit 2 ;;
 esac

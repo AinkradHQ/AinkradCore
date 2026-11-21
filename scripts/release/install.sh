@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # E1-15.4: verify, then install. Nothing is written to the prefix unless the signature AND every checksum hold.
-#   install.sh --from <dir|https-url> [--prefix DIR] [--pubkey FILE] [--target T] [--verify-only FILE] [--scripts DIR]
+#   install.sh --from <dir|https-url> [--prefix DIR] [--pubkey FILE] [--target T] [--verify-only FILE] [--scripts DIR] [--units DIR]
 # 1. minisign -V over SHA256SUMS with the pinned public key (refuses on any mismatch).
 # 2. SHA-256 of each artefact for this target against the signed sums.
 # 3. Only then install all four (ainkrad-core-server, ainkrad-runner, ainkradctl, ainkrad-ptyhost) into <prefix>/bin as one set:
@@ -12,12 +12,16 @@
 # --scripts DIR (the self-updater, after a healthy update): instead of binaries, put the updater's own scripts (update.sh, install.sh,
 # model.sh) from the release's signed installer bundle into DIR, each as a temp file renamed into place (a running copy keeps its
 # old inode, so bash reading it is not disturbed). The pinned key is never replaced this way.
+# --units DIR (the self-updater, Core mode): the same, for the host helper's systemd units (deploy/systemd/ainkrad-host.socket,
+# ainkrad-host@.service) into DIR, mode 0644. A bundle without them installs none (older releases).
+# ainkrad-host (the root host helper) and ainkrad-job (the runner's heavy-job shim) are optional members of a set: installed with
+# the Core's and the runner's programs when the signed sums have them, so an older release still installs.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-from= prefix= pub=${AINKRAD_RELEASE_PUBKEY:-$here/ainkrad-release.pub} target= only= part= scripts=
+from= prefix= pub=${AINKRAD_RELEASE_PUBKEY:-$here/ainkrad-release.pub} target= only= part= scripts= units=
 while [ $# -gt 0 ]; do case $1 in
   --from) from=$2; shift 2 ;; --prefix) prefix=$2; shift 2 ;; --pubkey) pub=$2; shift 2 ;;
-  --target) target=$2; shift 2 ;; --only) part=$2; shift 2 ;; --verify-only) only=$2; shift 2 ;; --scripts) scripts=$2; shift 2 ;; *) echo "unknown option $1" >&2; exit 2 ;;
+  --target) target=$2; shift 2 ;; --only) part=$2; shift 2 ;; --verify-only) only=$2; shift 2 ;; --scripts) scripts=$2; shift 2 ;; --units) units=$2; shift 2 ;; *) echo "unknown option $1" >&2; exit 2 ;;
 esac; done
 die() { echo "install: REFUSED: $*" >&2; exit 1; }
 [ -n "$from" ] || die "--from is required"
@@ -43,23 +47,38 @@ verify() {  # verify NAME: fetch it and hold it to its signed checksum
   fetch "$1"
   [ "$(sha "$tmp/$1")" = "$(awk -v n="$1" '$2 == n { print $1 }' "$tmp/SHA256SUMS")" ] || die "$1 does not match its signed checksum"
 }
-if [ -n "$scripts" ]; then
+if [ -n "$scripts$units" ]; then
   bundle=$(awk '$2 ~ /^ainkrad-core-installer-[0-9][0-9A-Za-z.+-]*\.tar\.gz$/ { print $2 }' "$tmp/SHA256SUMS")
   [ -n "$bundle" ] && [ "$(echo "$bundle" | wc -l)" -eq 1 ] || die "the signed sums have no single installer bundle"
   verify "$bundle"
-  top=${bundle%.tar.gz} want="update.sh install.sh model.sh"
+  top=${bundle%.tar.gz}
+  # The whole (verified) bundle into an empty dir; it must hold exactly one top folder, named for the bundle. No member name is
+  # matched by tar itself (tars differ on `./` prefixes and pax headers): files are picked from the tree by exact path.
   mkdir "$tmp/s"
-  # Only these named members are taken out; model.sh is optional (older bundles have none).
-  for f in $want; do tar -xzf "$tmp/$bundle" -C "$tmp/s" "$top/scripts/release/$f" 2>/dev/null || true; done
-  for f in update.sh install.sh; do [ -f "$tmp/s/$top/scripts/release/$f" ] || die "$bundle has no $f"; done
-  for f in $want; do
-    src=$tmp/s/$top/scripts/release/$f
-    [ -e "$src" ] || [ -L "$src" ] || continue
-    { [ -f "$src" ] && [ ! -L "$src" ]; } || die "$f in $bundle is not a plain file"
-    new=$(mktemp "$scripts/.$f.XXXXXX") || die "cannot place $f in $scripts"
-    { install -m 0755 "$src" "$new" && mv -f "$new" "$scripts/$f"; } || { rm -f "$new"; die "cannot place $f in $scripts"; }
-    echo "installed $scripts/$f"
-  done
+  tar -xzf "$tmp/$bundle" -C "$tmp/s" --no-same-owner 2>"$tmp/tar.err" || die "$bundle does not unpack: $(head -c 200 "$tmp/tar.err")"
+  [ "$(ls -A "$tmp/s")" = "$top" ] && [ -d "$tmp/s/$top" ] && [ ! -L "$tmp/s/$top" ] || die "$bundle does not hold the single folder $top"
+  place() { # place SRC DIR NAME MODE: a plain file, as a temp file renamed into place
+    { [ -f "$1" ] && [ ! -L "$1" ]; } || die "$3 in $bundle is not a plain file"
+    new=$(mktemp "$2/.$3.XXXXXX") || die "cannot place $3 in $2"
+    { install -m "$4" "$1" "$new" && mv -f "$new" "$2/$3"; } || { rm -f "$new"; die "cannot place $3 in $2"; }
+    echo "installed $2/$3"
+  }
+  if [ -n "$scripts" ]; then
+    # model.sh is optional (older bundles have none).
+    for f in update.sh install.sh; do src=$tmp/s/$top/scripts/release/$f; [ -e "$src" ] || [ -L "$src" ] || die "$bundle has no $top/scripts/release/$f"; done
+    for f in update.sh install.sh model.sh; do
+      src=$tmp/s/$top/scripts/release/$f
+      [ -e "$src" ] || [ -L "$src" ] || continue
+      place "$src" "$scripts" "$f" 0755
+    done
+  fi
+  if [ -n "$units" ]; then
+    for f in ainkrad-host.socket ainkrad-host@.service; do
+      src=$tmp/s/$top/deploy/systemd/$f
+      [ -e "$src" ] || [ -L "$src" ] || continue
+      place "$src" "$units" "$f" 0644
+    done
+  fi
   exit 0
 fi
 # --only core|runner (E12): a mode installs only its own programs, so a Core update never swaps the runner under a running task.
@@ -82,6 +101,7 @@ else
   # The heavy-job shim (E15-3) goes beside the runner, where it looks for it; optional, so an older release still installs.
   # (no `grep -q`: under pipefail its early exit can SIGPIPE the echo and read as "absent")
   if [ "${part:-}" != core ] && echo "$names" | grep -x "ainkrad-job-[0-9].*-$target" >/dev/null; then order="$order ainkrad-job"; fi
+  if [ "${part:-}" != runner ] && echo "$names" | grep -x "ainkrad-host-[0-9].*-$target" >/dev/null; then order="$order ainkrad-host"; fi
   # A release is all four: a set without the CLI (first-device step) or ptyhost (terminals) is refused, not half-installed.
   for b in $order; do
     echo "$names" | grep -qx "$b-[0-9].*-$target" || die "the signed sums have no $b for $target"

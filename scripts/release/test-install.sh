@@ -83,4 +83,13 @@ printf 'Z' | dd of="$w/run/ainkrad-runner-9.9.9-$t" bs=1 seek=5 conv=notrunc 2>/
 if "$here/self-verify.sh" "$w/run/ainkrad-runner-9.9.9-$t" --from "$w/run" --pubkey "$w/a.pub" >"$w/sv" 2>&1; then echo "FAIL self-verify tampered"; fail=1
 elif tail -1 "$w/sv" | grep -q "is not in the signed sums"; then echo "ok   self-verify refuses a tampered binary (not in the signed sums)"
 else echo "FAIL self-verify tampered: wrong reason: $(tail -1 "$w/sv")"; fail=1; fi
+# The optional members: ainkrad-host (the root host helper) and ainkrad-job (the heavy-job shim) install when the sums have them,
+# host with the Core's programs, job with the runner's.
+rm -rf "$w/opt"; mkdir "$w/opt"; cp -R "$w/dist/9.9.9" "$w/opt/9.9.9"; for b in ainkrad-host ainkrad-job; do printf '#!/bin/sh\necho %s\n' "$b" >"$w/opt/9.9.9/$b-9.9.9-$t"; done
+"$here/sign.sh" "$w/opt/9.9.9" "$w/a.key" >/dev/null
+oinst() { rm -rf "$w/prefix"; "$here/install.sh" --from "$w/opt/9.9.9" --pubkey "$w/a.pub" --prefix "$w/prefix" --target "$t" "$@" >"$w/out" 2>&1 && ls "$w/prefix/bin" | tr '\n' ' '; }
+check1() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got '$2' wanted '$3'"; fail=1; fi; }
+check1 "a full install carries host and job" "$(oinst)" "ainkrad-core-server ainkrad-host ainkrad-job ainkrad-ptyhost ainkrad-runner ainkradctl "
+check1 "--only core carries ainkrad-host" "$(oinst --only core)" "ainkrad-core-server ainkrad-host ainkradctl "
+check1 "--only runner carries ainkrad-job" "$(oinst --only runner)" "ainkrad-job ainkrad-ptyhost ainkrad-runner "
 exit $fail

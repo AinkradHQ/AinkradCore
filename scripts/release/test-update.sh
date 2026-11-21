@@ -14,12 +14,16 @@ bins="ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost"
 stub() { printf '#!/bin/sh\necho "%s %s"\n' "$1" "$2"; }   # `--version` prints "<name> <ver>"
 release() { # release VER [KEY]: a signed dist dir at $w/rel/core/VER
   local v=$1 d=$w/rel/core/$1; rm -rf "$d"; mkdir -p "$d"
-  for b in $bins; do stub "$b" "$v" >"$d/$b-$v-$t"; done; printf '#!/bin/sh\n' >"$d/get.sh"
+  for b in $bins ainkrad-job ainkrad-host; do stub "$b" "$v" >"$d/$b-$v-$t"; done; printf '#!/bin/sh\n' >"$d/get.sh"
   # the installer bundle: the real install.sh, and update.sh/model.sh marked with the version they came from
   local s=$w/bundle/ainkrad-core-installer-$v/scripts/release; rm -rf "$w/bundle"; mkdir -p "$s"
   cp "$here/install.sh" "$s/"; echo "# release $v" >>"$s/install.sh"
   printf '#!/bin/sh\n# release %s\n' "$v" >"$s/update.sh"; printf '#!/bin/sh\necho "model: present"\n# release %s\n' "$v" >"$s/model.sh"
-  tar -czf "$d/ainkrad-core-installer-$v.tar.gz" -C "$w/bundle" "ainkrad-core-installer-$v"
+  # the host helper's units, as deploy/systemd ships them (git archive puts everything under the one top folder)
+  mkdir -p "$w/bundle/ainkrad-core-installer-$v/deploy/systemd"
+  for u in ainkrad-host.socket ainkrad-host@.service; do echo "# release $v" >"$w/bundle/ainkrad-core-installer-$v/deploy/systemd/$u"; done
+  if [ "${BUNDLE_DOT:-}" = 1 ]; then tar -czf "$d/ainkrad-core-installer-$v.tar.gz" -C "$w/bundle" .   # members named ./ainkrad-core-installer-…
+  else tar -czf "$d/ainkrad-core-installer-$v.tar.gz" -C "$w/bundle" "ainkrad-core-installer-$v"; fi
   AINKRAD_RELEASE_NO_MAC=1 "$here/sign.sh" "$d" "${2:-$w/a.key}" >/dev/null
 }
 manifest() { # manifest VER GENERATED EXPIRES [KEY]
@@ -34,6 +38,7 @@ case "\$1" in
   start) if [ -e "$w/bad" ] && [ "\$("$w/prefix/bin/ainkrad-core-server" | awk '{print \$2}')" = "\$(cat "$w/bad")" ]; then rm -f "$w/active"; else touch "$w/active"; fi ;;
   is-active) [ -e "$w/active" ] ;;
   try-restart) echo "\$2" >>"$w/restarts" ;;
+  daemon-reload|enable) echo "\$*" >>"$w/calls" ;;
 esac
 SH
 chmod +x "$w/systemctl"
@@ -47,7 +52,7 @@ setup() { # a Core on 1.0.0 with a database
 # a real SQLite file when sqlite3 exists (update.sh runs PRAGMA integrity_check on the snapshot), else plain text
 dbset() { rm -f "$w/home/core.db"; if command -v sqlite3 >/dev/null; then sqlite3 "$w/home/core.db" "create table t(x); insert into t values('$1');"; else echo "$1" >"$w/home/core.db"; fi; }
 dbval() { if command -v sqlite3 >/dev/null; then sqlite3 "$w/home/core.db" 'select x from t'; else cat "$w/home/core.db"; fi; }
-run() { env -u HOME AINKRAD_UPDATE_TEST=1 UPD_RUNNER_STATE="$w/rstate" UPD_RUNNER_GAP=0 UPD_LIB="$w/lib" UPD_PREFIX="$w/prefix" UPD_STATE="$w/state" UPD_HOME="$w/home" UPD_BASE="$w/rel" UPD_SYSTEMCTL="$w/systemctl" UPD_HEALTH_TRIES=3 UPD_HEALTH_NEED=2 UPD_HEALTH_SLEEP=0 "$here/update.sh" "${1:-now}" >"$w/out" 2>&1; [ -z "${DEBUG_UPD:-}" ] || cat "$w/out" >&2; }
+run() { env -u HOME AINKRAD_UPDATE_TEST=1 ${UNITS_DIR:+UPD_UNITS=$UNITS_DIR} UPD_RUNNER_STATE="$w/rstate" UPD_RUNNER_GAP=0 UPD_LIB="$w/lib" UPD_PREFIX="$w/prefix" UPD_STATE="$w/state" UPD_HOME="$w/home" UPD_BASE="$w/rel" UPD_SYSTEMCTL="$w/systemctl" UPD_HEALTH_TRIES=3 UPD_HEALTH_NEED=2 UPD_HEALTH_SLEEP=0 "$here/update.sh" "${1:-now}" >"$w/out" 2>&1; [ -z "${DEBUG_UPD:-}" ] || cat "$w/out" >&2; }
 ver() { "$w/prefix/bin/ainkrad-core-server" | awk '{print $2}'; }
 st() { sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" "$w/state/status.json" | head -1; }
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got '$2' wanted '$3'"; fail=1; fi; }
@@ -165,4 +170,25 @@ check "the refused file is not in place" "$(ls -A "$w/mdir" | tr '\n' ' ')" "con
 check "model.sh pins match the Core's loader" "$(grep -oE '[0-9a-f]{64}' "$here/model.sh" | sort | tr '\n' ' ')" \
   "$(grep -oE '"[0-9a-f]{64}"' "$here/../../crates/embed/src/local.rs" | tr -d '"' | sort | tr '\n' ' ')"
 check "model.sh revision matches the Core's loader" "$(sed -n 's/^rev=//p' "$here/model.sh")" "$(sed -n 's/^const REV: &str = "\(.*\)";/\1/p' "$here/../../crates/embed/src/local.rs")"
+# the bundle as git archive makes it, top folder and all; also with ./-prefixed members: the scripts come out either way
+setup; BUNDLE_DOT=1 release 1.1.0; manifest 1.1.0 100 "$FUT"; run now
+check "a ./-prefixed bundle refreshes update.sh" "$(rel update.sh)" 1.1.0
+setup; release 1.1.0; mkdir -p "$w/bundle/extra"; tar -czf "$w/rel/core/1.1.0/ainkrad-core-installer-1.1.0.tar.gz" -C "$w/bundle" ainkrad-core-installer-1.1.0 extra
+AINKRAD_RELEASE_NO_MAC=1 "$here/sign.sh" "$w/rel/core/1.1.0" "$w/a.key" >/dev/null; manifest 1.1.0 100 "$FUT"; run now
+check "a bundle with a second top folder refreshes nothing" "$(rel update.sh)" ""
+
+# the root host helper: a Core run installs ainkrad-host and its units (enabled once, then only restarted); the runner's job shim
+# comes with a runner run. A Core run never touches ainkrad-job, a runner run never ainkrad-host.
+mkdir -p "$w/units"; rm -f "$w/units/"* "$w/calls"
+setup; rm -f "$w/prefix/bin/ainkrad-host" "$w/prefix/bin/ainkrad-job"; release 1.1.0; manifest 1.1.0 100 "$FUT"; (UNITS_DIR=$w/units run now)
+check "a Core update installs ainkrad-host" "$("$w/prefix/bin/ainkrad-host" 2>/dev/null | awk '{print $2}')" 1.1.0
+check "... and not ainkrad-job" "$([ -e "$w/prefix/bin/ainkrad-job" ] && echo there || echo absent)" absent
+check "... the host units from the bundle" "$(sed -n 's/^# release //p' "$w/units/ainkrad-host.socket" "$w/units/ainkrad-host@.service" | tr '\n' ' ')" "1.1.0 1.1.0 "
+check "... the units are 0644" "$(ls -l "$w/units/ainkrad-host.socket" | cut -c1-10)" "-rw-r--r--"
+check "... a new socket is enabled and started" "$(tr '\n' ' ' <"$w/calls")" "daemon-reload enable --now ainkrad-host.socket "
+rm -f "$w/calls" "$w/restarts"; setup; release 1.1.0; manifest 1.1.0 100 "$FUT"; (UNITS_DIR=$w/units run now)
+check "a present socket is only restarted" "$(tr '\n' ' ' <"$w/calls")$(cat "$w/restarts")" "daemon-reload ainkrad-host.socket"
+rm -f "$w/units/"*; setup; rm -f "$w/prefix/bin/ainkrad-host" "$w/prefix/bin/ainkrad-job"; release 1.1.0; manifest 1.1.0 100 "$FUT"; (UNITS_DIR=$w/units run runner)
+check "a runner update brings ainkrad-job beside the runner" "$("$w/prefix/bin/ainkrad-job" 2>/dev/null | awk '{print $2}')" 1.1.0
+check "... and neither ainkrad-host nor its units" "$(ls "$w/prefix/bin/ainkrad-host" "$w/units/"* 2>/dev/null | wc -l | tr -d ' ')" 0
 exit $fail

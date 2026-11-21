@@ -16,7 +16,7 @@ for t in $targets; do
   $here/build.sh "$t" dist/.build "${BUILD_TAG:-a}"
   # macOS ships as ONE zip (runner + ptyhost, no Apple signature), exactly like the real release; the other three binaries stay unshipped.
   [ "$t" = macos-arm64 ] && { $here/mac-zip.sh "dist/.build/$t" "$out" "$ver"; continue; }
-  for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost; do cp "dist/.build/$t/$b" "$out/$b-$ver-$t"; done
+  for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost ainkrad-job ainkrad-host; do cp "dist/.build/$t/$b" "$out/$b-$ver-$t"; done
 done
 # The installer bundle scripts/get.sh runs after it has verified it against the signed sums, and get.sh itself (the
 # one-line install fetches it from the release: .../releases/latest/download/get.sh; it carries the pinned key and is in the signed sums).

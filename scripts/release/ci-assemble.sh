@@ -12,7 +12,8 @@ ver=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
 case $(basename "$out") in "$ver") ;; *) echo "ci-assemble: out dir must be named $ver (sign.sh reads the version from it)" >&2; exit 2 ;; esac
 rm -rf "$out"; mkdir -p "$out"
 for t in linux-arm64 linux-x86_64; do
-  for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost; do cp "$build/$t/$b" "$out/$b-$ver-$t"; done
+  # ainkrad-job (the runner's heavy-job shim) and ainkrad-host (the root host helper) are Linux-only.
+  for b in ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost ainkrad-job ainkrad-host; do cp "$build/$t/$b" "$out/$b-$ver-$t"; done
 done
 $here/mac-zip.sh "$build/macos-arm64" "$out" "$ver"
 git archive --format=tar.gz --prefix="ainkrad-core-installer-$ver/" -o "$out/ainkrad-core-installer-$ver.tar.gz" HEAD \

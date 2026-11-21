@@ -227,7 +227,7 @@ stage_binaries() {
   local src n citadel_src=''
   if [ "${A_BUILD:-no}" = yes ]; then
     command -v cargo >/dev/null || die "BUILD=yes needs cargo on this host"
-    run nice -n 19 cargo build --release --manifest-path "$ROOT/Cargo.toml" -p ainkrad-ctl -p ainkrad-runner -p ainkrad-ptyhost
+    run nice -n 19 cargo build --release --manifest-path "$ROOT/Cargo.toml" -p ainkrad-ctl -p ainkrad-runner -p ainkrad-ptyhost -p ainkrad-host
     # ainkrad-core-server is the Brain-carrying build (its own cargo workspace), like a release's.
     run nice -n 19 cargo build --release --manifest-path "$ROOT/modules/brain/Cargo.toml" -p ainkrad-core-brain
     src=$ROOT/target/release
@@ -240,7 +240,7 @@ stage_binaries() {
   STAGE=$(mktemp -d)
   # shellcheck disable=SC2016 # the string is eval'd at exit, when $STAGE is known
   if [ "$GUIDED" = 1 ]; then ui_clean_add 'rm -rf "$STAGE"'; else trap 'rm -rf "$STAGE"' EXIT; fi
-  for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost ainkrad-job; do
+  for n in ainkrad-core-server ainkradctl ainkrad-runner ainkrad-ptyhost ainkrad-job ainkrad-host; do
     if [ -f "$src/$n" ]; then cp "$src/$n" "$STAGE/$n"; chmod 0755 "$STAGE/$n"; info "$n sha256 $(sha "$STAGE/$n")"
     elif [ "$n" = ainkrad-core-server ] && [ "$DRY" = 0 ]; then die "no $n in $src"
     else warn "$n: not in $src (skipped; every signed release ships it, so a release installed with scripts/release/install.sh has it)"; fi
