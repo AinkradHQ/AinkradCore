@@ -1999,6 +1999,8 @@
           "brain.distil.done",
           "brain.distil.queued",
           "brain.distil.rejected",
+          "brain.import.auto_accepted",
+          "brain.import.auto_undone",
           "brain.import.committed",
           "brain.import.discovered",
           "brain.import.regrouped",

@@ -887,6 +887,10 @@ impl Module for Brain {
             "brain.import.discovered",
             "brain.import.regrouped",
             "brain.import.committed",
+            // Auto-sort (Brain v3): unregistered, the Core refused the audit write and every automatic sort failed
+            // ("Nothing was sorted by itself", 2026-11-21).
+            "brain.import.auto_accepted",
+            "brain.import.auto_undone",
             "brain.room.created",
             "brain.room.opened",
             "brain.room.refused",
