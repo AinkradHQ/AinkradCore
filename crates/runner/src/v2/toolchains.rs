@@ -249,25 +249,9 @@ async fn install(p: &Pin, build: &Build, dir: &Path) -> Result<(), String> {
     download(build, &file).await?;
     match p.kind {
         Kind::Tarball => {
-            vet_tar(&file).await?;
-            let status = tokio::process::Command::new("tar")
-                .args([
-                    "--no-same-owner",
-                    "--no-same-permissions",
-                    "--strip-components=1",
-                    "-xzf",
-                ])
-                .arg(&file)
-                .arg("-C")
-                .arg(dir)
-                .status()
-                .await
-                .map_err(|e| format!("could not unpack it: {e}"))?;
+            super::untar::unpack(&file, dir, 1, true).await?;
             let _ = std::fs::remove_file(&file);
-            status
-                .success()
-                .then_some(())
-                .ok_or("could not unpack the download".to_owned())
+            Ok(())
         }
         Kind::Installer => {
             let done = run_installer(&file, p.version, build.triple, dir).await;
@@ -376,66 +360,6 @@ async fn download(build: &Build, file: &Path) -> Result<(), String> {
         );
     }
     Ok(())
-}
-
-/// A member that must not be unpacked: an absolute path or `..` step; anything but a plain file,
-/// folder or relative symlink that stays under the archive's top folder (a hard link or device
-/// could point out). `names` is `tar -tzf`, `verbose` is `tar -tzvf`, in the same order. Unlike
-/// the AI tools' tarballs, these hold symlinks (`bin/npm`, `bin/python3`).
-fn unsafe_member(names: &str, verbose: &str) -> Option<String> {
-    for (n, v) in names.lines().zip(verbose.lines()) {
-        if n.starts_with('/') || n.split('/').any(|p| p == "..") || n.contains('\0') {
-            return Some(n.to_owned());
-        }
-        match v.chars().next() {
-            Some('-' | 'd') => {}
-            Some('l') => {
-                let target = v.rsplit_once(" -> ").map_or("", |(_, t)| t);
-                // Folders above the link, the top folder included: a link may not climb out of it.
-                let mut depth = n.trim_end_matches('/').split('/').count() as i64 - 1;
-                let ok = !target.is_empty()
-                    && !target.starts_with('/')
-                    && target.split('/').all(|part| {
-                        match part {
-                            ".." => depth -= 1,
-                            "" | "." => {}
-                            _ => depth += 1,
-                        }
-                        depth >= 1
-                    });
-                if !ok {
-                    return Some(n.to_owned());
-                }
-            }
-            _ => return Some(v.chars().take(80).collect()),
-        }
-    }
-    None
-}
-
-async fn vet_tar(file: &Path) -> Result<(), String> {
-    let list = |flags: &'static str| {
-        let file = file.to_owned();
-        async move {
-            let out = tokio::process::Command::new("tar")
-                .arg(flags)
-                .arg(&file)
-                .output()
-                .await
-                .map_err(|e| format!("could not read the download: {e}"))?;
-            if !out.status.success() {
-                return Err("the download is not a tarball".to_owned());
-            }
-            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-        }
-    };
-    let (names, verbose) = (list("-tzf").await?, list("-tzvf").await?);
-    match unsafe_member(&names, &verbose) {
-        Some(m) => Err(format!(
-            "the download has a member it must not unpack ({m}), so it was refused"
-        )),
-        None => Ok(()),
-    }
 }
 
 /// The version after `prefix` on the first line of `out` that has it: `Xcode 16.4` gives `16.4`.

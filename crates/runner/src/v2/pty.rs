@@ -901,7 +901,7 @@ impl PtyDriver {
             net: &net,
             terminal: id,
             env: &shell_env,
-            hide: &hide,
+            hide: &boxed_hide(&hide, &self.config.shell_dir),
             jobs,
         })?;
         if let Some((f, was)) = &folder {
@@ -1328,3 +1328,40 @@ mod shell_tests {
 
 #[cfg(test)]
 mod remote_tests;
+
+/// What a private root covers with an empty mount: the folder check's list minus the Ainkrad shell profile. The profile is
+/// one of the runner's read-only paths (a folder must not carry it), but a private root already shows `/usr` read-only, and
+/// hiding it left zsh with no startup files: every Core sandbox terminal opened on zsh's new-user wizard (2026-11-21).
+fn boxed_hide(hide: &[PathBuf], shell_dir: &Path) -> Vec<PathBuf> {
+    let shell = shell_dir
+        .canonicalize()
+        .unwrap_or_else(|_| shell_dir.to_path_buf());
+    hide.iter()
+        .filter(|h| !h.starts_with(&shell))
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod boxed_hide_tests {
+    use super::boxed_hide;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn the_shell_profile_stays_visible_and_everything_else_stays_hidden() {
+        let shell = Path::new("/nonexistent-ainkrad-test/share/ainkrad/shell");
+        let hide = vec![
+            PathBuf::from("/nonexistent-ainkrad-test/share/ainkrad/shell"),
+            PathBuf::from("/usr/local/bin/ainkrad-runner"),
+            PathBuf::from("/var/lib/ainkrad-runner/sandbox"),
+        ];
+        let out = boxed_hide(&hide, shell);
+        assert_eq!(
+            out,
+            vec![
+                PathBuf::from("/usr/local/bin/ainkrad-runner"),
+                PathBuf::from("/var/lib/ainkrad-runner/sandbox")
+            ]
+        );
+    }
+}
