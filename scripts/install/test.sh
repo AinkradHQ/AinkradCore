@@ -93,6 +93,14 @@ for want in 'write /etc/ainkrad/core.env' 'AINKRAD_HOSTNAME=core.example.com' 'a
   'RUNNER_ARGS=--enable-pty' '/ainkrad-ptyhost /usr/local/bin/ainkrad-ptyhost' 'Runner on this host (terminals ON; exec.run OFF)' 'Still yours to do'; do
   grep -qF -- "$want" "$t/out" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: dry run lacks: $want" >&2; }
 done
+# The Core's own installer puts the root host helper, its units and the enabled socket in place (helper beside --binary).
+printf '#!/bin/sh\n' >"$t/bin/ainkrad-host"
+bash "$HERE/../../deploy/install-core-linux.sh" --binary "$t/bin/ainkrad-core-server" --no-semantic-model --dry-run >"$t/core.out" 2>&1
+for want in "$t/bin/ainkrad-host /usr/local/bin/ainkrad-host" '/ainkrad-host.socket /etc/systemd/system/ainkrad-host.socket' \
+  '/ainkrad-host@.service /etc/systemd/system/ainkrad-host@.service' 'systemctl enable --now ainkrad-host.socket'; do
+  grep -qF -- "$want" "$t/core.out" && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: install-core-linux dry run lacks: $want" >&2; }
+done
+rm "$t/bin/ainkrad-host"
 grep -qF "$SECRET" "$t/out" && { fail=$((fail + 1)); echo "FAIL: the secret key was printed" >&2; } || pass=$((pass + 1))
 [ "$(ls -la /etc 2>/dev/null | wc -l)" = "$before" ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL: /etc changed" >&2; }
 # Citadel is off unless asked for: nothing of it is installed, and the removal of a stale drop-in is printed.

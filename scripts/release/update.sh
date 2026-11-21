@@ -16,20 +16,22 @@
 # `runner` (E12-4, started by ainkrad-update-runner.path when the runner drops <runner state>/update-request): the same steps for
 # the runner's programs on this host: no Core stop and no database; after the install it restarts ainkrad-runner.service and
 # rolls the binaries back when that does not stay active. Status: runner-status.json.
+# A Core-mode run also installs ainkrad-host (the root host helper) and refreshes its socket and service units; a runner run brings
+# ainkrad-job (the terminals' heavy-job shim) beside the runner.
 set -uo pipefail
 mode=${1:-now}
 recover=0; case $mode in recover-*) recover=1; mode=${mode#recover-} ;; esac   # ExecStopPost: start the service again if this run died mid-way
 case $mode in now | auto | runner) ;; *) echo "update: mode is now|auto|runner" >&2; exit 2 ;; esac
-kind=core svc=ainkrad-core.service vbin=ainkrad-core-server statusf=status.json bins="ainkrad-core-server ainkradctl"
-[ "$mode" = runner ] && { kind=runner svc=ainkrad-runner.service vbin=ainkrad-runner statusf=runner-status.json bins="ainkrad-runner ainkrad-ptyhost"; }
+kind=core svc=ainkrad-core.service vbin=ainkrad-core-server statusf=status.json bins="ainkrad-core-server ainkradctl ainkrad-host"
+[ "$mode" = runner ] && { kind=runner svc=ainkrad-runner.service vbin=ainkrad-runner statusf=runner-status.json bins="ainkrad-runner ainkrad-ptyhost ainkrad-job"; }
 # STATE is root's own directory (the unit's StateDirectory=ainkrad-update: /var/lib/ainkrad-update, 0755 root), NOT inside the
 # Core's /var/lib/ainkrad: the Core user must never be able to plant a path, a symlink or a status file the updater trusts.
 LIB=/usr/local/lib/ainkrad PREFIX=/usr/local STATE=/var/lib/ainkrad-update HOMEDIR=/var/lib/ainkrad/core
 BASE=https://ainkrad.io/releases CHANNEL=stable SYSTEMCTL=/usr/bin/systemctl RUNNER_STATE=/var/lib/ainkrad-runner/core
-CORE_ENV=/etc/ainkrad/core.env NO_MODEL=/etc/ainkrad/no-model
+CORE_ENV=/etc/ainkrad/core.env NO_MODEL=/etc/ainkrad/no-model UNITS=/etc/systemd/system
 [ -r /etc/ainkrad/update.conf ] && . /etc/ainkrad/update.conf   # root-owned: BASE=, CHANNEL=
 # Test hooks only (a non-root run against a scratch tree); never set in the unit.
-if [ "${AINKRAD_UPDATE_TEST:-}" = 1 ]; then LIB=${UPD_LIB:-$LIB} PREFIX=${UPD_PREFIX:-$PREFIX} STATE=${UPD_STATE:-$STATE} HOMEDIR=${UPD_HOME:-$HOMEDIR} BASE=${UPD_BASE:-$BASE} SYSTEMCTL=${UPD_SYSTEMCTL:-$SYSTEMCTL} RUNNER_STATE=${UPD_RUNNER_STATE:-$RUNNER_STATE} HEALTH_URL=${UPD_HEALTH:-} WINDOW=${UPD_WINDOW:-} CORE_ENV=${UPD_CORE_ENV:-/dev/null} NO_MODEL=${UPD_NO_MODEL:-/nonexistent}; fi
+if [ "${AINKRAD_UPDATE_TEST:-}" = 1 ]; then LIB=${UPD_LIB:-$LIB} PREFIX=${UPD_PREFIX:-$PREFIX} STATE=${UPD_STATE:-$STATE} HOMEDIR=${UPD_HOME:-$HOMEDIR} BASE=${UPD_BASE:-$BASE} SYSTEMCTL=${UPD_SYSTEMCTL:-$SYSTEMCTL} RUNNER_STATE=${UPD_RUNNER_STATE:-$RUNNER_STATE} HEALTH_URL=${UPD_HEALTH:-} WINDOW=${UPD_WINDOW:-} CORE_ENV=${UPD_CORE_ENV:-/dev/null} NO_MODEL=${UPD_NO_MODEL:-/nonexistent} UNITS=${UPD_UNITS:-/nonexistent}; fi
 umask 022
 if [ "$recover" = 1 ]; then "$SYSTEMCTL" start "$svc" || true; exit 0; fi
 # The request file only says "go": removed BEFORE the lock, so a request that arrives while an update runs is not left behind to
@@ -181,6 +183,18 @@ if [ "$runner_was_active" = 1 ] && ! "$SYSTEMCTL" is-active --quiet ainkrad-runn
 # reason to roll back: the new version is installed and healthy; the old scripts stay until the next release.
 "$LIB/install.sh" --from "$url" --pubkey "$LIB/ainkrad-release.pub" --scripts "$LIB" >>"$STATE/install.log" 2>&1 ||
   echo "update: the updater scripts were not refreshed (see $STATE/install.log)" >&2
+# 7. Core mode: the root host helper's units (ainkrad-host.socket + ainkrad-host@.service, from the same signed bundle; the binary came
+# with --only core). New: enabled and started, so "Update now" reaches ainkrad-update@now; present: the socket picks up a changed unit.
+if [ "$kind" = core ] && [ -d "$UNITS" ]; then
+  had=0; [ -e "$UNITS/ainkrad-host.socket" ] && had=1
+  if "$LIB/install.sh" --from "$url" --pubkey "$LIB/ainkrad-release.pub" --units "$UNITS" >>"$STATE/install.log" 2>&1 && [ -e "$UNITS/ainkrad-host.socket" ]; then
+    "$SYSTEMCTL" daemon-reload
+    if [ "$had" = 0 ]; then "$SYSTEMCTL" enable --now ainkrad-host.socket; else "$SYSTEMCTL" try-restart ainkrad-host.socket; fi ||
+      echo "update: the host helper socket did not start" >&2
+  else
+    echo "update: the host helper units were not refreshed (see $STATE/install.log)" >&2
+  fi
+fi
 
 if [ "$kind" = core ]; then lbl=Core; else lbl=Runner; fi; ev done "$lbl is on $new"; avail=''; put done 1
 # keep the two newest snapshots

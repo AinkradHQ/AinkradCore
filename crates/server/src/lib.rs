@@ -25,4 +25,5 @@ pub mod runner_update;
 pub mod runs;
 pub mod scheduler;
 pub mod store;
+pub mod update_feed;
 pub mod workspace;

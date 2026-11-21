@@ -1,0 +1,21 @@
+# The one door to the root host helper (crates/host, `ainkrad-host`): the Core (user ainkrad) asks it to restart the Core or the
+# runner, read logs, start a backup or start `ainkrad-update@now` ("Update now"). One helper process per connection (Accept=yes);
+# the helper also checks the peer's uid is ainkrad before it reads a byte. The path is fixed (crates/server/src/host.rs SOCKET).
+# /run/ainkrad is root:ainkrad 0750, made here: no unit may set RuntimeDirectory=ainkrad (systemd would chown it to ainkrad, and
+# the Core could then swap the socket). Installed and enabled by deploy/install-core-linux.sh and the Core updater.
+[Unit]
+Description=Ainkrad host helper (socket)
+Documentation=https://github.com/AinkradHQ/AinkradCore
+
+[Socket]
+ExecStartPre=/usr/bin/install -d -m 0750 -o root -g ainkrad /run/ainkrad
+ListenStream=/run/ainkrad/host.sock
+SocketUser=root
+SocketGroup=ainkrad
+SocketMode=0660
+DirectoryMode=0750
+Accept=yes
+MaxConnections=4
+
+[Install]
+WantedBy=sockets.target

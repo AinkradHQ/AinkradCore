@@ -9688,8 +9688,22 @@
               "null"
             ]
           },
+          "reason": {
+            "description": "Why the feed is unavailable: `no_manifest`, `bad_signature`, `bad_key`, `bad_manifest`, `manifest_expired`\nor `bad_base`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runner_latest_version": {
+            "description": "The runner version the feed names (runners update to it with `POST /runners/{id}/update`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
-            "description": "`feed_unavailable`: no release feed is set up on this Core yet, so nothing was compared.",
+            "description": "`up_to_date`, `available` (`latest_version` is newer; install it with `POST /system/update`) or\n`feed_unavailable` (the signed feed could not be fetched or did not verify: `reason`).",
             "type": "string"
           }
         },
@@ -10107,7 +10121,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.96.0"
+    "version": "1.97.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -15693,7 +15707,7 @@
                 }
               }
             },
-            "description": "Records that a check ran. Until a release feed exists (E12) the status is `feed_unavailable` and no version is compared. Needs `admin`"
+            "description": "Fetches the release manifest (`/etc/ainkrad/update.conf` `BASE`, default `https://ainkrad.io/releases`), verifies its minisign signature with the pinned release key and compares its channel's Core version with this one. An unsigned or unverifiable manifest is never read: `feed_unavailable` with a `reason`. Records that a check ran. Needs `admin`"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

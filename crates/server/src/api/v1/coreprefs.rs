@@ -4,8 +4,8 @@
 //! updates. Preferences live in the settings table under `core.pref.*` (strings, so outside the
 //! integer registry that `/api/v1/settings` lists).
 //!
-//! The update choice and hour are only stored here: installing an update is E12's, and there is
-//! no release feed yet, so `check` records that it looked and says the feed is unavailable.
+//! The update choice and hour are only stored here: installing an update is the root-side updater's
+//! (`POST /system/update`). `check` reads the signed release feed the updater reads (`crate::update_feed`).
 //! ponytail: backup schedule, retention and "back up now" are the host's backup timer and the
 //! root-owned helper (`system::host`); the Core cannot start or change them, so they are not here.
 
@@ -190,25 +190,46 @@ pub struct UpdateCheck {
     /// A newer version, when a feed says so.
     #[schema(required = false)]
     pub latest_version: Option<String>,
-    /// `feed_unavailable`: no release feed is set up on this Core yet, so nothing was compared.
+    /// `up_to_date`, `available` (`latest_version` is newer; install it with `POST /system/update`) or
+    /// `feed_unavailable` (the signed feed could not be fetched or did not verify: `reason`).
     pub status: String,
+    /// The runner version the feed names (runners update to it with `POST /runners/{id}/update`).
+    #[schema(required = false)]
+    pub runner_latest_version: Option<String>,
+    /// Why the feed is unavailable: `no_manifest`, `bad_signature`, `bad_key`, `bad_manifest`, `manifest_expired`
+    /// or `bad_base`.
+    #[schema(required = false)]
+    pub reason: Option<String>,
 }
 
 #[utoipa::path(post, path = "/api/v1/core/update/check", operation_id = "checkCoreUpdate",
     tag = "system",
-    responses((status = 200, description = "Records that a check ran. Until a release feed \
-        exists (E12) the status is `feed_unavailable` and no version is compared. Needs `admin`",
+    responses((status = 200, description = "Fetches the release manifest (`/etc/ainkrad/update.conf` `BASE`, \
+        default `https://ainkrad.io/releases`), verifies its minisign signature with the pinned release key and \
+        compares its channel's Core version with this one. An unsigned or unverifiable manifest is never read: \
+        `feed_unavailable` with a `reason`. Records that a check ran. Needs `admin`",
         body = UpdateCheck)))]
 pub async fn check_update(State(app): State<App>) -> ApiResult<UpdateCheck> {
     let now = app.clock.now();
+    let current = env!("CARGO_PKG_VERSION");
+    let found = app.update_feed.latest(app.clock.unix()).await;
     let mut tx = store::begin_write(&app.pool).await?;
     write(&mut tx, CHECKED, &now, &now).await?;
     tx.commit().await?;
+    let (status, latest_version, runner_latest_version, reason) = match found {
+        Ok(l) if crate::update_feed::newer(&l.core, current) => {
+            ("available", Some(l.core), l.runner, None)
+        }
+        Ok(l) => ("up_to_date", None, l.runner, None),
+        Err(why) => ("feed_unavailable", None, None, Some(why.to_owned())),
+    };
     Ok(Json(UpdateCheck {
         checked_at: ts(&now),
-        current_version: env!("CARGO_PKG_VERSION").to_owned(),
-        latest_version: None,
-        status: "feed_unavailable".to_owned(),
+        current_version: current.to_owned(),
+        latest_version,
+        status: status.to_owned(),
+        runner_latest_version,
+        reason,
     }))
 }
 

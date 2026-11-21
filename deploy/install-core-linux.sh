@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # Installs the Ainkrad Core and its systemd unit (E1-14.5). Idempotent; never touches /etc/ainkrad/backup.env.
-#   install-core-linux.sh [--binary PATH] [--hostname NAME --acme-contact EMAIL] [--acme-directory URL]
+#   install-core-linux.sh [--binary PATH] [--host-helper PATH] [--hostname NAME --acme-contact EMAIL] [--acme-directory URL]
 #                         [--backup-recipient age1...] [--no-semantic-model | --semantic-model-from DIR] [--start] [--dry-run]
 # Creates the `ainkrad` user if missing, installs the binary and unit, inits the home /var/lib/ainkrad/core as
 # `ainkrad` when it does not exist (printing the backup signer's fingerprint once), and writes /etc/ainkrad/core.env
 # when --hostname is given (otherwise an existing one is kept), and the pinned local model (about 490 MB; skip it with
 # --no-semantic-model, which also keeps the updater from fetching it). Starts only with --start.
+# The root host helper (ainkrad-host, default: beside --binary) and its socket are installed with it, and the socket is enabled
+# (it starts nothing until the Core connects): restarts, logs, backups and "Update now" from the app go through it.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-binary="$HERE/../target/release/ainkrad-core-server" hostname='' contact='' directory='' recipient='' semantic=1 from='' start=0 dry=0
+binary="$HERE/../target/release/ainkrad-core-server" helper='' hostname='' contact='' directory='' recipient='' semantic=1 from='' start=0 dry=0
 while [ $# -gt 0 ]; do
   case $1 in
     --binary) binary=${2:?}; shift 2 ;;
+    --host-helper) helper=${2:?}; shift 2 ;;
     --hostname) hostname=${2:?}; shift 2 ;;
     --acme-contact) contact=${2:?}; shift 2 ;;
     --acme-directory) directory=${2:?}; shift 2 ;;
@@ -22,7 +25,7 @@ while [ $# -gt 0 ]; do
     --semantic-model-from) from=${2:?}; shift 2 ;;
     --start) start=1; shift ;;
     --dry-run) dry=1; shift ;;
-    *) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+    *) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
   esac
 done
 run() { printf '+ %s\n' "$*"; [ "$dry" = 1 ] || "$@"; }
@@ -50,6 +53,14 @@ for f in update.sh install.sh model.sh; do run install -m 0755 "$HERE/../scripts
 run install -m 0644 "$HERE/../scripts/release/ainkrad-release.pub" /usr/local/lib/ainkrad/ainkrad-release.pub
 run install -m 0644 "$HERE/systemd/ainkrad-update@.service" /etc/systemd/system/ainkrad-update@.service
 run install -m 0644 "$HERE/systemd/ainkrad-update.timer" /etc/systemd/system/ainkrad-update.timer
+# The root host helper: its binary, socket and per-connection service (deploy/systemd/ainkrad-host.socket).
+helper=${helper:-$(dirname "$binary")/ainkrad-host}
+if [ -f "$helper" ]; then
+  run install -m 0755 "$helper" /usr/local/bin/ainkrad-host
+  for u in ainkrad-host.socket ainkrad-host@.service; do run install -m 0644 "$HERE/systemd/$u" "/etc/systemd/system/$u"; done
+else
+  echo "no ainkrad-host at $helper (--host-helper): the app cannot restart, update or back up this Core" >&2
+fi
 if [ -n "$hostname" ]; then
   env="AINKRAD_LISTEN=public
 AINKRAD_HOSTNAME=$hostname
@@ -79,6 +90,8 @@ else
   run touch /etc/ainkrad/no-model
 fi
 run systemctl daemon-reload
+# Socket-activated: enabling it at once is safe, the helper runs only per connection.
+[ ! -e /etc/systemd/system/ainkrad-host.socket ] && [ "$dry" = 0 ] || run systemctl enable --now ainkrad-host.socket
 if [ "$start" = 1 ]; then
   [ "$dry" = 1 ] || [ -r /etc/ainkrad/core.env ] || { echo "no /etc/ainkrad/core.env: pass --hostname" >&2; exit 1; }
   run systemctl enable --now ainkrad-core.service
