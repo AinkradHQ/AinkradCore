@@ -176,6 +176,17 @@ check "a ./-prefixed bundle refreshes update.sh" "$(rel update.sh)" 1.1.0
 setup; release 1.1.0; mkdir -p "$w/bundle/extra"; tar -czf "$w/rel/core/1.1.0/ainkrad-core-installer-1.1.0.tar.gz" -C "$w/bundle" ainkrad-core-installer-1.1.0 extra
 AINKRAD_RELEASE_NO_MAC=1 "$here/sign.sh" "$w/rel/core/1.1.0" "$w/a.key" >/dev/null; manifest 1.1.0 100 "$FUT"; run now
 check "a bundle with a second top folder refreshes nothing" "$(rel update.sh)" ""
+# no tar at all: under the updater unit (RestrictSUIDSGID=yes) GNU tar fails every member, so the bundle is never unpacked with it
+mkdir -p "$w/notar"; printf '#!/bin/sh\necho "tar: Cannot mkdir: Function not implemented" >&2; exit 1\n' >"$w/notar/tar"; chmod +x "$w/notar/tar"
+mkdir -p "$w/units"; rm -f "$w/units/"*
+setup; release 1.1.0; manifest 1.1.0 100 "$FUT"; (PATH=$w/notar:$PATH UNITS_DIR=$w/units run now)
+check "with a failing tar the scripts are still refreshed" "$(rel update.sh)$(rel install.sh)" 1.1.01.1.0
+check "... and the host units installed" "$(sed -n 's/^# release //p' "$w/units/ainkrad-host.socket")" 1.1.0
+# a bundle member that is a link is never written, so a needed script that is one is refused
+setup; release 1.1.0; ln -sf /etc/hostname "$w/bundle/ainkrad-core-installer-1.1.0/scripts/release/update.sh"
+tar -czf "$w/rel/core/1.1.0/ainkrad-core-installer-1.1.0.tar.gz" -C "$w/bundle" ainkrad-core-installer-1.1.0
+AINKRAD_RELEASE_NO_MAC=1 "$here/sign.sh" "$w/rel/core/1.1.0" "$w/a.key" >/dev/null; manifest 1.1.0 100 "$FUT"; run now
+check "a linked update.sh in the bundle refreshes nothing" "$(rel update.sh)$(rel install.sh)" ""
 
 # the root host helper: a Core run installs ainkrad-host and its units (enabled once, then only restarted); the runner's job shim
 # comes with a runner run. A Core run never touches ainkrad-job, a runner run never ainkrad-host.

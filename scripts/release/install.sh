@@ -52,10 +52,31 @@ if [ -n "$scripts$units" ]; then
   [ -n "$bundle" ] && [ "$(echo "$bundle" | wc -l)" -eq 1 ] || die "the signed sums have no single installer bundle"
   verify "$bundle"
   top=${bundle%.tar.gz}
-  # The whole (verified) bundle into an empty dir; it must hold exactly one top folder, named for the bundle. No member name is
-  # matched by tar itself (tars differ on `./` prefixes and pax headers): files are picked from the tree by exact path.
+  # The whole (verified) bundle into an empty dir; it must hold exactly one top folder, named for the bundle; files are then
+  # picked from the tree by exact path. Not GNU tar: under the updater unit's RestrictSUIDSGID=yes it fails every member
+  # (ENOSYS from openat2). Python's tarfile, by hand: only plain files and folders, no absolute or `..` path, no link, no mode
+  # bits beyond 0755 (python3 is already required by update.sh).
   mkdir "$tmp/s"
-  tar -xzf "$tmp/$bundle" -C "$tmp/s" --no-same-owner 2>"$tmp/tar.err" || die "$bundle does not unpack: $(head -c 200 "$tmp/tar.err")"
+  command -v python3 >/dev/null || die "python3 is not installed"
+  python3 -I - "$tmp/$bundle" "$tmp/s" 2>"$tmp/tar.err" <<'PY' || die "$bundle does not unpack: $(tail -c 200 "$tmp/tar.err")"
+import os, sys, tarfile
+src, dst = sys.argv[1], sys.argv[2]
+with tarfile.open(src, "r:gz") as t:
+    for m in t:
+        name = os.path.normpath(m.name)
+        if name == "." or name.startswith(("/", "..")) or not (m.isfile() or m.isdir()):
+            continue   # never a link, a device or a path outside; the caller refuses what it needed and did not get
+        if os.path.basename(name).startswith("._"):
+            continue   # macOS tar's AppleDouble metadata (a bundle made on a Mac), never a file of ours
+        out = os.path.join(dst, name)
+        if m.isdir():
+            os.makedirs(out, mode=0o755, exist_ok=True)
+            continue
+        os.makedirs(os.path.dirname(out), mode=0o755, exist_ok=True)
+        with t.extractfile(m) as f, open(out, "xb") as o:
+            o.write(f.read())
+        os.chmod(out, m.mode & 0o755)
+PY
   [ "$(ls -A "$tmp/s")" = "$top" ] && [ -d "$tmp/s/$top" ] && [ ! -L "$tmp/s/$top" ] || die "$bundle does not hold the single folder $top"
   place() { # place SRC DIR NAME MODE: a plain file, as a temp file renamed into place
     { [ -f "$1" ] && [ ! -L "$1" ]; } || die "$3 in $bundle is not a plain file"
