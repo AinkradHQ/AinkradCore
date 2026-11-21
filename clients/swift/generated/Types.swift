@@ -62,6 +62,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `PUT /api/v1/accounts/{id}/models/{model}`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/models/{model}/put(setAccountModelAllowed)`.
     func setAccountModelAllowed(_ input: Operations.SetAccountModelAllowed.Input) async throws -> Operations.SetAccountModelAllowed.Output
+    /// - Remark: HTTP `PUT /api/v1/accounts/{id}/name`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/name/put(setAccountName)`.
+    func setAccountName(_ input: Operations.SetAccountName.Input) async throws -> Operations.SetAccountName.Output
     /// - Remark: HTTP `POST /api/v1/accounts/{id}/restore`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/restore/post(restoreAccount)`.
     func restoreAccount(_ input: Operations.RestoreAccount.Input) async throws -> Operations.RestoreAccount.Output
@@ -981,6 +984,19 @@ extension APIProtocol {
         body: Operations.SetAccountModelAllowed.Input.Body
     ) async throws -> Operations.SetAccountModelAllowed.Output {
         try await setAccountModelAllowed(Operations.SetAccountModelAllowed.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `PUT /api/v1/accounts/{id}/name`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/name/put(setAccountName)`.
+    public func setAccountName(
+        path: Operations.SetAccountName.Input.Path,
+        headers: Operations.SetAccountName.Input.Headers = .init(),
+        body: Operations.SetAccountName.Input.Body
+    ) async throws -> Operations.SetAccountName.Output {
+        try await setAccountName(Operations.SetAccountName.Input(
             path: path,
             headers: headers,
             body: body

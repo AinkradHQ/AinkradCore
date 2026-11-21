@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # E1-15.4: verify, then install. Nothing is written to the prefix unless the signature AND every checksum hold.
-#   install.sh --from <dir|https-url> [--prefix DIR] [--pubkey FILE] [--target T] [--verify-only FILE]
+#   install.sh --from <dir|https-url> [--prefix DIR] [--pubkey FILE] [--target T] [--verify-only FILE] [--scripts DIR]
 # 1. minisign -V over SHA256SUMS with the pinned public key (refuses on any mismatch).
 # 2. SHA-256 of each artefact for this target against the signed sums.
 # 3. Only then install all four (ainkrad-core-server, ainkrad-runner, ainkradctl, ainkrad-ptyhost) into <prefix>/bin as one set:
@@ -9,12 +9,15 @@
 #    exits non-zero. The macos-arm64 release is ONE zip (ainkrad-runner-<ver>-macos-arm64.zip: ainkrad-runner + ainkrad-ptyhost, unsigned
 #    by Apple: the Mac app re-signs them): when a target has no four-binary set but has that zip, the zip is verified against the signed
 #    sums, then those two are installed the same way. ainkrad-ptyhost sits beside ainkrad-runner, where the runner looks for it. Needs `minisign` (brew/apt install minisign).
+# --scripts DIR (the self-updater, after a healthy update): instead of binaries, put the updater's own scripts (update.sh, install.sh,
+# model.sh) from the release's signed installer bundle into DIR, each as a temp file renamed into place (a running copy keeps its
+# old inode, so bash reading it is not disturbed). The pinned key is never replaced this way.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-from= prefix=${HOME}/.local pub=${AINKRAD_RELEASE_PUBKEY:-$here/ainkrad-release.pub} target= only= part=
+from= prefix= pub=${AINKRAD_RELEASE_PUBKEY:-$here/ainkrad-release.pub} target= only= part= scripts=
 while [ $# -gt 0 ]; do case $1 in
   --from) from=$2; shift 2 ;; --prefix) prefix=$2; shift 2 ;; --pubkey) pub=$2; shift 2 ;;
-  --target) target=$2; shift 2 ;; --only) part=$2; shift 2 ;; --verify-only) only=$2; shift 2 ;; *) echo "unknown option $1" >&2; exit 2 ;;
+  --target) target=$2; shift 2 ;; --only) part=$2; shift 2 ;; --verify-only) only=$2; shift 2 ;; --scripts) scripts=$2; shift 2 ;; *) echo "unknown option $1" >&2; exit 2 ;;
 esac; done
 die() { echo "install: REFUSED: $*" >&2; exit 1; }
 [ -n "$from" ] || die "--from is required"
@@ -40,6 +43,25 @@ verify() {  # verify NAME: fetch it and hold it to its signed checksum
   fetch "$1"
   [ "$(sha "$tmp/$1")" = "$(awk -v n="$1" '$2 == n { print $1 }' "$tmp/SHA256SUMS")" ] || die "$1 does not match its signed checksum"
 }
+if [ -n "$scripts" ]; then
+  bundle=$(awk '$2 ~ /^ainkrad-core-installer-[0-9][0-9A-Za-z.+-]*\.tar\.gz$/ { print $2 }' "$tmp/SHA256SUMS")
+  [ -n "$bundle" ] && [ "$(echo "$bundle" | wc -l)" -eq 1 ] || die "the signed sums have no single installer bundle"
+  verify "$bundle"
+  top=${bundle%.tar.gz} want="update.sh install.sh model.sh"
+  mkdir "$tmp/s"
+  # Only these named members are taken out; model.sh is optional (older bundles have none).
+  for f in $want; do tar -xzf "$tmp/$bundle" -C "$tmp/s" "$top/scripts/release/$f" 2>/dev/null || true; done
+  for f in update.sh install.sh; do [ -f "$tmp/s/$top/scripts/release/$f" ] || die "$bundle has no $f"; done
+  for f in $want; do
+    src=$tmp/s/$top/scripts/release/$f
+    [ -e "$src" ] || [ -L "$src" ] || continue
+    { [ -f "$src" ] && [ ! -L "$src" ]; } || die "$f in $bundle is not a plain file"
+    new=$(mktemp "$scripts/.$f.XXXXXX") || die "cannot place $f in $scripts"
+    { install -m 0755 "$src" "$new" && mv -f "$new" "$scripts/$f"; } || { rm -f "$new"; die "cannot place $f in $scripts"; }
+    echo "installed $scripts/$f"
+  done
+  exit 0
+fi
 # --only core|runner (E12): a mode installs only its own programs, so a Core update never swaps the runner under a running task.
 case $part in
   '') order="ainkrad-core-server ainkrad-runner ainkradctl ainkrad-ptyhost" ;;
@@ -67,6 +89,8 @@ else
   for b in $order; do verify "$(echo "$names" | grep -x "$b-[0-9].*-$target" | head -1)"; done
   for b in $order; do cp "$tmp/$(echo "$names" | grep -x "$b-[0-9].*-$target" | head -1)" "$tmp/z/$b"; done
 fi
+# The default prefix is ~/.local; a caller with no HOME (the systemd updater) must pass --prefix.
+[ -n "$prefix" ] || { [ -n "${HOME:-}" ] || die "no HOME: pass --prefix"; prefix=$HOME/.local; }
 bindir=$prefix/bin
 mkdir -p "$bindir"
 stage=$(mktemp -d "$bindir/.stage.XXXXXX") || die "cannot stage in $bindir"

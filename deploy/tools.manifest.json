@@ -17,9 +17,9 @@
   },
   "codex": {
     "package": "@openai/codex",
-    "version": "0.167.1",
-    "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.167.1.tgz",
-    "integrity": "sha512-39uApTRT9bkhE8tMXTIfZxaZ27oi7hPqWoF2Coyp+iQFAD3NVHgH838IYVUfJaX85leMSP2s4JOmVw0mMSCN5Q=="
+    "version": "0.154.0",
+    "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0.tgz",
+    "integrity": "sha512-FV/x1OHXYv/ifjf3mXj9ThTTAWcUZN6cGIRQRhRxkKNOPuImu1WW0c8ev1vUkE9XGH90dEnYG1tBjIkxRikg0w=="
   },
   "chromium": {
     "version": "159.0.8154.6",

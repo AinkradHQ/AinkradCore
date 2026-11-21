@@ -16,6 +16,9 @@ pub struct NewLogin {
     pub provider: String,
     /// The new account's label.
     pub label: String,
+    /// The new account's free-text name (as `createAccount` takes it); default none.
+    #[serde(default)]
+    pub display_name: Option<String>,
     /// A runner device id; absent, the best ready runner that has the provider's harness. A
     /// runner-bound provider keeps the login on the runner it runs on: the account is pinned to it.
     #[serde(default)]
@@ -111,9 +114,16 @@ pub async fn start_login(
     body: Bytes,
 ) -> ApiResult<AccountLogin> {
     let b: NewLogin = parse(&body)?;
-    let l = login::start(&app, &me, &b.provider, &b.label, b.runner.as_deref())
-        .await
-        .map_err(err)?;
+    let l = login::start(
+        &app,
+        &me,
+        &b.provider,
+        &b.label,
+        b.display_name.as_deref(),
+        b.runner.as_deref(),
+    )
+    .await
+    .map_err(err)?;
     Ok(Json(l.into()))
 }
 

@@ -215,6 +215,7 @@ async fn an_account_is_bound_to_its_providers_base_url_when_stored() {
         value: "throwaway-provider-value-aa11bb22",
         runners: &[],
         cap: None,
+        display_name: None,
     };
     let a = acc::create(&fx.app.pool, &s, &new, &fx.dev.id, BY, NOW)
         .await

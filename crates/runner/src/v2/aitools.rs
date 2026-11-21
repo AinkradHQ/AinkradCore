@@ -474,13 +474,13 @@ mod tests {
     #[test]
     fn every_pin_is_a_tested_version_with_all_four_platforms_and_a_real_digest() {
         for p in PINS {
-            let v = compat::check(p.tool.name(), Some(p.version), &Default::default());
+            // Tested, not merely allowed: an untested newer version installs, then a sign-in refuses it.
+            let tested = compat::compat(p.tool.name()).map_or(&[][..], |c| c.tested);
             assert!(
-                !v.refused,
-                "{} {} is refused: {:?}",
+                tested.contains(&p.version),
+                "{} {} is not in harness::compat's tested list {tested:?}",
                 p.tool.name(),
-                p.version,
-                v.reason
+                p.version
             );
             for plat in ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"] {
                 let b = p

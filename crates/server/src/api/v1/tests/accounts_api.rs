@@ -12,7 +12,7 @@ use crate::ops::secretbox::SecretBox;
 const V1: &str = "throwaway-route-value-one-5a91c3";
 const V2: &str = "throwaway-route-value-two-77d0be";
 
-async fn setup() -> (Fx, TestDevice, TestDevice) {
+pub(super) async fn setup() -> (Fx, TestDevice, TestDevice) {
     let mut fx = fx().await;
     fx.app.secrets = Some(Arc::new(SecretBox::new(&[7; 32])));
     fx.app.limits = Arc::new(Limits {
@@ -33,7 +33,13 @@ async fn setup() -> (Fx, TestDevice, TestDevice) {
     (fx, vm, reader)
 }
 
-async fn call(fx: &Fx, dev: &TestDevice, m: Method, uri: &str, body: Value) -> (StatusCode, Value) {
+pub(super) async fn call(
+    fx: &Fx,
+    dev: &TestDevice,
+    m: Method,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
     let body = (!body.is_null()).then_some(body);
     send(&fx.app, req(m, uri, Some(dev), body)).await
 }

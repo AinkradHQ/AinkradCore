@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Installs the Ainkrad Core and its systemd unit (E1-14.5). Idempotent; never touches /etc/ainkrad/backup.env.
 #   install-core-linux.sh [--binary PATH] [--hostname NAME --acme-contact EMAIL] [--acme-directory URL]
-#                         [--backup-recipient age1...] [--semantic-model [--semantic-model-from DIR]] [--start] [--dry-run]
+#                         [--backup-recipient age1...] [--no-semantic-model | --semantic-model-from DIR] [--start] [--dry-run]
 # Creates the `ainkrad` user if missing, installs the binary and unit, inits the home /var/lib/ainkrad/core as
 # `ainkrad` when it does not exist (printing the backup signer's fingerprint once), and writes /etc/ainkrad/core.env
-# when --hostname is given (otherwise an existing one is kept). Starts only with --start.
+# when --hostname is given (otherwise an existing one is kept), and the pinned local model (about 490 MB; skip it with
+# --no-semantic-model, which also keeps the updater from fetching it). Starts only with --start.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-binary="$HERE/../target/release/ainkrad-core-server" hostname='' contact='' directory='' recipient='' semantic=0 from='' start=0 dry=0
+binary="$HERE/../target/release/ainkrad-core-server" hostname='' contact='' directory='' recipient='' semantic=1 from='' start=0 dry=0
 while [ $# -gt 0 ]; do
   case $1 in
     --binary) binary=${2:?}; shift 2 ;;
@@ -16,7 +17,8 @@ while [ $# -gt 0 ]; do
     --acme-contact) contact=${2:?}; shift 2 ;;
     --acme-directory) directory=${2:?}; shift 2 ;;
     --backup-recipient) recipient=${2:?}; shift 2 ;;
-    --semantic-model) semantic=1; shift ;;
+    --semantic-model) semantic=1; shift ;;   # the default; kept so older callers still work
+    --no-semantic-model) semantic=0; shift ;;
     --semantic-model-from) from=${2:?}; shift 2 ;;
     --start) start=1; shift ;;
     --dry-run) dry=1; shift ;;
@@ -44,7 +46,7 @@ run install -m 0755 "$binary" /usr/local/bin/ainkrad-core-server
 run install -m 0644 "$HERE/systemd/ainkrad-core.service" /etc/systemd/system/ainkrad-core.service
 # E12-3: the self-update (units, the updater, install.sh and the pinned key it verifies with). The timer is enabled below.
 run install -d -m 0755 /usr/local/lib/ainkrad
-for f in update.sh install.sh; do run install -m 0755 "$HERE/../scripts/release/$f" "/usr/local/lib/ainkrad/$f"; done
+for f in update.sh install.sh model.sh; do run install -m 0755 "$HERE/../scripts/release/$f" "/usr/local/lib/ainkrad/$f"; done
 run install -m 0644 "$HERE/../scripts/release/ainkrad-release.pub" /usr/local/lib/ainkrad/ainkrad-release.pub
 run install -m 0644 "$HERE/systemd/ainkrad-update@.service" /etc/systemd/system/ainkrad-update@.service
 run install -m 0644 "$HERE/systemd/ainkrad-update.timer" /etc/systemd/system/ainkrad-update.timer
@@ -66,25 +68,15 @@ if [ -e "$home/config.toml" ]; then
 else
   run runuser -u ainkrad -- /usr/local/bin/ainkrad-core-server init "$home"
 fi
+# The Brain's and Lore's local model (scripts/release/model.sh: pinned revision and SHA-256, run as the Core user inside
+# its home). /etc/ainkrad/no-model is the opt-out the updater honours too; without it every Core update re-checks the model.
 if [ "$semantic" = 1 ]; then
-  # The Brain's local sorting model (multilingual-e5-small, MIT), pinned by revision and SHA-256. Root-owned and
-  # read-only: the Core loads it only when every file verifies (a swapped or truncated file leaves the step off).
-  rev=614241f622f53c4eeff9890bdc4f31cfecc418b3 models=$home/models/e5-small
-  run install -d -m 0755 -o root -g root "$home/models" "$models"
-  for f in config.json:69137736cab8b8903a07fe8afaafdda25aac55415a12a55d1bffa9f581abf959 \
-    tokenizer.json:0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39 \
-    model.safetensors:1a55775f53449dac10a2bcbc312469fac40b96d53198c407081a831f81c98477; do
-    name=${f%%:*} sha=${f##*:}
-    if [ "$dry" = 1 ]; then printf '+ fetch %s (sha256 %s) into %s\n' "$name" "$sha" "$models"; continue; fi
-    got=$(sha256sum "$models/$name" 2>/dev/null | cut -d' ' -f1 || true)
-    [ "$got" = "$sha" ] && { echo "$name: present, verified"; continue; }
-    tmp=$(mktemp "$models/.$name.XXXXXX")
-    # A directory of already verified files (--semantic-model-from) is copied from; otherwise it is downloaded.
-    if [ -n "$from" ] && [ -f "$from/$name" ]; then cp "$from/$name" "$tmp"
-    else curl -fsSL "https://huggingface.co/intfloat/multilingual-e5-small/resolve/$rev/$name" -o "$tmp"; fi
-    [ "$(sha256sum "$tmp" | cut -d' ' -f1)" = "$sha" ] || { rm -f "$tmp"; echo "$name: SHA-256 does not match the pin" >&2; exit 1; }
-    chown root:root "$tmp" && chmod 0644 "$tmp" && mv "$tmp" "$models/$name"
-  done
+  run rm -f /etc/ainkrad/no-model
+  # Not fatal: the Core runs without it, and the hourly updater fetches it again. FROM must be readable by `ainkrad`.
+  run runuser -u ainkrad -- /usr/local/lib/ainkrad/model.sh "$home/models/e5-small" ${from:+"$from"} ||
+    echo "the local model did not install (the next update run retries it): Brain sorts by rules, Lore searches text" >&2
+else
+  run touch /etc/ainkrad/no-model
 fi
 run systemctl daemon-reload
 if [ "$start" = 1 ]; then

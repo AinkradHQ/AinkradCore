@@ -368,6 +368,7 @@ pub fn router(app: App) -> Router {
         )
         .route("/api/v1/accounts/{id}/state", put(accounts::set_state))
         .route("/api/v1/accounts/{id}/cap", put(accounts::set_cap))
+        .route("/api/v1/accounts/{id}/name", put(accounts::set_name))
         .route(
             "/api/v1/accounts/{id}/session-limits",
             put(accounts::set_session_limits),

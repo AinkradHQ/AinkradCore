@@ -173,8 +173,10 @@ pub async fn start(
     caller: &Caller,
     provider: &str,
     label: &str,
+    display_name: Option<&str>,
     runner: Option<&str>,
 ) -> Result<Login, Error> {
+    let display_name = accounts::display_name(display_name)?;
     let def = match providers::get(&app.pool, provider).await {
         Ok(d) if account_keys::is_subscription(&d) => d,
         Ok(_) | Err(Error::Refused { .. }) => {
@@ -202,9 +204,10 @@ pub async fn start(
         return refused("conflict", "an account of that label exists");
     }
     let runner = pick(app, &def.harness, bound, runner)?;
-    let l = logins::create(
+    let l = logins::create_named(
         &app.pool,
         (provider, label, &runner),
+        display_name.as_deref(),
         &caller.device.id,
         BY,
         now(app),
@@ -612,6 +615,7 @@ async fn store_bound_inner(app: &App, l: &Login) -> bool {
         value: &marker,
         runners: &[],
         cap: Some(1),
+        display_name: l.display_name.as_deref(),
     };
     let user = crate::store::chains::user_of(&app.pool, &l.device)
         .await
@@ -698,6 +702,7 @@ async fn store(app: &App, l: &Login, token: Zeroizing<String>) {
         value: &token,
         runners: &runners,
         cap: None,
+        display_name: l.display_name.as_deref(),
     };
     let user = crate::store::chains::user_of(&app.pool, &l.device)
         .await

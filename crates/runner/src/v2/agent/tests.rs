@@ -1653,3 +1653,34 @@ async fn a_start_naming_a_folder_outside_the_workspace_is_refused_and_a_runner_w
     d.start(good).expect("its own place is taken");
     drain(&d, "as_i").await;
 }
+
+/// A pending restart waits only for work in flight: a session parked on a tool approval, or one whose task is gone
+/// without an end, never goes idle by itself and must not hold the restart.
+#[tokio::test]
+async fn busy_names_only_sessions_with_work_in_flight() {
+    let (root, config) = dirs("busy");
+    let d = Arc::new(AgentDriver::new(config, script("echo APPROVAL; sleep 30")).unwrap());
+    d.start(start("as_a", "fake")).unwrap();
+    assert_eq!(d.busy(), ["as_a"], "started, working");
+    until("the approval request", || {
+        !d.sessions.lock().unwrap()["as_a"].approvals.is_empty()
+    })
+    .await;
+    assert!(d.busy().is_empty(), "parked on a person's decision");
+    d.with("as_a", |live, _, _| {
+        live.approvals.clear();
+        if let Some(t) = &live.task {
+            t.abort();
+        }
+    });
+    until("the task gone", || {
+        d.sessions.lock().unwrap()["as_a"]
+            .task
+            .as_ref()
+            .is_some_and(|t| t.is_finished())
+    })
+    .await;
+    assert_eq!(d.states()["as_a"], AgentState::Running, "no end ran");
+    assert!(d.busy().is_empty(), "a task gone without an end");
+    let _ = std::fs::remove_dir_all(root);
+}

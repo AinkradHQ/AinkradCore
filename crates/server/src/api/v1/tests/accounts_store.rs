@@ -37,6 +37,7 @@ fn new<'a>(label: &'a str, value: &'a str, runners: &'a [String]) -> acc::NewAcc
         value,
         runners,
         cap: None,
+        display_name: None,
     }
 }
 
@@ -279,6 +280,7 @@ async fn input_is_validated_at_the_boundary() {
                 value: V1,
                 runners: &runners,
                 cap,
+                display_name: None,
             };
             acc::create(p, s, &n, id, super::super::BY, NOW).await
         }

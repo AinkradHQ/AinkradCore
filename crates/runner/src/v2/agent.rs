@@ -1295,6 +1295,22 @@ impl AgentDriver {
         let all = self.sessions.lock().unwrap();
         all.iter().map(|(k, l)| (k.clone(), l.meta.state)).collect()
     }
+
+    /// The sessions with work in flight, which a pending restart waits for: running, with a live
+    /// task, and not parked on a tool approval. A session waiting for a person (its next message,
+    /// or a decision on a tool call) is not work, nor is one whose task is gone without an end (a
+    /// panic): neither ever goes idle by itself.
+    pub fn busy(&self) -> Vec<String> {
+        let all = self.sessions.lock().unwrap();
+        all.iter()
+            .filter(|(_, l)| {
+                l.meta.state == AgentState::Running
+                    && l.approvals.is_empty()
+                    && l.task.as_ref().is_some_and(|t| !t.is_finished())
+            })
+            .map(|(k, _)| k.clone())
+            .collect()
+    }
 }
 
 /// A SIGKILLed runner cannot run `Proc::drop`; reap the process groups recorded by its

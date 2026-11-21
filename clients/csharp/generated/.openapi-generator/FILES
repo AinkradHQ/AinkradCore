@@ -296,6 +296,7 @@ src/Ainkrad.Client/Model/SetConnectionGrant.cs
 src/Ainkrad.Client/Model/SetCorePrefs.cs
 src/Ainkrad.Client/Model/SetDefaultConnection.cs
 src/Ainkrad.Client/Model/SetModelAllowed.cs
+src/Ainkrad.Client/Model/SetName.cs
 src/Ainkrad.Client/Model/SetPrice.cs
 src/Ainkrad.Client/Model/SetProjectDefaults.cs
 src/Ainkrad.Client/Model/SetProjectSecret.cs

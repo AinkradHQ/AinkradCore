@@ -7394,6 +7394,10 @@ extension Components {
         ///
         /// - Remark: Generated from `#/components/schemas/NewLogin`.
         public struct NewLogin: Codable, Hashable, Sendable {
+            /// The new account's free-text name (as `createAccount` takes it); default none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewLogin/display_name`.
+            public var displayName: Swift.String?
             /// The new account's label.
             ///
             /// - Remark: Generated from `#/components/schemas/NewLogin/label`.
@@ -7411,25 +7415,33 @@ extension Components {
             /// Creates a new `NewLogin`.
             ///
             /// - Parameters:
+            ///   - displayName: The new account's free-text name (as `createAccount` takes it); default none.
             ///   - label: The new account's label.
             ///   - provider: A subscription provider: `claude-sub` (a pasted approval code), or the runner-bound
             ///   - runner: A runner device id; absent, the best ready runner that has the provider's harness. A
             public init(
+                displayName: Swift.String? = nil,
                 label: Swift.String,
                 provider: Swift.String,
                 runner: Swift.String? = nil
             ) {
+                self.displayName = displayName
                 self.label = label
                 self.provider = provider
                 self.runner = runner
             }
             public enum CodingKeys: String, CodingKey {
+                case displayName = "display_name"
                 case label
                 case provider
                 case runner
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.displayName = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .displayName
+                )
                 self.label = try container.decode(
                     Swift.String.self,
                     forKey: .label
@@ -7443,6 +7455,7 @@ extension Components {
                     forKey: .runner
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "display_name",
                     "label",
                     "provider",
                     "runner"
@@ -7669,6 +7682,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewProviderAccount/chain`.
             public var chain: Swift.Int64?
+            /// A free-text name, trimmed, at most 64 characters, no control characters; default none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/NewProviderAccount/display_name`.
+            public var displayName: Swift.String?
             /// - Remark: Generated from `#/components/schemas/NewProviderAccount/label`.
             public var label: Swift.String
             /// The monthly dollar limit in micro-dollars; default 20000000 ($20); 0 is no limit.
@@ -7698,6 +7715,7 @@ extension Components {
             /// - Parameters:
             ///   - cap: Default 4; 0 is no cap.
             ///   - chain: An existing chain to put the pool in; default: the user's default chain (made if missing).
+            ///   - displayName: A free-text name, trimmed, at most 64 characters, no control characters; default none.
             ///   - label:
             ///   - monthlyLimitUsdMicros: The monthly dollar limit in micro-dollars; default 20000000 ($20); 0 is no limit.
             ///   - pool: An existing pool of the provider to join; default: the provider's default pool (made if missing).
@@ -7708,6 +7726,7 @@ extension Components {
             public init(
                 cap: Swift.Int64? = nil,
                 chain: Swift.Int64? = nil,
+                displayName: Swift.String? = nil,
                 label: Swift.String,
                 monthlyLimitUsdMicros: Swift.Int64? = nil,
                 pool: Swift.Int64? = nil,
@@ -7718,6 +7737,7 @@ extension Components {
             ) {
                 self.cap = cap
                 self.chain = chain
+                self.displayName = displayName
                 self.label = label
                 self.monthlyLimitUsdMicros = monthlyLimitUsdMicros
                 self.pool = pool
@@ -7729,6 +7749,7 @@ extension Components {
             public enum CodingKeys: String, CodingKey {
                 case cap
                 case chain
+                case displayName = "display_name"
                 case label
                 case monthlyLimitUsdMicros = "monthly_limit_usd_micros"
                 case pool
@@ -9437,6 +9458,10 @@ extension Components {
             public var cap: Swift.Int64
             /// - Remark: Generated from `#/components/schemas/ProviderAccount/created_at`.
             public var createdAt: Components.Schemas.Timestamp
+            /// The free-text name a person gave it (`Work Claude`); absent: show the provider's name.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/display_name`.
+            public var displayName: Swift.String?
             /// What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason`
             /// and `state_until` (a cooldown's end) are above.
             ///
@@ -9518,6 +9543,7 @@ extension Components {
             ///   - baseUrl: The provider's base URL when the account was stored.
             ///   - cap: Sessions that may hold the account at once; 0 is no cap.
             ///   - createdAt:
+            ///   - displayName: The free-text name a person gave it (`Work Claude`); absent: show the provider's name.
             ///   - health: What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason`
             ///   - id:
             ///   - label:
@@ -9541,6 +9567,7 @@ extension Components {
                 baseUrl: Swift.String,
                 cap: Swift.Int64,
                 createdAt: Components.Schemas.Timestamp,
+                displayName: Swift.String? = nil,
                 health: Components.Schemas.AccountHealth? = nil,
                 id: Swift.Int64,
                 label: Swift.String,
@@ -9564,6 +9591,7 @@ extension Components {
                 self.baseUrl = baseUrl
                 self.cap = cap
                 self.createdAt = createdAt
+                self.displayName = displayName
                 self.health = health
                 self.id = id
                 self.label = label
@@ -9588,6 +9616,7 @@ extension Components {
                 case baseUrl = "base_url"
                 case cap
                 case createdAt = "created_at"
+                case displayName = "display_name"
                 case health
                 case id
                 case label
@@ -12088,6 +12117,33 @@ extension Components {
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "allowed"
+                ])
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/SetName`.
+        public struct SetName: Codable, Hashable, Sendable {
+            /// Trimmed, at most 64 characters, no control characters; `null` or blank clears it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/SetName/display_name`.
+            public var displayName: Swift.String?
+            /// Creates a new `SetName`.
+            ///
+            /// - Parameters:
+            ///   - displayName: Trimmed, at most 64 characters, no control characters; `null` or blank clears it.
+            public init(displayName: Swift.String? = nil) {
+                self.displayName = displayName
+            }
+            public enum CodingKeys: String, CodingKey {
+                case displayName = "display_name"
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.displayName = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .displayName
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "display_name"
                 ])
             }
         }

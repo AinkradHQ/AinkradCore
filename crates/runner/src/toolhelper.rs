@@ -541,6 +541,15 @@ mod tests {
             assert!(script.contains(sha), "{sha}");
         }
         assert_eq!(m.claude.version, "2.1.318");
+        // The root helper's AI tools are tested versions too, as the runner's own pins are.
+        for (name, pin) in [("claude", &m.claude), ("codex", &m.codex)] {
+            let tested = ainkrad_harness::compat::compat(name).map_or(&[][..], |c| c.tested);
+            assert!(
+                tested.contains(&pin.version.as_str()),
+                "{name} {} untested",
+                pin.version
+            );
+        }
         assert!(m.node.version.starts_with("22."));
         assert_eq!(
             m.claude.managed_settings,

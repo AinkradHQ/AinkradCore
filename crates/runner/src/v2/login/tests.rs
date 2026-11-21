@@ -470,3 +470,37 @@ async fn a_bad_code_never_reaches_the_pty() {
 }
 
 // ---- redaction ---------------------------------------------------------------------------
+
+/// The runner's own tools folder is searched before `PATH`, so a tool the app installed there is
+/// the one a sign-in drives; a folder without it, or a file that cannot run, is passed over.
+#[test]
+fn a_sign_in_finds_the_runner_installed_tool_first() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = std::env::temp_dir().join(format!("login-find-{}", std::process::id()));
+    let (tools, path, empty) = (
+        root.join("ai-tools/bin"),
+        root.join("usr/bin"),
+        root.join("none"),
+    );
+    for d in [&tools, &path, &empty] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let exe = |p: PathBuf, mode| {
+        std::fs::write(&p, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+        p
+    };
+    let managed = exe(tools.join("codex"), 0o755);
+    let system = exe(path.join("codex"), 0o755);
+    exe(tools.join("opencode"), 0o644);
+    let on_path = exe(path.join("opencode"), 0o755);
+    let dirs = || [empty.clone(), tools.clone(), path.clone()];
+    assert_eq!(super::first_executable(dirs(), "codex"), Some(managed));
+    assert_eq!(super::first_executable(dirs(), "opencode"), Some(on_path));
+    assert_eq!(
+        super::first_executable([path.clone()], "codex"),
+        Some(system)
+    );
+    assert_eq!(super::first_executable(dirs(), "agy"), None);
+    let _ = std::fs::remove_dir_all(root);
+}

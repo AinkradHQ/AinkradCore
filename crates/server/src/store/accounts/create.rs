@@ -5,7 +5,8 @@ use serde_json::json;
 use sqlx::sqlite::SqlitePool;
 
 use super::{
-    Account, DEFAULT_CAP, NewAccount, audit, check_cap, find, refused, tail_of, valid_label,
+    Account, DEFAULT_CAP, NewAccount, audit, check_cap, display_name, find, refused, tail_of,
+    valid_label,
 };
 use crate::ops::secretbox::SecretBox;
 use crate::store::placement::Placement;
@@ -121,6 +122,7 @@ async fn create_inner(
     if !valid_label(new.label) {
         return refused("bad_request", "a label is [a-z][a-z0-9._-]{0,63}");
     }
+    let display = display_name(new.display_name)?;
     let cap = new.cap.unwrap_or(DEFAULT_CAP);
     check_cap(cap)?;
     // A pasted key often carries a trailing newline: neither the sealed value nor the tail keeps it.
@@ -151,11 +153,13 @@ async fn create_inner(
     // The secret's name needs the row's id, so the row goes in first and the name follows, in
     // the same transaction; nothing outside it ever sees the placeholder.
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO core_accounts (provider, label, secret_name, masked_tail, base_url, cap, \
-         owner, created_at, updated_at) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO core_accounts (provider, label, display_name, secret_name, masked_tail, \
+         base_url, cap, owner, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?) \
+         RETURNING id",
     )
     .bind(new.provider)
     .bind(new.label)
+    .bind(&display)
     .bind(tail_of(key))
     .bind(&base_url)
     .bind(cap)
@@ -193,7 +197,7 @@ async fn create_inner(
         actor,
         "account.created",
         id,
-        json!({"provider": new.provider, "label": new.label, "cap": cap,
+        json!({"provider": new.provider, "label": new.label, "display_name": display, "cap": cap,
                "base_url": base_url, "runners": new.runners, "by_device": owner,
                "method": method, "bound_runner": bound.map(|b| b.0)}),
     )

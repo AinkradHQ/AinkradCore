@@ -526,6 +526,7 @@ async fn a_built_in_providers_unlisted_model_is_granted_at_the_flagged_default_a
             value: "sk-or-v1-0123456789abcdefghijklmnopqrstuvwxyzTESTONLY",
             runners: std::slice::from_ref(&vm.id),
             cap: None,
+            display_name: None,
         },
         &fx.dev.id,
         BY,
