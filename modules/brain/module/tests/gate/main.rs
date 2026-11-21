@@ -16,6 +16,7 @@ mod common;
 mod context;
 mod decide;
 mod distil;
+mod distil_capacity;
 mod index;
 mod intake;
 mod keys;

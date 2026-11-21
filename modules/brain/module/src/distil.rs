@@ -17,6 +17,7 @@ use ainkrad_core_server::store::agents::NewSession;
 use ainkrad_core_server::store::chains::{self as ch, Request};
 use ainkrad_core_server::store::{alloc, begin_write};
 use ainkrad_proto::redact::Redactor;
+use ainkrad_proto::v2::ErrorCode;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use brain_model::merge::Grounding;
@@ -46,6 +47,12 @@ const MAX_PROMPT_BYTES: usize = 120_000;
 /// Distil sessions at once across rooms: an import's rooms are learned a few at a time, never all
 /// started in one tick on one account (18 started together and all ended unanswered, 2026-11-21).
 const MAX_RUNNING: i64 = 3;
+/// Agent slots a distil leaves free on a runner that has more than one, so the person's own AI
+/// session still starts while the Brain learns. A one-slot runner is not held back: the Brain would
+/// never learn there.
+const KEEP_FREE_SLOTS: usize = 1;
+/// Why a distil waits while every agent slot it may take is in use (or the runner refused it, full).
+pub(crate) const WAITING_FOR_SLOT: &str = "waiting for a free AI session slot";
 #[derive(Serialize, ToSchema)]
 pub struct DistilView {
     pub id: String,
@@ -262,31 +269,62 @@ async fn advance_inner(app: &App, b: &Brain) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// The first online runner that offers AI sessions.
 /// The policy of a Brain AI session (distil, overview). It holds a provider-account secret, so the
 /// Core only places it in a sandbox of at least the `process` tier (`agents::account_policy_problem`).
 pub(crate) fn session_policy() -> serde_json::Value {
     json!({"mode": "ask", "min_isolation": "process"})
 }
 
-/// The first online runner that offers agent sessions in a sandbox meeting [`session_policy`].
-pub(crate) fn pick_runner(app: &App) -> Option<String> {
+/// The online runners that offer agent sessions in a sandbox meeting [`session_policy`], by id,
+/// with their agent driver's capacity.
+fn eligible(app: &App) -> Vec<(String, u32)> {
     let policy = session_policy();
     let mut all: Vec<_> = app
         .hub
         .runners()
         .into_iter()
         .filter(|(_, r)| {
-            r.online
-                && r.drivers
-                    .iter()
-                    .any(|d| d.name == ainkrad_proto::v2::AGENT_DRIVER)
-                && ainkrad_core_server::agents::tier_refusal(r, &policy).is_none()
+            r.online && ainkrad_core_server::agents::tier_refusal(r, &policy).is_none()
         })
-        .map(|(id, _)| id)
+        .filter_map(|(id, r)| {
+            r.drivers
+                .iter()
+                .find(|d| d.name == ainkrad_proto::v2::AGENT_DRIVER)
+                .map(|d| (id, d.capacity))
+        })
         .collect();
     all.sort();
-    all.into_iter().next()
+    all
+}
+
+/// The first online runner that offers agent sessions in a sandbox meeting [`session_policy`].
+pub(crate) fn pick_runner(app: &App) -> Option<String> {
+    eligible(app).into_iter().next().map(|(id, _)| id)
+}
+
+/// How many of a runner's `capacity` agent slots the Brain's sessions may hold: all but
+/// [`KEEP_FREE_SLOTS`], and the one slot of a one-slot runner.
+fn distil_slots(capacity: u32) -> usize {
+    let c = usize::try_from(capacity).unwrap_or(usize::MAX);
+    if c > KEEP_FREE_SLOTS {
+        c - KEEP_FREE_SLOTS
+    } else {
+        c
+    }
+}
+
+/// The first eligible runner (see [`pick_runner`]) with a slot a distil may take: the sessions
+/// the Core holds on it (anyone's) are under [`distil_slots`] of its advertised capacity.
+async fn runner_with_room(app: &App) -> Result<Option<String>, sqlx::Error> {
+    for (id, capacity) in eligible(app) {
+        let held = ainkrad_core_server::store::agents::on_runner(&app.pool, &id)
+            .await?
+            .len();
+        if held < distil_slots(capacity) {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
 }
 
 /// The room's current memory, newest first, from which the prompt's related block is picked. A
@@ -370,7 +408,11 @@ async fn launch(app: &App, b: &Brain, d: &DistilView, by: &str) -> Result<(), Ap
         };
         return Ok(set_state(app, &d.id, state, &why, None).await?);
     }
-    let Some(runner) = pick_runner(app) else {
+    let Some(runner) = runner_with_room(app).await? else {
+        if pick_runner(app).is_some() {
+            // Every slot it may take is in use: it waits its turn, which is not a failure.
+            return Ok(set_state(app, &d.id, "queued", WAITING_FOR_SLOT, None).await?);
+        }
         return Ok(set_state(
             app,
             &d.id,
@@ -476,12 +518,15 @@ async fn launch(app: &App, b: &Brain, d: &DistilView, by: &str) -> Result<(), Ap
             alloc::end_unstarted_why(&app.pool, &s.id, &app.clock.now(), "it could not start")
                 .await?;
             give_back(app, b, d).await?;
-            let why = match r {
-                Refusal::Runner(e) => e.message,
-                Refusal::Secrets(e) => e.to_string(),
-                Refusal::Db(e) => e.to_string(),
+            let (state, why) = match r {
+                Refusal::Runner(e) if e.code == ErrorCode::Busy => {
+                    ("queued", WAITING_FOR_SLOT.to_owned())
+                }
+                Refusal::Runner(e) => ("waiting", e.message),
+                Refusal::Secrets(e) => ("waiting", e.to_string()),
+                Refusal::Db(e) => ("waiting", e.to_string()),
             };
-            Ok(set_state(app, &d.id, "waiting", &why, None).await?)
+            Ok(set_state(app, &d.id, state, &why, None).await?)
         }
     }
 }
@@ -534,6 +579,21 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
         }
         return Ok(());
     };
+    if refused_full(s.outcome.as_ref()) {
+        // The runner was full when the session's start reached it: nothing ran and nothing is
+        // wrong. The sources go back and the distil waits for a slot: no failure, so no backoff.
+        give_back(app, b, d).await?;
+        ainkrad_core_server::store::agents::seal(&app.pool, &s.id).await?;
+        sqlx::query(
+            "UPDATE brain_distils SET state = 'queued', session = NULL, detail = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(WAITING_FOR_SLOT)
+        .bind(app.clock.now())
+        .bind(&d.id)
+        .execute(&app.pool)
+        .await?;
+        return Ok(());
+    }
     let output = answer_of(app, &s.id).await?;
     let pool = canon(app, b, &d.room).await?;
     // The distil's answer was admitted and parked while a judge session ran: this is that session.
@@ -632,6 +692,12 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     }
     let detail = json!({"distil": d.id, "session": s.id, "answer": output});
     save(app, b, d, pool, &s.id, staged.keep, dropped, &by, detail).await
+}
+
+/// Whether the session ended because the runner refused its start at capacity (the Core's
+/// structured `code`, never the text).
+fn refused_full(outcome: Option<&serde_json::Value>) -> bool {
+    outcome.and_then(|o| o["code"].as_str()) == Some(agents::RUNNER_BUSY)
 }
 
 /// Why a session that ended said nothing: the model gave no answer, or the session ended before
@@ -943,6 +1009,22 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn a_distil_leaves_one_slot_free_except_on_a_one_slot_runner() {
+        let got: Vec<usize> = [0, 1, 2, 3, 8].into_iter().map(distil_slots).collect();
+        assert_eq!(got, [0, 1, 1, 2, 7]);
+    }
+
+    #[test]
+    fn only_the_structured_busy_code_means_the_runner_was_full() {
+        let full = json!({"kind": "failed", "reason": "x", "code": agents::RUNNER_BUSY});
+        assert!(refused_full(Some(&full)));
+        // The runner's English text alone never counts: only the Core's code does.
+        let text = json!({"kind": "failed", "reason": "the agent driver is at its capacity"});
+        assert!(!refused_full(Some(&text)));
+        assert!(!refused_full(None));
+    }
 
     fn cand(kind: &str, body: &str) -> Candidate {
         serde_json::from_value(json!({"type": kind, "body": body, "sources": ["i1"]})).unwrap()

@@ -351,7 +351,8 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
             Ok(())
         }
         Err(e) if matches!(e.code, ErrorCode::Busy | ErrorCode::InvalidArgs) => {
-            fail(app, s, &e.message).await;
+            let code = (e.code == ErrorCode::Busy).then_some(RUNNER_BUSY);
+            fail_coded(app, s, &e.message, code).await;
             Err(e.into())
         }
         Err(e) => Err(e.into()),
