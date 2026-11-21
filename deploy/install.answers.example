@@ -40,11 +40,11 @@ BACKUP_RECIPIENT=age1<public key>
 # yes). The binary runs the module's migrations itself. no: nothing of Citadel is installed or mounted.
 ENABLE_CITADEL=no
 
-# The local sorting model for the Brain import (opt-in, off by default). yes downloads three pinned files
-# (about 490 MB) once into /var/lib/ainkrad/core/models/e5-small, checks their SHA-256, and installs them
-# root-owned and read-only; a Core built with the `semantic` feature then loads them at start. no: Review
-# sorts by rules alone.
-ENABLE_SEMANTIC=no
+# The local model for Brain sorting and Lore search (on by default). yes downloads three pinned files (about
+# 490 MB) once into /var/lib/ainkrad/core/models/e5-small and checks their SHA-256; the Core loads them at start
+# and every Core update re-checks them. no: Review sorts by rules alone, Lore searches text only, and the
+# updater never fetches the model (/etc/ainkrad/no-model).
+ENABLE_SEMANTIC=yes
 
 # A runner on this host too, with its own hardened unit. exec.run stays OFF (add --enable-exec to RUNNER_ARGS in
 # /etc/ainkrad-runner/runner.env yourself if you want it). RUNNER_PTY=yes offers terminals: a shell as the

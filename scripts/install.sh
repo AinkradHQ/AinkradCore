@@ -161,7 +161,7 @@ The backup encryption key: make it OFFLINE, on a machine other than this host:
   paper): without it no backup can be restored, and with it anyone can read them."
   ask BACKUP_RECIPIENT "The age recipient (public key, age1...)."
   ask ENABLE_CITADEL "Enable the Citadel module? (default no) Needs the composed binary ainkrad-core-citadel beside the others; the unit then starts it with --enable-module citadel, and the module's data and migrations are handled by that binary. Off: nothing of Citadel is installed or mounted."
-  ask ENABLE_SEMANTIC "Fetch the local sorting model for the Brain import (default no)? About 490 MB, downloaded once from a pinned Hugging Face revision and checked against pinned SHA-256 sums; it runs on this host only. Off: Review sorts by rules alone."
+  ask ENABLE_SEMANTIC "Fetch the local model for Brain sorting and Lore search (default yes)? About 490 MB, downloaded once from a pinned Hugging Face revision and checked against pinned SHA-256 sums; it runs on this host only, and Core updates keep it. Off: Review sorts by rules alone and Lore searches text only."
   ask RUNNER "Also install a runner on this host (yes/no)? exec.run stays OFF unless you add --enable-exec to RUNNER_ARGS in /etc/ainkrad-runner/runner.env."
   if [ "$A_RUNNER" = yes ]; then
     ask RUNNER_PTY "Offer terminals on that runner (yes/no)? A client with the terminal scope and a live step-up gets a shell as the unprivileged ainkrad-runner user, inside the unit's sandbox."
@@ -283,7 +283,7 @@ harden() {
 install_core() {
   step "Core: user, binary, unit, home"
   local out prev_env tls=$CORE_HOME/tls dry=() sem=()
-  [ "$A_ENABLE_SEMANTIC" = yes ] && sem=(--semantic-model)
+  [ "$A_ENABLE_SEMANTIC" = yes ] || sem=(--no-semantic-model)
   [ "$DRY" = 1 ] && dry=(--dry-run)
   if [ "$GUIDED$DRY" = 10 ]; then
     out=''

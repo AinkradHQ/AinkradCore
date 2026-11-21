@@ -41,7 +41,7 @@ pub const FILES: [(&str, &str, u64); 3] = [
 const DEFAULT_TOKENS: usize = 128;
 const BATCH: usize = 16;
 
-/// Where the installer puts the three files (root-owned, read-only to the Core).
+/// Where the installer and the updater put the three files (scripts/release/model.sh, as the Core user).
 pub const DEFAULT_DIR: &str = "/var/lib/ainkrad/core/models/e5-small";
 
 /// The one model of this process, loaded on first call from `dir` (later calls ignore `dir`).
