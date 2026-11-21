@@ -499,9 +499,22 @@ fn other_kind(b: &Body) -> &'static str {
     }
 }
 
+/// The `code` of a session's outcome when the runner refused its start because its agent driver
+/// was full: nothing went wrong, so a caller that queues work (the Brain's distil) tries it again
+/// when a slot frees instead of counting a failure.
+pub const RUNNER_BUSY: &str = "runner_busy";
+
 /// Ends `s` as failed with `why` (no value or lease is ever in it).
 async fn fail(app: &App, s: &Session, why: &str) {
-    let outcome = json!({"kind": "failed", "reason": why, "fingerprint": "core"});
+    fail_coded(app, s, why, None).await;
+}
+
+/// [`fail`], with a machine-readable `code` in the outcome (e.g. [`RUNNER_BUSY`]).
+async fn fail_coded(app: &App, s: &Session, why: &str, code: Option<&str>) {
+    let mut outcome = json!({"kind": "failed", "reason": why, "fingerprint": "core"});
+    if let Some(code) = code {
+        outcome["code"] = json!(code);
+    }
     if let Err(e) = store::end(&app.pool, &s.id, "ended", &outcome, &app.clock.now()).await {
         tracing::error!(session = s.id, error = %e, "ending a session failed");
     }

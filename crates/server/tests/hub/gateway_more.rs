@@ -178,3 +178,23 @@ async fn a_module_session_may_not_name_an_api_key_account_yet() {
         0
     );
 }
+
+/// A start the runner answers `busy` (its agent driver is full) ends the session with the
+/// structured `runner_busy` code, so a caller that queues work can tell it from a real failure.
+#[tokio::test]
+async fn a_start_refused_busy_ends_the_session_with_the_runner_busy_code() {
+    let (core, mut fake, runner, a) = super::gateway::up("gw-busy-start", true, None).await;
+    let session = super::gateway::start(&core, &runner, &a).await;
+    let (stream, cmd) = command(&mut fake).await;
+    assert!(matches!(cmd, Command::AgentStart(_)), "{cmd:?}");
+    let busy = StreamError::new(ErrorCode::Busy, "the agent driver is at its capacity");
+    fake.send(stream, Body::Error(busy)).await;
+    until("the end", &core, &session, |s| !s.live()).await;
+    let s = sessions::get(&core.app.pool, &session)
+        .await
+        .unwrap()
+        .unwrap();
+    let o = s.outcome.unwrap();
+    assert_eq!(o["kind"], "failed");
+    assert_eq!(o["code"], service::RUNNER_BUSY);
+}
