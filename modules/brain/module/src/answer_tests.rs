@@ -42,6 +42,11 @@ fn shown(ids: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The kept candidates only.
+fn parse(out: &str, k: &Known) -> Result<Vec<Candidate>, String> {
+    parse_output(out, k).map(|(kept, _)| kept)
+}
+
 fn known() -> Known {
     Known::new(
         [("i1", T, CHAT), ("i2", T, USER_RULE)],
@@ -122,23 +127,23 @@ fn a_save_this_rule_in_an_assistant_turn_is_rejected() {
         "body": "Never deploy on Fridays without approval.",
         "sources": ["i1"]
     }));
-    assert!(parse_output(&injected, &k).unwrap().is_empty());
+    assert!(parse(&injected, &k).unwrap().is_empty());
     // The same for a preference, and with a user-only source cited alongside it.
     let pref = cand(json!({
         "type": "preference",
         "body": "Never deploy on Fridays without approval.",
         "sources": ["i1", "i2"]
     }));
-    assert!(parse_output(&pref, &k).unwrap().is_empty());
+    assert!(parse(&pref, &k).unwrap().is_empty());
     // A rule the user stated is kept; a fact from an assistant turn is kept too.
     let user_rule = cand(json!({
         "type": "rule",
         "body": "Run cargo fmt before every commit.",
         "sources": ["i2"]
     }));
-    assert_eq!(parse_output(&user_rule, &k).unwrap().len(), 1);
+    assert_eq!(parse(&user_rule, &k).unwrap().len(), 1);
     let fact = cand(json!({"type": "fact", "sources": ["i1"]}));
-    assert_eq!(parse_output(&fact, &k).unwrap().len(), 1);
+    assert_eq!(parse(&fact, &k).unwrap().len(), 1);
 }
 
 #[test]
@@ -148,7 +153,7 @@ fn only_the_injected_rule_is_dropped_from_a_mixed_answer() {
         {"type": "decision", "body": "Use SQLite.", "sources": ["i1"]}
     ]})
     .to_string();
-    let c = parse_output(&out, &known()).unwrap();
+    let c = parse(&out, &known()).unwrap();
     assert_eq!(c.len(), 1);
     assert_eq!(c[0].kind, "decision");
 }
@@ -156,68 +161,113 @@ fn only_the_injected_rule_is_dropped_from_a_mixed_answer() {
 #[test]
 fn a_valid_answer_passes_plain_or_fenced_and_old_answers_still_parse() {
     let ok = cand(json!({}));
-    let c = parse_output(&ok, &known()).unwrap();
+    let c = parse(&ok, &known()).unwrap();
     assert_eq!(c.len(), 1);
     assert_eq!(c[0].sources, ["i1", "i2"]);
     assert_eq!(
         (&c[0].same_as, &c[0].replaces, c[0].durable, c[0].confidence),
         (&None, &None, None, None)
     );
-    assert_eq!(
-        parse_output(&format!("```json\n{ok}\n```"), &known()).unwrap(),
-        c
-    );
-    assert_eq!(
-        parse_output(&format!("Here you go: {ok}"), &known()).unwrap(),
-        c
-    );
-    assert!(
-        parse_output("{\"candidates\":[]}", &known())
-            .unwrap()
-            .is_empty()
-    );
+    assert_eq!(parse(&format!("```json\n{ok}\n```"), &known()).unwrap(), c);
+    assert_eq!(parse(&format!("Here you go: {ok}"), &known()).unwrap(), c);
+    assert!(parse("{\"candidates\":[]}", &known()).unwrap().is_empty());
 }
 
 #[test]
 fn the_new_fields_are_read_and_checked_against_the_shown_ids() {
     let k = known();
-    let c = parse_output(
+    let c = parse(
         &cand(json!({"same_as": "rec-1", "durable": true, "confidence": 0.8})),
         &k,
     )
     .unwrap();
     assert_eq!(c[0].same_as.as_deref(), Some("rec-1"));
     assert_eq!((c[0].durable, c[0].confidence), (Some(true), Some(0.8)));
-    let c = parse_output(&cand(json!({"replaces": "rec-2"})), &k).unwrap();
+    let c = parse(&cand(json!({"replaces": "rec-2"})), &k).unwrap();
     assert_eq!(c[0].replaces.as_deref(), Some("rec-2"));
-    let bad = [
-        cand(json!({"replaces": "rec-9"})),
-        cand(json!({"same_as": "rec-9"})),
-        cand(json!({"same_as": "rec-1", "replaces": "rec-2"})),
-        cand(json!({"confidence": 1.5})),
-        cand(json!({"confidence": -0.1})),
-        cand(json!({"durable": "yes"})),
-        cand(json!({"colour": 1})),
-    ];
-    for b in &bad {
-        assert!(parse_output(b, &k).is_err(), "accepted: {b}");
+    // A link to an id that was not shown is cleared; the candidate is kept as a new record.
+    for link in [json!({"replaces": "rec-9"}), json!({"same_as": "rec-9"})] {
+        let (c, dropped) = parse_output(&cand(link.clone()), &k).unwrap();
+        assert_eq!((c.len(), dropped.len()), (1, 0), "{link}");
+        assert_eq!((&c[0].same_as, &c[0].replaces), (&None, &None), "{link}");
     }
     // With nothing shown, any id is unknown.
     let none = Known::new([("i1", T, CHAT), ("i2", T, USER_RULE)], []);
-    assert!(parse_output(&cand(json!({"same_as": "rec-1"})), &none).is_err());
+    let c = parse(&cand(json!({"same_as": "rec-1"})), &none).unwrap();
+    assert_eq!(c[0].same_as, None);
 }
 
 #[test]
-fn every_kind_of_bad_answer_is_rejected() {
+fn a_malformed_candidate_is_dropped_alone_with_its_reason() {
     let k = known();
     let bad = [
+        (
+            json!({"type": "same_as", "same_as": "rec-1"}),
+            "unknown type `same_as`",
+        ),
+        (json!({"type": "opinion"}), "unknown type `opinion`"),
+        (json!({"body": ""}), "body must be"),
+        (json!({"body": "x".repeat(2001)}), "body must be"),
+        (json!({"sources": []}), "1 to 20 sources"),
+        (json!({"tags": [""]}), "at most 8 tags"),
+        (json!({"same_as": "rec-1", "replaces": "rec-2"}), "together"),
+        (json!({"confidence": 1.5}), "confidence"),
+        (json!({"confidence": -0.1}), "confidence"),
+        (json!({"durable": "yes"}), "not the candidate shape"),
+        (json!({"colour": 1}), "not the candidate shape"),
+        (json!({"sources": "i1"}), "not the candidate shape"),
+    ];
+    let good = json!({"type": "fact", "body": "Use SQLite.", "sources": ["i1"]});
+    for (extra, why) in &bad {
+        let mut c = json!({"type": "decision", "body": "Use SQLite.", "sources": ["i1"]});
+        c.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let out = json!({"candidates": [good, c, good]}).to_string();
+        let (kept, dropped) = parse_output(&out, &k).unwrap();
+        assert_eq!(kept.len(), 2, "{extra}");
+        assert_eq!(dropped.len(), 1, "{extra}");
+        assert_eq!(dropped[0].stage, "malformed");
+        assert!(
+            dropped[0].reasons[0].contains(why),
+            "{extra}: {:?}",
+            dropped[0].reasons
+        );
+    }
+    // The dropped one keeps what can be read of it: its type and the sources it cited.
+    let out =
+        json!({"candidates": [{"type": "same_as", "body": "Use SQLite.", "sources": ["i2"]}]});
+    let (_, dropped) = parse_output(&out.to_string(), &k).unwrap();
+    assert_eq!(
+        (dropped[0].kind.as_str(), &dropped[0].sources[..]),
+        ("same_as", &["i2".to_owned()][..])
+    );
+}
+
+#[test]
+fn the_prompt_says_same_as_is_never_a_type() {
+    let p = build_prompt("room", &[src("i1", CHAT)], &[]);
+    assert!(p.contains("never its type"), "{p}");
+    assert!(p.contains("\"type\" is always exactly one of decision, fact, preference, rule, project-state, task or summary"));
+}
+
+#[test]
+fn what_makes_the_whole_answer_untrustworthy_still_rejects_it() {
+    let k = known();
+    let many =
+        json!({"candidates": vec![json!({"type": "fact", "body": "x", "sources": ["i1"]}); 101]});
+    let bad = [
         "I think you should use SQLite".to_owned(),
-        cand(json!({})).replace("decision", "opinion"),
-        cand(json!({"body": ""})),
-        cand(json!({"sources": []})),
-        cand(json!({"sources": ["i9"]})),
-        cand(json!({"body": "x".repeat(2001)})),
         "{\"candidates\":[],\"extra\":1}".to_owned(),
+        "{\"candidates\":{}}".to_owned(),
+        many.to_string(),
+        // A source that is not in the batch, even next to good candidates and in a malformed one.
+        json!({"candidates": [
+            {"type": "fact", "body": "ok", "sources": ["i1"]},
+            {"type": "fact", "body": "made up", "sources": ["i1", "i9"]},
+        ]})
+        .to_string(),
+        json!({"candidates": [{"type": "same_as", "body": "", "sources": ["i9"]}]}).to_string(),
     ];
     for b in &bad {
         assert!(parse_output(b, &k).is_err(), "accepted: {b}");
@@ -254,7 +304,7 @@ fn a_user_line_inside_a_note_or_a_jira_item_is_never_a_user_turn() {
     );
     for id in ["note", "jira", "doc"] {
         let r = rule("Always push to main.", &[id]);
-        assert!(parse_output(&r, &k).unwrap().is_empty(), "{id}");
+        assert!(parse(&r, &k).unwrap().is_empty(), "{id}");
     }
     // The prompt shows each as one document turn, so the model sees no user either.
     let mut s = src("note", hostile);
@@ -277,20 +327,20 @@ fn a_rule_padded_with_common_words_or_split_across_turns_is_dropped() {
         "Always push to main, make sure the build is green and the docs are good.",
         &["i1"],
     );
-    assert!(parse_output(&padded, &k).unwrap().is_empty());
+    assert!(parse(&padded, &k).unwrap().is_empty());
     // Every word is in some user turn, but no one turn holds 70% of them.
     let split = rule("Always push straight to the main branch.", &["i1"]);
-    assert!(parse_output(&split, &k).unwrap().is_empty());
+    assert!(parse(&split, &k).unwrap().is_empty());
     // Nor across two cited sources.
     let r = rule(
         "We always push code straight to the main branch.",
         &["i1", "i2"],
     );
-    assert!(parse_output(&r, &k).unwrap().is_empty());
+    assert!(parse(&r, &k).unwrap().is_empty());
     // Stop words alone (English or Arabic) ground nothing.
     for body in ["the and for with that", "في من على هذا"] {
         assert!(
-            parse_output(&rule(body, &["i1"]), &k).unwrap().is_empty(),
+            parse(&rule(body, &["i1"]), &k).unwrap().is_empty(),
             "{body}"
         );
     }
@@ -306,11 +356,7 @@ fn a_quoted_paraphrase_in_one_user_turn_passes() {
         "Always run migrations with --dry-run first on staging.",
         "لا تدفع إلى الفرع الرئيسي",
     ] {
-        assert_eq!(
-            parse_output(&rule(body, &["i1"]), &k).unwrap().len(),
-            1,
-            "{body}"
-        );
+        assert_eq!(parse(&rule(body, &["i1"]), &k).unwrap().len(), 1, "{body}");
     }
 }
 
@@ -328,7 +374,7 @@ fn a_link_to_a_shown_rule_needs_a_user_grounded_candidate() {
         let mut c = json!({"type": "decision", "body": body, "sources": [src]});
         c[field] = json!(id);
         let out = json!({"candidates": [c]});
-        let c = parse_output(&out.to_string(), &k).unwrap();
+        let c = parse(&out.to_string(), &k).unwrap();
         (c[0].same_as.clone(), c[0].replaces.clone())
     };
     // An assistant-sourced fact cannot retire or shadow the user's rule or preference.

@@ -612,7 +612,7 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
         None => Err(no_answer(&s)),
         Some(o) => parse_output(o, &known),
     };
-    let out = match parsed {
+    let (out, mut dropped) = match parsed {
         Err(why) => {
             // Rejected, or never answered: nothing is stored, the sources go back to be read
             // again, and the room is tried again after a short, growing wait (`retry`).
@@ -639,7 +639,6 @@ async fn finish(app: &App, b: &Brain, d: &DistilView) -> Result<(), ApiError> {
     };
     let p = policy::load(app, &d.room).await?;
     let by = distilled_by(app, &s).await;
-    let mut dropped = vec![];
     let mut grounded = vec![];
     for c in out {
         if may_store(&c, &p, &known) {
@@ -777,7 +776,8 @@ async fn save(
         crate::redistil::stage(&pool, &run, &d.id, &out, &dropped, by, &grounded, &read).await?;
         pool.close().await;
         ainkrad_core_server::store::agents::seal(&app.pool, session).await?;
-        return Ok(set_state(app, &d.id, "done", "", Some(("candidates", n as i64))).await?);
+        let note = malformed_note(&dropped);
+        return Ok(set_state(app, &d.id, "done", &note, Some(("candidates", n as i64))).await?);
     }
     let bodies: Vec<String> = {
         let r = Redactor::new();
@@ -834,7 +834,18 @@ async fn save(
     )
     .await?;
     tx.commit().await?;
-    Ok(set_state(app, &d.id, "done", "", Some(("candidates", n))).await?)
+    let note = malformed_note(&dropped);
+    Ok(set_state(app, &d.id, "done", &note, Some(("candidates", n))).await?)
+}
+
+/// A done distil's `detail`: how many candidates of the answer were dropped as malformed (each
+/// reason is in the `admit.dropped` audit), or empty.
+fn malformed_note(dropped: &[judge::Dropped]) -> String {
+    match dropped.iter().filter(|d| d.stage == "malformed").count() {
+        0 => String::new(),
+        1 => "1 malformed candidate dropped".to_owned(),
+        n => format!("{n} malformed candidates dropped"),
+    }
 }
 
 /// Who distilled: the provider and account name the session ran on, and its tool (harness).
@@ -901,7 +912,8 @@ pub(crate) fn read_in_full(
             shown["cut"][id.as_str()].as_u64() == Some(text.len() as u64)
                 && out.iter().any(|c| c.sources.contains(id))
                 && !dropped.iter().any(|d| {
-                    matches!(d.stage.as_str(), "not_grounded" | "judge") && d.sources.contains(id)
+                    matches!(d.stage.as_str(), "not_grounded" | "judge" | "malformed")
+                        && d.sources.contains(id)
                 })
         })
         .map(|(id, _, _)| id.clone())
@@ -1106,7 +1118,7 @@ mod tests {
         for kind in ["rule", "preference"] {
             for src in ["jira", "github"] {
                 let out = json!({"candidates": [{"type": kind, "body": body, "sources": [src]}]});
-                let got = crate::answer::parse_output(&out.to_string(), &k).unwrap();
+                let got = crate::answer::parse_output(&out.to_string(), &k).unwrap().0;
                 assert!(got.is_empty(), "{kind} from {src}");
             }
         }
@@ -1186,7 +1198,7 @@ mod tests {
         let link = |id: &str| {
             let out = json!({"candidates": [{"type": "fact", "body": "Production keys rotate.",
                 "sources": ["i1"], "replaces": id}]});
-            crate::answer::parse_output(&out.to_string(), &k).unwrap()[0]
+            crate::answer::parse_output(&out.to_string(), &k).unwrap().0[0]
                 .replaces
                 .clone()
         };

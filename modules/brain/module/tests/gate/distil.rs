@@ -245,6 +245,36 @@ async fn an_invalid_answer_is_rejected_and_stores_nothing() {
 }
 
 #[tokio::test]
+async fn a_malformed_candidate_is_dropped_and_counted_and_the_rest_is_kept() {
+    let fx = fx().await;
+    let room = committed_room(&fx, DOCS).await;
+    let ids = item_ids(&fx, &room).await;
+    // The model used a field name as a type (seen on a real import).
+    let answer = json!({"candidates": [
+        {"type": "fact", "body": "Deploys need an approval from the release owner.", "sources": [ids[0]]},
+        {"type": "same_as", "body": "Deploys need an approval.", "sources": [ids[0]]},
+    ]})
+    .to_string();
+    ended_distil(&fx, &room, &answer).await;
+    fx.brain.distil_step().await.unwrap();
+    let l = ok(&fx, Method::GET, &format!("/rooms/{room}/distils"), None).await;
+    assert_eq!(l[0]["state"], "done", "{l}");
+    assert_eq!(l[0]["detail"], "1 malformed candidate dropped", "{l}");
+    let p = canon_pool(&fx, &room).await;
+    let dropped: String = sqlx::query_scalar(
+        "SELECT detail FROM room_audit WHERE action = 'admit.dropped' ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&p)
+    .await
+    .unwrap();
+    p.close().await;
+    assert!(
+        dropped.contains("malformed: unknown type `same_as`"),
+        "{dropped}"
+    );
+}
+
+#[tokio::test]
 async fn the_inbox_accepts_edits_and_rejects_and_auto_accept_is_off_until_set() {
     let fx = fx().await;
     let room = committed_room(&fx, DOCS).await;
