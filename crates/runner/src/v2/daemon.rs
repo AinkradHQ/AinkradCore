@@ -269,11 +269,11 @@ pub async fn from_state(
         // A tool install restarts the runner only when no session holds a slot.
         let probe = Arc::clone(&agent);
         super::aitools::set_idle(move || {
-            // A session waiting for its user's next message is not work in flight: only a running one is.
-            !probe
-                .states()
-                .values()
-                .any(|s| matches!(s, ainkrad_proto::v2::AgentState::Running))
+            let busy = probe.busy();
+            if !busy.is_empty() {
+                tracing::info!(?busy, "a pending restart waits for these sessions");
+            }
+            busy.is_empty()
         });
         agent
     });
