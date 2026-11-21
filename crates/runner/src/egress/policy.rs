@@ -235,10 +235,24 @@ pub fn default_hosts() -> String {
         "repo1.maven.org",
         "repo.maven.apache.org",
     ];
+    // The AI CLIs a person runs in a terminal (claude, codex, opencode) and their sign-ins: without them
+    // `claude` in a Core terminal failed with ERR_PROXY_TUNNEL (Oracle, 2026-11-21).
+    const AI_HOSTS: [&str; 9] = [
+        "api.anthropic.com",
+        "claude.ai",
+        "console.anthropic.com",
+        "statsig.anthropic.com",
+        "api.openai.com",
+        "auth.openai.com",
+        "chatgpt.com",
+        "opencode.ai",
+        "models.dev",
+    ];
     FORGE_HOSTS
         .iter()
         .chain(ainkrad_proto::v2::JOB_REGISTRY_HOSTS.iter())
         .chain(MORE_REGISTRIES.iter())
+        .chain(AI_HOSTS.iter())
         .copied()
         .collect::<Vec<_>>()
         .join(",")
