@@ -275,48 +275,6 @@ impl Drop for Busy {
 /// The most one download may be (the biggest tool is about 340 MB).
 const MAX_DOWNLOAD: u64 = 400 * 1024 * 1024;
 
-/// A member of a tarball that must not be unpacked: an absolute path, a `..` step, or anything that is not a plain
-/// file or folder (a link could point out of the install folder). `names` is `tar -tzf`, `verbose` is `tar -tzvf`.
-fn unsafe_member(names: &str, verbose: &str) -> Option<String> {
-    for n in names.lines() {
-        if n.starts_with('/') || n.split('/').any(|p| p == "..") {
-            return Some(n.to_owned());
-        }
-    }
-    for l in verbose.lines() {
-        if !matches!(l.chars().next(), Some('-' | 'd')) {
-            return Some(l.chars().take(80).collect());
-        }
-    }
-    None
-}
-
-/// Lists `file`'s members and refuses it when one is unsafe.
-async fn vet_tar(file: &Path) -> Result<(), String> {
-    let list = |flags: &'static str| {
-        let file = file.to_owned();
-        async move {
-            let out = tokio::process::Command::new("tar")
-                .arg(flags)
-                .arg(&file)
-                .output()
-                .await
-                .map_err(|e| format!("could not read the download: {e}"))?;
-            if !out.status.success() {
-                return Err("the download is not a tarball".to_owned());
-            }
-            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-        }
-    };
-    let (names, verbose) = (list("-tzf").await?, list("-tzvf").await?);
-    match unsafe_member(&names, &verbose) {
-        Some(m) => Err(format!(
-            "the download has a member it must not unpack ({m}), so it was refused"
-        )),
-        None => Ok(()),
-    }
-}
-
 /// Downloads `build` to `file`, hashing as it goes, and checks the digest. `progress` gets 0..=100.
 async fn download(
     build: &Build,
@@ -454,20 +412,7 @@ pub async fn install(tool: Tool, progress: &(dyn Fn(u8, &str) + Sync)) -> Result
         .await?;
         if pin.packed {
             report(91, &format!("Unpacking {label}"));
-            vet_tar(&file).await?;
-            let status = tokio::process::Command::new("tar")
-                .arg("--no-same-owner")
-                .arg("--no-same-permissions")
-                .arg("-xzf")
-                .arg(&file)
-                .arg("-C")
-                .arg(&out)
-                .status()
-                .await
-                .map_err(|e| format!("could not unpack it: {e}"))?;
-            if !status.success() {
-                return Err("could not unpack the download".to_owned());
-            }
+            super::untar::unpack(&file, &out, 0, false).await?;
         } else {
             std::fs::rename(&file, out.join(build.entry)).map_err(|e| e.to_string())?;
         }
@@ -583,29 +528,6 @@ mod tests {
             (Failed, Some("no network"))
         );
         assert!(install_of(&serde_json::json!({"percent":3})).is_none());
-    }
-
-    #[test]
-    fn a_tarball_member_that_could_leave_the_folder_is_refused() {
-        let ok_names = "package/bin/opencode\npackage/package.json\n";
-        let ok_verbose = "-rwxr-xr-x  0 0 0 100 Jan  1  1970 package/bin/opencode\ndrwxr-xr-x  0 0 0 0 Jan  1  1970 package/bin/\n";
-        assert_eq!(unsafe_member(ok_names, ok_verbose), None);
-        assert!(unsafe_member("/etc/passwd\n", ok_verbose).is_some());
-        assert!(unsafe_member("package/../../x\n", ok_verbose).is_some());
-        assert!(
-            unsafe_member(
-                ok_names,
-                "lrwxrwxrwx 0 0 0 0 Jan 1 1970 package/x -> /etc\n"
-            )
-            .is_some()
-        );
-        assert!(
-            unsafe_member(
-                ok_names,
-                "hrwxr-xr-x 0 0 0 0 Jan 1 1970 package/y link to package/x\n"
-            )
-            .is_some()
-        );
     }
 
     #[test]

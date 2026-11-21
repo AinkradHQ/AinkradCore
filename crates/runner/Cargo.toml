@@ -19,6 +19,10 @@ rquickjs = { version = "0.14.0", default-features = false, optional = true }
 base64 = "0.22.1"
 # Sync hashes (E15-4): the same blake3 the Core's workspace uses.
 blake3 = "1.8.7"
+# Unpacking AI tool and toolchain downloads in-process: the runner unit's RestrictSUIDSGID blocks openat2, which GNU tar
+# 1.35 needs (2026-11-21). Pure Rust gzip (miniz_oxide), no C library.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = { version = "0.4", default-features = false }
 ainkrad-harness = { path = "../harness" }
 ainkrad-proto = { path = "../proto" }
 # Terminals (E2-02, E2-03): the host process and its client.

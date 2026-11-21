@@ -55,6 +55,7 @@ pub mod sync;
 pub mod termbox;
 pub mod toolchains;
 mod tools;
+mod untar;
 pub use design::{Cgroups, DesignConfig, DesignDriver};
 pub use exec::{ExecConfig, ExecDriver};
 pub use pty::{PtyConfig, PtyDriver};

@@ -1,4 +1,4 @@
-//! Toolchain tests: program mapping, tarball vetting, the Rust channel rule, version probes and the
+//! Toolchain tests: program mapping, the Rust channel rule, version probes and the
 //! job's mounts and environment.
 use super::*;
 
@@ -9,21 +9,6 @@ fn programs_map_to_the_toolchain_that_runs_them() {
     assert_eq!(tool_for("pytest"), Some("python"));
     assert_eq!(tool_for("go"), Some("go"));
     assert_eq!(tool_for("make"), None);
-}
-
-#[test]
-fn a_tarball_may_hold_inner_links_but_never_an_escape() {
-    let names = "node-v22/\nnode-v22/bin/node\nnode-v22/bin/npm\n";
-    let ok = "drwxr-xr-x 0/0 0 d node-v22/\n-rwxr-xr-x 0/0 9 d node-v22/bin/node\nlrwxr-xr-x 0/0 0 d node-v22/bin/npm -> ../lib/node_modules/npm/bin/npm-cli.js\n";
-    assert_eq!(unsafe_member(names, ok), None);
-    let climbs = "drwxr-xr-x 0/0 0 d node-v22/\n-rwxr-xr-x 0/0 9 d node-v22/bin/node\nlrwxr-xr-x 0/0 0 d node-v22/bin/npm -> ../../../etc/passwd\n";
-    assert!(unsafe_member(names, climbs).is_some());
-    let absolute = "drwxr-xr-x 0/0 0 d node-v22/\n-rwxr-xr-x 0/0 9 d node-v22/bin/node\nlrwxr-xr-x 0/0 0 d node-v22/bin/npm -> /etc/passwd\n";
-    assert!(unsafe_member(names, absolute).is_some());
-    let hard = "drwxr-xr-x 0/0 0 d node-v22/\n-rwxr-xr-x 0/0 9 d node-v22/bin/node\nhrwxr-xr-x 0/0 0 d node-v22/bin/npm link to node-v22/bin/node\n";
-    assert!(unsafe_member(names, hard).is_some());
-    assert!(unsafe_member("../evil\n", "-rw-r--r-- 0/0 1 d ../evil\n").is_some());
-    assert!(unsafe_member("/evil\n", "-rw-r--r-- 0/0 1 d /evil\n").is_some());
 }
 
 #[test]
