@@ -80,19 +80,25 @@ pub(crate) async fn commit(
     if let Some(k) = &keep {
         decide(&app, &b, &st, &run, k).await?;
     }
-    Ok(Json(commit_accepted(&app, &b, &run, st, false).await?))
+    Ok(Json(commit_accepted(&app, &b, &run, st).await?))
 }
 
 /// Imports every accepted room of the run (`st` is its staging file, closed here) and closes the
-/// run when nothing accepted is left. The person's commit and the auto-import (E9-5) both end here.
+/// run when nothing accepted is left. The person's commit ends here.
 pub(crate) async fn commit_accepted(
     app: &App,
     b: &Brain,
     run: &str,
     st: SqlitePool,
-    hold_unsorted: bool,
 ) -> Result<CommitResult, ApiError> {
     let key = b.key(app).await?;
+    // An accepted room the person emptied is not a room: it goes back to undecided, dropped.
+    sqlx::query(
+        "UPDATE proposals SET state = 'proposed' WHERE state = 'accepted' \
+         AND NOT EXISTS (SELECT 1 FROM items i WHERE i.proposal = proposals.id)",
+    )
+    .execute(&st)
+    .await?;
     let accepted =
         sqlx::query("SELECT * FROM proposals WHERE state IN ('accepted','held') ORDER BY id")
             .fetch_all(&st)
@@ -135,17 +141,8 @@ pub(crate) async fn commit_accepted(
         sqlx::query_scalar("SELECT count(*) FROM proposals WHERE state IN ('accepted','held')")
             .fetch_one(&st)
             .await?;
-    // The auto-import keeps a run open while Unsorted still holds items, so they keep being re-sorted.
-    let waiting: i64 = if hold_unsorted {
-        sqlx::query_scalar("SELECT count(*) FROM items WHERE proposal = ?")
-            .bind(UNSORTED)
-            .fetch_one(&st)
-            .await?
-    } else {
-        0
-    };
     st.close().await;
-    if open == 0 && waiting == 0 {
+    if open == 0 {
         close_run(app, run, result.rooms.len()).await?;
         result.state = "committed".to_owned();
     }
@@ -182,13 +179,23 @@ async fn decide(
         }
     }
     let mut refused: Vec<&(String, String, String)> = vec![];
+    // A room the person emptied (its items moved to Unsorted or elsewhere) is dropped silently:
+    // never imported, never refused, so it drafts no refusal rule.
+    let empty: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM proposals p WHERE id != ? AND NOT EXISTS (SELECT 1 FROM items i WHERE i.proposal = p.id)",
+    )
+    .bind(UNSORTED)
+    .fetch_all(st)
+    .await?;
     let mut tx = st.begin().await?;
     for r in &rows {
         let (id, state) = (r.0.as_str(), r.1.as_str());
         if matches!(state, "merged" | "committed") {
             continue;
         }
-        let to = if id == UNSORTED {
+        let to = if empty.iter().any(|e| e == id) {
+            "proposed"
+        } else if id == UNSORTED {
             if k.keep_unsorted.unwrap_or(true) {
                 "proposed"
             } else {

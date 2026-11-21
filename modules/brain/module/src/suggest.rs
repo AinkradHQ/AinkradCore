@@ -43,7 +43,9 @@ pub struct SemanticView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<SemanticProgress>,
     /// When `ready`: what the local model changed by itself in the proposal (duplicates merged,
-    /// rooms merged or folded, items moved), with the link to the list of changes. Absent before.
+    /// rooms merged or folded, items moved), with the link to the list of changes. When `off`: what
+    /// the Core changed by names and sizes alone (one room per product, tiny rooms to Unsorted).
+    /// Absent before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai_tidy: Option<crate::tidy::AiTidy>,
 }
@@ -677,8 +679,12 @@ pub(crate) async fn get(
             .fetch_one(&st)
             .await?;
         v = serde_json::from_str(&body).unwrap_or(v);
-        v.state = state;
+        v.state = state.clone();
         prune(&st, &mut v).await?;
+        v.ai_tidy = crate::tidy::view(&st, &run).await?;
+    }
+    // Without the local model the Core tidies by names and sizes (`tidy::prepare`): its summary too.
+    if state == "off" {
         v.ai_tidy = crate::tidy::view(&st, &run).await?;
     }
     st.close().await;

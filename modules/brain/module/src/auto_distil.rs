@@ -9,7 +9,7 @@
 //!   reset them: `brain_room_policy.daily_distils` per room and `GLOBAL_DAILY` across rooms. A trigger over
 //!   a cap is dropped and audited (`brain.distil.capped`), never turned into a failed distil.
 //!   Redistil, tidy and judge runs have their own budget and are not counted. A cap is audited at
-//!   most once per room per UTC day. A room whose distil failed is skipped for `FAIL_BACKOFF_SECS`.
+//!   most once per room per UTC day. A room whose distil failed waits a short, growing while (`retry`: 2, 5, 15, 60 min, then 6 h).
 //! - One open distil per room: triggers coalesce into it. A session gets one `session_end` distil
 //!   (`of_session`), however often its end event is read.
 //! - Queueing happens in one write transaction (check, cap, insert), so two ticks or a crash in
@@ -52,8 +52,6 @@ pub(crate) const IDLE_SECS: i64 = 45;
 const SCAN_EVERY_SECS: i64 = 60;
 /// Automatic and manual distils across all rooms per rolling 24 hours.
 const GLOBAL_DAILY: i64 = 100;
-/// A room whose distil failed is left alone this long (a Q value).
-const FAIL_BACKOFF_SECS: i64 = 6 * 3600;
 /// An end event this old is set aside rather than waited on for its session to be collected.
 const STALE_END_SECS: i64 = 86_400;
 const PAGE: u32 = 200;
@@ -129,14 +127,10 @@ pub(crate) async fn queue(
     let since = iso_of_unix(now - 86_400);
     let at = iso_of_unix(now);
     let mut tx = begin_write(&app.pool).await?;
-    let failed: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM brain_distils WHERE room = ? AND state = 'failed' AND updated_at >= ?",
-    )
-    .bind(room)
-    .bind(iso_of_unix(now - FAIL_BACKOFF_SECS))
-    .fetch_one(&mut *tx)
-    .await?;
-    if failed > 0 {
+    if crate::retry::retry_at(&mut tx, room)
+        .await?
+        .is_some_and(|t| t > now)
+    {
         return Ok(Queued::Nothing);
     }
     let open: i64 = sqlx::query_scalar(

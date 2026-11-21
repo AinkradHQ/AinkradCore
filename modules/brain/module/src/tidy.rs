@@ -20,6 +20,7 @@ use crate::suggest::SemanticView;
 use crate::{Brain, code};
 
 mod plan;
+mod stem;
 pub(crate) use plan::{Hints, RoomIn, confident, plan};
 
 /// The AI tidy of this run's proposal: what the local model changed by itself.
@@ -51,6 +52,10 @@ pub struct TidySummary {
     /// Tiny or junk rooms folded into the closest room, or into Unsorted.
     #[serde(default)]
     pub rooms_folded: u64,
+    /// Of `rooms_folded`, the rooms sent to Unsorted (no room was clearly closer); the rest went into a room.
+    #[serde(default)]
+    #[schema(required = false)]
+    pub rooms_to_unsorted: u64,
     /// Unsorted items moved into the room they clearly belong in.
     #[serde(default)]
     pub items_moved: u64,
@@ -202,6 +207,7 @@ pub(crate) fn summary(changes: &[TidyChange], before: u64, after: u64) -> TidySu
         duplicates_merged: n("duplicate").map(|c| c.item_ids.len() as u64).sum(),
         rooms_merged: n("merge").count() as u64,
         rooms_folded: n("fold").count() as u64,
+        rooms_to_unsorted: n("fold").filter(|c| c.to == UNSORTED).count() as u64,
         items_moved: n("move").count() as u64,
         rooms_before: before,
         rooms_after: after,
@@ -365,6 +371,59 @@ pub(crate) async fn apply(
         .execute(&mut *tx)
         .await?;
     Ok(())
+}
+
+/// The tidy without the local model (no model installed, or the step off): the same planner over
+/// names and sizes only, once per run, when no tidy was planned yet. Staging only, undone like any
+/// tidy. Returns whether it changed the proposal.
+pub(crate) async fn prepare(b: &Brain, st: &SqlitePool, run: &str) -> Result<bool, ApiError> {
+    if b.inner
+        .prepared
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(run)
+    {
+        return Ok(false);
+    }
+    let planned: i64 = sqlx::query_scalar("SELECT count(*) FROM tidy")
+        .fetch_one(st)
+        .await?;
+    if planned == 0 {
+        let ids: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM proposals WHERE state = 'proposed' AND id != ? ORDER BY id",
+        )
+        .bind(UNSORTED)
+        .fetch_all(st)
+        .await?;
+        // One employer per room; a mixed room takes no part (as in the semantic step).
+        let mut employers = HashMap::new();
+        for id in ids {
+            let emp = crate::review::employers(st, &id).await?;
+            if emp.len() <= 1 {
+                employers.insert(id, emp.into_iter().next().map(|e| e.to_lowercase()));
+            }
+        }
+        let hints = Hints {
+            duplicates: &[],
+            closest: &[],
+        };
+        let mut tx = st.begin().await?;
+        apply(
+            &mut tx,
+            &employers,
+            &HashMap::new(),
+            &hints,
+            Thresholds::for_strength(1),
+        )
+        .await?;
+        tx.commit().await?;
+    }
+    b.inner
+        .prepared
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(run.to_owned());
+    Ok(planned == 0 && applied(st).await?)
 }
 
 /// The run's tidy for `SemanticView.ai_tidy`; `None` when the last step changed nothing.

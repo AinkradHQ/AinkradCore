@@ -332,6 +332,9 @@
 ///    `JobLocal` | 409 `interactive`), `GET /jobs` (`listJobs`, `project`, `session`, `state`, `limit`), `GET /jobs/{id}`
 ///    (`getJob`), `GET /jobs/{id}/stream` (`streamJob`, WebSocket), `POST /jobs/{id}/signal` (`signalJob`, `JobSignal`),
 ///    `DELETE /jobs/{id}` (`cancelJob`). Stubs until E15-1 and E15-3. Runner protocol 2.1: `job.run`, `sync.*`, `gateway.call`.
+/// 95+ (pending, Brain review before filing; `API_MINOR` NOT bumped here): the Brain module's `LearningPlace` gains `left`,
+///    `retry_at` and `failure` and the state `failed`; `SemanticView.ai_tidy` is also set when the step is `off` (the Core's
+///    tidy by names and sizes); `GET /auto-imports` lists only runs auto-accepted before (no new ones).
 pub const API_MINOR: u32 = 95;
 
 use serde::{Deserialize, Serialize};

@@ -69,7 +69,9 @@ pub mod propose;
 mod redistil;
 mod redistil_routes;
 pub mod retention;
+mod retry;
 mod review;
+mod review_runs;
 mod room_tidy;
 mod room_tidy_run;
 pub mod rooms;
@@ -181,6 +183,7 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("POST", "/imports/{run}/proposals/{p}/merge"),
     ("POST", "/imports/{run}/proposals/{p}/split"),
     ("POST", "/imports/{run}/proposals/{p}/refuse"),
+    ("POST", "/imports/{run}/proposals/{p}/to-unsorted"),
     ("PATCH", "/imports/{run}/items"),
     ("POST", "/imports/{run}/regroup"),
     ("POST", "/imports/{run}/proposals/{p}/same-project"),
@@ -237,6 +240,7 @@ const SETTINGS: &[ModuleSetting] = &[
 ];
 const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/status", "read"),
+    ("GET", "/imports", "read"),
     ("GET", "/imports/{run}", "read"),
     ("GET", "/imports/{run}/learning", "read"),
     ("GET", "/rooms", "read"),
@@ -298,6 +302,8 @@ struct Inner {
     sem: semantic::service::Service,
     /// Runs whose semantic step is queued or working, with (items embedded, items to embed).
     sem_running: Mutex<HashMap<String, (usize, usize)>>,
+    /// Runs in review the Core tidied without the local model this process (`tidy::prepare`).
+    prepared: Mutex<std::collections::HashSet<String>>,
     #[cfg(feature = "test-support")]
     fetch: Mutex<Option<Arc<dyn collectors::Fetch>>>,
     #[cfg(feature = "test-support")]
@@ -620,6 +626,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         areas::restore,
         auto_import::list,
         learning::get,
+        review_runs::list,
+        review_runs::to_unsorted,
         auto_import::undo,
         overview::instructions,
         policy::get,
@@ -656,6 +664,8 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         auto_import::AutoImport,
         learning::Learning,
         learning::LearningPlace,
+        review_runs::RunSummary,
+        review_runs::Moved,
         auto_import::Undone,
         imports::StartRun,
         imports::RunId,
@@ -759,7 +769,7 @@ impl Module for Brain {
     fn routes(&self) -> Router<App> {
         Router::new()
             .route("/status", get(status))
-            .route("/imports", post(imports::start))
+            .route("/imports", post(imports::start).get(review_runs::list))
             .route("/imports/{run}", get(imports::get))
             .route(
                 "/imports/{run}/items",
@@ -778,6 +788,10 @@ impl Module for Brain {
             .route("/imports/{run}/proposals/{p}/merge", post(review::merge))
             .route("/imports/{run}/proposals/{p}/split", post(review::split))
             .route("/imports/{run}/proposals/{p}/refuse", post(review::refuse))
+            .route(
+                "/imports/{run}/proposals/{p}/to-unsorted",
+                post(review_runs::to_unsorted),
+            )
             .route("/imports/{run}/regroup", post(review::regroup))
             .route(
                 "/imports/{run}/proposals/{p}/same-project",
