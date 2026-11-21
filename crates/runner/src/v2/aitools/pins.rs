@@ -46,38 +46,38 @@ pub(super) const PINS: &[Pin] = &[
     },
     Pin {
         tool: Tool::Codex,
-        version: "0.167.1",
+        version: "0.154.0",
         packed: true,
         builds: &[
             Build {
                 platform: "darwin-arm64",
-                url: "https://registry.npmjs.org/@openai/codex/-/codex-0.167.1-darwin-arm64.tgz",
+                url: "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-darwin-arm64.tgz",
                 check: Check::Sha512(
-                    "IMUByWGPhdbJFZzuk18iIdF/mfd21cPwalRTp5vGYIsOCyv3SJGRY5snbzZd0zO37WGuNjfUvH/62LvQHqNT2A==",
+                    "HP/vJCH/t2hB9Kg6hotN9UglClJ6/z584fal5lEP14C9gNAgAQS4/kTQC7l5V+BA3TqwDPwINSjul28cX8AYXg==",
                 ),
                 entry: "package/vendor/aarch64-apple-darwin/bin/codex",
             },
             Build {
                 platform: "darwin-x64",
-                url: "https://registry.npmjs.org/@openai/codex/-/codex-0.167.1-darwin-x64.tgz",
+                url: "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-darwin-x64.tgz",
                 check: Check::Sha512(
-                    "SwJf87Qtuktk8qHSDsbNkjVjOerqQRCBgdrqw6gvAlF3tO8UizEp/Vs8qQVznNI1aJfFc6GoJLvcgBGVWVylDg==",
+                    "2aqz+72Hop8PF2RYglQ4JnGjm3OlRIrTykJIT0hyLeUgM6NCFy09RgTmqRCoWliKQZjEn9jjZqUEp7QujAj77g==",
                 ),
                 entry: "package/vendor/x86_64-apple-darwin/bin/codex",
             },
             Build {
                 platform: "linux-arm64",
-                url: "https://registry.npmjs.org/@openai/codex/-/codex-0.167.1-linux-arm64.tgz",
+                url: "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-linux-arm64.tgz",
                 check: Check::Sha512(
-                    "z13jj4X4GDk7CTd1kXHkhXC8Gj8zomd1jYsU2//0KjevbLelPxowWLSTqIcR1rarJCtzveBHsS8gR7B9pAWB0g==",
+                    "KmTCB6ST484zeYlPpKP/K5P/gRaYmt6TihVD+zotoe6O9q0JSBP+FYvCz4A/zZXR7xDOHURTSjHp0sD8wWS0YQ==",
                 ),
                 entry: "package/vendor/aarch64-unknown-linux-musl/bin/codex",
             },
             Build {
                 platform: "linux-x64",
-                url: "https://registry.npmjs.org/@openai/codex/-/codex-0.167.1-linux-x64.tgz",
+                url: "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-linux-x64.tgz",
                 check: Check::Sha512(
-                    "qZteglyvMCj1QVymMyPyKdtw38HaXCv5gvw8WN+N0+JJstu3k/d8xiYj9ciL7OwFLhcujgP8bCGJgaREeqrHkw==",
+                    "a4FI3A8sGtwGrOqltrPbrS2hajrHQG591EwmRfiRoLMb10VxdBtUGW4gu6IJVYENiYGA7k3P4jlRHEoCZU/s9Q==",
                 ),
                 entry: "package/vendor/x86_64-unknown-linux-musl/bin/codex",
             },

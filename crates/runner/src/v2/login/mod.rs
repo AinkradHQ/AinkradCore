@@ -135,31 +135,36 @@ impl LoginConfig {
     }
 }
 
-/// `claude` on the runner's PATH, as an absolute path.
+/// `claude`, as an absolute path ([`find_cli`]).
 fn find_claude() -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-    std::env::split_paths(&std::env::var_os("PATH")?)
-        .map(|d| d.join("claude"))
-        .find(|p| {
-            p.is_absolute()
-                && std::fs::metadata(p)
-                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        })
+    find_cli("claude")
 }
 
-/// The vendor CLIs on PATH that a runner-bound sign-in can drive, at the versions the harness
-/// adapters were written against.
+/// Where the agent driver finds a tool (`cli::agents`): the runner's own install (`aitools`, the
+/// tested versions) first, then `~/.local/bin`, then `PATH`.
+fn find_cli(name: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/bin"));
+    let path = std::env::var_os("PATH");
+    let dirs = super::aitools::bin_dir()
+        .into_iter()
+        .chain(home)
+        .chain(path.iter().flat_map(std::env::split_paths));
+    first_executable(dirs, name)
+}
+
+fn first_executable(dirs: impl IntoIterator<Item = PathBuf>, name: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    dirs.into_iter().map(|d| d.join(name)).find(|p| {
+        p.is_absolute()
+            && std::fs::metadata(p)
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    })
+}
+
+/// The vendor CLIs that a runner-bound sign-in can drive ([`find_cli`]), at the versions the
+/// harness adapters were written against.
 fn bound_clis() -> Vec<bound::BoundCli> {
-    let find = |name: &str| {
-        use std::os::unix::fs::PermissionsExt;
-        std::env::split_paths(&std::env::var_os("PATH")?)
-            .map(|d| d.join(name))
-            .find(|p| {
-                p.is_absolute()
-                    && std::fs::metadata(p)
-                        .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-            })
-    };
+    let find = find_cli;
     [
         ("codex", ainkrad_harness::codex::VERSION),
         ("opencode", ainkrad_harness::opencode::VERSION),
