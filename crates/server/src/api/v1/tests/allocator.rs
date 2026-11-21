@@ -117,6 +117,7 @@ impl W {
             value: TOKEN,
             runners: std::slice::from_ref(&self.vm.id),
             cap: None,
+            display_name: None,
         };
         let by = &self.fx.dev.id;
         let sealer = &self.sealer;

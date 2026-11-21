@@ -62,6 +62,8 @@ pub struct Account {
     pub id: i64,
     pub provider: String,
     pub label: String,
+    /// The free-text name a person gave it ([`display_name`]); `None`: clients show the provider's.
+    pub display_name: Option<String>,
     /// The provider's base URL when the account was stored; later edits of the definition do not
     /// move it (KAN-429).
     pub base_url: String,
@@ -100,9 +102,11 @@ pub struct NewAccount<'a> {
     pub runners: &'a [String],
     /// Default [`DEFAULT_CAP`].
     pub cap: Option<i64>,
+    /// Already checked by [`display_name`].
+    pub display_name: Option<&'a str>,
 }
 
-const COLUMNS: &str = "a.id, a.provider, a.label, a.secret_name, a.masked_tail, a.base_url, a.state, \
+const COLUMNS: &str = "a.id, a.provider, a.label, a.display_name, a.secret_name, a.masked_tail, a.base_url, a.state, \
     a.state_reason, a.state_until, a.cap, a.owner, a.last_used_at, a.created_at, a.updated_at, \
     a.session_max_tokens, a.session_max_usd_micros, a.last_test_at, a.last_test_result, \
     COALESCE(s.runners, '[]') AS runners";
@@ -120,6 +124,7 @@ fn row(r: SqliteRow) -> Result<Account, sqlx::Error> {
         id: r.try_get("id")?,
         provider: r.try_get("provider")?,
         label: r.try_get("label")?,
+        display_name: r.try_get("display_name")?,
         secret_name: r.try_get("secret_name")?,
         masked_tail: r.try_get("masked_tail")?,
         base_url: r.try_get("base_url")?,
@@ -145,6 +150,59 @@ pub fn valid_label(s: &str) -> bool {
         && s.as_bytes()[0].is_ascii_lowercase()
         && s.bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
+}
+
+/// The most characters a display name may have.
+pub const MAX_DISPLAY_NAME: usize = 64;
+
+/// A display name as stored: trimmed, at most [`MAX_DISPLAY_NAME`] characters, no control
+/// characters; blank is no name (`None`). Capitals, spaces and any script are fine.
+pub fn display_name(s: Option<&str>) -> Result<Option<String>, Error> {
+    let Some(s) = s.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    if s.chars().count() > MAX_DISPLAY_NAME {
+        return refused(
+            "bad_request",
+            format!("a name is at most {MAX_DISPLAY_NAME} characters"),
+        );
+    }
+    if s.chars().any(char::is_control) {
+        return refused("bad_request", "a name has no control characters");
+    }
+    Ok(Some(s.to_owned()))
+}
+
+/// Names the account (`None` clears the name, and clients show the provider's), audited
+/// `account.renamed`.
+pub async fn rename(
+    pool: &SqlitePool,
+    id: i64,
+    name: Option<&str>,
+    by_device: &str,
+    actor: AuditActor,
+    now: &str,
+) -> Result<Account, Error> {
+    let name = display_name(name)?;
+    let mut tx = super::begin_write(pool).await?;
+    let old = find(&mut tx, id).await?;
+    sqlx::query("UPDATE core_accounts SET display_name = ?, updated_at = ? WHERE id = ?")
+        .bind(&name)
+        .bind(now)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    audit(
+        &mut tx,
+        actor,
+        "account.renamed",
+        id,
+        json!({"label": old.label, "from": old.display_name, "to": name, "by_device": by_device}),
+    )
+    .await?;
+    let a = find(&mut tx, id).await?;
+    tx.commit().await?;
+    Ok(a)
 }
 
 fn check_cap(cap: i64) -> Result<(), Error> {
@@ -500,5 +558,20 @@ mod tests {
             !valid_label("") && !valid_label("Main") && !valid_label("../x") && !valid_label("a b")
         );
         assert!(!valid_label(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn display_names_are_trimmed_free_text() {
+        let ok = |s: &str| display_name(Some(s)).ok().flatten();
+        assert_eq!(ok("  Work Claude "), Some("Work Claude".to_owned()));
+        assert_eq!(
+            ok("Google Gemini (EU) · 2"),
+            Some("Google Gemini (EU) · 2".to_owned())
+        );
+        assert_eq!(ok(&"é".repeat(64)).map(|s| s.chars().count()), Some(64));
+        assert_eq!(display_name(Some("   ")).unwrap(), None);
+        assert_eq!(display_name(None).unwrap(), None);
+        assert!(display_name(Some(&"a".repeat(65))).is_err());
+        assert!(display_name(Some("a\nb")).is_err() && display_name(Some("a\u{7}b")).is_err());
     }
 }

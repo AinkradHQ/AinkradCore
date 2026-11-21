@@ -23,6 +23,7 @@ pub(super) async fn second(core: &super::Core, runner: &str) -> accounts::Accoun
         value: "throwaway-account-value-two-77d0be",
         runners: &runners,
         cap: None,
+        display_name: None,
     };
     accounts::create(
         &core.app.pool,

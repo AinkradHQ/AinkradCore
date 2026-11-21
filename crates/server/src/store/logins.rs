@@ -44,6 +44,8 @@ pub struct Login {
     pub id: String,
     pub provider: String,
     pub label: String,
+    /// The name the account it makes gets (checked by `accounts::display_name`).
+    pub display_name: Option<String>,
     pub runner: String,
     pub device: String,
     pub state: String,
@@ -78,6 +80,7 @@ fn row(r: &SqliteRow) -> Result<Login, sqlx::Error> {
         id: r.try_get("id")?,
         provider: r.try_get("provider")?,
         label: r.try_get("label")?,
+        display_name: r.try_get("display_name")?,
         runner: r.try_get("runner")?,
         device: r.try_get("device")?,
         state: r.try_get("state")?,
@@ -91,7 +94,7 @@ fn row(r: &SqliteRow) -> Result<Login, sqlx::Error> {
     })
 }
 
-const COLUMNS: &str = "id, provider, label, runner, device, state, url, code, account_id, reason, \
+const COLUMNS: &str = "id, provider, label, display_name, runner, device, state, url, code, account_id, reason, \
                        created_at, updated_at, expires_at";
 
 async fn find(conn: &mut SqliteConnection, id: &str) -> Result<Option<Login>, sqlx::Error> {
@@ -158,7 +161,19 @@ pub async fn audit_input(
 /// Starts a login in `starting`, at `now` (unix seconds). One open login per label, a few at once.
 pub async fn create(
     pool: &SqlitePool,
+    args: (&str, &str, &str),
+    device: &str,
+    actor: AuditActor,
+    now: i64,
+) -> Result<Login, Error> {
+    create_named(pool, args, None, device, actor, now).await
+}
+
+/// [`create`], with the name the account it makes gets.
+pub async fn create_named(
+    pool: &SqlitePool,
     (provider, label, runner): (&str, &str, &str),
+    display_name: Option<&str>,
     device: &str,
     actor: AuditActor,
     now: i64,
@@ -185,12 +200,13 @@ pub async fn create(
     let (at, until) = (iso_of_unix(now), iso_of_unix(now + TTL_SECS));
     let id = crate::auth::crypto::random_id("lg_");
     sqlx::query(
-        "INSERT INTO core_account_logins (id, provider, label, runner, device, state, created_at, \
-         updated_at, expires_at) VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?)",
+        "INSERT INTO core_account_logins (id, provider, label, display_name, runner, device, state, \
+         created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?)",
     )
     .bind(&id)
     .bind(provider)
     .bind(label)
+    .bind(display_name)
     .bind(runner)
     .bind(device)
     .bind(&at)

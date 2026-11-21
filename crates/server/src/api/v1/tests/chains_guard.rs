@@ -235,6 +235,7 @@ async fn no_chain_route_and_no_event_or_audit_row_holds_a_key() {
         value: KEY,
         runners: &[],
         cap: None,
+        display_name: None,
     };
     let account = acc::create(
         &fx.app.pool,

@@ -40,6 +40,7 @@ import ainkrad.client.models.ReplaceKey
 import ainkrad.client.models.SessionLimits
 import ainkrad.client.models.SetCap
 import ainkrad.client.models.SetModelAllowed
+import ainkrad.client.models.SetName
 import ainkrad.client.models.SetState
 
 import ainkrad.client.infrastructure.*
@@ -992,6 +993,40 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.PUT,
             "/api/v1/accounts/{id}/models/{model}".replace("{" + "id" + "}", "$id").replace("{" + "model" + "}", "$model"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * PUT /api/v1/accounts/{id}/name
+        * 
+        * 
+         * @param id The account&#39;s id 
+         * @param setName  
+         * @return ProviderAccount
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun setAccountName(id: kotlin.String, setName: SetName): HttpResponse<ProviderAccount> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = setName
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.PUT,
+            "/api/v1/accounts/{id}/name".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

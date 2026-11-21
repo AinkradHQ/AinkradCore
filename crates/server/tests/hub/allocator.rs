@@ -180,6 +180,7 @@ async fn a_launch_that_refuses_the_picked_account_picks_another() {
         value: "throwaway-account-value-two-77d0be",
         runners: std::slice::from_ref(&runner),
         cap: None,
+        display_name: None,
     };
     let b = accounts::create(
         &core.app.pool,
@@ -362,6 +363,7 @@ async fn a_refusal_that_is_not_about_the_account_ends_the_session_and_never_move
         value: "throwaway-account-value-two-77d0be",
         runners: std::slice::from_ref(&runner),
         cap: None,
+        display_name: None,
     };
     let b = accounts::create(
         &core.app.pool,
@@ -399,6 +401,7 @@ async fn a_re_pick_across_providers_says_so_in_the_state_event() {
         value: "throwaway-account-value-two-77d0be",
         runners: std::slice::from_ref(&runner),
         cap: None,
+        display_name: None,
     };
     let c = accounts::create(
         &core.app.pool,

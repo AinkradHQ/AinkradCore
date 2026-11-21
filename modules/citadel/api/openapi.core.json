@@ -2531,6 +2531,7 @@
           "account.login_failed",
           "account.login_started",
           "account.model_allowed_set",
+          "account.renamed",
           "account.restored",
           "account.secret_replaced",
           "account.session_limits_set",
@@ -8981,6 +8982,13 @@
         "additionalProperties": false,
         "description": "Starts a sign-in.",
         "properties": {
+          "display_name": {
+            "description": "The new account's free-text name (as `createAccount` takes it); default none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "label": {
             "description": "The new account's label.",
             "type": "string"
@@ -9284,6 +9292,13 @@
             "format": "int64",
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "display_name": {
+            "description": "A free-text name, trimmed, at most 64 characters, no control characters; default none.",
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -11854,6 +11869,13 @@
           },
           "created_at": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "display_name": {
+            "description": "The free-text name a person gave it (`Work Claude`); absent: show the provider's name.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "health": {
             "$ref": "#/components/schemas/AccountHealth",
@@ -14705,6 +14727,19 @@
         ],
         "type": "object"
       },
+      "SetName": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "description": "Trimmed, at most 64 characters, no control characters; `null` or blank clears it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "SetPrice": {
         "properties": {
           "cache_per_mtok_micro": {
@@ -17208,7 +17243,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.95.0"
+    "version": "1.96.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -18212,6 +18247,69 @@
               }
             },
             "description": "Allows or switches off the model for the account (audited as `account.model_allowed_set`); a chain, the AI order and a gateway grant refuse a switched-off model. Needs a step-up. 404 for no such account"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/accounts/{id}/name": {
+      "put": {
+        "operationId": "setAccountName",
+        "parameters": [
+          {
+            "description": "The account's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetName"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderAccount"
+                }
+              }
+            },
+            "description": "The account's free-text name; `null` or blank clears it (audited as `account.renamed`). 400 for a name over 64 characters or with a control character"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

@@ -98,6 +98,7 @@ async fn user_provider(core: &Core, runner: &str) -> accounts::Account {
         value: OR,
         runners: &runners,
         cap: None,
+        display_name: None,
     };
     let sealer = core.app.secrets.as_deref().unwrap();
     let account = accounts::create(

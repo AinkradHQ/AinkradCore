@@ -27,6 +27,7 @@ async fn account(fx: &Fx, provider: &str, label: &str) -> i64 {
         value: "throwaway-pool-value-5a91c3d4",
         runners: &[],
         cap: None,
+        display_name: None,
     };
     acc::create(&fx.app.pool, &s, &new, &fx.dev.id, BY, NOW)
         .await

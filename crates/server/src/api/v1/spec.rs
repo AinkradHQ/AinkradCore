@@ -143,6 +143,7 @@ use super::{
         accounts::replace_secret,
         accounts::set_state,
         accounts::set_cap,
+        accounts::set_name,
         accounts::set_session_limits,
         accounts::list_models,
         accounts::set_model_allowed,

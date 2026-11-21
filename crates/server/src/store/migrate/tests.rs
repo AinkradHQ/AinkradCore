@@ -160,7 +160,8 @@ async fn a_fresh_database_records_the_baseline_and_a_second_run_is_a_no_op() {
             (60, "ws_path_run_kind"),
             (61, "decisions"),
             (62, "hw_cache_prepared"),
-            (63, "hw_first_capacity")
+            (63, "hw_first_capacity"),
+            (64, "account_display_name")
         ]
     );
     let sum: Vec<u8> =

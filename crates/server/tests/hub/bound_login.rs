@@ -57,7 +57,7 @@ async fn up(name: &str, bound_cap: bool) -> W {
 }
 
 async fn to_open_url(w: &mut W, label: &str) -> (logins::Login, u64) {
-    let l = login::start(&w.core.app, &w.who, "codex-sub", label, None)
+    let l = login::start(&w.core.app, &w.who, "codex-sub", label, None, None)
         .await
         .unwrap_or_else(|e| panic!("{:?}", refusal::<()>(Err(e))));
     let (stream, cmd) = command(&mut w.fake).await;
@@ -178,11 +178,11 @@ async fn a_failed_runner_ends_the_login_and_makes_no_account() {
 #[tokio::test]
 async fn a_runner_without_the_bound_login_is_not_picked_and_a_foreign_page_or_code_is_refused() {
     let w = up("bound-nocap", false).await;
-    let r = login::start(&w.core.app, &w.who, "codex-sub", "x", None).await;
+    let r = login::start(&w.core.app, &w.who, "codex-sub", "x", None, None).await;
     assert_eq!(refusal(r).0, "no_runner");
 
     let mut w = up("bound-badurl", true).await;
-    let l = login::start(&w.core.app, &w.who, "codex-sub", "y", None)
+    let l = login::start(&w.core.app, &w.who, "codex-sub", "y", None, None)
         .await
         .unwrap();
     let (stream, _) = command(&mut w.fake).await;
@@ -202,7 +202,7 @@ async fn a_runner_without_the_bound_login_is_not_picked_and_a_foreign_page_or_co
 #[tokio::test]
 async fn an_opencode_login_is_guided_through_a_screen_and_typed_lines_and_stays_on_its_runner() {
     let mut w = up("bound-guided", true).await;
-    let l = login::start(&w.core.app, &w.who, "opencode-sub", "oc", None)
+    let l = login::start(&w.core.app, &w.who, "opencode-sub", "oc", None, None)
         .await
         .unwrap();
     let (stream, cmd) = command(&mut w.fake).await;
@@ -321,7 +321,7 @@ async fn a_codex_login_has_no_screen_and_takes_no_typed_line() {
 #[tokio::test]
 async fn an_antigravity_login_is_guided_and_only_googles_pages_are_taken() {
     let mut w = up("bound-agy", true).await;
-    let l = login::start(&w.core.app, &w.who, "agy-sub", "ag", None)
+    let l = login::start(&w.core.app, &w.who, "agy-sub", "ag", None, None)
         .await
         .unwrap();
     let (stream, cmd) = command(&mut w.fake).await;
@@ -370,7 +370,7 @@ async fn an_antigravity_login_is_guided_and_only_googles_pages_are_taken() {
     );
 
     // Another provider's page is refused for this one.
-    let l2 = login::start(&w.core.app, &w.who, "agy-sub", "ag2", None)
+    let l2 = login::start(&w.core.app, &w.who, "agy-sub", "ag2", None, None)
         .await
         .unwrap();
     let (stream, _) = command(&mut w.fake).await;

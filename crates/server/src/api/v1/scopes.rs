@@ -142,6 +142,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("PUT", "/api/v1/accounts/{id}/secret", "admin"),
     ("PUT", "/api/v1/accounts/{id}/state", "admin"),
     ("PUT", "/api/v1/accounts/{id}/cap", "admin"),
+    ("PUT", "/api/v1/accounts/{id}/name", "admin"),
     ("PUT", "/api/v1/accounts/{id}/session-limits", "admin"),
     ("POST", "/api/v1/accounts/{id}/test", "admin"),
     ("POST", "/api/v1/accounts/{id}/check", "admin"),

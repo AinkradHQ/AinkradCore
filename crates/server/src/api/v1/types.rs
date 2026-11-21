@@ -332,7 +332,11 @@
 ///    `JobLocal` | 409 `interactive`), `GET /jobs` (`listJobs`, `project`, `session`, `state`, `limit`), `GET /jobs/{id}`
 ///    (`getJob`), `GET /jobs/{id}/stream` (`streamJob`, WebSocket), `POST /jobs/{id}/signal` (`signalJob`, `JobSignal`),
 ///    `DELETE /jobs/{id}` (`cancelJob`). Stubs until E15-1 and E15-3. Runner protocol 2.1: `job.run`, `sync.*`, `gateway.call`.
-pub const API_MINOR: u32 = 95;
+/// 96: account names. `ProviderAccount.display_name` (free text, trimmed, at most 64 characters, no control
+///    characters; absent when unnamed), `display_name` on `NewProviderAccount` (`createAccount`) and `NewLogin`
+///    (`startAccountLogin`, it lands on the account the sign-in makes), and `PUT /accounts/{id}/name` (`setAccountName`,
+///    body `SetName {display_name}`, `admin`, not destructive, audit `account.renamed`). Migration 64.
+pub const API_MINOR: u32 = 96;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

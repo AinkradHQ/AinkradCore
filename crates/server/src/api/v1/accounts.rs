@@ -273,6 +273,7 @@ pub async fn create(
         value: &b.value,
         runners: b.runners.as_deref().unwrap_or_default(),
         cap: b.cap,
+        display_name: b.display_name.as_deref(),
     };
     let user = crate::store::chains::user_of(&app.pool, &me.device.id).await?;
     let place = Placement {
@@ -377,6 +378,32 @@ pub async fn set_cap(
         &app.pool,
         num(&id, "account")?,
         b.cap,
+        &me.device.id,
+        BY,
+        &app.clock.now(),
+    )
+    .await
+    .map_err(err)?;
+    Ok(Json(a.into()))
+}
+
+#[utoipa::path(put, path = "/api/v1/accounts/{id}/name", operation_id = "setAccountName",
+    tag = "accounts", params(("id" = String, Path, description = "The account's id")),
+    request_body = SetName,
+    responses((status = 200, description = "The account's free-text name; `null` or blank clears \
+        it (audited as `account.renamed`). 400 for a name over 64 characters or with a control \
+        character", body = ProviderAccount)))]
+pub async fn set_name(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> ApiResult<ProviderAccount> {
+    let b: SetName = parse(&body)?;
+    let a = acc::rename(
+        &app.pool,
+        num(&id, "account")?,
+        b.display_name.as_deref(),
         &me.device.id,
         BY,
         &app.clock.now(),

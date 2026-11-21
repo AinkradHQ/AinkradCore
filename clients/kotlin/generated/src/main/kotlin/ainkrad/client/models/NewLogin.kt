@@ -25,6 +25,7 @@ import kotlinx.serialization.Contextual
  *
  * @param label The new account's label.
  * @param provider A subscription provider: `claude-sub` (a pasted approval code), or the runner-bound `codex-sub` (a device code; the login stays on that runner and no token comes back).
+ * @param displayName The new account's free-text name (as `createAccount` takes it); default none.
  * @param runner A runner device id; absent, the best ready runner that has the provider's harness. A runner-bound provider keeps the login on the runner it runs on: the account is pinned to it.
  */
 @Serializable
@@ -38,6 +39,10 @@ data class NewLogin (
     /* A subscription provider: `claude-sub` (a pasted approval code), or the runner-bound `codex-sub` (a device code; the login stays on that runner and no token comes back). */
     @SerialName(value = "provider")
     val provider: kotlin.String,
+
+    /* The new account's free-text name (as `createAccount` takes it); default none. */
+    @SerialName(value = "display_name")
+    val displayName: kotlin.String? = null,
 
     /* A runner device id; absent, the best ready runner that has the provider's harness. A runner-bound provider keeps the login on the runner it runs on: the account is pinned to it. */
     @SerialName(value = "runner")

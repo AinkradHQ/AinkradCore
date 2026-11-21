@@ -28,6 +28,7 @@ mod account_remove;
 mod account_secrets;
 mod accounts_api;
 mod accounts_gateway;
+mod accounts_name;
 mod accounts_review;
 mod accounts_store;
 mod agents;

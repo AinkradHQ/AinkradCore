@@ -148,6 +148,11 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
         ),
         (
             "PUT",
+            "/api/v1/accounts/{id}/name",
+            "a name only: it grants, widens or removes nothing",
+        ),
+        (
+            "PUT",
             "/api/v1/accounts/{id}/session-limits",
             "D-4: a normal write; only the danger list asks Touch ID, only code-running routes need the unlock",
         ),
