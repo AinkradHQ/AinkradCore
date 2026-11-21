@@ -84,7 +84,9 @@ pub(crate) async fn step(app: &App, b: &Brain) -> Result<usize, ApiError> {
             st.close().await;
             continue;
         }
-        if state == "off" && crate::tidy::prepare(b, &st, &run).await? {
+        // Without the model, or when the model's own tidy was declined as unbelievable, the Core still
+        // tidies by names and sizes: the person never gets the raw folder list.
+        if crate::tidy::prepare(b, &st, &run).await? {
             changed += 1;
         }
         changed += resort_unsorted(app, b, &run, &st).await?;

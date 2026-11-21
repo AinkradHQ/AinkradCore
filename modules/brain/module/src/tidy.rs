@@ -385,9 +385,12 @@ pub(crate) async fn prepare(b: &Brain, st: &SqlitePool, run: &str) -> Result<boo
     {
         return Ok(false);
     }
-    let planned: i64 = sqlx::query_scalar("SELECT count(*) FROM tidy")
-        .fetch_one(st)
-        .await?;
+    // A tidy that was applied (or that the person undid) stays as it is; none yet, or one the model declined, gets the
+    // names-only tidy.
+    let planned: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM tidy WHERE state IN ('applied', 'undone')")
+            .fetch_one(st)
+            .await?;
     if planned == 0 {
         let ids: Vec<String> = sqlx::query_scalar(
             "SELECT id FROM proposals WHERE state = 'proposed' AND id != ? ORDER BY id",
@@ -441,9 +444,10 @@ pub(crate) async fn view(st: &SqlitePool, run: &str) -> Result<Option<AiTidy>, A
 
 /// Whether an AI tidy is applied to the run's proposal now.
 pub(crate) async fn applied(st: &SqlitePool) -> Result<bool, ApiError> {
-    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM tidy WHERE state = 'applied'")
-        .fetch_one(st)
-        .await?;
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM tidy WHERE state IN ('applied', 'undone')")
+            .fetch_one(st)
+            .await?;
     Ok(n > 0)
 }
 
