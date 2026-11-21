@@ -245,7 +245,7 @@ pub fn default_hosts() -> String {
 }
 
 /// `set` (the env value, `None` when unset), or [`default_hosts`].
-fn hosts_or_default(set: Option<String>) -> String {
+pub(crate) fn hosts_or_default(set: Option<String>) -> String {
     set.unwrap_or_else(default_hosts)
 }
 

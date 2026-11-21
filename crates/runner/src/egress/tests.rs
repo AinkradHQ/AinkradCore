@@ -1,6 +1,7 @@
 //! The proxy against hostile clients and hostile answers, without a sandbox. The sandbox pairs
 //! (each vector once with the sandbox on, once off) are in `tests/egress_netns.rs`.
 
+use super::policy::hosts_or_default;
 use super::*;
 use std::collections::VecDeque;
 use std::sync::Mutex;
