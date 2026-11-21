@@ -8,7 +8,10 @@
 #   4. install: install.sh --from <url> (it re-verifies the signed SHA256SUMS and every file's hash);
 #   5. health: start Core, it must stay active and answer /healthz;
 #   6. any failure after 3: put the binaries and the database back, start Core, report "rolled_back".
-# `auto` (the timer, hourly) only records what is available, and installs only between 02:00 and 05:00 local time.
+# `auto` (the timer, hourly) only records what is available, and installs only between 02:00 and 05:00 local time; outside it
+# status.json carries a `wait` event and the journal says when it will install.
+# Every Core-mode run also makes sure the pinned local model is installed (model.sh, as the Core user), unless
+# /etc/ainkrad/no-model opts out; a newly installed model restarts the Core so it loads it. A model failure never fails the update.
 # Progress is /var/lib/ainkrad-update/status.json (the Core reads it for the app).
 # `runner` (E12-4, started by ainkrad-update-runner.path when the runner drops <runner state>/update-request): the same steps for
 # the runner's programs on this host: no Core stop and no database; after the install it restarts ainkrad-runner.service and
@@ -23,9 +26,10 @@ kind=core svc=ainkrad-core.service vbin=ainkrad-core-server statusf=status.json 
 # Core's /var/lib/ainkrad: the Core user must never be able to plant a path, a symlink or a status file the updater trusts.
 LIB=/usr/local/lib/ainkrad PREFIX=/usr/local STATE=/var/lib/ainkrad-update HOMEDIR=/var/lib/ainkrad/core
 BASE=https://ainkrad.io/releases CHANNEL=stable SYSTEMCTL=/usr/bin/systemctl RUNNER_STATE=/var/lib/ainkrad-runner/core
+CORE_ENV=/etc/ainkrad/core.env NO_MODEL=/etc/ainkrad/no-model
 [ -r /etc/ainkrad/update.conf ] && . /etc/ainkrad/update.conf   # root-owned: BASE=, CHANNEL=
 # Test hooks only (a non-root run against a scratch tree); never set in the unit.
-if [ "${AINKRAD_UPDATE_TEST:-}" = 1 ]; then LIB=${UPD_LIB:-$LIB} PREFIX=${UPD_PREFIX:-$PREFIX} STATE=${UPD_STATE:-$STATE} HOMEDIR=${UPD_HOME:-$HOMEDIR} BASE=${UPD_BASE:-$BASE} SYSTEMCTL=${UPD_SYSTEMCTL:-$SYSTEMCTL} RUNNER_STATE=${UPD_RUNNER_STATE:-$RUNNER_STATE} HEALTH_URL=${UPD_HEALTH:-} WINDOW=${UPD_WINDOW:-}; fi
+if [ "${AINKRAD_UPDATE_TEST:-}" = 1 ]; then LIB=${UPD_LIB:-$LIB} PREFIX=${UPD_PREFIX:-$PREFIX} STATE=${UPD_STATE:-$STATE} HOMEDIR=${UPD_HOME:-$HOMEDIR} BASE=${UPD_BASE:-$BASE} SYSTEMCTL=${UPD_SYSTEMCTL:-$SYSTEMCTL} RUNNER_STATE=${UPD_RUNNER_STATE:-$RUNNER_STATE} HEALTH_URL=${UPD_HEALTH:-} WINDOW=${UPD_WINDOW:-} CORE_ENV=${UPD_CORE_ENV:-/dev/null} NO_MODEL=${UPD_NO_MODEL:-/nonexistent}; fi
 umask 022
 if [ "$recover" = 1 ]; then "$SYSTEMCTL" start "$svc" || true; exit 0; fi
 # The request file only says "go": removed BEFORE the lock, so a request that arrives while an update runs is not left behind to
@@ -61,6 +65,18 @@ PY
 fail() { put failed 0 "$1"; echo "update: $1" >&2; exit 1; }
 for c in curl minisign python3; do command -v "$c" >/dev/null || fail "missing_$c"; done
 
+if [ "$kind" = core ] && [ ! -e "$NO_MODEL" ] && [ -x "$LIB/model.sh" ]; then
+  # As the Core user: the model directory is inside its home, where root must not follow a link it could plant.
+  as=(setpriv --reuid=ainkrad --regid=ainkrad --init-groups); [ "${AINKRAD_UPDATE_TEST:-}" = 1 ] && as=()
+  if m=$(${as[@]+"${as[@]}"} "$LIB/model.sh" "$HOMEDIR/models/e5-small" 2>"$STATE/model.log"); then
+    echo "update: $m"
+    # The Core looks for the model only at start.
+    [ "$m" != "model: installed" ] || "$SYSTEMCTL" try-restart "$svc" || echo "update: could not restart $svc for the model" >&2
+  else
+    echo "update: the local model did not install: $(tail -1 "$STATE/model.log")" >&2
+  fi
+fi
+
 cur=$("$PREFIX/bin/$vbin" --version 2>/dev/null | awk '{print $NF}')
 [[ $cur =~ $verre ]] || fail "unknown_version"
 from=$cur
@@ -84,7 +100,11 @@ if ! gt "$new" "$cur"; then put idle 0; echo "update: up to date ($cur)"; exit 0
 avail=$new; to=$new
 hour=$(date +%H); hour=$((10#$hour))
 # `urgent` (the release says the app now needs this Core) may install off-window: no day-long lockout of a newer app.
-if [ "$mode" = auto ] && [ "$urgent" != 1 ] && ! { [ -n "${WINDOW:-}" ] || { [ "$hour" -ge 2 ] && [ "$hour" -lt 5 ]; }; }; then put idle 0; exit 0; fi
+if [ "$mode" = auto ] && [ "$urgent" != 1 ] && ! { [ -n "${WINDOW:-}" ] || { [ "$hour" -ge 2 ] && [ "$hour" -lt 5 ]; }; }; then
+  ev wait "Installs between 02:00 and 05:00"; put idle 0
+  echo "update: $new is available; auto installs it between 02:00 and 05:00 local time (now ${hour}h). Now: systemctl start ainkrad-update@now"
+  exit 0
+fi
 
 # 3. snapshot
 ev snapshot "Snapshot taken"; put snapshot 0.12
@@ -140,10 +160,15 @@ if [ "$kind" = runner ]; then "$SYSTEMCTL" restart "$svc" || back start_failed; 
 healthy() {
   "$SYSTEMCTL" is-active --quiet "$svc" || return 1
   [ "$kind" = core ] || return 0   # a runner: active and staying active is the check (it has no health URL)
-  local l=${AINKRAD_LISTEN:-}; [ -r /etc/ainkrad/core.env ] && l=$(sed -n 's/^AINKRAD_LISTEN=//p' /etc/ainkrad/core.env | tail -1)
+  local l=${AINKRAD_LISTEN:-} h; [ -r "$CORE_ENV" ] && l=$(sed -n 's/^AINKRAD_LISTEN=//p' "$CORE_ENV" | tail -1)
   if [ -n "${HEALTH_URL:-}" ]; then curl -fsS --max-time 3 "$HEALTH_URL" 2>/dev/null | grep -qx ok; return; fi
   case $l in
-    public) curl -fksS --max-time 3 https://127.0.0.1/healthz 2>/dev/null | grep -qx ok ;;
+    # The Core answers only its own host name (a 403 unknown_host otherwise), so ask for that name, resolved to loopback.
+    # -k: a staging ACME certificate is not trusted, and on loopback the name is all this checks.
+    public)
+      h=$(sed -n 's/^AINKRAD_HOSTNAME=//p' "$CORE_ENV" 2>/dev/null | tail -1)
+      [[ $h =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+      curl -fksS --max-time 3 --resolve "$h:443:127.0.0.1" "https://$h/healthz" 2>/dev/null | grep -qx ok ;;
     loopback:[0-9]*) curl -fsS --max-time 3 "http://127.0.0.1:${l#loopback:}/healthz" 2>/dev/null | grep -qx ok ;;
     *) return 0 ;;   # a unix socket: "active" is all we can check from here
   esac
@@ -152,6 +177,10 @@ ok=0; for _ in $(seq 1 "${UPD_HEALTH_TRIES:-20}"); do if healthy; then ok=$((ok 
 [ "$ok" -ge "${UPD_HEALTH_NEED:-5}" ] || back health_failed
 # a combined host: the runner was not touched (--only core), but it must still be up after the Core came back
 if [ "$runner_was_active" = 1 ] && ! "$SYSTEMCTL" is-active --quiet ainkrad-runner.service; then back runner_down; fi
+# 6. the updater's own scripts from the release just verified (its signed installer bundle), so the next run uses them. Not a
+# reason to roll back: the new version is installed and healthy; the old scripts stay until the next release.
+"$LIB/install.sh" --from "$url" --pubkey "$LIB/ainkrad-release.pub" --scripts "$LIB" >>"$STATE/install.log" 2>&1 ||
+  echo "update: the updater scripts were not refreshed (see $STATE/install.log)" >&2
 
 if [ "$kind" = core ]; then lbl=Core; else lbl=Runner; fi; ev done "$lbl is on $new"; avail=''; put done 1
 # keep the two newest snapshots

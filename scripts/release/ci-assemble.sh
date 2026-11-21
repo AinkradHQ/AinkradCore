@@ -16,7 +16,7 @@ for t in linux-arm64 linux-x86_64; do
 done
 $here/mac-zip.sh "$build/macos-arm64" "$out" "$ver"
 git archive --format=tar.gz --prefix="ainkrad-core-installer-$ver/" -o "$out/ainkrad-core-installer-$ver.tar.gz" HEAD \
-  scripts/install.sh scripts/install scripts/host scripts/release/install.sh scripts/release/update.sh scripts/release/ainkrad-release.pub deploy/install-core-linux.sh deploy/install-linux.sh deploy/systemd deploy/shell
+  scripts/install.sh scripts/install scripts/host scripts/release/install.sh scripts/release/update.sh scripts/release/model.sh scripts/release/ainkrad-release.pub deploy/install-core-linux.sh deploy/install-linux.sh deploy/systemd deploy/shell
 git show HEAD:scripts/get.sh | sed "s/^\( *\)MIN_VERSION=[0-9.]*/\1MIN_VERSION=$ver/" > "$out/get.sh"; chmod 755 "$out/get.sh"
 grep -q "^ *MIN_VERSION=$ver " "$out/get.sh" || { echo "ci-assemble: get.sh was not stamped with $ver" >&2; exit 1; }
 $here/sign.sh "$out" "$key"
