@@ -28755,7 +28755,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Records that a check ran. Until a release feed exists (E12) the status is `feed_unavailable` and no version is compared. Needs `admin`
+            /// Fetches the release manifest (`/etc/ainkrad/update.conf` `BASE`, default `https://ainkrad.io/releases`), verifies its minisign signature with the pinned release key and compares its channel's Core version with this one. An unsigned or unverifiable manifest is never read: `feed_unavailable` with a `reason`. Records that a check ran. Needs `admin`
             ///
             /// - Remark: Generated from `#/paths//api/v1/core/update/check/post(checkCoreUpdate)/responses/200`.
             ///

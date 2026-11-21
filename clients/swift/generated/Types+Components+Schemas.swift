@@ -13433,7 +13433,17 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/UpdateCheck/latest_version`.
             public var latestVersion: Swift.String?
-            /// `feed_unavailable`: no release feed is set up on this Core yet, so nothing was compared.
+            /// Why the feed is unavailable: `no_manifest`, `bad_signature`, `bad_key`, `bad_manifest`, `manifest_expired`
+            /// or `bad_base`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpdateCheck/reason`.
+            public var reason: Swift.String?
+            /// The runner version the feed names (runners update to it with `POST /runners/{id}/update`).
+            ///
+            /// - Remark: Generated from `#/components/schemas/UpdateCheck/runner_latest_version`.
+            public var runnerLatestVersion: Swift.String?
+            /// `up_to_date`, `available` (`latest_version` is newer; install it with `POST /system/update`) or
+            /// `feed_unavailable` (the signed feed could not be fetched or did not verify: `reason`).
             ///
             /// - Remark: Generated from `#/components/schemas/UpdateCheck/status`.
             public var status: Swift.String
@@ -13443,22 +13453,30 @@ extension Components {
             ///   - checkedAt: When the check ran.
             ///   - currentVersion: The version this Core runs.
             ///   - latestVersion: A newer version, when a feed says so.
-            ///   - status: `feed_unavailable`: no release feed is set up on this Core yet, so nothing was compared.
+            ///   - reason: Why the feed is unavailable: `no_manifest`, `bad_signature`, `bad_key`, `bad_manifest`, `manifest_expired`
+            ///   - runnerLatestVersion: The runner version the feed names (runners update to it with `POST /runners/{id}/update`).
+            ///   - status: `up_to_date`, `available` (`latest_version` is newer; install it with `POST /system/update`) or
             public init(
                 checkedAt: Components.Schemas.Timestamp,
                 currentVersion: Swift.String,
                 latestVersion: Swift.String? = nil,
+                reason: Swift.String? = nil,
+                runnerLatestVersion: Swift.String? = nil,
                 status: Swift.String
             ) {
                 self.checkedAt = checkedAt
                 self.currentVersion = currentVersion
                 self.latestVersion = latestVersion
+                self.reason = reason
+                self.runnerLatestVersion = runnerLatestVersion
                 self.status = status
             }
             public enum CodingKeys: String, CodingKey {
                 case checkedAt = "checked_at"
                 case currentVersion = "current_version"
                 case latestVersion = "latest_version"
+                case reason
+                case runnerLatestVersion = "runner_latest_version"
                 case status
             }
         }

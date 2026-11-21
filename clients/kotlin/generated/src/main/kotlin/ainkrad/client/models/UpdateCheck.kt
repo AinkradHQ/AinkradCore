@@ -25,8 +25,10 @@ import kotlinx.serialization.Contextual
  *
  * @param checkedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param currentVersion The version this Core runs.
- * @param status `feed_unavailable`: no release feed is set up on this Core yet, so nothing was compared.
+ * @param status `up_to_date`, `available` (`latest_version` is newer; install it with `POST /system/update`) or `feed_unavailable` (the signed feed could not be fetched or did not verify: `reason`).
  * @param latestVersion A newer version, when a feed says so.
+ * @param reason Why the feed is unavailable: `no_manifest`, `bad_signature`, `bad_key`, `bad_manifest`, `manifest_expired` or `bad_base`.
+ * @param runnerLatestVersion The runner version the feed names (runners update to it with `POST /runners/{id}/update`).
  */
 @Serializable
 
@@ -40,13 +42,21 @@ data class UpdateCheck (
     @SerialName(value = "current_version")
     val currentVersion: kotlin.String,
 
-    /* `feed_unavailable`: no release feed is set up on this Core yet, so nothing was compared. */
+    /* `up_to_date`, `available` (`latest_version` is newer; install it with `POST /system/update`) or `feed_unavailable` (the signed feed could not be fetched or did not verify: `reason`). */
     @SerialName(value = "status")
     val status: kotlin.String,
 
     /* A newer version, when a feed says so. */
     @SerialName(value = "latest_version")
-    val latestVersion: kotlin.String? = null
+    val latestVersion: kotlin.String? = null,
+
+    /* Why the feed is unavailable: `no_manifest`, `bad_signature`, `bad_key`, `bad_manifest`, `manifest_expired` or `bad_base`. */
+    @SerialName(value = "reason")
+    val reason: kotlin.String? = null,
+
+    /* The runner version the feed names (runners update to it with `POST /runners/{id}/update`). */
+    @SerialName(value = "runner_latest_version")
+    val runnerLatestVersion: kotlin.String? = null
 
 ) {
 

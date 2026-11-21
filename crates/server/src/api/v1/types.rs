@@ -341,6 +341,8 @@
 ///    is `off` (the Core's tidy by names and sizes); `GET /imports` (`brainImports`, `?state=`, `[RunSummary]`, `read`) and
 ///    `POST /imports/{run}/proposals/{p}/to-unsorted` (`brainProposalToUnsorted`, `Moved {items}`); `GET /auto-imports` lists
 ///    only runs auto-accepted before (no new ones).
+/// 96 (also, working updates; same milestone): `UpdateCheck` (`checkCoreUpdate`) reads the signed release feed: `status` is
+///    `up_to_date`, `available` or `feed_unavailable`, with the new optional `runner_latest_version` and `reason`.
 pub const API_MINOR: u32 = 96;
 
 use serde::{Deserialize, Serialize};
