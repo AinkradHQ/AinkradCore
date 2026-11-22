@@ -25,7 +25,8 @@
 //!   or the scope its `Module::route_scopes` declares for that route (`module_scope`).
 //! - A `runner` device holds only `runner`, which only `POST /api/v1/secret-leases/redeem` and
 //!   the read side of the Core's repo copies (`/api/v1/mirrors/{repo}/…`, P3-01) take, and the
-//!   built-in runner's job routes (`/api/v1/runner/jobs…`, E15-3): it can call
+//!   built-in runner's job routes (`/api/v1/runner/jobs…`, E15-3) and a hosted terminal's account
+//!   (`/api/v1/runner/terminals/{id}/account`, 0.10.5): it can call
 //!   nothing else here (the runner hub is E1-11).
 //!
 //! **Danger routes** (spec §8, E1-09.6, D-4; still named "destructive" in the contract) are
@@ -118,6 +119,9 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/runner/jobs", "runner"),
     ("POST", "/api/v1/runner/jobs/report", "runner"),
     ("POST", "/api/v1/runner/jobs/{job}/signal", "runner"),
+    // A terminal's `claude` shim asks for its opener's account (signed as the runner hosting it;
+    // the handler refuses any other runner).
+    ("POST", "/api/v1/runner/terminals/{id}/account", "runner"),
     ("GET", "/api/v1/runners", "read"),
     ("GET", "/api/v1/runners/{id}", "read"),
     ("POST", "/api/v1/runners/{id}/noop", "agent"),

@@ -2497,6 +2497,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runner/terminals/{id}/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["runnerTerminalAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runners": {
         parameters: {
             query?: never;
@@ -3443,6 +3459,12 @@ export interface components {
             runner_name?: string | null;
             session_id: string;
             started_at: components["schemas"]["Timestamp"];
+            /**
+             * @description Set when this row is not an AI session but a tool typed in a terminal (its id, also in
+             *     `session_id`) that signed in with the account: `title` names the tool, and no transcript,
+             *     tokens or dollars exist for it.
+             */
+            terminal?: string | null;
             /** @description The session's title, else its first message's start; empty when it has neither. */
             title: string;
             /**
@@ -6623,6 +6645,11 @@ export interface components {
              */
             terminals_used: number;
         };
+        /** @description What a terminal's tool asks for. */
+        RunnerTerminalAccount: {
+            /** @description The tool typed in the terminal: `claude` only for now. */
+            tool: string;
+        };
         /** @description An AI tool install as a runner reports it. */
         RunnerToolInstall: {
             /** Format: int32 */
@@ -7111,6 +7138,21 @@ export interface components {
             seq?: number | null;
             size?: components["schemas"]["TerminalSize"];
             status: components["schemas"]["TerminalStatus"];
+        };
+        /** @description A Claude plan leased to the terminal's runner as env, for the one process the shim starts. */
+        TerminalAccountLease: {
+            /**
+             * Format: int64
+             * @description The account's id.
+             */
+            account: number;
+            expires_at: components["schemas"]["Timestamp"];
+            /** @description `l_…`, redeemable once by this runner (`POST /secret-leases/redeem`) until `expires_at`. */
+            lease: string;
+            /** @description The account's name: its display name, else its label. */
+            name: string;
+            /** @description The variable the token goes in: `CLAUDE_CODE_OAUTH_TOKEN`. */
+            var: string;
         };
         TerminalSignal: {
             signal: string;
@@ -13646,6 +13688,52 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    runnerTerminalAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The terminal's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunnerTerminalAccount"];
+            };
+        };
+        responses: {
+            /** @description The first Claude plan of the opener's AI order that can take work, leased as env to the calling runner (audited `secret.leased`). Only the runner hosting the running terminal may call it (`runner` scope) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalAccountLease"];
+                };
+            };
+            /** @description A tool other than `claude` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description `no_account` (the message is the line to show), or no such running terminal on this runner */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];

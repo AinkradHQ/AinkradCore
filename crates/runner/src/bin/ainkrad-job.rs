@@ -10,6 +10,9 @@
 //! `{t:"exit",code,signal?}`. A `local` verdict may carry `report:true`: the shim then runs the
 //! tool as a child instead of replacing itself, and ends with `{t:"done",ms,code}` so the Core
 //! learns how long the command takes (tier 2 of the decision).
+//!
+//! Linked as `claude` (0.10.5), it asks the same socket for the terminal opener's account instead
+//! (`{t:"account",tool}`, see [`signed_in`]) and starts the real `claude` with that one variable.
 
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::os::unix::fs::MetadataExt;
@@ -252,6 +255,87 @@ mod libc_int {
     pub const TERM: i32 = 15;
 }
 
+/// The account tools (`jobsock::ACCOUNT_TOOLS`) and the variables that mean the person already
+/// chose how the tool signs in: then the shim does not ask.
+const ACCOUNT_TOOLS: &[(&str, &[&str])] = &[(
+    "claude",
+    &[
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "AINKRAD_OWN_LOGIN",
+    ],
+)];
+/// The Core finds, leases and the runner redeems the account in this long.
+const ACCOUNT_WAIT: Duration = Duration::from_secs(25);
+
+/// How a terminal's account tool starts.
+#[derive(Debug, PartialEq, Eq)]
+enum SignIn {
+    /// With this variable, the account named `name`.
+    Account {
+        var: String,
+        value: String,
+        name: String,
+    },
+    /// With its own sign-in, after this line.
+    Own(Option<String>),
+}
+
+/// Asks the socket for the account `tool` signs in with. Any trouble is `Own(None)`: the tool runs
+/// exactly as without the shim.
+fn signed_in(sock: &str, tool: &str) -> SignIn {
+    let own = SignIn::Own(None);
+    let Ok(mut stream) = UnixStream::connect(sock) else {
+        return own;
+    };
+    let _ = stream.set_read_timeout(Some(ACCOUNT_WAIT));
+    if writeln!(stream, "{}", json!({"t": "account", "tool": tool})).is_err() {
+        return own;
+    }
+    let mut line = String::new();
+    if BufReader::new(stream).read_line(&mut line).is_err() {
+        return own;
+    }
+    let Ok(v) = serde_json::from_str::<Value>(&line) else {
+        return own;
+    };
+    if let Some(say) = v["say"].as_str() {
+        return SignIn::Own(Some(say.to_owned()));
+    }
+    match v["env"].as_object().and_then(|m| m.iter().next()) {
+        Some((var, Value::String(value))) if !value.is_empty() => SignIn::Account {
+            var: var.clone(),
+            value: value.clone(),
+            name: v["name"].as_str().unwrap_or("your account").to_owned(),
+        },
+        _ => own,
+    }
+}
+
+/// Claude Code's onboarding asks how to sign in even with `CLAUDE_CODE_OAUTH_TOKEN` set; marks it
+/// done in `home`'s `.claude.json` (made if missing, left alone if it is not a JSON object).
+/// ponytail: drop once Claude's onboarding honours the token by itself.
+fn onboarded(home: &Path) {
+    let file = home.join(".claude.json");
+    let mut v = match std::fs::read(&file) {
+        Ok(b) => match serde_json::from_slice::<Value>(&b) {
+            Ok(v) if v.is_object() => v,
+            _ => return,
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(_) => return,
+    };
+    if v["hasCompletedOnboarding"] == true {
+        return;
+    }
+    v["hasCompletedOnboarding"] = json!(true);
+    let tmp = home.join(".claude.json.ainkrad");
+    if std::fs::write(&tmp, v.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, &file);
+    }
+}
+
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
     let Some((tool, args)) = tool_of(&argv) else {
@@ -263,6 +347,31 @@ fn main() {
     let sock = std::env::var("AINKRAD_JOB_SOCK")
         .ok()
         .filter(|s| !s.is_empty());
+    if let Some((_, own)) = ACCOUNT_TOOLS.iter().find(|(t, _)| *t == tool) {
+        let chosen = own.iter().any(|v| std::env::var_os(v).is_some());
+        let mut cmd = match find_real(&tool, &path, me.as_deref()) {
+            Some(real) => std::process::Command::new(real),
+            None => {
+                eprintln!("ainkrad: {tool}: command not found");
+                std::process::exit(EXIT_MISSING);
+            }
+        };
+        cmd.arg0(&tool).args(&args);
+        match sock.filter(|_| !chosen).map(|s| signed_in(&s, &tool)) {
+            Some(SignIn::Account { var, value, name }) => {
+                if let Some(home) = std::env::var_os("HOME") {
+                    onboarded(Path::new(&home));
+                }
+                eprintln!("ainkrad: {tool} signs in with {name}");
+                cmd.env(var, value);
+            }
+            Some(SignIn::Own(Some(say))) => eprintln!("ainkrad: {say}"),
+            _ => {}
+        }
+        let e = cmd.exec();
+        eprintln!("ainkrad: cannot run {tool}: {e}");
+        std::process::exit(EXIT_MISSING);
+    }
     // AINKRAD_JOB_LOCAL: set for a command the job runner itself starts, so it cannot loop back.
     if let Some(sock) = sock.filter(|_| std::env::var_os("AINKRAD_JOB_LOCAL").is_none()) {
         let cwd = std::env::current_dir()
@@ -326,6 +435,73 @@ mod tests {
         assert_eq!(v["env"], json!({"CI": "1"}));
         assert_eq!(v["tty"], true);
         assert!(line.ends_with('\n'));
+    }
+
+    /// A socket that answers `answer` to one request, and the request it got.
+    fn one_answer(name: &str, answer: Value) -> (PathBuf, std::thread::JoinHandle<String>) {
+        let dir = std::env::temp_dir().join(format!("ainkrad-acct-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("s");
+        let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let t = std::thread::spawn(move || {
+            let (mut c, _) = l.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(c.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            writeln!(c, "{answer}").unwrap();
+            line
+        });
+        (sock, t)
+    }
+
+    #[test]
+    fn claude_gets_its_account_a_line_or_its_own_sign_in() {
+        let (sock, t) = one_answer(
+            "env",
+            json!({"env": {"CLAUDE_CODE_OAUTH_TOKEN": "fake-token"}, "name": "Work plan"}),
+        );
+        assert_eq!(
+            signed_in(sock.to_str().unwrap(), "claude"),
+            SignIn::Account {
+                var: "CLAUDE_CODE_OAUTH_TOKEN".into(),
+                value: "fake-token".into(),
+                name: "Work plan".into()
+            }
+        );
+        let asked: Value = serde_json::from_str(&t.join().unwrap()).unwrap();
+        assert_eq!(asked, json!({"t": "account", "tool": "claude"}));
+        let (sock, _t) = one_answer("say", json!({"say": "No Claude plan"}));
+        assert_eq!(
+            signed_in(sock.to_str().unwrap(), "claude"),
+            SignIn::Own(Some("No Claude plan".into()))
+        );
+        let (sock, _t) = one_answer("local", json!({"local": "core_unavailable"}));
+        assert_eq!(
+            signed_in(sock.to_str().unwrap(), "claude"),
+            SignIn::Own(None)
+        );
+        assert_eq!(signed_in("/nonexistent/sock", "claude"), SignIn::Own(None));
+    }
+
+    #[test]
+    fn onboarding_is_marked_done_without_losing_settings() {
+        let home = std::env::temp_dir().join(format!("ainkrad-onb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let f = home.join(".claude.json");
+        onboarded(&home);
+        let v: Value = serde_json::from_slice(&std::fs::read(&f).unwrap()).unwrap();
+        assert_eq!(v, json!({"hasCompletedOnboarding": true}));
+        std::fs::write(&f, r#"{"theme":"dark"}"#).unwrap();
+        onboarded(&home);
+        let v: Value = serde_json::from_slice(&std::fs::read(&f).unwrap()).unwrap();
+        assert_eq!(v, json!({"theme": "dark", "hasCompletedOnboarding": true}));
+        std::fs::write(&f, "not json").unwrap();
+        onboarded(&home);
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "not json");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

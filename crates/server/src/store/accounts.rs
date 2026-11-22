@@ -526,6 +526,10 @@ pub(super) async fn delete_gated(
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    sqlx::query("DELETE FROM core_terminal_account_uses WHERE account_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM core_accounts WHERE id = ?")
         .bind(id)
         .execute(&mut *tx)

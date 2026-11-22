@@ -280,6 +280,7 @@ src/Ainkrad.Client/Model/RunnerNewJob.cs
 src/Ainkrad.Client/Model/RunnerPolicyBody.cs
 src/Ainkrad.Client/Model/RunnerRunsAs.cs
 src/Ainkrad.Client/Model/RunnerSlots.cs
+src/Ainkrad.Client/Model/RunnerTerminalAccount.cs
 src/Ainkrad.Client/Model/RunnerToolInstall.cs
 src/Ainkrad.Client/Model/SecretDeleted.cs
 src/Ainkrad.Client/Model/SecretGroupDeleted.cs
@@ -317,6 +318,7 @@ src/Ainkrad.Client/Model/StepUpPurpose.cs
 src/Ainkrad.Client/Model/StepUpRequest.cs
 src/Ainkrad.Client/Model/SubjectBudget.cs
 src/Ainkrad.Client/Model/Terminal.cs
+src/Ainkrad.Client/Model/TerminalAccountLease.cs
 src/Ainkrad.Client/Model/TerminalSignal.cs
 src/Ainkrad.Client/Model/TerminalSize.cs
 src/Ainkrad.Client/Model/TerminalStatus.cs
