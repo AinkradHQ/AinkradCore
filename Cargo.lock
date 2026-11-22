@@ -142,11 +142,11 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core"
-version = "0.10.4"
+version = "0.10.5"
 
 [[package]]
 name = "ainkrad-core-server"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "age",
  "ainkrad-core",
@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-ctl"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "ainkrad-ctl",
  "base64 0.22.1",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-embed"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -228,7 +228,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-gitfixture"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "rcgen",
  "rustls",
@@ -238,7 +238,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-harness"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "ainkrad-sys",
  "getrandom 0.4.3",
@@ -251,7 +251,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-host"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "ainkrad-proto",
  "ainkrad-sys",
@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-proto"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "blake3",
  "schemars",
@@ -275,7 +275,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-providers"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "ainkrad-providers",
  "axum",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-ptyhost"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "ainkrad-proto",
  "ainkrad-sys",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-runner"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "ainkrad-gitfixture",
  "ainkrad-harness",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-sys"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "ainkrad-proto",
  "libc",
@@ -345,7 +345,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-term"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "proptest",
  "vt100",
