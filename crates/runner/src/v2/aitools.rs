@@ -1,7 +1,9 @@
-//! The AI tools a runner installs and keeps current itself (D-22): Claude Code, Codex, OpenCode.
+//! The AI tools a runner installs and keeps current itself (D-22): Claude Code, Codex, OpenCode,
+//! Antigravity.
 //!
 //! Each tool is pinned to a tested version (`harness::compat`) and fetched from its official
-//! source, Anthropic's release bucket or the npm registry, over TLS. The download is checked
+//! source, Anthropic's release bucket, the npm registry or Google's Antigravity CLI releases on
+//! GitHub, over TLS. The download is checked
 //! against the digest pinned below before anything is unpacked, and it is installed into a
 //! runner-owned folder, `<state>/ai-tools`: never system-wide, never as root. `bin/<tool>` there
 //! is a small launcher, which the agent driver and the tool probe look in first.
@@ -163,7 +165,7 @@ struct Build {
 struct Pin {
     tool: Tool,
     version: &'static str,
-    /// A `.tgz` to unpack, or the binary itself.
+    /// A `.tgz` / `.tar.gz` to unpack, or the binary itself.
     packed: bool,
     builds: &'static [Build],
 }
@@ -501,7 +503,10 @@ mod tests {
                         64
                     ),
                 }
-                assert_eq!(p.packed, b.url.ends_with(".tgz"));
+                assert_eq!(
+                    p.packed,
+                    b.url.ends_with(".tgz") || b.url.ends_with(".tar.gz")
+                );
             }
         }
     }
@@ -602,11 +607,11 @@ mod tests {
     #[test]
     fn missing_tools_install_an_older_managed_one_updates_and_the_persons_own_is_left_alone() {
         let prefix = dir();
-        // Nothing here and nothing on the host: all three with a pin are due, Antigravity has none.
+        // Nothing here and nothing on the host: all four are due.
         let due_all = due(&prefix, &|_| false);
         assert_eq!(
             due_all,
-            [Tool::Claude, Tool::Codex, Tool::Opencode]
+            AI_TOOLS
                 .into_iter()
                 .filter(|_| platform().is_some())
                 .collect::<Vec<_>>()
@@ -619,5 +624,42 @@ mod tests {
         std::fs::write(unpacked.join("claude"), "#!/bin/sh\n").unwrap();
         activate(&prefix, Tool::Claude, "2.0.0", &unpacked, "claude").unwrap();
         assert!(due(&prefix, &|_| true).contains(&Tool::Claude));
+    }
+
+    /// Antigravity ships a GNU tarball of one root-owned `antigravity` at the top (1.4.4, every
+    /// platform): it unpacks in-process, keeps 0755 and becomes `bin/agy`.
+    #[tokio::test]
+    async fn the_antigravity_tarball_unpacks_and_activates_as_agy() {
+        use flate2::{Compression, write::GzEncoder};
+        let prefix = dir();
+        let file = prefix.join("download");
+        let body = b"#!/bin/sh\necho 1.4.4\n";
+        let mut b = tar::Builder::new(GzEncoder::new(
+            std::fs::File::create(&file).unwrap(),
+            Compression::fast(),
+        ));
+        let mut h = tar::Header::new_gnu();
+        h.set_size(body.len() as u64);
+        h.set_mode(0o755);
+        h.set_username("root").unwrap();
+        h.set_groupname("root").unwrap();
+        b.append_data(&mut h, "antigravity", &body[..]).unwrap();
+        b.into_inner().unwrap().finish().unwrap();
+        let pin = pin(Tool::Agy).unwrap();
+        let entry = pin.builds[0].entry;
+        let out = prefix.join("stage/out");
+        std::fs::create_dir_all(&out).unwrap();
+        super::super::untar::unpack(&file, &out, 0, false)
+            .await
+            .unwrap();
+        activate(&prefix, Tool::Agy, pin.version, &out, entry).unwrap();
+        assert_eq!(
+            managed_version(&prefix, Tool::Agy).as_deref(),
+            Some("1.4.4")
+        );
+        let run = std::process::Command::new(prefix.join("bin/agy"))
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "1.4.4");
     }
 }

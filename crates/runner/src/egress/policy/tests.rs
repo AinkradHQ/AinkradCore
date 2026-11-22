@@ -355,8 +355,33 @@ fn the_default_terminal_list_reaches_the_ai_clis_by_domain() {
         "opencode.ai",
         "models.dev",
         "github.com",
+        "antigravity.google",
+        "cloudcode-pa.googleapis.com",
+        "oauth2.googleapis.com",
+        "storage.googleapis.com",
+        "accounts.google.com",
+        "antigravity-cli-auto-updater-974169037036.us-central1.run.app",
     ] {
         assert!(p.host_listed(h), "{h} missing from the default");
     }
     assert!(!p.host_listed("anthropic.com.evil.test") && !p.host_listed("notopenai.com"));
+    // Only the updater's own Cloud Run host, never anyone's; and not the rest of google.com.
+    assert!(!p.host_listed("evil.us-central1.run.app") && !p.host_listed("drive.google.com"));
+}
+
+/// The installers write the same lists: the terminals' is [`default_hosts`], and the agents' one
+/// (Claude's API, Antigravity's Code Assist API and OAuth token host, nothing wider of Google's) is
+/// the same on Linux and macOS.
+#[test]
+fn the_installers_write_the_default_terminal_list_and_one_agent_list() {
+    let linux = include_str!("../../../../../deploy/install-linux.sh");
+    let plist = include_str!("../../../../../deploy/launchd/io.ainkrad.runner.plist");
+    assert!(linux.contains(&format!("\nterm_hosts={}\n", default_hosts())));
+    let agents = "api.anthropic.com,cloudcode-pa.googleapis.com,oauth2.googleapis.com";
+    assert!(linux.contains(&format!("AINKRAD_AGENT_EGRESS_HOSTS={agents}\\n")));
+    assert!(plist.contains(&format!("<string>{agents}</string>")));
+    let p = policy("", agents);
+    assert!(
+        p.host_listed("cloudcode-pa.googleapis.com") && !p.host_listed("storage.googleapis.com")
+    );
 }

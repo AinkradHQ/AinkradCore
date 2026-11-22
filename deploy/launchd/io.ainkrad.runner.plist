@@ -24,7 +24,7 @@
 		<key>AINKRAD_AGENT_NETWORK</key>
 		<string>filtered</string>
 		<key>AINKRAD_AGENT_EGRESS_HOSTS</key>
-		<string>api.anthropic.com</string>
+		<string>api.anthropic.com,cloudcode-pa.googleapis.com,oauth2.googleapis.com</string>
 		<key>CITADEL_RUNNER_LOG</key>
 		<string>__HOME__/Library/Logs/AinkradRunner/runner.log</string>
 	</dict>

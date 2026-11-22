@@ -8,7 +8,7 @@
 # `install` puts ainkrad-runner and ainkrad-ptyhost in ~/.local/bin and writes the agent; it loads it only when
 # the runner is already paired (otherwise it would exit and respawn every 30 s). --pty offers terminals: a shell as
 # this user, with no sandbox. Agent sessions are always offered (--enable-agents) with the egress filter on: sessions
-# reach only api.anthropic.com (AINKRAD_AGENT_NETWORK/AINKRAD_AGENT_EGRESS_HOSTS in the plist). exec.run stays off unless you pass --enable-exec after `--`.
+# reach only api.anthropic.com and Antigravity's API and token hosts (AINKRAD_AGENT_NETWORK/AINKRAD_AGENT_EGRESS_HOSTS in the plist). exec.run stays off unless you pass --enable-exec after `--`.
 # SC2015: `test && shift || usage` is meant (shift cannot fail after the test).
 # shellcheck disable=SC2015
 set -euo pipefail

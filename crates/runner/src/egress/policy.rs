@@ -235,10 +235,12 @@ pub fn default_hosts() -> String {
         "repo1.maven.org",
         "repo.maven.apache.org",
     ];
-    // The AI CLIs a person runs in a terminal (claude, codex, opencode) and their sign-ins, as base
-    // domains (a listed name covers its sub-domains): single hosts kept missing the next one
-    // (`claude` needed platform.claude.com, Oracle 2026-11-22).
-    const AI_DOMAINS: [&str; 7] = [
+    // The AI CLIs a person runs in a terminal (claude, codex, opencode, agy) and their sign-ins, as
+    // base domains (a listed name covers its sub-domains): single hosts kept missing the next one
+    // (`claude` needed platform.claude.com, Oracle 2026-11-22). Antigravity: its site, Google's
+    // APIs (Code Assist, OAuth token, the update tarballs on storage), the sign-in page, and its
+    // updater's manifest host by exact name (never all of run.app).
+    const AI_DOMAINS: [&str; 11] = [
         "anthropic.com",
         "claude.com",
         "claude.ai",
@@ -246,6 +248,10 @@ pub fn default_hosts() -> String {
         "chatgpt.com",
         "opencode.ai",
         "models.dev",
+        "antigravity.google",
+        "googleapis.com",
+        "accounts.google.com",
+        "antigravity-cli-auto-updater-974169037036.us-central1.run.app",
     ];
     FORGE_HOSTS
         .iter()
