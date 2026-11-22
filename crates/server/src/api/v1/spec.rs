@@ -146,6 +146,7 @@ use super::{
         accounts::set_name,
         accounts::set_session_limits,
         accounts::list_models,
+        accounts::list_sessions,
         accounts::set_model_allowed,
         accounts::test_account,
         accounts::check_account,

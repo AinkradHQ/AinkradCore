@@ -72,7 +72,7 @@ async fn a_real_turn_with_an_approval_an_interrupt_and_a_resume() {
     let mut h = OpenCode::start(&spec).await.unwrap();
     h.send(CREATE).await.unwrap();
     let session = match next(&mut h).await {
-        HarnessEvent::SessionStarted { id } => id,
+        HarnessEvent::SessionStarted { id, .. } => id,
         other => panic!("expected the session first, got {other:?}"),
     };
     let (outcome, _, approvals) = turn(&mut h).await;
@@ -90,10 +90,10 @@ async fn a_real_turn_with_an_approval_an_interrupt_and_a_resume() {
 
     let mut h = OpenCode::resume(&spec, &session).await.unwrap();
     h.send(RECALL).await.unwrap();
-    assert_eq!(
+    assert!(matches!(
         next(&mut h).await,
-        HarnessEvent::SessionStarted { id: session }
-    );
+        HarnessEvent::SessionStarted { id, .. } if id == session
+    ));
     let (outcome, text, _) = turn(&mut h).await;
     assert_eq!(outcome, TurnOutcome::Success);
     assert!(text.contains("hello.txt"), "{text}");
@@ -133,7 +133,7 @@ async fn a_warm_server_opens_a_new_session_for_the_next_run() {
     let say = "Reply with exactly one word: ok. Use no tools.";
     let mut h = OpenCode::start(&spec).await.unwrap();
     h.send(say).await.unwrap();
-    let HarnessEvent::SessionStarted { id: first } = next(&mut h).await else {
+    let HarnessEvent::SessionStarted { id: first, .. } = next(&mut h).await else {
         panic!("expected the session first");
     };
     assert_eq!(turn(&mut h).await.0, TurnOutcome::Success);
@@ -142,7 +142,7 @@ async fn a_warm_server_opens_a_new_session_for_the_next_run() {
     let spec = Spec { cwd: two, ..spec };
     h.renew(&spec).await.unwrap();
     h.send(say).await.unwrap();
-    let HarnessEvent::SessionStarted { id: second } = next(&mut h).await else {
+    let HarnessEvent::SessionStarted { id: second, .. } = next(&mut h).await else {
         panic!("expected the new session first");
     };
     assert_ne!(first, second, "a new session");

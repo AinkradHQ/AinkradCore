@@ -485,16 +485,24 @@ pub struct DayUsage {
 }
 
 /// Per UTC day and provider, from the day `days - 1` before `now` to today, oldest first. Summed in SQL.
-pub async fn series(pool: &SqlitePool, now: &str, days: i64) -> Result<Vec<DayUsage>, sqlx::Error> {
+/// `account`: that account's events only.
+pub async fn series(
+    pool: &SqlitePool,
+    now: &str,
+    days: i64,
+    account: Option<i64>,
+) -> Result<Vec<DayUsage>, sqlx::Error> {
     sqlx::query(
         "SELECT substr(occurred_at, 1, 10) AS day, provider, \
          coalesce(sum(input_tokens + output_tokens + cache_tokens), 0) AS tokens, \
          coalesce(sum(cost_usd_micros), 0) AS cost \
          FROM core_cost_events WHERE substr(occurred_at, 1, 10) >= date(?1, ?2) \
+         AND (?3 IS NULL OR account_id = ?3) \
          GROUP BY day, provider ORDER BY day, provider",
     )
     .bind(now)
     .bind(format!("-{} days", days - 1))
+    .bind(account)
     .fetch_all(pool)
     .await?
     .iter()

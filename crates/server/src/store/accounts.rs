@@ -83,6 +83,10 @@ pub struct Account {
     /// The last one-shot `gateway.test` of the key: when, and the status class it answered.
     pub last_test_at: Option<String>,
     pub last_test_result: Option<String>,
+    /// How long that test took to answer, and the runner device that ran it (with its name).
+    pub last_test_ms: Option<i64>,
+    pub last_test_runner: Option<String>,
+    pub last_test_runner_name: Option<String>,
     /// The runner devices the key may be leased to (the broker secret's scope).
     pub runners: Vec<String>,
     /// The device that stored it.
@@ -109,6 +113,8 @@ pub struct NewAccount<'a> {
 const COLUMNS: &str = "a.id, a.provider, a.label, a.display_name, a.secret_name, a.masked_tail, a.base_url, a.state, \
     a.state_reason, a.state_until, a.cap, a.owner, a.last_used_at, a.created_at, a.updated_at, \
     a.session_max_tokens, a.session_max_usd_micros, a.last_test_at, a.last_test_result, \
+    a.last_test_ms, a.last_test_runner, \
+    (SELECT d.name FROM core_devices d WHERE d.id = a.last_test_runner) AS last_test_runner_name, \
     COALESCE(s.runners, '[]') AS runners";
 
 fn refused<T>(code: &'static str, message: impl Into<String>) -> Result<T, Error> {
@@ -136,6 +142,9 @@ fn row(r: SqliteRow) -> Result<Account, sqlx::Error> {
         session_max_usd_micros: r.try_get("session_max_usd_micros")?,
         last_test_at: r.try_get("last_test_at")?,
         last_test_result: r.try_get("last_test_result")?,
+        last_test_ms: r.try_get("last_test_ms")?,
+        last_test_runner: r.try_get("last_test_runner")?,
+        last_test_runner_name: r.try_get("last_test_runner_name")?,
         runners: serde_json::from_str(&runners).unwrap_or_default(),
         owner: r.try_get("owner")?,
         last_used_at: r.try_get("last_used_at")?,

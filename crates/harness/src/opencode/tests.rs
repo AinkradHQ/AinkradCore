@@ -275,7 +275,8 @@ async fn the_prompt_goes_by_http_and_the_config_stays_isolated() {
     assert_eq!(
         events[0],
         HarnessEvent::SessionStarted {
-            id: SESSION.to_owned()
+            id: SESSION.to_owned(),
+            model: None
         }
     );
 

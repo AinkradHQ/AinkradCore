@@ -74,6 +74,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `PUT /api/v1/accounts/{id}/session-limits`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/session-limits/put(setAccountSessionLimits)`.
     func setAccountSessionLimits(_ input: Operations.SetAccountSessionLimits.Input) async throws -> Operations.SetAccountSessionLimits.Output
+    /// - Remark: HTTP `GET /api/v1/accounts/{id}/sessions`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/sessions/get(listAccountSessions)`.
+    func listAccountSessions(_ input: Operations.ListAccountSessions.Input) async throws -> Operations.ListAccountSessions.Output
     /// - Remark: HTTP `PUT /api/v1/accounts/{id}/state`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/state/put(setAccountState)`.
     func setAccountState(_ input: Operations.SetAccountState.Input) async throws -> Operations.SetAccountState.Output
@@ -1037,6 +1040,19 @@ extension APIProtocol {
             path: path,
             headers: headers,
             body: body
+        ))
+    }
+    /// - Remark: HTTP `GET /api/v1/accounts/{id}/sessions`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/sessions/get(listAccountSessions)`.
+    public func listAccountSessions(
+        path: Operations.ListAccountSessions.Input.Path,
+        query: Operations.ListAccountSessions.Input.Query = .init(),
+        headers: Operations.ListAccountSessions.Input.Headers = .init()
+    ) async throws -> Operations.ListAccountSessions.Output {
+        try await listAccountSessions(Operations.ListAccountSessions.Input(
+            path: path,
+            query: query,
+            headers: headers
         ))
     }
     /// - Remark: HTTP `PUT /api/v1/accounts/{id}/state`.

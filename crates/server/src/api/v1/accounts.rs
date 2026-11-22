@@ -600,10 +600,12 @@ mod logins;
 mod meter;
 mod models;
 mod pools;
+mod sessions;
 mod types;
 
 pub use logins::*;
 pub use meter::AccountMeter;
 pub use models::*;
 pub use pools::*;
+pub use sessions::*;
 pub use types::*;

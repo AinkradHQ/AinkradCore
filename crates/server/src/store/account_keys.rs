@@ -198,12 +198,17 @@ pub async fn record_test(
 ) -> Result<Account, Error> {
     let mut tx = super::begin_write(pool).await?;
     let old = find(&mut tx, id).await?;
-    sqlx::query("UPDATE core_accounts SET last_test_at = ?, last_test_result = ? WHERE id = ?")
-        .bind(now)
-        .bind(result)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "UPDATE core_accounts SET last_test_at = ?, last_test_result = ?, last_test_ms = ?, \
+         last_test_runner = ? WHERE id = ?",
+    )
+    .bind(now)
+    .bind(result)
+    .bind(i64::try_from(latency_ms).unwrap_or(i64::MAX))
+    .bind(Some(runner).filter(|r| !r.is_empty()))
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
     audit(
         &mut tx,
         actor,

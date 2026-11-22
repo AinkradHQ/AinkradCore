@@ -503,6 +503,93 @@ extension Components {
                 case restored
             }
         }
+        /// One AI session that ran on the account.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AccountSession`.
+        public struct AccountSession: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AccountSession/ended_at`.
+            public var endedAt: Components.Schemas.Timestamp?
+            /// The model it ran: what the harness said it runs, else what the session asked for. Absent
+            /// when neither is known (the harness default, not reported).
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountSession/model`.
+            public var model: Swift.String?
+            /// The account (its id) the run moved to when this session failed over; absent when it did not.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountSession/moved_to_account`.
+            public var movedToAccount: Swift.String?
+            /// The runner device it ran on, and that runner's name.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountSession/runner_id`.
+            public var runnerId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/AccountSession/runner_name`.
+            public var runnerName: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/AccountSession/session_id`.
+            public var sessionId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AccountSession/started_at`.
+            public var startedAt: Components.Schemas.Timestamp
+            /// The session's title, else its first message's start; empty when it has neither.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountSession/title`.
+            public var title: Swift.String
+            /// Input, output and cache tokens.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountSession/tokens`.
+            public var tokens: Swift.Int64
+            /// What it cost, in millionths of a dollar; absent for a plan (unpriced) and for a device that
+            /// is not `admin`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountSession/usd_micros`.
+            public var usdMicros: Swift.Int64?
+            /// Creates a new `AccountSession`.
+            ///
+            /// - Parameters:
+            ///   - endedAt:
+            ///   - model: The model it ran: what the harness said it runs, else what the session asked for. Absent
+            ///   - movedToAccount: The account (its id) the run moved to when this session failed over; absent when it did not.
+            ///   - runnerId: The runner device it ran on, and that runner's name.
+            ///   - runnerName:
+            ///   - sessionId:
+            ///   - startedAt:
+            ///   - title: The session's title, else its first message's start; empty when it has neither.
+            ///   - tokens: Input, output and cache tokens.
+            ///   - usdMicros: What it cost, in millionths of a dollar; absent for a plan (unpriced) and for a device that
+            public init(
+                endedAt: Components.Schemas.Timestamp? = nil,
+                model: Swift.String? = nil,
+                movedToAccount: Swift.String? = nil,
+                runnerId: Swift.String? = nil,
+                runnerName: Swift.String? = nil,
+                sessionId: Swift.String,
+                startedAt: Components.Schemas.Timestamp,
+                title: Swift.String,
+                tokens: Swift.Int64,
+                usdMicros: Swift.Int64? = nil
+            ) {
+                self.endedAt = endedAt
+                self.model = model
+                self.movedToAccount = movedToAccount
+                self.runnerId = runnerId
+                self.runnerName = runnerName
+                self.sessionId = sessionId
+                self.startedAt = startedAt
+                self.title = title
+                self.tokens = tokens
+                self.usdMicros = usdMicros
+            }
+            public enum CodingKeys: String, CodingKey {
+                case endedAt = "ended_at"
+                case model
+                case movedToAccount = "moved_to_account"
+                case runnerId = "runner_id"
+                case runnerName = "runner_name"
+                case sessionId = "session_id"
+                case startedAt = "started_at"
+                case title
+                case tokens
+                case usdMicros = "usd_micros"
+            }
+        }
         /// One account's usage. No key, secret name, delivery or runner: it is for a `read` device.
         ///
         /// - Remark: Generated from `#/components/schemas/AccountSpend`.
@@ -6235,6 +6322,63 @@ extension Components {
                 case title
             }
         }
+        /// The last test or check of an account (`testAccount`, `checkAccount`) in detail.
+        ///
+        /// - Remark: Generated from `#/components/schemas/LastCheck`.
+        public struct LastCheck: Codable, Hashable, Sendable {
+            /// How long it took to answer, in milliseconds; absent when it did not answer.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LastCheck/answer_ms`.
+            public var answerMs: Swift.Int64?
+            /// - Remark: Generated from `#/components/schemas/LastCheck/at`.
+            public var at: Components.Schemas.Timestamp
+            /// The result word when it was not `ok` (`token_expired`, `auth_failed`, `failed`, ...).
+            ///
+            /// - Remark: Generated from `#/components/schemas/LastCheck/detail`.
+            public var detail: Swift.String?
+            /// It answered `ok`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LastCheck/ok`.
+            public var ok: Swift.Bool
+            /// The runner device that ran it, and its name.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LastCheck/runner_id`.
+            public var runnerId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/LastCheck/runner_name`.
+            public var runnerName: Swift.String?
+            /// Creates a new `LastCheck`.
+            ///
+            /// - Parameters:
+            ///   - answerMs: How long it took to answer, in milliseconds; absent when it did not answer.
+            ///   - at:
+            ///   - detail: The result word when it was not `ok` (`token_expired`, `auth_failed`, `failed`, ...).
+            ///   - ok: It answered `ok`.
+            ///   - runnerId: The runner device that ran it, and its name.
+            ///   - runnerName:
+            public init(
+                answerMs: Swift.Int64? = nil,
+                at: Components.Schemas.Timestamp,
+                detail: Swift.String? = nil,
+                ok: Swift.Bool,
+                runnerId: Swift.String? = nil,
+                runnerName: Swift.String? = nil
+            ) {
+                self.answerMs = answerMs
+                self.at = at
+                self.detail = detail
+                self.ok = ok
+                self.runnerId = runnerId
+                self.runnerName = runnerName
+            }
+            public enum CodingKeys: String, CodingKey {
+                case answerMs = "answer_ms"
+                case at
+                case detail
+                case ok
+                case runnerId = "runner_id"
+                case runnerName = "runner_name"
+            }
+        }
         /// The last one-shot test of an account's key.
         ///
         /// - Remark: Generated from `#/components/schemas/LastTest`.
@@ -9471,6 +9615,11 @@ extension Components {
             public var id: Swift.Int64
             /// - Remark: Generated from `#/components/schemas/ProviderAccount/label`.
             public var label: Swift.String
+            /// The last test or check in detail: when, whether it answered `ok`, the runner that ran it, how
+            /// long it took to answer and, when it was not `ok`, the result word. Absent when never checked.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/last_check`.
+            public var lastCheck: Components.Schemas.LastCheck?
             /// The last one-shot test of the key; absent when it was never tested.
             ///
             /// - Remark: Generated from `#/components/schemas/ProviderAccount/last_test`.
@@ -9547,6 +9696,7 @@ extension Components {
             ///   - health: What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason`
             ///   - id:
             ///   - label:
+            ///   - lastCheck: The last test or check in detail: when, whether it answered `ok`, the runner that ran it, how
             ///   - lastTest: The last one-shot test of the key; absent when it was never tested.
             ///   - lastUsedAt:
             ///   - live: Sessions that hold a slot of its cap now (`starting`, `running`, `interrupted`). Only the
@@ -9571,6 +9721,7 @@ extension Components {
                 health: Components.Schemas.AccountHealth? = nil,
                 id: Swift.Int64,
                 label: Swift.String,
+                lastCheck: Components.Schemas.LastCheck? = nil,
                 lastTest: Components.Schemas.LastTest? = nil,
                 lastUsedAt: Components.Schemas.Timestamp? = nil,
                 live: Swift.Int64? = nil,
@@ -9595,6 +9746,7 @@ extension Components {
                 self.health = health
                 self.id = id
                 self.label = label
+                self.lastCheck = lastCheck
                 self.lastTest = lastTest
                 self.lastUsedAt = lastUsedAt
                 self.live = live
@@ -9620,6 +9772,7 @@ extension Components {
                 case health
                 case id
                 case label
+                case lastCheck = "last_check"
                 case lastTest = "last_test"
                 case lastUsedAt = "last_used_at"
                 case live

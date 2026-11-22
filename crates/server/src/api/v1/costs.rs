@@ -93,6 +93,8 @@ pub async fn list(State(app): State<App>, Query(q): Query<CostQuery>) -> ApiResu
 pub struct SeriesQuery {
     /// Days back, today included (default 14, most 90).
     pub days: Option<i64>,
+    /// Only this account's events (its id): the same daily rows, for that one account.
+    pub account: Option<i64>,
 }
 
 /// One provider's day on the ledger.
@@ -110,13 +112,14 @@ pub struct DayUsage {
 #[utoipa::path(get, path = "/api/v1/costs/series", operation_id = "costSeries", tag = "costs",
     params(SeriesQuery),
     responses((status = 200, description = "Daily spend and tokens per provider, summed from the ledger, \
-        oldest day first (needs `admin`). A day or provider with no events has no row", body = Vec<DayUsage>)))]
+        oldest day first (needs `admin`). A day or provider with no events has no row. With `account`, only \
+        that account's events", body = Vec<DayUsage>)))]
 pub async fn series(
     State(app): State<App>,
     Query(q): Query<SeriesQuery>,
 ) -> ApiResult<Vec<DayUsage>> {
     let days = q.days.unwrap_or(14).clamp(1, 90);
-    let rows = costs::series(&app.pool, &app.clock.now(), days).await?;
+    let rows = costs::series(&app.pool, &app.clock.now(), days, q.account).await?;
     Ok(Json(
         rows.into_iter()
             .map(|r| DayUsage {

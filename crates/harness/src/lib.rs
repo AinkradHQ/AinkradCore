@@ -130,9 +130,13 @@ pub struct JobShims {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HarnessEvent {
-    /// The resumable session id, once per session.
+    /// The resumable session id, once per session, and the model the harness says it runs
+    /// (Claude's `system/init`, Codex's `thread/start` answer): the real one when the spec
+    /// left the harness its default. Absent when the harness does not say.
     SessionStarted {
         id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
     },
     AssistantText {
         text: String,

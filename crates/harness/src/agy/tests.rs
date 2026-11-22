@@ -56,7 +56,8 @@ fn decodes_a_turn_then_an_interrupted_one() {
     assert_eq!(
         events[0],
         HarnessEvent::SessionStarted {
-            id: CONVERSATION.to_owned()
+            id: CONVERSATION.to_owned(),
+            model: None
         }
     );
     // Tool steps update twice (ACTIVE, DONE); announced once. 1.4.4 names it `write_file`.
@@ -98,7 +99,8 @@ fn a_resumed_conversation_counts_its_own_steps_not_the_old_total() {
     assert_eq!(
         events[0],
         HarnessEvent::SessionStarted {
-            id: CONVERSATION.to_owned()
+            id: CONVERSATION.to_owned(),
+            model: None
         }
     );
     assert!(events.contains(&HarnessEvent::AssistantText {

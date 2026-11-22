@@ -136,6 +136,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("DELETE", "/api/v1/accounts/logins/{id}", "admin"),
     ("GET", "/api/v1/accounts/{id}", "read"),
     ("GET", "/api/v1/accounts/{id}/models", "read"),
+    ("GET", "/api/v1/accounts/{id}/sessions", "read"),
     ("PUT", "/api/v1/accounts/{id}/models/{model}", "admin"),
     ("GET", "/api/v1/accounts/providers", "read"),
     ("POST", "/api/v1/accounts", "admin"),

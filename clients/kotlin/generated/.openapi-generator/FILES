@@ -45,6 +45,7 @@ src/main/kotlin/ainkrad/client/models/AccountModels.kt
 src/main/kotlin/ainkrad/client/models/AccountPlanLimit.kt
 src/main/kotlin/ainkrad/client/models/AccountPlanWindow.kt
 src/main/kotlin/ainkrad/client/models/AccountRestored.kt
+src/main/kotlin/ainkrad/client/models/AccountSession.kt
 src/main/kotlin/ainkrad/client/models/AccountSpend.kt
 src/main/kotlin/ainkrad/client/models/AccountTested.kt
 src/main/kotlin/ainkrad/client/models/AccountsDeleted.kt
@@ -167,6 +168,7 @@ src/main/kotlin/ainkrad/client/models/KindAuthMethod.kt
 src/main/kotlin/ainkrad/client/models/KindCapability.kt
 src/main/kotlin/ainkrad/client/models/KindCount.kt
 src/main/kotlin/ainkrad/client/models/KindLimit.kt
+src/main/kotlin/ainkrad/client/models/LastCheck.kt
 src/main/kotlin/ainkrad/client/models/LastTest.kt
 src/main/kotlin/ainkrad/client/models/LatestEvent.kt
 src/main/kotlin/ainkrad/client/models/LeaseGrant.kt

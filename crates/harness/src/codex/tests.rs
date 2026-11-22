@@ -226,7 +226,8 @@ async fn the_prompt_goes_by_stdin_and_the_config_stays_isolated() {
     assert_eq!(
         events.first(),
         Some(&HarnessEvent::SessionStarted {
-            id: THREAD.to_owned()
+            id: THREAD.to_owned(),
+            model: Some("gpt-5.6-luna".to_owned()),
         })
     );
     assert_eq!(events.last(), Some(&HarnessEvent::Exited { code: Some(0) }));
