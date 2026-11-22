@@ -751,6 +751,17 @@ async fn queue(
         tx.commit().await?;
         return Ok(false);
     }
+    // A re-distil batch runs alone in its room: it waits for every open distil, the sweep's
+    // parallel batches (`auto_distil::MAX_PER_ROOM`, not held by the index) among them.
+    let open: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) FROM brain_distils WHERE room = ? AND state IN ({OPEN})"
+    )))
+    .bind(&run.room)
+    .fetch_one(&mut *tx)
+    .await?;
+    if open > 0 {
+        return Ok(false);
+    }
     // A local-only room waits for a local model, as any distil does.
     let state = if p.local_only() {
         "needs_local_model"

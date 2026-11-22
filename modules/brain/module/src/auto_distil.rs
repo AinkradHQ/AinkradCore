@@ -11,7 +11,11 @@
 //!   Redistil, tidy and judge runs have their own budget and are not counted. A cap is audited at
 //!   most once per room per UTC day. A room whose distil failed waits a short, growing while (`retry`: 2, 5, 15, 60 min, then 6 h).
 //! - One open distil per room: triggers coalesce into it. A session gets one `session_end` distil
-//!   (`of_session`), however often its end event is read.
+//!   (`of_session`), however often its end event is read. The one exception is the dreaming sweep
+//!   (`threshold`, which drives an import's Learn step): it adds another batch of a room while every
+//!   open one is already running (has taken its sources), up to [`MAX_PER_ROOM`] and never beside a
+//!   re-distil batch. Each batch takes a disjoint set of sources (`distil::launch`), and the global
+//!   caps (`distil::MAX_RUNNING`, the runner's free slots) still bound how many run.
 //! - Queueing happens in one write transaction (check, cap, insert), so two ticks or a crash in
 //!   between never leave a duplicate or a half-made row; a unique index (one open distil per room)
 //!   also settles a race with a manual start. The event cursor moves only past an event that reached
@@ -54,6 +58,9 @@ const SCAN_EVERY_SECS: i64 = 60;
 const GLOBAL_DAILY: i64 = 100;
 /// An end event this old is set aside rather than waited on for its session to be collected.
 const STALE_END_SECS: i64 = 86_400;
+/// Dreaming-sweep batches of one room open at once: one big room at the tail of an import is read
+/// this many batches at a time, not one (2026-11-22: 1,381 sources at ~100 an hour).
+pub(crate) const MAX_PER_ROOM: i64 = 3;
 const PAGE: u32 = 200;
 const MAX_PAGES: u32 = 10;
 
@@ -133,13 +140,17 @@ pub(crate) async fn queue(
     {
         return Ok(Queued::Nothing);
     }
-    let open: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM brain_distils WHERE room = ? \
-         AND state IN ('queued','needs_local_model','waiting','running')",
+    // Open distils of the room: all, those not running yet (no sources taken), re-distil batches.
+    let (open, unlaunched, redistil): (i64, i64, i64) = sqlx::query_as(
+        "SELECT count(*), coalesce(sum(state <> 'running'), 0), coalesce(sum(\"trigger\" = 'redistil'), 0) \
+         FROM brain_distils WHERE room = ? AND state IN ('queued','needs_local_model','waiting','running')",
     )
     .bind(room)
     .fetch_one(&mut *tx)
     .await?;
+    // The sweep adds a batch beside running ones: they took their sources, so `fresh` counts only
+    // what is left, and the new batch takes a disjoint set.
+    let another = trigger == "threshold" && open < MAX_PER_ROOM && unlaunched == 0 && redistil == 0;
     let had: i64 = match session {
         Some(s) => {
             sqlx::query_scalar(
@@ -152,7 +163,7 @@ pub(crate) async fn queue(
         }
         None => 0,
     };
-    if open + had > 0 {
+    if (open > 0 && !another) || had > 0 {
         return Ok(Queued::Coalesced);
     }
     let cap: i64 = sqlx::query_scalar("SELECT daily_distils FROM brain_room_policy WHERE room = ?")
