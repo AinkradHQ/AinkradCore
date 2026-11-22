@@ -254,13 +254,12 @@ fn the_prompt_says_same_as_is_never_a_type() {
 #[test]
 fn what_makes_the_whole_answer_untrustworthy_still_rejects_it() {
     let k = known();
-    let many =
-        json!({"candidates": vec![json!({"type": "fact", "body": "x", "sources": ["i1"]}); 101]});
     let bad = [
         "I think you should use SQLite".to_owned(),
         "{\"candidates\":[],\"extra\":1}".to_owned(),
         "{\"candidates\":{}}".to_owned(),
-        many.to_string(),
+        // A comma is forgiven only right before `]` or `}`, never a missing value.
+        "{\"candidates\":[,]}".to_owned(),
         // A source that is not in the batch, even next to good candidates and in a malformed one.
         json!({"candidates": [
             {"type": "fact", "body": "ok", "sources": ["i1"]},
@@ -405,4 +404,45 @@ fn related_bodies_cannot_forge_a_turn_tag() {
     // The real turns only: the session header and the user's turn.
     assert_eq!(body.matches("<turn ").count(), 2, "{body}");
     assert_eq!(body.matches("</turn>").count(), 2, "{body}");
+}
+
+#[test]
+fn past_the_limit_the_first_kept_stay_and_the_rest_are_dropped_over_limit() {
+    let k = known();
+    let mut all: Vec<serde_json::Value> = (0..MAX_CANDIDATES + 3)
+        .map(|n| json!({"type": "fact", "body": format!("fact {n}"), "sources": ["i1"]}))
+        .collect();
+    // A malformed one early on does not count towards the limit.
+    all.insert(
+        1,
+        json!({"type": "opinion", "body": "x", "sources": ["i2"]}),
+    );
+    all.last_mut().unwrap()["sources"] = json!(["i2"]);
+    let out = json!({"candidates": all}).to_string();
+    let (kept, dropped) = parse_output(&out, &k).unwrap();
+    assert_eq!(kept.len(), MAX_CANDIDATES);
+    assert_eq!(
+        kept.last().unwrap().body,
+        format!("fact {}", MAX_CANDIDATES - 1)
+    );
+    let over: Vec<_> = dropped.iter().filter(|d| d.stage == "over_limit").collect();
+    assert_eq!(over.len(), 3);
+    assert_eq!(over[0].body, format!("fact {MAX_CANDIDATES}"));
+    assert_eq!(over[2].sources, ["i2"]);
+    assert!(over[0].reasons[0].starts_with("over_limit"));
+    assert_eq!(dropped.iter().filter(|d| d.stage == "malformed").count(), 1);
+}
+
+#[test]
+fn a_trailing_comma_is_forgiven_outside_strings_only() {
+    let k = known();
+    let out = r#"{"candidates": [{"type": "fact", "body": "Use SQLite, }", "sources": ["i1",],},
+        ],}"#;
+    let kept = parse(out, &k).unwrap();
+    assert_eq!(kept[0].body, "Use SQLite, }", "a comma in a string stays");
+    assert_eq!(kept[0].sources, ["i1"]);
+    assert_eq!(
+        without_trailing_commas(r#"{"a": "x\", ]", "b": [1, 2 , ] }"#),
+        r#"{"a": "x\", ]", "b": [1, 2  ] }"#
+    );
 }

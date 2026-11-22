@@ -271,8 +271,10 @@ pub(crate) fn fields_supported(c: &Candidate, known: &Known) -> bool {
 
 /// The answer as candidates and the ones dropped as malformed, or why the whole answer is rejected.
 /// A fenced block is unwrapped. Rejected whole, as untrustworthy: not JSON or not the
-/// `{"candidates": [...]}` shape, more than [`MAX_CANDIDATES`], or any candidate citing a source
-/// that is not in the batch (the model is not answering about what it was shown). Dropped alone,
+/// `{"candidates": [...]}` shape (a trailing comma before `]` or `}` is forgiven), or any candidate
+/// citing a source that is not in the batch (the model is not answering about what it was shown).
+/// Past the first [`MAX_CANDIDATES`] kept, each further one is dropped alone (`stage = "over_limit"`):
+/// its sources count as unread, so they are read again in the next batch. Dropped alone,
 /// the rest kept (`stage = "malformed"`, its reason in the `admit.dropped` audit): a candidate that
 /// is not the candidate shape (an unknown field, a wrong value type), a bad kind, an empty or
 /// oversize body, bad tags, 0 or more than 20 sources, `same_as` and `replaces` at once, or a bad
@@ -286,11 +288,11 @@ pub(crate) fn parse_output(
     known: &Known,
 ) -> Result<(Vec<Candidate>, Vec<Dropped>), String> {
     let t = json_body(out);
-    let parsed: Output =
-        serde_json::from_str(t).map_err(|e| format!("not the output shape: {e}"))?;
-    if parsed.candidates.len() > MAX_CANDIDATES {
-        return Err(format!("more than {MAX_CANDIDATES} candidates"));
-    }
+    let parsed: Output = match serde_json::from_str(t) {
+        Ok(p) => p,
+        Err(e) => serde_json::from_str(&without_trailing_commas(t))
+            .map_err(|_| format!("not the output shape: {e}"))?,
+    };
     for (i, v) in parsed.candidates.iter().enumerate() {
         let cited = v["sources"].as_array().into_iter().flatten();
         if let Some(bad) = cited
@@ -338,9 +340,49 @@ pub(crate) fn parse_output(
                 }
             }
         }
+        if kept.len() >= MAX_CANDIDATES {
+            let why = format!("over_limit: past the first {MAX_CANDIDATES} candidates");
+            dropped.push(crate::judge::dropped_of(&c, vec![why], 0.0, "over_limit"));
+            continue;
+        }
         kept.push(c);
     }
     Ok((kept, dropped))
+}
+
+/// `t` without the commas that stand right after a value and before a `]` or `}` (whitespace
+/// between allowed), outside strings: a model's trailing comma. Nothing else changes, so a text that was not JSON
+/// still is not.
+fn without_trailing_commas(t: &str) -> String {
+    let mut out = String::with_capacity(t.len());
+    let (mut in_str, mut escaped) = (false, false);
+    let chars: Vec<char> = t.chars().collect();
+    for (i, &ch) in chars.iter().enumerate() {
+        if in_str {
+            (escaped, in_str) = match (escaped, ch) {
+                (true, _) => (false, true),
+                (false, '\\') => (true, true),
+                (false, '"') => (false, false),
+                _ => (false, true),
+            };
+        } else if ch == '"' {
+            in_str = true;
+        } else if ch == ','
+            && out
+                .trim_end()
+                .chars()
+                .last()
+                .is_some_and(|c| !matches!(c, '[' | '{' | ',' | ':'))
+            && chars[i + 1..]
+                .iter()
+                .find(|c| !c.is_whitespace())
+                .is_some_and(|c| matches!(c, ']' | '}'))
+        {
+            continue;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// Why one candidate is malformed, if it is (the sources were checked against the batch already).

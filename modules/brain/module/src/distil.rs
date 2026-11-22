@@ -809,6 +809,14 @@ async fn save(
     {
         b.queue_record_vectors(&rows);
     }
+    // Sources only an over-the-limit candidate cited are read again in the next batch.
+    for id in over_limit_sources(&out, &dropped) {
+        sqlx::query("UPDATE sources SET distilled = NULL WHERE distilled = ? AND item_id = ?")
+            .bind(&d.id)
+            .bind(&id)
+            .execute(&pool)
+            .await?;
+    }
     sqlx::query("INSERT INTO room_audit (action, detail, at) VALUES ('distil.answer', ?, ?)")
         .bind(answer_detail.to_string())
         .bind(app.clock.now())
@@ -838,14 +846,37 @@ async fn save(
     Ok(set_state(app, &d.id, "done", &note, Some(("candidates", n))).await?)
 }
 
-/// A done distil's `detail`: how many candidates of the answer were dropped as malformed (each
-/// reason is in the `admit.dropped` audit), or empty.
+/// A done distil's `detail`: how many candidates of the answer were dropped as malformed and how
+/// many past the candidate limit (each reason is in the `admit.dropped` audit), or empty.
 fn malformed_note(dropped: &[judge::Dropped]) -> String {
-    match dropped.iter().filter(|d| d.stage == "malformed").count() {
-        0 => String::new(),
-        1 => "1 malformed candidate dropped".to_owned(),
-        n => format!("{n} malformed candidates dropped"),
-    }
+    let count = |stage: &str| dropped.iter().filter(|d| d.stage == stage).count();
+    let part = |n: usize, what: &str| match n {
+        0 => None,
+        1 => Some(format!("1 {what} candidate dropped")),
+        n => Some(format!("{n} {what} candidates dropped")),
+    };
+    [
+        part(count("malformed"), "malformed"),
+        part(count("over_limit"), "over-the-limit"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", ")
+}
+
+/// The taken sources only candidates past the limit cited (`over_limit`), none that was kept: they go
+/// back to be read in the next batch.
+fn over_limit_sources(out: &[Candidate], dropped: &[judge::Dropped]) -> Vec<String> {
+    let mut ids: Vec<String> = dropped
+        .iter()
+        .filter(|d| d.stage == "over_limit")
+        .flat_map(|d| d.sources.iter().cloned())
+        .filter(|id| !out.iter().any(|c| c.sources.contains(id)))
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 /// Who distilled: the provider and account name the session ran on, and its tool (harness).
@@ -912,8 +943,10 @@ pub(crate) fn read_in_full(
             shown["cut"][id.as_str()].as_u64() == Some(text.len() as u64)
                 && out.iter().any(|c| c.sources.contains(id))
                 && !dropped.iter().any(|d| {
-                    matches!(d.stage.as_str(), "not_grounded" | "judge" | "malformed")
-                        && d.sources.contains(id)
+                    matches!(
+                        d.stage.as_str(),
+                        "not_grounded" | "judge" | "malformed" | "over_limit"
+                    ) && d.sources.contains(id)
                 })
         })
         .map(|(id, _, _)| id.clone())
@@ -1248,5 +1281,36 @@ mod tests {
             read_in_full(&taken, &shown, &[f2], &[by_score]),
             vec!["i1".to_owned()]
         );
+    }
+
+    /// Past the candidate limit: the detail counts them, a source only they cited goes back to be
+    /// read, and a re-distil counts every source they cited as unread.
+    #[test]
+    fn over_the_limit_drops_are_counted_and_their_sources_read_again() {
+        let kept = cand("fact", "Kept.");
+        let mut over = judge::dropped_of(&cand("fact", "Over."), vec![], 0.0, "over_limit");
+        over.sources = vec!["i1".to_owned(), "i2".to_owned()];
+        let bad = judge::dropped_of(&cand("fact", "Bad."), vec![], 0.0, "malformed");
+        let all = [over.clone(), over.clone(), bad];
+        assert_eq!(
+            malformed_note(&all),
+            "1 malformed candidate dropped, 2 over-the-limit candidates dropped"
+        );
+        assert_eq!(
+            malformed_note(&all[..1]),
+            "1 over-the-limit candidate dropped"
+        );
+        assert_eq!(malformed_note(&[]), "");
+        assert_eq!(
+            over_limit_sources(std::slice::from_ref(&kept), &all),
+            ["i2"]
+        );
+        let taken = [(
+            "i1".to_owned(),
+            "core_transcript".to_owned(),
+            TEXT.to_owned(),
+        )];
+        let shown = json!({"cut": {"i1": TEXT.len()}});
+        assert!(read_in_full(&taken, &shown, &[kept], &[over]).is_empty());
     }
 }

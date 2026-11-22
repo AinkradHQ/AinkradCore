@@ -350,7 +350,12 @@
 ///    session's ledger rows carry the model the harness says it runs (`session_started.model` in the transcript, from
 ///    Claude's `system/init` and Codex's `thread/start`), not `unknown`, when the session left the harness its default.
 ///    Migration 65.
-pub const API_MINOR: u32 = 98;
+/// 99: plan models (0.10.5). `AccountModels.billing` (`plan` | `metered`) and `AccountModels.models_enforced`; a plan
+///    account's `listAccountModels` lists the models its harness runs on a plan (Claude: the shipped Anthropic models;
+///    ChatGPT: the runner's Codex default and the shipped Codex models) and every model its sessions were seen running.
+///    Brain distil answers (no contract change): past 100 candidates the rest are dropped `over_limit` (their sources
+///    read again) instead of the whole answer rejected, and a trailing comma before `]` or `}` is forgiven.
+pub const API_MINOR: u32 = 99;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -193,3 +193,111 @@ async fn the_last_check_shows_its_runner_time_and_answer() {
     assert_eq!((&c["ok"], &c["detail"]), (&json!(false), &json!("failed")));
     assert!(c.get("answer_ms").is_none(), "{c}");
 }
+
+/// A Claude plan has no key to list its models: it gets the shipped Anthropic models and every model
+/// its sessions were seen running, marked as included in the plan, and the switch still works.
+#[tokio::test]
+async fn a_plan_account_lists_its_models_as_included_and_they_can_be_switched_off() {
+    use ainkrad_core::settings::{Key, Scope};
+    let (fx, vm, s) = setup().await;
+    crate::store::settings::set(
+        &fx.app.pool,
+        Key::SecretsProviderAccounts,
+        Scope::Server,
+        "1",
+        BY,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let new = crate::store::accounts::NewAccount {
+        provider: "claude-sub",
+        label: "claude-me",
+        value: "sk-ant-oat01-TESTONLY0123456789abcdefghijklmnop",
+        runners: std::slice::from_ref(&vm.id),
+        cap: None,
+        display_name: None,
+    };
+    let a = crate::store::accounts::create_by(
+        &fx.app.pool,
+        &s,
+        &new,
+        "subscription",
+        &fx.dev.id,
+        BY,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let id = session(&fx, &vm.id, a.id, "hi").await;
+    sqlx::query("UPDATE core_agent_sessions SET harness_model = 'claude-fable-9' WHERE id = ?")
+        .bind(&id)
+        .execute(&fx.app.pool)
+        .await
+        .unwrap();
+    let uri = format!("/api/v1/accounts/{}/models", a.id);
+    let (st, b) = call(&fx, &fx.dev, Method::GET, &uri).await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+    assert_eq!(
+        b["models"],
+        json!([
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+            "claude-fable-9"
+        ])
+    );
+    assert_eq!(
+        (&b["billing"], &b["models_enforced"]),
+        (&json!("plan"), &json!(false))
+    );
+    let items = b["items"].as_array().unwrap();
+    assert_eq!(items.len(), 4, "{b}");
+    assert!(
+        items
+            .iter()
+            .all(|r| r["allowed"] == true && r.get("input_per_mtok_micro").is_none())
+    );
+
+    let off = format!("{uri}/claude-opus-5-5");
+    let (st, b) = send(
+        &fx.app,
+        req(
+            Method::PUT,
+            &off,
+            Some(&fx.dev),
+            Some(json!({"allowed": false})),
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{b}");
+    let opus = b["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["model"] == "claude-opus-5-5");
+    assert_eq!(opus.unwrap()["allowed"], false, "{b}");
+
+    // An API-key account is metered and enforced.
+    let k = make(&fx, &s, "main", V1, std::slice::from_ref(&vm.id)).await;
+    let (_, b) = call(
+        &fx,
+        &fx.dev,
+        Method::GET,
+        &format!("/api/v1/accounts/{}/models", k.id),
+    )
+    .await;
+    assert_eq!(
+        (&b["billing"], &b["models_enforced"]),
+        (&json!("metered"), &json!(true))
+    );
+}
+
+/// The ChatGPT plan's ids come from Core data only: the runner's Codex default and the shipped
+/// OpenAI Codex rows. Other providers get none here.
+#[test]
+fn the_codex_plan_lists_the_runner_default_and_the_shipped_codex_models() {
+    use crate::store::account_models::plan_models;
+    assert_eq!(plan_models("codex-sub"), ["gpt-5.6-luna", "gpt-5.3-codex"]);
+    assert!(plan_models("anthropic").is_empty() && plan_models("opencode-sub").is_empty());
+}
