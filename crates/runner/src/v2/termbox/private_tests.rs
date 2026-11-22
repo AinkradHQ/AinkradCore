@@ -32,6 +32,7 @@ fn spec<'a>(
         env,
         hide: &[],
         jobs: None,
+        tools: None,
     }
 }
 
@@ -512,5 +513,40 @@ fn seatbelt_denies_everything_but_the_home_the_scratch_and_the_folder() {
         assert!(out.contains(want), "{want} missing in {out}");
     }
     assert!(!out.contains("secret") && !out.contains("no\n"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The runner's AI tools folder is in the root read-only, at its own path; never writable.
+#[test]
+fn the_ai_tools_folder_is_bound_read_only() {
+    let base = tmp("tools");
+    let sb = base.join("sb");
+    let home = sandbox_home(&sb, "u").unwrap();
+    let sbc = sb.canonicalize().unwrap();
+    let tools = base.join("ai-tools");
+    std::fs::create_dir_all(tools.join("bin")).unwrap();
+    let t = tools.to_string_lossy().into_owned();
+    let (args, env) = (vec!["-i".to_owned()], BTreeMap::new());
+    let mut s = spec(&sbc, &home, None, &env, &args, &Net::Host);
+    s.tools = Some(&tools);
+    let b = wrap_private(&s).unwrap();
+    if cfg!(target_os = "linux") {
+        assert!(
+            b.args.windows(3).any(|w| w == ["--ro-bind", &t, &t]),
+            "{:?}",
+            b.args
+        );
+        assert!(!b.args.windows(3).any(|w| w[0] == "--bind" && w[1] == t));
+    } else {
+        let p = &b.args[1];
+        assert!(
+            p.contains(&format!("(allow file-read* (subpath \"{t}\"))")),
+            "{p}"
+        );
+        assert!(
+            !p.contains(&format!("file-write* (subpath \"{t}\")")),
+            "{p}"
+        );
+    }
     let _ = std::fs::remove_dir_all(&base);
 }

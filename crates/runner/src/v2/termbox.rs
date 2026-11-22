@@ -46,6 +46,13 @@ pub fn readonly_paths(host: &Path) -> Vec<PathBuf> {
     if shell.is_dir() {
         v.push(shell.to_path_buf());
     }
+    // The runner's AI tools (D-22): inside its hidden state, so bound back read-only for `codex`
+    // and `opencode` to run; what they write goes to the shell's HOME.
+    v.extend(
+        super::aitools::prefix()
+            .filter(|p| p.is_dir())
+            .map(Path::to_path_buf),
+    );
     for d in launcher_dirs() {
         // Created if missing, so the shell cannot plant a unit or agent in a dir that did not
         // exist yet; read-only inside the sandbox from then on.
@@ -140,6 +147,23 @@ pub fn resolve(program: &str, path: Option<&str>) -> String {
             std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
         })
         .map_or_else(|| program.to_owned(), |p| p.to_string_lossy().into_owned())
+}
+
+/// The runner's AI tools folder's `bin` first on a shell's `PATH` (whatever it was, or the system
+/// default), and named in `AINKRAD_TOOLS_BIN` so the Ainkrad zsh profile keeps it there.
+pub fn add_tools(env: &mut std::collections::BTreeMap<String, String>, bin: &Path) {
+    let b = bin.to_string_lossy().into_owned();
+    let rest = env.get("PATH").filter(|p| !p.is_empty()).map_or(
+        "/usr/local/bin:/usr/bin:/bin".to_owned(),
+        |p| {
+            p.split(':')
+                .filter(|d| *d != b)
+                .collect::<Vec<_>>()
+                .join(":")
+        },
+    );
+    env.insert("PATH".to_owned(), format!("{b}:{rest}"));
+    env.insert("AINKRAD_TOOLS_BIN".to_owned(), b);
 }
 
 /// The network of a terminal shell (KAN-416, `--terminal-network`).
@@ -306,6 +330,11 @@ pub fn wrap_in(
             }
         }
         for p in &readonly {
+            // Readable again when it lies in a hidden path (the AI tools in the state dir), as the
+            // read-only bind over the emptied state gives on Linux; never one that holds a hidden path.
+            if hidden.iter().any(|h| p.starts_with(h)) && !hidden.iter().any(|h| h.starts_with(p)) {
+                profile.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", quote(p)));
+            }
             profile.push_str(&format!("(deny file-write* (subpath \"{}\"))\n", quote(p)));
         }
         out.extend(["-p".to_owned(), profile, "--".to_owned()]);
@@ -874,6 +903,67 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         std::os::unix::fs::symlink("/tmp", base.join("link")).unwrap();
         assert!(prepare(&[base.join("link")]).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The runner's AI tools (in its hidden state) come back read-only, and their bin leads PATH.
+    #[test]
+    fn the_ai_tools_are_readable_unwritable_and_first_on_path() {
+        let base = std::env::temp_dir().join(format!("apr-tools-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let tools = base.join("state/ai-tools");
+        std::fs::create_dir_all(tools.join("bin")).unwrap();
+        let (state, tools) = (
+            base.join("state").canonicalize().unwrap(),
+            tools.canonicalize().unwrap(),
+        );
+        let t = tools.to_string_lossy().into_owned();
+        let (_, args) = wrap(
+            std::slice::from_ref(&state),
+            std::slice::from_ref(&tools),
+            "/bin/sh",
+            &[],
+            "/",
+        )
+        .unwrap();
+        if cfg!(target_os = "linux") {
+            let hide = args
+                .windows(2)
+                .position(|w| w[0] == "--tmpfs" && w[1] == state.to_string_lossy());
+            let back = args.windows(3).position(|w| w == ["--ro-bind", &t, &t]);
+            assert!(hide.unwrap() < back.expect("read-only bind"), "{args:?}");
+        } else {
+            let p = &args[1];
+            let read = p
+                .find(&format!("(allow file-read* (subpath \"{t}\"))"))
+                .expect("readable");
+            let deny = p
+                .find(&format!("(deny file-write* (subpath \"{t}\"))"))
+                .expect("unwritable");
+            assert!(read < deny, "{p}");
+        }
+        // A read-only path that holds a hidden one is not opened.
+        let (_, args) = wrap(
+            std::slice::from_ref(&tools),
+            std::slice::from_ref(&state),
+            "/bin/sh",
+            &[],
+            "/",
+        )
+        .unwrap();
+        assert!(
+            !args.iter().any(|a| a.contains("(allow file-read*")),
+            "{args:?}"
+        );
+        let bin = tools.join("bin");
+        let b = bin.to_string_lossy().into_owned();
+        let mut env = std::collections::BTreeMap::new();
+        add_tools(&mut env, &bin);
+        assert_eq!(env["PATH"], format!("{b}:/usr/local/bin:/usr/bin:/bin"));
+        env.insert("PATH".to_owned(), format!("/usr/bin:{b}:/bin"));
+        add_tools(&mut env, &bin);
+        assert_eq!(env["PATH"], format!("{b}:/usr/bin:/bin"));
+        assert_eq!(env["AINKRAD_TOOLS_BIN"], b);
         let _ = std::fs::remove_dir_all(&base);
     }
 }

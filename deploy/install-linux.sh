@@ -304,7 +304,7 @@ if [ -n "$ws_root" ]; then
 else run rm -f "$dropin/workspace.conf"; fi
 # The terminals' egress hosts: the runner's built-in default (crates/runner/src/egress/policy.rs default_hosts), written
 # explicitly so an admin can edit it. The AI sessions keep their own AINKRAD_AGENT_EGRESS_HOSTS.
-term_hosts=github.com,codeload.github.com,objects.githubusercontent.com,api.github.com,gitlab.com,bitbucket.org,crates.io,static.crates.io,registry.npmjs.org,pypi.org,files.pythonhosted.org,proxy.golang.org,rubygems.org,index.rubygems.org,repo1.maven.org,repo.maven.apache.org,api.anthropic.com,claude.ai,console.anthropic.com,statsig.anthropic.com,api.openai.com,auth.openai.com,chatgpt.com,opencode.ai,models.dev
+term_hosts=github.com,codeload.github.com,objects.githubusercontent.com,api.github.com,gitlab.com,bitbucket.org,crates.io,static.crates.io,registry.npmjs.org,pypi.org,files.pythonhosted.org,proxy.golang.org,rubygems.org,index.rubygems.org,repo1.maven.org,repo.maven.apache.org,anthropic.com,claude.com,claude.ai,openai.com,chatgpt.com,opencode.ai,models.dev
 printf '+ write %s: RUNNER_ARGS=%s%s\n' "$envfile" "$args" "$([ "$agents" = 0 ] || echo ' (+ AINKRAD_AGENT_NETWORK=filtered, AINKRAD_AGENT_EGRESS_HOSTS=api.anthropic.com)')$([ "$pty" = 0 ] || echo " (+ AINKRAD_TERMINAL_EGRESS_HOSTS=$term_hosts)")"
 if [ "$dry" = 0 ]; then
   printf '# Written by deploy/install-linux.sh. exec.run is off unless --enable-exec is added here.\nRUNNER_ARGS=%s\n' "$args" >"$envfile"

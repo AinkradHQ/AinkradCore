@@ -235,15 +235,14 @@ pub fn default_hosts() -> String {
         "repo1.maven.org",
         "repo.maven.apache.org",
     ];
-    // The AI CLIs a person runs in a terminal (claude, codex, opencode) and their sign-ins: without them
-    // `claude` in a Core terminal failed with ERR_PROXY_TUNNEL (Oracle, 2026-11-21).
-    const AI_HOSTS: [&str; 9] = [
-        "api.anthropic.com",
+    // The AI CLIs a person runs in a terminal (claude, codex, opencode) and their sign-ins, as base
+    // domains (a listed name covers its sub-domains): single hosts kept missing the next one
+    // (`claude` needed platform.claude.com, Oracle 2026-11-22).
+    const AI_DOMAINS: [&str; 7] = [
+        "anthropic.com",
+        "claude.com",
         "claude.ai",
-        "console.anthropic.com",
-        "statsig.anthropic.com",
-        "api.openai.com",
-        "auth.openai.com",
+        "openai.com",
         "chatgpt.com",
         "opencode.ai",
         "models.dev",
@@ -252,7 +251,7 @@ pub fn default_hosts() -> String {
         .iter()
         .chain(ainkrad_proto::v2::JOB_REGISTRY_HOSTS.iter())
         .chain(MORE_REGISTRIES.iter())
-        .chain(AI_HOSTS.iter())
+        .chain(AI_DOMAINS.iter())
         .copied()
         .collect::<Vec<_>>()
         .join(",")
@@ -396,9 +395,10 @@ impl Policy {
         self.hosts.iter().cloned().collect()
     }
 
-    /// `name` is exactly a listed host name (already lower-case, no trailing dot).
+    /// `name` (already lower-case, no trailing dot) is a listed host name or a sub-domain of one.
     pub fn host_listed(&self, name: &str) -> bool {
         self.hosts.contains(name)
+            || (name.match_indices('.')).any(|(i, _)| self.hosts.contains(&name[i + 1..]))
     }
 
     /// Adds the host's own interface addresses (`host_addresses`): a host with a public address on an

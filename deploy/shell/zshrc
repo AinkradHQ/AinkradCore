@@ -20,6 +20,8 @@ ZSH_THEME=powerlevel10k/powerlevel10k
 plugins=(git zsh-autosuggestions zsh-syntax-highlighting)
 source $ZSH/oh-my-zsh.sh
 [[ -r $ZDOTDIR/.p10k.zsh ]] && source $ZDOTDIR/.p10k.zsh
+# The runner's AI tools (codex, opencode) stay on PATH whatever /etc/zprofile did to it; the job shims below go first.
+[[ -n $AINKRAD_TOOLS_BIN && -d $AINKRAD_TOOLS_BIN ]] && path=($AINKRAD_TOOLS_BIN ${path:#$AINKRAD_TOOLS_BIN})
 # Heavy jobs (E15-3): the job shims stay first on PATH whatever /etc/zprofile did to it. Unset outside Core shells.
 [[ -n $AINKRAD_SHIM_BIN && -d $AINKRAD_SHIM_BIN ]] && path=($AINKRAD_SHIM_BIN ${path:#$AINKRAD_SHIM_BIN})
 [[ -r $HOME/.zshrc.local ]] && source $HOME/.zshrc.local
