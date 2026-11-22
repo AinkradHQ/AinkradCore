@@ -292,6 +292,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAccountSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{id}/state": {
         parameters: {
             query?: never;
@@ -3412,6 +3428,35 @@ export interface components {
         AccountRestored: {
             restored: boolean;
         };
+        /** @description One AI session that ran on the account. */
+        AccountSession: {
+            ended_at?: components["schemas"]["Timestamp"];
+            /**
+             * @description The model it ran: what the harness said it runs, else what the session asked for. Absent
+             *     when neither is known (the harness default, not reported).
+             */
+            model?: string | null;
+            /** @description The account (its id) the run moved to when this session failed over; absent when it did not. */
+            moved_to_account?: string | null;
+            /** @description The runner device it ran on, and that runner's name. */
+            runner_id?: string | null;
+            runner_name?: string | null;
+            session_id: string;
+            started_at: components["schemas"]["Timestamp"];
+            /** @description The session's title, else its first message's start; empty when it has neither. */
+            title: string;
+            /**
+             * Format: int64
+             * @description Input, output and cache tokens.
+             */
+            tokens: number;
+            /**
+             * Format: int64
+             * @description What it cost, in millionths of a dollar; absent for a plan (unpriced) and for a device that
+             *     is not `admin`.
+             */
+            usd_micros?: number | null;
+        };
         /** @description One account's usage. No key, secret name, delivery or runner: it is for a `read` device. */
         AccountSpend: {
             /** Format: int64 */
@@ -5053,6 +5098,22 @@ export interface components {
             key: string;
             title: string;
         };
+        /** @description The last test or check of an account (`testAccount`, `checkAccount`) in detail. */
+        LastCheck: {
+            /**
+             * Format: int64
+             * @description How long it took to answer, in milliseconds; absent when it did not answer.
+             */
+            answer_ms?: number | null;
+            at: components["schemas"]["Timestamp"];
+            /** @description The result word when it was not `ok` (`token_expired`, `auth_failed`, `failed`, ...). */
+            detail?: string | null;
+            /** @description It answered `ok`. */
+            ok: boolean;
+            /** @description The runner device that ran it, and its name. */
+            runner_id?: string | null;
+            runner_name?: string | null;
+        };
         /** @description The last one-shot test of an account's key. */
         LastTest: {
             at: components["schemas"]["Timestamp"];
@@ -6021,6 +6082,11 @@ export interface components {
             /** Format: int64 */
             id: number;
             label: string;
+            /**
+             * @description The last test or check in detail: when, whether it answered `ok`, the runner that ran it, how
+             *     long it took to answer and, when it was not `ok`, the result word. Absent when never checked.
+             */
+            last_check?: components["schemas"]["LastCheck"];
             /** @description The last one-shot test of the key; absent when it was never tested. */
             last_test?: components["schemas"]["LastTest"];
             last_used_at?: components["schemas"]["Timestamp"];
@@ -8045,6 +8111,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderAccount"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAccountSessions: {
+        parameters: {
+            query?: {
+                /** @description At most this many, newest first (default 10, most 50). */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The account's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The latest AI sessions that ran on the account, newest first, with their title, model, runner, tokens and (for an `admin` device) dollars, and the account a failed-over session moved to. 404 for no such account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSession"][];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -10522,6 +10621,8 @@ export interface operations {
             query?: {
                 /** @description Days back, today included (default 14, most 90). */
                 days?: number;
+                /** @description Only this account's events (its id): the same daily rows, for that one account. */
+                account?: number;
             };
             header?: never;
             path?: never;
@@ -10529,7 +10630,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Daily spend and tokens per provider, summed from the ledger, oldest day first (needs `admin`). A day or provider with no events has no row */
+            /** @description Daily spend and tokens per provider, summed from the ledger, oldest day first (needs `admin`). A day or provider with no events has no row. With `account`, only that account's events */
             200: {
                 headers: {
                     [name: string]: unknown;

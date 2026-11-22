@@ -523,6 +523,20 @@ pub async fn apply_quiet(
         .await?;
     let gateway = super::gateway::absorb(&mut tx, id, &ev.gateway, now).await?;
     super::health::on_plan_limit(&mut tx, id, ev.plan_limit.as_ref(), now).await?;
+    // The model the harness says it runs, before the meter prices or labels this read's usage.
+    let ran = ev.entries.iter().rev().find_map(|e| {
+        (e.body["type"] == "session_started")
+            .then(|| e.body["model"].as_str())
+            .flatten()
+            .filter(|m| super::prices::valid_model(m))
+    });
+    if let Some(model) = ran {
+        sqlx::query("UPDATE core_agent_sessions SET harness_model = ? WHERE id = ?")
+            .bind(model)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
     let gateway =
         gateway || super::usage_meter::record(&mut tx, id, ev.usage, gateway, now).await?;
     let mut last = u64::try_from(last).unwrap_or(0);

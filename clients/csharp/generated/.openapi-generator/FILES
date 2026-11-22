@@ -53,6 +53,7 @@ src/Ainkrad.Client/Model/AccountModels.cs
 src/Ainkrad.Client/Model/AccountPlanLimit.cs
 src/Ainkrad.Client/Model/AccountPlanWindow.cs
 src/Ainkrad.Client/Model/AccountRestored.cs
+src/Ainkrad.Client/Model/AccountSession.cs
 src/Ainkrad.Client/Model/AccountSpend.cs
 src/Ainkrad.Client/Model/AccountTested.cs
 src/Ainkrad.Client/Model/AccountsDeleted.cs
@@ -175,6 +176,7 @@ src/Ainkrad.Client/Model/KindAuthMethod.cs
 src/Ainkrad.Client/Model/KindCapability.cs
 src/Ainkrad.Client/Model/KindCount.cs
 src/Ainkrad.Client/Model/KindLimit.cs
+src/Ainkrad.Client/Model/LastCheck.cs
 src/Ainkrad.Client/Model/LastTest.cs
 src/Ainkrad.Client/Model/LatestEvent.cs
 src/Ainkrad.Client/Model/LeaseGrant.cs

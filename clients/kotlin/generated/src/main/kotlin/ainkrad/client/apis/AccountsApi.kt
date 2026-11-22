@@ -20,6 +20,7 @@ import ainkrad.client.models.AccountDetail
 import ainkrad.client.models.AccountLogin
 import ainkrad.client.models.AccountModels
 import ainkrad.client.models.AccountRestored
+import ainkrad.client.models.AccountSession
 import ainkrad.client.models.AccountTested
 import ainkrad.client.models.AccountsDeleted
 import ainkrad.client.models.AiOrder
@@ -587,6 +588,42 @@ import io.ktor.http.ParametersBuilder
             val localVariableConfig = RequestConfig<kotlin.Any?>(
             RequestMethod.GET,
             "/api/v1/accounts/{id}/models".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * GET /api/v1/accounts/{id}/sessions
+        * 
+        * 
+         * @param id The account&#39;s id 
+         * @param limit At most this many, newest first (default 10, most 50). (optional)
+         * @return kotlin.collections.List<AccountSession>
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun listAccountSessions(id: kotlin.String, limit: kotlin.Long?): HttpResponse<kotlin.collections.List<AccountSession>> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+            limit?.apply { localVariableQuery["limit"] = listOf("$limit") }
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.GET,
+            "/api/v1/accounts/{id}/sessions".replace("{" + "id" + "}", "$id"),
             query = localVariableQuery,
             headers = localVariableHeaders,
             requiresAuthentication = true,

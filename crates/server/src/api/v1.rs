@@ -375,6 +375,10 @@ pub fn router(app: App) -> Router {
         )
         .route("/api/v1/accounts/{id}/models", get(accounts::list_models))
         .route(
+            "/api/v1/accounts/{id}/sessions",
+            get(accounts::list_sessions),
+        )
+        .route(
             "/api/v1/accounts/{id}/models/{model}",
             put(accounts::set_model_allowed),
         )

@@ -28,6 +28,11 @@ pub struct ProviderAccount {
     pub session_limits: Option<SessionLimits>,
     /// The last one-shot test of the key; absent when it was never tested.
     pub last_test: Option<LastTest>,
+    /// The last test or check in detail: when, whether it answered `ok`, the runner that ran it, how
+    /// long it took to answer and, when it was not `ok`, the result word. Absent when never checked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub last_check: Option<LastCheck>,
     pub last_used_at: Option<Timestamp>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
@@ -181,6 +186,14 @@ impl From<acc::Account> for ProviderAccount {
                     max_tokens: a.session_max_tokens,
                     max_usd_micros: a.session_max_usd_micros,
                 }),
+            last_check: a.last_test_at.as_deref().zip(a.last_test_result.as_deref()).map(|(at, result)| LastCheck {
+                at: ts(at),
+                ok: result == "ok",
+                runner_id: a.last_test_runner.clone(),
+                runner_name: a.last_test_runner_name.clone(),
+                answer_ms: a.last_test_ms.filter(|ms| *ms > 0),
+                detail: (result != "ok").then(|| result.to_owned()),
+            }),
             last_test: a
                 .last_test_at
                 .as_deref()
@@ -303,6 +316,29 @@ pub struct LastTest {
     /// [`AccountTested`]) or `failed` (the runner did not answer). Never provider text.
     pub result: String,
     pub at: Timestamp,
+}
+
+/// The last test or check of an account (`testAccount`, `checkAccount`) in detail.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct LastCheck {
+    pub at: Timestamp,
+    /// It answered `ok`.
+    pub ok: bool,
+    /// The runner device that ran it, and its name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub runner_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub runner_name: Option<String>,
+    /// How long it took to answer, in milliseconds; absent when it did not answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub answer_ms: Option<i64>,
+    /// The result word when it was not `ok` (`token_expired`, `auth_failed`, `failed`, ...).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub detail: Option<String>,
 }
 
 /// What `POST /accounts/{id}/test` answers: a status class and a latency, never a response body.

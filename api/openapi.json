@@ -434,6 +434,71 @@
         ],
         "type": "object"
       },
+      "AccountSession": {
+        "description": "One AI session that ran on the account.",
+        "properties": {
+          "ended_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "model": {
+            "description": "The model it ran: what the harness said it runs, else what the session asked for. Absent\nwhen neither is known (the harness default, not reported).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "moved_to_account": {
+            "description": "The account (its id) the run moved to when this session failed over; absent when it did not.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runner_id": {
+            "description": "The runner device it ran on, and that runner's name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runner_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "title": {
+            "description": "The session's title, else its first message's start; empty when it has neither.",
+            "type": "string"
+          },
+          "tokens": {
+            "description": "Input, output and cache tokens.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "usd_micros": {
+            "description": "What it cost, in millionths of a dollar; absent for a plan (unpriced) and for a device that\nis not `admin`.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "session_id",
+          "title",
+          "tokens",
+          "started_at"
+        ],
+        "type": "object"
+      },
       "AccountSpend": {
         "description": "One account's usage. No key, secret name, delivery or runner: it is for a `read` device.",
         "properties": {
@@ -4675,6 +4740,51 @@
         ],
         "type": "object"
       },
+      "LastCheck": {
+        "description": "The last test or check of an account (`testAccount`, `checkAccount`) in detail.",
+        "properties": {
+          "answer_ms": {
+            "description": "How long it took to answer, in milliseconds; absent when it did not answer.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "detail": {
+            "description": "The result word when it was not `ok` (`token_expired`, `auth_failed`, `failed`, ...).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ok": {
+            "description": "It answered `ok`.",
+            "type": "boolean"
+          },
+          "runner_id": {
+            "description": "The runner device that ran it, and its name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runner_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "at",
+          "ok"
+        ],
+        "type": "object"
+      },
       "LastTest": {
         "description": "The last one-shot test of an account's key.",
         "properties": {
@@ -6971,6 +7081,10 @@
           },
           "label": {
             "type": "string"
+          },
+          "last_check": {
+            "$ref": "#/components/schemas/LastCheck",
+            "description": "The last test or check in detail: when, whether it answered `ok`, the runner that ran it, how\nlong it took to answer and, when it was not `ok`, the result word. Absent when never checked."
           },
           "last_test": {
             "$ref": "#/components/schemas/LastTest",
@@ -10121,7 +10235,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.97.0"
+    "version": "1.98.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -11394,6 +11508,72 @@
           "accounts"
         ],
         "x-ainkrad-scope": "admin"
+      }
+    },
+    "/api/v1/accounts/{id}/sessions": {
+      "get": {
+        "operationId": "listAccountSessions",
+        "parameters": [
+          {
+            "description": "The account's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "At most this many, newest first (default 10, most 50).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AccountSession"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "The latest AI sessions that ran on the account, newest first, with their title, model, runner, tokens and (for an `admin` device) dollars, and the account a failed-over session moved to. 404 for no such account"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "accounts"
+        ],
+        "x-ainkrad-scope": "read"
       }
     },
     "/api/v1/accounts/{id}/state": {
@@ -15826,6 +16006,16 @@
               "format": "int64",
               "type": "integer"
             }
+          },
+          {
+            "description": "Only this account's events (its id): the same daily rows, for that one account.",
+            "in": "query",
+            "name": "account",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -15840,7 +16030,7 @@
                 }
               }
             },
-            "description": "Daily spend and tokens per provider, summed from the ledger, oldest day first (needs `admin`). A day or provider with no events has no row"
+            "description": "Daily spend and tokens per provider, summed from the ledger, oldest day first (needs `admin`). A day or provider with no events has no row. With `account`, only that account's events"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

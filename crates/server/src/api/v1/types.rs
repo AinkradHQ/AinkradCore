@@ -343,7 +343,14 @@
 ///    only runs auto-accepted before (no new ones).
 /// 97: working updates (next milestone after 0.10.2). `UpdateCheck` (`checkCoreUpdate`) reads the signed release feed: `status` is
 ///    `up_to_date`, `available` or `feed_unavailable`, with the new optional `runner_latest_version` and `reason`.
-pub const API_MINOR: u32 = 97;
+/// 98: account details (0.10.4). `GET /accounts/{id}/sessions` (`listAccountSessions`, `?limit=` default 10, most 50,
+///    `read`) -> `[AccountSession {session_id, title, model?, runner_id?, runner_name?, tokens, usd_micros? (admin only),
+///    started_at, ended_at?, moved_to_account?}]` newest first; `account` on `GET /costs/series` (`costSeries`: that
+///    account's daily rows); `ProviderAccount.last_check {at, ok, runner_id?, runner_name?, answer_ms?, detail?}`. A plan
+///    session's ledger rows carry the model the harness says it runs (`session_started.model` in the transcript, from
+///    Claude's `system/init` and Codex's `thread/start`), not `unknown`, when the session left the harness its default.
+///    Migration 65.
+pub const API_MINOR: u32 = 98;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -76,10 +76,11 @@ import io.ktor.http.ParametersBuilder
         * 
         * 
          * @param days Days back, today included (default 14, most 90). (optional)
+         * @param account Only this account&#39;s events (its id): the same daily rows, for that one account. (optional)
          * @return kotlin.collections.List<DayUsage>
         */
             @Suppress("UNCHECKED_CAST")
-        open suspend fun costSeries(days: kotlin.Long?): HttpResponse<kotlin.collections.List<DayUsage>> {
+        open suspend fun costSeries(days: kotlin.Long?, account: kotlin.Long?): HttpResponse<kotlin.collections.List<DayUsage>> {
 
             val localVariableAuthNames = listOf<String>("device_signature")
 
@@ -88,6 +89,7 @@ import io.ktor.http.ParametersBuilder
 
             val localVariableQuery = mutableMapOf<String, List<String>>()
             days?.apply { localVariableQuery["days"] = listOf("$days") }
+            account?.apply { localVariableQuery["account"] = listOf("$account") }
 
             val localVariableHeaders = mutableMapOf<String, String>()
 

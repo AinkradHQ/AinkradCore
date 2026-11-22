@@ -453,3 +453,34 @@ async fn an_account_deleted_under_a_live_session_still_gets_its_last_readings() 
     assert_eq!(rows.len(), 2, "{rows:?}");
     assert!(rows.iter().all(|r| r.1 == Some(m.account.id)));
 }
+
+/// A session that left Claude its default model: the ledger rows carry the model the harness said
+/// it runs (`session_started.model`), never `unknown`; with nothing said they stay `unknown`.
+#[tokio::test]
+async fn a_default_model_sessions_rows_carry_the_model_the_harness_ran() {
+    let m = m().await;
+    let id = &m.session.id;
+    feed(&m.fx, id, tokens(10, 1, 0)).await;
+    let started = TranscriptEntry {
+        seq: 1,
+        at: 0,
+        body: json!({"type": "session_started", "id": "h1", "model": "claude-opus-4-5"}),
+    };
+    let ev = events(id, tokens(30, 2, 0), vec![started]);
+    store::apply(&m.fx.app.pool, id, &ev, NOW).await.unwrap();
+    // A forged or bad name is no model: the one recorded stays.
+    let bad = TranscriptEntry {
+        seq: 2,
+        at: 0,
+        body: json!({"type": "session_started", "id": "h1", "model": "not a model!"}),
+    };
+    let ev = events(id, tokens(50, 3, 0), vec![bad]);
+    store::apply(&m.fx.app.pool, id, &ev, NOW).await.unwrap();
+    let models: Vec<String> =
+        sqlx::query_scalar("SELECT model FROM core_cost_events WHERE session = ? ORDER BY id")
+            .bind(id)
+            .fetch_all(&m.fx.app.pool)
+            .await
+            .unwrap();
+    assert_eq!(models, ["unknown", "claude-opus-4-5", "claude-opus-4-5"]);
+}

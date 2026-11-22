@@ -58,7 +58,7 @@ pub async fn record(
         return Ok(false);
     }
     let Some(row) = sqlx::query(
-        "SELECT harness, model, secrets, resumes, owner_module, account_id, hm_epoch, hm_in, hm_out, \
+        "SELECT harness, coalesce(harness_model, model) AS model, secrets, resumes, owner_module, account_id, hm_epoch, hm_in, hm_out, \
          hm_cache \
          FROM core_agent_sessions WHERE id = ?",
     )
@@ -131,6 +131,7 @@ pub async fn record(
         return Ok(true);
     }
     let key = format!("hm:{session}:{epoch}:{}.{}.{}", new[0], new[1], new[2]);
+    // The model the harness says it runs, else the one the session asked for (`harness_model`).
     let model = row.try_get::<Option<String>, _>("model")?;
     let harness: String = row.try_get("harness")?;
     let cost = NewCost {
