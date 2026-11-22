@@ -10,6 +10,7 @@
 //! Instructions go by protocol (`developerInstructions`, read from the spec's file), never
 //! argv. Approvals: `approvalPolicy: untrusted` asks before anything not known-safe, routed to
 //! us (`approvalsReviewer: user`), not to Codex's auto-reviewer. Codex reports tokens, no cost.
+//! Plan limits: `account/rateLimits/updated` becomes `RateLimit`, as Claude's `rate_limit_event`.
 //!
 //! Long-lived (E15.6): every thread param is per thread, so a later run starts a new thread on
 //! the same app-server (`renew`).
@@ -22,10 +23,49 @@ use tokio::process::Command;
 
 use crate::exec::Launch;
 use crate::proc::Proc;
-use crate::{Decision, Harness, HarnessEvent, Spec, TurnOutcome, Usage};
+use crate::{Decision, Harness, HarnessEvent, RateWindow, Spec, TurnOutcome, Usage};
 
 /// The Codex CLI version this adapter was written and recorded against (E3.6 probes it).
 pub const VERSION: &str = "0.154.0";
+
+/// `account/rateLimits/updated`: the plan's `primary` and `secondary` windows (`usedPercent`, the
+/// window's length in minutes, `resetsAt`) as a `RateLimit`, the way Claude's are. `rejected`
+/// once Codex says a limit was reached.
+fn rate_limits(r: &Value) -> Option<HarnessEvent> {
+    let windows: Vec<RateWindow> = ["primary", "secondary"]
+        .iter()
+        .filter_map(|k| {
+            let w = &r[*k];
+            Some(RateWindow {
+                name: window_name(w["windowDurationMins"].as_i64()?),
+                utilization: w["usedPercent"].as_f64()? / 100.0,
+                resets_at: w["resetsAt"].as_i64(),
+            })
+        })
+        .collect();
+    if windows.is_empty() {
+        return None;
+    }
+    let status = match r["rateLimitReachedType"].is_null() {
+        true => "allowed",
+        false => "rejected",
+    };
+    Some(HarnessEvent::RateLimit {
+        status: status.to_owned(),
+        windows,
+    })
+}
+
+/// Claude's names for the two windows both plans have, and the length for any other.
+fn window_name(mins: i64) -> String {
+    match mins {
+        300 => "five_hour".to_owned(),
+        10_080 => "seven_day".to_owned(),
+        m if m > 0 && m % 1440 == 0 => format!("{}_day", m / 1440),
+        m if m > 0 && m % 60 == 0 => format!("{}_hour", m / 60),
+        m => format!("{m}_minute"),
+    }
+}
 
 /// The process to spawn: cleared env + allowlist, `CODEX_HOME` set to the spec's config dir.
 pub fn command(spec: &Spec) -> Command {
@@ -330,6 +370,7 @@ impl Decoder {
                 vec![HarnessEvent::UsageSoFar(minus(self.latest, self.base))]
             }
             "turn/completed" => self.turn_completed(&p["turn"]),
+            "account/rateLimits/updated" => rate_limits(&p["rateLimits"]).into_iter().collect(),
             other => {
                 tracing::debug!(harness = "codex", method = other, "ignored a notification");
                 vec![]

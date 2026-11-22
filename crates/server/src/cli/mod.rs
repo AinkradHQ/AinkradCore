@@ -931,6 +931,9 @@ async fn serve(
         app.clone(),
     ));
     tokio::spawn(ainkrad_core_server::runner_update::sweep_loop(app.clone()));
+    tokio::spawn(ainkrad_core_server::agents::plan_check::refresh_loop(
+        app.clone(),
+    ));
     for m in modules.iter() {
         m.attach(&app);
     }

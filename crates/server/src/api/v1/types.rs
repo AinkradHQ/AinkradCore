@@ -355,6 +355,8 @@
 ///    ChatGPT: the runner's Codex default and the shipped Codex models) and every model its sessions were seen running.
 ///    Brain distil answers (no contract change): past 100 candidates the rest are dropped `over_limit` (their sources
 ///    read again) instead of the whole answer rejected, and a trailing comma before `]` or `}` is forgiven.
+///    `PlanChecked.plan_limit` (runner schema, optional): a plan check's answer carries the windows Claude reported,
+///    kept on the account like a session's (`health.plan_limit`).
 pub const API_MINOR: u32 = 99;
 
 use serde::{Deserialize, Serialize};

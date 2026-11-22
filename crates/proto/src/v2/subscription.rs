@@ -179,14 +179,16 @@ impl std::fmt::Debug for PlanCheck {
 }
 
 /// Runner to Core: how the check ended. Never the CLI's text.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct PlanChecked {
     /// `ok`, or why not: `token_expired`, `limit_reached`, `egress_not_proven`,
     /// `sandbox_unavailable`, `runner_busy`, `unreachable`, `timeout` or `failed`.
     pub result: String,
     pub latency_ms: u64,
+    /// The plan windows Claude reported on the check's answer (its `rate_limit_event`), stored on
+    /// the account like a session's. Absent from an older runner or when Claude said none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_limit: Option<super::PlanLimit>,
 }
 
 #[cfg(test)]
