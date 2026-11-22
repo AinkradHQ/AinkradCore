@@ -361,7 +361,9 @@
 ///    expires_at}`: the first Claude plan of the opener's AI order that can take work, leased as env
 ///    (`CLAUDE_CODE_OAUTH_TOKEN`); 404 `no_account` whose message is the line the shim shows.
 ///    `AccountSession.terminal` (the terminal id) marks a terminal's use in `listAccountSessions`. Migration 66.
-pub const API_MINOR: u32 = 99;
+/// 100: plan windows from a check (0.10.6). `PlanChecked.plan_limit` (runner schema, optional): a plan check's answer
+///    carries the windows Claude reported, kept on the account like a session's (`health.plan_limit`). No Core API change.
+pub const API_MINOR: u32 = 100;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
