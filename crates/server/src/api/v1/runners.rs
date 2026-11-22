@@ -276,6 +276,11 @@ fn of(d: gov::Device, live: Option<&RunnerState>, x: &Extra) -> Runner {
         });
     let version = live.map(|s| s.version.clone()).filter(|v| !v.is_empty());
     let facts = x.facts.as_ref();
+    let behind = version
+        .as_deref()
+        .and_then(semver)
+        .zip(semver(env!("CARGO_PKG_VERSION")))
+        .map(|(runner, core)| core > runner);
     Runner {
         slots: Some(RunnerSlots {
             agents_used: x.agents,
@@ -304,13 +309,12 @@ fn of(d: gov::Device, live: Option<&RunnerState>, x: &Extra) -> Runner {
             .since
             .filter(|_| live.is_some_and(|s| s.online))
             .map(|t| ts(&iso_of_unix(t))),
-        update_available: version
-            .as_deref()
-            .and_then(semver)
-            .zip(semver(env!("CARGO_PKG_VERSION")))
-            .map(|(runner, core)| core > runner),
-        updating: crate::runner_update::is_updating(&d.id, crate::runner_update::unix_now())
-            .then_some(true),
+        update_available: behind,
+        // Only while it is still behind: a runner back on the Core's version is done, not "updating" for the rest of
+        // the window (Oracle 2026-11-22: Azure showed "Updating" for 15 min after it was already on 0.10.4).
+        updating: (behind != Some(false)
+            && crate::runner_update::is_updating(&d.id, crate::runner_update::unix_now()))
+        .then_some(true),
         update_required: version
             .as_deref()
             .map(crate::runner_update::runner_too_old)
