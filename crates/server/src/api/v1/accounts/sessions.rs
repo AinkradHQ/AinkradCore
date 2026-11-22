@@ -41,6 +41,12 @@ pub struct AccountSession {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
     pub moved_to_account: Option<String>,
+    /// Set when this row is not an AI session but a tool typed in a terminal (its id, also in
+    /// `session_id`) that signed in with the account: `title` names the tool, and no transcript,
+    /// tokens or dollars exist for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub terminal: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, IntoParams)]
@@ -103,7 +109,36 @@ pub async fn list_sessions(
             moved_to_account: r
                 .try_get::<Option<i64>, _>("moved_to")?
                 .map(|n| n.to_string()),
+            terminal: None,
         });
     }
+    // A tool typed in a terminal (0.10.5), between the sessions by when it signed in.
+    let uses = sqlx::query_as::<_, (String, String, String, String, Option<String>)>(
+        "SELECT u.terminal, u.tool, u.runner, u.created_at, d.name FROM core_terminal_account_uses u \
+         LEFT JOIN core_devices d ON d.id = u.runner WHERE u.account_id = ? \
+         ORDER BY u.created_at DESC, u.id DESC LIMIT ?",
+    )
+    .bind(a.id)
+    .bind(limit)
+    .fetch_all(&app.pool)
+    .await?;
+    for (terminal, tool, runner, at, runner_name) in uses {
+        out.push(AccountSession {
+            session_id: terminal.clone(),
+            title: format!("{tool} in a terminal"),
+            model: None,
+            runner_id: Some(runner),
+            runner_name,
+            tokens: 0,
+            usd_micros: None,
+            started_at: ts(&at),
+            ended_at: None,
+            moved_to_account: None,
+            terminal: Some(terminal),
+        });
+    }
+    // Timestamps of one format sort as text; newest first, stable for equal times.
+    out.sort_by(|x, y| y.started_at.cmp(&x.started_at));
+    out.truncate(usize::try_from(limit).unwrap_or(10));
     Ok(Json(out))
 }

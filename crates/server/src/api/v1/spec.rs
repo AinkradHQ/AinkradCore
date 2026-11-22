@@ -123,6 +123,7 @@ use super::{
         terminals::attach,
         terminals::grant,
         terminals::release,
+        terminals::runner_account,
         settings::list_server,
         settings::list,
         settings::get,

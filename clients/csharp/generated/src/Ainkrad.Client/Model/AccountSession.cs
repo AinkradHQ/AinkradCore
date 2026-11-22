@@ -47,10 +47,11 @@ namespace Ainkrad.Client.Model
         /// <param name="runnerName">runnerName.</param>
         /// <param name="sessionId">sessionId (required).</param>
         /// <param name="startedAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4). (required).</param>
+        /// <param name="terminal">Set when this row is not an AI session but a tool typed in a terminal (its id, also in &#x60;session_id&#x60;) that signed in with the account: &#x60;title&#x60; names the tool, and no transcript, tokens or dollars exist for it..</param>
         /// <param name="title">The session&#39;s title, else its first message&#39;s start; empty when it has neither. (required).</param>
         /// <param name="tokens">Input, output and cache tokens. (required).</param>
         /// <param name="usdMicros">What it cost, in millionths of a dollar; absent for a plan (unpriced) and for a device that is not &#x60;admin&#x60;..</param>
-        public AccountSession(DateTime endedAt = default, string model = default, string movedToAccount = default, string runnerId = default, string runnerName = default, string sessionId = default, DateTime startedAt = default, string title = default, long tokens = default, long? usdMicros = default)
+        public AccountSession(DateTime endedAt = default, string model = default, string movedToAccount = default, string runnerId = default, string runnerName = default, string sessionId = default, DateTime startedAt = default, string terminal = default, string title = default, long tokens = default, long? usdMicros = default)
         {
             // to ensure "sessionId" is required (not null)
             if (sessionId == null)
@@ -71,6 +72,7 @@ namespace Ainkrad.Client.Model
             this.MovedToAccount = movedToAccount;
             this.RunnerId = runnerId;
             this.RunnerName = runnerName;
+            this.Terminal = terminal;
             this.UsdMicros = usdMicros;
         }
 
@@ -122,6 +124,13 @@ namespace Ainkrad.Client.Model
         public DateTime StartedAt { get; set; }
 
         /// <summary>
+        /// Set when this row is not an AI session but a tool typed in a terminal (its id, also in &#x60;session_id&#x60;) that signed in with the account: &#x60;title&#x60; names the tool, and no transcript, tokens or dollars exist for it.
+        /// </summary>
+        /// <value>Set when this row is not an AI session but a tool typed in a terminal (its id, also in &#x60;session_id&#x60;) that signed in with the account: &#x60;title&#x60; names the tool, and no transcript, tokens or dollars exist for it.</value>
+        [DataMember(Name = "terminal", EmitDefaultValue = true)]
+        public string Terminal { get; set; }
+
+        /// <summary>
         /// The session&#39;s title, else its first message&#39;s start; empty when it has neither.
         /// </summary>
         /// <value>The session&#39;s title, else its first message&#39;s start; empty when it has neither.</value>
@@ -157,6 +166,7 @@ namespace Ainkrad.Client.Model
             sb.Append("  RunnerName: ").Append(RunnerName).Append("\n");
             sb.Append("  SessionId: ").Append(SessionId).Append("\n");
             sb.Append("  StartedAt: ").Append(StartedAt).Append("\n");
+            sb.Append("  Terminal: ").Append(Terminal).Append("\n");
             sb.Append("  Title: ").Append(Title).Append("\n");
             sb.Append("  Tokens: ").Append(Tokens).Append("\n");
             sb.Append("  UsdMicros: ").Append(UsdMicros).Append("\n");

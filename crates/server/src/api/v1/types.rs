@@ -355,8 +355,12 @@
 ///    ChatGPT: the runner's Codex default and the shipped Codex models) and every model its sessions were seen running.
 ///    Brain distil answers (no contract change): past 100 candidates the rest are dropped `over_limit` (their sources
 ///    read again) instead of the whole answer rejected, and a trailing comma before `]` or `}` is forgiven.
-///    `PlanChecked.plan_limit` (runner schema, optional): a plan check's answer carries the windows Claude reported,
-///    kept on the account like a session's (`health.plan_limit`).
+///    Also in 99: AI tools in terminals use the person's accounts (0.10.5). `POST /runner/terminals/{id}/account`
+///    (`runnerTerminalAccount`, `runner` scope, only the runner hosting the running terminal), body
+///    `RunnerTerminalAccount {tool}` (`claude` only, else 400) -> `TerminalAccountLease {account, name, lease, var,
+///    expires_at}`: the first Claude plan of the opener's AI order that can take work, leased as env
+///    (`CLAUDE_CODE_OAUTH_TOKEN`); 404 `no_account` whose message is the line the shim shows.
+///    `AccountSession.terminal` (the terminal id) marks a terminal's use in `listAccountSessions`. Migration 66.
 pub const API_MINOR: u32 = 99;
 
 use serde::{Deserialize, Serialize};
@@ -364,7 +368,18 @@ use utoipa::ToSchema;
 
 /// RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a
 /// client's date parser never meets a second one (E0.4).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, schemars::JsonSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    schemars::JsonSchema,
+)]
 #[schema(value_type = String, format = DateTime)]
 pub struct Timestamp(String);
 

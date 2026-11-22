@@ -52,6 +52,9 @@ pub const SHIM_NAMES: [&str; 21] = [
     "vitest",
     "jest",
 ];
+/// The AI tools the shim stands in for in a terminal (0.10.5): it asks this socket for the opener's
+/// account (`{t:"account",tool}`) and starts the real tool signed in with it.
+pub const ACCOUNT_TOOLS: [&str; 1] = ["claude"];
 /// Environment names a request may carry; the shim sends the same list and this side checks again.
 pub const ENV_ALLOW: [&str; 11] = [
     "CI",
@@ -131,7 +134,7 @@ pub fn install_shims(state: &Path, shim: &Path) -> io::Result<PathBuf> {
     let bin = state.join("shims").join("bin");
     std::fs::create_dir_all(&bin)?;
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))?;
-    for name in SHIM_NAMES {
+    for name in SHIM_NAMES.iter().chain(&ACCOUNT_TOOLS) {
         let dst = bin.join(name);
         let _ = std::fs::remove_file(&dst);
         if std::fs::hard_link(shim, &dst).is_err() {
@@ -398,9 +401,13 @@ async fn serve(conn: UnixStream, up: Upstream, origin: Origin) -> io::Result<()>
         .await
         .ok()
         .flatten();
-    let body = first
-        .and_then(|l| serde_json::from_str::<Value>(&l).ok())
-        .and_then(|r| build(&r, &origin));
+    let first = first.and_then(|l| serde_json::from_str::<Value>(&l).ok());
+    if let Some(r) = first.as_ref().filter(|r| r["t"] == "account") {
+        let answer = account(&up, &origin, r).await;
+        let _ = wr.write_all(answer.as_bytes()).await;
+        return Ok(());
+    }
+    let body = first.and_then(|r| build(&r, &origin));
     let Some(body) = body else {
         say(&mut wr, local("bad_request")).await;
         return Ok(());
@@ -499,6 +506,99 @@ async fn serve(conn: UnixStream, up: Upstream, origin: Origin) -> io::Result<()>
             },
         }
     }
+}
+
+/// A whole JSON answer of the Core, at most 64 KiB.
+async fn json_of(mut r: crate::workspace::relay::Reply) -> Option<Value> {
+    let mut buf = Vec::new();
+    while let Some(c) = r.body.recv().await {
+        buf.extend_from_slice(&c.ok()?);
+        if buf.len() > 64 * 1024 {
+            return None;
+        }
+    }
+    serde_json::from_slice(&buf).ok()
+}
+
+/// One signed JSON call to the Core: its status and body, or `None` when it did not answer in time.
+async fn post(up: &Upstream, path: String, body: Value) -> Option<(u16, Value)> {
+    let call = Call {
+        method: "POST",
+        path,
+        query: String::new(),
+        headers: vec![("content-type".to_owned(), "application/json".to_owned())],
+        body: body.to_string().into_bytes(),
+    };
+    let r = tokio::time::timeout(ACCOUNT_WAIT, up(call))
+        .await
+        .ok()?
+        .ok()?;
+    let status = r.status;
+    Some((
+        status,
+        tokio::time::timeout(ACCOUNT_WAIT, json_of(r))
+            .await
+            .ok()??,
+    ))
+}
+
+/// What the Core and the lease take to answer a terminal's `claude`.
+const ACCOUNT_WAIT: Duration = Duration::from_secs(10);
+
+/// A terminal's `{t:"account",tool}` (0.10.5): the opener's account, leased by the Core
+/// (`POST /runner/terminals/{id}/account`) and redeemed here, goes back as the one variable the tool
+/// starts with: `{env:{VAR:value},name}`. `{say}` is the line to show when nothing is usable;
+/// `{local}` any other trouble. Either way the shim then runs the tool with its own sign-in. Only a
+/// terminal's socket asks: an AI session already has its account.
+async fn account(up: &Upstream, origin: &Origin, req: &Value) -> zeroize::Zeroizing<String> {
+    use ainkrad_proto::v2::{SUBSCRIPTION_HARNESS, SUBSCRIPTION_VAR, subscription_problem};
+    let line = |v: Value| zeroize::Zeroizing::new(format!("{v}\n"));
+    let local = |why: &str| line(json!({ "local": why }));
+    let (Some(terminal), None) = (&origin.terminal, &origin.session) else {
+        return local("not_a_terminal");
+    };
+    if req["tool"] != SUBSCRIPTION_HARNESS {
+        return local("unknown_tool");
+    }
+    let path = format!("/api/v1/runner/terminals/{terminal}/account");
+    let asked = post(up, path, json!({ "tool": SUBSCRIPTION_HARNESS })).await;
+    let granted = match asked {
+        Some((200, v)) => v,
+        Some((404, v)) if v["code"] == "no_account" => {
+            let say = v["message"].as_str().unwrap_or("no account can be used");
+            return line(json!({ "say": say }));
+        }
+        _ => return local("core_unavailable"),
+    };
+    let (Some(lease), Some(var)) = (granted["lease"].as_str(), granted["var"].as_str()) else {
+        return local("bad_answer");
+    };
+    if var != SUBSCRIPTION_VAR {
+        return local("bad_answer");
+    }
+    let redeemed = post(
+        up,
+        "/api/v1/secret-leases/redeem".to_owned(),
+        json!({ "lease": lease }),
+    )
+    .await;
+    let Some((200, mut v)) = redeemed else {
+        return local("core_unavailable");
+    };
+    let name = v["name"].as_str().unwrap_or_default().to_owned();
+    let delivery = v["delivery"].as_str().unwrap_or_default().to_owned();
+    let value = match v.get_mut("value").map(Value::take) {
+        Some(Value::String(s)) => zeroize::Zeroizing::new(s),
+        _ => return local("bad_answer"),
+    };
+    // The same rule an AI session's token passes: a plan's, for claude, in its variable, as env.
+    let grants = [(name.as_str(), var, Some(delivery.as_str()))];
+    if subscription_problem(SUBSCRIPTION_HARNESS, false, grants).is_some()
+        || !ainkrad_proto::v2::is_subscription_secret(&name)
+    {
+        return local("refused");
+    }
+    line(json!({ "env": { var: value.as_str() }, "name": granted["name"] }))
 }
 
 #[cfg(test)]

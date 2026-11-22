@@ -105,12 +105,25 @@ async fn mint(
     s: &Session,
     secret: &store::SessionSecret,
 ) -> Result<(String, i64), Refusal> {
+    let resumed = s.state == "interrupted";
+    mint_to(app, &secret.name, &s.runner, &s.created_by, resumed).await
+}
+
+/// [`mint`] for any holder: `name` leased as env to `runner` on behalf of `by` (a session's creator,
+/// or the device that opened a terminal).
+pub(super) async fn mint_to(
+    app: &App,
+    name: &str,
+    runner: &str,
+    by: &str,
+    resumed: bool,
+) -> Result<(String, i64), Refusal> {
     let got = secrets::lease_to(
         &app.pool,
-        &secret.name,
-        &s.runner,
+        name,
+        runner,
         None,
-        &s.created_by,
+        by,
         AuditActor::System,
         &app.clock.now(),
         app.clock.unix(),
@@ -120,10 +133,9 @@ async fn mint(
     .map_err(lift)?;
     let row: Option<(String, Option<String>)> =
         sqlx::query_as("SELECT state, state_reason FROM core_accounts WHERE secret_name = ?")
-            .bind(&secret.name)
+            .bind(name)
             .fetch_optional(&app.pool)
             .await?;
-    let resumed = s.state == "interrupted";
     if !row
         .as_ref()
         .is_some_and(|(st, why)| crate::store::health::startable(st, why.as_deref(), resumed))
@@ -131,7 +143,7 @@ async fn mint(
         // A disabled or deleted account has no lease left. A cooldown or health state only refuses
         // this start: another session's unredeemed lease is its own, and only ours is dropped.
         if row.as_ref().is_none_or(|(st, _)| st == "disabled") {
-            crate::store::account_keys::revoke_leases(&app.pool, &secret.name).await?;
+            crate::store::account_keys::revoke_leases(&app.pool, name).await?;
             return Err(refuse(
                 "the subscription account was disabled or deleted while the session started",
             ));

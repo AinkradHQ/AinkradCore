@@ -43,7 +43,7 @@ fn shims_are_linked_and_found_first_on_path() {
     let shim = dir.join("ainkrad-job");
     std::fs::write(&shim, "x").unwrap();
     let bin = install_shims(&dir, &shim).unwrap();
-    for n in SHIM_NAMES {
+    for n in SHIM_NAMES.iter().chain(&ACCOUNT_TOOLS) {
         assert!(bin.join(n).is_file(), "{n}");
     }
     install_shims(&dir, &shim).unwrap();
@@ -220,4 +220,94 @@ async fn a_bad_request_is_told_to_run_locally() {
     let (c, _g) = talk(up, "{\"argv\":[]}\n").await;
     let mut rd = BufReader::new(c);
     assert!(line(&mut rd, 4096).await.unwrap().contains("\"local\""));
+}
+
+/// A Core that answers each path with a status and a JSON body.
+fn core(answers: Vec<(&'static str, u16, Value)>, seen: Arc<Mutex<Vec<String>>>) -> Upstream {
+    Arc::new(move |call: Call| {
+        let (answers, seen) = (answers.clone(), Arc::clone(&seen));
+        Box::pin(async move {
+            seen.lock().unwrap().push(call.path.clone());
+            let (status, body) = answers
+                .iter()
+                .find(|(p, _, _)| *p == call.path)
+                .map(|(_, s, b)| (*s, b.to_string()))
+                .unwrap_or((500, "{}".into()));
+            let (tx, rx) = mpsc::channel(1);
+            tx.send(Ok(body.into_bytes())).await.unwrap();
+            Ok(crate::workspace::relay::Reply {
+                status,
+                content_type: "application/json".into(),
+                body: rx,
+            })
+        })
+    })
+}
+
+const ASK: &str = "/api/v1/runner/terminals/t1/account";
+const REDEEM: &str = "/api/v1/secret-leases/redeem";
+
+async fn ask_account(up: Upstream, o: Origin) -> Value {
+    serde_json::from_str(&account(&up, &o, &json!({"t": "account", "tool": "claude"})).await)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_terminal_gets_its_plan_token_as_the_one_variable() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let lease = json!({"lease": "l_1", "var": "CLAUDE_CODE_OAUTH_TOKEN", "name": "Work"});
+    let token = |name: &str, delivery: &str| json!({"name": name, "delivery": delivery, "value": "fake-token", "kind": "text"});
+    let up = core(
+        vec![
+            (ASK, 200, lease.clone()),
+            (REDEEM, 200, token("acct.claude-sub.3", "env")),
+        ],
+        Arc::clone(&seen),
+    );
+    let v = ask_account(up, origin()).await;
+    assert_eq!(
+        v,
+        json!({"env": {"CLAUDE_CODE_OAUTH_TOKEN": "fake-token"}, "name": "Work"})
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![ASK.to_owned(), REDEEM.to_owned()]
+    );
+    // An API key's secret, or a file delivery, never goes into the tool's environment.
+    for bad in [
+        token("acct.anthropic.3", "env"),
+        token("acct.claude-sub.3", "file"),
+    ] {
+        let up = core(
+            vec![(ASK, 200, lease.clone()), (REDEEM, 200, bad)],
+            Arc::default(),
+        );
+        assert_eq!(ask_account(up, origin()).await, json!({"local": "refused"}));
+    }
+}
+
+#[tokio::test]
+async fn no_account_is_a_line_and_a_session_never_asks() {
+    let none = json!({"code": "no_account", "message": "No Claude plan"});
+    let up = core(vec![(ASK, 404, none)], Arc::default());
+    assert_eq!(
+        ask_account(up, origin()).await,
+        json!({"say": "No Claude plan"})
+    );
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let up = core(Vec::new(), Arc::clone(&seen));
+    let session = Origin {
+        terminal: None,
+        session: Some("as_1".into()),
+        ..origin()
+    };
+    assert_eq!(
+        ask_account(up.clone(), session).await,
+        json!({"local": "not_a_terminal"})
+    );
+    assert!(seen.lock().unwrap().is_empty());
+    assert_eq!(
+        ask_account(up, origin()).await,
+        json!({"local": "core_unavailable"})
+    );
 }

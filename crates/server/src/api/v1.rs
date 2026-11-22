@@ -242,6 +242,10 @@ pub fn router(app: App) -> Router {
             "/api/v1/runner/jobs/{job}/signal",
             post(jobs::runner_signal),
         )
+        .route(
+            "/api/v1/runner/terminals/{id}/account",
+            post(terminals::runner_account),
+        )
         .route("/api/v1/runners", get(runners::list))
         .route("/api/v1/runners/{id}", get(runners::get))
         .route("/api/v1/runners/{id}/noop", post(runners::noop))
