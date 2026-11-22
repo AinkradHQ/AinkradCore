@@ -53,6 +53,44 @@ pub async fn save(
     Ok(ids.len())
 }
 
+/// The Codex model the runner gives a session that names none (`crates/runner/src/harness.rs`
+/// `HARNESSES`), which Codex's own `thread/start` answer names in the recorded fixtures.
+const CODEX_DEFAULT: &str = "gpt-5.6-luna";
+
+/// The models a plan account can run, with no key to list them: a Claude plan runs the Anthropic
+/// models this release ships prices for (`prices::SHIPPED`; the `claude` CLI takes the full ids), a
+/// ChatGPT plan the Codex models of the shipped OpenAI rows and the runner's Codex default. Any
+/// other provider has none here (its list is fetched with its key).
+pub fn plan_models(provider: &str) -> Vec<String> {
+    let shipped = |vendor: &str, keep: fn(&str) -> bool| {
+        super::prices::SHIPPED
+            .iter()
+            .filter(|(p, m, ..)| *p == vendor && keep(m))
+            .map(|(_, m, ..)| (*m).to_owned())
+            .collect::<Vec<_>>()
+    };
+    match provider {
+        "claude-sub" => shipped("anthropic", |_| true),
+        "codex-sub" => {
+            let mut out = vec![CODEX_DEFAULT.to_owned()];
+            out.extend(shipped("openai", |m| m.contains("codex")));
+            out
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The models the harness said it ran in account `id`'s sessions (`harness_model`), oldest first.
+pub async fn seen(pool: &SqlitePool, id: i64) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT harness_model FROM core_agent_sessions WHERE account_id = ? \
+         AND harness_model IS NOT NULL GROUP BY harness_model ORDER BY min(n)",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await
+}
+
 /// Account `id`'s kept list and when it was read; empty when none was.
 pub async fn get(pool: &SqlitePool, id: i64) -> Result<(Vec<String>, Option<String>), sqlx::Error> {
     let row: Option<(String, String)> =

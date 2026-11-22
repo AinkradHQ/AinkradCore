@@ -4941,7 +4941,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The model ids the provider listed for the account when its key was added or checked (a preset's list is read through a runner's gateway), and in `items` each model with its list price where there is one and whether it is allowed. 404 for no such account
+            /// The model ids the provider listed for the account when its key was added or checked (a preset's list is read through a runner's gateway), and in `items` each model with its list price where there is one and whether it is allowed. A plan account (`billing: plan`) has no key to list them: its models are the ones its harness runs on a plan (the shipped Anthropic models for Claude, the Codex models for ChatGPT) and every model its sessions were seen running, all included in the plan. 404 for no such account
             ///
             /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/models/get(listAccountModels)/responses/200`.
             ///
