@@ -5,6 +5,7 @@
 # Every run is as systemd runs it: no HOME. A public Core's health check must send the Core's own host name. The local model
 # (model.sh) is installed on Core runs, verified against its pins, kept when present, and skipped with the opt-out file.
 # After a healthy update the updater's own scripts come from the release's signed installer bundle, and only from it.
+# On a combined host (runner up beside the Core) a Core update also updates that runner; a runner failure puts back only the runner.
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 case "$(uname -s)-$(uname -m)" in Linux-aarch64) t=linux-arm64 ;; Linux-x86_64) t=linux-x86_64 ;; Darwin-arm64) t=macos-arm64 ;; esac
@@ -33,17 +34,20 @@ manifest() { # manifest VER GENERATED EXPIRES [KEY]
 mkdir -p "$w/lib" "$w/bin"; cp "$here/install.sh" "$w/lib/"; cp "$w/a.pub" "$w/lib/ainkrad-release.pub"
 cat >"$w/systemctl" <<SH
 #!/bin/sh
+# ainkrad-runner.service is its own state (ractive, failing on the version in rbad); every other unit is the Core's (active, bad)
+for a; do u=\$a; done
+if [ "\$u" = ainkrad-runner.service ]; then f="$w/ractive" b="$w/rbad" p=ainkrad-runner; else f="$w/active" b="$w/bad" p=ainkrad-core-server; fi
 case "\$1" in
-  stop) rm -f "$w/active" ;;
-  start) if [ -e "$w/bad" ] && [ "\$("$w/prefix/bin/ainkrad-core-server" | awk '{print \$2}')" = "\$(cat "$w/bad")" ]; then rm -f "$w/active"; else touch "$w/active"; fi ;;
-  is-active) [ -e "$w/active" ] ;;
+  stop) rm -f "\$f" ;;
+  start|restart) if [ -e "\$b" ] && [ "\$("$w/prefix/bin/\$p" | awk '{print \$2}')" = "\$(cat "\$b")" ]; then rm -f "\$f"; else touch "\$f"; fi ;;
+  is-active) [ -e "\$f" ] ;;
   try-restart) echo "\$2" >>"$w/restarts" ;;
   daemon-reload|enable) echo "\$*" >>"$w/calls" ;;
 esac
 SH
 chmod +x "$w/systemctl"
 setup() { # a Core on 1.0.0 with a database
-  rm -rf "$w/prefix" "$w/home" "$w/state" "$w/bad"; mkdir -p "$w/prefix/bin" "$w/home" "$w/state"
+  rm -rf "$w/prefix" "$w/home" "$w/state" "$w/bad" "$w/ractive" "$w/rbad"; mkdir -p "$w/prefix/bin" "$w/home" "$w/state"
   # the updater's scripts as installed: a refresh by an earlier case must not leak into this one
   rm -f "$w/lib/update.sh" "$w/lib/model.sh"; cp "$here/install.sh" "$w/lib/"; [ ! -f "$w/model-stub" ] || cp -p "$w/model-stub" "$w/lib/model.sh"
   for b in $bins; do stub "$b" 1.0.0 >"$w/prefix/bin/$b"; chmod +x "$w/prefix/bin/$b"; done
@@ -88,6 +92,31 @@ check "the Core is running again" "$([ -e "$w/active" ] && echo up || echo down)
 # --only: a Core update leaves the runner's programs alone
 setup; release 1.1.0; manifest 1.1.0 100 "$FUT"; run now
 check "core mode leaves the runner programs alone" "$("$w/prefix/bin/ainkrad-runner" | awk '{print $2}')" 1.0.0
+# a combined host (the runner is up here): the healthy Core brings its runner to the same release, and says so
+rv() { "$w/prefix/bin/ainkrad-runner" | awk '{print $2}'; }
+setup; touch "$w/ractive"; release 1.1.0; manifest 1.1.0 100 "$FUT"; run now
+check "combined host: the Core is on 1.1.0" "$(ver)" 1.1.0; check "combined host: the runner is on 1.1.0" "$(rv)" 1.1.0
+check "... ptyhost and the job shim too" "$("$w/prefix/bin/ainkrad-ptyhost" | awk '{print $2}')$("$w/prefix/bin/ainkrad-job" | awk '{print $2}')" 1.1.01.1.0
+check "... a runner event" "$(grep -c '"step":"runner","text":"Runner is on 1.1.0"' "$w/state/status.json")" 1
+check "... between health and done" "$(grep -o '"step":"[a-z]*"' "$w/state/status.json" | tr '\n' ' ')" '"step":"snapshot" "step":"install" "step":"health" "step":"runner" "step":"done" '
+check "... status done, no error" "$(st state)$(sed -n 's/.*"error":null.*/null/p' "$w/state/status.json")" donenull
+check "... the runner is up" "$([ -e "$w/ractive" ] && echo up || echo down)" up
+# the new runner dies at start: only the runner goes back, the healthy Core stays on the new version
+setup; touch "$w/ractive"; echo 1.1.0 >"$w/rbad"; release 1.1.0; manifest 1.1.0 100 "$FUT"; run now
+check "runner failure: the Core stays on 1.1.0" "$(ver)" 1.1.0; check "runner failure: the runner is back on 1.0.0" "$(rv)" 1.0.0
+check "... ptyhost back too" "$("$w/prefix/bin/ainkrad-ptyhost" | awk '{print $2}')" 1.0.0
+check "... the job shim it did not have is gone" "$([ -e "$w/prefix/bin/ainkrad-job" ] && echo there || echo gone)" gone
+check "... the database is not rolled back" "$(dbval)" db-v1; check "... the Core is up" "$([ -e "$w/active" ] && echo up || echo down)" up
+check "... status done with the runner error" "$(st state) $(st error)" "done runner_health_failed"
+check "... and an event says so" "$(grep -c '"step":"runner","text":"Runner went back to 1.0.0"' "$w/state/status.json")" 1
+check "... and the journal" "$(grep -c 'the runner stayed on 1.0.0 (runner_health_failed)' "$w/out")" 1
+check "... the old runner is up" "$([ -e "$w/ractive" ] && echo up || echo down)" up
+# a runner already on the release is left alone; a host without a running runner gets no runner step
+setup; touch "$w/ractive"; stub ainkrad-runner 1.1.0 >"$w/prefix/bin/ainkrad-runner"; release 1.1.0; manifest 1.1.0 100 "$FUT"; run now
+check "a runner already on the release gets no runner step" "$(grep -c '"step":"runner"' "$w/state/status.json")" 0
+setup; release 1.1.0; manifest 1.1.0 100 "$FUT"; run now
+check "non-combined host: no runner step" "$(grep -c '"step":"runner"' "$w/state/status.json")" 0
+check "non-combined host: the runner programs stay" "$(rv)" 1.0.0
 # urgent releases install off-window in auto mode
 h=$(date +%H); if [ $((10#$h)) -lt 2 ] || [ $((10#$h)) -ge 5 ]; then
   setup; release 1.1.0; manifest 1.1.0 100 "$FUT"; sed -i.bak 's/"url"/"urgent": true, "url"/' "$w/rel/manifest.json"; rm -f "$w/rel/manifest.json.minisig"

@@ -8,6 +8,8 @@
 #   4. install: install.sh --from <url> (it re-verifies the signed SHA256SUMS and every file's hash);
 #   5. health: start Core, it must stay active and answer /healthz;
 #   6. any failure after 3: put the binaries and the database back, start Core, report "rolled_back".
+#   On a combined host (the runner runs here too) the healthy Core then updates that runner from the same release (step 5b,
+#   event "runner"); a runner failure puts back only the runner and ends `done` with a runner_* error.
 # `auto` (the timer, hourly) only records what is available, and installs only between 02:00 and 05:00 local time; outside it
 # status.json carries a `wait` event and the journal says when it will install.
 # Every Core-mode run also makes sure the pinned local model is installed (model.sh, as the Core user), unless
@@ -179,6 +181,46 @@ ok=0; for _ in $(seq 1 "${UPD_HEALTH_TRIES:-20}"); do if healthy; then ok=$((ok 
 [ "$ok" -ge "${UPD_HEALTH_NEED:-5}" ] || back health_failed
 # a combined host: the runner was not touched (--only core), but it must still be up after the Core came back
 if [ "$runner_was_active" = 1 ] && ! "$SYSTEMCTL" is-active --quiet ainkrad-runner.service; then back runner_down; fi
+# 5b. a combined host: the runner beside this Core updates with it, from the release just verified (install.sh re-checks the
+# signed sums and each file, as in `update.sh runner`). Not held for idle: terminals live in ainkrad-ptyhost and survive the
+# restart, and a running AI session comes back `interrupted`, which the Core resumes with the harness's own session id (only
+# the turn in flight is cut). A failure here puts back only the runner's programs: the healthy Core stays on $new.
+rerr=''
+if [ "$runner_was_active" = 1 ]; then
+  rbins="ainkrad-runner ainkrad-ptyhost ainkrad-job"
+  rcur=$("$PREFIX/bin/ainkrad-runner" --version 2>/dev/null | awk '{print $NF}')
+  if [[ $rcur =~ $verre ]] && gt "$new" "$rcur"; then
+    put health 0.92
+    rsnap="$snap/runner"; mkdir -p "$rsnap"
+    for b in $rbins; do
+      [ -L "$PREFIX/bin/$b" ] && rerr=runner_snapshot_failed
+      [ ! -e "$PREFIX/bin/$b" ] || { cp -pP "$PREFIX/bin/$b" "$rsnap/$b" && cmp -s "$PREFIX/bin/$b" "$rsnap/$b"; } || rerr=runner_snapshot_failed
+    done
+    rup() { local ok=0; for _ in $(seq 1 "${UPD_HEALTH_TRIES:-20}"); do
+      if "$SYSTEMCTL" is-active --quiet ainkrad-runner.service; then ok=$((ok + 1)); else ok=0; fi
+      [ "$ok" -ge "${UPD_HEALTH_NEED:-5}" ] && return 0; sleep "${UPD_HEALTH_SLEEP:-3}"; done; return 1; }
+    if [ -n "$rerr" ]; then
+      ev runner "Runner not updated, stays on $rcur"
+    elif ! "$LIB/install.sh" --only runner --from "$url" --prefix "$PREFIX" --pubkey "$LIB/ainkrad-release.pub" >>"$STATE/install.log" 2>&1; then
+      rerr=runner_install_failed
+    elif [ "$("$PREFIX/bin/ainkrad-runner" --version 2>/dev/null | awk '{print $NF}')" != "$new" ]; then
+      rerr=runner_wrong_version
+    elif ! "$SYSTEMCTL" restart ainkrad-runner.service || ! rup; then
+      rerr=runner_health_failed
+    else
+      ev runner "Runner is on $new"; echo "update: the runner on this host is on $new"
+    fi
+    if [ -n "$rerr" ] && [ "$rerr" != runner_snapshot_failed ]; then
+      for b in $rbins; do
+        if [ -e "$rsnap/$b" ]; then { cp -pP "$rsnap/$b" "$PREFIX/bin/.$b.rb" && mv -f "$PREFIX/bin/.$b.rb" "$PREFIX/bin/$b"; } || echo "update: could not restore $b" >&2
+        else rm -f "$PREFIX/bin/$b"; fi   # new with this release: not beside the old runner
+      done
+      "$SYSTEMCTL" restart ainkrad-runner.service && rup || echo "update: the runner did not come back on $rcur either" >&2
+      ev runner "Runner went back to $rcur"
+    fi
+    [ -z "$rerr" ] || echo "update: the Core is on $new, the runner stayed on $rcur ($rerr)" >&2
+  fi
+fi
 # 6. the updater's own scripts from the release just verified (its signed installer bundle), so the next run uses them. Not a
 # reason to roll back: the new version is installed and healthy; the old scripts stay until the next release.
 "$LIB/install.sh" --from "$url" --pubkey "$LIB/ainkrad-release.pub" --scripts "$LIB" >>"$STATE/install.log" 2>&1 ||
@@ -196,7 +238,7 @@ if [ "$kind" = core ] && [ -d "$UNITS" ]; then
   fi
 fi
 
-if [ "$kind" = core ]; then lbl=Core; else lbl=Runner; fi; ev done "$lbl is on $new"; avail=''; put done 1
+if [ "$kind" = core ]; then lbl=Core; else lbl=Runner; fi; ev done "$lbl is on $new"; avail=''; put done 1 "$rerr"
 # keep the two newest snapshots
 ls -1t "$STATE/snapshots" | tail -n +3 | while read -r d; do case $d in *[!0-9A-Za-z._-]* | '') ;; *) rm -rf "${STATE:?}/snapshots/$d" ;; esac; done
 echo "update: $kind is on $new"
