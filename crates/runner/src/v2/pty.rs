@@ -631,6 +631,11 @@ impl PtyDriver {
                 Err(why) => tracing::warn!("{why}: starting the login shell"),
             }
         }
+        // The AI tools the runner installed (D-22): on every shell's PATH, as for its agent sessions;
+        // before the job shims, which stay first.
+        if let Some(bin) = super::aitools::bin_dir().filter(|b| b.is_dir()) {
+            super::termbox::add_tools(&mut spec.env, &bin);
+        }
         if let Some(b) = req.scrollback_budget {
             self.set_budget(b);
         }
@@ -891,6 +896,9 @@ impl PtyDriver {
         // launcher's own environment.
         let shell_env = std::mem::take(&mut spec.env);
         let net = self.config.private_net.clone();
+        let tools = super::aitools::prefix()
+            .and_then(|p| p.canonicalize().ok())
+            .filter(|p| p.is_dir());
         let b = tb::wrap_private(&tb::PrivateSpec {
             base: &base,
             user,
@@ -903,6 +911,7 @@ impl PtyDriver {
             env: &shell_env,
             hide: &boxed_hide(&hide, &self.config.shell_dir),
             jobs,
+            tools: tools.as_deref(),
         })?;
         if let Some((f, was)) = &folder {
             tb::recheck_folder(f, *was)?;

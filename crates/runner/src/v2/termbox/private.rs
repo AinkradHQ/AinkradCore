@@ -225,6 +225,9 @@ pub struct PrivateSpec<'a> {
     /// Heavy-job shims (E15-3): the directory of the shim links and the directory of this
     /// terminal's job socket (`job.sock`). Both are readable and read-only; the socket connects.
     pub jobs: Option<(&'a Path, &'a Path)>,
+    /// The runner's AI tools folder (`aitools::prefix`, canonical), read-only at the same path so
+    /// the `PATH` entry [`super::add_tools`] gave the shell works inside the root.
+    pub tools: Option<&'a Path>,
 }
 
 /// `program args` in a private root: `home` writable and `folder` added when given. `cwd` is the
@@ -262,6 +265,9 @@ pub fn wrap_private(p: &PrivateSpec) -> Result<Boxed, String> {
         let mut profile = seatbelt_profile(home, folder, &scratch, net, &hidden);
         if let Some((bin, sock_dir)) = p.jobs {
             profile.push_str(&jobs_rules(bin, sock_dir));
+        }
+        if let Some(t) = p.tools {
+            profile.push_str(&read_rules(t));
         }
         let mut out = vec!["-p".to_owned(), profile, "--".to_owned()];
         // The shell's variables travel in `sandbox-exec`'s own environment, never its argv (a
@@ -330,10 +336,8 @@ pub fn wrap_private(p: &PrivateSpec) -> Result<Boxed, String> {
         }
         None => BOX_HOME.to_owned(),
     };
-    if let Some((bin, sock_dir)) = p.jobs {
-        for d in [bin, sock_dir] {
-            out.extend(["--ro-bind".to_owned(), h(d), h(d)]);
-        }
+    for d in p.jobs.into_iter().flat_map(|(b, s)| [b, s]).chain(p.tools) {
+        out.extend(["--ro-bind".to_owned(), h(d), h(d)]);
     }
     for (k, v) in &env {
         out.extend(["--setenv".to_owned(), k.clone(), v.clone()]);
@@ -455,6 +459,19 @@ fn jobs_rules(bin: &Path, sock_dir: &Path) -> String {
         quote(&dir.join("job.sock"))
     );
     for a in bin.ancestors().skip(1).chain(dir.ancestors().skip(1)) {
+        r.push_str(&format!(
+            "(allow file-read-metadata (literal \"{}\"))\n",
+            quote(a)
+        ));
+    }
+    r
+}
+
+/// Seatbelt rules to read `dir` (and stat its parents), appended last over the hidden state.
+fn read_rules(dir: &Path) -> String {
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_owned());
+    let mut r = format!("(allow file-read* (subpath \"{}\"))\n", quote(&dir));
+    for a in dir.ancestors().skip(1) {
         r.push_str(&format!(
             "(allow file-read-metadata (literal \"{}\"))\n",
             quote(a)

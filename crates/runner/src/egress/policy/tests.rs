@@ -184,13 +184,15 @@ fn host_names_and_ports_are_validated_and_errors_do_not_echo_entries() {
 }
 
 #[test]
-fn hosts_match_exactly() {
+fn hosts_match_a_name_and_its_sub_domains_only() {
     let p = policy("", "api.model.test");
     assert!(p.host_listed("api.model.test"));
+    assert!(p.host_listed("x.api.model.test") && p.host_listed("a.b.api.model.test"));
     for n in [
         "model.test",
-        "x.api.model.test",
+        "xapi.model.test",
         "api.model.test.evil.test",
+        "test",
         "API.model.test",
     ] {
         assert!(!p.host_listed(n), "{n}");
@@ -337,4 +339,24 @@ fn a_provider_account_policy_drops_forge_names_and_nothing_else() {
     // The CIDRs and ports are untouched (a CIDR over a forge still reaches it: documented).
     assert_eq!(q.counts().0, p.counts().0);
     assert_eq!(q.counts().2, p.counts().2);
+}
+
+/// The terminals' default lists the AI CLIs by base domain, so their next host is reached too.
+#[test]
+fn the_default_terminal_list_reaches_the_ai_clis_by_domain() {
+    let p = policy("", &default_hosts());
+    for h in [
+        "api.anthropic.com",
+        "platform.claude.com",
+        "claude.ai",
+        "api.openai.com",
+        "auth.openai.com",
+        "chatgpt.com",
+        "opencode.ai",
+        "models.dev",
+        "github.com",
+    ] {
+        assert!(p.host_listed(h), "{h} missing from the default");
+    }
+    assert!(!p.host_listed("anthropic.com.evil.test") && !p.host_listed("notopenai.com"));
 }
