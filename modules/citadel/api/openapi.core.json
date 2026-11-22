@@ -602,6 +602,13 @@
           "started_at": {
             "$ref": "#/components/schemas/Timestamp"
           },
+          "terminal": {
+            "description": "Set when this row is not an AI session but a tool typed in a terminal (its id, also in\n`session_id`) that signed in with the account: `title` names the tool, and no transcript,\ntokens or dollars exist for it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "title": {
             "description": "The session's title, else its first message's start; empty when it has neither.",
             "type": "string"
@@ -14183,6 +14190,19 @@
         ],
         "type": "object"
       },
+      "RunnerTerminalAccount": {
+        "description": "What a terminal's tool asks for.",
+        "properties": {
+          "tool": {
+            "description": "The tool typed in the terminal: `claude` only for now.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool"
+        ],
+        "type": "object"
+      },
       "RunnerToolInstall": {
         "description": "An AI tool install as a runner reports it.",
         "properties": {
@@ -16012,6 +16032,39 @@
           "id",
           "runner",
           "status"
+        ],
+        "type": "object"
+      },
+      "TerminalAccountLease": {
+        "description": "A Claude plan leased to the terminal's runner as env, for the one process the shim starts.",
+        "properties": {
+          "account": {
+            "description": "The account's id.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "expires_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "lease": {
+            "description": "`l_…`, redeemable once by this runner (`POST /secret-leases/redeem`) until `expires_at`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The account's name: its display name, else its label.",
+            "type": "string"
+          },
+          "var": {
+            "description": "The variable the token goes in: `CLAUDE_CODE_OAUTH_TOKEN`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account",
+          "name",
+          "lease",
+          "var",
+          "expires_at"
         ],
         "type": "object"
       },
@@ -28713,6 +28766,69 @@
         },
         "tags": [
           "jobs"
+        ],
+        "x-ainkrad-scope": "runner"
+      }
+    },
+    "/api/v1/runner/terminals/{id}/account": {
+      "post": {
+        "operationId": "runnerTerminalAccount",
+        "parameters": [
+          {
+            "description": "The terminal's id",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunnerTerminalAccount"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalAccountLease"
+                }
+              }
+            },
+            "description": "The first Claude plan of the opener's AI order that can take work, leased as env to the calling runner (audited `secret.leased`). Only the runner hosting the running terminal may call it (`runner` scope)"
+          },
+          "400": {
+            "description": "A tool other than `claude`"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "`no_account` (the message is the line to show), or no such running terminal on this runner"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        },
+        "tags": [
+          "terminals"
         ],
         "x-ainkrad-scope": "runner"
       }

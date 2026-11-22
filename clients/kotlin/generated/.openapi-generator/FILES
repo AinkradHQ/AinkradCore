@@ -272,6 +272,7 @@ src/main/kotlin/ainkrad/client/models/RunnerNewJob.kt
 src/main/kotlin/ainkrad/client/models/RunnerPolicyBody.kt
 src/main/kotlin/ainkrad/client/models/RunnerRunsAs.kt
 src/main/kotlin/ainkrad/client/models/RunnerSlots.kt
+src/main/kotlin/ainkrad/client/models/RunnerTerminalAccount.kt
 src/main/kotlin/ainkrad/client/models/RunnerToolInstall.kt
 src/main/kotlin/ainkrad/client/models/SecretDeleted.kt
 src/main/kotlin/ainkrad/client/models/SecretGroupDeleted.kt
@@ -309,6 +310,7 @@ src/main/kotlin/ainkrad/client/models/StepUpPurpose.kt
 src/main/kotlin/ainkrad/client/models/StepUpRequest.kt
 src/main/kotlin/ainkrad/client/models/SubjectBudget.kt
 src/main/kotlin/ainkrad/client/models/Terminal.kt
+src/main/kotlin/ainkrad/client/models/TerminalAccountLease.kt
 src/main/kotlin/ainkrad/client/models/TerminalSignal.kt
 src/main/kotlin/ainkrad/client/models/TerminalSize.kt
 src/main/kotlin/ainkrad/client/models/TerminalStatus.kt

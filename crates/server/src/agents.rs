@@ -38,6 +38,7 @@ pub mod login;
 pub mod plan_check;
 pub mod rules;
 pub mod subscription;
+pub mod terminal;
 mod topup;
 pub mod wake;
 pub use failover::drive as drive_failover;

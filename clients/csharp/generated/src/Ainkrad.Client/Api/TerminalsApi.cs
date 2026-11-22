@@ -157,6 +157,26 @@ namespace Ainkrad.Client.Api
         /// 
         /// </summary>
         /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The terminal&#39;s id</param>
+        /// <param name="runnerTerminalAccount"></param>
+        /// <returns>TerminalAccountLease</returns>
+        TerminalAccountLease RunnerTerminalAccount(string id, RunnerTerminalAccount runnerTerminalAccount);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The terminal&#39;s id</param>
+        /// <param name="runnerTerminalAccount"></param>
+        /// <returns>ApiResponse of TerminalAccountLease</returns>
+        ApiResponse<TerminalAccountLease> RunnerTerminalAccountWithHttpInfo(string id, RunnerTerminalAccount runnerTerminalAccount);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
         /// <param name="id"></param>
         /// <param name="terminalSignal"></param>
         /// <returns></returns>
@@ -363,6 +383,31 @@ namespace Ainkrad.Client.Api
         /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
         /// <returns>Task of ApiResponse</returns>
         System.Threading.Tasks.Task<ApiResponse<Object>> ReleaseLocalTerminalWithHttpInfoAsync(string id, System.Threading.CancellationToken cancellationToken = default);
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The terminal&#39;s id</param>
+        /// <param name="runnerTerminalAccount"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of TerminalAccountLease</returns>
+        System.Threading.Tasks.Task<TerminalAccountLease> RunnerTerminalAccountAsync(string id, RunnerTerminalAccount runnerTerminalAccount, System.Threading.CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <remarks>
+        /// 
+        /// </remarks>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The terminal&#39;s id</param>
+        /// <param name="runnerTerminalAccount"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (TerminalAccountLease)</returns>
+        System.Threading.Tasks.Task<ApiResponse<TerminalAccountLease>> RunnerTerminalAccountWithHttpInfoAsync(string id, RunnerTerminalAccount runnerTerminalAccount, System.Threading.CancellationToken cancellationToken = default);
         /// <summary>
         /// 
         /// </summary>
@@ -1491,6 +1536,147 @@ namespace Ainkrad.Client.Api
             if (this.ExceptionFactory != null)
             {
                 Exception _exception = this.ExceptionFactory("ReleaseLocalTerminal", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The terminal&#39;s id</param>
+        /// <param name="runnerTerminalAccount"></param>
+        /// <returns>TerminalAccountLease</returns>
+        public TerminalAccountLease RunnerTerminalAccount(string id, RunnerTerminalAccount runnerTerminalAccount)
+        {
+            Ainkrad.Client.Client.ApiResponse<TerminalAccountLease> localVarResponse = RunnerTerminalAccountWithHttpInfo(id, runnerTerminalAccount);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The terminal&#39;s id</param>
+        /// <param name="runnerTerminalAccount"></param>
+        /// <returns>ApiResponse of TerminalAccountLease</returns>
+        public Ainkrad.Client.Client.ApiResponse<TerminalAccountLease> RunnerTerminalAccountWithHttpInfo(string id, RunnerTerminalAccount runnerTerminalAccount)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling TerminalsApi->RunnerTerminalAccount");
+
+            // verify the required parameter 'runnerTerminalAccount' is set
+            if (runnerTerminalAccount == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'runnerTerminalAccount' when calling TerminalsApi->RunnerTerminalAccount");
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+                "application/json"
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            localVarRequestOptions.Data = runnerTerminalAccount;
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+            var localVarResponse = this.Client.Post<TerminalAccountLease>("/api/v1/runner/terminals/{id}/account", localVarRequestOptions, this.Configuration);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("RunnerTerminalAccount", localVarResponse);
+                if (_exception != null) throw _exception;
+            }
+
+            return localVarResponse;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The terminal&#39;s id</param>
+        /// <param name="runnerTerminalAccount"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of TerminalAccountLease</returns>
+        public async System.Threading.Tasks.Task<TerminalAccountLease> RunnerTerminalAccountAsync(string id, RunnerTerminalAccount runnerTerminalAccount, System.Threading.CancellationToken cancellationToken = default)
+        {
+            Ainkrad.Client.Client.ApiResponse<TerminalAccountLease> localVarResponse = await RunnerTerminalAccountWithHttpInfoAsync(id, runnerTerminalAccount, cancellationToken).ConfigureAwait(false);
+            return localVarResponse.Data;
+        }
+
+        /// <summary>
+        ///  
+        /// </summary>
+        /// <exception cref="Ainkrad.Client.Client.ApiException">Thrown when fails to make API call</exception>
+        /// <param name="id">The terminal&#39;s id</param>
+        /// <param name="runnerTerminalAccount"></param>
+        /// <param name="cancellationToken">Cancellation Token to cancel the request.</param>
+        /// <returns>Task of ApiResponse (TerminalAccountLease)</returns>
+        public async System.Threading.Tasks.Task<Ainkrad.Client.Client.ApiResponse<TerminalAccountLease>> RunnerTerminalAccountWithHttpInfoAsync(string id, RunnerTerminalAccount runnerTerminalAccount, System.Threading.CancellationToken cancellationToken = default)
+        {
+            // verify the required parameter 'id' is set
+            if (id == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'id' when calling TerminalsApi->RunnerTerminalAccount");
+
+            // verify the required parameter 'runnerTerminalAccount' is set
+            if (runnerTerminalAccount == null)
+                throw new Ainkrad.Client.Client.ApiException(400, "Missing required parameter 'runnerTerminalAccount' when calling TerminalsApi->RunnerTerminalAccount");
+
+
+            Ainkrad.Client.Client.RequestOptions localVarRequestOptions = new Ainkrad.Client.Client.RequestOptions();
+
+            string[] _contentTypes = new string[] {
+                "application/json"
+            };
+
+            // to determine the Accept header
+            string[] _accepts = new string[] {
+                "application/json"
+            };
+
+
+            var localVarContentType = Ainkrad.Client.Client.ClientUtils.SelectHeaderContentType(_contentTypes);
+            if (localVarContentType != null) localVarRequestOptions.HeaderParameters.Add("Content-Type", localVarContentType);
+
+            var localVarAccept = Ainkrad.Client.Client.ClientUtils.SelectHeaderAccept(_accepts);
+            if (localVarAccept != null) localVarRequestOptions.HeaderParameters.Add("Accept", localVarAccept);
+
+            localVarRequestOptions.PathParameters.Add("id", Ainkrad.Client.Client.ClientUtils.ParameterToString(id)); // path parameter
+            localVarRequestOptions.Data = runnerTerminalAccount;
+
+            // authentication (device_signature) required
+            if (!string.IsNullOrEmpty(this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature")))
+            {
+                localVarRequestOptions.HeaderParameters.Add("Ainkrad-Signature", this.Configuration.GetApiKeyWithPrefix("Ainkrad-Signature"));
+            }
+
+            // make the HTTP request
+
+            var localVarResponse = await this.AsynchronousClient.PostAsync<TerminalAccountLease>("/api/v1/runner/terminals/{id}/account", localVarRequestOptions, this.Configuration, cancellationToken).ConfigureAwait(false);
+
+            if (this.ExceptionFactory != null)
+            {
+                Exception _exception = this.ExceptionFactory("RunnerTerminalAccount", localVarResponse);
                 if (_exception != null) throw _exception;
             }
 

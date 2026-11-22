@@ -151,6 +151,7 @@ mod settings;
 mod signed;
 mod stepup;
 mod system;
+mod terminal_account;
 mod token;
 mod usage_meter;
 mod wake;

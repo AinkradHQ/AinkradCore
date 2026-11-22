@@ -32,6 +32,7 @@ import kotlinx.serialization.Contextual
  * @param movedToAccount The account (its id) the run moved to when this session failed over; absent when it did not.
  * @param runnerId The runner device it ran on, and that runner's name.
  * @param runnerName 
+ * @param terminal Set when this row is not an AI session but a tool typed in a terminal (its id, also in `session_id`) that signed in with the account: `title` names the tool, and no transcript, tokens or dollars exist for it.
  * @param usdMicros What it cost, in millionths of a dollar; absent for a plan (unpriced) and for a device that is not `admin`.
  */
 @Serializable
@@ -71,6 +72,10 @@ data class AccountSession (
 
     @SerialName(value = "runner_name")
     val runnerName: kotlin.String? = null,
+
+    /* Set when this row is not an AI session but a tool typed in a terminal (its id, also in `session_id`) that signed in with the account: `title` names the tool, and no transcript, tokens or dollars exist for it. */
+    @SerialName(value = "terminal")
+    val terminal: kotlin.String? = null,
 
     /* What it cost, in millionths of a dollar; absent for a plan (unpriced) and for a device that is not `admin`. */
     @SerialName(value = "usd_micros")

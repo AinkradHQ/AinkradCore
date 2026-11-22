@@ -18,7 +18,9 @@ package ainkrad.client.apis
 import ainkrad.client.models.ErrorBody
 import ainkrad.client.models.LocalTerminalGrant
 import ainkrad.client.models.NewTerminal
+import ainkrad.client.models.RunnerTerminalAccount
 import ainkrad.client.models.Terminal
+import ainkrad.client.models.TerminalAccountLease
 import ainkrad.client.models.TerminalSignal
 import ainkrad.client.models.TerminalTailView
 
@@ -268,6 +270,40 @@ import io.ktor.http.ParametersBuilder
             )
 
             return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/runner/terminals/{id}/account
+        * 
+        * 
+         * @param id The terminal&#39;s id 
+         * @param runnerTerminalAccount  
+         * @return TerminalAccountLease
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun runnerTerminalAccount(id: kotlin.String, runnerTerminalAccount: RunnerTerminalAccount): HttpResponse<TerminalAccountLease> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = runnerTerminalAccount
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/runner/terminals/{id}/account".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames

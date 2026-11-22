@@ -610,6 +610,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/runner/jobs/{job}/signal`.
     /// - Remark: Generated from `#/paths//api/v1/runner/jobs/{job}/signal/post(runnerSignalJob)`.
     func runnerSignalJob(_ input: Operations.RunnerSignalJob.Input) async throws -> Operations.RunnerSignalJob.Output
+    /// - Remark: HTTP `POST /api/v1/runner/terminals/{id}/account`.
+    /// - Remark: Generated from `#/paths//api/v1/runner/terminals/{id}/account/post(runnerTerminalAccount)`.
+    func runnerTerminalAccount(_ input: Operations.RunnerTerminalAccount.Input) async throws -> Operations.RunnerTerminalAccount.Output
     /// - Remark: HTTP `GET /api/v1/runners`.
     /// - Remark: Generated from `#/paths//api/v1/runners/get(listRunners)`.
     func listRunners(_ input: Operations.ListRunners.Input) async throws -> Operations.ListRunners.Output
@@ -2905,6 +2908,19 @@ extension APIProtocol {
         body: Operations.RunnerSignalJob.Input.Body
     ) async throws -> Operations.RunnerSignalJob.Output {
         try await runnerSignalJob(Operations.RunnerSignalJob.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/runner/terminals/{id}/account`.
+    /// - Remark: Generated from `#/paths//api/v1/runner/terminals/{id}/account/post(runnerTerminalAccount)`.
+    public func runnerTerminalAccount(
+        path: Operations.RunnerTerminalAccount.Input.Path,
+        headers: Operations.RunnerTerminalAccount.Input.Headers = .init(),
+        body: Operations.RunnerTerminalAccount.Input.Body
+    ) async throws -> Operations.RunnerTerminalAccount.Output {
+        try await runnerTerminalAccount(Operations.RunnerTerminalAccount.Input(
             path: path,
             headers: headers,
             body: body

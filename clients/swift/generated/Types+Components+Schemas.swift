@@ -547,6 +547,12 @@ extension Components {
             public var sessionId: Swift.String
             /// - Remark: Generated from `#/components/schemas/AccountSession/started_at`.
             public var startedAt: Components.Schemas.Timestamp
+            /// Set when this row is not an AI session but a tool typed in a terminal (its id, also in
+            /// `session_id`) that signed in with the account: `title` names the tool, and no transcript,
+            /// tokens or dollars exist for it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountSession/terminal`.
+            public var terminal: Swift.String?
             /// The session's title, else its first message's start; empty when it has neither.
             ///
             /// - Remark: Generated from `#/components/schemas/AccountSession/title`.
@@ -570,6 +576,7 @@ extension Components {
             ///   - runnerName:
             ///   - sessionId:
             ///   - startedAt:
+            ///   - terminal: Set when this row is not an AI session but a tool typed in a terminal (its id, also in
             ///   - title: The session's title, else its first message's start; empty when it has neither.
             ///   - tokens: Input, output and cache tokens.
             ///   - usdMicros: What it cost, in millionths of a dollar; absent for a plan (unpriced) and for a device that
@@ -581,6 +588,7 @@ extension Components {
                 runnerName: Swift.String? = nil,
                 sessionId: Swift.String,
                 startedAt: Components.Schemas.Timestamp,
+                terminal: Swift.String? = nil,
                 title: Swift.String,
                 tokens: Swift.Int64,
                 usdMicros: Swift.Int64? = nil
@@ -592,6 +600,7 @@ extension Components {
                 self.runnerName = runnerName
                 self.sessionId = sessionId
                 self.startedAt = startedAt
+                self.terminal = terminal
                 self.title = title
                 self.tokens = tokens
                 self.usdMicros = usdMicros
@@ -604,6 +613,7 @@ extension Components {
                 case runnerName = "runner_name"
                 case sessionId = "session_id"
                 case startedAt = "started_at"
+                case terminal
                 case title
                 case tokens
                 case usdMicros = "usd_micros"
@@ -11433,6 +11443,25 @@ extension Components {
                 case terminalsUsed = "terminals_used"
             }
         }
+        /// What a terminal's tool asks for.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RunnerTerminalAccount`.
+        public struct RunnerTerminalAccount: Codable, Hashable, Sendable {
+            /// The tool typed in the terminal: `claude` only for now.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunnerTerminalAccount/tool`.
+            public var tool: Swift.String
+            /// Creates a new `RunnerTerminalAccount`.
+            ///
+            /// - Parameters:
+            ///   - tool: The tool typed in the terminal: `claude` only for now.
+            public init(tool: Swift.String) {
+                self.tool = tool
+            }
+            public enum CodingKeys: String, CodingKey {
+                case tool
+            }
+        }
         /// An AI tool install as a runner reports it.
         ///
         /// - Remark: Generated from `#/components/schemas/RunnerToolInstall`.
@@ -13370,6 +13399,57 @@ extension Components {
                 case seq
                 case size
                 case status
+            }
+        }
+        /// A Claude plan leased to the terminal's runner as env, for the one process the shim starts.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TerminalAccountLease`.
+        public struct TerminalAccountLease: Codable, Hashable, Sendable {
+            /// The account's id.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TerminalAccountLease/account`.
+            public var account: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/TerminalAccountLease/expires_at`.
+            public var expiresAt: Components.Schemas.Timestamp
+            /// `l_…`, redeemable once by this runner (`POST /secret-leases/redeem`) until `expires_at`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TerminalAccountLease/lease`.
+            public var lease: Swift.String
+            /// The account's name: its display name, else its label.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TerminalAccountLease/name`.
+            public var name: Swift.String
+            /// The variable the token goes in: `CLAUDE_CODE_OAUTH_TOKEN`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TerminalAccountLease/var`.
+            public var _var: Swift.String
+            /// Creates a new `TerminalAccountLease`.
+            ///
+            /// - Parameters:
+            ///   - account: The account's id.
+            ///   - expiresAt:
+            ///   - lease: `l_…`, redeemable once by this runner (`POST /secret-leases/redeem`) until `expires_at`.
+            ///   - name: The account's name: its display name, else its label.
+            ///   - _var: The variable the token goes in: `CLAUDE_CODE_OAUTH_TOKEN`.
+            public init(
+                account: Swift.Int64,
+                expiresAt: Components.Schemas.Timestamp,
+                lease: Swift.String,
+                name: Swift.String,
+                _var: Swift.String
+            ) {
+                self.account = account
+                self.expiresAt = expiresAt
+                self.lease = lease
+                self.name = name
+                self._var = _var
+            }
+            public enum CodingKeys: String, CodingKey {
+                case account
+                case expiresAt = "expires_at"
+                case lease
+                case name
+                case _var = "var"
             }
         }
         /// - Remark: Generated from `#/components/schemas/TerminalSignal`.
