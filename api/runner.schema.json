@@ -4431,6 +4431,17 @@
           "minimum": 0,
           "type": "integer"
         },
+        "plan_limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanLimit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The plan windows Claude reported on the check's answer (its `rate_limit_event`), stored on\nthe account like a session's. Absent from an older runner or when Claude said none."
+        },
         "result": {
           "description": "`ok`, or why not: `token_expired`, `limit_reached`, `egress_not_proven`,\n`sandbox_unavailable`, `runner_busy`, `unreachable`, `timeout` or `failed`.",
           "type": "string"

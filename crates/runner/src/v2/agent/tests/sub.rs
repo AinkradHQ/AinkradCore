@@ -242,7 +242,11 @@ async fn a_plan_check_runs_the_token_in_a_session_it_then_forgets() {
     let d = Arc::new(
         AgentDriver::new(
             config,
-            script("echo \"tok=${CLAUDE_CODE_OAUTH_TOKEN:-none}\""),
+            script(concat!(
+                "echo \"tok=${CLAUDE_CODE_OAUTH_TOKEN:-none}\"; ",
+                r#"echo 'EVENT {"type":"rate_limit","status":"allowed","windows":"#,
+                r#"[{"name":"five_hour","utilization":0.25,"resets_at":1792608000}]}'"#
+            )),
         )
         .unwrap()
         .with_redeem(redeem())
@@ -255,6 +259,12 @@ async fn a_plan_check_runs_the_token_in_a_session_it_then_forgets() {
         .await
         .unwrap();
     assert_eq!(got.result, "ok");
+    // The windows Claude reported on the answer come back with the word.
+    let plan = got.plan_limit.expect("the check's plan windows");
+    assert_eq!(plan.status, "allowed");
+    assert_eq!(plan.windows[0].name, "five_hour");
+    assert_eq!(plan.windows[0].utilization, 0.25);
+    assert_eq!(plan.windows[0].resets_at, Some(1792608000));
     assert!(d.states().is_empty(), "the check's session is forgotten");
     // A harness that fails is `failed`, and is forgotten as well.
     let bad = Arc::new(
@@ -270,6 +280,7 @@ async fn a_plan_check_runs_the_token_in_a_session_it_then_forgets() {
         .await
         .unwrap();
     assert_eq!(got.result, "failed");
+    assert_eq!(got.plan_limit, None, "Claude said no windows");
     assert!(bad.states().is_empty());
 }
 

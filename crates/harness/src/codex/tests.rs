@@ -541,3 +541,44 @@ fn effort_is_the_threads_reasoning_effort() {
     assert!(with(Some("turbo"))["config"].is_null());
     assert!(with(None)["config"].is_null());
 }
+
+/// The recorded `account/rateLimits/updated` (a free plan's one 30-day window) is a `RateLimit`,
+/// and a plan's 5-hour and weekly windows take Claude's names; a reached limit is `rejected`.
+#[test]
+fn rate_limits_become_the_plan_windows() {
+    let limits: Vec<_> = replay(RESUME, &mut Decoder::default())
+        .into_iter()
+        .filter(|e| matches!(e, HarnessEvent::RateLimit { .. }))
+        .collect();
+    assert!(!limits.is_empty());
+    assert_eq!(
+        limits[0],
+        HarnessEvent::RateLimit {
+            status: "allowed".to_owned(),
+            windows: vec![RateWindow {
+                name: "30_day".to_owned(),
+                utilization: 0.0,
+                resets_at: Some(1795168832),
+            }],
+        }
+    );
+    let plus = json!({"jsonrpc": "2.0", "method": "account/rateLimits/updated", "params": {
+        "rateLimits": {"rateLimitReachedType": "primary",
+            "primary": {"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1795000000},
+            "secondary": {"usedPercent": 42.5, "windowDurationMins": 10080, "resetsAt": null}}}});
+    let got = Decoder::default().decode(&plus);
+    let [HarnessEvent::RateLimit { status, windows }] = got.as_slice() else {
+        panic!("{got:?}")
+    };
+    assert_eq!(status, "rejected");
+    let names: Vec<_> = windows
+        .iter()
+        .map(|w| (w.name.as_str(), w.utilization))
+        .collect();
+    assert_eq!(names, [("five_hour", 1.0), ("seven_day", 0.425)]);
+    assert_eq!(windows[1].resets_at, None);
+    // No window with a length and a use: no snapshot.
+    let none = json!({"jsonrpc": "2.0", "method": "account/rateLimits/updated",
+        "params": {"rateLimits": {"primary": null, "secondary": null}}});
+    assert!(Decoder::default().decode(&none).is_empty());
+}

@@ -1,7 +1,8 @@
 //! `plan.check` (N36): does a Claude subscription's token work? The Core leases the token; the
 //! runner starts an ordinary session on it (claude, the prompt `ok`, the sandbox and egress
 //! filter every subscription session needs, so [`sub::early`] judges it too), waits for its end,
-//! forgets the session and answers one word. Nothing the CLI printed leaves the runner.
+//! forgets the session and answers one word, with the plan windows Claude reported on the answer
+//! (`rate_limit_event`). Nothing else the CLI printed leaves the runner.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,6 +29,7 @@ impl AgentDriver {
         let done = |result: &str| PlanChecked {
             result: result.to_owned(),
             latency_ms: u64::try_from(at.elapsed().as_millis()).unwrap_or(u64::MAX),
+            plan_limit: None,
         };
         if !self.sandbox.capabilities().contains(&"egress-filter") {
             return Ok(done("egress_not_proven"));
@@ -67,16 +69,18 @@ impl AgentDriver {
             Err(e) => return Err(refuse(e.code, e.message)),
         }
         let end = Instant::now() + WAIT;
-        let outcome = loop {
+        let (outcome, plan_limit) = loop {
             let woken = self.changed.notified();
             tokio::pin!(woken);
             woken.as_mut().enable();
             {
                 let all = self.sessions.lock().unwrap();
                 match all.get(&session) {
-                    Some(l) if l.meta.state != AgentState::Running => break l.meta.outcome.clone(),
+                    Some(l) if l.meta.state != AgentState::Running => {
+                        break (l.meta.outcome.clone(), l.meta.plan_limit.clone());
+                    }
                     Some(_) => {}
-                    None => break None,
+                    None => break (None, None),
                 }
             }
             if tokio::time::timeout_at(end, woken).await.is_err() {
@@ -89,7 +93,11 @@ impl AgentDriver {
             }
         };
         self.forget(&session);
-        Ok(done(word(outcome)))
+        // The windows Claude reported on the answer: the one thing besides the word that leaves.
+        Ok(PlanChecked {
+            plan_limit,
+            ..done(word(outcome))
+        })
     }
 
     /// Drops the check's session and its transcript: it was never the Core's.

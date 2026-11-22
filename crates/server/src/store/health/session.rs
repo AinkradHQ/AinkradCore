@@ -123,6 +123,19 @@ pub async fn on_plan_limit(
     Ok(())
 }
 
+/// A plan check's snapshot (`PlanChecked.plan_limit`): kept on account `account` exactly like a
+/// session's, so its windows show and its freshness (`at`) is the check's.
+pub async fn keep_checked_plan(
+    pool: &sqlx::SqlitePool,
+    account: i64,
+    plan: &PlanLimit,
+    now: &str,
+) -> Result<(), sqlx::Error> {
+    let mut tx = crate::store::begin_write(pool).await?;
+    keep_plan(&mut tx, account, plan, now).await?;
+    tx.commit().await
+}
+
 /// Keeps the latest snapshot on the account (each one overwrites the last), for the allocator: a
 /// `rejected` plan with no reset time is cooling still when the session that saw it has ended and
 /// its one cooling has run out. Harness output, so it is only ever read as a reason to wait.
