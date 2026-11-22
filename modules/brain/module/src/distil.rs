@@ -476,17 +476,35 @@ async fn launch(app: &App, b: &Brain, d: &DistilView, by: &str) -> Result<(), Ap
         return Ok(set_state(app, &d.id, "waiting", &e.message, None).await?);
     }
     // Mark the sources taken, so a second run never reads them again; a failed run gives them back.
+    // Only a source still unread is taken: batches of one room run side by side (the sweep's
+    // `auto_distil::MAX_PER_ROOM`), and two must never read the same source. If another batch took
+    // one first, nothing is taken and this one waits for the next tick with a fresh read.
     // A re-distil batch never touches `sources`: the run records what the batch took.
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     match &run {
         Some(run) => crate::redistil::take(&mut tx, run, &d.id, &sources).await?,
         None => {
-            for s in &sources {
-                sqlx::query("UPDATE sources SET distilled = ? WHERE item_id = ?")
-                    .bind(&d.id)
-                    .bind(&s.item_id)
-                    .execute(&mut *tx)
+            for src in &sources {
+                let took = sqlx::query(
+                    "UPDATE sources SET distilled = ? WHERE item_id = ? AND distilled IS NULL",
+                )
+                .bind(&d.id)
+                .bind(&src.item_id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+                if took == 0 {
+                    drop(tx);
+                    pool.close().await;
+                    alloc::end_unstarted_why(
+                        &app.pool,
+                        &s.id,
+                        &app.clock.now(),
+                        "another batch took its sources",
+                    )
                     .await?;
+                    return Ok(set_state(app, &d.id, "queued", "", None).await?);
+                }
             }
         }
     }
