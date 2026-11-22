@@ -211,7 +211,7 @@ impl Decoder {
                     return vec![];
                 }
                 self.session = Some(id.clone());
-                vec![HarnessEvent::SessionStarted { id }]
+                vec![HarnessEvent::SessionStarted { id, model: None }]
             }
             "step_update" => self.step(&m["step_update"]),
             "result" => self.result(&m["result"]),

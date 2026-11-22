@@ -251,7 +251,11 @@ impl Decoder {
                     return vec![];
                 }
                 self.session = Some(id.clone());
-                vec![HarnessEvent::SessionStarted { id }]
+                let model = m["model"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
+                vec![HarnessEvent::SessionStarted { id, model }]
             }
             "assistant" => {
                 let mut events: Vec<HarnessEvent> = m["message"]["content"]

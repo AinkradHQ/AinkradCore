@@ -396,7 +396,8 @@ impl OpenCode {
         self.decoder.session = self.session.clone();
         self.decoder.cost = session["cost"].as_f64().unwrap_or(0.0);
         let id = self.session.clone();
-        self.queued.push_back(HarnessEvent::SessionStarted { id });
+        self.queued
+            .push_back(HarnessEvent::SessionStarted { id, model: None });
         Ok(())
     }
 

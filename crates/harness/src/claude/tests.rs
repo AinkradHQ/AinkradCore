@@ -54,7 +54,8 @@ fn decodes_a_turn_with_an_approval_then_an_interrupted_turn() {
     assert_eq!(
         sessions,
         [&HarnessEvent::SessionStarted {
-            id: SESSION.to_owned()
+            id: SESSION.to_owned(),
+            model: Some("claude-haiku-5-5".to_owned()),
         }]
     );
     let approval = events
@@ -110,7 +111,8 @@ fn a_resumed_session_keeps_its_id_and_its_memory() {
     assert_eq!(
         events[0],
         HarnessEvent::SessionStarted {
-            id: SESSION.to_owned()
+            id: SESSION.to_owned(),
+            model: Some("claude-haiku-5-5".to_owned()),
         }
     );
     assert!(events.contains(&HarnessEvent::AssistantText {
@@ -235,7 +237,8 @@ async fn the_prompt_goes_by_stdin_and_the_config_stays_isolated() {
     }
     assert_eq!(events.last(), Some(&HarnessEvent::Exited { code: Some(0) }));
     assert!(events.contains(&HarnessEvent::SessionStarted {
-        id: SESSION.to_owned()
+        id: SESSION.to_owned(),
+        model: Some("claude-haiku-5-5".to_owned()),
     }));
     assert_eq!(claude.usage().output, 207);
 

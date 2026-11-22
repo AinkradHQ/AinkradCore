@@ -433,7 +433,7 @@ impl HarnessExecutor {
                 }
             }
             match event {
-                HarnessEvent::SessionStarted { id } => *session = Some(id),
+                HarnessEvent::SessionStarted { id, .. } => *session = Some(id),
                 HarnessEvent::ApprovalRequested { id, tool, input } => {
                     let own = self.connection_call(job, &spec.env, &tool);
                     let decided = if own {
@@ -563,7 +563,7 @@ impl HarnessExecutor {
                 }
                 Some(None) => *harness = None,
                 Some(Some(event)) => {
-                    if let HarnessEvent::SessionStarted { id } = &event {
+                    if let HarnessEvent::SessionStarted { id, .. } = &event {
                         *session = Some(id.clone());
                     }
                     let event = super::tools::event(&event);

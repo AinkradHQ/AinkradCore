@@ -167,6 +167,15 @@ fn text(v: &Value) -> String {
     v.as_str().map_or_else(|| v.to_string(), str::to_owned)
 }
 
+/// The model a `thread/start` (or `thread/resume`) answer says the thread runs: the real one when the
+/// spec left Codex its default.
+fn ran_model(started: &Value) -> Option<String> {
+    started["model"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
 fn count(v: &Value) -> u64 {
     v.as_u64().unwrap_or(0)
 }
@@ -425,9 +434,12 @@ impl Codex {
             "thread/start"
         };
         let id = codex.request(method, params).await?;
-        codex.thread = text(&codex.response(id).await?["thread"]["id"]);
-        let id = codex.thread.clone();
-        codex.queued.push_front(HarnessEvent::SessionStarted { id });
+        let started = codex.response(id).await?;
+        codex.thread = text(&started["thread"]["id"]);
+        let (id, model) = (codex.thread.clone(), ran_model(&started));
+        codex
+            .queued
+            .push_front(HarnessEvent::SessionStarted { id, model });
         Ok(codex)
     }
 
@@ -529,9 +541,11 @@ impl Harness for Codex {
         self.decoder = Decoder::default();
         self.queued.clear();
         let id = self.request("thread/start", params).await?;
-        self.thread = text(&self.response(id).await?["thread"]["id"]);
-        let id = self.thread.clone();
-        self.queued.push_front(HarnessEvent::SessionStarted { id });
+        let started = self.response(id).await?;
+        self.thread = text(&started["thread"]["id"]);
+        let (id, model) = (self.thread.clone(), ran_model(&started));
+        self.queued
+            .push_front(HarnessEvent::SessionStarted { id, model });
         Ok(())
     }
 

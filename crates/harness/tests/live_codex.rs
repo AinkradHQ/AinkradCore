@@ -68,7 +68,7 @@ async fn a_real_turn_with_an_approval_an_interrupt_and_a_resume() {
     let mut h = Codex::start(&spec).await.unwrap();
     h.send(CREATE).await.unwrap();
     let session = match next(&mut h).await {
-        HarnessEvent::SessionStarted { id } => id,
+        HarnessEvent::SessionStarted { id, .. } => id,
         other => panic!("expected the session first, got {other:?}"),
     };
     let (outcome, _, approvals) = turn(&mut h).await;
@@ -86,10 +86,10 @@ async fn a_real_turn_with_an_approval_an_interrupt_and_a_resume() {
 
     let mut h = Codex::resume(&spec, &session).await.unwrap();
     h.send(RECALL).await.unwrap();
-    assert_eq!(
+    assert!(matches!(
         next(&mut h).await,
-        HarnessEvent::SessionStarted { id: session }
-    );
+        HarnessEvent::SessionStarted { id, .. } if id == session
+    ));
     let (outcome, text, _) = turn(&mut h).await;
     assert_eq!(outcome, TurnOutcome::Success);
     assert!(text.contains("hello.txt"), "{text}");
