@@ -245,6 +245,11 @@ pub struct RunnerIsolation {
     pub kvm: Option<String>,
 }
 
+/// "Updating": asked to update within the window and not yet on the Core's version (`behind`).
+fn updating(id: &str, behind: Option<bool>, now: i64) -> Option<bool> {
+    (behind != Some(false) && crate::runner_update::is_updating(id, now)).then_some(true)
+}
+
 fn of(d: gov::Device, live: Option<&RunnerState>, x: &Extra) -> Runner {
     let used = d.last_used_at.as_deref().and_then(unix_secs);
     let seen = live.map(|s| s.last_seen).into_iter().chain(used).max();
@@ -276,6 +281,11 @@ fn of(d: gov::Device, live: Option<&RunnerState>, x: &Extra) -> Runner {
         });
     let version = live.map(|s| s.version.clone()).filter(|v| !v.is_empty());
     let facts = x.facts.as_ref();
+    let behind = version
+        .as_deref()
+        .and_then(semver)
+        .zip(semver(env!("CARGO_PKG_VERSION")))
+        .map(|(runner, core)| core > runner);
     Runner {
         slots: Some(RunnerSlots {
             agents_used: x.agents,
@@ -304,13 +314,10 @@ fn of(d: gov::Device, live: Option<&RunnerState>, x: &Extra) -> Runner {
             .since
             .filter(|_| live.is_some_and(|s| s.online))
             .map(|t| ts(&iso_of_unix(t))),
-        update_available: version
-            .as_deref()
-            .and_then(semver)
-            .zip(semver(env!("CARGO_PKG_VERSION")))
-            .map(|(runner, core)| core > runner),
-        updating: crate::runner_update::is_updating(&d.id, crate::runner_update::unix_now())
-            .then_some(true),
+        update_available: behind,
+        // Only while it is still behind: a runner back on the Core's version is done, not "updating" for the rest of
+        // the window (Oracle 2026-11-22: Azure showed "Updating" for 15 min after it was already on 0.10.4).
+        updating: updating(&d.id, behind, crate::runner_update::unix_now()),
         update_required: version
             .as_deref()
             .map(crate::runner_update::runner_too_old)
@@ -529,6 +536,23 @@ mod tests {
             tiers: Some(t.iter().map(|c| (*c).to_owned()).collect()),
             kvm: None,
         }
+    }
+
+    #[test]
+    fn a_runner_asked_to_update_is_updating_only_while_it_is_behind() {
+        crate::runner_update::note_asked("d_updating_test", 1_000);
+        assert_eq!(updating("d_updating_test", Some(true), 1_010), Some(true));
+        assert_eq!(
+            updating("d_updating_test", Some(false), 1_010),
+            None,
+            "on the Core's version: done"
+        );
+        assert_eq!(
+            updating("d_updating_test", None, 1_010),
+            Some(true),
+            "version unknown"
+        );
+        assert_eq!(updating("d_never_asked", Some(true), 1_010), None);
     }
 
     #[test]

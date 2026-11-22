@@ -353,6 +353,13 @@
       "AccountModels": {
         "description": "What `GET /accounts/{id}/models` answers: the model ids the provider listed for the account.",
         "properties": {
+          "billing": {
+            "description": "`plan`: a subscription; its models are included in the plan, so they have no prices here.\n`metered`: an API key, billed per token at the prices in `items`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "fetched_at": {
             "$ref": "#/components/schemas/Timestamp",
             "description": "When the list was read; absent when none was."
@@ -370,6 +377,13 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "models_enforced": {
+            "description": "As `ProviderAccount.models_enforced`: whether a switched-off model is refused in its sessions\n(an API key's gateway), or only advice (a plan: the harness talks to its provider itself,\nand the Core only skips the account when a session asks for that model at its start).",
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         },
         "required": [
@@ -12795,7 +12809,7 @@
                 }
               }
             },
-            "description": "The model ids the provider listed for the account when its key was added or checked (a preset's list is read through a runner's gateway), and in `items` each model with its list price where there is one and whether it is allowed. 404 for no such account"
+            "description": "The model ids the provider listed for the account when its key was added or checked (a preset's list is read through a runner's gateway), and in `items` each model with its list price where there is one and whether it is allowed. A plan account (`billing: plan`) has no key to list them: its models are the ones its harness runs on a plan (the shipped Anthropic models for Claude, the Codex models for ChatGPT) and every model its sessions were seen running, all included in the plan. 404 for no such account"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

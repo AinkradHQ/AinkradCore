@@ -25,8 +25,10 @@ import kotlinx.serialization.Contextual
  * What `GET /accounts/{id}/models` answers: the model ids the provider listed for the account.
  *
  * @param models Exactly as the provider names them; empty until a list was read (a preset's add or check through a runner). No price: an unpriced model runs at the flagged default price.
+ * @param billing `plan`: a subscription; its models are included in the plan, so they have no prices here. `metered`: an API key, billed per token at the prices in `items`.
  * @param fetchedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param items Every model the account can name with its price and switch: the listed ids, the provider's priced ones and any switched off. Absent when there is none.
+ * @param modelsEnforced As `ProviderAccount.models_enforced`: whether a switched-off model is refused in its sessions (an API key's gateway), or only advice (a plan: the harness talks to its provider itself, and the Core only skips the account when a session asks for that model at its start).
  */
 @Serializable
 
@@ -36,13 +38,21 @@ data class AccountModels (
     @SerialName(value = "models")
     val models: kotlin.collections.List<kotlin.String>,
 
+    /* `plan`: a subscription; its models are included in the plan, so they have no prices here. `metered`: an API key, billed per token at the prices in `items`. */
+    @SerialName(value = "billing")
+    val billing: kotlin.String? = null,
+
     /* RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4). */
     @Contextual @SerialName(value = "fetched_at")
     val fetchedAt: java.time.OffsetDateTime? = null,
 
     /* Every model the account can name with its price and switch: the listed ids, the provider's priced ones and any switched off. Absent when there is none. */
     @SerialName(value = "items")
-    val items: kotlin.collections.List<AccountModelRow>? = null
+    val items: kotlin.collections.List<AccountModelRow>? = null,
+
+    /* As `ProviderAccount.models_enforced`: whether a switched-off model is refused in its sessions (an API key's gateway), or only advice (a plan: the harness talks to its provider itself, and the Core only skips the account when a session asks for that model at its start). */
+    @SerialName(value = "models_enforced")
+    val modelsEnforced: kotlin.Boolean? = null
 
 ) {
 

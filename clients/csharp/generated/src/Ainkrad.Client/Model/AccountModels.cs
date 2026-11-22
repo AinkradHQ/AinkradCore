@@ -40,10 +40,12 @@ namespace Ainkrad.Client.Model
         /// <summary>
         /// Initializes a new instance of the <see cref="AccountModels" /> class.
         /// </summary>
+        /// <param name="billing">&#x60;plan&#x60;: a subscription; its models are included in the plan, so they have no prices here. &#x60;metered&#x60;: an API key, billed per token at the prices in &#x60;items&#x60;..</param>
         /// <param name="fetchedAt">RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4)..</param>
         /// <param name="items">Every model the account can name with its price and switch: the listed ids, the provider&#39;s priced ones and any switched off. Absent when there is none..</param>
         /// <param name="models">Exactly as the provider names them; empty until a list was read (a preset&#39;s add or check through a runner). No price: an unpriced model runs at the flagged default price. (required).</param>
-        public AccountModels(DateTime fetchedAt = default, List<AccountModelRow> items = default, List<string> models = default)
+        /// <param name="modelsEnforced">As &#x60;ProviderAccount.models_enforced&#x60;: whether a switched-off model is refused in its sessions (an API key&#39;s gateway), or only advice (a plan: the harness talks to its provider itself, and the Core only skips the account when a session asks for that model at its start)..</param>
+        public AccountModels(string billing = default, DateTime fetchedAt = default, List<AccountModelRow> items = default, List<string> models = default, bool? modelsEnforced = default)
         {
             // to ensure "models" is required (not null)
             if (models == null)
@@ -51,9 +53,18 @@ namespace Ainkrad.Client.Model
                 throw new ArgumentNullException("models is a required property for AccountModels and cannot be null");
             }
             this.Models = models;
+            this.Billing = billing;
             this.FetchedAt = fetchedAt;
             this.Items = items;
+            this.ModelsEnforced = modelsEnforced;
         }
+
+        /// <summary>
+        /// &#x60;plan&#x60;: a subscription; its models are included in the plan, so they have no prices here. &#x60;metered&#x60;: an API key, billed per token at the prices in &#x60;items&#x60;.
+        /// </summary>
+        /// <value>&#x60;plan&#x60;: a subscription; its models are included in the plan, so they have no prices here. &#x60;metered&#x60;: an API key, billed per token at the prices in &#x60;items&#x60;.</value>
+        [DataMember(Name = "billing", EmitDefaultValue = true)]
+        public string Billing { get; set; }
 
         /// <summary>
         /// RFC 3339 UTC with exactly milliseconds, &#x60;2026-10-21T12:00:00.250Z&#x60;: one shape, so a client&#39;s date parser never meets a second one (E0.4).
@@ -77,6 +88,13 @@ namespace Ainkrad.Client.Model
         public List<string> Models { get; set; }
 
         /// <summary>
+        /// As &#x60;ProviderAccount.models_enforced&#x60;: whether a switched-off model is refused in its sessions (an API key&#39;s gateway), or only advice (a plan: the harness talks to its provider itself, and the Core only skips the account when a session asks for that model at its start).
+        /// </summary>
+        /// <value>As &#x60;ProviderAccount.models_enforced&#x60;: whether a switched-off model is refused in its sessions (an API key&#39;s gateway), or only advice (a plan: the harness talks to its provider itself, and the Core only skips the account when a session asks for that model at its start).</value>
+        [DataMember(Name = "models_enforced", EmitDefaultValue = true)]
+        public bool? ModelsEnforced { get; set; }
+
+        /// <summary>
         /// Returns the string presentation of the object
         /// </summary>
         /// <returns>String presentation of the object</returns>
@@ -84,9 +102,11 @@ namespace Ainkrad.Client.Model
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("class AccountModels {\n");
+            sb.Append("  Billing: ").Append(Billing).Append("\n");
             sb.Append("  FetchedAt: ").Append(FetchedAt).Append("\n");
             sb.Append("  Items: ").Append(Items).Append("\n");
             sb.Append("  Models: ").Append(Models).Append("\n");
+            sb.Append("  ModelsEnforced: ").Append(ModelsEnforced).Append("\n");
             sb.Append("}\n");
             return sb.ToString();
         }

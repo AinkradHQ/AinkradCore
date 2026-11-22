@@ -42,10 +42,11 @@ pub(crate) struct Dropped {
     pub kind: String,
     pub reasons: Vec<String>,
     pub score: f32,
-    /// `malformed` (`answer::parse_output`), `not_grounded` (code rule), `admit` (score) or `judge`.
+    /// `malformed` or `over_limit` (`answer::parse_output`), `not_grounded` (code rule), `admit`
+    /// (score) or `judge`.
     pub stage: String,
     /// The source ids it cited. A re-distil counts a source cited by a candidate dropped at the
-    /// `malformed`, `not_grounded` or `judge` stage as unread (`distil::read_in_full`).
+    /// `malformed`, `over_limit`, `not_grounded` or `judge` stage as unread (`distil::read_in_full`).
     #[serde(default)]
     pub sources: Vec<String>,
 }

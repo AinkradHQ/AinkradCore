@@ -385,6 +385,11 @@ extension Components {
         ///
         /// - Remark: Generated from `#/components/schemas/AccountModels`.
         public struct AccountModels: Codable, Hashable, Sendable {
+            /// `plan`: a subscription; its models are included in the plan, so they have no prices here.
+            /// `metered`: an API key, billed per token at the prices in `items`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountModels/billing`.
+            public var billing: Swift.String?
             /// When the list was read; absent when none was.
             ///
             /// - Remark: Generated from `#/components/schemas/AccountModels/fetched_at`.
@@ -399,25 +404,39 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AccountModels/models`.
             public var models: [Swift.String]
+            /// As `ProviderAccount.models_enforced`: whether a switched-off model is refused in its sessions
+            /// (an API key's gateway), or only advice (a plan: the harness talks to its provider itself,
+            /// and the Core only skips the account when a session asks for that model at its start).
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountModels/models_enforced`.
+            public var modelsEnforced: Swift.Bool?
             /// Creates a new `AccountModels`.
             ///
             /// - Parameters:
+            ///   - billing: `plan`: a subscription; its models are included in the plan, so they have no prices here.
             ///   - fetchedAt: When the list was read; absent when none was.
             ///   - items: Every model the account can name with its price and switch: the listed ids, the provider's
             ///   - models: Exactly as the provider names them; empty until a list was read (a preset's add or check
+            ///   - modelsEnforced: As `ProviderAccount.models_enforced`: whether a switched-off model is refused in its sessions
             public init(
+                billing: Swift.String? = nil,
                 fetchedAt: Components.Schemas.Timestamp? = nil,
                 items: [Components.Schemas.AccountModelRow]? = nil,
-                models: [Swift.String]
+                models: [Swift.String],
+                modelsEnforced: Swift.Bool? = nil
             ) {
+                self.billing = billing
                 self.fetchedAt = fetchedAt
                 self.items = items
                 self.models = models
+                self.modelsEnforced = modelsEnforced
             }
             public enum CodingKeys: String, CodingKey {
+                case billing
                 case fetchedAt = "fetched_at"
                 case items
                 case models
+                case modelsEnforced = "models_enforced"
             }
         }
         /// A subscription's plan-limit snapshot.

@@ -3410,6 +3410,11 @@ export interface components {
         };
         /** @description What `GET /accounts/{id}/models` answers: the model ids the provider listed for the account. */
         AccountModels: {
+            /**
+             * @description `plan`: a subscription; its models are included in the plan, so they have no prices here.
+             *     `metered`: an API key, billed per token at the prices in `items`.
+             */
+            billing?: string | null;
             /** @description When the list was read; absent when none was. */
             fetched_at?: components["schemas"]["Timestamp"];
             /**
@@ -3422,6 +3427,12 @@ export interface components {
              *     through a runner). No price: an unpriced model runs at the flagged default price.
              */
             models: string[];
+            /**
+             * @description As `ProviderAccount.models_enforced`: whether a switched-off model is refused in its sessions
+             *     (an API key's gateway), or only advice (a plan: the harness talks to its provider itself,
+             *     and the Core only skips the account when a session asks for that model at its start).
+             */
+            models_enforced?: boolean | null;
         };
         /** @description A subscription's plan-limit snapshot. */
         AccountPlanLimit: {
@@ -7978,7 +7989,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The model ids the provider listed for the account when its key was added or checked (a preset's list is read through a runner's gateway), and in `items` each model with its list price where there is one and whether it is allowed. 404 for no such account */
+            /** @description The model ids the provider listed for the account when its key was added or checked (a preset's list is read through a runner's gateway), and in `items` each model with its list price where there is one and whether it is allowed. A plan account (`billing: plan`) has no key to list them: its models are the ones its harness runs on a plan (the shipped Anthropic models for Claude, the Codex models for ChatGPT) and every model its sessions were seen running, all included in the plan. 404 for no such account */
             200: {
                 headers: {
                     [name: string]: unknown;
