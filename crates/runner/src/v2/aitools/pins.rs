@@ -1,6 +1,7 @@
 //! The pinned versions and their digests. A version goes here only after it is inside
 //! `harness::compat`'s tested range (a test checks it); the digests come from Anthropic's release
-//! manifest and from npm's `dist.integrity` for that exact version.
+//! manifest, from npm's `dist.integrity`, and from the `digest` GitHub publishes for each asset of
+//! Google's Antigravity CLI release (checked against two downloads of our own) for that exact version.
 
 use super::{Build, Check, Pin, Tool};
 
@@ -119,6 +120,49 @@ pub(super) const PINS: &[Pin] = &[
                     "RTAMjCve4euxP2QKLuvRmdoW5J5DQK1DiZqt+7slfixyjAEi79QC2Df2oYKogibaAI4IEU8uzenoJeEl3k+UEw==",
                 ),
                 entry: "package/bin/opencode",
+            },
+        ],
+    },
+    // Google's installer (antigravity.google/cli/install.sh) only knows the latest build, from a
+    // manifest; the same tarballs are the assets of each release of Google's upstream repo, which
+    // keeps every version (1.5.14 checked byte-identical to the installer's storage.googleapis.com
+    // copy). One member, `antigravity`, at the root; the glibc builds, as the installer picks.
+    Pin {
+        tool: Tool::Agy,
+        version: "1.4.4",
+        packed: true,
+        builds: &[
+            Build {
+                platform: "darwin-arm64",
+                url: "https://github.com/google-antigravity/antigravity-cli/releases/download/1.4.4/agy_cli_mac_arm64.tar.gz",
+                check: Check::Sha256(
+                    "85482aa8969300183f71c9653d9f581248fba7f506342a8eb087f3d2503203bd",
+                ),
+                entry: "antigravity",
+            },
+            Build {
+                platform: "darwin-x64",
+                url: "https://github.com/google-antigravity/antigravity-cli/releases/download/1.4.4/agy_cli_mac_x64.tar.gz",
+                check: Check::Sha256(
+                    "12c96c065ac50d36e087c1fda1bba8d6fb4fa7af232d1ef2a44499c2481a52bf",
+                ),
+                entry: "antigravity",
+            },
+            Build {
+                platform: "linux-arm64",
+                url: "https://github.com/google-antigravity/antigravity-cli/releases/download/1.4.4/agy_cli_linux_arm64.tar.gz",
+                check: Check::Sha256(
+                    "57a96abbc94745a5faf4f24e878766a1882b9aa4c4b83ba567717d8206745f5a",
+                ),
+                entry: "antigravity",
+            },
+            Build {
+                platform: "linux-x64",
+                url: "https://github.com/google-antigravity/antigravity-cli/releases/download/1.4.4/agy_cli_linux_x64.tar.gz",
+                check: Check::Sha256(
+                    "9ae4f7f0667a2868e15bb9ad93819ff7527c7187f12d12e3b5191137c726287b",
+                ),
+                entry: "antigravity",
             },
         ],
     },
