@@ -370,6 +370,15 @@ pub(crate) async fn stage_items(
             .bind(kind)
             .execute(&mut *seen_tx)
             .await?;
+        sqlx::query(
+            "INSERT INTO brain_read_days (device, kind, day, n, last_at) VALUES (?1, ?2, substr(?3, 1, 10), 1, ?3) \
+             ON CONFLICT(device, kind, day) DO UPDATE SET n = n + 1, last_at = excluded.last_at",
+        )
+        .bind(device)
+        .bind(kind)
+        .bind(app.clock.now())
+        .execute(&mut *seen_tx)
+        .await?;
     }
     save_counts(&mut seen_tx, run, &counts).await?;
     record_progress(&mut seen_tx, run, "collect", &counts).await?;

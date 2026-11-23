@@ -72,6 +72,16 @@ pub struct SourceView {
     pub items: i64,
     /// For a `runner-<id>` source: the runner now. None for any other source.
     pub runner: Option<RunnerNow>,
+    /// Items read from this source in all, and in the last 7 days.
+    #[schema(required = false)]
+    pub read_total: i64,
+    #[schema(required = false)]
+    pub read_week: i64,
+    /// When an item was last read from it.
+    pub last_read_at: Option<String>,
+    /// True while a collection from it is running.
+    #[schema(required = false)]
+    pub reading: bool,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -126,7 +136,35 @@ fn view(r: &sqlx::sqlite::SqliteRow) -> Result<SourceView, sqlx::Error> {
         last_run: r.try_get("last_run")?,
         items: r.try_get("items")?,
         runner: None,
+        read_total: 0,
+        read_week: 0,
+        last_read_at: None,
+        reading: false,
     })
+}
+
+/// Fills the reading counts of `v` from `brain_read_days` and the runs being collected now.
+async fn fill_reads(app: &App, v: &mut SourceView) -> Result<(), sqlx::Error> {
+    let (week, last): (i64, Option<String>) = sqlx::query_as(
+        "SELECT coalesce(sum(n) FILTER (WHERE day >= date(?3, '-6 days')), 0), max(last_at) \
+         FROM brain_read_days WHERE device = ?1 AND kind = ?2",
+    )
+    .bind(&v.device)
+    .bind(&v.kind)
+    .bind(app.clock.now())
+    .fetch_one(&app.pool)
+    .await?;
+    v.read_total = v.items;
+    v.read_week = week;
+    v.last_read_at = last;
+    v.reading = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM brain_import_runs r, json_each(r.sources) j \
+         WHERE r.state = 'collecting' AND j.value = ?)",
+    )
+    .bind(&v.id)
+    .fetch_one(&app.pool)
+    .await?;
+    Ok(())
 }
 
 /// The Core's own collectors: AI session transcripts (on), then Jira and GitHub (off until the
@@ -165,6 +203,7 @@ pub(crate) async fn sources(State(app): State<App>) -> ApiResult<Vec<SourceView>
     let mut out = rows.iter().map(view).collect::<Result<Vec<_>, _>>()?;
     for v in &mut out {
         v.runner = runner_now(&app, v);
+        fill_reads(&app, v).await?;
     }
     Ok(Json(out))
 }
@@ -240,6 +279,7 @@ pub(crate) async fn put_source(
         .await?;
     let mut v = view(&row)?;
     v.runner = runner_now(&app, &v);
+    fill_reads(&app, &mut v).await?;
     Ok(Json(v))
 }
 

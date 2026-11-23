@@ -24,6 +24,7 @@ use utoipa::{OpenApi, ToSchema};
 
 mod access;
 mod activity;
+mod activity_days;
 mod ai;
 mod ai_propose;
 mod ai_semantic;
@@ -31,6 +32,7 @@ mod aliases;
 mod answer;
 mod answer_turns;
 mod areas;
+mod ask;
 mod auto_distil;
 mod auto_import;
 mod backfill;
@@ -49,12 +51,14 @@ mod echo;
 pub mod eval;
 pub mod eval_census;
 pub mod files;
+mod follow;
 mod imports;
 mod inbox;
 mod index;
 mod judge;
 pub mod key;
 mod learning;
+mod lens;
 mod loaded;
 mod lore;
 pub mod me_card;
@@ -63,6 +67,7 @@ pub mod merge;
 mod overview;
 pub mod overview_select;
 pub mod overview_write;
+mod places;
 mod policy;
 mod project_rooms;
 pub mod propose;
@@ -160,6 +165,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0012_brain_parallel_sweep.up.sql"),
         down: include_str!("../migrations/0012_brain_parallel_sweep.down.sql"),
     },
+    Migration {
+        version: 13,
+        name: "brain_read_days",
+        up: include_str!("../migrations/0013_brain_read_days.up.sql"),
+        down: include_str!("../migrations/0013_brain_read_days.down.sql"),
+    },
 ];
 
 /// Employer and client rooms commit like any other room. Ahmed, 2026-11-15: "no need to hold the import bcz of backup".
@@ -180,6 +191,9 @@ const NON_DESTRUCTIVE: &[(&str, &str)] = &[
     ("PATCH", "/rules/{id}"),
     ("POST", "/rooms/{room}/redistil"),
     ("POST", "/rooms/{room}/records/{id}/restore"),
+    ("PUT", "/rooms/{room}/records/{id}/follow"),
+    ("POST", "/areas/rules"),
+    ("POST", "/ask"),
     ("POST", "/rooms/{room}/records/{id}/archive"),
     ("POST", "/auto-imports/{run}/undo"),
     ("POST", "/imports"),
@@ -260,6 +274,10 @@ const ROUTE_SCOPES: &[(&str, &str, &str)] = &[
     ("GET", "/rooms/{room}/overview", "read"),
     ("GET", "/overview/progress", "read"),
     ("GET", "/activity", "read"),
+    ("GET", "/activity/days", "read"),
+    ("GET", "/places", "read"),
+    ("GET", "/topics", "read"),
+    ("POST", "/ask", "read"),
     ("GET", "/areas", "read"),
     ("GET", "/learned", "read"),
     ("GET", "/rooms/{room}/sources/{item}/trace", "read"),
@@ -630,6 +648,12 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         areas::archive,
         areas::trace,
         areas::restore,
+        activity_days::days,
+        places::places,
+        places::topics,
+        ask::ask,
+        follow::follow,
+        follow::write_rule,
         auto_import::list,
         learning::get,
         review_runs::list,
@@ -667,6 +691,21 @@ async fn status(axum::extract::State(app): axum::extract::State<App>) -> ApiResu
         areas::TraceRecord,
         areas::TraceStep,
         areas::Restored,
+        areas::RuleKinds,
+        lens::PlaceRef,
+        activity_days::ActivityDays,
+        activity_days::ActivityDay,
+        activity_days::DayEvent,
+        places::Place,
+        places::Topic,
+        ask::AskBody,
+        ask::AskSource,
+        ask::Asked,
+        follow::FollowBody,
+        follow::Followed,
+        follow::WriteRule,
+        follow::RuleWritten,
+        follow::WrittenRule,
         auto_import::AutoImport,
         learning::Learning,
         learning::LearningPlace,
@@ -851,6 +890,15 @@ impl Module for Brain {
             .route("/overview/write-all", post(overview::write_all))
             .route("/overview/progress", get(overview::progress_route))
             .route("/activity", get(activity::get))
+            .route("/activity/days", get(activity_days::days))
+            .route("/places", get(places::places))
+            .route("/topics", get(places::topics))
+            .route("/ask", post(ask::ask))
+            .route(
+                "/areas/rules",
+                get(areas::rules_records).post(follow::write_rule),
+            )
+            .route("/rooms/{room}/records/{id}/follow", put(follow::follow))
             .route("/areas", get(areas::summary))
             .route("/areas/{area}", get(areas::records))
             .route("/learned", get(areas::learned))
@@ -942,6 +990,7 @@ impl Module for Brain {
             "brain.ai.context",
             "brain.me_card.served",
             "brain.me.profile",
+            "brain.ask",
             "brain.ai.proposed",
             "brain.ai.checkpoint_requested",
             "brain.ai.outcome",
@@ -989,6 +1038,7 @@ impl Module for Brain {
     fn query_names(&self) -> &'static [&'static str] {
         &[
             "q", "room", "mode", "status", "limit", "after", "prompt", "budget", "days", "state",
+            "kind", "topic", "type",
         ]
     }
 

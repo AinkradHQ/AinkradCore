@@ -363,7 +363,12 @@
 ///    `AccountSession.terminal` (the terminal id) marks a terminal's use in `listAccountSessions`. Migration 66.
 /// 100: plan windows from a check (0.10.6). `PlanChecked.plan_limit` (runner schema, optional): a plan check's answer
 ///    carries the windows Claude reported, kept on the account like a session's (`health.plan_limit`). No Core API change.
-pub const API_MINOR: u32 = 100;
+/// 101: the Brain redesign (0.10.7), all in the Brain module's contract: `GET /areas` adds `series` and `rule_kinds`;
+///    area and learned records add `kind` (`always|never|prefer`), `following`, `everywhere`, `rooms`; `GET /areas/{area}`
+///    adds `kind`, `topic`, `q`; `GET /places`, `GET /topics`, `POST /ask`, `GET /activity/days`, `PUT
+///    /rooms/{room}/records/{id}/follow`, `POST /areas/rules`; `GET /sources` adds the read counts; inbox candidates add
+///    `reason`, `other_id`, `other_body`. Profile answers now count as About you.
+pub const API_MINOR: u32 = 101;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

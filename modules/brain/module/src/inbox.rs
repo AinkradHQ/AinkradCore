@@ -47,6 +47,15 @@ pub struct InboxRecord {
     pub decided_by: Option<String>,
     /// The AI session that proposed it through Code Mode (`brain.propose`); none otherwise.
     pub proposed_by: Option<String>,
+    /// Why a waiting candidate needs a look: `conflict`, `single_source`, `duplicate` or `other`.
+    /// Only on candidates listed by `GET /rooms/{room}/inbox`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// For `conflict` and `duplicate`: the record in memory it clashes with, and its text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub other_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub other_body: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -145,6 +154,9 @@ fn candidate(r: &sqlx::sqlite::SqliteRow) -> Result<(InboxRecord, Vec<String>), 
         proposed_by: r
             .try_get::<Option<String>, _>("distil")?
             .and_then(|d| d.strip_prefix(crate::ai::PROPOSED).map(str::to_owned)),
+        reason: None,
+        other_id: None,
+        other_body: None,
     };
     Ok((rec, list("source_ids")?))
 }
@@ -185,6 +197,45 @@ async fn fill(
     Ok(out)
 }
 
+/// Why a candidate waits, derived when it is read: it contests or replaces a record in memory
+/// (`conflict`), says what a record in memory already says (`duplicate`), rests on fewer than two
+/// sources (`single_source`), or none of those (`other`). `conflict` and `duplicate` name the other record.
+async fn reason_of(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+) -> Result<(&'static str, Option<(String, String)>), sqlx::Error> {
+    let conflict: Option<(String, String)> = sqlx::query_as(
+        "SELECT m.id, m.body FROM records r JOIN memory m ON m.id = coalesce(r.contests, r.supersedes) \
+         WHERE r.id = ?1 AND m.id <> r.id",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    if conflict.is_some() {
+        return Ok(("conflict", conflict));
+    }
+    let dup: Option<(String, String)> = sqlx::query_as(
+        "SELECT m.id, m.body FROM records r JOIN memory m ON m.id <> r.id AND m.type = r.type \
+           AND coalesce(m.body_norm, lower(trim(m.body))) = coalesce(r.body_norm, lower(trim(r.body))) \
+         WHERE r.id = ?1 LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    if dup.is_some() {
+        return Ok(("duplicate", dup));
+    }
+    let cited: i64 = sqlx::query_scalar(
+        "SELECT max((SELECT count(*) FROM record_sources WHERE record = r.id AND echo = 0), \
+                    CASE WHEN json_valid(r.source_ids) THEN json_array_length(r.source_ids) ELSE 0 END) \
+         FROM records r WHERE r.id = ?1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+    Ok((if cited < 2 { "single_source" } else { "other" }, None))
+}
+
 #[utoipa::path(get, path = "/rooms/{room}/inbox", operation_id = "brainInbox", tag = "brain",
     params(("room" = String, Path, description = "Room id"), InboxQuery),
     responses((status = 200, description = "Candidate records of an open room, oldest first, with how many wait", body = InboxPage)))]
@@ -212,7 +263,14 @@ pub(crate) async fn list(
             .fetch_one(access.pool())
             .await?;
     let raw = rows.iter().map(candidate).collect::<Result<Vec<_>, _>>()?;
-    let items = fill(access.pool(), &room, raw).await?;
+    let mut items = fill(access.pool(), &room, raw).await?;
+    if status == "candidate" {
+        for rec in &mut items {
+            let (reason, other) = reason_of(access.pool(), &rec.id).await?;
+            rec.reason = Some(reason.to_owned());
+            (rec.other_id, rec.other_body) = other.unzip();
+        }
+    }
     access.pool().close().await;
     Ok(Json(InboxPage { items, waiting }))
 }

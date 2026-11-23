@@ -73,7 +73,7 @@ const MAX_PROMPT_CHARS: usize = 2000;
 /// Records queued for embedding by one call.
 const MAX_QUEUE: usize = 100;
 
-const NOT_CONTESTED: &str = "contests IS NULL";
+const NOT_CONTESTED: &str = "contests IS NULL AND following = 1";
 /// Distinct cited sources of a record. Raw `support` is not used (it is being changed to count
 /// origins, B5-02), and this reads the same facts directly.
 const SUPPORT_SQL: &str = "(SELECT count(DISTINCT rs.source) FROM record_sources rs WHERE rs.record = memory.id AND rs.echo = 0)";
