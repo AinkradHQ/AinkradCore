@@ -27,6 +27,7 @@ mod overview;
 mod policy_card;
 mod project_rooms;
 mod query;
+mod redesign;
 mod redistil;
 mod retention;
 mod review;

@@ -73,7 +73,7 @@ pub(crate) async fn candidates(pool: &SqlitePool) -> Result<Vec<Cand>, sqlx::Err
     let sql = format!(
         "SELECT id, body, support, coalesce(last_seen_at, created_at) AS seen, coalesce({PERSON}, 0) AS person \
          FROM memory \
-         WHERE type IN ('preference','rule') AND origin <> 'ai' AND contests IS NULL \
+         WHERE type IN ('preference','rule') AND origin <> 'ai' AND contests IS NULL AND following = 1 \
            AND NOT EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE value IN {CONTESTED}) \
          ORDER BY support DESC, seen DESC, id"
     );

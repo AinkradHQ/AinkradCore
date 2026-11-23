@@ -20,11 +20,14 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use utoipa::{IntoParams, ToSchema};
 
+use crate::lens::{PlaceRef, area_cond, is_rule, local_days, rule_kind, rule_places};
 use crate::{Brain, code};
 
 const DEFAULT_LIMIT: u32 = 50;
 const MAX_LIMIT: u32 = 200;
 const LATEST_CHARS: usize = 160;
+const SERIES_DAYS: u32 = 14;
+const MAX_Q: usize = 200;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Area {
@@ -35,9 +38,9 @@ pub(crate) enum Area {
 }
 
 impl Area {
-    const ALL: [Area; 4] = [Area::Me, Area::Rules, Area::Knowledge, Area::Timeline];
+    pub(crate) const ALL: [Area; 4] = [Area::Me, Area::Rules, Area::Knowledge, Area::Timeline];
 
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Area::Me => "me",
             Area::Rules => "rules",
@@ -64,7 +67,7 @@ pub(crate) fn types_for(area: Area, kind: &str) -> &'static [&'static str] {
 }
 
 /// `'a','b'` for a SQL `IN`: the types are this file's constants, never input.
-fn in_list(types: &[&str]) -> String {
+pub(crate) fn in_list(types: &[&str]) -> String {
     types
         .iter()
         .map(|t| format!("'{t}'"))
@@ -81,6 +84,16 @@ pub struct AreaSummary {
     pub today: i64,
     /// The newest record's text, cut short.
     pub latest: Option<String>,
+    /// Records accepted into the area on each of the last 14 local days, oldest first, today last.
+    #[schema(required = false)]
+    pub series: Vec<i64>,
+}
+
+#[derive(Serialize, ToSchema, Default)]
+pub struct RuleKinds {
+    pub always: i64,
+    pub never: i64,
+    pub prefer: i64,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -92,6 +105,9 @@ pub struct Areas {
     pub evidence: i64,
     /// Rooms not read because they are not open.
     pub locked_rooms: i64,
+    /// How many current rules are `always`, `never` and `prefer`.
+    #[schema(required = false)]
+    pub rule_kinds: RuleKinds,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -109,6 +125,19 @@ pub struct AreaRecord {
     pub created_at: String,
     /// When a source last showed it.
     pub seen_at: String,
+    /// A rule's kind: `always`, `never` or `prefer`. Absent on other records.
+    #[serde(rename = "kind", skip_serializing_if = "Option::is_none")]
+    #[schema(rename = "kind", required = false)]
+    pub rule_kind: Option<String>,
+    /// False once the person unfollowed it: it stays, but AI sessions are not given it.
+    #[schema(required = false)]
+    pub following: bool,
+    /// A rule worded the same in two or more places.
+    #[schema(required = false)]
+    pub everywhere: bool,
+    /// Those places, when `everywhere`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rooms: Option<Vec<PlaceRef>>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -130,16 +159,24 @@ pub struct AreaQuery {
     pub limit: Option<u32>,
     /// Only this room's records (a room id), so one room's list is not cut by the other rooms'.
     pub room: Option<String>,
+    /// Rules only: `always`, `never` or `prefer`.
+    #[serde(rename = "kind")]
+    #[param(rename = "kind")]
+    pub rule_kind: Option<String>,
+    /// Knowledge: only records tagged with this topic.
+    pub topic: Option<String>,
+    /// Only records whose text contains this (1 to 200 characters).
+    pub q: Option<String>,
 }
 
-struct RoomRef {
-    id: String,
-    name: String,
-    kind: String,
+pub(crate) struct RoomRef {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
 }
 
 /// The active rooms and how many are closed; open ones come with a handle.
-async fn open_rooms(
+pub(crate) async fn open_rooms(
     app: &App,
     b: &Brain,
 ) -> Result<(Vec<(RoomRef, crate::rooms::RoomAccess)>, i64), ApiError> {
@@ -174,24 +211,38 @@ pub(crate) async fn summary(
 ) -> ApiResult<Areas> {
     let (rooms, locked_rooms) = open_rooms(&app, &b).await?;
     let day = iso_of_unix(app.clock.unix() - 86_400);
+    let days = local_days(&app, SERIES_DAYS).await?;
+    let since = iso_of_unix(app.clock.unix() - (i64::from(SERIES_DAYS) + 1) * 86_400);
     let mut out = vec![];
     for area in Area::ALL {
         let (mut count, mut today, mut newest): (i64, i64, Option<(String, String)>) = (0, 0, None);
+        let mut series = vec![0i64; days.len()];
         for (room, access) in &rooms {
-            let types = in_list(types_for(area, &room.kind));
-            if types.is_empty() {
+            let Some(cond) = area_cond(area, &room.kind, None) else {
                 continue;
-            }
+            };
             let (n, t): (i64, i64) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-                "SELECT count(*), coalesce(sum(created_at >= ?), 0) FROM memory WHERE type IN ({types})"
+                "SELECT count(*), coalesce(sum(created_at >= ?), 0) FROM memory WHERE {cond}"
             )))
             .bind(&day)
             .fetch_one(access.pool())
             .await?;
             count += n;
             today += t;
+            let per_day: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "SELECT date(created_at, 'localtime') AS d, count(*) FROM memory \
+                 WHERE {cond} AND created_at >= ? GROUP BY d"
+            )))
+            .bind(&since)
+            .fetch_all(access.pool())
+            .await?;
+            for (d, c) in per_day {
+                if let Some(i) = days.iter().position(|x| *x == d) {
+                    series[i] += c;
+                }
+            }
             let top: Option<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-                "SELECT created_at, body FROM memory WHERE type IN ({types}) ORDER BY created_at DESC, id DESC LIMIT 1"
+                "SELECT created_at, body FROM memory WHERE {cond} ORDER BY created_at DESC, id DESC LIMIT 1"
             )))
             .fetch_optional(access.pool())
             .await?;
@@ -204,7 +255,30 @@ pub(crate) async fn summary(
             count,
             today,
             latest: newest.map(|(_, body)| body.chars().take(LATEST_CHARS).collect()),
+            series,
         });
+    }
+    let mut rule_kinds = RuleKinds::default();
+    for (room, access) in &rooms {
+        let Some(cond) = area_cond(Area::Rules, &room.kind, None) else {
+            continue;
+        };
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT type, body, tags FROM memory WHERE {cond}"
+        )))
+        .fetch_all(access.pool())
+        .await?;
+        for r in rows {
+            match rule_kind(
+                &r.try_get::<String, _>("type")?,
+                &r.try_get::<String, _>("body")?,
+                &r.try_get::<String, _>("tags")?,
+            ) {
+                "never" => rule_kinds.never += 1,
+                "prefer" => rule_kinds.prefer += 1,
+                _ => rule_kinds.always += 1,
+            }
+        }
     }
     for (_, a) in &rooms {
         a.pool().close().await;
@@ -220,6 +294,7 @@ pub(crate) async fn summary(
         places,
         evidence,
         locked_rooms,
+        rule_kinds,
     }))
 }
 
@@ -234,41 +309,101 @@ pub(crate) async fn records(
 ) -> ApiResult<AreaPage> {
     let area = Area::parse(&area).ok_or_else(|| code(404, "unknown_area", "no such area"))?;
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT) as usize;
+    if q.rule_kind
+        .as_deref()
+        .is_some_and(|k| !matches!(k, "always" | "never" | "prefer"))
+    {
+        return Err(ApiError::bad_request(
+            "kind is `always`, `never` or `prefer`",
+        ));
+    }
+    let text = q.q.as_deref().map(str::trim).filter(|t| !t.is_empty());
+    if text.is_some_and(|t| t.chars().count() > MAX_Q)
+        || q.topic
+            .as_deref()
+            .is_some_and(|t| t.is_empty() || t.chars().count() > 80)
+    {
+        return Err(ApiError::bad_request(
+            "q is 1 to 200 characters and topic 1 to 80",
+        ));
+    }
+    let like = text.map(|t| {
+        format!(
+            "%{}%",
+            t.replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        )
+    });
     let (rooms, locked_rooms) = open_rooms(&app, &b).await?;
+    let everywhere = if area == Area::Rules {
+        rule_places(&rooms).await?
+    } else {
+        Default::default()
+    };
+    // A rule kind is derived, so it filters after the read: read them all then.
+    let fetch = if q.rule_kind.is_some() {
+        5000
+    } else {
+        MAX_LIMIT as usize
+    };
     let mut all: Vec<AreaRecord> = vec![];
     for (room, access) in &rooms {
         if q.room.as_deref().is_some_and(|r| r != room.id) {
             continue;
         }
-        let types: Vec<&str> = types_for(area, &room.kind)
-            .iter()
-            .copied()
-            .filter(|t| q.kind.as_deref().is_none_or(|k| k == *t))
-            .collect();
-        if types.is_empty() {
+        let Some(cond) = area_cond(area, &room.kind, q.kind.as_deref()) else {
             continue;
+        };
+        let mut sql = format!(
+            "SELECT id, type, body, tags, support, created_at, following, \
+                    coalesce(body_norm, lower(trim(body))) AS norm, coalesce(last_seen_at, created_at) AS seen \
+             FROM memory WHERE {cond}"
+        );
+        if q.topic.is_some() {
+            sql += " AND EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(tags) THEN tags ELSE '[]' END) WHERE value = ?)";
         }
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id, type, body, tags, support, created_at, coalesce(last_seen_at, created_at) AS seen \
-             FROM memory WHERE type IN ({}) ORDER BY support DESC, seen DESC, id LIMIT {MAX_LIMIT}",
-            in_list(&types)
-        )))
-        .fetch_all(access.pool())
-        .await?;
-        for r in rows {
+        if like.is_some() {
+            sql += " AND body LIKE ? ESCAPE '\\'";
+        }
+        sql += &format!(" ORDER BY support DESC, seen DESC, id LIMIT {fetch}");
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        if let Some(t) = &q.topic {
+            query = query.bind(t);
+        }
+        if let Some(l) = &like {
+            query = query.bind(l);
+        }
+        for r in query.fetch_all(access.pool()).await? {
+            let kind: String = r.try_get("type")?;
+            let body: String = r.try_get("body")?;
+            let tags: String = r.try_get("tags")?;
+            let rk = is_rule(&kind).then(|| rule_kind(&kind, &body, &tags).to_owned());
+            if q.rule_kind.is_some() && rk != q.rule_kind {
+                continue;
+            }
+            let places = rk
+                .as_ref()
+                .and_then(|_| everywhere.get(&r.get::<String, _>("norm")));
             all.push(AreaRecord {
                 id: r.try_get("id")?,
                 room: room.id.clone(),
                 room_name: room.name.clone(),
-                kind: r.try_get("type")?,
-                body: r.try_get("body")?,
-                tags: serde_json::from_str(&r.try_get::<String, _>("tags")?).unwrap_or_default(),
+                kind,
+                body,
+                tags: serde_json::from_str(&tags).unwrap_or_default(),
                 support: r.try_get("support")?,
                 created_at: r.try_get("created_at")?,
                 seen_at: r.try_get("seen")?,
+                rule_kind: rk,
+                following: r.try_get::<i64, _>("following")? == 1,
+                everywhere: places.is_some(),
+                rooms: places.cloned(),
             });
         }
-        access.pool().close().await;
+    }
+    for (_, a) in &rooms {
+        a.pool().close().await;
     }
     all.sort_by(|a, b| {
         b.support
@@ -285,6 +420,15 @@ pub(crate) async fn records(
     }))
 }
 
+/// `GET /areas/rules` is the `rules` area; a literal route is needed because `POST /areas/rules` shares the path.
+pub(crate) async fn rules_records(
+    state: State<App>,
+    b: Extension<Brain>,
+    Query(q): Query<AreaQuery>,
+) -> ApiResult<AreaPage> {
+    records(state, b, Path("rules".to_owned()), Query(q)).await
+}
+
 #[derive(Serialize, ToSchema)]
 pub struct Learned {
     pub id: String,
@@ -297,10 +441,25 @@ pub struct Learned {
     pub area: String,
     pub body: String,
     pub created_at: String,
+    /// A rule's kind: `always`, `never` or `prefer`. Absent on other records.
+    #[serde(rename = "kind", skip_serializing_if = "Option::is_none")]
+    #[schema(rename = "kind", required = false)]
+    pub rule_kind: Option<String>,
+    #[schema(required = false)]
+    pub everywhere: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rooms: Option<Vec<PlaceRef>>,
 }
 
 /// The area a record of `kind` in a room of `room_kind` lands in.
-pub(crate) fn area_of(room_kind: &str, kind: &str) -> Option<Area> {
+pub(crate) fn area_of(room_kind: &str, kind: &str, id: &str) -> Option<Area> {
+    // A profile answer is About you, whatever its type says (`lens::area_cond`).
+    if matches!(room_kind, "personal" | "global-safe")
+        && kind == "preference"
+        && id.starts_with("me-")
+    {
+        return Some(Area::Me);
+    }
     Area::ALL
         .into_iter()
         .find(|a| types_for(*a, room_kind).contains(&kind))
@@ -314,10 +473,11 @@ pub(crate) async fn learned(
 ) -> ApiResult<Vec<Learned>> {
     let (rooms, _) = open_rooms(&app, &b).await?;
     let day = iso_of_unix(app.clock.unix() - 86_400);
+    let everywhere = rule_places(&rooms).await?;
     let mut all = vec![];
     for (room, access) in &rooms {
         let rows = sqlx::query(
-            "SELECT id, type, body, created_at FROM memory WHERE created_at >= ? \
+            "SELECT id, type, body, tags, created_at, coalesce(body_norm, lower(trim(body))) AS norm FROM memory WHERE created_at >= ? \
              ORDER BY created_at DESC, id LIMIT 12",
         )
         .bind(&day)
@@ -325,16 +485,26 @@ pub(crate) async fn learned(
         .await?;
         for r in rows {
             let kind: String = r.try_get("type")?;
-            let Some(area) = area_of(&room.kind, &kind) else {
+            let id: String = r.try_get("id")?;
+            let Some(area) = area_of(&room.kind, &kind, &id) else {
                 continue;
             };
+            let body: String = r.try_get("body")?;
+            let rk = (area == Area::Rules)
+                .then(|| rule_kind(&kind, &body, &r.get::<String, _>("tags")).to_owned());
+            let places = rk
+                .as_ref()
+                .and_then(|_| everywhere.get(&r.get::<String, _>("norm")));
             all.push(Learned {
-                id: r.try_get("id")?,
+                everywhere: places.is_some(),
+                rooms: places.cloned(),
+                rule_kind: rk,
+                id,
                 room: room.id.clone(),
                 room_name: room.name.clone(),
                 area: area.name().to_owned(),
                 kind,
-                body: r.try_get("body")?,
+                body,
                 created_at: r.try_get("created_at")?,
             });
         }
