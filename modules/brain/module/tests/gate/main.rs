@@ -24,6 +24,7 @@ mod keys;
 mod lore;
 mod merge;
 mod overview;
+mod overview_auto;
 mod policy_card;
 mod project_rooms;
 mod query;

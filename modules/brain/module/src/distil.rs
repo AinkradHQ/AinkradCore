@@ -46,7 +46,7 @@ const MAX_SOURCES: i64 = 30;
 const MAX_PROMPT_BYTES: usize = 120_000;
 /// Distil sessions at once across rooms: an import's rooms are learned a few at a time, never all
 /// started in one tick on one account (18 started together and all ended unanswered, 2026-11-21).
-const MAX_RUNNING: i64 = 3;
+pub(crate) const MAX_RUNNING: i64 = 3;
 /// Agent slots a distil leaves free on a runner that has more than one, so the person's own AI
 /// session still starts while the Brain learns. A one-slot runner is not held back: the Brain would
 /// never learn there.

@@ -69,6 +69,10 @@ pub struct OverviewView {
     pub progress: Progress,
     /// Title of every item a rule cites, by item id (for "from N items").
     pub source_titles: std::collections::BTreeMap<String, String>,
+    /// When the overview was written (same as `written_at`).
+    pub card_at: Option<String>,
+    /// True while a write of this room's overview is queued or running (a first one or a refresh).
+    pub card_pending: bool,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -166,7 +170,15 @@ async fn view(app: &App, room: &str, pool: &SqlitePool) -> Result<OverviewView, 
         }
     }
     let writing = r.try_get::<String, _>("state")? == "writing";
+    let card_pending: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM brain_overview_queue WHERE room = ? AND state IN ('queued','running')",
+    )
+    .bind(room)
+    .fetch_one(&app.pool)
+    .await?;
     Ok(OverviewView {
+        card_at: r.try_get("written_at")?,
+        card_pending: card_pending > 0,
         stage: r.try_get::<Option<String>, _>("stage")?.filter(|_| writing),
         stage_since: r
             .try_get::<Option<String>, _>("stage_since")?
@@ -294,7 +306,7 @@ async fn batch_of_open(app: &App) -> Result<String, sqlx::Error> {
 }
 
 /// Queues one room, or records why it cannot be written. Returns whether it was queued.
-async fn enqueue(app: &App, b: &Brain, room: &str, by: &str) -> Result<bool, ApiError> {
+pub(crate) async fn enqueue(app: &App, b: &Brain, room: &str, by: &str) -> Result<bool, ApiError> {
     let p = policy::load(app, room).await?;
     let open: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM brain_overview_queue WHERE room = ? AND state IN ('queued','running')",
@@ -706,6 +718,10 @@ impl JobHandler for OverviewJob {
             let Some(app) = self.0.inner.app.get() else {
                 return Err("the Core is still starting".to_owned());
             };
+            // Rooms that are due an overview are queued (at most one per pass); the queue then moves.
+            crate::overview_auto::sweep(app, &self.0, app.clock.unix())
+                .await
+                .map_err(|e| format!("{}: {}", e.code, e.message))?;
             let open: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM brain_overview_queue WHERE state IN ('queued','running')",
             )
