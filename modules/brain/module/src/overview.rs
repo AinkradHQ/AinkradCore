@@ -72,6 +72,7 @@ pub struct OverviewView {
     /// When the overview was written (same as `written_at`).
     pub card_at: Option<String>,
     /// True while a write of this room's overview is queued or running (a first one or a refresh).
+    #[schema(required = false)]
     pub card_pending: bool,
 }
 

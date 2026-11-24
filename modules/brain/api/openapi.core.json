@@ -8328,8 +8328,7 @@
           "state",
           "detail",
           "progress",
-          "source_titles",
-          "card_pending"
+          "source_titles"
         ],
         "type": "object"
       },
