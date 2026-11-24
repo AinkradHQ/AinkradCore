@@ -368,7 +368,6 @@
 ///    adds `kind`, `topic`, `q`; `GET /places`, `GET /topics`, `POST /ask`, `GET /activity/days`, `PUT
 ///    /rooms/{room}/records/{id}/follow`, `POST /areas/rules`; `GET /sources` adds the read counts; inbox candidates add
 ///    `reason`, `other_id`, `other_body`. Profile answers now count as About you.
-/// 102: taken by the Brain overviews lane (merged separately).
 /// 103: accounts on the Core (2026-11-23). `ProviderAccount.held` (`core` | `runner`, plans only); `POST
 ///    /accounts/{id}/move-to-core` (`moveAccountToCore`, `admin`, a normal write like a sign-in, not on the D-4
 ///    list) -> `ProviderAccount`, 409 `not_portable` (Antigravity), `runner_offline`, `runner_too_old`, `runner_failed`; `POST /runner/sessions/{id}/credential`
