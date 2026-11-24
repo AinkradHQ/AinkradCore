@@ -190,15 +190,26 @@ pub async fn scan_report(dir: &Path) -> ScanReport {
         let record: Option<HostRecord> = std::fs::read(record_path(dir, &id))
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok());
+        // Gone for good only when its process is: a refused or missing socket of a live host
+        // (busy, or the file swapped) must not cost it its files, or its shell (the host ends
+        // itself when its socket is gone). The next scan looks again.
+        let dead = record
+            .as_ref()
+            .is_none_or(|r| match ainkrad_sys::kill_pid(r.pid, 0) {
+                Ok(alive) => !alive,
+                // Not a pid a host can have (0, 1): no process. Any other error (EPERM) is "alive".
+                Err(e) => e.kind() == io::ErrorKind::InvalidInput,
+            });
         match (record, connect(dir, &id).await) {
             (Some(r), Ok((info, _, _))) if info.pid == r.pid && info.boot == r.boot => {
                 live.push(info);
             }
             (_, Err(e))
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-                ) =>
+                if dead
+                    && matches!(
+                        e.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                    ) =>
             {
                 orphaned.push(id.clone());
                 let _ = std::fs::remove_file(record_path(dir, &id));
