@@ -490,6 +490,9 @@ impl State {
     }
 }
 
+/// How long an orphaned host (its socket removed) gives its shell per signal.
+const ORPHAN_GRACE: Duration = Duration::from_secs(2);
+
 /// The most rows a `tail` answers, each cut to 400 characters by the runner.
 const TAIL_MAX: usize = 20;
 
@@ -763,7 +766,15 @@ pub async fn serve(
                     }
                 }
             }
-            _ = tick.tick() => st.expire_local(),
+            _ = tick.tick() => {
+                st.expire_local();
+                // Nobody can reach a host whose socket is gone, so nobody can ever close it or
+                // ack its exit: it ends its shell and itself (a leaked host held its shell forever).
+                if !sock.exists() {
+                    hang_up(st.pty.pid, ORPHAN_GRACE, st.exit_rx.clone()).await;
+                    break;
+                }
+            }
             Some(ev) = events.recv() => match ev {
                 Event::Gone(id) => drop(st.clients.remove(&id)),
                 Event::Msg(id, m) => {

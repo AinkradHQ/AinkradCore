@@ -321,6 +321,50 @@ async fn a_hundred_open_close_cycles_leave_nothing() {
     }
 }
 
+/// A host nobody can reach (its socket removed) ends its shell and itself, with no ack.
+#[tokio::test]
+async fn a_host_whose_socket_is_gone_ends_itself_and_its_shell() {
+    let dir = tmp();
+    let id = new_id().unwrap();
+    let info = launch(Path::new(BIN), &dir, &id, &spec("/bin/sleep", &["996"]))
+        .await
+        .unwrap();
+    support::register(&dir, info.pid, info.child);
+    let alive = |pid: u32| ainkrad_sys::kill_pid(pid, 0).unwrap_or(false);
+    assert!(alive(info.pid));
+    std::fs::remove_file(socket_path(&dir, &id)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while (alive(info.pid) || alive(info.child.unwrap())) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(!alive(info.pid), "the host is still running");
+    assert!(!alive(info.child.unwrap()), "its shell is still running");
+    assert!(!record_path(&dir, &id).exists());
+}
+
+/// A refused connect to a live host (its socket swapped for a dead one) costs it nothing.
+#[tokio::test]
+async fn a_refused_scan_leaves_a_live_hosts_files_and_the_host() {
+    let dir = tmp();
+    let id = new_id().unwrap();
+    let info = launch(Path::new(BIN), &dir, &id, &spec("/bin/sleep", &["995"]))
+        .await
+        .unwrap();
+    support::register(&dir, info.pid, info.child);
+    let sock = socket_path(&dir, &id);
+    let aside = dir.join("aside.sock");
+    std::fs::rename(&sock, &aside).unwrap();
+    drop(std::os::unix::net::UnixListener::bind(&sock).unwrap()); // a file nobody listens on
+    let report = scan_report(&dir).await;
+    assert!(report.orphaned.is_empty());
+    assert!(sock.exists() && record_path(&dir, &id).exists());
+    assert!(ainkrad_sys::kill_pid(info.pid, 0).unwrap());
+    std::fs::remove_file(&sock).unwrap();
+    std::fs::rename(&aside, &sock).unwrap();
+    let (_, _, mut w) = connect(&dir, &id).await.unwrap();
+    w.send(&ToHost::Close { grace_ms: 100 }).await.unwrap();
+}
+
 /// E2-03.2/.3: the process that started five hosts is killed with `kill -9`; every host keeps
 /// running, a scan re-adopts all five, stale records are cleaned, and the terminals still work.
 #[tokio::test]

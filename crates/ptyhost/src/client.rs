@@ -131,24 +131,34 @@ pub async fn launch(bin: &Path, dir: &Path, id: &str, spec: &Spec) -> io::Result
         .stdout
         .take()
         .ok_or_else(|| io::Error::other("no stdout"))?;
-    // One fixed buffer, wiped on drop: `fd3` holds keys.
-    stdin.write_all(&crate::pty::spec_bytes(spec)?).await?;
-    drop(stdin);
-    let line = tokio::time::timeout(START, BufReader::new(stdout).lines().next_line())
-        .await
-        .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??
-        .unwrap_or_default();
-    // Reaped here should it end while this runner lives; no zombie either way.
-    tokio::spawn(async move {
-        let _ = child.wait().await;
-    });
-    match line.strip_prefix("ready ") {
-        Some(info) => serde_json::from_str(info).map_err(io::Error::other),
+    // A host that does not report ready is not told of by anyone later: it is ended here, or it
+    // runs on with its shell and nobody knows (a leaked host held its shell forever).
+    let said = async {
+        // One fixed buffer, wiped on drop: `fd3` holds keys.
+        stdin.write_all(&crate::pty::spec_bytes(spec)?).await?;
+        drop(stdin);
+        let mut lines = BufReader::new(stdout).lines();
+        let line = tokio::time::timeout(START, lines.next_line())
+            .await
+            .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
+        Ok::<_, io::Error>(line.unwrap_or_default())
+    }
+    .await;
+    let info = said.and_then(|line| match line.strip_prefix("ready ") {
+        Some(info) => serde_json::from_str::<HostInfo>(info).map_err(io::Error::other),
         None => Err(io::Error::other(format!(
             "the host did not start: {}",
             line.strip_prefix("error ").unwrap_or(&line)
         ))),
+    });
+    if info.is_err() {
+        let _ = child.start_kill();
     }
+    // Reaped here should it end while this runner lives; no zombie either way.
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
+    info
 }
 
 /// Every host in `dir` that is still the process its record names (pid and boot answer on
@@ -180,15 +190,26 @@ pub async fn scan_report(dir: &Path) -> ScanReport {
         let record: Option<HostRecord> = std::fs::read(record_path(dir, &id))
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok());
+        // Gone for good only when its process is: a refused or missing socket of a live host
+        // (busy, or the file swapped) must not cost it its files, or its shell (the host ends
+        // itself when its socket is gone). The next scan looks again.
+        let dead = record
+            .as_ref()
+            .is_none_or(|r| match ainkrad_sys::kill_pid(r.pid, 0) {
+                Ok(alive) => !alive,
+                // Not a pid a host can have (0, 1): no process. Any other error (EPERM) is "alive".
+                Err(e) => e.kind() == io::ErrorKind::InvalidInput,
+            });
         match (record, connect(dir, &id).await) {
             (Some(r), Ok((info, _, _))) if info.pid == r.pid && info.boot == r.boot => {
                 live.push(info);
             }
             (_, Err(e))
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
-                ) =>
+                if dead
+                    && matches!(
+                        e.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+                    ) =>
             {
                 orphaned.push(id.clone());
                 let _ = std::fs::remove_file(record_path(dir, &id));

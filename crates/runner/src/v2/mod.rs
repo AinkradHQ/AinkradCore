@@ -47,6 +47,7 @@ mod observe;
 pub mod pair;
 mod port;
 pub mod pty;
+mod ptysweep;
 mod run;
 mod sandbox;
 mod session;
