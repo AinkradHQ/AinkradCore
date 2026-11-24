@@ -402,8 +402,6 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
 /// reads nothing and changes nothing on the runner (it proves the path).
 pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/devices/{id}"),
-    // It widens who may be lent a plan's login: every runner, not the one it signed in on.
-    ("POST", "/api/v1/accounts/{id}/move-to-core"),
     ("PATCH", "/api/v1/devices/{id}"),
     ("PUT", "/api/v1/devices/{id}/scopes"),
     ("POST", "/api/v1/pairings"),

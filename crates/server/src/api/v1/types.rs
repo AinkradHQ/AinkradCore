@@ -370,8 +370,8 @@
 ///    `reason`, `other_id`, `other_body`. Profile answers now count as About you.
 /// 102: taken by the Brain overviews lane (merged separately).
 /// 103: accounts on the Core (2026-11-23). `ProviderAccount.held` (`core` | `runner`, plans only); `POST
-///    /accounts/{id}/move-to-core` (`moveAccountToCore`, `admin`, a step-up) -> `ProviderAccount`, 409 `not_portable`
-///    (Antigravity), `runner_offline`, `runner_too_old`, `runner_failed`; `POST /runner/sessions/{id}/credential`
+///    /accounts/{id}/move-to-core` (`moveAccountToCore`, `admin`, a normal write like a sign-in, not on the D-4
+///    list) -> `ProviderAccount`, 409 `not_portable` (Antigravity), `runner_offline`, `runner_too_old`, `runner_failed`; `POST /runner/sessions/{id}/credential`
 ///    (`runnerSessionCredential`, `runner` scope) body `ReturnedCredential {files}` -> 204. A ChatGPT or OpenCode
 ///    sign-in now goes into the vault as soon as it finishes; `NewLogin.runner` is deprecated (the Core places a
 ///    sign-in on its own runner first). Runner protocol: `login.export` (`LoginExport`, capability `login-export`),
