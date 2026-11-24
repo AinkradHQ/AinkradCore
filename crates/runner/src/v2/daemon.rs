@@ -258,10 +258,18 @@ pub async fn from_state(
                     Arc::clone(&enrolment),
                 ))
                 .with_redeem(super::agent::secrets::http_redeem(
-                    c,
+                    Arc::clone(&c),
                     Arc::clone(&key),
                     Arc::clone(&enrolment),
-                )),
+                ))
+                // A Core-held plan's login lent per session (2026-11-23), beside the bound homes.
+                .with_lending(
+                    state
+                        .0
+                        .join("agents-config")
+                        .join(ainkrad_proto::v2::BOUND_HOME_DIR),
+                    super::agent::lent::http_give_back(c, Arc::clone(&key), Arc::clone(&enrolment)),
+                ),
             Err(_) => a,
         });
         // A tier that goes away mid-life ends the sessions that need it (E8a-09.3).

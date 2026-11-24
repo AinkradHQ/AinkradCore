@@ -16,10 +16,20 @@ pub(super) fn is_bound(s: &store::SessionSecret) -> bool {
     ainkrad_proto::v2::is_bound_secret(&s.name)
 }
 
-/// The home key the session starts in, or `None` for a session with no bound account.
-pub(super) async fn home(app: &App, s: &Session) -> Result<Option<String>, Refusal> {
+/// Where a session's plan login comes from.
+pub(super) enum Home {
+    /// No runner-bound or lent plan account.
+    None,
+    /// The home key on the session's runner, where the login lives (runner-bound).
+    Bound(String),
+    /// A lease on the login the Core holds, and its end (unix seconds).
+    Lent(String, i64),
+}
+
+/// The home the session starts in: its bound home, or a lease on the Core-held login.
+pub(super) async fn home(app: &App, s: &Session) -> Result<Home, Refusal> {
     let Some(secret) = s.secrets.iter().find(|x| is_bound(x)) else {
-        return Ok(None);
+        return Ok(Home::None);
     };
     let Some((provider, id)) = crate::store::gateway::account_secret(&secret.name) else {
         return Err(refuse("the session's account does not exist"));
@@ -60,12 +70,58 @@ pub(super) async fn home(app: &App, s: &Session) -> Result<Option<String>, Refus
     }
     let mut conn = app.pool.acquire().await?;
     let Some(bound) = crate::store::bound::of(&mut conn, id).await? else {
-        return Err(refuse("the account holds no login on any runner"));
+        drop(conn);
+        return lent(app, s, &secret.name, provider).await;
     };
     if bound.runner != s.runner {
         return Err(refuse(
             "the account's login is on another runner: it never moves",
         ));
     }
-    Ok(Some(bound.home))
+    Ok(Home::Bound(bound.home))
+}
+
+/// A lease on the Core-held login of `name` to the session's runner, which must say it takes one.
+async fn lent(app: &App, s: &Session, name: &str, provider: &str) -> Result<Home, Refusal> {
+    if !ainkrad_proto::v2::lendable(provider) {
+        return Err(refuse("the account holds no login on any runner"));
+    }
+    let lists = app.hub.runners().get(&s.runner).is_some_and(|r| {
+        r.drivers
+            .iter()
+            .filter(|d| d.name == ainkrad_proto::v2::AGENT_DRIVER)
+            .any(|d| {
+                d.commands
+                    .iter()
+                    .any(|c| c == ainkrad_proto::v2::CAP_LENT_HOME)
+            })
+    });
+    if !lists {
+        return Err(refuse(
+            "a session of an account held by the Core needs a runner that takes a lent login \
+             (the lent-home command): update the runner",
+        ));
+    }
+    let (lease, until) = secrets::lease_to(
+        &app.pool,
+        name,
+        &s.runner,
+        None,
+        &s.created_by,
+        AuditActor::System,
+        &app.clock.now(),
+        app.clock.unix(),
+        Some("home"),
+    )
+    .await
+    .map_err(|e| match e {
+        secrets::Error::Refused { message, .. } => refuse(message),
+        secrets::Error::Db(e) => Refusal::Db(e),
+    })?;
+    // Which version this session was lent: its write-back is taken only against that one, once.
+    let Some((_, id)) = crate::store::gateway::account_secret(name) else {
+        return Err(refuse("the session's account does not exist"));
+    };
+    crate::store::bound::lent(&app.pool, &s.id, id, name, &app.clock.now()).await?;
+    Ok(Home::Lent(lease, until))
 }

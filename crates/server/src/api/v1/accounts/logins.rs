@@ -19,8 +19,9 @@ pub struct NewLogin {
     /// The new account's free-text name (as `createAccount` takes it); default none.
     #[serde(default)]
     pub display_name: Option<String>,
-    /// A runner device id; absent, the best ready runner that has the provider's harness. A
-    /// runner-bound provider keeps the login on the runner it runs on: the account is pinned to it.
+    /// Deprecated (API 103): the Core places a sign-in itself, on its own runner first. Still
+    /// honoured when sent. A ChatGPT or OpenCode login then moves into the Core's vault; an
+    /// Antigravity one stays on the runner it ran on.
     #[serde(default)]
     pub runner: Option<String>,
 }
@@ -206,4 +207,61 @@ pub async fn get_login_screen(
         url: s.url,
         code: s.code,
     }))
+}
+
+#[utoipa::path(post, path = "/api/v1/accounts/{id}/move-to-core", operation_id = "moveAccountToCore",
+    tag = "accounts", params(("id" = String, Path, description = "The account's id")),
+    responses((status = 200, description = "The login of a ChatGPT or OpenCode plan that signed in \
+        on one runner is now in the Core's vault (API 103): sealed, lent to whichever runner runs a \
+        session, its runner-bound record gone and its home on the runner wiped once that runner \
+        confirms (audited `account.moved_to_core`, `secret.rotated`). Nothing changes on any \
+        refusal. 409 `not_portable` (Antigravity: its login is in the OS keyring), `runner_offline`, \
+        `runner_too_old`, `runner_failed`, `real_secret_refused`; 400 for an account that is not \
+        runner-bound; 503 `secrets_unavailable`", body = ProviderAccount)))]
+pub async fn move_to_core(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+) -> ApiResult<ProviderAccount> {
+    let id = num(&id, "account")?;
+    crate::agents::lend::move_to_core(&app, id, &me.device.id, BY)
+        .await
+        .map_err(err)?;
+    get(State(app), Extension(me), Path(id.to_string())).await
+}
+
+/// A login the harness of a session refreshed, sent back by the session's runner.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReturnedCredential {
+    /// Each credential file the harness changed (`auth.json`, …) and its JSON text. A secret: no
+    /// `Debug`, never logged or echoed.
+    #[schema(value_type = std::collections::BTreeMap<String, String>)]
+    pub files: ainkrad_proto::v2::Bundle,
+}
+
+#[utoipa::path(post, path = "/api/v1/runner/sessions/{id}/credential",
+    operation_id = "runnerSessionCredential", tag = "accounts",
+    params(("id" = String, Path, description = "The session's id")), request_body = ReturnedCredential,
+    responses((status = 204, description = "The Core-held login the session was lent, refreshed by its \
+        harness, is resealed in the vault (API 103; audited `secret.rotated`). Only the runner \
+        running the session (`runner` scope), only for the plan account it holds, only the \
+        harness's own credential files and only the same account's (identity claims, else key set). \
+        Unchanged files are a no-op"),
+        (status = 400, description = "Not the harness's files, not JSON, or another account's login"),
+        (status = 404, description = "No such session on this runner")))]
+pub async fn runner_credential(
+    State(app): State<App>,
+    Extension(me): Extension<Caller>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<axum::http::StatusCode, ApiError> {
+    if me.device.kind != "runner" {
+        return Err(ApiError::not_found("no such session on this runner"));
+    }
+    let b: ReturnedCredential = parse(&body)?;
+    crate::agents::lend::take_back(&app, &me.device.id, &id, &b.files)
+        .await
+        .map_err(err)?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }

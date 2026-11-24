@@ -186,6 +186,11 @@ fn bound_clis() -> Vec<bound::BoundCli> {
 /// this at start whatever else is enabled: a crash can leave a scratch HOME behind.
 pub fn sweep(state: &Path) {
     let _ = std::fs::remove_dir_all(state.join("logins"));
+    // A runner that died mid-session left credential copies (review item 2): every per-session
+    // copy of a bound or lent login, and every lent home. Bound homes stay.
+    let config = state.join("agents-config");
+    crate::harness::bound_session::sweep(&config);
+    super::agent::lent::sweep(&config.join(ainkrad_proto::v2::BOUND_HOME_DIR));
 }
 
 /// The sign-in driver for this runner (`<state>/logins`), or `None` (with the reason logged)
@@ -232,10 +237,19 @@ pub async fn advertise(
     // The runner starts a session in a bound account's own home (E7-4).
     info.commands
         .push(ainkrad_proto::v2::CAP_BOUND_HOME.to_owned());
+    // And a Core-held plan's login lent for one session (`AgentStart::home_lease`), only when
+    // this driver can redeem one and send a refresh back (review item 12).
+    if agent.is_some_and(|a| a.lends()) {
+        info.commands
+            .push(ainkrad_proto::v2::CAP_LENT_HOME.to_owned());
+    }
     if let Some(l) = login {
         // The runner can delete a removed account's home (`login.wipe`).
         info.commands
             .push(ainkrad_proto::v2::CAP_LOGIN_WIPE.to_owned());
+        // It can hand a bound home's login to the Core's vault (`login.export`).
+        info.commands
+            .push(ainkrad_proto::v2::CAP_LOGIN_EXPORT.to_owned());
         if !l.cfg.program.as_os_str().is_empty() {
             match l.supported().await {
                 Ok(_) => info.commands.push(CAP_LOGIN.to_owned()),
@@ -280,6 +294,7 @@ pub fn dispatch(
             Command::LoginInput(req) => login.input(req).await.map(Reply::LoginResult),
             Command::LoginScreen(req) => login.screen(req).await.map(Reply::LoginScreen),
             Command::LoginWipe(req) => login.wipe(req).await.map(Reply::LoginResult),
+            Command::LoginExport(req) => login.export(req).await.map(Reply::LoginResult),
             _ => return,
         };
         let body = match answer {

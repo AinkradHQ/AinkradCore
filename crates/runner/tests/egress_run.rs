@@ -129,6 +129,7 @@ fn start_request() -> AgentStart {
         live: false,
         folder: None,
         home: None,
+        home_lease: None,
     }
 }
 

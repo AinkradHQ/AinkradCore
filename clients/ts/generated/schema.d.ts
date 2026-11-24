@@ -228,6 +228,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/{id}/move-to-core": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["moveAccountToCore"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/accounts/{id}/name": {
         parameters: {
             query?: never;
@@ -2491,6 +2507,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["runnerSignalJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/runner/sessions/{id}/credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["runnerSessionCredential"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5520,8 +5552,9 @@ export interface components {
              */
             provider: string;
             /**
-             * @description A runner device id; absent, the best ready runner that has the provider's harness. A
-             *     runner-bound provider keeps the login on the runner it runs on: the account is pinned to it.
+             * @description Deprecated (API 103): the Core places a sign-in itself, on its own runner first. Still
+             *     honoured when sent. A ChatGPT or OpenCode login then moves into the Core's vault; an
+             *     Antigravity one stays on the runner it ran on.
              */
             runner?: string | null;
         };
@@ -6112,6 +6145,12 @@ export interface components {
              *     and `state_until` (a cooldown's end) are above.
              */
             health?: components["schemas"]["AccountHealth"];
+            /**
+             * @description Where a plan account's login lives (API 103, accounts on the Core): `core` (in the Core's
+             *     vault, lent to whichever runner runs a session) or `runner` (on the one runner it signed in on:
+             *     an Antigravity login, or an older ChatGPT/OpenCode one not yet moved). Absent for an API key.
+             */
+            held?: string | null;
             /** Format: int64 */
             id: number;
             label: string;
@@ -6248,6 +6287,16 @@ export interface components {
         Restarted: {
             /** @description The id the restart is audited under (`host.restart_requested`, `host.action_result`). */
             request_id: string;
+        };
+        /** @description A login the harness of a session refreshed, sent back by the session's runner. */
+        ReturnedCredential: {
+            /**
+             * @description Each credential file the harness changed (`auth.json`, …) and its JSON text. A secret: no
+             *     `Debug`, never logged or echoed.
+             */
+            files: {
+                [key: string]: string;
+            };
         };
         /** @description A secret's value, shown to the person who asked. No `Debug`. */
         RevealedSecret: {
@@ -8032,6 +8081,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountModels"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    moveAccountToCore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The login of a ChatGPT or OpenCode plan that signed in on one runner is now in the Core's vault (API 103): sealed, lent to whichever runner runs a session, its runner-bound record gone and its home on the runner wiped once that runner confirms (audited `account.moved_to_core`, `secret.rotated`). Nothing changes on any refusal. 409 `not_portable` (Antigravity: its login is in the OS keyring), `runner_offline`, `runner_too_old`, `runner_failed`, `real_secret_refused`; 400 for an account that is not runner-bound; 503 `secrets_unavailable` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderAccount"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -13699,6 +13778,50 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    runnerSessionCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The session's id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReturnedCredential"];
+            };
+        };
+        responses: {
+            /** @description The Core-held login the session was lent, refreshed by its harness, is resealed in the vault (API 103; audited `secret.rotated`). Only the runner running the session (`runner` scope), only for the plan account it holds, only the harness's own credential files and only the same account's (identity claims, else key set). Unchanged files are a no-op */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not the harness's files, not JSON, or another account's login */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such session on this runner */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             409: components["responses"]["Conflict"];
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];

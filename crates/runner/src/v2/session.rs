@@ -679,6 +679,7 @@ impl Session {
             | Command::LoginInput(_)
             | Command::LoginScreen(_)
             | Command::LoginWipe(_)
+            | Command::LoginExport(_)
             | Command::Unknown => {
                 super::login::dispatch(self.login.as_ref(), stream, command, &self.done_tx)
             }

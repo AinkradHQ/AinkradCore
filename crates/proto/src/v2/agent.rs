@@ -349,6 +349,12 @@ pub struct AgentStart {
     /// travels: the runner reads its own files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<String>,
+    /// A Core-held plan's login, lent for this session alone (`CAP_LENT_HOME`, 2026-11-23): a lease
+    /// on its credential bundle (`{"auth.json": "…"}`), redeemed once by this runner. The runner
+    /// writes it into a home of this session only, wipes it at the end, and sends a credential the
+    /// harness rotated back to the Core (`POST /runner/sessions/{id}/credential`). Never with `home`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_lease: Option<String>,
 }
 
 /// The runner flag that makes it the Core host's built-in runner over the canonical workspace

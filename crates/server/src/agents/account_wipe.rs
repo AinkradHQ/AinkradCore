@@ -19,6 +19,8 @@ pub async fn sweep(app: &App, all: bool) {
         tracing::warn!(error = %e, "wiping removed accounts");
     }
     send_wipes(app).await;
+    // Each runner that came online can be lent every Core-held login.
+    super::lend::widen(app).await;
 }
 
 /// Asks each owed runner to wipe its home; the row goes only once the runner says it is done.

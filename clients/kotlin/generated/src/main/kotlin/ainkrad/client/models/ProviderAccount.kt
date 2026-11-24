@@ -39,6 +39,7 @@ import kotlinx.serialization.Contextual
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param displayName The free-text name a person gave it (`Work Claude`); absent: show the provider's name.
  * @param health What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason` and `state_until` (a cooldown's end) are above.
+ * @param held Where a plan account's login lives (API 103, accounts on the Core): `core` (in the Core's vault, lent to whichever runner runs a session) or `runner` (on the one runner it signed in on: an Antigravity login, or an older ChatGPT/OpenCode one not yet moved). Absent for an API key.
  * @param lastCheck The last test or check in detail: when, whether it answered `ok`, the runner that ran it, how long it took to answer and, when it was not `ok`, the result word. Absent when never checked.
  * @param lastTest The last one-shot test of the key; absent when it was never tested.
  * @param lastUsedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
@@ -98,6 +99,10 @@ data class ProviderAccount (
     /* What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason` and `state_until` (a cooldown's end) are above. */
     @SerialName(value = "health")
     val health: AccountHealth? = null,
+
+    /* Where a plan account's login lives (API 103, accounts on the Core): `core` (in the Core's vault, lent to whichever runner runs a session) or `runner` (on the one runner it signed in on: an Antigravity login, or an older ChatGPT/OpenCode one not yet moved). Absent for an API key. */
+    @SerialName(value = "held")
+    val held: kotlin.String? = null,
 
     /* The last test or check in detail: when, whether it answered `ok`, the runner that ran it, how long it took to answer and, when it was not `ok`, the result word. Absent when never checked. */
     @SerialName(value = "last_check")

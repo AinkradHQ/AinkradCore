@@ -114,6 +114,7 @@ pub const PLATFORM_AUDIT_ACTIONS: &[&str] = &[
     "account.login_failed",
     "account.login_started",
     "account.model_allowed_set",
+    "account.moved_to_core",
     "account.renamed",
     "account.restored",
     "account.secret_replaced",

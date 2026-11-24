@@ -122,14 +122,24 @@ fn ready(r: &RunnerState, harness: &str, bound: bool) -> bool {
         })
 }
 
-/// The runner a sign-in goes to: `asked`, or the least loaded ready one.
-fn pick(app: &App, harness: &str, bound: bool, asked: Option<&str>) -> Result<String, Error> {
+/// The runner a sign-in goes to: `asked` (an older app still names one), else the Core's own
+/// built-in runner when it is ready, else the least loaded ready one. The person never picks: the
+/// login is the Core's (accounts on the Core, 2026-11-23).
+async fn pick(app: &App, harness: &str, bound: bool, asked: Option<&str>) -> Result<String, Error> {
+    let core = crate::hardware::view::views(app)
+        .await
+        .ok()
+        .and_then(|v| {
+            v.into_iter()
+                .find(|h| h.kind == ainkrad_proto::v2::HwKind::Core)
+        })
+        .map(|h| h.device);
     let live = app.hub.runners();
     let mut ok: Vec<_> = live
         .iter()
         .filter(|(_, r)| ready(r, harness, bound))
         .collect();
-    ok.sort_by_key(|(id, r)| (r.load, (*id).clone()));
+    ok.sort_by_key(|(id, r)| (core.as_deref() != Some(id.as_str()), r.load, (*id).clone()));
     match (asked, ok.first()) {
         (Some(a), _) if ok.iter().any(|(id, _)| *id == a) => Ok(a.to_owned()),
         (Some(_), _) => refused(
@@ -203,7 +213,7 @@ pub async fn start(
     if taken > 0 {
         return refused("conflict", "an account of that label exists");
     }
-    let runner = pick(app, &def.harness, bound, runner)?;
+    let runner = pick(app, &def.harness, bound, runner).await?;
     let l = logins::create_named(
         &app.pool,
         (provider, label, &runner),
@@ -637,6 +647,18 @@ async fn store_bound_inner(app: &App, l: &Login) -> bool {
     .map(|(a, _)| a);
     match made {
         Ok(a) => {
+            // A Codex or OpenCode login goes into the Core's vault at once and is lent per session.
+            // If it cannot (an older runner, a refusing gate), the account stays on its runner and
+            // still works; the app says where it is.
+            if ainkrad_proto::v2::lendable(&l.provider)
+                && let Err(e) = super::lend::move_to_core(app, a.id, &l.device, BY).await
+            {
+                let why = match e {
+                    Error::Refused { message, .. } => message,
+                    Error::Db(e) => e.to_string(),
+                };
+                tracing::warn!(%why, "a new sign-in stays on its runner");
+            }
             let change = Change {
                 account_id: Some(a.id),
                 ..Change::default()

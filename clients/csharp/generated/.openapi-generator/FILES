@@ -254,6 +254,7 @@ src/Ainkrad.Client/Model/ReplaceKey.cs
 src/Ainkrad.Client/Model/RepoCode.cs
 src/Ainkrad.Client/Model/RestartBody.cs
 src/Ainkrad.Client/Model/Restarted.cs
+src/Ainkrad.Client/Model/ReturnedCredential.cs
 src/Ainkrad.Client/Model/RevealedSecret.cs
 src/Ainkrad.Client/Model/RotateSecret.cs
 src/Ainkrad.Client/Model/RunConfig.cs

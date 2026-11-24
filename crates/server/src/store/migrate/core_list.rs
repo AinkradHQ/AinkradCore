@@ -401,6 +401,12 @@ pub static CORE_MIGRATIONS: &[Migration] = &[
         up: include_str!("../../../migrations/0066_terminal_account_uses.up.sql"),
         down: include_str!("../../../migrations/0066_terminal_account_uses.down.sql"),
     },
+    Migration {
+        version: 67,
+        name: "lent_logins",
+        up: include_str!("../../../migrations/0067_lent_logins.up.sql"),
+        down: include_str!("../../../migrations/0067_lent_logins.down.sql"),
+    },
 ];
 
 #[cfg(test)]

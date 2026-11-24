@@ -7580,8 +7580,9 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/NewLogin/provider`.
             public var provider: Swift.String
-            /// A runner device id; absent, the best ready runner that has the provider's harness. A
-            /// runner-bound provider keeps the login on the runner it runs on: the account is pinned to it.
+            /// Deprecated (API 103): the Core places a sign-in itself, on its own runner first. Still
+            /// honoured when sent. A ChatGPT or OpenCode login then moves into the Core's vault; an
+            /// Antigravity one stays on the runner it ran on.
             ///
             /// - Remark: Generated from `#/components/schemas/NewLogin/runner`.
             public var runner: Swift.String?
@@ -7591,7 +7592,7 @@ extension Components {
             ///   - displayName: The new account's free-text name (as `createAccount` takes it); default none.
             ///   - label: The new account's label.
             ///   - provider: A subscription provider: `claude-sub` (a pasted approval code), or the runner-bound
-            ///   - runner: A runner device id; absent, the best ready runner that has the provider's harness. A
+            ///   - runner: Deprecated (API 103): the Core places a sign-in itself, on its own runner first. Still
             public init(
                 displayName: Swift.String? = nil,
                 label: Swift.String,
@@ -9640,6 +9641,12 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ProviderAccount/health`.
             public var health: Components.Schemas.AccountHealth?
+            /// Where a plan account's login lives (API 103, accounts on the Core): `core` (in the Core's
+            /// vault, lent to whichever runner runs a session) or `runner` (on the one runner it signed in on:
+            /// an Antigravity login, or an older ChatGPT/OpenCode one not yet moved). Absent for an API key.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ProviderAccount/held`.
+            public var held: Swift.String?
             /// - Remark: Generated from `#/components/schemas/ProviderAccount/id`.
             public var id: Swift.Int64
             /// - Remark: Generated from `#/components/schemas/ProviderAccount/label`.
@@ -9723,6 +9730,7 @@ extension Components {
             ///   - createdAt:
             ///   - displayName: The free-text name a person gave it (`Work Claude`); absent: show the provider's name.
             ///   - health: What the scheduler keeps of its health. Only the reads say it; `state`, `state_reason`
+            ///   - held: Where a plan account's login lives (API 103, accounts on the Core): `core` (in the Core's
             ///   - id:
             ///   - label:
             ///   - lastCheck: The last test or check in detail: when, whether it answered `ok`, the runner that ran it, how
@@ -9748,6 +9756,7 @@ extension Components {
                 createdAt: Components.Schemas.Timestamp,
                 displayName: Swift.String? = nil,
                 health: Components.Schemas.AccountHealth? = nil,
+                held: Swift.String? = nil,
                 id: Swift.Int64,
                 label: Swift.String,
                 lastCheck: Components.Schemas.LastCheck? = nil,
@@ -9773,6 +9782,7 @@ extension Components {
                 self.createdAt = createdAt
                 self.displayName = displayName
                 self.health = health
+                self.held = held
                 self.id = id
                 self.label = label
                 self.lastCheck = lastCheck
@@ -9799,6 +9809,7 @@ extension Components {
                 case createdAt = "created_at"
                 case displayName = "display_name"
                 case health
+                case held
                 case id
                 case label
                 case lastCheck = "last_check"
@@ -10074,6 +10085,57 @@ extension Components {
             }
             public enum CodingKeys: String, CodingKey {
                 case requestId = "request_id"
+            }
+        }
+        /// A login the harness of a session refreshed, sent back by the session's runner.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReturnedCredential`.
+        public struct ReturnedCredential: Codable, Hashable, Sendable {
+            /// Each credential file the harness changed (`auth.json`, …) and its JSON text. A secret: no
+            /// `Debug`, never logged or echoed.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReturnedCredential/files`.
+            public struct FilesPayload: Codable, Hashable, Sendable {
+                /// A container of undocumented properties.
+                public var additionalProperties: [String: Swift.String]
+                /// Creates a new `FilesPayload`.
+                ///
+                /// - Parameters:
+                ///   - additionalProperties: A container of undocumented properties.
+                public init(additionalProperties: [String: Swift.String] = .init()) {
+                    self.additionalProperties = additionalProperties
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    additionalProperties = try decoder.decodeAdditionalProperties(knownKeys: [])
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeAdditionalProperties(additionalProperties)
+                }
+            }
+            /// Each credential file the harness changed (`auth.json`, …) and its JSON text. A secret: no
+            /// `Debug`, never logged or echoed.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ReturnedCredential/files`.
+            public var files: Components.Schemas.ReturnedCredential.FilesPayload
+            /// Creates a new `ReturnedCredential`.
+            ///
+            /// - Parameters:
+            ///   - files: Each credential file the harness changed (`auth.json`, …) and its JSON text. A secret: no
+            public init(files: Components.Schemas.ReturnedCredential.FilesPayload) {
+                self.files = files
+            }
+            public enum CodingKeys: String, CodingKey {
+                case files
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.files = try container.decode(
+                    Components.Schemas.ReturnedCredential.FilesPayload.self,
+                    forKey: .files
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "files"
+                ])
             }
         }
         /// A secret's value, shown to the person who asked. No `Debug`.

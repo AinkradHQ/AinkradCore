@@ -118,6 +118,11 @@ fn every_privileged_write_is_danger_unlocked_or_plain_with_a_reason() {
         ),
         (
             "POST",
+            "/api/v1/accounts/{id}/move-to-core",
+            "accounts on the Core (API 103): the admin's own plan login moves into the vault, as a sign-in puts it there",
+        ),
+        (
+            "POST",
             "/api/v1/accounts/logins/{id}/code",
             "fixed or caller-owned effect, not a grant (see 0.9 notes)",
         ),

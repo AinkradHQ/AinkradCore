@@ -368,7 +368,14 @@
 ///    adds `kind`, `topic`, `q`; `GET /places`, `GET /topics`, `POST /ask`, `GET /activity/days`, `PUT
 ///    /rooms/{room}/records/{id}/follow`, `POST /areas/rules`; `GET /sources` adds the read counts; inbox candidates add
 ///    `reason`, `other_id`, `other_body`. Profile answers now count as About you.
-pub const API_MINOR: u32 = 102;
+/// 103: accounts on the Core (2026-11-23). `ProviderAccount.held` (`core` | `runner`, plans only); `POST
+///    /accounts/{id}/move-to-core` (`moveAccountToCore`, `admin`, a normal write like a sign-in, not on the D-4
+///    list) -> `ProviderAccount`, 409 `not_portable` (Antigravity), `runner_offline`, `runner_too_old`, `runner_failed`; `POST /runner/sessions/{id}/credential`
+///    (`runnerSessionCredential`, `runner` scope) body `ReturnedCredential {files}` -> 204. A ChatGPT or OpenCode
+///    sign-in now goes into the vault as soon as it finishes; `NewLogin.runner` is deprecated (the Core places a
+///    sign-in on its own runner first). Runner protocol: `login.export` (`LoginExport`, capability `login-export`),
+///    `AgentStart.home_lease` (capability `lent-home`).
+pub const API_MINOR: u32 = 103;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -324,6 +324,17 @@ async fn check_value(
         return Ok(false);
     }
     match kind {
+        // A ChatGPT or OpenCode plan's login held by the Core (accounts on the Core): a file of the
+        // harness's own credential JSON, several tokens in one. The narrow gate admits it as the
+        // provider-account credential it is; the shape is checked by `parse_bundle` before it gets here.
+        Kind::ProviderAccount { provider, .. }
+            if form.kind == "file"
+                && ainkrad_proto::v2::lendable(provider)
+                && lent_login_ok(&redactor, provider, value)
+                && setting(conn, Key::SecretsProviderAccounts).await? == 1 =>
+        {
+            Ok(true)
+        }
         Kind::ProviderAccount { shape, .. }
             if setting(conn, Key::SecretsProviderAccounts).await? == 1
                 && super::secrets_user::single_own_key(&redactor, value, shape) =>
@@ -1180,6 +1191,57 @@ pub async fn open_for_module(
     Ok(value)
 }
 
+/// The key shapes a plan's login file may hold: an AI provider's own kinds and bearer tokens.
+const LENT_SHAPES: [&str; 4] = ["openai_key", "anthropic_key", "google_key", "bearer"];
+
+/// Whether `value` is a lendable plan's login the narrow gate may admit (review item 10): the
+/// harness's own credential files (`parse_bundle`), with no other kind of credential in it (a
+/// GitHub, AWS, Slack or Citadel token is never a plan's login).
+fn lent_login_ok(redactor: &Redactor, provider: &str, value: &str) -> bool {
+    let Some(harness) = ainkrad_proto::v2::bound_harness(provider) else {
+        return false;
+    };
+    if ainkrad_proto::v2::parse_bundle(harness, value).is_err() {
+        return false;
+    }
+    redactor
+        .text(value)
+        .split("[redacted:")
+        .skip(1)
+        .filter_map(|rest| rest.split(']').next())
+        .all(|shape| LENT_SHAPES.contains(&shape))
+}
+
+/// The plain value of account secret `name`, for the Core itself (a lent login's write-back compares
+/// the rotation with it). No lease and no audit row: nothing leaves the Core.
+pub(crate) async fn open_value(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    name: &str,
+) -> Result<Zeroizing<String>, Error> {
+    let row = sqlx::query("SELECT version, key_id, sealed FROM core_secrets WHERE name = ?")
+        .bind(name)
+        .fetch_optional(pool)
+        .await?;
+    let Some(row) = row else {
+        return refused("not_found", "no such secret");
+    };
+    let (version, key_id, sealed): (i64, String, Vec<u8>) = (
+        row.try_get("version")?,
+        row.try_get("key_id")?,
+        row.try_get("sealed")?,
+    );
+    let plain = sealer
+        .holds(&key_id)
+        .then(|| sealer.open_as(&key_id, &label(name, version), &sealed).ok())
+        .flatten()
+        .and_then(|p| String::from_utf8(p.to_vec()).ok());
+    match plain {
+        Some(v) => Ok(Zeroizing::new(v)),
+        None => refused("secrets_unavailable", "the secret did not open"),
+    }
+}
+
 /// Opens the secrets `names` so a Core-side redactor can mask their values in text an agent
 /// sends or reads (E2-29). Nothing leaves the Core, so there is no lease and no audit row (one
 /// per tool call would drown the trail); it works while the broker is off, because a value
@@ -1352,6 +1414,29 @@ pub async fn reseal_all(
         moved,
         from,
     })
+}
+
+#[cfg(test)]
+mod lent_tests {
+    use super::*;
+
+    #[test]
+    fn the_gate_takes_a_plan_login_only_as_its_harness_files_with_no_foreign_credential() {
+        let r = Redactor::new();
+        let ok = r#"{"auth.json":"{\"tokens\":{\"refresh_token\":\"dummy-r\"}}"}"#;
+        assert!(lent_login_ok(&r, "codex-sub", ok));
+        assert!(!lent_login_ok(&r, "codex-sub", "not a bundle"));
+        assert!(!lent_login_ok(&r, "codex-sub", r#"{"config.toml":"{}"}"#));
+        assert!(
+            !lent_login_ok(&r, "agy-sub", ok),
+            "Antigravity's login is never held"
+        );
+        let gh = format!(r#"{{"auth.json":"{{\"t\":\"ghp_{}\"}}"}}"#, "A".repeat(36));
+        assert!(
+            !lent_login_ok(&r, "codex-sub", &gh),
+            "a GitHub token is no plan login"
+        );
+    }
 }
 
 #[cfg(test)]
