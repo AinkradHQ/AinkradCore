@@ -65,6 +65,7 @@ pub mod me_card;
 mod me_profile;
 pub mod merge;
 mod overview;
+mod overview_auto;
 pub mod overview_select;
 pub mod overview_write;
 mod places;
@@ -320,6 +321,8 @@ struct Inner {
     /// Per AI session: the `brainAiContext` token bucket (`context::allow`).
     ctx_rate: Mutex<HashMap<String, (f64, std::time::Instant)>>,
     overviewing: AtomicBool,
+    /// When the automatic Overview sweep last ran (`overview_auto`).
+    overview_scan: AtomicI64,
     /// Rooms held for a backup before 0.8.5 were imported this process (`commit::release_held`).
     held_released: AtomicBool,
     /// The shared semantic service: model, vector store and background worker (`semantic::service`).

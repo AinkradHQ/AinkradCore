@@ -368,7 +368,7 @@
 ///    adds `kind`, `topic`, `q`; `GET /places`, `GET /topics`, `POST /ask`, `GET /activity/days`, `PUT
 ///    /rooms/{room}/records/{id}/follow`, `POST /areas/rules`; `GET /sources` adds the read counts; inbox candidates add
 ///    `reason`, `other_id`, `other_body`. Profile answers now count as About you.
-pub const API_MINOR: u32 = 101;
+pub const API_MINOR: u32 = 102;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
