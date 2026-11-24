@@ -438,7 +438,7 @@ pub fn seatbelt_profile(
         }
     }
     // The launch tools and launchd's XPC domain stay shut, as in the host-view sandbox.
-    p.push_str("(deny process-exec (literal \"/bin/launchctl\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/open\") (literal \"/usr/bin/at\") (literal \"/usr/bin/crontab\"))\n");
+    p.push_str("(deny process-exec (literal \"/bin/launchctl\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/at\") (literal \"/usr/bin/crontab\"))\n");
     if *net == Net::Host {
         // Over the network by IP, and over no unix socket but the name service's: the host's own services on `localhost` are out of reach. Link-local
         // ranges cannot be named in Seatbelt; macOS hosts have no metadata service there.
