@@ -321,6 +321,27 @@ async fn a_hundred_open_close_cycles_leave_nothing() {
     }
 }
 
+/// A host nobody can reach (its socket removed) ends its shell and itself, with no ack.
+#[tokio::test]
+async fn a_host_whose_socket_is_gone_ends_itself_and_its_shell() {
+    let dir = tmp();
+    let id = new_id().unwrap();
+    let info = launch(Path::new(BIN), &dir, &id, &spec("/bin/sleep", &["996"]))
+        .await
+        .unwrap();
+    support::register(&dir, info.pid, info.child);
+    let alive = |pid: u32| ainkrad_sys::kill_pid(pid, 0).unwrap_or(false);
+    assert!(alive(info.pid));
+    std::fs::remove_file(socket_path(&dir, &id)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while (alive(info.pid) || alive(info.child.unwrap())) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(!alive(info.pid), "the host is still running");
+    assert!(!alive(info.child.unwrap()), "its shell is still running");
+    assert!(!record_path(&dir, &id).exists());
+}
+
 /// E2-03.2/.3: the process that started five hosts is killed with `kill -9`; every host keeps
 /// running, a scan re-adopts all five, stale records are cleaned, and the terminals still work.
 #[tokio::test]

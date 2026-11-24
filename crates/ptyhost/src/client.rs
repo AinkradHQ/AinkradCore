@@ -131,24 +131,34 @@ pub async fn launch(bin: &Path, dir: &Path, id: &str, spec: &Spec) -> io::Result
         .stdout
         .take()
         .ok_or_else(|| io::Error::other("no stdout"))?;
-    // One fixed buffer, wiped on drop: `fd3` holds keys.
-    stdin.write_all(&crate::pty::spec_bytes(spec)?).await?;
-    drop(stdin);
-    let line = tokio::time::timeout(START, BufReader::new(stdout).lines().next_line())
-        .await
-        .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??
-        .unwrap_or_default();
-    // Reaped here should it end while this runner lives; no zombie either way.
-    tokio::spawn(async move {
-        let _ = child.wait().await;
-    });
-    match line.strip_prefix("ready ") {
-        Some(info) => serde_json::from_str(info).map_err(io::Error::other),
+    // A host that does not report ready is not told of by anyone later: it is ended here, or it
+    // runs on with its shell and nobody knows (a leaked host held its shell forever).
+    let said = async {
+        // One fixed buffer, wiped on drop: `fd3` holds keys.
+        stdin.write_all(&crate::pty::spec_bytes(spec)?).await?;
+        drop(stdin);
+        let mut lines = BufReader::new(stdout).lines();
+        let line = tokio::time::timeout(START, lines.next_line())
+            .await
+            .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
+        Ok::<_, io::Error>(line.unwrap_or_default())
+    }
+    .await;
+    let info = said.and_then(|line| match line.strip_prefix("ready ") {
+        Some(info) => serde_json::from_str::<HostInfo>(info).map_err(io::Error::other),
         None => Err(io::Error::other(format!(
             "the host did not start: {}",
             line.strip_prefix("error ").unwrap_or(&line)
         ))),
+    });
+    if info.is_err() {
+        let _ = child.start_kill();
     }
+    // Reaped here should it end while this runner lives; no zombie either way.
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
+    info
 }
 
 /// Every host in `dir` that is still the process its record names (pid and boot answer on

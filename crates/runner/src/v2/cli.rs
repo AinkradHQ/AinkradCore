@@ -585,6 +585,7 @@ pub async fn connect_main(args: &[&str]) -> ExitCode {
         });
         let d = Arc::new(if local_host { driver } else { driver.remote() });
         d.spawn_budget_loop();
+        d.spawn_stray_sweep();
         d
     });
 

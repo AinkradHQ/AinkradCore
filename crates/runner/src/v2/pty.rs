@@ -360,6 +360,26 @@ impl PtyDriver {
         });
     }
 
+    /// Ends hosts nobody tracks any more, now and every minute (`ptysweep`).
+    pub fn spawn_stray_sweep(self: &Arc<Self>) {
+        if !self.config.enabled {
+            return;
+        }
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                let Some(d) = weak.upgrade() else { return };
+                let dir = d.config.dir.clone();
+                drop(d);
+                let _ = tokio::task::spawn_blocking(move || {
+                    super::ptysweep::sweep(&dir, super::ptysweep::MIN_AGE)
+                })
+                .await;
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+        });
+    }
+
     fn client(self: &Arc<Self>, terminal: &str) -> ClientGuard {
         let mut all = self.clients.lock().unwrap();
         let c = all.entry(terminal.to_owned()).or_default();
