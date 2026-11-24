@@ -444,7 +444,11 @@ pub async fn set_cap(
     let old = find(&mut tx, id).await?;
     // A runner-bound login's rotating auth.json is never refreshed by two sessions at once: its
     // cap is one session at a time, and that is the lock (the allocator holds the rest back).
-    if cap != 1 && super::bound::of(&mut tx, id).await?.is_some() {
+    // A login the Core holds for a ChatGPT or OpenCode plan rotates the same way (review item 6).
+    if cap != 1
+        && (super::bound::of(&mut tx, id).await?.is_some()
+            || ainkrad_proto::v2::lendable(&old.provider))
+    {
         return refused(
             "bad_request",
             "a runner-bound account runs one session at a time: its cap stays 1",
@@ -526,6 +530,10 @@ pub(super) async fn delete_gated(
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    sqlx::query("DELETE FROM core_lent_logins WHERE account_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM core_terminal_account_uses WHERE account_id = ?")
         .bind(id)
         .execute(&mut *tx)

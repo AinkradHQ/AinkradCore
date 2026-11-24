@@ -118,5 +118,10 @@ async fn lent(app: &App, s: &Session, name: &str, provider: &str) -> Result<Home
         secrets::Error::Refused { message, .. } => refuse(message),
         secrets::Error::Db(e) => Refusal::Db(e),
     })?;
+    // Which version this session was lent: its write-back is taken only against that one, once.
+    let Some((_, id)) = crate::store::gateway::account_secret(name) else {
+        return Err(refuse("the session's account does not exist"));
+    };
+    crate::store::bound::lent(&app.pool, &s.id, id, name, &app.clock.now()).await?;
     Ok(Home::Lent(lease, until))
 }

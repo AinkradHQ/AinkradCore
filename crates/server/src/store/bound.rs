@@ -50,16 +50,51 @@ pub async fn held_by_core(
     Ok(ainkrad_proto::v2::lendable(provider) && of(conn, id).await?.is_none())
 }
 
+/// A write-back's claim: the session whose lease it returns (`core_lent_logins`).
+pub struct Return<'a> {
+    pub session: &'a str,
+}
+
+/// Records that account `account`'s Core-held login, at its current version, was lent to
+/// `session` (once per lease: a resumed session is lent again and may send one refresh again).
+pub async fn lent(
+    pool: &sqlx::SqlitePool,
+    session: &str,
+    account: i64,
+    secret_name: &str,
+    now: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO core_lent_logins (session_id, account_id, version, lent_at) \
+         SELECT ?, ?, version, ? FROM core_secrets WHERE name = ? \
+         ON CONFLICT(session_id) DO UPDATE SET account_id = excluded.account_id, \
+         version = excluded.version, lent_at = excluded.lent_at, returned_at = NULL",
+    )
+    .bind(session)
+    .bind(account)
+    .bind(now)
+    .bind(secret_name)
+    .execute(pool)
+    .await
+    .map(drop)
+}
+
 /// Seals `bundle` (a login's credential files, `parse_bundle`-checked by the caller) as account
-/// `a`'s value, scoped to every active runner, and drops its runner-bound record in the same
-/// transaction. Returns the record it had (its home is then owed a wipe by the caller), or `None`
-/// for an account already held by the Core (a write-back). Audited `secret.rotated`, plus
-/// `account.moved_to_core` for a move.
+/// `a`'s value, scoped to every active runner, all in one transaction:
+///
+/// - a move (the account has a runner-bound record): the record goes, and its home on the runner is
+///   owed a wipe (`core_account_wipes`), audited `account.moved_to_core`;
+/// - a write-back (`back`): only once per lease, and only while the sealed login is still the
+///   version that was lent (review item 4); else `conflict` and nothing is written.
+///
+/// Returns the runner-bound record it had. Audited `secret.rotated`.
+#[allow(clippy::too_many_arguments)]
 pub async fn hold(
     pool: &sqlx::SqlitePool,
     sealer: &crate::ops::secretbox::SecretBox,
     a: &super::accounts::Account,
     bundle: &str,
+    back: Option<Return<'_>>,
     by_device: &str,
     actor: ainkrad_core::audit::AuditActor,
     now: &str,
@@ -68,6 +103,27 @@ pub async fn hold(
     let value = zeroize::Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(bundle));
     let runners = super::logins::active_runners(pool).await?;
     let mut tx = super::begin_write(pool).await?;
+    if let Some(back) = &back {
+        let claimed = sqlx::query(
+            "UPDATE core_lent_logins SET returned_at = ? WHERE session_id = ? AND account_id = ? \
+             AND returned_at IS NULL \
+             AND version = (SELECT version FROM core_secrets WHERE name = ?)",
+        )
+        .bind(now)
+        .bind(back.session)
+        .bind(a.id)
+        .bind(&a.secret_name)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if claimed != 1 {
+            return Err(super::secrets::Error::Refused {
+                code: "conflict",
+                message: "the session's login was already taken back, or changed since it was lent"
+                    .to_owned(),
+            });
+        }
+    }
     let was = of(&mut tx, a.id).await?;
     let new = super::secrets::NewValue {
         value: &value,
@@ -84,6 +140,15 @@ pub async fn hold(
             .bind(a.id)
             .execute(&mut *tx)
             .await?;
+        // The copy on the runner goes, confirmed by the runner (review item 8: same transaction).
+        sqlx::query(
+            "INSERT OR IGNORE INTO core_account_wipes (runner, home, created_at) VALUES (?, ?, ?)",
+        )
+        .bind(&b.runner)
+        .bind(&b.home)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
         super::accounts::audit(
             &mut tx,
             actor,

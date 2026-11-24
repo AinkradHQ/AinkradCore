@@ -102,6 +102,19 @@ pub(crate) fn write_credential(root: &Path, rel: &str, bytes: &[u8]) -> std::io:
     }
 }
 
+/// Removes every per-session copy (`<config>/bound-sessions/run-*`) a runner that died mid-session
+/// left: each may hold an `auth.json`. Run at runner start, before any session.
+pub(crate) fn sweep(config_root: &Path) {
+    let Ok(rd) = fs::read_dir(config_root.join("bound-sessions")) else {
+        return;
+    };
+    for e in rd.flatten() {
+        if e.file_name().to_string_lossy().starts_with("run-") {
+            wipe(&e.path());
+        }
+    }
+}
+
 /// Removes `dir` and everything in it (links inside are removed, never followed). A `dir` that is
 /// itself a symlink is left alone.
 pub(crate) fn wipe(dir: &Path) {
@@ -394,6 +407,22 @@ mod tests {
         assert_eq!(rotate(&d, "ks_1", old, same), same);
         let other = br#"{"a":"x","c":"y"}"#;
         assert_eq!(rotate(&d, "ks_2", old, other), old);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_runner_start_sweeps_every_session_copy_a_crash_left() {
+        let d = scratch("sweep");
+        let left = d.join("bound-sessions/run-42");
+        fs::create_dir_all(&left).unwrap();
+        fs::write(left.join("auth.json"), br#"{"t":"dummy"}"#).unwrap();
+        fs::create_dir_all(d.join("bound/lg_1")).unwrap();
+        sweep(&d);
+        assert!(!left.exists(), "no auth.json survives a crash");
+        assert!(
+            d.join("bound/lg_1").exists(),
+            "a bound home is not a session copy"
+        );
         let _ = fs::remove_dir_all(&d);
     }
 

@@ -18,10 +18,10 @@ use super::login::{W, refusal, until};
 use super::{Core, Fake, agents, quick, random32};
 
 /// A dummy Codex login (no real token shape anywhere).
-const AUTH: &str =
-    r#"{"tokens":{"refresh_token":"dummy-refresh-1","access_token":"dummy-access-1"}}"#;
-const AUTH_NEW: &str =
-    r#"{"tokens":{"refresh_token":"dummy-refresh-2","access_token":"dummy-access-2"}}"#;
+const AUTH: &str = r#"{"tokens":{"account_id":"acct-dummy-1","refresh_token":"dummy-refresh-1","access_token":"dummy-access-1"}}"#;
+const AUTH_NEW: &str = r#"{"tokens":{"account_id":"acct-dummy-1","refresh_token":"dummy-refresh-2","access_token":"dummy-access-2"}}"#;
+/// Another ChatGPT account's login, as an agent could write it into the session's home.
+const AUTH_OTHER: &str = r#"{"tokens":{"account_id":"acct-dummy-2","refresh_token":"dummy-refresh-9","access_token":"dummy-access-9"}}"#;
 
 fn bundle(text: &str) -> Bundle {
     Bundle::from([("auth.json".to_owned(), text.to_owned())])
@@ -267,6 +267,7 @@ async fn lent_session(w: &W) -> (accounts::Account, sessions::Session) {
         sealer,
         &a,
         &serde_json::to_string(&bundle(AUTH)).unwrap(),
+        None,
         "d",
         AuditActor::System,
         &w.core.app.clock.now(),
@@ -348,6 +349,12 @@ async fn a_session_is_lent_the_login_once_and_a_refresh_comes_back_only_for_the_
     // Another runner, another account's login, or a file that is not the harness's: refused.
     let r = lend::take_back(&w.core.app, "d_other", &row.id, &bundle(AUTH_NEW)).await;
     assert_eq!(refusal(r).0, "not_found");
+    let r = lend::take_back(&w.core.app, &w.runner, &row.id, &bundle(AUTH_OTHER)).await;
+    assert_eq!(
+        refusal(r).0,
+        "bad_request",
+        "another account's login in the same shape"
+    );
     let r = lend::take_back(
         &w.core.app,
         &w.runner,
@@ -366,4 +373,122 @@ async fn a_session_is_lent_the_login_once_and_a_refresh_comes_back_only_for_the_
         .await
         .unwrap();
     assert_eq!(on_file(&w, &a).await, bundle(AUTH_NEW));
+    // At most once per lease: a second write-back is refused and changes nothing.
+    let third = AUTH_NEW.replace("dummy-refresh-2", "dummy-refresh-3");
+    let r = lend::take_back(&w.core.app, &w.runner, &row.id, &bundle(&third)).await;
+    assert_eq!(refusal(r).0, "conflict");
+    assert_eq!(on_file(&w, &a).await, bundle(AUTH_NEW));
+}
+
+/// Leases `row`'s login by starting it (the fake runner never answers), and returns once it is lent.
+async fn lend_now(w: &mut W, row: &sessions::Session) {
+    let (app, started) = (w.core.app.clone(), row.clone());
+    tokio::spawn(async move {
+        let _ = service::start(&app, &started).await;
+    });
+    let (_, cmd) = command(&mut w.fake).await;
+    assert!(matches!(cmd, Command::AgentStart(_)), "{cmd:?}");
+}
+
+/// One more stored session of the Core-held account `a`.
+async fn session_of(w: &W, a: &accounts::Account) -> sessions::Session {
+    let secrets = [SessionSecret {
+        name: a.secret_name.clone(),
+        var: "OPENAI_API_KEY".to_owned(),
+    }];
+    let policy = policy();
+    let new = NewSession {
+        runner: &w.runner,
+        harness: "codex",
+        model: None,
+        prompt: Some("again"),
+        workspace: None,
+        policy: &policy,
+        secrets: &secrets,
+        created_by: &w.runner,
+    };
+    let row = sessions::create_owned(
+        &w.core.app.pool,
+        &new,
+        None,
+        AuditActor::System,
+        &w.core.app.clock.now(),
+    )
+    .await
+    .unwrap();
+    service::authorize_for_tests(&w.core.app, &row.id);
+    row
+}
+
+#[tokio::test]
+async fn a_write_back_is_refused_once_the_login_changed_or_the_session_ended_long_ago() {
+    let mut w = up("lent-version", true).await;
+    let (a, row) = lent_session(&w).await;
+    lend_now(&mut w, &row).await;
+    // The login on file was replaced meanwhile: the version this session was lent is gone.
+    let sealer = w.core.app.secrets.as_deref().unwrap();
+    bound::hold(
+        &w.core.app.pool,
+        sealer,
+        &a,
+        &serde_json::to_string(&bundle(AUTH)).unwrap(),
+        None,
+        "d",
+        AuditActor::System,
+        &w.core.app.clock.now(),
+    )
+    .await
+    .unwrap();
+    let r = lend::take_back(&w.core.app, &w.runner, &row.id, &bundle(AUTH_NEW)).await;
+    assert_eq!(refusal(r).0, "conflict");
+
+    // A session that ended past the grace sends nothing back.
+    let old = session_of(&w, &a).await;
+    lend_now(&mut w, &old).await;
+    sqlx::query(
+        "UPDATE core_agent_sessions SET state = 'ended', ended_at = '2000-01-01T00:00:00.000Z' \
+         WHERE id = ?",
+    )
+    .bind(&old.id)
+    .execute(&w.core.app.pool)
+    .await
+    .unwrap();
+    let r = lend::take_back(&w.core.app, &w.runner, &old.id, &bundle(AUTH_NEW)).await;
+    assert_eq!(refusal(r).0, "conflict");
+    assert_eq!(on_file(&w, &a).await, bundle(AUTH));
+}
+
+#[tokio::test]
+async fn a_lendable_account_keeps_its_cap_at_one_and_never_moves_under_a_running_session() {
+    let w = up("lent-cap", true).await;
+    let (a, _) = lent_session(&w).await;
+    let r = accounts::set_cap(
+        &w.core.app.pool,
+        a.id,
+        3,
+        "d",
+        AuditActor::System,
+        "2026-01-01T00:00:00Z",
+    )
+    .await;
+    assert_eq!(
+        refusal(r).0,
+        "bad_request",
+        "one session refreshes it at a time"
+    );
+
+    let b = bound_account(&w, "codex-sub", "codex-busy", "lg_busy").await;
+    let busy = session_of(&w, &b).await;
+    sqlx::query("UPDATE core_agent_sessions SET state = 'running' WHERE id = ?")
+        .bind(&busy.id)
+        .execute(&w.core.app.pool)
+        .await
+        .unwrap();
+    let r = lend::move_to_core(&w.core.app, b.id, "d", AuditActor::System).await;
+    assert_eq!(refusal(r).0, "account_busy");
+    let mut conn = w.core.app.pool.acquire().await.unwrap();
+    assert!(
+        bound::of(&mut conn, b.id).await.unwrap().is_some(),
+        "nothing moved"
+    );
 }

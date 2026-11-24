@@ -18,9 +18,13 @@ use std::time::Duration;
 use ainkrad_core::audit::AuditActor;
 use ainkrad_proto::v2::{
     AGENT_DRIVER, Body, Bundle, CAP_LOGIN_EXPORT, Command, LoginExport, Reply, bound_harness,
-    bound_problem, is_bound_secret, lendable, parse_bundle, same_account,
+    bound_problem, is_bound_secret, lendable, parse_bundle, same_lent_account,
 };
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
+
+/// How long after its session ended a refreshed login is still taken back (review item 4): the
+/// runner sends it before it reports the end, so this only covers a slow link.
+pub const RETURN_GRACE_SECS: i64 = 120;
 
 use crate::api::App;
 use crate::store::secrets::Error;
@@ -58,6 +62,23 @@ pub async fn move_to_core(
     let Some(b) = bound::of(&mut conn, id).await? else {
         return refused("bad_request", "the account is already on the Core");
     };
+    // Never under a running session (review item 7): it refreshes the copy on the runner, which the
+    // move would leave behind for the wipe.
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM core_agent_sessions s WHERE s.state IN ('starting', 'running', 'interrupted') \
+         AND (s.account_id = ? OR EXISTS (SELECT 1 FROM json_each(s.secrets) j \
+              WHERE json_extract(j.value, '$.name') = ?))",
+    )
+    .bind(id)
+    .bind(&a.secret_name)
+    .fetch_one(&mut *conn)
+    .await?;
+    if live > 0 {
+        return refused(
+            "account_busy",
+            "a session is using this account: move it once that session has ended",
+        );
+    }
     drop(conn);
     let Some(sealer) = app.secrets.as_deref() else {
         return refused("secrets_unavailable", "this Core has no master key loaded");
@@ -93,7 +114,11 @@ pub async fn move_to_core(
         Ok(Ok(Body::Result(Reply::LoginResult(mut r)))) if r.done && r.error.is_none() => {
             r.token.take().map(Zeroizing::new)
         }
-        Ok(Ok(Body::Result(Reply::LoginResult(r)))) => {
+        Ok(Ok(Body::Result(Reply::LoginResult(mut r)))) => {
+            // An answer with an error never keeps a login it may carry (review item 14).
+            if let Some(t) = r.token.as_mut() {
+                t.zeroize();
+            }
             return refused(
                 "runner_failed",
                 r.error
@@ -110,20 +135,27 @@ pub async fn move_to_core(
     if let Err(why) = parse_bundle(harness, &token) {
         return refused("runner_failed", why);
     }
-    let now = app.clock.now();
-    if let Some(was) = bound::hold(&app.pool, sealer, &a, &token, by_device, actor, &now).await? {
-        // The login is in the vault: the copy on the runner goes, confirmed by the runner.
-        if let Err(e) = accounts::owe_wipe(&app.pool, &was.runner, &was.home, &now).await {
-            tracing::warn!(error = %e, "recording a runner wipe");
-        }
-    }
+    // The login goes into the vault and the runner's copy is owed a wipe, in one transaction.
+    bound::hold(
+        &app.pool,
+        sealer,
+        &a,
+        &token,
+        None,
+        by_device,
+        actor,
+        &app.clock.now(),
+    )
+    .await?;
     drop(token);
     accounts::get(&app.pool, id).await
 }
 
 /// Takes back the login the harness of session `session` refreshed, sent by `runner`. Only the
-/// session's own runner, for the Core-held plan account the session holds, the harness's own
-/// credential files, and the same account as the one on file.
+/// session's own runner, for the Core-held plan account the session holds, while it runs or within
+/// [`RETURN_GRACE_SECS`] of its end, once per lease, against the version it was lent, the
+/// harness's own credential files, and the same account by the strict lent rule
+/// (`same_lent_account`).
 pub async fn take_back(
     app: &App,
     runner: &str,
@@ -136,6 +168,17 @@ pub async fn take_back(
     };
     if s.runner != runner {
         return gone();
+    }
+    let late = s
+        .ended_at
+        .as_deref()
+        .and_then(crate::scheduler::unix_secs)
+        .is_some_and(|end| app.clock.unix() - end > RETURN_GRACE_SECS);
+    if late {
+        return refused(
+            "conflict",
+            "the session ended too long ago to send its login back",
+        );
     }
     let Some(secret) = s.secrets.iter().find(|x| is_bound_secret(&x.name)) else {
         return gone();
@@ -180,7 +223,7 @@ pub async fn take_back(
     for (rel, new) in files {
         let same = held
             .get(rel)
-            .is_some_and(|old| same_account(old.as_bytes(), new.as_bytes()));
+            .is_some_and(|old| same_lent_account(harness, old.as_bytes(), new.as_bytes()));
         if !same {
             return refused(
                 "bad_request",
@@ -199,6 +242,7 @@ pub async fn take_back(
         sealer,
         &a,
         &text,
+        Some(bound::Return { session }),
         runner,
         AuditActor::System,
         &app.clock.now(),

@@ -158,6 +158,27 @@ pub fn same_account(old: &[u8], new: &[u8]) -> bool {
     keys(&o).is_some() && keys(&o) == keys(&n)
 }
 
+/// Whether a login a session sends back may replace the Core-held one of `harness` (accounts on the
+/// Core, security review item 5). The agent can write those files, and their claims are unsigned,
+/// so a looser rule would let it swap in another account. Codex: the stored login must carry its
+/// stable `tokens.account_id` (from the sign-in, stored by the Core), and the new one the very same
+/// identity (that id and the `id_token`'s claims). Anything else, and every OpenCode login (no stable
+/// identity at all), is refused: the vault keeps its copy; a new sign-in beats a swapped account.
+pub fn same_lent_account(harness: &str, old: &[u8], new: &[u8]) -> bool {
+    if harness != "codex" {
+        return false;
+    }
+    let (Ok(o), Ok(n)) = (
+        serde_json::from_slice::<serde_json::Value>(old),
+        serde_json::from_slice::<serde_json::Value>(new),
+    ) else {
+        return false;
+    };
+    let id = identity(&o);
+    let anchored = id.iter().any(|(k, v)| k == "account_id" && !v.is_empty());
+    anchored && id == identity(&n)
+}
+
 /// The harness a bound provider runs, or `None` for any other provider.
 pub fn bound_harness(provider: &str) -> Option<&'static str> {
     BOUND_PROVIDERS
@@ -336,6 +357,18 @@ mod tests {
         assert!(parse_bundle("opencode", r#"{"auth.json":"{}"}"#).is_err());
         assert!(parse_bundle("opencode", r#"{"data/opencode/auth.json":"{}"}"#).is_ok());
         assert!(same_account(br#"{"a":1}"#, br#"{"a":2}"#));
+        // A lent login comes back only for Codex, anchored on the stored account id.
+        let old = br#"{"tokens":{"account_id":"acct-dummy-1","refresh_token":"r1"}}"#;
+        let new = br#"{"tokens":{"account_id":"acct-dummy-1","refresh_token":"r2"}}"#;
+        let other = br#"{"tokens":{"account_id":"acct-dummy-2","refresh_token":"r2"}}"#;
+        assert!(same_lent_account("codex", old, new));
+        assert!(!same_lent_account("codex", old, other));
+        assert!(!same_lent_account(
+            "codex",
+            br#"{"tokens":{"r":"1"}}"#,
+            br#"{"tokens":{"r":"2"}}"#
+        ));
+        assert!(!same_lent_account("opencode", br#"{"a":1}"#, br#"{"a":2}"#));
         assert!(!same_account(br#"{"a":1}"#, br#"{"b":2}"#));
     }
 

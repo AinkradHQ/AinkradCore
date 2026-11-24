@@ -449,6 +449,11 @@ impl AgentDriver {
         self
     }
 
+    /// Whether this driver can take a lent login (`CAP_LENT_HOME` is listed only then).
+    pub fn lends(&self) -> bool {
+        self.lend.is_some() && self.redeem.is_some()
+    }
+
     /// Where lent logins go (`<config root>/bound`) and how a rotated one goes back
     /// (`lent::http_give_back`). The `lent-*` homes a crash left are swept now.
     pub fn with_lending(mut self, homes: PathBuf, give_back: lent::GiveBack) -> Self {
@@ -757,7 +762,7 @@ impl AgentDriver {
         let session = req.session.clone();
         // A Core-held plan's login, lent for this session: held to the end of this task, its drop
         // (the end, a kill's abort, a failure) sends a rotation back and wipes the home.
-        let lent_home = match self.lend_home(&req, run).await {
+        let mut lent_home = match self.lend_home(&req, run).await {
             Ok(h) => h,
             Err(why) => {
                 if req.workspace.is_some() {
@@ -955,6 +960,11 @@ impl AgentDriver {
             .await;
         self.harness.cleanup_agent_workspace(&session, run).await;
         drop(delivered);
+        // A refreshed lent login reaches the Core before the end does (review item 3): the
+        // account's next session never starts on the token this one replaced.
+        if let Some(home) = lent_home.take() {
+            home.finish().await;
+        }
         self.end(&session, outcome);
     }
 
@@ -989,9 +999,16 @@ impl AgentDriver {
             _ => leased.value,
         };
         let bundle = ainkrad_proto::v2::parse_bundle(&req.harness, &text).map_err(str::to_owned)?;
-        lent::LentHome::make(homes, run, &req.session, bundle, Some(Arc::clone(give)))
-            .map(Some)
-            .map_err(|e| format!("writing the lent login: {e}"))
+        lent::LentHome::make(
+            homes,
+            run,
+            &req.harness,
+            &req.session,
+            bundle,
+            Some(Arc::clone(give)),
+        )
+        .map(Some)
+        .map_err(|e| format!("writing the lent login: {e}"))
     }
 
     /// Redeems each lease and delivers it to the session's private dir; the redactor learns

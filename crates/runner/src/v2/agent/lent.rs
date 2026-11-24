@@ -13,7 +13,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ainkrad_proto::v2::{Bundle, same_account};
+use ainkrad_proto::v2::{Bundle, same_lent_account};
 use serde_json::json;
 use zeroize::Zeroize;
 
@@ -30,6 +30,8 @@ pub type GiveBack = Arc<
 
 /// How often a give-back is tried before the rotation is dropped (the vault keeps the old one).
 const TRIES: u32 = 5;
+/// How long the end of a session waits for its give-back before it is reported anyway.
+const FINISH: Duration = Duration::from_secs(30);
 const PREFIX: &str = "lent-";
 
 /// Removes every lent home a runner that died mid-session left under `homes`.
@@ -48,6 +50,7 @@ pub fn sweep(homes: &Path) {
 pub struct LentHome {
     dir: PathBuf,
     key: String,
+    harness: String,
     session: String,
     sent: Bundle,
     give_back: Option<GiveBack>,
@@ -58,6 +61,7 @@ impl LentHome {
     pub fn make(
         homes: &Path,
         run: i64,
+        harness: &str,
         session: &str,
         bundle: Bundle,
         give_back: Option<GiveBack>,
@@ -70,6 +74,7 @@ impl LentHome {
         let home = Self {
             dir,
             key,
+            harness: harness.to_owned(),
             session: session.to_owned(),
             sent: bundle,
             give_back,
@@ -105,15 +110,16 @@ impl LentHome {
         out
     }
 
-    /// The files the harness changed since the start, the same account's only (the copy-back into
-    /// this home already refused another account's; checked again here, and by the Core).
+    /// The files the harness changed since the start, the same account's only by the strict lent
+    /// rule (`same_lent_account`: Codex anchored on its stored account id; OpenCode never), checked
+    /// again by the Core.
     pub fn rotated(&self) -> Option<Bundle> {
         let mut out = Bundle::new();
         for (rel, old) in &self.sent {
             let Some(new) = read_credential(&self.dir, rel) else {
                 continue;
             };
-            if new != old.as_bytes() && same_account(old.as_bytes(), &new) {
+            if new != old.as_bytes() && same_lent_account(&self.harness, old.as_bytes(), &new) {
                 out.insert(rel.clone(), String::from_utf8_lossy(&new).into_owned());
             }
         }
@@ -121,35 +127,58 @@ impl LentHome {
     }
 }
 
+impl LentHome {
+    /// The end of the session, before it is reported (review item 3): the home is wiped and a
+    /// rotation is sent back and awaited, at most [`FINISH`], so the account's next session never
+    /// starts on the token this one replaced.
+    pub async fn finish(mut self) {
+        let rotated = self.rotated();
+        wipe(&self.dir);
+        let give = self.give_back.take();
+        if let (Some(files), Some(give)) = (rotated, give) {
+            let session = self.session.clone();
+            let sent = tokio::time::timeout(FINISH, send(give, session, files)).await;
+            if sent.is_err() {
+                tracing::warn!("a rotated login was not taken back by the Core in time");
+            }
+        }
+        // Drop now finds nothing to send and an empty home.
+    }
+}
+
+/// Tries a give-back up to [`TRIES`] times, waiting longer between tries.
+async fn send(give: GiveBack, session: String, files: Bundle) {
+    let mut wait = Duration::from_secs(2);
+    for n in 1..=TRIES {
+        match give(session.clone(), files.clone()).await {
+            Ok(()) => return,
+            // The reason never holds a value (`http_give_back`).
+            Err(why) if n == TRIES => {
+                tracing::warn!(%why, "a rotated login was not taken back by the Core")
+            }
+            Err(_) => {
+                tokio::time::sleep(wait).await;
+                wait *= 2;
+            }
+        }
+    }
+}
+
 impl Drop for LentHome {
+    /// A session that did not reach [`LentHome::finish`] (a kill's abort, a failure): the rotation
+    /// is sent in the background and the home wiped.
     fn drop(&mut self) {
         let rotated = self.rotated();
         wipe(&self.dir);
         self.sent.values_mut().for_each(Zeroize::zeroize);
-        let (Some(files), Some(give)) = (rotated, self.give_back.clone()) else {
+        let (Some(files), Some(give)) = (rotated, self.give_back.take()) else {
             return;
         };
         let Ok(rt) = tokio::runtime::Handle::try_current() else {
             tracing::warn!("a rotated login could not be sent back: no runtime");
             return;
         };
-        let session = self.session.clone();
-        rt.spawn(async move {
-            let mut wait = Duration::from_secs(2);
-            for n in 1..=TRIES {
-                match give(session.clone(), files.clone()).await {
-                    Ok(()) => return,
-                    // The reason never holds a value (`http_give_back`).
-                    Err(why) if n == TRIES => {
-                        tracing::warn!(%why, "a rotated login was not taken back by the Core")
-                    }
-                    Err(_) => {
-                        tokio::time::sleep(wait).await;
-                        wait *= 2;
-                    }
-                }
-            }
-        });
+        rt.spawn(send(give, self.session.clone(), files));
     }
 }
 
@@ -221,20 +250,20 @@ mod tests {
         }
     }
 
+    const OLD: &str = r#"{"tokens":{"account_id":"acct-dummy-1","refresh_token":"r1"}}"#;
+    const NEW: &str = r#"{"tokens":{"account_id":"acct-dummy-1","refresh_token":"r2"}}"#;
+    const OTHER: &str = r#"{"tokens":{"account_id":"acct-dummy-2","refresh_token":"r9"}}"#;
+
     #[tokio::test]
     async fn a_lent_home_holds_only_the_login_and_is_gone_after_the_session() {
         let d = scratch("gone");
         let (give, got) = catcher();
-        let h = LentHome::make(&d, 7, "as_x", bundle(r#"{"t":"dummy-a"}"#), Some(give)).unwrap();
+        let h = LentHome::make(&d, 7, "codex", "as_x", bundle(OLD), Some(give)).unwrap();
         let dir = d.join(h.key());
         assert_eq!(h.key(), "lent-7");
-        assert_eq!(
-            std::fs::read(dir.join("auth.json")).unwrap(),
-            br#"{"t":"dummy-a"}"#
-        );
-        assert_eq!(h.secrets(), vec!["dummy-a".to_owned()]);
-        drop(h);
-        settle().await;
+        assert_eq!(std::fs::read_to_string(dir.join("auth.json")).unwrap(), OLD);
+        assert!(h.secrets().contains(&"r1".to_owned()));
+        h.finish().await;
         assert!(!dir.exists(), "the runner keeps nothing after the session");
         assert!(
             got.lock().unwrap().is_empty(),
@@ -244,26 +273,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_token_refreshed_during_the_session_goes_back_to_the_core_and_another_account_does_not()
-     {
+    async fn a_refreshed_token_is_sent_back_before_the_end_and_another_account_never() {
         let d = scratch("back");
         let (give, got) = catcher();
-        let h =
-            LentHome::make(&d, 8, "as_y", bundle(r#"{"t":"old"}"#), Some(give.clone())).unwrap();
-        std::fs::write(d.join("lent-8/auth.json"), br#"{"t":"new"}"#).unwrap();
-        drop(h);
-        settle().await;
-        let sent = got.lock().unwrap().clone();
-        assert_eq!(sent, vec![("as_y".to_owned(), bundle(r#"{"t":"new"}"#))]);
+        let h = LentHome::make(&d, 8, "codex", "as_y", bundle(OLD), Some(give.clone())).unwrap();
+        std::fs::write(d.join("lent-8/auth.json"), NEW).unwrap();
+        // `finish` returns only once the Core has it: the end is reported after the write-back.
+        h.finish().await;
+        assert_eq!(*got.lock().unwrap(), vec![("as_y".to_owned(), bundle(NEW))]);
         assert!(!d.join("lent-8").exists());
-        // Another account's login swapped in is never sent.
+        // Another account's login, or an OpenCode one (no stable identity), is never sent.
         got.lock().unwrap().clear();
-        let h = LentHome::make(&d, 9, "as_z", bundle(r#"{"t":"old"}"#), Some(give)).unwrap();
-        std::fs::write(d.join("lent-9/auth.json"), br#"{"other":"x"}"#).unwrap();
+        let h = LentHome::make(&d, 9, "codex", "as_z", bundle(OLD), Some(give.clone())).unwrap();
+        std::fs::write(d.join("lent-9/auth.json"), OTHER).unwrap();
+        h.finish().await;
+        let oc = Bundle::from([(
+            "data/opencode/auth.json".to_owned(),
+            r#"{"a":"1"}"#.to_owned(),
+        )]);
+        let h = LentHome::make(&d, 10, "opencode", "as_o", oc, Some(give)).unwrap();
+        std::fs::write(d.join("lent-10/data/opencode/auth.json"), r#"{"a":"2"}"#).unwrap();
         drop(h);
         settle().await;
         assert!(got.lock().unwrap().is_empty());
-        assert!(!d.join("lent-9").exists());
+        assert!(!d.join("lent-9").exists() && !d.join("lent-10").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn an_aborted_session_still_sends_its_refresh_from_the_drop() {
+        let d = scratch("abort");
+        let (give, got) = catcher();
+        let h = LentHome::make(&d, 11, "codex", "as_k", bundle(OLD), Some(give)).unwrap();
+        std::fs::write(d.join("lent-11/auth.json"), NEW).unwrap();
+        drop(h);
+        settle().await;
+        assert_eq!(got.lock().unwrap().len(), 1);
+        assert!(!d.join("lent-11").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 
