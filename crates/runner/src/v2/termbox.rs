@@ -294,12 +294,13 @@ pub fn wrap_in(
     let launcher = if cfg!(target_os = "macos") {
         // Everything is allowed but the hidden paths (files and unix sockets alike), writes to
         // the read-only ones, inspecting other processes (so no `ps eww` of their environment),
-        // their task ports, the launch tools and launchd's XPC domain (no `launchctl submit`).
+        // their task ports, the launch tools and launchd's XPC domain (no `launchctl submit`). `open` is allowed: the
+        // person opens files, folders and links from their own Mac terminal (2026-11-24, Ahmed's call).
         // Not denied: signalling other processes, which Seatbelt cannot separate from the
         // shell's own jobs, and launching through a copied or scripted client of services
         // other than launchd (residual, see the security posture runbook).
         let mut profile = String::from(
-            "(version 1)\n(allow default)\n(deny mach-priv-task-port)\n(deny process-info* (target others))\n(deny process-exec (literal \"/bin/launchctl\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/open\") (literal \"/usr/bin/at\") (literal \"/usr/bin/crontab\"))\n(deny mach-lookup (global-name-prefix \"com.apple.xpc.launchd.domain\"))\n",
+            "(version 1)\n(allow default)\n(deny mach-priv-task-port)\n(deny process-info* (target others))\n(deny process-exec (literal \"/bin/launchctl\") (literal \"/usr/bin/osascript\") (literal \"/usr/bin/at\") (literal \"/usr/bin/crontab\"))\n(deny mach-lookup (global-name-prefix \"com.apple.xpc.launchd.domain\"))\n",
         );
         if *net != Net::Host {
             // `deny network*` closes sockets of every kind, unix ones included. The services a
