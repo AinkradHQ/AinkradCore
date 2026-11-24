@@ -40,11 +40,20 @@ async fn leases(app: &App, s: &Session) -> Result<Leased, Refusal> {
         }
         None => None,
     };
+    let (home, home_lease) = match bound::home(app, s).await? {
+        bound::Home::None => (None, None),
+        bound::Home::Bound(h) => (Some(h), None),
+        bound::Home::Lent(lease, until) => {
+            expires = expires.min(until);
+            (None, Some(lease))
+        }
+    };
     Ok(Leased {
         until: expires,
         secrets: out,
         gateway,
-        home: bound::home(app, s).await?,
+        home,
+        home_lease,
     })
 }
 
@@ -95,7 +104,7 @@ fn start_command(
     secrets: Vec<SecretGrant>,
     gateway: Option<Box<ainkrad_proto::v2::GatewayGrant>>,
     instructions: Option<String>,
-    home: Option<String>,
+    (home, home_lease): (Option<String>, Option<String>),
     resume: bool,
 ) -> Result<Command, Refusal> {
     let bad = || {
@@ -134,6 +143,7 @@ fn start_command(
         instructions,
         folder: None,
         home,
+        home_lease,
     }))
 }
 
@@ -195,7 +205,7 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
         let why = "the runner is not connected";
         return Err(Refusal::Runner(StreamError::new(ErrorCode::Offline, why)));
     }
-    if let Err(e) = start_command(s, Vec::new(), None, None, None, resume) {
+    if let Err(e) = start_command(s, Vec::new(), None, None, (None, None), resume) {
         fail(app, s, &describe(&e)).await;
         return Err(e);
     }
@@ -335,7 +345,7 @@ pub(super) async fn launch(app: &App, s: &Session, resume: bool) -> Result<(), R
         secrets.clone(),
         leased.gateway.clone(),
         instructions,
-        leased.home.clone(),
+        (leased.home.clone(), leased.home_lease.clone()),
         resume,
     )?;
     // E15-2: a session on the built-in runner works in the canonical workspace.

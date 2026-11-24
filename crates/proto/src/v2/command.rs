@@ -150,6 +150,10 @@ pub enum Command {
     SyncDrop(super::SyncDrop),
     #[serde(rename = "gateway.call")]
     GatewayCall(super::GatewayCall),
+    /// (After every older op.) Read a runner-bound account's credential files out of its home, for
+    /// the Core's vault (2026-11-23, accounts on the Core).
+    #[serde(rename = "login.export")]
+    LoginExport(super::LoginExport),
     /// An op from a newer Core: answered `unsupported_command`. Never sent.
     #[serde(other)]
     Unknown,
@@ -222,6 +226,7 @@ impl Command {
             Self::SyncWatch(_) => super::OP_SYNC_WATCH,
             Self::SyncDrop(_) => super::OP_SYNC_DROP,
             Self::GatewayCall(_) => super::OP_GATEWAY_CALL,
+            Self::LoginExport(_) => super::OP_LOGIN_EXPORT,
             Self::Unknown => "unknown",
         }
     }

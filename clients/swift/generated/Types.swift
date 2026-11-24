@@ -62,6 +62,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `PUT /api/v1/accounts/{id}/models/{model}`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/models/{model}/put(setAccountModelAllowed)`.
     func setAccountModelAllowed(_ input: Operations.SetAccountModelAllowed.Input) async throws -> Operations.SetAccountModelAllowed.Output
+    /// - Remark: HTTP `POST /api/v1/accounts/{id}/move-to-core`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/move-to-core/post(moveAccountToCore)`.
+    func moveAccountToCore(_ input: Operations.MoveAccountToCore.Input) async throws -> Operations.MoveAccountToCore.Output
     /// - Remark: HTTP `PUT /api/v1/accounts/{id}/name`.
     /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/name/put(setAccountName)`.
     func setAccountName(_ input: Operations.SetAccountName.Input) async throws -> Operations.SetAccountName.Output
@@ -610,6 +613,9 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /api/v1/runner/jobs/{job}/signal`.
     /// - Remark: Generated from `#/paths//api/v1/runner/jobs/{job}/signal/post(runnerSignalJob)`.
     func runnerSignalJob(_ input: Operations.RunnerSignalJob.Input) async throws -> Operations.RunnerSignalJob.Output
+    /// - Remark: HTTP `POST /api/v1/runner/sessions/{id}/credential`.
+    /// - Remark: Generated from `#/paths//api/v1/runner/sessions/{id}/credential/post(runnerSessionCredential)`.
+    func runnerSessionCredential(_ input: Operations.RunnerSessionCredential.Input) async throws -> Operations.RunnerSessionCredential.Output
     /// - Remark: HTTP `POST /api/v1/runner/terminals/{id}/account`.
     /// - Remark: Generated from `#/paths//api/v1/runner/terminals/{id}/account/post(runnerTerminalAccount)`.
     func runnerTerminalAccount(_ input: Operations.RunnerTerminalAccount.Input) async throws -> Operations.RunnerTerminalAccount.Output
@@ -993,6 +999,17 @@ extension APIProtocol {
             path: path,
             headers: headers,
             body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/accounts/{id}/move-to-core`.
+    /// - Remark: Generated from `#/paths//api/v1/accounts/{id}/move-to-core/post(moveAccountToCore)`.
+    public func moveAccountToCore(
+        path: Operations.MoveAccountToCore.Input.Path,
+        headers: Operations.MoveAccountToCore.Input.Headers = .init()
+    ) async throws -> Operations.MoveAccountToCore.Output {
+        try await moveAccountToCore(Operations.MoveAccountToCore.Input(
+            path: path,
+            headers: headers
         ))
     }
     /// - Remark: HTTP `PUT /api/v1/accounts/{id}/name`.
@@ -2908,6 +2925,19 @@ extension APIProtocol {
         body: Operations.RunnerSignalJob.Input.Body
     ) async throws -> Operations.RunnerSignalJob.Output {
         try await runnerSignalJob(Operations.RunnerSignalJob.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
+    /// - Remark: HTTP `POST /api/v1/runner/sessions/{id}/credential`.
+    /// - Remark: Generated from `#/paths//api/v1/runner/sessions/{id}/credential/post(runnerSessionCredential)`.
+    public func runnerSessionCredential(
+        path: Operations.RunnerSessionCredential.Input.Path,
+        headers: Operations.RunnerSessionCredential.Input.Headers = .init(),
+        body: Operations.RunnerSessionCredential.Input.Body
+    ) async throws -> Operations.RunnerSessionCredential.Output {
+        try await runnerSessionCredential(Operations.RunnerSessionCredential.Input(
             path: path,
             headers: headers,
             body: body

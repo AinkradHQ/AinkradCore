@@ -232,10 +232,16 @@ pub async fn advertise(
     // The runner starts a session in a bound account's own home (E7-4).
     info.commands
         .push(ainkrad_proto::v2::CAP_BOUND_HOME.to_owned());
+    // And a Core-held plan's login lent for one session (`AgentStart::home_lease`).
+    info.commands
+        .push(ainkrad_proto::v2::CAP_LENT_HOME.to_owned());
     if let Some(l) = login {
         // The runner can delete a removed account's home (`login.wipe`).
         info.commands
             .push(ainkrad_proto::v2::CAP_LOGIN_WIPE.to_owned());
+        // It can hand a bound home's login to the Core's vault (`login.export`).
+        info.commands
+            .push(ainkrad_proto::v2::CAP_LOGIN_EXPORT.to_owned());
         if !l.cfg.program.as_os_str().is_empty() {
             match l.supported().await {
                 Ok(_) => info.commands.push(CAP_LOGIN.to_owned()),
@@ -280,6 +286,7 @@ pub fn dispatch(
             Command::LoginInput(req) => login.input(req).await.map(Reply::LoginResult),
             Command::LoginScreen(req) => login.screen(req).await.map(Reply::LoginScreen),
             Command::LoginWipe(req) => login.wipe(req).await.map(Reply::LoginResult),
+            Command::LoginExport(req) => login.export(req).await.map(Reply::LoginResult),
             _ => return,
         };
         let body = match answer {

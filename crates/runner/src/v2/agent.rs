@@ -50,6 +50,7 @@ mod docs;
 mod front;
 mod gw;
 mod history;
+pub mod lent;
 mod plan;
 mod signals;
 mod sub;
@@ -377,6 +378,9 @@ pub struct AgentDriver {
     config: AgentConfig,
     harness: Arc<dyn Harness>,
     redeem: Option<Redeem>,
+    /// Where a Core-held plan's login lent for one session goes (`<config>/bound`), and how a
+    /// rotated one goes back; without it a start with a `home_lease` fails.
+    lend: Option<(PathBuf, lent::GiveBack)>,
     sandbox: Arc<dyn Sandbox>,
     sessions: Mutex<HashMap<String, Live>>,
     /// Connection tools of the sessions (C4): calls waiting on the Core, and its results.
@@ -426,6 +430,7 @@ impl AgentDriver {
             config,
             harness: Arc::new(executor),
             redeem: None,
+            lend: None,
             sandbox: Arc::new(Unconfined),
             sessions: Mutex::new(sessions),
             tools: Arc::new(tools::Tools::default()),
@@ -441,6 +446,14 @@ impl AgentDriver {
     /// How leases are redeemed (`secrets::http_redeem`); without it a start with secrets fails.
     pub fn with_redeem(mut self, redeem: Redeem) -> Self {
         self.redeem = Some(redeem);
+        self
+    }
+
+    /// Where lent logins go (`<config root>/bound`) and how a rotated one goes back
+    /// (`lent::http_give_back`). The `lent-*` homes a crash left are swept now.
+    pub fn with_lending(mut self, homes: PathBuf, give_back: lent::GiveBack) -> Self {
+        lent::sweep(&homes);
+        self.lend = Some((homes, give_back));
         self
     }
 
@@ -597,6 +610,12 @@ impl AgentDriver {
         {
             return Err(refuse(ErrorCode::InvalidArgs, "a home key is a plain name"));
         }
+        if req.home.is_some() && req.home_lease.is_some() {
+            return Err(refuse(
+                ErrorCode::InvalidArgs,
+                "a session runs in a bound home or a lent one, never both",
+            ));
+        }
         if req.secrets.iter().any(|s| !secrets::valid_var(&s.var)) {
             return Err(refuse(
                 ErrorCode::InvalidArgs,
@@ -736,6 +755,21 @@ impl AgentDriver {
     /// Redeems and delivers the session's secrets, starts the harness and works it to its end.
     async fn work(self: Arc<Self>, req: AgentStart, run: i64, resumed: bool) {
         let session = req.session.clone();
+        // A Core-held plan's login, lent for this session: held to the end of this task, its drop
+        // (the end, a kill's abort, a failure) sends a rotation back and wipes the home.
+        let lent_home = match self.lend_home(&req, run).await {
+            Ok(h) => h,
+            Err(why) => {
+                if req.workspace.is_some() {
+                    self.harness.cleanup_agent_workspace(&session, run).await;
+                }
+                return self.end(&session, failed(why, "account"));
+            }
+        };
+        let home_key = req
+            .home
+            .clone()
+            .or_else(|| lent_home.as_ref().map(|h| h.key().to_owned()));
         let job = Job {
             run,
             agent: 0,
@@ -749,7 +783,7 @@ impl AgentDriver {
             policy: req.policy.clone(),
             issue_key: None,
             instructions: req.instructions.clone(),
-            account: req.home.as_deref().map(|h| ainkrad_proto::runner::Account {
+            account: home_key.as_deref().map(|h| ainkrad_proto::runner::Account {
                 id: 0,
                 label: "bound".to_owned(),
                 config_dir: format!("{}/{h}", ainkrad_proto::v2::BOUND_HOME_DIR),
@@ -766,6 +800,9 @@ impl AgentDriver {
         let mut redactor = Redactor::new();
         for (name, value) in self.harness.secrets().await {
             redactor.known(&name, &value);
+        }
+        for value in lent_home.iter().flat_map(lent::LentHome::secrets) {
+            redactor.known("lent login", &value);
         }
         // Held to the end of this task: dropping it (the end, a kill's abort) removes the files.
         let (mut delivered, run_token) = match self.deliver(&req, &mut redactor).await {
@@ -919,6 +956,42 @@ impl AgentDriver {
         self.harness.cleanup_agent_workspace(&session, run).await;
         drop(delivered);
         self.end(&session, outcome);
+    }
+
+    /// Redeems `req`'s lent login (if any) and writes it into a home of this session alone. The
+    /// bundle must be the harness's own credential files (`parse_bundle`); the reason never holds a value.
+    async fn lend_home(
+        &self,
+        req: &AgentStart,
+        run: i64,
+    ) -> Result<Option<lent::LentHome>, String> {
+        let Some(lease) = &req.home_lease else {
+            return Ok(None);
+        };
+        let (Some(redeem), Some((homes, give))) = (self.redeem.as_ref(), self.lend.as_ref()) else {
+            return Err("this runner cannot take a lent login".to_owned());
+        };
+        let leased = redeem(lease.clone()).await?;
+        if !ainkrad_proto::v2::is_bound_secret(&leased.name) {
+            return Err("the lent login is not a plan account's".to_owned());
+        }
+        let text = match leased.form {
+            secrets::Form::File { .. } => {
+                use base64::Engine;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(leased.value.as_bytes())
+                    .map_err(|_| "the lent login is not base64".to_owned())?;
+                zeroize::Zeroizing::new(
+                    String::from_utf8(bytes)
+                        .map_err(|_| "the lent login is not text".to_owned())?,
+                )
+            }
+            _ => leased.value,
+        };
+        let bundle = ainkrad_proto::v2::parse_bundle(&req.harness, &text).map_err(str::to_owned)?;
+        lent::LentHome::make(homes, run, &req.session, bundle, Some(Arc::clone(give)))
+            .map(Some)
+            .map_err(|e| format!("writing the lent login: {e}"))
     }
 
     /// Redeems each lease and delivers it to the session's private dir; the redactor learns

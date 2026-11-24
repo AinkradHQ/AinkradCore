@@ -23,6 +23,7 @@ mod gateway_test_route;
 mod health;
 mod history;
 mod isolation;
+mod lent;
 mod live;
 mod login;
 mod login_pool;

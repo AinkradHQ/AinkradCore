@@ -22,24 +22,16 @@ use super::account::bound_key;
 use crate::Job;
 
 /// The most a credential file may be. Real ones are a few KB.
-pub(super) const MAX_CREDENTIAL: u64 = 256 * 1024;
+pub(crate) const MAX_CREDENTIAL: u64 = ainkrad_proto::v2::MAX_CREDENTIAL as u64;
 
-/// The credential file(s) of `harness`, relative to its config dir (the home).
-/// Codex and OpenCode: their own `auth.json`. agy keeps its login in the OS keyring (not here);
-/// `.gemini/oauth_creds.json` is what a file-backed agy login writes (unverified per CLI version).
 fn credential_files(harness: &str) -> &'static [&'static str] {
-    match harness {
-        "codex" => &["auth.json"],
-        "opencode" => &["data/opencode/auth.json"],
-        "agy" => &[".gemini/oauth_creds.json"],
-        _ => &[],
-    }
+    ainkrad_proto::v2::credential_files(harness)
 }
 
 /// `root/rel` as a regular file, read without following a symlink on the way: every component
 /// must be a real dir (the last a real file), and the opened file must be the one that was checked.
 /// `None` for anything else, a file over [`MAX_CREDENTIAL`], or text that is not JSON.
-fn read_credential(root: &Path, rel: &str) -> Option<Vec<u8>> {
+pub(crate) fn read_credential(root: &Path, rel: &str) -> Option<Vec<u8>> {
     let mut path = root.to_path_buf();
     let parts: Vec<_> = Path::new(rel).components().collect();
     if parts.iter().any(|c| !matches!(c, Component::Normal(_))) {
@@ -69,65 +61,7 @@ fn read_credential(root: &Path, rel: &str) -> Option<Vec<u8>> {
     ok.then_some(buf)
 }
 
-/// The identity a credential carries, as sorted `(claim, value)` pairs: Codex's `tokens.account_id`
-/// and the `sub`, `email` and `chatgpt_account_id` claims of its `id_token` (a JWT whose payload is
-/// decoded, NOT verified: a rotation is compared with the stored one, never trusted on its own).
-fn identity(v: &serde_json::Value) -> Vec<(String, String)> {
-    use base64::Engine;
-    let mut out = Vec::new();
-    let tokens = v.get("tokens").unwrap_or(v);
-    if let Some(a) = tokens.get("account_id").and_then(|x| x.as_str()) {
-        out.push(("account_id".to_owned(), a.to_owned()));
-    }
-    let payload = tokens
-        .get("id_token")
-        .and_then(|t| t.as_str())
-        .and_then(|t| t.split('.').nth(1))
-        .and_then(|p| {
-            base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .decode(p)
-                .ok()
-        })
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
-    if let Some(c) = payload {
-        for k in ["sub", "email"] {
-            if let Some(x) = c.get(k).and_then(|x| x.as_str()) {
-                out.push((k.to_owned(), x.to_owned()));
-            }
-        }
-        let auth = c.get("https://api.openai.com/auth");
-        if let Some(x) = auth
-            .and_then(|a| a.get("chatgpt_account_id"))
-            .and_then(|x| x.as_str())
-        {
-            out.push(("chatgpt_account_id".to_owned(), x.to_owned()));
-        }
-    }
-    out.sort();
-    out
-}
-
-/// Whether the rotated credential `new` is the stored `old`'s own account: the same identity claims
-/// when the stored one carries any (a rotated token keeps them), else the same top-level key set
-/// (names only, never values). Unparseable either way: not the same.
-fn same_account(old: &[u8], new: &[u8]) -> bool {
-    let (Ok(o), Ok(n)) = (
-        serde_json::from_slice::<serde_json::Value>(old),
-        serde_json::from_slice::<serde_json::Value>(new),
-    ) else {
-        return false;
-    };
-    let id = identity(&o);
-    if !id.is_empty() {
-        return id == identity(&n);
-    }
-    let keys = |v: &serde_json::Value| -> Option<Vec<String>> {
-        let mut k: Vec<_> = v.as_object()?.keys().cloned().collect();
-        k.sort();
-        Some(k)
-    };
-    keys(&o).is_some() && keys(&o) == keys(&n)
-}
+use ainkrad_proto::v2::same_account;
 
 /// A private dir, every parent a real dir (created when missing), never through a symlink.
 fn private_path(root: &Path, rel: &Path) -> std::io::Result<PathBuf> {
@@ -144,7 +78,7 @@ fn private_path(root: &Path, rel: &Path) -> std::io::Result<PathBuf> {
 }
 
 /// Writes `bytes` to `root/rel` atomically (a private temp file, then rename), mode 0600.
-fn write_credential(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_credential(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<()> {
     let rel = Path::new(rel);
     let dir = private_path(root, rel.parent().unwrap_or(Path::new("")))?;
     let name = rel
@@ -170,7 +104,7 @@ fn write_credential(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<()>
 
 /// Removes `dir` and everything in it (links inside are removed, never followed). A `dir` that is
 /// itself a symlink is left alone.
-fn wipe(dir: &Path) {
+pub(crate) fn wipe(dir: &Path) {
     if fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink()) {
         let _ = fs::remove_dir_all(dir);
     }

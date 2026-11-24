@@ -152,6 +152,7 @@ dependencies = [
 name = "ainkrad-proto"
 version = "0.10.7"
 dependencies = [
+ "base64 0.22.1",
  "blake3",
  "schemars",
  "serde",

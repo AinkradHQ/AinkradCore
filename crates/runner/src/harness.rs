@@ -592,7 +592,7 @@ impl Executor for HarnessExecutor {
 }
 
 mod account;
-mod bound_session;
+pub(crate) mod bound_session;
 mod cli;
 mod files;
 mod inbox;

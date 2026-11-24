@@ -26,7 +26,7 @@ import kotlinx.serialization.Contextual
  * @param label The new account's label.
  * @param provider A subscription provider: `claude-sub` (a pasted approval code), or the runner-bound `codex-sub` (a device code; the login stays on that runner and no token comes back).
  * @param displayName The new account's free-text name (as `createAccount` takes it); default none.
- * @param runner A runner device id; absent, the best ready runner that has the provider's harness. A runner-bound provider keeps the login on the runner it runs on: the account is pinned to it.
+ * @param runner Deprecated (API 103): the Core places a sign-in itself, on its own runner first. Still honoured when sent. A ChatGPT or OpenCode login then moves into the Core's vault; an Antigravity one stays on the runner it ran on.
  */
 @Serializable
 
@@ -44,7 +44,7 @@ data class NewLogin (
     @SerialName(value = "display_name")
     val displayName: kotlin.String? = null,
 
-    /* A runner device id; absent, the best ready runner that has the provider's harness. A runner-bound provider keeps the login on the runner it runs on: the account is pinned to it. */
+    /* Deprecated (API 103): the Core places a sign-in itself, on its own runner first. Still honoured when sent. A ChatGPT or OpenCode login then moves into the Core's vault; an Antigravity one stays on the runner it ran on. */
     @SerialName(value = "runner")
     val runner: kotlin.String? = null
 

@@ -187,6 +187,7 @@ pub(super) fn start(session: &str, harness: &str) -> AgentStart {
         live: false,
         folder: None,
         home: None,
+        home_lease: None,
     }
 }
 

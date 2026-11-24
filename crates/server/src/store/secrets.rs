@@ -324,6 +324,16 @@ async fn check_value(
         return Ok(false);
     }
     match kind {
+        // A ChatGPT or OpenCode plan's login held by the Core (accounts on the Core): a file of the
+        // harness's own credential JSON, several tokens in one. The narrow gate admits it as the
+        // provider-account credential it is; the shape is checked by `parse_bundle` before it gets here.
+        Kind::ProviderAccount { provider, .. }
+            if form.kind == "file"
+                && ainkrad_proto::v2::lendable(provider)
+                && setting(conn, Key::SecretsProviderAccounts).await? == 1 =>
+        {
+            Ok(true)
+        }
         Kind::ProviderAccount { shape, .. }
             if setting(conn, Key::SecretsProviderAccounts).await? == 1
                 && super::secrets_user::single_own_key(&redactor, value, shape) =>
@@ -1178,6 +1188,36 @@ pub async fn open_for_module(
     audit(&mut tx, AuditActor::System, "secret.used", id, details).await?;
     tx.commit().await?;
     Ok(value)
+}
+
+/// The plain value of account secret `name`, for the Core itself (a lent login's write-back compares
+/// the rotation with it). No lease and no audit row: nothing leaves the Core.
+pub(crate) async fn open_value(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    name: &str,
+) -> Result<Zeroizing<String>, Error> {
+    let row = sqlx::query("SELECT version, key_id, sealed FROM core_secrets WHERE name = ?")
+        .bind(name)
+        .fetch_optional(pool)
+        .await?;
+    let Some(row) = row else {
+        return refused("not_found", "no such secret");
+    };
+    let (version, key_id, sealed): (i64, String, Vec<u8>) = (
+        row.try_get("version")?,
+        row.try_get("key_id")?,
+        row.try_get("sealed")?,
+    );
+    let plain = sealer
+        .holds(&key_id)
+        .then(|| sealer.open_as(&key_id, &label(name, version), &sealed).ok())
+        .flatten()
+        .and_then(|p| String::from_utf8(p.to_vec()).ok());
+    match plain {
+        Some(v) => Ok(Zeroizing::new(v)),
+        None => refused("secrets_unavailable", "the secret did not open"),
+    }
 }
 
 /// Opens the secrets `names` so a Core-side redactor can mask their values in text an agent

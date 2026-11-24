@@ -246,6 +246,10 @@ pub fn router(app: App) -> Router {
             "/api/v1/runner/terminals/{id}/account",
             post(terminals::runner_account),
         )
+        .route(
+            "/api/v1/runner/sessions/{id}/credential",
+            post(accounts::runner_credential),
+        )
         .route("/api/v1/runners", get(runners::list))
         .route("/api/v1/runners/{id}", get(runners::get))
         .route("/api/v1/runners/{id}/noop", post(runners::noop))
@@ -360,6 +364,10 @@ pub fn router(app: App) -> Router {
         .route(
             "/api/v1/accounts/logins/{id}/screen",
             get(accounts::get_login_screen),
+        )
+        .route(
+            "/api/v1/accounts/{id}/move-to-core",
+            post(accounts::move_to_core),
         )
         .route(
             "/api/v1/accounts/{id}",

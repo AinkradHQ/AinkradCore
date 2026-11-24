@@ -476,6 +476,13 @@
             "null"
           ]
         },
+        "home_lease": {
+          "description": "A Core-held plan's login, lent for this session alone (`CAP_LENT_HOME`, 2026-11-23): a lease\non its credential bundle (`{\"auth.json\": \"…\"}`), redeemed once by this runner. The runner\nwrites it into a home of this session only, wipes it at the end, and sends a credential the\nharness rotated back to the Core (`POST /runner/sessions/{id}/credential`). Never with `home`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "instructions": {
           "description": "Instructions for the harness (P3-03): the approved instructions of the Brain room a\nsession of a project claimed. The runner hands them to the harness as a private file\nbeside the session, never inside the repo checkout.",
           "type": [
@@ -1701,6 +1708,20 @@
           "properties": {
             "op": {
               "const": "gateway.call",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/LoginExport",
+          "description": "(After every older op.) Read a runner-bound account's credential files out of its home, for\nthe Core's vault (2026-11-23, accounts on the Core).",
+          "properties": {
+            "op": {
+              "const": "login.export",
               "type": "string"
             }
           },
@@ -4090,6 +4111,23 @@
       "required": [
         "login_id",
         "code"
+      ],
+      "type": "object"
+    },
+    "LoginExport": {
+      "description": "Core to runner: the credential files of the home `home` (a `harness` sign-in), as a bundle in\n`LoginResult.token` (`{\"<file>\": \"<its JSON text>\"}`, [`super::credential_files`] only) with\n`done` set. Nothing is wiped: the Core stores the bundle first, then owes the home a wipe.",
+      "properties": {
+        "harness": {
+          "type": "string"
+        },
+        "home": {
+          "description": "The account's home key (`[A-Za-z0-9_-]{1,64}`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "home",
+        "harness"
       ],
       "type": "object"
     },

@@ -41,6 +41,123 @@ pub const CAP_BOUND_HOME: &str = "bound-home";
 /// Where a bound account's home is, under the runner's config root.
 pub const BOUND_HOME_DIR: &str = "bound";
 
+/// The command an agent driver lists when its runner takes a Core-held plan's login for one
+/// session (`AgentStart::home_lease`, 2026-11-23). The Core lends one only to a runner that lists it.
+pub const CAP_LENT_HOME: &str = "lent-home";
+
+/// The runner-bound providers whose login is files the Core can keep and lend (Codex, OpenCode).
+/// Antigravity's lives in the OS keyring: it stays on the runner that signed in.
+pub const LENDABLE: [&str; 2] = ["codex-sub", "opencode-sub"];
+
+/// Whether `provider`'s login can be held by the Core and lent per session.
+pub fn lendable(provider: &str) -> bool {
+    LENDABLE.contains(&provider)
+}
+
+/// The credential file(s) of `harness`, relative to its config dir: Codex's and OpenCode's own
+/// `auth.json`. agy keeps its login in the OS keyring; `.gemini/oauth_creds.json` is what a
+/// file-backed agy login writes (unverified per CLI version), copied per session on its runner only.
+pub fn credential_files(harness: &str) -> &'static [&'static str] {
+    match harness {
+        "codex" => &["auth.json"],
+        "opencode" => &["data/opencode/auth.json"],
+        "agy" => &[".gemini/oauth_creds.json"],
+        _ => &[],
+    }
+}
+
+/// The most one credential file may be. Real ones are a few KB.
+pub const MAX_CREDENTIAL: usize = 256 * 1024;
+
+/// A lent login: each credential file's path (one of [`credential_files`]) and its JSON text.
+pub type Bundle = std::collections::BTreeMap<String, String>;
+
+/// `text` as `harness`'s bundle: at least one file, each a known path whose content is JSON of
+/// at most [`MAX_CREDENTIAL`] bytes. Anything else is `Err` with a reason that holds no value.
+pub fn parse_bundle(harness: &str, text: &str) -> Result<Bundle, &'static str> {
+    let b: Bundle =
+        serde_json::from_str(text).map_err(|_| "the login is not a credential bundle")?;
+    bundle_problem(harness, &b).map_or(Ok(b), Err)
+}
+
+/// Why `b` is not a bundle of `harness`'s, if it is not.
+pub fn bundle_problem(harness: &str, b: &Bundle) -> Option<&'static str> {
+    let known = credential_files(harness);
+    if b.is_empty() {
+        return Some("the login holds no credential file");
+    }
+    for (path, text) in b {
+        if !known.contains(&path.as_str()) {
+            return Some("the login names a file that is not the harness's credential");
+        }
+        if text.len() > MAX_CREDENTIAL || serde_json::from_str::<serde_json::Value>(text).is_err() {
+            return Some("a credential file is not small JSON");
+        }
+    }
+    None
+}
+
+/// The identity a credential carries, as sorted `(claim, value)` pairs: Codex's `tokens.account_id`
+/// and the `sub`, `email` and `chatgpt_account_id` claims of its `id_token` (a JWT whose payload is
+/// decoded, NOT verified: a rotation is compared with the stored one, never trusted on its own).
+fn identity(v: &serde_json::Value) -> Vec<(String, String)> {
+    use base64::Engine;
+    let mut out = Vec::new();
+    let tokens = v.get("tokens").unwrap_or(v);
+    if let Some(a) = tokens.get("account_id").and_then(|x| x.as_str()) {
+        out.push(("account_id".to_owned(), a.to_owned()));
+    }
+    let payload = tokens
+        .get("id_token")
+        .and_then(|t| t.as_str())
+        .and_then(|t| t.split('.').nth(1))
+        .and_then(|p| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(p)
+                .ok()
+        })
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    if let Some(c) = payload {
+        for k in ["sub", "email"] {
+            if let Some(x) = c.get(k).and_then(|x| x.as_str()) {
+                out.push((k.to_owned(), x.to_owned()));
+            }
+        }
+        let auth = c.get("https://api.openai.com/auth");
+        if let Some(x) = auth
+            .and_then(|a| a.get("chatgpt_account_id"))
+            .and_then(|x| x.as_str())
+        {
+            out.push(("chatgpt_account_id".to_owned(), x.to_owned()));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Whether the rotated credential `new` is the stored `old`'s own account: the same identity claims
+/// when the stored one carries any (a rotated token keeps them), else the same top-level key set
+/// (names only, never values). Unparseable either way: not the same. The runner and the Core both
+/// apply it to a credential coming back from a session.
+pub fn same_account(old: &[u8], new: &[u8]) -> bool {
+    let (Ok(o), Ok(n)) = (
+        serde_json::from_slice::<serde_json::Value>(old),
+        serde_json::from_slice::<serde_json::Value>(new),
+    ) else {
+        return false;
+    };
+    let id = identity(&o);
+    if !id.is_empty() {
+        return id == identity(&n);
+    }
+    let keys = |v: &serde_json::Value| -> Option<Vec<String>> {
+        let mut k: Vec<_> = v.as_object()?.keys().cloned().collect();
+        k.sort();
+        Some(k)
+    };
+    keys(&o).is_some() && keys(&o) == keys(&n)
+}
+
 /// The harness a bound provider runs, or `None` for any other provider.
 pub fn bound_harness(provider: &str) -> Option<&'static str> {
     BOUND_PROVIDERS
@@ -201,6 +318,25 @@ mod tests {
 
     fn problem(h: &str, gw: bool, g: &[(&str, &str, Option<&str>)]) -> Option<&'static str> {
         subscription_problem(h, gw, g.iter().copied())
+    }
+
+    #[test]
+    fn a_bundle_is_the_harness_s_own_credential_files_as_json_only() {
+        assert!(lendable("codex-sub") && lendable("opencode-sub") && !lendable("agy-sub"));
+        assert!(parse_bundle("codex", r#"{"auth.json":"{\"t\":\"x\"}"}"#).is_ok());
+        for bad in [
+            "{}",
+            "not json",
+            r#"{"auth.json":"not json"}"#,
+            r#"{"../auth.json":"{}"}"#,
+            r#"{"config.toml":"{}"}"#,
+        ] {
+            assert!(parse_bundle("codex", bad).is_err(), "{bad}");
+        }
+        assert!(parse_bundle("opencode", r#"{"auth.json":"{}"}"#).is_err());
+        assert!(parse_bundle("opencode", r#"{"data/opencode/auth.json":"{}"}"#).is_ok());
+        assert!(same_account(br#"{"a":1}"#, br#"{"a":2}"#));
+        assert!(!same_account(br#"{"a":1}"#, br#"{"b":2}"#));
     }
 
     #[test]

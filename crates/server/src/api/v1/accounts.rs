@@ -169,25 +169,31 @@ async fn month_spend(
 
 // ----- accounts ---------------------------------------------------------------------------
 
-/// The runner each runner-bound account signed in on (`core_account_bound`), for an `admin`
-/// device only; a runner id is not a secret.
-async fn bound_runners(
-    app: &App,
-    me: &Caller,
-) -> Result<Option<std::collections::HashMap<i64, String>>, ApiError> {
-    if !me.device.scopes.iter().any(|s| s == "admin") {
-        return Ok(None);
-    }
+/// The runner each runner-bound account signed in on (`core_account_bound`), and whether the
+/// caller is an `admin` device (only one is told the runner; a runner id is not a secret).
+struct BoundRunners {
+    rows: std::collections::HashMap<i64, String>,
+    admin: bool,
+}
+
+async fn bound_runners(app: &App, me: &Caller) -> Result<BoundRunners, ApiError> {
     let rows: Vec<(i64, String)> =
         sqlx::query_as("SELECT account_id, runner FROM core_account_bound")
             .fetch_all(&app.pool)
             .await?;
-    Ok(Some(rows.into_iter().collect()))
+    Ok(BoundRunners {
+        rows: rows.into_iter().collect(),
+        admin: me.device.scopes.iter().any(|s| s == "admin"),
+    })
 }
 
 impl ProviderAccount {
-    fn with_runner(mut self, m: Option<&std::collections::HashMap<i64, String>>) -> Self {
-        self.runner = m.and_then(|m| m.get(&self.id).cloned());
+    fn with_runner(mut self, b: &BoundRunners) -> Self {
+        let on = b.rows.get(&self.id);
+        self.runner = on.filter(|_| b.admin).cloned();
+        // A plan's login: on a runner (its bound record) or in the Core's vault, lent per session.
+        self.held = account_keys::subscription_provider(&self.provider)
+            .then(|| if on.is_some() { "runner" } else { "core" }.to_owned());
         self
     }
 }
@@ -214,7 +220,7 @@ pub async fn list(
                     .with_status(st)
                     .with_spend(spend.as_ref())
                     .with_meter(meters.as_ref())
-                    .with_runner(bound.as_ref())
+                    .with_runner(&bound)
             })
             .collect(),
     ))
@@ -242,7 +248,7 @@ pub async fn get(
             .with_status(st)
             .with_spend(spend.as_ref())
             .with_meter(meters.as_ref())
-            .with_runner(bound.as_ref()),
+            .with_runner(&bound),
     ))
 }
 

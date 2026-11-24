@@ -60,6 +60,7 @@ impl AgentDriver {
             live: false,
             folder: None,
             home: None,
+            home_lease: None,
         };
         match self.start(start) {
             Ok(_) => {}

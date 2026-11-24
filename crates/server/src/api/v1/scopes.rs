@@ -26,7 +26,8 @@
 //! - A `runner` device holds only `runner`, which only `POST /api/v1/secret-leases/redeem` and
 //!   the read side of the Core's repo copies (`/api/v1/mirrors/{repo}/…`, P3-01) take, and the
 //!   built-in runner's job routes (`/api/v1/runner/jobs…`, E15-3) and a hosted terminal's account
-//!   (`/api/v1/runner/terminals/{id}/account`, 0.10.5): it can call
+//!   (`/api/v1/runner/terminals/{id}/account`, 0.10.5) and a lent login's write-back
+//!   (`/api/v1/runner/sessions/{id}/credential`, API 103): it can call
 //!   nothing else here (the runner hub is E1-11).
 //!
 //! **Danger routes** (spec §8, E1-09.6, D-4; still named "destructive" in the contract) are
@@ -122,6 +123,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     // A terminal's `claude` shim asks for its opener's account (signed as the runner hosting it;
     // the handler refuses any other runner).
     ("POST", "/api/v1/runner/terminals/{id}/account", "runner"),
+    ("POST", "/api/v1/runner/sessions/{id}/credential", "runner"),
     ("GET", "/api/v1/runners", "read"),
     ("GET", "/api/v1/runners/{id}", "read"),
     ("POST", "/api/v1/runners/{id}/noop", "agent"),
@@ -137,6 +139,7 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/accounts/logins/{id}/code", "admin"),
     ("POST", "/api/v1/accounts/logins/{id}/input", "admin"),
     ("GET", "/api/v1/accounts/logins/{id}/screen", "admin"),
+    ("POST", "/api/v1/accounts/{id}/move-to-core", "admin"),
     ("DELETE", "/api/v1/accounts/logins/{id}", "admin"),
     ("GET", "/api/v1/accounts/{id}", "read"),
     ("GET", "/api/v1/accounts/{id}/models", "read"),
@@ -399,6 +402,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
 /// reads nothing and changes nothing on the runner (it proves the path).
 pub const DESTRUCTIVE: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/devices/{id}"),
+    // It widens who may be lent a plan's login: every runner, not the one it signed in on.
+    ("POST", "/api/v1/accounts/{id}/move-to-core"),
     ("PATCH", "/api/v1/devices/{id}"),
     ("PUT", "/api/v1/devices/{id}/scopes"),
     ("POST", "/api/v1/pairings"),

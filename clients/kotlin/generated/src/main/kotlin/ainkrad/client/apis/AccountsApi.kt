@@ -38,6 +38,7 @@ import ainkrad.client.models.Pool
 import ainkrad.client.models.Provider
 import ainkrad.client.models.ProviderAccount
 import ainkrad.client.models.ReplaceKey
+import ainkrad.client.models.ReturnedCredential
 import ainkrad.client.models.SessionLimits
 import ainkrad.client.models.SetCap
 import ainkrad.client.models.SetModelAllowed
@@ -769,6 +770,40 @@ import io.ktor.http.ParametersBuilder
             }
 
         /**
+        * POST /api/v1/accounts/{id}/move-to-core
+        * 
+        * 
+         * @param id The account&#39;s id 
+         * @return ProviderAccount
+        */
+            @Suppress("UNCHECKED_CAST")
+        open suspend fun moveAccountToCore(id: kotlin.String): HttpResponse<ProviderAccount> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = 
+                    io.ktor.client.utils.EmptyContent
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/accounts/{id}/move-to-core".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
         * DELETE /api/v1/pools/{id}/members/{account}
         * 
         * 
@@ -899,6 +934,39 @@ import io.ktor.http.ParametersBuilder
             )
 
             return request(
+            localVariableConfig,
+            localVariableBody,
+            localVariableAuthNames
+            ).wrap()
+            }
+
+        /**
+        * POST /api/v1/runner/sessions/{id}/credential
+        * 
+        * 
+         * @param id The session&#39;s id 
+         * @param returnedCredential  
+         * @return void
+        */
+        open suspend fun runnerSessionCredential(id: kotlin.String, returnedCredential: ReturnedCredential): HttpResponse<Unit> {
+
+            val localVariableAuthNames = listOf<String>("device_signature")
+
+            val localVariableBody = returnedCredential
+
+            val localVariableQuery = mutableMapOf<String, List<String>>()
+
+            val localVariableHeaders = mutableMapOf<String, String>()
+
+            val localVariableConfig = RequestConfig<kotlin.Any?>(
+            RequestMethod.POST,
+            "/api/v1/runner/sessions/{id}/credential".replace("{" + "id" + "}", "$id"),
+            query = localVariableQuery,
+            headers = localVariableHeaders,
+            requiresAuthentication = true,
+            )
+
+            return jsonRequest(
             localVariableConfig,
             localVariableBody,
             localVariableAuthNames

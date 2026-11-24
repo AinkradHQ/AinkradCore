@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ainkrad_proto::v2::{
-    BOUND_HOME_DIR, ErrorCode, LOGIN_INPUT_MAX, LoginInput, LoginResult, LoginScreen,
+    BOUND_HOME_DIR, ErrorCode, LOGIN_INPUT_MAX, LoginExport, LoginInput, LoginResult, LoginScreen,
     LoginScreenReq, LoginStart, LoginUrl, LoginWait, LoginWipe, StreamError, bound_key_ok,
 };
 use ainkrad_ptyhost::pty::{self, Pty, Spec};
@@ -293,6 +293,52 @@ impl LoginDriver {
             }
             Err(why) => Err(err(ErrorCode::InvalidArgs, why)),
         }
+    }
+
+    /// `login.export`: the credential files of a bound home, as a bundle for the Core's vault. Read
+    /// only (the Core owes the home a wipe once it has stored them). Only regular, small JSON files
+    /// reached without a symlink count; a home with none is refused.
+    pub async fn export(&self, req: LoginExport) -> Result<LoginResult, StreamError> {
+        if !bound_key_ok(&req.home) {
+            return Err(err(ErrorCode::InvalidArgs, "a home key is a plain name"));
+        }
+        if !ainkrad_proto::v2::lendable(&format!("{}-sub", req.harness)) {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "that harness's login cannot leave its runner",
+            ));
+        }
+        let home = self.cfg.homes.join(&req.home);
+        if !std::fs::symlink_metadata(&home)
+            .is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink())
+        {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "no such account home on this runner",
+            ));
+        }
+        let mut bundle = ainkrad_proto::v2::Bundle::new();
+        for rel in ainkrad_proto::v2::credential_files(&req.harness) {
+            if let Some(bytes) = crate::harness::bound_session::read_credential(&home, rel) {
+                bundle.insert(
+                    (*rel).to_owned(),
+                    String::from_utf8_lossy(&bytes).into_owned(),
+                );
+            }
+        }
+        if bundle.is_empty() {
+            return Err(err(
+                ErrorCode::InvalidArgs,
+                "the account's home holds no credential file",
+            ));
+        }
+        let token = Zeroizing::new(serde_json::to_string(&bundle).unwrap_or_default());
+        bundle.values_mut().for_each(zeroize::Zeroize::zeroize);
+        Ok(LoginResult {
+            token: Some(token.to_string()),
+            done: true,
+            ..result(&req.home, None)
+        })
     }
 
     /// `login.input`: one typed line, with Enter, into the sign-in's terminal.

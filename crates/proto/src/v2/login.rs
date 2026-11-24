@@ -24,6 +24,10 @@ pub const OP_LOGIN_INPUT: &str = "login.input";
 pub const OP_LOGIN_SCREEN: &str = "login.screen";
 /// Core to runner: delete a runner-bound account's login (its home dir) from the runner.
 pub const OP_LOGIN_WIPE: &str = "login.wipe";
+/// Core to runner: read a runner-bound account's credential files for the Core's vault.
+pub const OP_LOGIN_EXPORT: &str = "login.export";
+/// The command a runner lists when it answers `login.export`.
+pub const CAP_LOGIN_EXPORT: &str = "login-export";
 /// The most a typed line may be.
 pub const LOGIN_INPUT_MAX: usize = 512;
 
@@ -131,6 +135,16 @@ impl std::fmt::Debug for LoginInput {
 pub struct LoginWipe {
     /// The account's home key (`[A-Za-z0-9_-]{1,64}`).
     pub home: String,
+}
+
+/// Core to runner: the credential files of the home `home` (a `harness` sign-in), as a bundle in
+/// `LoginResult.token` (`{"<file>": "<its JSON text>"}`, [`super::credential_files`] only) with
+/// `done` set. Nothing is wiped: the Core stores the bundle first, then owes the home a wipe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct LoginExport {
+    /// The account's home key (`[A-Za-z0-9_-]{1,64}`).
+    pub home: String,
+    pub harness: String,
 }
 
 /// Core to runner: the current screen of the sign-in.

@@ -58,6 +58,12 @@ pub struct ProviderAccount {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
     pub runner: Option<String>,
+    /// Where a plan account's login lives (API 103, accounts on the Core): `core` (in the Core's
+    /// vault, lent to whichever runner runs a session) or `runner` (on the one runner it signed in on:
+    /// an Antigravity login, or an older ChatGPT/OpenCode one not yet moved). Absent for an API key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub held: Option<String>,
     /// Whether a model the person switched off for this account is refused in its sessions: true for
     /// an API-key account (its gateway grants only the models left on), false for a subscription or
     /// runner-bound login, where the harness talks to its provider itself and the Core only skips the
@@ -208,6 +214,7 @@ impl From<acc::Account> for ProviderAccount {
             month_limit_usd_micros: None,
             usage: None,
             runner: None,
+            held: None,
             models_enforced,
             wipe_note: agy_sub.then(|| {
                 "Removing this account cannot clear its login from the runner's keyring. Sign out in Antigravity on that runner.".to_owned()

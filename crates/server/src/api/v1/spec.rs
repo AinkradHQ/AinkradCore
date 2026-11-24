@@ -156,6 +156,8 @@ use super::{
         accounts::send_login_code,
         accounts::send_login_input,
         accounts::get_login_screen,
+        accounts::move_to_core,
+        accounts::runner_credential,
         accounts::cancel_login,
         accounts::list_providers,
         accounts::create_provider,

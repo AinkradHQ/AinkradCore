@@ -33,6 +33,7 @@ mod failover;
 pub mod gateway;
 pub mod history;
 mod launch;
+pub mod lend;
 pub(crate) mod live;
 pub mod login;
 pub mod plan_check;
@@ -114,6 +115,8 @@ struct Leased {
     gateway: Option<Box<ainkrad_proto::v2::GatewayGrant>>,
     /// A runner-bound account's home on the runner (`AgentStart::home`); nothing is leased for it.
     home: Option<String>,
+    /// A Core-held plan's login lent for this start (`AgentStart::home_lease`): a lease on it.
+    home_lease: Option<String>,
 }
 
 /// How long a module credential's lease lasts: the runner redeems it at the start of the session.
