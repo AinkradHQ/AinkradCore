@@ -50,7 +50,7 @@ async fn the_redirect_is_exchanged_with_core_own_verifier_and_one_site_is_connec
     assert_eq!(param(url, "client_id"), "client-id-8c41");
     assert_eq!(
         param(url, "redirect_uri"),
-        "http://127.0.0.1:47613/callback"
+        "https://signin.ainkrad.io/callback"
     );
     assert_eq!(param(url, "code_challenge_method"), "S256");
     assert!(!url.contains("verifier") && !url.contains(CLIENT_SECRET));
@@ -76,7 +76,7 @@ async fn the_redirect_is_exchanged_with_core_own_verifier_and_one_site_is_connec
     let sent = cx.jf.last("POST /oauth/token").unwrap().body;
     assert_eq!(sent["code"], CODE);
     assert!(sent["code_verifier"].as_str().unwrap().len() >= 43);
-    assert_eq!(sent["redirect_uri"], "http://127.0.0.1:47613/callback");
+    assert_eq!(sent["redirect_uri"], "https://signin.ainkrad.io/callback");
     // A replay is refused and makes nothing more.
     let again = callback(&cx, id, CODE, state).await;
     assert_eq!(code(&again), (409, "conflict".to_owned()), "{}", again.1);
@@ -283,4 +283,80 @@ async fn signing_in_again_keeps_the_site_and_refuses_another_one() {
     .unwrap();
     assert_eq!(version, 2, "the credential was not replaced");
     cx.assert_clean().await;
+}
+
+/// The flow's step once it stops waiting (or after about 2 s).
+async fn settled(cx: &Cx, id: &str) -> Value {
+    for _ in 0..100 {
+        let v = cx
+            .ok(Method::GET, &format!("{URI}/flows/{id}"), Value::Null)
+            .await;
+        if v["step"] != "waiting" && v["step"] != "approved" {
+            return v;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("the flow never finished");
+}
+
+#[tokio::test]
+async fn the_hosted_callback_is_collected_by_core_itself_with_no_client_delivery() {
+    let cx = cx().await;
+    cx.configure().await;
+    cx.jf
+        .reply("POST /v1/oauth/collect", 200, json!({"code": CODE}));
+    let v = begin(&cx, json!({})).await;
+    let (id, state) = (v["id"].as_str().unwrap(), v["state"].as_str().unwrap());
+    let done = settled(&cx, id).await;
+    assert_eq!(done["step"], "connected", "{done}");
+    let asked = cx.jf.last("POST /v1/oauth/collect").unwrap();
+    assert_eq!(asked.body, json!({"state": state}));
+    assert!(asked.headers.contains_key("ainkrad-signature"));
+    assert_eq!(cx.jf.last("POST /oauth/token").unwrap().body["code"], CODE);
+    // Collected once: the poll stopped with the flow.
+    let n = cx.jf.count("POST /v1/oauth/collect");
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(cx.jf.count("POST /v1/oauth/collect"), n);
+    assert_eq!(connections(&cx).await.len(), 1);
+    cx.assert_clean().await;
+}
+
+#[tokio::test]
+async fn a_refusal_at_the_hosted_callback_ends_the_flow_denied() {
+    let cx = cx().await;
+    cx.configure().await;
+    cx.jf.reply(
+        "POST /v1/oauth/collect",
+        200,
+        json!({"error": "access_denied"}),
+    );
+    let v = begin(&cx, json!({})).await;
+    let done = settled(&cx, v["id"].as_str().unwrap()).await;
+    assert_eq!(done["step"], "denied", "{done}");
+    assert_eq!(cx.jf.count("POST /oauth/token"), 0);
+    assert!(connections(&cx).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_loopback_config_is_never_polled_and_waits_for_the_client() {
+    let cx = cx().await;
+    cx.configure().await;
+    cx.ok(
+        Method::PUT,
+        "/api/v1/connection-apps/jira",
+        json!({"fields": {"loopback_port": "47613"}}),
+    )
+    .await;
+    cx.jf
+        .reply("POST /v1/oauth/collect", 200, json!({"code": CODE}));
+    let v = begin(&cx, json!({})).await;
+    let url = v["authorize_url"].as_str().unwrap();
+    assert_eq!(
+        param(url, "redirect_uri"),
+        "http://127.0.0.1:47613/callback"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert_eq!(cx.jf.count("POST /v1/oauth/collect"), 0);
+    let (id, state) = (v["id"].as_str().unwrap(), v["state"].as_str().unwrap());
+    assert_eq!(callback(&cx, id, CODE, state).await.1["step"], "connected");
 }
