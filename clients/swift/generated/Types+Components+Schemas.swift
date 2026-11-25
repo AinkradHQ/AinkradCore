@@ -9491,6 +9491,10 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/builtin`.
             public var builtin: Swift.Bool?
+            /// Read-only, a preset's: the model an AI-order entry on it runs when it names none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/default_model`.
+            public var defaultModel: Swift.String?
             /// `env` and/or `gateway`.
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/delivery`.
@@ -9501,12 +9505,21 @@ extension Components {
             public var harness: Swift.String
             /// - Remark: Generated from `#/components/schemas/Provider/id`.
             public var id: Swift.String
+            /// Read-only, a preset's: how its keys usually start (`sk-or-v1-`), a hint for the paste field
+            /// only; a preset key is bound to its account and host, not to this.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/key_hint`.
+            public var keyHint: Swift.String?
             /// The shape this provider's keys start with (6 to 16 characters, never a built-in's, such
             /// as `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway
             /// (`delivery` is `["gateway"]`): the broker binds each key to the account's host by it.
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/key_prefix`.
             public var keyPrefix: Swift.String?
+            /// Read-only, a preset's: the vendor's page where a person creates a key.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/key_url`.
+            public var keyUrl: Swift.String?
             /// `paste`.
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/login_methods`.
@@ -9527,6 +9540,12 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/priced_at`.
             public var pricedAt: Swift.String?
+            /// Read-only: the harness the Core runs this provider's AI sessions on, chosen by the Core and
+            /// never by the person (E7-5): a built-in's own, `opencode` for a provider with no harness of
+            /// its own (a preset, a user definition). `harness` above is only the definition's dialect.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/session_harness`.
+            public var sessionHarness: Swift.String?
             /// The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
             /// for a provider whose model list needs no key (OpenRouter's is public: a revoked key would
             /// read as `ok`). A user definition without one cannot be tested: the answer is
@@ -9550,15 +9569,19 @@ extension Components {
             ///   - authVar: The harness's own authentication variable.
             ///   - baseUrl: `https://`, a public DNS name.
             ///   - builtin: Read-only: built-ins cannot be edited.
+            ///   - defaultModel: Read-only, a preset's: the model an AI-order entry on it runs when it names none.
             ///   - delivery: `env` and/or `gateway`.
             ///   - harness: `claude`, `codex` or `agy`.
             ///   - id:
+            ///   - keyHint: Read-only, a preset's: how its keys usually start (`sk-or-v1-`), a hint for the paste field
             ///   - keyPrefix: The shape this provider's keys start with (6 to 16 characters, never a built-in's, such
+            ///   - keyUrl: Read-only, a preset's: the vendor's page where a person creates a key.
             ///   - loginMethods: `paste`.
             ///   - models: Model ids exactly as the provider names them: the gateway compares a request's model with
             ///   - name:
             ///   - preset: A preset provider (OpenRouter, Groq, ...): shipped in code, read-only, the user only
             ///   - pricedAt: When the models' list prices were read.
+            ///   - sessionHarness: Read-only: the harness the Core runs this provider's AI sessions on, chosen by the Core and
             ///   - testPath: The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
             ///   - usageParser:
             ///   - version:
@@ -9567,15 +9590,19 @@ extension Components {
                 authVar: Swift.String,
                 baseUrl: Swift.String,
                 builtin: Swift.Bool? = nil,
+                defaultModel: Swift.String? = nil,
                 delivery: [Swift.String],
                 harness: Swift.String,
                 id: Swift.String,
+                keyHint: Swift.String? = nil,
                 keyPrefix: Swift.String? = nil,
+                keyUrl: Swift.String? = nil,
                 loginMethods: [Swift.String],
                 models: [Components.Schemas.ModelPrice],
                 name: Swift.String,
                 preset: Swift.Bool? = nil,
                 pricedAt: Swift.String? = nil,
+                sessionHarness: Swift.String? = nil,
                 testPath: Swift.String? = nil,
                 usageParser: Swift.String,
                 version: Swift.Int64? = nil,
@@ -9584,15 +9611,19 @@ extension Components {
                 self.authVar = authVar
                 self.baseUrl = baseUrl
                 self.builtin = builtin
+                self.defaultModel = defaultModel
                 self.delivery = delivery
                 self.harness = harness
                 self.id = id
+                self.keyHint = keyHint
                 self.keyPrefix = keyPrefix
+                self.keyUrl = keyUrl
                 self.loginMethods = loginMethods
                 self.models = models
                 self.name = name
                 self.preset = preset
                 self.pricedAt = pricedAt
+                self.sessionHarness = sessionHarness
                 self.testPath = testPath
                 self.usageParser = usageParser
                 self.version = version
@@ -9602,15 +9633,19 @@ extension Components {
                 case authVar = "auth_var"
                 case baseUrl = "base_url"
                 case builtin
+                case defaultModel = "default_model"
                 case delivery
                 case harness
                 case id
+                case keyHint = "key_hint"
                 case keyPrefix = "key_prefix"
+                case keyUrl = "key_url"
                 case loginMethods = "login_methods"
                 case models
                 case name
                 case preset
                 case pricedAt = "priced_at"
+                case sessionHarness = "session_harness"
                 case testPath = "test_path"
                 case usageParser = "usage_parser"
                 case version

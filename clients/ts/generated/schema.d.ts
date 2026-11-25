@@ -6082,17 +6082,26 @@ export interface components {
             base_url: string;
             /** @description Read-only: built-ins cannot be edited. */
             builtin?: boolean;
+            /** @description Read-only, a preset's: the model an AI-order entry on it runs when it names none. */
+            default_model?: string | null;
             /** @description `env` and/or `gateway`. */
             delivery: string[];
             /** @description `claude`, `codex` or `agy`. */
             harness: string;
             id: string;
             /**
+             * @description Read-only, a preset's: how its keys usually start (`sk-or-v1-`), a hint for the paste field
+             *     only; a preset key is bound to its account and host, not to this.
+             */
+            key_hint?: string | null;
+            /**
              * @description The shape this provider's keys start with (6 to 16 characters, never a built-in's, such
              *     as `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway
              *     (`delivery` is `["gateway"]`): the broker binds each key to the account's host by it.
              */
             key_prefix?: string | null;
+            /** @description Read-only, a preset's: the vendor's page where a person creates a key. */
+            key_url?: string | null;
             /** @description `paste`. */
             login_methods: string[];
             /**
@@ -6108,6 +6117,12 @@ export interface components {
             preset?: boolean | null;
             /** @description When the models' list prices were read. */
             priced_at?: string | null;
+            /**
+             * @description Read-only: the harness the Core runs this provider's AI sessions on, chosen by the Core and
+             *     never by the person (E7-5): a built-in's own, `opencode` for a provider with no harness of
+             *     its own (a preset, a user definition). `harness` above is only the definition's dialect.
+             */
+            session_harness?: string | null;
             /**
              * @description The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
              *     for a provider whose model list needs no key (OpenRouter's is public: a revoked key would

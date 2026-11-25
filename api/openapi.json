@@ -6984,6 +6984,13 @@
             "description": "Read-only: built-ins cannot be edited.",
             "type": "boolean"
           },
+          "default_model": {
+            "description": "Read-only, a preset's: the model an AI-order entry on it runs when it names none.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "delivery": {
             "description": "`env` and/or `gateway`.",
             "items": {
@@ -6998,8 +7005,22 @@
           "id": {
             "type": "string"
           },
+          "key_hint": {
+            "description": "Read-only, a preset's: how its keys usually start (`sk-or-v1-`), a hint for the paste field\nonly; a preset key is bound to its account and host, not to this.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "key_prefix": {
             "description": "The shape this provider's keys start with (6 to 16 characters, never a built-in's, such\nas `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway\n(`delivery` is `[\"gateway\"]`): the broker binds each key to the account's host by it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key_url": {
+            "description": "Read-only, a preset's: the vendor's page where a person creates a key.",
             "type": [
               "string",
               "null"
@@ -7031,6 +7052,13 @@
           },
           "priced_at": {
             "description": "When the models' list prices were read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_harness": {
+            "description": "Read-only: the harness the Core runs this provider's AI sessions on, chosen by the Core and\nnever by the person (E7-5): a built-in's own, `opencode` for a provider with no harness of\nits own (a preset, a user definition). `harness` above is only the definition's dialect.",
             "type": [
               "string",
               "null"
@@ -10330,7 +10358,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.104.0"
+    "version": "1.105.0"
   },
   "openapi": "3.1.0",
   "paths": {
