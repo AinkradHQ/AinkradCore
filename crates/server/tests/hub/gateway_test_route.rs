@@ -242,7 +242,8 @@ async fn a_user_providers_test_and_grant_carry_its_frozen_host_prefix_and_path()
     }];
     let new = NewSession {
         runner: &runner,
-        harness: "codex",
+        // A provider with no harness of its own runs on OpenCode (E7-5).
+        harness: "opencode",
         model: Some("vendor/m"),
         prompt: Some("go"),
         workspace: None,
