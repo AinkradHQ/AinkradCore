@@ -53,6 +53,16 @@ pub struct LoginScreenView {
     pub url: Option<String>,
     /// The device code, once it printed one.
     pub code: Option<String>,
+    /// What the person does now (API 105), read from this screen: `starting` (the CLI is still
+    /// getting there, or going back after a failed attempt; a menu it knows is answered for them), `open_url` (open `url` and sign
+    /// in), `enter_code` (the CLI waits for a pasted code; `url`, when shown, is the page that gives
+    /// it) or `finishing` (the CLI says it is signed in). `lines` are for a "Show details" view.
+    #[schema(required = false)]
+    pub stage: Option<String>,
+    /// Why the last attempt on this screen failed, in plain words (the CLI then goes back and a new
+    /// page follows: use the code from that one).
+    #[schema(required = false)]
+    pub message: Option<String>,
 }
 
 /// Where a sign-in has got to. Never a token or a code.
@@ -80,10 +90,21 @@ pub struct AccountLogin {
     pub updated_at: Timestamp,
     /// Ten minutes after it began; a sign-in open past it fails.
     pub expires_at: Timestamp,
+    /// What the person does now (API 105): `starting`, `open_url` (open `url` and sign in),
+    /// `enter_code` (paste the code the page gives: `claude-sub`), `finishing` (the code is in or
+    /// the account is being stored), `done` or `failed` (also a cancelled one; see `message`). A
+    /// guided sign-in (`agy-sub`, `opencode-sub`) is `starting` here until it showed a page:
+    /// `getAccountLoginScreen` reads its live stage.
+    #[schema(required = false)]
+    pub stage: Option<String>,
+    /// Why it failed, in plain words, when `stage` is `failed`.
+    #[schema(required = false)]
+    pub message: Option<String>,
 }
 
 impl From<Login> for AccountLogin {
     fn from(l: Login) -> Self {
+        let (stage, message) = login::stage(&l);
         Self {
             id: l.id,
             provider: l.provider,
@@ -97,6 +118,8 @@ impl From<Login> for AccountLogin {
             created_at: ts(&l.created_at),
             updated_at: ts(&l.updated_at),
             expires_at: ts(&l.expires_at),
+            stage: Some(stage.to_owned()),
+            message,
         }
     }
 }
@@ -202,7 +225,10 @@ pub async fn get_login_screen(
     Path(id): Path<String>,
 ) -> ApiResult<LoginScreenView> {
     let s = login::screen(&app, &me, &id).await.map_err(err)?;
+    let (stage, message) = login::screen_stage(&s);
     Ok(Json(LoginScreenView {
+        stage: Some(stage.to_owned()),
+        message,
         lines: s.lines,
         url: s.url,
         code: s.code,

@@ -21,6 +21,32 @@ pub(super) fn input_ok(text: &str) -> bool {
     ainkrad_proto::v2::agy_input_ok(text)
 }
 
+/// Whether the login landed in the account's home: a file-backed agy login writes
+/// `.gemini/oauth_creds.json` there (`credential_files`). The home is new for every sign-in, so any
+/// such file is this one's. A symlink or an empty file does not count.
+pub(super) fn creds_written(home: &Path) -> bool {
+    ainkrad_proto::v2::credential_files("agy")
+        .iter()
+        .any(|f| std::fs::symlink_metadata(home.join(f)).is_ok_and(|m| m.is_file() && m.len() > 0))
+}
+
+/// Whether the output since the person's code shows agy past its login: its first-run onboarding
+/// (agy 1.5's theme picker, "shift+up/down Navigate"), with the login menu not back and no error.
+/// agy prints no "signed in" line, so this is the fallback to [`creds_written`].
+pub(super) fn onboarded(since_code: &[String], tail: &str) -> bool {
+    let text = since_code
+        .iter()
+        .map(String::as_str)
+        .chain([tail])
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    text.contains("shift+up/down")
+        && !text.contains("login method")
+        && !text.contains("got an error")
+        && !text.contains("invalid_grant")
+}
+
 /// The sandbox environment of the sign-in: network open (it must reach Google), every limit the
 /// runner's default, `state` hidden (the other accounts' homes), the scratch `tmp` private.
 fn sandbox_env(scratch: &Path, state: &Path) -> Vec<(String, std::ffi::OsString)> {

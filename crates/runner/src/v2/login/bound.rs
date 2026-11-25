@@ -84,17 +84,47 @@ fn home_env(harness: &str, home: &Path) -> Vec<(String, String)> {
 /// Whether the CLI says, in so many words, that the sign-in worked. A TUI like agy's does not
 /// exit when it is signed in, so this is what ends its sign-in; nothing else counts.
 pub(super) fn signed_in(lines: &[String]) -> bool {
-    const SAID: [&str; 5] = [
-        "logged in as",
-        "signed in as",
-        "successfully signed in",
-        "successfully logged in",
-        "login successful",
-    ];
-    lines.iter().any(|l| {
-        let l = l.to_ascii_lowercase();
-        !l.contains("not ") && SAID.iter().any(|s| l.contains(s))
-    })
+    ainkrad_proto::v2::signed_in(lines)
+}
+
+/// Menus the runner answers itself, per harness: when every needle (lower case) is in the output
+/// that came since the last answer, the line is typed (an empty one is Enter alone). Nothing else
+/// is ever answered for the person. `codex login --device-auth` and `opencode auth login` are not
+/// here: Codex asks nothing, and OpenCode's provider choice is the person's.
+pub(super) const MENUS: &[(&str, &[&str], &str)] = &[
+    // After a failed attempt agy says "Got an error: ..." then "Press any key to go back." and shows
+    // the menu again; the retry prints a new page (a new PKCE secret). First: going back comes
+    // before choosing, should both be in one burst.
+    ("agy", &["press any key to go back"], ""),
+    // agy's first run: "Select login method: 1. Google OAuth 2. Use a Google Cloud project".
+    ("agy", &["login method", "google oauth"], "1"),
+];
+
+/// How many of the last lines a menu must be on.
+const MENU_LINES: usize = 12;
+/// How often one menu is answered in a sign-in (a CLI that fails by itself does not loop).
+pub(super) const MENU_MAX: usize = 3;
+
+/// The known menu in the last `fresh` lines (those since the last answer) and the line being
+/// written, as its index in [`MENUS`].
+pub(super) fn known_menu(
+    harness: &str,
+    lines: &[String],
+    tail: &str,
+    fresh: usize,
+) -> Option<usize> {
+    let recent = lines
+        .iter()
+        .rev()
+        .take(MENU_LINES.min(fresh))
+        .map(String::as_str)
+        .chain([tail])
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    MENUS
+        .iter()
+        .position(|(h, needles, _)| *h == harness && needles.iter().all(|n| recent.contains(n)))
 }
 
 /// What the home needs before the CLI runs: Codex keeps its login in `auth.json`, never the OS
@@ -146,6 +176,20 @@ pub(super) fn find_device_code(lines: &[String]) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The last `https://` word: the page of the newest attempt (a retry prints a new one, with a new
+/// PKCE secret, and a code from the old page fails `invalid_grant`). The Core checks the host.
+pub(super) fn find_last_page(lines: &[String]) -> Option<String> {
+    lines
+        .iter()
+        .rev()
+        .find_map(|l| {
+            l.split_whitespace()
+                .rev()
+                .find(|w| w.starts_with("https://"))
+        })
+        .map(str::to_owned)
+}
+
 /// The first `https://` word: the page the user opens. Whether the host is the vendor's is the
 /// Core's call (`agents::login::url_ok`); the runner never opens it.
 pub(super) fn find_page(lines: &[String]) -> Option<String> {
@@ -167,6 +211,9 @@ fn guided(harness: &str) -> bool {
 fn input_ok(text: &str) -> bool {
     text.len() <= LOGIN_INPUT_MAX && !text.chars().any(char::is_control)
 }
+
+/// How long a menu's output must have been quiet before it is answered (it is fully drawn).
+const MENU_QUIET: Duration = Duration::from_millis(500);
 
 /// How many of the last lines a screen answer carries.
 const SCREEN_LINES: usize = 30;
@@ -512,6 +559,7 @@ impl LoginDriver {
             .watch_bound(
                 harness,
                 id,
+                home,
                 rx,
                 &mut out,
                 &mut writer,
@@ -556,6 +604,7 @@ impl LoginDriver {
         &self,
         harness: &str,
         id: &str,
+        home: &Path,
         rx: &mut mpsc::UnboundedReceiver<Msg>,
         out: &mut mpsc::Receiver<Zeroizing<Vec<u8>>>,
         writer: &mut Box<dyn Write + Send>,
@@ -574,6 +623,11 @@ impl LoginDriver {
         let mut found_at = None::<Instant>;
         let (mut exited, mut drain) = (false, None::<Instant>);
         let mut tick = tokio::time::interval(TICK);
+        // Per known menu: how often it was answered. `mark`: the line count at the last answer.
+        let mut answered = [0usize; MENUS.len()];
+        let mut mark = 0usize;
+        // The line count when the person last typed a code (agy): what follows tells if it worked.
+        let mut code_at = None::<usize>;
         loop {
             tokio::select! {
                 chunk = out.recv() => {
@@ -593,11 +647,38 @@ impl LoginDriver {
                         return End::Fail("the sign-in timed out".to_owned());
                     }
                     // A harness that stays up once signed in (agy) ends its sign-in on its own words.
+                    // agy 1.5 says nothing like "signed in": the login landing in the home is the
+                    // proof, its onboarding after the code the fallback. Ending it closes the
+                    // onboarding (the process is hung up).
                     if harness == "agy"
                         && last_out.elapsed() >= Duration::from_millis(1500)
-                        && signed_in(screen.done())
+                        && (signed_in(screen.done())
+                            || agy::creds_written(home)
+                            || code_at.is_some_and(|at| {
+                                let done = screen.done();
+                                let n = (screen.total() - at).min(done.len());
+                                agy::onboarded(&done[done.len() - n..], &screen.tail())
+                            }))
                     {
                         return End::Done;
+                    }
+                    // A known menu, drawn and quiet, is answered once with its default.
+                    if guided
+                        && last_out.elapsed() >= MENU_QUIET
+                        && let Some(i) = known_menu(
+                            harness,
+                            screen.done(),
+                            &screen.tail(),
+                            screen.total() - mark,
+                        )
+                        && answered[i] < MENU_MAX
+                    {
+                        answered[i] += 1;
+                        if type_code(writer, MENUS[i].2, self.cfg.enter_delay).await.is_err() {
+                            return End::Fail(format!("{harness} could not be answered"));
+                        }
+                        screen.flush();
+                        mark = screen.total();
                     }
                     if url_tx.is_some() && !guided && Instant::now() >= url_deadline {
                         return End::Fail(format!("{harness} showed no sign-in page in time"));
@@ -620,6 +701,10 @@ impl LoginDriver {
                         }
                         // Typed as the claude sign-in types its code: the text, then Enter as a
                         // write of its own. It is never kept, logged or echoed back.
+                        screen.flush();
+                        if text.len() >= 8 {
+                            code_at = Some(screen.total());
+                        }
                         let sent = type_code(writer, &text, self.cfg.enter_delay).await;
                         let _ = tx.send(match sent {
                             Ok(()) => result(id, None),
@@ -718,7 +803,7 @@ fn snapshot(id: &str, screen: &Screen) -> LoginScreen {
     LoginScreen {
         login_id: id.to_owned(),
         lines,
-        url: find_page(done),
+        url: find_last_page(done),
         code: find_device_code(done),
     }
 }

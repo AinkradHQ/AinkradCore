@@ -33,7 +33,9 @@ import kotlinx.serialization.Contextual
  * @param updatedAt RFC 3339 UTC with exactly milliseconds, `2026-10-21T12:00:00.250Z`: one shape, so a client's date parser never meets a second one (E0.4).
  * @param accountId The new account, once `done`.
  * @param code The one-time device code to type on that page (`codex-sub`), from `open_url` on. Not a credential. Absent for a sign-in with no device code. A runner-bound sign-in takes no `/code`: it goes `open_url` then `storing` then `done` by itself once the user finishes.
+ * @param message Why it failed, in plain words, when `stage` is `failed`.
  * @param reason Why it `failed` or was `cancelled`; provider text passes the redactor.
+ * @param stage What the person does now (API 105): `starting`, `open_url` (open `url` and sign in), `enter_code` (paste the code the page gives: `claude-sub`), `finishing` (the code is in or the account is being stored), `done` or `failed` (also a cancelled one; see `message`). A guided sign-in (`agy-sub`, `opencode-sub`) is `starting` here until it showed a page: `getAccountLoginScreen` reads its live stage.
  * @param url The sign-in URL, from `open_url` on.
  */
 @Serializable
@@ -77,9 +79,17 @@ data class AccountLogin (
     @SerialName(value = "code")
     val code: kotlin.String? = null,
 
+    /* Why it failed, in plain words, when `stage` is `failed`. */
+    @SerialName(value = "message")
+    val message: kotlin.String? = null,
+
     /* Why it `failed` or was `cancelled`; provider text passes the redactor. */
     @SerialName(value = "reason")
     val reason: kotlin.String? = null,
+
+    /* What the person does now (API 105): `starting`, `open_url` (open `url` and sign in), `enter_code` (paste the code the page gives: `claude-sub`), `finishing` (the code is in or the account is being stored), `done` or `failed` (also a cancelled one; see `message`). A guided sign-in (`agy-sub`, `opencode-sub`) is `starting` here until it showed a page: `getAccountLoginScreen` reads its live stage. */
+    @SerialName(value = "stage")
+    val stage: kotlin.String? = null,
 
     /* The sign-in URL, from `open_url` on. */
     @SerialName(value = "url")

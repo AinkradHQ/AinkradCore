@@ -447,12 +447,18 @@ pub struct Provider {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
     pub preset: Option<bool>,
+    /// `false` (API 105): offered for no new sign-in, though accounts it made still work. Only the
+    /// OpenCode login, whose vendors are API-key providers now. Absent: as `login_methods` says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub sign_in: Option<bool>,
     #[serde(default)]
     pub version: i64,
 }
 
 impl From<Definition> for Provider {
     fn from(d: Definition) -> Self {
+        let sign_in = (d.builtin && d.id == "opencode-sub").then_some(false);
         Self {
             id: d.id,
             name: d.name,
@@ -477,6 +483,7 @@ impl From<Definition> for Provider {
             priced_at: d.priced_at,
             builtin: d.builtin,
             preset: Some(d.preset).filter(|p| *p),
+            sign_in,
             version: d.version,
         }
     }

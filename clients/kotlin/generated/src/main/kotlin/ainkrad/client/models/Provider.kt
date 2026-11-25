@@ -37,6 +37,7 @@ import kotlinx.serialization.Contextual
  * @param keyPrefix The shape this provider's keys start with (6 to 16 characters, never a built-in's, such as `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway (`delivery` is `[\"gateway\"]`): the broker binds each key to the account's host by it.
  * @param preset A preset provider (OpenRouter, Groq, ...): shipped in code, read-only, the user only pastes a key. Its keys are bound to the account and its frozen host, not to a prefix.
  * @param pricedAt When the models' list prices were read.
+ * @param signIn `false` (API 105): offered for no new sign-in, though accounts it made still work. Only the OpenCode login, whose vendors are API-key providers now. Absent: as `login_methods` says.
  * @param testPath The authenticated path (under the base URL, such as `/key`) of the one-shot account test, for a provider whose model list needs no key (OpenRouter's is public: a revoked key would read as `ok`). A user definition without one cannot be tested: the answer is `inconclusive`. Built-ins use their wire's own model list.
  * @param version 
  * @param wire The API dialect the gateway speaks to this provider: `anthropic-messages` (claude), `openai-responses` (codex) or `gemini-generate` (agy). Optional on write: it is its harness's own, and any other is refused.
@@ -93,6 +94,10 @@ data class Provider (
     /* When the models' list prices were read. */
     @SerialName(value = "priced_at")
     val pricedAt: kotlin.String? = null,
+
+    /* `false` (API 105): offered for no new sign-in, though accounts it made still work. Only the OpenCode login, whose vendors are API-key providers now. Absent: as `login_methods` says. */
+    @SerialName(value = "sign_in")
+    val signIn: kotlin.Boolean? = null,
 
     /* The authenticated path (under the base URL, such as `/key`) of the one-shot account test, for a provider whose model list needs no key (OpenRouter's is public: a revoked key would read as `ok`). A user definition without one cannot be tested: the answer is `inconclusive`. Built-ins use their wire's own model list. */
     @SerialName(value = "test_path")

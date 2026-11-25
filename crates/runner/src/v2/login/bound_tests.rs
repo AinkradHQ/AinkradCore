@@ -295,6 +295,11 @@ async fn a_typed_line_is_one_printable_line_and_a_codex_sign_in_is_not_guided_by
 /// A stand-in `agy`: shows a page and wants the pasted code, then says it is signed in and stays up
 /// (a TUI does not exit). It records HOME so the test sees the account's home was used.
 fn agy_driver(t: &Tmp, said: &str) -> Arc<LoginDriver> {
+    agy_driver_with(t, said, "")
+}
+
+/// [`agy_driver`] whose stand-in first runs `before` (a menu, say).
+fn agy_driver_with(t: &Tmp, said: &str, before: &str) -> Arc<LoginDriver> {
     // The sign-in runs in the session sandbox: it hides the host's temp dir and binds only the
     // program's own dir. So the stand-in is the program itself, alone in a dir beside the test
     // binary (named after this test's scratch dir).
@@ -308,6 +313,7 @@ fn agy_driver(t: &Tmp, said: &str) -> Arc<LoginDriver> {
     let body = format!(
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo 'agy 9.9.9'; exit 0; fi
+{before}
 printf 'Sign in: https://accounts.google.com/o/oauth2/auth?x=1\r\nPaste code: '
 read -r pasted
 [ "$pasted" = "4/0TESTONLY-code" ] || exit 5
@@ -550,4 +556,206 @@ fn the_antigravity_sign_in_is_wrapped_by_the_sandbox_never_run_bare() {
         let joined = args.join(" ");
         assert!(joined.contains(&home.display().to_string()), "{joined}");
     }
+}
+
+#[tokio::test]
+async fn the_antigravity_login_method_menu_is_answered_with_google_oauth() {
+    let t = Tmp::new();
+    // The stand-in exits 6 unless the menu got "1": the page is only shown after the answer.
+    let menu = r#"printf 'Select login method:\r\n  1. Google OAuth\r\n  2. Use a Google Cloud project\r\n(Use Enter to select)'
+read -r choice
+[ "$choice" = "1" ] || exit 6"#;
+    let d = agy_driver_with(&t, "Successfully signed in as someone@example.test", menu);
+    let u = d.start(agy_start("l_1", "lg_1")).await.unwrap();
+    assert_eq!(u.url, "https://accounts.google.com/o/oauth2/auth?x=1");
+    d.input(LoginInput {
+        login_id: "l_1".into(),
+        text: "4/0TESTONLY-code".into(),
+    })
+    .await
+    .unwrap();
+    let r = d.wait(wait("l_1")).await.unwrap();
+    assert!(r.done, "{:?}", r.error);
+}
+
+#[test]
+fn only_known_menus_are_answered() {
+    use super::bound::known_menu;
+    let l = |s: &[&str]| s.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
+    let agy = l(&[
+        "Select login method:",
+        "  1. Google OAuth",
+        "  2. Use a Google Cloud project",
+    ]);
+    let menu = |lines: &[String], fresh| known_menu("agy", lines, "", fresh);
+    assert_eq!(menu(&agy, 3), Some(1));
+    // The same words in another harness, or another menu, are the person's to answer.
+    assert_eq!(known_menu("opencode", &agy, "", 3), None);
+    assert_eq!(known_menu("codex", &agy, "", 3), None);
+    for other in [
+        &["Select provider:", "  1. Anthropic", "  2. OpenAI"][..],
+        &["Select login method:", "  1. Use an API key"][..],
+        &["Do you trust this folder?", "  1. Yes  2. No"][..],
+    ] {
+        assert_eq!(menu(&l(other), 3), None, "{other:?}");
+    }
+    // Only output since the last answer counts: an answered menu is not answered again.
+    assert_eq!(menu(&agy, 0), None);
+    let mut old = agy.clone();
+    old.extend((0..20).map(|i| format!("line {i}")));
+    assert_eq!(menu(&old, 23), None);
+    // The error screen goes back first, even when the menu is in the same burst.
+    let err = l(&[
+        "Got an error: token exchange failed: oauth2: \"invalid_grant\" \"Bad Request\"",
+        "Press any key to go back.",
+        "Select login method:",
+        "  1. Google OAuth",
+    ]);
+    assert_eq!(menu(&err, 4), Some(0));
+    assert_eq!(menu(&err[2..], 2), Some(1));
+}
+
+/// agy's real retry screen (2026-11-25): a code from the first page fails, agy goes back to its
+/// menu, and the retry prints a new page. The screen must show the NEW page.
+fn retry_screen() -> Vec<String> {
+    [
+        "Select login method:",
+        "  1. Google OAuth",
+        "  2. Use a Google Cloud project",
+        "Sign in: https://accounts.google.com/o/oauth2/auth?state=FIRST",
+        "Paste code: 4/0FIRST-code",
+        "Got an error: token exchange failed: oauth2: \"invalid_grant\" \"Bad Request\"",
+        "Press any key to go back.",
+        "Select login method:",
+        "  1. Google OAuth",
+        "  2. Use a Google Cloud project",
+        "Sign in: https://accounts.google.com/o/oauth2/auth?state=SECOND",
+        "Paste code: ",
+    ]
+    .iter()
+    .map(|l| (*l).to_owned())
+    .collect()
+}
+
+#[test]
+fn the_screen_shows_the_newest_page_after_a_retry() {
+    use super::bound::find_last_page;
+    let s = retry_screen();
+    assert_eq!(
+        find_last_page(&s).as_deref(),
+        Some("https://accounts.google.com/o/oauth2/auth?state=SECOND")
+    );
+    assert_eq!(
+        find_last_page(&s[..4]).as_deref(),
+        Some("https://accounts.google.com/o/oauth2/auth?state=FIRST")
+    );
+    assert_eq!(find_last_page(&s[..3]), None);
+}
+
+#[tokio::test]
+async fn after_a_failed_code_antigravity_goes_back_and_the_new_page_is_shown() {
+    let t = Tmp::new();
+    // Attempt one: menu, page FIRST, a code that fails, the error screen. Attempt two: menu, then
+    // the stand-in's own page (`x=1`, a new one) and the good code.
+    let before = r#"n=FIRST
+while :; do
+printf 'Select login method:\r\n  1. Google OAuth\r\n  2. Use a Google Cloud project\r\n'
+read -r choice
+[ "$choice" = "1" ] || exit 6
+[ "$n" = SECOND ] && break
+printf "Sign in: https://accounts.google.com/o/oauth2/auth?state=$n\r\nPaste code: "
+read -r bad
+printf '\r\nGot an error: token exchange failed: oauth2: "invalid_grant" "Bad Request"\r\nPress any key to go back.'
+read -r key
+n=SECOND
+done"#;
+    let d = agy_driver_with(&t, "Successfully signed in as someone@example.test", before);
+    let u = d.start(agy_start("l_1", "lg_1")).await.unwrap();
+    assert!(u.url.ends_with("state=FIRST"), "{}", u.url);
+    d.input(LoginInput {
+        login_id: "l_1".into(),
+        text: "4/0WRONGTEST-code".into(),
+    })
+    .await
+    .unwrap();
+    // The runner presses a key, picks Google OAuth again, and the screen moves to the new page.
+    let mut url = None;
+    for _ in 0..100 {
+        let s = d
+            .screen(LoginScreenReq {
+                login_id: "l_1".into(),
+            })
+            .await
+            .unwrap();
+        if s.url.as_deref().is_some_and(|u| u.ends_with("x=1")) {
+            url = s.url;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(url.is_some(), "the screen never showed the new page");
+    d.input(LoginInput {
+        login_id: "l_1".into(),
+        text: "4/0TESTONLY-code".into(),
+    })
+    .await
+    .unwrap();
+    let r = d.wait(wait("l_1")).await.unwrap();
+    assert!(r.done, "{:?}", r.error);
+}
+
+/// What agy 1.5 shows right after a good code (the owner's test, 2026-11-25): no "signed in" line,
+/// its first-run theme picker. Kept free of `%`: the stand-in prints it through `printf`.
+const AGY_THEME_PICKER: &str = "Authorized with the authorization code.\r\n\
+    Choose a theme\r\n  tokyo night\r\n  dracula\r\n\
+    func main() { fmt.Printf(\"Hello, name\") }\r\n\
+    Thought Process\r\nerror: compilation failed\r\n\
+    shift+up/down Navigate";
+
+#[tokio::test]
+async fn an_antigravity_sign_in_ends_at_its_theme_picker_after_the_code() {
+    let t = Tmp::new();
+    let d = agy_driver(&t, AGY_THEME_PICKER);
+    d.start(agy_start("l_1", "lg_1")).await.unwrap();
+    d.input(LoginInput {
+        login_id: "l_1".into(),
+        text: "4/0TESTONLY-code".into(),
+    })
+    .await
+    .unwrap();
+    let r = d.wait(wait("l_1")).await.unwrap();
+    assert!(r.done, "{:?}", r.error);
+    assert!(
+        t.file("homes")
+            .canonicalize()
+            .unwrap()
+            .join("lg_1")
+            .exists()
+    );
+}
+
+#[test]
+fn agy_is_signed_in_by_its_creds_file_or_its_onboarding_after_the_code() {
+    use super::agy::{creds_written, onboarded};
+    let t = Tmp::new();
+    let home = t.file("home");
+    std::fs::create_dir_all(home.join(".gemini")).unwrap();
+    assert!(!creds_written(&home));
+    std::fs::write(home.join(".gemini/oauth_creds.json"), "").unwrap();
+    assert!(!creds_written(&home), "an empty file is no login");
+    std::fs::write(
+        home.join(".gemini/oauth_creds.json"),
+        "{\"fake\":\"TESTONLY\"}",
+    )
+    .unwrap();
+    assert!(creds_written(&home));
+
+    let l = |s: &str| s.split("\r\n").map(str::to_owned).collect::<Vec<_>>();
+    assert!(onboarded(&l(AGY_THEME_PICKER), ""));
+    // The login menu again, or an error after the code, is not signed in.
+    let again = format!("Got an error: oauth2: \"invalid_grant\"\r\n{AGY_THEME_PICKER}");
+    assert!(!onboarded(&l(&again), ""));
+    let menu = "Select login method:\r\n  1. Google OAuth\r\nshift+up/down Navigate";
+    assert!(!onboarded(&l(menu), ""));
+    assert!(!onboarded(&l("Paste code: "), ""));
 }
