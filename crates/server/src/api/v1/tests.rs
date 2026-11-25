@@ -63,6 +63,7 @@ mod connections_health;
 mod connections_jira;
 mod connections_leak;
 mod connections_linear;
+mod connections_one_account;
 mod connections_resources;
 mod connections_review;
 mod connections_routes;

@@ -220,6 +220,25 @@ pub async fn get(pool: &SqlitePool, ws: i64, id: i64) -> Result<Connection, Erro
     find(&mut conn, ws, id).await
 }
 
+/// Workspace `user_id`'s connection of `kind` other than `except` that is already signed in as
+/// `identity` with a token or by signing in: one account is one connection. A GitHub App
+/// installation is not an account and is not compared.
+pub async fn same_account(
+    pool: &SqlitePool,
+    user_id: i64,
+    kind: &str,
+    identity: &str,
+    except: i64,
+) -> Result<Option<Connection>, sqlx::Error> {
+    let account = |m: &str| m == "token" || m == "oauth";
+    Ok(list(pool, user_id, Some(kind))
+        .await?
+        .into_iter()
+        .find(|c| {
+            c.id != except && account(&c.auth_method) && c.identity.as_deref() == Some(identity)
+        }))
+}
+
 /// `user_id`'s connections (of `kind` when given), oldest first.
 pub async fn list(
     pool: &SqlitePool,

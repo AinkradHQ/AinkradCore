@@ -103,7 +103,7 @@ pub(super) async fn store(
             .store(true, std::sync::atomic::Ordering::Relaxed);
         id
     };
-    match flow.kind {
+    let tested = match flow.kind {
         "jira" => {
             let cx = crate::connections::jira::Ctx {
                 pool: &app.pool,
@@ -137,7 +137,20 @@ pub(super) async fn store(
             app.connections.teams().test_connection(&cx, id).await
         }
         _ => verdict::run_test(&app.pool, sealer, reg, id, who).await,
+    }?;
+    // One account is one connection: a new sign-in for an account already connected is undone.
+    // A sign-in again (`reconnect`) is that connection's own.
+    if let (None, Some(identity)) = (flow.reconnect, &tested.identity)
+        && let Some(o) =
+            connections::same_account(&app.pool, flow.user, flow.kind, identity, tested.id).await?
+    {
+        connections::delete(&app.pool, tested.id, who).await?;
+        return Err(Error::Refused {
+            code: "already_connected",
+            message: format!("already connected as {}; change it there", o.name),
+        });
     }
+    Ok(tested)
 }
 
 /// Ends `flow` with what [`store`] came to.

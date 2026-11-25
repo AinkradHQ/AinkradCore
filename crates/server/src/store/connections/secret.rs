@@ -178,7 +178,30 @@ pub async fn replace(
     m: &Material,
     who: Who<'_>,
 ) -> Result<Connection, Error> {
-    replace_with(pool, sealer, id, m, who, (true, None), None).await
+    replace_with(pool, sealer, id, m, who, (true, None, None), None).await
+}
+
+/// [`replace`] that also switches how the connection signs in (a sign-in's connection taking a
+/// pasted token for the same account), in the same transaction. Its id, name, label, grants and
+/// limits stay as they were.
+pub async fn replace_as(
+    pool: &SqlitePool,
+    sealer: &SecretBox,
+    id: i64,
+    m: &Material,
+    auth_method: &str,
+    who: Who<'_>,
+) -> Result<Connection, Error> {
+    replace_with(
+        pool,
+        sealer,
+        id,
+        m,
+        who,
+        (true, None, Some(auth_method)),
+        None,
+    )
+    .await
 }
 
 /// [`replace`] for a GitHub App connection whose installation changes with its credential: the
@@ -192,7 +215,16 @@ pub async fn replace_installed(
     installation: (i64, &str),
     who: Who<'_>,
 ) -> Result<Connection, Error> {
-    replace_with(pool, sealer, id, m, who, (true, None), Some(installation)).await
+    replace_with(
+        pool,
+        sealer,
+        id,
+        m,
+        who,
+        (true, None, None),
+        Some(installation),
+    )
+    .await
 }
 
 /// [`replace`] for an adapter's own token renewal: the credential is a new one for the SAME grant,
@@ -211,7 +243,16 @@ pub async fn renew(
     who: Who<'_>,
     expected: i64,
 ) -> Result<Connection, Error> {
-    replace_with(pool, sealer, id, m, who, (false, Some(expected)), None).await
+    replace_with(
+        pool,
+        sealer,
+        id,
+        m,
+        who,
+        (false, Some(expected), None),
+        None,
+    )
+    .await
 }
 
 async fn replace_with(
@@ -220,7 +261,7 @@ async fn replace_with(
     id: i64,
     m: &Material,
     who: Who<'_>,
-    (clear_auth, expected): (bool, Option<i64>),
+    (clear_auth, expected, method): (bool, Option<i64>, Option<&str>),
     installation: Option<(i64, &str)>,
 ) -> Result<Connection, Error> {
     let mut tx = crate::store::begin_write(pool).await?;
@@ -287,12 +328,23 @@ async fn replace_with(
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    let mut details =
+        json!({"version": old + 1, "key_id": sealer.key_id(), "by_device": who.by_device});
+    if let Some(method) = method {
+        sqlx::query("UPDATE core_connections SET auth_method = ?, updated_at = ? WHERE id = ?")
+            .bind(method)
+            .bind(who.now)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        details["auth_method"] = json!(method);
+    }
     audit(
         &mut tx,
         who.actor,
         "connection.secret_replaced",
         id,
-        json!({"version": old + 1, "key_id": sealer.key_id(), "by_device": who.by_device}),
+        details,
     )
     .await?;
     let c = find(&mut tx, who.workspace, id).await?;

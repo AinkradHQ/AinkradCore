@@ -162,7 +162,11 @@ async fn material_of(
         `auth_method` `token` pastes a token (GitHub), or an email, a site and an API token \
         (Jira); `app_install` takes a GitHub App `installation_id`, which must exist and belong to \
         no other workspace (409). The credential is never \
-        returned. 400 for a bad name, label or credential, or one the service refuses \
+        returned. One account is one connection: a `token` for an account this workspace already \
+        has connected (by token or by signing in) is refused, 409 `already_connected` \
+        (\"already connected as <name>; change it there\"; nothing is kept), and a sign-in flow \
+        for such an account ends `failed` with the same code. 400 for a bad name, label or \
+        credential, or one the service refuses \
         (`credential_rejected`); 409 `conflict` (the name is taken), `limit_reached` or the \
         secrets gates (`secrets_disabled`, `real_secret_refused`); 502 when the service could \
         not be reached (`upstream_failed`)", body = Connection)))]
@@ -230,7 +234,66 @@ pub async fn create(
             ),
         });
     }
+    if let (Some(identity), false) = (&tested.identity, b.auth_method == "app_install")
+        && let Some(o) = store::same_account(&app.pool, user, d.kind, identity, c.id).await?
+    {
+        store::delete(&app.pool, c.id, who).await?;
+        return Err(already_connected(&o.name));
+    }
     Ok(Json(one(&app, &me, user, c.id).await?))
+}
+
+/// One account is one connection: a second one for an account already connected is refused.
+fn already_connected(name: &str) -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "already_connected",
+        format!("already connected as {name}; change it there"),
+    )
+}
+
+/// Checks, before a pasted token replaces a sign-in's, that it is the account the connection
+/// records (the test's identity). Fails closed: no recorded identity, or a token the service
+/// cannot be asked about, does not let it through.
+async fn same_account(
+    app: &App,
+    c: &store::Connection,
+    m: &Material,
+    title: &str,
+) -> Result<(), ApiError> {
+    let Some(adapter) = app.connections.registry().get(&c.kind) else {
+        return Err(ApiError::bad_request("no adapter for this kind".to_owned()));
+    };
+    let new = match adapter.test(m).await {
+        Ok(id) => id.subject,
+        Err(TestError::Rejected) => {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "credential_rejected",
+                "the service did not accept that credential; check it and try again",
+            ));
+        }
+        Err(TestError::Inconclusive) => {
+            return Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                "upstream_failed",
+                "the service could not be reached to check the token; try again",
+            ));
+        }
+    };
+    match c.identity.as_deref() {
+        Some(old) if old == new => Ok(()),
+        Some(_) => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "different_account",
+            format!("that token is for another {title} account"),
+        )),
+        None => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "identity_unknown",
+            "this connection has no recorded account to compare with; test it first",
+        )),
+    }
 }
 
 async fn free_name(app: &App, user: i64, kind: &str) -> Result<String, ApiError> {
@@ -330,8 +393,13 @@ async fn same_slack_workspace(
         `connection.secret_replaced`) and tested; a pending or confirmed auth failure is cleared \
         first, the test then decides. For a `token` connection a token (and for Jira an email \
         and site); for an `app_install` one an `installation_id`. A connection made by signing \
-        in is refreshed by signing in again (`startConnectionFlow` with `connection`), not \
-        here (400). Never returned. 404 for another workspace's", body = Connection)))]
+        in (`oauth`) takes a `token` of the SAME account when its kind accepts tokens: its \
+        `auth_method` becomes `token`, its id, name, label, grants and limits stay (the audit \
+        row carries `auth_method`); a token of another account is refused, 409 \
+        `different_account`, one the service refuses 400 `credential_rejected`, a connection \
+        with no recorded account 409 `identity_unknown`. Without a token it is refreshed by \
+        signing in again (`startConnectionFlow` with `connection`), not here (400). Never \
+        returned. 404 for another workspace's", body = Connection)))]
 pub async fn replace_credential(
     State(app): State<App>,
     Extension(me): Extension<Caller>,
@@ -342,24 +410,34 @@ pub async fn replace_credential(
     let user = workspace(&app, &me).await?;
     let id = num(&id)?;
     let c = store::get(&app.pool, user, id).await?;
-    if c.auth_method == "oauth" {
+    // A sign-in's connection takes a pasted token for the same account (one account, one
+    // connection); anything else made by signing in is refreshed by signing in again.
+    let d = kind_of(&app, &c.kind)?;
+    let to_token = c.auth_method == "oauth";
+    if to_token && (b.token.is_none() || d.auth_method("token").is_none()) {
         return Err(ApiError::bad_request(
             "this connection was made by signing in: sign in again instead",
         ));
     }
+    let method = if to_token {
+        "token"
+    } else {
+        c.auth_method.as_str()
+    };
     let sealer = sealer(&app)?;
     let (m, installation) = material_of(
         &app,
         user,
         &c.kind,
-        &c.auth_method,
+        method,
         Given::of(&b.token, &b.email, &b.site, b.installation_id),
     )
     .await?;
-    if c.kind == "linear" {
+    if to_token {
+        same_account(&app, &c, &m, d.title).await?;
+    } else if c.kind == "linear" {
         same_workspace(&app, &c, &m).await?;
-    }
-    if c.kind == "slack" {
+    } else if c.kind == "slack" {
         same_slack_workspace(&app, &c, &m).await?;
     }
     let now = app.clock.now();
@@ -370,6 +448,9 @@ pub async fn replace_credential(
         Some((i, account)) => {
             let at = (*i, account.as_str());
             store::secret::replace_installed(&app.pool, sealer, id, &m, at, who).await?;
+        }
+        None if to_token => {
+            store::secret::replace_as(&app.pool, sealer, id, &m, "token", who).await?;
         }
         None => {
             store::secret::replace(&app.pool, sealer, id, &m, who).await?;

@@ -375,7 +375,10 @@
 ///    sign-in now goes into the vault as soon as it finishes; `NewLogin.runner` is deprecated (the Core places a
 ///    sign-in on its own runner first). Runner protocol: `login.export` (`LoginExport`, capability `login-export`),
 ///    `AgentStart.home_lease` (capability `lent-home`).
-pub const API_MINOR: u32 = 103;
+/// 104: one connection per account (2026-11-25). `replaceConnectionCredential` takes a `token` on an `oauth`
+///    connection of the same account and switches it to `token` (409 `different_account`, `identity_unknown`);
+///    `createConnection` and a new sign-in flow refuse an account already connected, 409 `already_connected`.
+pub const API_MINOR: u32 = 104;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

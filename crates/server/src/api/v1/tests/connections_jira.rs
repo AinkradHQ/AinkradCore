@@ -110,8 +110,13 @@ async fn a_state_that_is_not_this_flows_is_refused_and_leaves_it_waiting() {
     }
     // Each flow's own state still finishes it, once.
     assert_eq!(callback(&cx, ida, CODE, sa).await.1["step"], "connected");
-    assert_eq!(callback(&cx, idb, CODE, sb).await.1["step"], "connected");
-    assert_eq!(connections(&cx).await.len(), 2);
+    // The same account and site again is not a second connection.
+    let v = callback(&cx, idb, CODE, sb).await.1;
+    assert_eq!(
+        (&v["step"], &v["error_code"]),
+        (&json!("failed"), &json!("already_connected"))
+    );
+    assert_eq!(connections(&cx).await.len(), 1);
     cx.assert_clean().await;
 }
 
