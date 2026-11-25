@@ -47,9 +47,15 @@ pub async fn open(
     let (events, rx) = tokio::sync::mpsc::unbounded_channel();
     let gateway = start(&sock, cfg, events).map_err(|e| format!("the gateway socket: {e}"))?;
     let exe = std::env::current_exe().map_err(|e| format!("the forwarder: {e}"))?;
-    let env = sandbox_env(&sock, &exe)
+    let mut env: Vec<(String, String)> = sandbox_env(&sock, &exe)
         .into_iter()
         .map(|(n, v)| Ok((n, v.into_string().map_err(|_| "a non-UTF-8 gateway path")?)))
         .collect::<Result<_, &str>>()?;
+    // The wire, for a harness whose config names it (OpenCode picks its SDK by it).
+    let wire = serde_json::to_value(grant.upstream.wire).map_err(|e| e.to_string())?;
+    env.push((
+        ainkrad_harness::opencode::GW_WIRE_VAR.to_owned(),
+        wire.as_str().unwrap_or_default().to_owned(),
+    ));
     Ok((gateway, env, rx))
 }

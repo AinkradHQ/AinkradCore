@@ -29,13 +29,14 @@ const SLOT_PORT: &str = "AINKRAD_SANDBOX_GW_PORT";
 
 /// Variable name prefixes that carry a provider's key, endpoint or account switch for some
 /// harness. A gateway session keeps none of them but the ones set here.
-const PROVIDER_PREFIXES: [&str; 6] = [
+const PROVIDER_PREFIXES: [&str; 7] = [
     "ANTHROPIC_",
     "CLAUDE_CODE_",
     "OPENAI_",
     "CODEX_",
     "GEMINI_",
     "GOOGLE_",
+    "OPENCODE_",
 ];
 
 fn provider_var(name: &str) -> bool {
@@ -66,7 +67,8 @@ pub fn gateway_port(env: &[(String, OsString)]) -> Result<Option<u16>, String> {
 }
 
 /// The variables `harness` is given: its base URL and a placeholder key. `None` is a harness with
-/// no gateway wiring (OpenCode has no account binding yet).
+/// no gateway wiring. OpenCode is given none: its adapter writes the provider (the gateway's URL,
+/// the placeholder, the wire's SDK) into the inline config from the slot itself.
 fn vars(harness: &str, port: u16) -> Option<Vec<(&'static str, String)>> {
     let url = format!("http://127.0.0.1:{port}");
     Some(match harness {
@@ -82,6 +84,7 @@ fn vars(harness: &str, port: u16) -> Option<Vec<(&'static str, String)>> {
         ],
         // The URL is in `config.toml`: Codex ignores `OPENAI_BASE_URL`.
         "codex" => vec![("OPENAI_API_KEY", PLACEHOLDER.to_owned())],
+        "opencode" => vec![],
         _ => return None,
     })
 }
@@ -103,6 +106,14 @@ pub fn wire(
     }
     let own = vars(harness, port)
         .ok_or_else(|| format!("the auth gateway has no wiring for harness {harness:?}"))?;
+    if harness == "opencode"
+        && ainkrad_harness::last_env(env, ainkrad_harness::opencode::GW_WIRE_VAR)
+            .and_then(|w| w.to_str())
+            .and_then(ainkrad_harness::opencode::gateway_sdk)
+            .is_none()
+    {
+        return Err("the auth gateway's slot has no wire OpenCode speaks".to_owned());
+    }
     env.retain(|(n, _)| !provider_var(n));
     allow.retain(|n| !provider_var(n));
     env.extend(own.into_iter().map(|(n, v)| (n.to_owned(), v.into())));

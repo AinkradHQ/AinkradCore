@@ -125,7 +125,7 @@ async fn a_harness_with_no_wiring_is_refused_and_a_session_without_the_slot_is_u
     assert!(!env.contains("placeholder"), "{env}");
     assert!(!dir.join("config/codex/config.toml").exists());
 
-    // A sandboxed gateway session of a harness the gateway has no wiring for fails, naming why.
+    // A sandboxed OpenCode gateway session whose slot names no wire fails, naming why.
     let ex = HarnessExecutor::new(dir.join("work"), dir.join("config"));
     let job = Job {
         run: 8,
@@ -136,7 +136,7 @@ async fn a_harness_with_no_wiring_is_refused_and_a_session_without_the_slot_is_u
     let (tx, _rx) = mpsc::channel(256);
     failed_with(
         &ex.run(&job, RunToken::new("t".to_owned()), tx).await,
-        "no wiring",
+        "no wire OpenCode speaks",
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

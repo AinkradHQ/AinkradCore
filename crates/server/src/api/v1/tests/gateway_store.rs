@@ -544,7 +544,7 @@ async fn a_built_in_providers_unlisted_model_is_granted_at_the_flagged_default_a
         async move {
             let new = NewSession {
                 runner: &vm.id,
-                harness: "codex",
+                harness: "opencode",
                 model: Some(model),
                 prompt: None,
                 workspace: None,
@@ -563,4 +563,24 @@ async fn a_built_in_providers_unlisted_model_is_granted_at_the_flagged_default_a
     let unlisted = mk("vendor/unlisted").await;
     let refused = why(crate::agents::gateway::grant(&fx.app, &unlisted).await).unwrap();
     assert!(refused.contains("has no price"), "{refused}");
+    // E7-5: the provider has no harness of its own, so it runs on OpenCode, never on the harness
+    // its definition's dialect is written for; and OpenCode names its model.
+    for (harness, model, says) in [
+        ("codex", Some("vendor/model-1"), "own harness"),
+        ("opencode", None, "names its model"),
+    ] {
+        let new = NewSession {
+            runner: &vm.id,
+            harness,
+            model,
+            prompt: None,
+            workspace: None,
+            policy: &policy,
+            secrets: &secrets,
+            created_by: &fx.dev.id,
+        };
+        let s = store::create(&fx.app.pool, &new, BY, NOW).await.unwrap();
+        let refused = why(crate::agents::gateway::grant(&fx.app, &s).await).unwrap();
+        assert!(refused.contains(says), "{harness}: {refused}");
+    }
 }

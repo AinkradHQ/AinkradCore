@@ -76,7 +76,7 @@ pub(super) async fn auth_var(
     e: &Entry,
 ) -> Result<Result<String, String>, sqlx::Error> {
     Ok(match providers::get_in(conn, &e.provider).await {
-        Ok(d) if d.harness == e.harness => Ok(d.auth_var),
+        Ok(d) if providers::session_harness(&d) == e.harness => Ok(d.auth_var),
         Ok(_) => Err("the entry's harness is not its provider's".to_owned()),
         Err(secrets::Error::Db(e)) => return Err(e),
         Err(_) => Err("the entry's provider is gone".to_owned()),

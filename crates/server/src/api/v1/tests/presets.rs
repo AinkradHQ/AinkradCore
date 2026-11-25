@@ -18,6 +18,7 @@ use crate::store::{account_keys, account_models, accounts as acc};
 const GROQ: &str = "gsk_TESTONLY0123456789abcdefghijklmnopqrstuv";
 const MISTRAL: &str = "TESTONLYmistralkey0123456789abcdefghij";
 const OR: &str = "sk-or-v1-0123456789abcdefghijklmnopqrstuvwxyzTESTONLY";
+const OR2: &str = "sk-or-v1-zyxwvutsrqponmlkjihgfedcba9876543210TESTONLY";
 const ANT: &str = "sk-ant-api03-0123456789abcdefghijklmnopqrstuvwxyzTESTONLY";
 const PROJ: &str = "sk-proj-0123456789abcdefghijklmnopqrstuvwxyzTESTONLY";
 
@@ -52,7 +53,10 @@ fn the_presets_are_valid_openai_wire_gateway_providers_with_a_frozen_https_host(
             "deepseek",
             "mistral",
             "xai",
-            "apinex"
+            "apinex",
+            "together",
+            "fireworks",
+            "vercel"
         ]
     );
     for p in all {
@@ -72,6 +76,13 @@ fn the_presets_are_valid_openai_wire_gateway_providers_with_a_frozen_https_host(
         assert_eq!(p.login_methods, ["paste"], "{}", p.id);
         // No invented model or price.
         assert!(p.models.is_empty() && p.priced_at.is_none(), "{}", p.id);
+        // Runs on OpenCode, and the app can link to the vendor's key page.
+        assert_eq!(prov::session_harness(&p), "opencode", "{}", p.id);
+        let row = prov::preset_of(&p.id).unwrap();
+        assert!(row.key_url.starts_with("https://"), "{}", p.id);
+        if let Some(m) = row.default_model {
+            assert!(crate::store::prices::valid_model(m), "{}", p.id);
+        }
         // A preset holds keys with no key_prefix; a user definition still needs one.
         assert_eq!(account_keys::holds_keys_problem(&p), None, "{}", p.id);
     }
@@ -198,6 +209,48 @@ async fn an_unpriced_model_is_accepted_on_a_preset_pool_but_not_on_a_user_defini
     let user = placed(&fx, &s, "router", OR).await;
     let mut e = spec(user);
     e.model = Some("vendor/unlisted");
+    assert_eq!(
+        code(ch::create(p, 1, "c2", &[e], "d_x", BY, NOW).await),
+        "bad_request"
+    );
+}
+
+/// E7-5: a preset or user-definition pool runs on OpenCode in a chain (a built-in keeps its own
+/// harness); a preset entry that names no model runs the preset's default.
+#[tokio::test]
+async fn a_harness_free_provider_runs_on_opencode_and_a_preset_entry_gets_its_default_model() {
+    let (fx, _vm, s) = setup().await;
+    open_gate(&fx).await;
+    let p = &fx.app.pool;
+    let or = placed(&fx, &s, "openrouter", OR).await;
+    let ant = placed(&fx, &s, "anthropic", ANT).await;
+    prov::create(p, &router("router", Some("sk-or-v1-")), "d_x", BY, NOW)
+        .await
+        .unwrap();
+    let user = placed(&fx, &s, "router", OR2).await;
+    let mut u = spec(user);
+    u.model = Some("vendor/model-1");
+    let c = ch::create(p, 1, "c1", &[spec(or), spec(ant), u], "d_x", BY, NOW)
+        .await
+        .unwrap();
+    let mut conn = p.acquire().await.unwrap();
+    let got: Vec<(String, Option<String>)> = ch::load(&mut conn, c.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| (e.harness, e.model))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("opencode".to_owned(), Some("openai/gpt-4o-mini".to_owned())),
+            ("claude".to_owned(), None),
+            ("opencode".to_owned(), Some("vendor/model-1".to_owned())),
+        ]
+    );
+    // An entry naming another harness than its pool's is refused.
+    let mut e = spec(or);
+    e.harness = Some("codex");
     assert_eq!(
         code(ch::create(p, 1, "c2", &[e], "d_x", BY, NOW).await),
         "bad_request"

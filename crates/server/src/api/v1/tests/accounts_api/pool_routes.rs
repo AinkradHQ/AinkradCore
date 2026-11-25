@@ -139,7 +139,10 @@ async fn provider_definitions_are_validated_and_built_ins_are_fixed() {
             "deepseek",
             "mistral",
             "xai",
-            "apinex"
+            "apinex",
+            "together",
+            "fireworks",
+            "vercel"
         ]
     );
     let def = json!({"id": "router", "name": "Router", "harness": "codex", "auth_var": "OPENAI_API_KEY",

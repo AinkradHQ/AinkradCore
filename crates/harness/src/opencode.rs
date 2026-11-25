@@ -34,6 +34,10 @@ pub const VERSION: &str = "1.18.34";
 /// `opencode serve`'s basic-auth user.
 const USER: &str = "opencode";
 
+mod gateway;
+use gateway::model_of;
+pub use gateway::{GW_PROVIDER, GW_WIRE_VAR, gateway_config, gateway_sdk};
+
 /// The variables that isolate the server, plus its password.
 pub fn env(spec: &Spec, password: &str) -> Vec<(&'static str, OsString)> {
     let dir = |name: &str| spec.config_dir.join(name).into_os_string();
@@ -52,6 +56,9 @@ pub fn env(spec: &Spec, password: &str) -> Vec<(&'static str, OsString)> {
     let mut inline = serde_json::Map::new();
     if let Some(file) = &spec.instructions {
         inline.insert("instructions".to_owned(), json!([file]));
+    }
+    if let Some(gw) = gateway_config(spec) {
+        inline.extend(gw);
     }
     if let Some((sock, exe)) = crate::connections::slot(&spec.env)
         && let Some(Value::Object(own)) = crate::connections::add("opencode", None, &exe, &sock)
@@ -323,13 +330,7 @@ fn forward(mut response: reqwest::Response) -> mpsc::UnboundedReceiver<Value> {
 
 impl OpenCode {
     async fn spawn(spec: &Spec, resume: Option<&str>) -> io::Result<Self> {
-        let invalid = |m: String| io::Error::new(io::ErrorKind::InvalidInput, m);
-        let (provider, model) = spec.model.split_once('/').ok_or_else(|| {
-            invalid(format!(
-                "opencode model {:?} is not provider/model",
-                spec.model
-            ))
-        })?;
+        let model = model_of(spec)?;
         let password = crate::claude::new_session_id()?;
         let mut proc = Proc::start(spec, launch(spec, &password)).await?;
         let listening = async {
@@ -361,7 +362,7 @@ impl OpenCode {
             // macOS).
             dir: std::fs::canonicalize(&spec.cwd)?.display().to_string(),
             session: String::new(),
-            model: json!({"providerID": provider, "modelID": model}),
+            model,
             events: mpsc::unbounded_channel().1,
             decoder: Decoder::default(),
             queued: VecDeque::new(),
@@ -447,8 +448,7 @@ impl Harness for OpenCode {
         if self.exited {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "opencode exited"));
         }
-        let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "model is not provider/model");
-        let (provider, model) = spec.model.split_once('/').ok_or_else(invalid)?;
+        let model = model_of(spec)?;
         let dir = std::fs::canonicalize(&spec.cwd)?.display().to_string();
         let old = std::mem::replace(&mut self.dir, dir);
         for dir in [old.as_str(), self.dir.as_str()] {
@@ -459,7 +459,7 @@ impl Harness for OpenCode {
                 .and_then(reqwest::Response::error_for_status);
             disposed.map_err(io::Error::other)?;
         }
-        self.model = json!({"providerID": provider, "modelID": model});
+        self.model = model;
         self.decoder = Decoder::default();
         self.queued.clear();
         self.open(spec, None).await

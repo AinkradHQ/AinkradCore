@@ -159,17 +159,125 @@ fn codex_gets_its_config_in_codex_home_and_the_others_write_no_file() {
 
 #[test]
 fn a_harness_with_no_wiring_is_refused_and_leaves_the_session_as_it_was() {
-    let dir = scratch("opencode");
-    let mut e = env(&[("OPENAI_API_KEY", "own"), ("PATH", "/bin"), SANDBOX]);
-    let before = names(&e).len();
-    let why = wire("opencode", 47833, &dir, &mut e, &mut vec![]).unwrap_err();
-    assert!(
-        why.contains("no wiring") && why.contains("opencode"),
-        "{why}"
-    );
-    assert_eq!(names(&e).len(), before);
-    assert_eq!(get(&e, "OPENAI_API_KEY"), Some("own"));
+    let dir = scratch("nowiring");
+    for (harness, why_has) in [
+        ("pi", "no wiring"),
+        // OpenCode without the slot's wire (or one it does not speak) is not run unwired.
+        ("opencode", "no wire"),
+    ] {
+        let mut e = env(&[("OPENAI_API_KEY", "own"), ("PATH", "/bin"), SANDBOX]);
+        let before = names(&e).len();
+        let why = wire(harness, 47833, &dir, &mut e, &mut vec![]).unwrap_err();
+        assert!(why.contains(why_has), "{harness}: {why}");
+        assert_eq!(names(&e).len(), before);
+        assert_eq!(get(&e, "OPENAI_API_KEY"), Some("own"));
+    }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// E7-5: OpenCode is given no provider variable at all (its adapter writes the gateway's URL and
+/// the placeholder into its inline config), every planted one is dropped, and no file is written.
+#[test]
+fn opencode_keeps_no_provider_variable_and_writes_no_file() {
+    let dir = scratch("opencode");
+    let wire_var = ainkrad_harness::opencode::GW_WIRE_VAR;
+    for w in ["openai-responses", "anthropic-messages", "gemini-generate"] {
+        let mut e = env(&[
+            ("OPENAI_API_KEY", "planted-1"),
+            ("ANTHROPIC_API_KEY", "planted-2"),
+            ("OPENCODE_CONFIG", "/planted.json"),
+            ("OPENCODE_CONFIG_CONTENT", "{}"),
+            ("PATH", "/bin"),
+            (wire_var, w),
+            SANDBOX,
+        ]);
+        let mut allow = vec!["PATH".to_owned(), "OPENCODE_CONFIG".to_owned()];
+        wire("opencode", 47833, &dir, &mut e, &mut allow).unwrap();
+        let left: Vec<_> = names(&e)
+            .into_iter()
+            .filter(|n| provider_name(n) || n.starts_with("OPENCODE_"))
+            .collect();
+        assert!(left.is_empty(), "{w}: {left:?}");
+        assert_eq!(allow, ["PATH"]);
+        assert_eq!(get(&e, wire_var), Some(w));
+        assert!(
+            e.iter()
+                .all(|(_, v)| !v.to_str().unwrap().contains("planted"))
+        );
+    }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// OpenAI chat completions, streamed with `include_usage`: the usage is in the last chunk.
+const CHAT_SSE: &str = "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":null}]}\n\n\
+     data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+     data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12}}\n\n\
+     data: [DONE]\n\n";
+
+/// E7-5: what OpenCode 1.18.34 sends for an OpenRouter session (captured on a Mac on 2026-11-25
+/// from the pinned binary, run with the adapter's inline gateway config against a local listener
+/// and a placeholder key; system prompt and tools trimmed): `POST /v1/chat/completions`, served
+/// by a preset's gateway at OpenRouter's `/api/v1`, with the real key and metered.
+#[tokio::test]
+async fn opencode_s_chat_request_reaches_openrouter_with_the_real_key_and_is_metered() {
+    let mut o = Opts::of(
+        Wire::OpenaiResponses,
+        "openrouter.ai",
+        "/api/v1",
+        "openrouter",
+        "or-test-",
+        sse(CHAT_SSE),
+    );
+    // A preset: no key shape, bound to the account's frozen host.
+    o.grant.user_key = Some(ainkrad_proto::v2::UserKeyDef {
+        prefix: String::new(),
+        host: "openrouter.ai".to_owned(),
+    });
+    let mut r = rig(o).await;
+    let c = Captured::of(include_str!("fixtures/opencode.json"));
+    assert!(
+        c.heads
+            .iter()
+            .any(|h| h == "authorization: Bearer placeholder")
+    );
+    let resp = c.send(&r).await;
+    let text = String::from_utf8_lossy(&resp).into_owned();
+    assert_eq!(status(&resp), 200, "{text}");
+    assert!(text.contains("hello"), "{text}");
+    let head = r.up.head(0);
+    let lower = head.to_ascii_lowercase();
+    assert!(
+        head.starts_with("POST /api/v1/chat/completions HTTP/1.1"),
+        "{head}"
+    );
+    assert!(
+        lower.contains(&format!(
+            "authorization: bearer {}",
+            r.key.to_ascii_lowercase()
+        )),
+        "{head}"
+    );
+    assert!(!lower.contains(PLACEHOLDER), "{head}");
+    assert_eq!(head.matches(&r.key).count(), 1, "{head}");
+    let seen = r.up.seen.lock().unwrap()[0].body.clone();
+    assert_eq!(serde_json::from_slice::<Value>(&seen).unwrap(), c.body);
+    let report = r.report().await;
+    assert_eq!(report.status, UpstreamStatus::Ok);
+    assert_eq!(
+        (report.input, report.output, report.approximate),
+        (10, 2, false)
+    );
+    // The same request with `:online` or a plugin is refused before the upstream.
+    for (k, v) in [
+        ("model", serde_json::json!("vendor/m:online")),
+        ("plugins", serde_json::json!([{"id": "web"}])),
+    ] {
+        let mut bad = Captured::of(include_str!("fixtures/opencode.json"));
+        bad.body[k] = v;
+        assert_eq!(status(&bad.send(&r).await), 403, "{k}");
+    }
+    assert_eq!(r.up.count(), 1);
 }
 
 // What each provider's fake answers: a streamed reply with usage 10 in, 2 out.

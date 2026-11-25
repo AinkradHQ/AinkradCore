@@ -378,7 +378,11 @@
 /// 104: one connection per account (2026-11-25). `replaceConnectionCredential` takes a `token` on an `oauth`
 ///    connection of the same account and switches it to `token` (409 `different_account`, `identity_unknown`);
 ///    `createConnection` and a new sign-in flow refuse an account already connected, 409 `already_connected`.
-pub const API_MINOR: u32 = 104;
+/// 105: harness-free API-key providers (E7-3, E7-5; 2026-11-25). `Provider` gains read-only `session_harness`
+///    (the harness the Core runs the provider on: a built-in's own, `opencode` for a preset or user definition),
+///    and for a preset `key_url`, `key_hint` and `default_model`. Presets add `together`, `fireworks` and `vercel`.
+///    An AI-order entry on a preset that names no model runs its `default_model`.
+pub const API_MINOR: u32 = 105;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

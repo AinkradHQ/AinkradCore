@@ -42,6 +42,7 @@ pub mod prices;
 pub mod project_secrets;
 pub mod project_usage;
 pub mod projects;
+mod provider_presets;
 pub mod provider_rules;
 mod provider_url;
 pub mod providers;
