@@ -66,6 +66,7 @@ pub(super) async fn start(app: &App, s: Start<'_>) -> Result<View, StartError> {
     flow.slack = Some(slack.clone());
     // Refused here (a race past `room`): the flow is dropped and takes its pending sign-in along.
     let flow = app.conn_flows.admit(flow)?;
+    super::hosted::watch(app, &flow, &redirect);
     Ok(flow.view())
 }
 

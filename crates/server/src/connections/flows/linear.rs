@@ -1,6 +1,7 @@
 //! Sign in with Linear as a flow. `start` makes the authorize address (Core keeps the PKCE
-//! verifier inside `Linear`); the Mac app opens it, catches the redirect on its loopback address
-//! and hands `code` and `state` to [`callback`]. A sign-in is ONE workspace, so there is no site
+//! verifier inside `Linear`); the redirect lands on Ainkrad's hosted callback, which `hosted` polls,
+//! or (a config with `loopback_port`) on the Mac app's loopback catcher, which hands it over.
+//! Either way `code` and `state` reach [`callback`]. A sign-in is ONE workspace, so there is no site
 //! to choose. The tokens are held only between the exchange and the sealing.
 //!
 //! A flow that signs in AGAIN for an existing connection must land in the same workspace: team keys
@@ -42,6 +43,7 @@ pub(super) fn start(app: &App, s: Start<'_>) -> Result<View, StartError> {
     flow.linear = Some(linear.clone());
     // Refused here (a race past `room`): the flow is dropped and takes its pending sign-in along.
     let flow = app.conn_flows.admit(flow)?;
+    super::hosted::watch(app, &flow, &redirect);
     Ok(flow.view())
 }
 

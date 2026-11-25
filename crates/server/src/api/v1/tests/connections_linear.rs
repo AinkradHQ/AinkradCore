@@ -78,7 +78,7 @@ async fn linear_is_a_kind_whose_sign_in_waits_for_its_app() {
     assert_eq!(code(&r), (409, "not_configured".to_owned()), "{}", r.1);
     let set = configure(&c).await;
     assert_eq!(set["configured"], true);
-    assert_eq!(set["redirect_uri"], "http://127.0.0.1:47613/callback");
+    assert_eq!(set["redirect_uri"], "https://signin.ainkrad.io/callback");
     let kinds = c
         .ok(Method::GET, "/api/v1/connection-kinds", Value::Null)
         .await;
@@ -155,7 +155,7 @@ async fn the_redirect_is_exchanged_with_core_own_verifier_and_one_workspace_is_c
     assert_eq!(param(url, "client_id"), "lin-client-1");
     assert_eq!(
         param(url, "redirect_uri"),
-        "http://127.0.0.1:47613/callback"
+        "https://signin.ainkrad.io/callback"
     );
     assert_eq!(param(url, "scope"), "read,issues:create,comments:create");
     assert_eq!(param(url, "code_challenge_method"), "S256");
