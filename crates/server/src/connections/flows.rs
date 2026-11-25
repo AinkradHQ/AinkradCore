@@ -23,6 +23,7 @@
 
 mod finish;
 mod github;
+mod hosted;
 mod jira;
 mod linear;
 mod slack;

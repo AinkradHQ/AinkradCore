@@ -71,7 +71,7 @@ async fn a_secret_field_is_write_only_and_sealed_and_a_value_field_shows_itself(
         (&secret["set"], &secret["secret"], &secret["value"]),
         (&json!(true), &json!(true), &Value::Null)
     );
-    assert_eq!(put["redirect_uri"], "http://127.0.0.1:47613/callback");
+    assert_eq!(put["redirect_uri"], "https://signin.ainkrad.io/callback");
     assert_eq!(
         cx.ok(Method::GET, &format!("{APPS}/jira"), Value::Null)
             .await,

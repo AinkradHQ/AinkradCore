@@ -36,7 +36,7 @@ pub const BUILT_IN_GITHUB_CLIENT_ID: &str = "Iv23licvgHhiqi2dQX3y";
 /// A Core uses it when the database holds no App of its own, so `app_install` works out of the box.
 pub const BUILT_IN_GITHUB_APP_ID: &str = "5725874";
 pub const BUILT_IN_GITHUB_SLUG: &str = "ainkradhq";
-/// The loopback port the Mac app's catcher listens on (registered with Atlassian), unless set.
+/// The loopback port the Mac app's catcher listens on, for a config that still sets `loopback_port`.
 pub const DEFAULT_PORT: u16 = 47613;
 
 /// One field of an app's config.
@@ -84,7 +84,7 @@ pub const JIRA_FIELDS: &[Field] = &[
     },
     Field {
         name: "loopback_port",
-        title: "Port of the Mac app's sign-in catcher on 127.0.0.1 (registered with Atlassian)",
+        title: "Port of the Mac app's sign-in catcher on 127.0.0.1 (registered with Atlassian); unset: Ainkrad's hosted callback",
         secret: false,
     },
 ];
@@ -147,7 +147,7 @@ pub const LINEAR_FIELDS: &[Field] = &[
     },
     Field {
         name: "loopback_port",
-        title: "Port of the Mac app's sign-in catcher on 127.0.0.1 (registered with Linear)",
+        title: "Port of the Mac app's sign-in catcher on 127.0.0.1 (registered with Linear); unset: Ainkrad's hosted callback",
         secret: false,
     },
 ];
@@ -227,6 +227,19 @@ impl Apps {
         format!("http://127.0.0.1:{port}/callback")
     }
 
+    /// The redirect of a Jira or Linear config: the Mac app's loopback catcher when the config
+    /// sets `loopback_port` (an app registered that way), else Ainkrad's hosted callback
+    /// (`https://signin.ainkrad.io/callback`), which the Core polls itself.
+    pub fn redirect_of(fields: &BTreeMap<String, Zeroizing<String>>) -> String {
+        match fields
+            .get("loopback_port")
+            .and_then(|p| p.parse::<u16>().ok())
+        {
+            Some(port) => Self::redirect(port),
+            None => super::jira::service::callback_url(),
+        }
+    }
+
     /// Reads the sealed config and puts it into force: the ONE shared `jira` gets (or loses) its
     /// OAuth app, the ONE shared `github` its App key. Called at start and after every config
     /// write. A kind whose config is incomplete or does not parse is simply off.
@@ -290,11 +303,7 @@ fn app_key(g: &BTreeMap<String, Zeroizing<String>>) -> Option<AppKey> {
 }
 
 fn jira_app(j: &BTreeMap<String, Zeroizing<String>>) -> Option<OAuthApp> {
-    let port = j
-        .get("loopback_port")
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(DEFAULT_PORT);
-    let redirect = Apps::redirect(port);
+    let redirect = Apps::redirect_of(j);
     // An admin's own app (id AND secret) is exchanged directly; with neither set, Ainkrad's own
     // app goes through the sign-in service and the Core holds no secret (N23). One without the
     // other is half-edited config: off.
@@ -312,9 +321,11 @@ fn jira_app(j: &BTreeMap<String, Zeroizing<String>>) -> Option<OAuthApp> {
 fn slack_app(s: &BTreeMap<String, Zeroizing<String>>) -> Option<SlackApp> {
     let flag = |k: &str| s.get(k).is_some_and(|v| v.as_str() == "true");
     let (id, secret) = (s.get("client_id")?, s.get("client_secret")?);
-    let signing_in = flag("catcher_ready")
-        .then(|| s.get("redirect_uri"))
-        .flatten()
+    // Ainkrad's hosted callback is a catcher page that exists: no `catcher_ready` needed for it.
+    let hosted = |r: &&Zeroizing<String>| r.as_str() == super::jira::service::callback_url();
+    let signing_in = s
+        .get("redirect_uri")
+        .filter(|r| flag("catcher_ready") || hosted(r))
         .and_then(|r| SlackApp::new(id, secret, r));
     let app = signing_in.or_else(|| SlackApp::renewal_only(id, secret))?;
     Some(app.rotating(flag("token_rotation")))
@@ -326,11 +337,7 @@ fn teams_app(t: &BTreeMap<String, Zeroizing<String>>) -> Option<TeamsApp> {
 }
 
 fn linear_app(l: &BTreeMap<String, Zeroizing<String>>) -> Option<LinearApp> {
-    let port = l
-        .get("loopback_port")
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(DEFAULT_PORT);
-    let redirect = Apps::redirect(port);
+    let redirect = Apps::redirect_of(l);
     LinearApp::new(l.get("client_id")?, l.get("client_secret")?, &[&redirect])
 }
 

@@ -1,6 +1,7 @@
 //! Sign in with Atlassian as a flow. `start` makes the authorize address (Core keeps the PKCE
-//! verifier inside `Jira`); the Mac app opens it, catches the redirect on its loopback address
-//! and hands `code` and `state` to [`callback`]. One site is connected at once; several wait in
+//! verifier inside `Jira`); the redirect lands on Ainkrad's hosted callback, which `hosted` polls,
+//! or (a config with `loopback_port`) on the Mac app's loopback catcher, which hands it over.
+//! Either way `code` and `state` reach [`callback`]. One site is connected at once; several wait in
 //! the flow for [`choose`]. The tokens are held only between the exchange and the sealing.
 
 use std::time::Duration;
@@ -34,6 +35,7 @@ pub(super) fn start(app: &App, s: Start<'_>) -> Result<View, StartError> {
     let flow = new_flow(&s, "jira", LIFE, view, Some((jira.clone(), started.state)));
     // Refused here (a race past `room`): the flow is dropped and takes its pending sign-in along.
     let flow = app.conn_flows.admit(flow)?;
+    super::hosted::watch(app, &flow, &redirect);
     Ok(flow.view())
 }
 

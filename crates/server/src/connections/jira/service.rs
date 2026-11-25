@@ -23,6 +23,12 @@ pub(crate) fn base() -> String {
         .unwrap_or_else(|| DEFAULT_BASE.to_owned())
 }
 
+/// The service's hosted OAuth redirect (`<base>/callback`): the browser lands there and the Core
+/// collects the code with [`Jira::collect`], so no local catcher is needed.
+pub(crate) fn callback_url() -> String {
+    format!("{}/callback", base())
+}
+
 /// The string the signature covers: 8 fields, `\n`-joined, no trailing newline.
 pub fn signed_string(fp: &str, path: &str, ts: &str, nonce: &str, body: &[u8]) -> String {
     let hash = b64(&sha256(body));
@@ -76,6 +82,27 @@ pub(crate) async fn post(
     match http.post_bytes(&url, bytes, &hdrs).await {
         Err(CallError::Network | CallError::TimedOut | CallError::Broken) => Err(DOWN),
         other => other,
+    }
+}
+
+impl super::Jira {
+    /// Asks the service for what the browser brought to the hosted callback for `state`
+    /// (`POST /v1/oauth/collect`, signed): 200 `{code}` or `{error}`, 404 not yet, 410 taken.
+    pub(crate) async fn collect(&self, state: &str, now: &str) -> Result<Resp, CallError> {
+        // Tests never reach the real service: only a Jira on a loopback fake collects.
+        if cfg!(test) && !self.http.signin.starts_with("http://127.0.0.1") {
+            return Err(CallError::Network);
+        }
+        let body = serde_json::json!({ "state": state });
+        let signer = self.signer();
+        post(
+            &self.http,
+            signer.as_deref(),
+            "/v1/oauth/collect",
+            &body,
+            now,
+        )
+        .await
     }
 }
 
