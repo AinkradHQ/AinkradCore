@@ -214,8 +214,11 @@ pub(super) fn s256(verifier: &str) -> String {
 }
 
 /// A fixed loopback address: `http` on `127.0.0.1` or `[::1]` with a port, no userinfo, query
-/// or fragment.
+/// or fragment; or exactly the sign-in service's hosted callback.
 fn redirect_ok(uri: &str) -> bool {
+    if uri == crate::connections::jira::service::callback_url() {
+        return true;
+    }
     let Ok(u) = reqwest::Url::parse(uri) else {
         return false;
     };

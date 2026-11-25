@@ -52,22 +52,36 @@ fn percent_decode(v: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The `code` and `state` of the address the browser was sent to. Nothing of the address is
-/// ever put in a message.
-pub fn callback_parts(url: &str) -> Result<(String, String), Error> {
+/// `k` of `url`'s query, decoded.
+fn query_param(url: &str, k: &str) -> Option<String> {
     let query = url
         .split('#')
         .next()
         .unwrap_or("")
         .split_once('?')
         .map_or("", |(_, q)| q);
-    let get = |k: &str| {
-        query
-            .split('&')
-            .filter_map(|p| p.split_once('='))
-            .find(|(n, _)| *n == k)
-            .map(|(_, v)| percent_decode(v))
-    };
+    query
+        .split('&')
+        .filter_map(|p| p.split_once('='))
+        .find(|(n, _)| *n == k)
+        .map(|(_, v)| percent_decode(v))
+}
+
+/// Whether the browser comes back to this machine (a loopback `redirect_uri`, or none named), so
+/// the person pastes where it ended. A Core using Ainkrad's hosted callback collects the code
+/// itself and ctl only waits.
+pub fn catches_here(authorize_url: &str) -> bool {
+    query_param(authorize_url, "redirect_uri").is_none_or(|r| {
+        ["http://127.0.0.1:", "http://[::1]:", "http://localhost:"]
+            .iter()
+            .any(|p| r.starts_with(p))
+    })
+}
+
+/// The `code` and `state` of the address the browser was sent to. Nothing of the address is
+/// ever put in a message.
+pub fn callback_parts(url: &str) -> Result<(String, String), Error> {
+    let get = |k: &str| query_param(url, k);
     if let Some(e) = get("error") {
         let safe: String = e
             .chars()
@@ -321,7 +335,7 @@ pub async fn login(
         }
         // An Atlassian flow waits for the redirect's code and state: from the flag, or pasted.
         if step == "waiting" && view["authorize_url"].is_string() {
-            if callback.is_none() {
+            if callback.is_none() && catches_here(s(&view["authorize_url"])) {
                 eprint!(
                     "then paste the address your browser ended on (it may fail to load, that is fine): "
                 );
@@ -389,6 +403,18 @@ mod tests {
         }
         let e = callback_parts("http://x/?error=access_denied&code=SECRETCODE").unwrap_err();
         assert!(e.to_string().contains("access_denied") && !e.to_string().contains("SECRETCODE"));
+    }
+
+    #[test]
+    fn only_a_loopback_redirect_asks_for_the_address() {
+        let a = "https://auth.atlassian.com/authorize?state=s&redirect_uri=";
+        assert!(catches_here(&format!(
+            "{a}http%3A%2F%2F127.0.0.1%3A47613%2Fcallback"
+        )));
+        assert!(catches_here("https://auth.atlassian.com/authorize?state=s"));
+        assert!(!catches_here(&format!(
+            "{a}https%3A%2F%2Fsignin.ainkrad.io%2Fcallback"
+        )));
     }
 
     #[test]
