@@ -166,9 +166,11 @@ impl Cx {
         .await;
     }
 
-    /// A GitHub token connection named `name` (the fake says whose it is).
+    /// A GitHub token connection named `name`, of the account `octocat-<name>` (one account is
+    /// one connection; the fake says whose it is).
     pub async fn github(&self, name: &str) -> i64 {
-        self.gh.push(200, &[], r#"{"login":"octocat","id":583231}"#);
+        let me = format!(r#"{{"login":"octocat-{name}","id":583231}}"#);
+        self.gh.push(200, &[], &me);
         let body =
             json!({"kind": "github", "name": name, "auth_method": "token", "token": GH_TOKEN});
         self.ok(Method::POST, "/api/v1/connections", body).await["id"]

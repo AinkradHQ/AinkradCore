@@ -362,7 +362,7 @@ async fn a_credential_is_replaced_and_a_signed_in_connection_signs_in_again_inst
     .unwrap();
     assert_eq!((m.access(), version), (GH_TOKEN2, 2));
     assert_eq!(code(&put(json!({})).await).0, 400);
-    // A connection made by signing in cannot be pasted over.
+    // A connection made by signing in takes no other credential than a token.
     let new = crate::store::connections::NewConnection {
         kind: "github",
         name: "signed",
@@ -385,7 +385,7 @@ async fn a_credential_is_replaced_and_a_signed_in_connection_signs_in_again_inst
         .admin(
             Method::PUT,
             &format!("{URI}/{}/credential", c.id),
-            json!({"token": GH_TOKEN2}),
+            json!({}),
         )
         .await;
     assert_eq!(r.0, StatusCode::BAD_REQUEST, "{}", r.1);

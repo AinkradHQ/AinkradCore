@@ -23553,7 +23553,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Stored for the caller's workspace, its credential sealed and tested once (audited `connection.created`, `connection.tested`). `auth_method` `token` pastes a token (GitHub), or an email, a site and an API token (Jira); `app_install` takes a GitHub App `installation_id`, which must exist and belong to no other workspace (409). The credential is never returned. 400 for a bad name, label or credential, or one the service refuses (`credential_rejected`); 409 `conflict` (the name is taken), `limit_reached` or the secrets gates (`secrets_disabled`, `real_secret_refused`); 502 when the service could not be reached (`upstream_failed`)
+            /// Stored for the caller's workspace, its credential sealed and tested once (audited `connection.created`, `connection.tested`). `auth_method` `token` pastes a token (GitHub), or an email, a site and an API token (Jira); `app_install` takes a GitHub App `installation_id`, which must exist and belong to no other workspace (409). The credential is never returned. One account is one connection: a `token` for an account this workspace already has connected (by token or by signing in) is refused, 409 `already_connected` ("already connected as <name>; change it there"; nothing is kept), and a sign-in flow for such an account ends `failed` with the same code. 400 for a bad name, label or credential, or one the service refuses (`credential_rejected`); 409 `conflict` (the name is taken), `limit_reached` or the secrets gates (`secrets_disabled`, `real_secret_refused`); 502 when the service could not be reached (`upstream_failed`)
             ///
             /// - Remark: Generated from `#/paths//api/v1/connections/post(createConnection)/responses/200`.
             ///
@@ -26495,7 +26495,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// The credential replaced (audited `connection.secret_replaced`) and tested; a pending or confirmed auth failure is cleared first, the test then decides. For a `token` connection a token (and for Jira an email and site); for an `app_install` one an `installation_id`. A connection made by signing in is refreshed by signing in again (`startConnectionFlow` with `connection`), not here (400). Never returned. 404 for another workspace's
+            /// The credential replaced (audited `connection.secret_replaced`) and tested; a pending or confirmed auth failure is cleared first, the test then decides. For a `token` connection a token (and for Jira an email and site); for an `app_install` one an `installation_id`. A connection made by signing in (`oauth`) takes a `token` of the SAME account when its kind accepts tokens: its `auth_method` becomes `token`, its id, name, label, grants and limits stay (the audit row carries `auth_method`); a token of another account is refused, 409 `different_account`, one the service refuses 400 `credential_rejected`, a connection with no recorded account 409 `identity_unknown`. Without a token it is refreshed by signing in again (`startConnectionFlow` with `connection`), not here (400). Never returned. 404 for another workspace's
             ///
             /// - Remark: Generated from `#/paths//api/v1/connections/{id}/credential/put(replaceConnectionCredential)/responses/200`.
             ///
