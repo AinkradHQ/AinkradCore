@@ -378,7 +378,12 @@
 /// 104: one connection per account (2026-11-25). `replaceConnectionCredential` takes a `token` on an `oauth`
 ///    connection of the same account and switches it to `token` (409 `different_account`, `identity_unknown`);
 ///    `createConnection` and a new sign-in flow refuse an account already connected, 409 `already_connected`.
-pub const API_MINOR: u32 = 104;
+/// 105: guided sign-in stages (2026-11-25). `AccountLogin.stage` (`starting|open_url|enter_code|finishing|done|failed`)
+///    and `AccountLogin.message` (plain words, when `failed`); `LoginScreenView.stage` (`starting|open_url|enter_code|
+///    finishing`, read from the screen) and `LoginScreenView.message` (why the last attempt failed); its `url` is the newest
+///    page (a retry prints a new one); `Provider.sign_in` (`false`: the OpenCode login is offered for no new sign-in).
+///    The runner answers Antigravity's login-method menu with Google OAuth itself; any other screen stays the person's.
+pub const API_MINOR: u32 = 105;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
