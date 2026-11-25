@@ -378,7 +378,10 @@
 /// 104: one connection per account (2026-11-25). `replaceConnectionCredential` takes a `token` on an `oauth`
 ///    connection of the same account and switches it to `token` (409 `different_account`, `identity_unknown`);
 ///    `createConnection` and a new sign-in flow refuse an account already connected, 409 `already_connected`.
-pub const API_MINOR: u32 = 104;
+/// 105: a sign-in switches back (2026-11-25). `startConnectionFlow` with `connection` takes a `token` connection
+///    too: a sign-in of the same account turns it back into `oauth` (grants kept), another account ends `failed`
+///    `different_account`.
+pub const API_MINOR: u32 = 105;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

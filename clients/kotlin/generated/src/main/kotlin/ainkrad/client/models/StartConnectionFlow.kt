@@ -25,7 +25,7 @@ import kotlinx.serialization.Contextual
  *
  * @param kind `github` or `jira`.
  * @param confirmIdentityChange With `connection` on GitHub: replace the credential even when the sign-in is a different GitHub account than the connection's. Without it that is refused (`different_account`).
- * @param connection Sign in again for this connection: its credential is replaced, nothing else changes.
+ * @param connection Sign in again for this connection: its credential is replaced, nothing else changes (a pasted-token connection of the same account becomes a sign-in again).
  * @param label 
  * @param name Names the connection it makes; absent, `<kind>-<n>`.
  */
@@ -41,7 +41,7 @@ data class StartConnectionFlow (
     @SerialName(value = "confirm_identity_change")
     val confirmIdentityChange: kotlin.Boolean? = null,
 
-    /* Sign in again for this connection: its credential is replaced, nothing else changes. */
+    /* Sign in again for this connection: its credential is replaced, nothing else changes (a pasted-token connection of the same account becomes a sign-in again). */
     @SerialName(value = "connection")
     val connection: kotlin.Long? = null,
 
