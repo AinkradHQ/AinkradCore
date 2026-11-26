@@ -447,6 +447,25 @@ pub struct Provider {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
     pub preset: Option<bool>,
+    /// Read-only: the harness the Core runs this provider's AI sessions on, chosen by the Core and
+    /// never by the person (E7-5): a built-in's own, `opencode` for a provider with no harness of
+    /// its own (a preset, a user definition). `harness` above is only the definition's dialect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub session_harness: Option<String>,
+    /// Read-only, a preset's: the vendor's page where a person creates a key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub key_url: Option<String>,
+    /// Read-only, a preset's: how its keys usually start (`sk-or-v1-`), a hint for the paste field
+    /// only; a preset key is bound to its account and host, not to this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub key_hint: Option<String>,
+    /// Read-only, a preset's: the model an AI-order entry on it runs when it names none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub default_model: Option<String>,
     /// `false` (API 105): offered for no new sign-in, though accounts it made still work. Only the
     /// OpenCode login, whose vendors are API-key providers now. Absent: as `login_methods` says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -458,6 +477,11 @@ pub struct Provider {
 
 impl From<Definition> for Provider {
     fn from(d: Definition) -> Self {
+        let preset = d
+            .preset
+            .then(|| crate::store::providers::preset_of(&d.id))
+            .flatten();
+        let session_harness = crate::store::providers::session_harness(&d).to_owned();
         let sign_in = (d.builtin && d.id == "opencode-sub").then_some(false);
         Self {
             id: d.id,
@@ -483,6 +507,10 @@ impl From<Definition> for Provider {
             priced_at: d.priced_at,
             builtin: d.builtin,
             preset: Some(d.preset).filter(|p| *p),
+            session_harness: Some(session_harness),
+            key_url: preset.map(|p| p.key_url.to_owned()),
+            key_hint: preset.and_then(|p| p.key_hint).map(str::to_owned),
+            default_model: preset.and_then(|p| p.default_model).map(str::to_owned),
             sign_in,
             version: d.version,
         }

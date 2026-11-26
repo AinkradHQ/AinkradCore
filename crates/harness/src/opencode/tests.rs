@@ -462,3 +462,64 @@ fn ignores_unknown_events_and_fields() {
         assert_eq!(replay(&newer, &mut Decoder::default()), want);
     }
 }
+
+/// E7-5: a gateway session's OpenCode gets one provider at the gateway's loopback URL with the
+/// placeholder key, the model id whole (OpenRouter's `vendor/model`), and no other provider.
+#[test]
+fn a_gateway_session_reaches_the_gateway_and_holds_no_key() {
+    let gw = |wire: &str| Spec {
+        model: "anthropic/claude-sonnet-4.5".to_owned(),
+        env: vec![
+            ("AINKRAD_SANDBOX_GW_PORT".to_owned(), "47833".into()),
+            (GW_WIRE_VAR.to_owned(), wire.into()),
+        ],
+        ..Spec::default()
+    };
+    let spec = gw("openai-responses");
+    let env = env(&spec, "pw");
+    let inline = env
+        .iter()
+        .find(|(n, _)| *n == "OPENCODE_CONFIG_CONTENT")
+        .map(|(_, v)| v.to_str().unwrap().to_owned())
+        .unwrap();
+    let config: Value = serde_json::from_str(&inline).unwrap();
+    let p = &config["provider"][GW_PROVIDER];
+    assert_eq!(p["npm"], "@ai-sdk/openai-compatible");
+    assert_eq!(p["options"]["baseURL"], "http://127.0.0.1:47833/v1");
+    assert_eq!(p["options"]["apiKey"], "placeholder");
+    assert_eq!(p["options"]["includeUsage"], true);
+    assert!(p["models"]["anthropic/claude-sonnet-4.5"].is_object());
+    assert_eq!(config["enabled_providers"], json!([GW_PROVIDER]));
+    assert_eq!(config["model"], "ainkrad/anthropic/claude-sonnet-4.5");
+    assert_eq!(config["small_model"], config["model"]);
+    assert_eq!(
+        model_of(&spec).unwrap(),
+        json!({"providerID": GW_PROVIDER, "modelID": "anthropic/claude-sonnet-4.5"})
+    );
+    // The other wires.
+    let p = gateway_config(&gw("anthropic-messages")).unwrap();
+    assert_eq!(p["provider"][GW_PROVIDER]["npm"], "@ai-sdk/anthropic");
+    let p = gateway_config(&gw("gemini-generate")).unwrap();
+    assert_eq!(
+        p["provider"][GW_PROVIDER]["options"]["baseURL"],
+        "http://127.0.0.1:47833/v1beta"
+    );
+    // A slot with no wire OpenCode speaks is refused, never run on another provider.
+    for bad in ["", "carrier-pigeon"] {
+        assert!(gateway_config(&gw(bad)).is_none());
+        assert_eq!(
+            model_of(&gw(bad)).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+    // Not a gateway session: its own `provider/model`, no provider block.
+    let own = Spec {
+        model: "opencode/nemotron".to_owned(),
+        ..Spec::default()
+    };
+    assert!(gateway_config(&own).is_none());
+    assert_eq!(
+        model_of(&own).unwrap(),
+        json!({"providerID": "opencode", "modelID": "nemotron"})
+    );
+}

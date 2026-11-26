@@ -110,42 +110,7 @@ fn builtin(id: &str, name: &str, harness: &str, var: &str, url: &str, parser: &s
     }
 }
 
-/// The presets (D-19): OpenAI-wire providers, delivered through the gateway, signed in by a pasted
-/// key. `(id, name, base URL, authenticated test path)`; the URLs and model-list paths were read
-/// from each vendor's public docs on 2026-11-19. A model list that is public (OpenRouter's)
-/// gets an authenticated path so a revoked key does not read as `ok`; the rest list models with
-/// the key, or (AIMLAPI, APInex: undocumented) declare none and answer `inconclusive` on success.
-const PRESETS: [(&str, &str, &str, Option<&str>); 7] = [
-    (
-        "openrouter",
-        "OpenRouter",
-        "https://openrouter.ai/api/v1",
-        Some("/key"),
-    ),
-    ("aimlapi", "AIMLAPI", "https://api.aimlapi.com/v1", None),
-    (
-        "groq",
-        "Groq",
-        "https://api.groq.com/openai/v1",
-        Some("/models"),
-    ),
-    (
-        "deepseek",
-        "DeepSeek",
-        "https://api.deepseek.com",
-        Some("/models"),
-    ),
-    (
-        "mistral",
-        "Mistral",
-        "https://api.mistral.ai/v1",
-        Some("/models"),
-    ),
-    ("xai", "xAI", "https://api.x.ai/v1", Some("/models")),
-    // OpenAI-compatible (chat completions, `/v1/responses`, Bearer), base URL read from its own
-    // site's bundle: https://apinex.bond serves the docs, https://api.apinex.bond/v1 the API.
-    ("apinex", "APInex", "https://api.apinex.bond/v1", None),
-];
+pub use super::provider_presets::{PRESETS, Preset, preset_of};
 
 /// The preset providers, in code. No model is listed and no price invented: the model list is
 /// fetched when an account is added (`account_models`), and a model without a price runs at the
@@ -153,13 +118,28 @@ const PRESETS: [(&str, &str, &str, Option<&str>); 7] = [
 pub fn presets() -> Vec<Definition> {
     PRESETS
         .iter()
-        .map(|(id, name, url, test)| {
-            let mut d = builtin(id, name, "codex", "OPENAI_API_KEY", url, "openai");
+        .map(|p| {
+            let mut d = builtin(
+                p.id,
+                p.name,
+                "codex",
+                "OPENAI_API_KEY",
+                p.base_url,
+                "openai",
+            );
             (d.builtin, d.preset) = (false, true);
-            d.test_path = test.map(str::to_owned);
+            d.test_path = p.test_path.map(str::to_owned);
             d
         })
         .collect()
+}
+
+/// The harness an AI session on `d` runs (E7-5, owner decision 2026-11-25): a built-in's own; a
+/// provider with no harness of its own (a preset such as OpenRouter, a user definition) runs on
+/// OpenCode, through the auth gateway, until Ainkrad ships a harness of its own. For those,
+/// `d.harness` only names the dialect the definition was written for (its wire and variable).
+pub fn session_harness(d: &Definition) -> &str {
+    if d.builtin { &d.harness } else { "opencode" }
 }
 
 /// The built-in providers, in code.

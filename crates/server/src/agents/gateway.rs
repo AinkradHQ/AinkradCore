@@ -114,10 +114,19 @@ pub async fn grant(app: &App, s: &Session) -> Result<Option<Issued>, Refusal> {
     }
     // The provider's definition (a built-in's is code) says which harness speaks to it.
     let def = providers::get(&app.pool, provider).await.map_err(lift)?;
-    if !costs::HARNESSES.contains(&s.harness.as_str()) || def.harness != s.harness {
+    if !costs::HARNESSES.contains(&s.harness.as_str())
+        || providers::session_harness(&def) != s.harness
+    {
         return Err(refuse(
-            "a gateway session runs its provider's own harness (claude, codex or agy)",
+            "a gateway session runs its provider's own harness (claude, codex or agy; OpenCode \
+             for a provider with none of its own)",
         ));
+    }
+    // OpenCode has no default model a gateway grants: its runner default is a model of OpenCode's.
+    if s.harness == "opencode" && s.model.is_none() {
+        return Err(refuse(format!(
+            "an OpenCode session on {provider} names its model: pick one for the account"
+        )));
     }
     let route = route::of(&def, &account.base_url)?;
     let upstream = upstream_of(&account.base_url, route.wire)?;

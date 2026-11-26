@@ -34,9 +34,13 @@ import kotlinx.serialization.Contextual
  * @param name 
  * @param usageParser 
  * @param builtin Read-only: built-ins cannot be edited.
+ * @param defaultModel Read-only, a preset's: the model an AI-order entry on it runs when it names none.
+ * @param keyHint Read-only, a preset's: how its keys usually start (`sk-or-v1-`), a hint for the paste field only; a preset key is bound to its account and host, not to this.
  * @param keyPrefix The shape this provider's keys start with (6 to 16 characters, never a built-in's, such as `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway (`delivery` is `[\"gateway\"]`): the broker binds each key to the account's host by it.
+ * @param keyUrl Read-only, a preset's: the vendor's page where a person creates a key.
  * @param preset A preset provider (OpenRouter, Groq, ...): shipped in code, read-only, the user only pastes a key. Its keys are bound to the account and its frozen host, not to a prefix.
  * @param pricedAt When the models' list prices were read.
+ * @param sessionHarness Read-only: the harness the Core runs this provider's AI sessions on, chosen by the Core and never by the person (E7-5): a built-in's own, `opencode` for a provider with no harness of its own (a preset, a user definition). `harness` above is only the definition's dialect.
  * @param signIn `false` (API 105): offered for no new sign-in, though accounts it made still work. Only the OpenCode login, whose vendors are API-key providers now. Absent: as `login_methods` says.
  * @param testPath The authenticated path (under the base URL, such as `/key`) of the one-shot account test, for a provider whose model list needs no key (OpenRouter's is public: a revoked key would read as `ok`). A user definition without one cannot be tested: the answer is `inconclusive`. Built-ins use their wire's own model list.
  * @param version 
@@ -83,9 +87,21 @@ data class Provider (
     @SerialName(value = "builtin")
     val builtin: kotlin.Boolean? = null,
 
+    /* Read-only, a preset's: the model an AI-order entry on it runs when it names none. */
+    @SerialName(value = "default_model")
+    val defaultModel: kotlin.String? = null,
+
+    /* Read-only, a preset's: how its keys usually start (`sk-or-v1-`), a hint for the paste field only; a preset key is bound to its account and host, not to this. */
+    @SerialName(value = "key_hint")
+    val keyHint: kotlin.String? = null,
+
     /* The shape this provider's keys start with (6 to 16 characters, never a built-in's, such as `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway (`delivery` is `[\"gateway\"]`): the broker binds each key to the account's host by it. */
     @SerialName(value = "key_prefix")
     val keyPrefix: kotlin.String? = null,
+
+    /* Read-only, a preset's: the vendor's page where a person creates a key. */
+    @SerialName(value = "key_url")
+    val keyUrl: kotlin.String? = null,
 
     /* A preset provider (OpenRouter, Groq, ...): shipped in code, read-only, the user only pastes a key. Its keys are bound to the account and its frozen host, not to a prefix. */
     @SerialName(value = "preset")
@@ -94,6 +110,10 @@ data class Provider (
     /* When the models' list prices were read. */
     @SerialName(value = "priced_at")
     val pricedAt: kotlin.String? = null,
+
+    /* Read-only: the harness the Core runs this provider's AI sessions on, chosen by the Core and never by the person (E7-5): a built-in's own, `opencode` for a provider with no harness of its own (a preset, a user definition). `harness` above is only the definition's dialect. */
+    @SerialName(value = "session_harness")
+    val sessionHarness: kotlin.String? = null,
 
     /* `false` (API 105): offered for no new sign-in, though accounts it made still work. Only the OpenCode login, whose vendors are API-key providers now. Absent: as `login_methods` says. */
     @SerialName(value = "sign_in")

@@ -305,9 +305,11 @@ async fn a_lease_becomes_a_gateway_whose_slot_names_a_socket_and_never_the_key()
         [
             "AINKRAD_SANDBOX_GW_SOCK",
             "AINKRAD_SANDBOX_GW_FWD",
-            "AINKRAD_SANDBOX_GW_PORT"
+            "AINKRAD_SANDBOX_GW_PORT",
+            "AINKRAD_SANDBOX_GW_WIRE"
         ]
     );
+    assert_eq!(env[3].1, "anthropic-messages");
     assert!(env.iter().all(|(_, v)| !v.contains(&key)));
     let sock = &env[0].1;
     assert!(sock.ends_with("gateway.sock"));

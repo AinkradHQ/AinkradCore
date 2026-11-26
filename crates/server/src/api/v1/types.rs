@@ -386,7 +386,11 @@
 /// 106: a sign-in switches back (2026-11-25). `startConnectionFlow` with `connection` takes a `token` connection
 ///    too: a sign-in of the same account turns it back into `oauth` (grants kept), another account ends `failed`
 ///    `different_account`.
-pub const API_MINOR: u32 = 106;
+/// 107: harness-free API-key providers (E7-3, E7-5; 2026-11-25). `Provider` gains read-only `session_harness`
+///    (the harness the Core runs the provider on: a built-in's own, `opencode` for a preset or user definition),
+///    and for a preset `key_url`, `key_hint` and `default_model`. Presets add `together`, `fireworks` and `vercel`.
+///    An AI-order entry on a preset that names no model runs its `default_model`.
+pub const API_MINOR: u32 = 107;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

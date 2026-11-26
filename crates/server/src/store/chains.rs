@@ -5,8 +5,9 @@
 //! choose accounts (the allocator); a chain only says which pool is tried next.
 //!
 //! - **Validation on write** ([`create`], [`update`]): 1 to 16 entries; no pool twice; each pool
-//!   exists and is the chain's user's (another user's is `not_found`, as a missing one); the pool's harness is `claude`, `codex` or `agy` (never
-//!   `opencode`: it has no account binding); a named harness is the pool's own; a model is a valid
+//!   exists and is the chain's user's (another user's is `not_found`, as a missing one); the pool's harness is `claude`, `codex` or `agy`, or
+//!   `opencode` for an OpenCode sign-in or a provider with no harness of its own
+//!   ([`providers::session_harness`]); a named harness is the pool's own; a model is a valid
 //!   id, and an API-key pool's model has a price (the gateway refuses an unpriced one anyway; this
 //!   says why sooner). A chain may hold several subscriptions (E7-1, D-18: the AI order lists every
 //!   account the user has, subscriptions included). A subscription is alone in its pool.
@@ -131,7 +132,8 @@ pub async fn load(conn: &mut SqliteConnection, chain_id: i64) -> Result<Vec<Chai
     }
     let mut out = Vec::with_capacity(rows.len());
     for (pool, model, provider) in rows {
-        let harness = providers::get_in(conn, &provider).await?.harness;
+        let harness =
+            providers::session_harness(&providers::get_in(conn, &provider).await?).to_owned();
         out.push(ChainEntry {
             pool,
             provider,
@@ -166,23 +168,32 @@ pub(super) async fn check_entries(
             return refused("not_found", format!("no pool {}", s.pool));
         };
         let def = providers::get_in(conn, &provider).await?;
-        // OpenCode runs in a chain only as a runner-bound sign-in (E7-5): its API-key pools are not
-        // served by the gateway.
-        let bound_opencode = def.harness == "opencode"
-            && ainkrad_proto::v2::bound_harness(&provider) == Some("opencode");
-        if !costs::HARNESSES.contains(&def.harness.as_str())
-            || (def.harness == "opencode" && !bound_opencode)
+        let harness = providers::session_harness(&def).to_owned();
+        // OpenCode runs in a chain as a runner-bound sign-in (E7-5), or for a provider with no
+        // harness of its own (a preset, a user definition), through the gateway. A built-in's
+        // OpenCode API key would not be.
+        let bound_opencode = ainkrad_proto::v2::bound_harness(&provider) == Some("opencode");
+        if !costs::HARNESSES.contains(&harness.as_str())
+            || (harness == "opencode" && def.builtin && !bound_opencode)
         {
             return refused(
                 "bad_request",
-                "a chain runs claude, codex or agy pools, or an OpenCode sign-in",
+                "a chain runs claude, codex or agy pools, an OpenCode sign-in, or a provider with no \
+                 harness of its own (on OpenCode)",
             );
         }
-        if s.harness.is_some_and(|h| h != def.harness) {
+        if s.harness.is_some_and(|h| h != harness) {
             return refused("bad_request", "an entry's harness is its pool's own");
         }
         let subscription = account_keys::is_subscription(&def);
-        if let Some(m) = s.model {
+        // A preset entry that names no model runs the preset's default (OpenCode has none the
+        // gateway would grant).
+        let model = s.model.or_else(|| {
+            def.preset
+                .then(|| providers::preset_of(&provider).and_then(|p| p.default_model))
+                .flatten()
+        });
+        if let Some(m) = model {
             if !prices::valid_model(m) {
                 return refused("bad_request", "a model id is 1 to 80 of [A-Za-z0-9._:/-]");
             }
@@ -201,8 +212,8 @@ pub(super) async fn check_entries(
         out.push(ChainEntry {
             pool: s.pool,
             provider,
-            harness: def.harness,
-            model: s.model.map(str::to_owned),
+            harness,
+            model: model.map(str::to_owned),
         });
     }
     Ok(out)
