@@ -3377,11 +3377,21 @@ export interface components {
             expires_at: components["schemas"]["Timestamp"];
             id: string;
             label: string;
+            /** @description Why it failed, in plain words, when `stage` is `failed`. */
+            message?: string | null;
             provider: string;
             /** @description Why it `failed` or was `cancelled`; provider text passes the redactor. */
             reason?: string | null;
             /** @description The runner doing the sign-in. */
             runner: string;
+            /**
+             * @description What the person does now (API 105): `starting`, `open_url` (open `url` and sign in),
+             *     `enter_code` (paste the code the page gives: `claude-sub`), `finishing` (the code is in or
+             *     the account is being stored), `done` or `failed` (also a cancelled one; see `message`). A
+             *     guided sign-in (`agy-sub`, `opencode-sub`) is `starting` here until it showed a page:
+             *     `getAccountLoginScreen` reads its live stage.
+             */
+            stage?: string | null;
             /**
              * @description `starting`, `open_url` (open `url`, then send the code), `waiting_code` (the code is with
              *     the runner), `storing`, `done` (see `account_id`), `failed` (see `reason`) or `cancelled`.
@@ -5283,6 +5293,18 @@ export interface components {
             code?: string | null;
             /** @description The last lines the sign-in's CLI printed. */
             lines: string[];
+            /**
+             * @description Why the last attempt on this screen failed, in plain words (the CLI then goes back and a new
+             *     page follows: use the code from that one).
+             */
+            message?: string | null;
+            /**
+             * @description What the person does now (API 105), read from this screen: `starting` (the CLI is still
+             *     getting there, or going back after a failed attempt; a menu it knows is answered for them), `open_url` (open `url` and sign
+             *     in), `enter_code` (the CLI waits for a pasted code; `url`, when shown, is the page that gives
+             *     it) or `finishing` (the CLI says it is signed in). `lines` are for a "Show details" view.
+             */
+            stage?: string | null;
             /** @description The sign-in page, once it printed one (https on the provider's own hosts). */
             url?: string | null;
         };
@@ -6108,6 +6130,11 @@ export interface components {
             preset?: boolean | null;
             /** @description When the models' list prices were read. */
             priced_at?: string | null;
+            /**
+             * @description `false` (API 105): offered for no new sign-in, though accounts it made still work. Only the
+             *     OpenCode login, whose vendors are API-key providers now. Absent: as `login_methods` says.
+             */
+            sign_in?: boolean | null;
             /**
              * @description The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
              *     for a provider whose model list needs no key (OpenRouter's is public: a revoked key would

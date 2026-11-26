@@ -174,6 +174,10 @@ extension Components {
             public var id: Swift.String
             /// - Remark: Generated from `#/components/schemas/AccountLogin/label`.
             public var label: Swift.String
+            /// Why it failed, in plain words, when `stage` is `failed`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/message`.
+            public var message: Swift.String?
             /// - Remark: Generated from `#/components/schemas/AccountLogin/provider`.
             public var provider: Swift.String
             /// Why it `failed` or was `cancelled`; provider text passes the redactor.
@@ -184,6 +188,14 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AccountLogin/runner`.
             public var runner: Swift.String
+            /// What the person does now (API 105): `starting`, `open_url` (open `url` and sign in),
+            /// `enter_code` (paste the code the page gives: `claude-sub`), `finishing` (the code is in or
+            /// the account is being stored), `done` or `failed` (also a cancelled one; see `message`). A
+            /// guided sign-in (`agy-sub`, `opencode-sub`) is `starting` here until it showed a page:
+            /// `getAccountLoginScreen` reads its live stage.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/stage`.
+            public var stage: Swift.String?
             /// `starting`, `open_url` (open `url`, then send the code), `waiting_code` (the code is with
             /// the runner), `storing`, `done` (see `account_id`), `failed` (see `reason`) or `cancelled`.
             ///
@@ -204,9 +216,11 @@ extension Components {
             ///   - expiresAt: Ten minutes after it began; a sign-in open past it fails.
             ///   - id:
             ///   - label:
+            ///   - message: Why it failed, in plain words, when `stage` is `failed`.
             ///   - provider:
             ///   - reason: Why it `failed` or was `cancelled`; provider text passes the redactor.
             ///   - runner: The runner doing the sign-in.
+            ///   - stage: What the person does now (API 105): `starting`, `open_url` (open `url` and sign in),
             ///   - state: `starting`, `open_url` (open `url`, then send the code), `waiting_code` (the code is with
             ///   - updatedAt:
             ///   - url: The sign-in URL, from `open_url` on.
@@ -217,9 +231,11 @@ extension Components {
                 expiresAt: Components.Schemas.Timestamp,
                 id: Swift.String,
                 label: Swift.String,
+                message: Swift.String? = nil,
                 provider: Swift.String,
                 reason: Swift.String? = nil,
                 runner: Swift.String,
+                stage: Swift.String? = nil,
                 state: Swift.String,
                 updatedAt: Components.Schemas.Timestamp,
                 url: Swift.String? = nil
@@ -230,9 +246,11 @@ extension Components {
                 self.expiresAt = expiresAt
                 self.id = id
                 self.label = label
+                self.message = message
                 self.provider = provider
                 self.reason = reason
                 self.runner = runner
+                self.stage = stage
                 self.state = state
                 self.updatedAt = updatedAt
                 self.url = url
@@ -244,9 +262,11 @@ extension Components {
                 case expiresAt = "expires_at"
                 case id
                 case label
+                case message
                 case provider
                 case reason
                 case runner
+                case stage
                 case state
                 case updatedAt = "updated_at"
                 case url
@@ -6779,6 +6799,18 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/LoginScreenView/lines`.
             public var lines: [Swift.String]
+            /// Why the last attempt on this screen failed, in plain words (the CLI then goes back and a new
+            /// page follows: use the code from that one).
+            ///
+            /// - Remark: Generated from `#/components/schemas/LoginScreenView/message`.
+            public var message: Swift.String?
+            /// What the person does now (API 105), read from this screen: `starting` (the CLI is still
+            /// getting there, or going back after a failed attempt; a menu it knows is answered for them), `open_url` (open `url` and sign
+            /// in), `enter_code` (the CLI waits for a pasted code; `url`, when shown, is the page that gives
+            /// it) or `finishing` (the CLI says it is signed in). `lines` are for a "Show details" view.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LoginScreenView/stage`.
+            public var stage: Swift.String?
             /// The sign-in page, once it printed one (https on the provider's own hosts).
             ///
             /// - Remark: Generated from `#/components/schemas/LoginScreenView/url`.
@@ -6788,19 +6820,27 @@ extension Components {
             /// - Parameters:
             ///   - code: The device code, once it printed one.
             ///   - lines: The last lines the sign-in's CLI printed.
+            ///   - message: Why the last attempt on this screen failed, in plain words (the CLI then goes back and a new
+            ///   - stage: What the person does now (API 105), read from this screen: `starting` (the CLI is still
             ///   - url: The sign-in page, once it printed one (https on the provider's own hosts).
             public init(
                 code: Swift.String? = nil,
                 lines: [Swift.String],
+                message: Swift.String? = nil,
+                stage: Swift.String? = nil,
                 url: Swift.String? = nil
             ) {
                 self.code = code
                 self.lines = lines
+                self.message = message
+                self.stage = stage
                 self.url = url
             }
             public enum CodingKeys: String, CodingKey {
                 case code
                 case lines
+                case message
+                case stage
                 case url
             }
         }
@@ -9527,6 +9567,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/priced_at`.
             public var pricedAt: Swift.String?
+            /// `false` (API 105): offered for no new sign-in, though accounts it made still work. Only the
+            /// OpenCode login, whose vendors are API-key providers now. Absent: as `login_methods` says.
+            ///
+            /// - Remark: Generated from `#/components/schemas/Provider/sign_in`.
+            public var signIn: Swift.Bool?
             /// The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
             /// for a provider whose model list needs no key (OpenRouter's is public: a revoked key would
             /// read as `ok`). A user definition without one cannot be tested: the answer is
@@ -9559,6 +9604,7 @@ extension Components {
             ///   - name:
             ///   - preset: A preset provider (OpenRouter, Groq, ...): shipped in code, read-only, the user only
             ///   - pricedAt: When the models' list prices were read.
+            ///   - signIn: `false` (API 105): offered for no new sign-in, though accounts it made still work. Only the
             ///   - testPath: The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
             ///   - usageParser:
             ///   - version:
@@ -9576,6 +9622,7 @@ extension Components {
                 name: Swift.String,
                 preset: Swift.Bool? = nil,
                 pricedAt: Swift.String? = nil,
+                signIn: Swift.Bool? = nil,
                 testPath: Swift.String? = nil,
                 usageParser: Swift.String,
                 version: Swift.Int64? = nil,
@@ -9593,6 +9640,7 @@ extension Components {
                 self.name = name
                 self.preset = preset
                 self.pricedAt = pricedAt
+                self.signIn = signIn
                 self.testPath = testPath
                 self.usageParser = usageParser
                 self.version = version
@@ -9611,6 +9659,7 @@ extension Components {
                 case name
                 case preset
                 case pricedAt = "priced_at"
+                case signIn = "sign_in"
                 case testPath = "test_path"
                 case usageParser = "usage_parser"
                 case version

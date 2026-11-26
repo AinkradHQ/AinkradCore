@@ -39,6 +39,8 @@ pub struct Screen {
     cr: bool,
     lines: Vec<String>,
     open: bool,
+    /// Lines ended since the start, never capped (so "new since" survives the trim).
+    total: usize,
 }
 
 impl Screen {
@@ -50,6 +52,7 @@ impl Screen {
             cr: false,
             lines: Vec::new(),
             open: false,
+            total: 0,
         }
     }
 
@@ -119,6 +122,7 @@ impl Screen {
             }
         } else {
             self.lines.push(p.to_owned());
+            self.total += 1;
         }
         let full = p.chars().count() + 1 >= self.cols;
         self.open = full
@@ -152,6 +156,11 @@ impl Screen {
     /// The line being written, which a prompt is (no newline after it).
     pub fn tail(&self) -> std::borrow::Cow<'_, str> {
         String::from_utf8_lossy(&self.cur)
+    }
+
+    /// How many lines have ended since the start.
+    pub fn total(&self) -> usize {
+        self.total
     }
 
     /// Whether the line being written is empty.

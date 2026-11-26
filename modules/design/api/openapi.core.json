@@ -212,6 +212,13 @@
           "label": {
             "type": "string"
           },
+          "message": {
+            "description": "Why it failed, in plain words, when `stage` is `failed`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "provider": {
             "type": "string"
           },
@@ -225,6 +232,13 @@
           "runner": {
             "description": "The runner doing the sign-in.",
             "type": "string"
+          },
+          "stage": {
+            "description": "What the person does now (API 105): `starting`, `open_url` (open `url` and sign in),\n`enter_code` (paste the code the page gives: `claude-sub`), `finishing` (the code is in or\nthe account is being stored), `done` or `failed` (also a cancelled one; see `message`). A\nguided sign-in (`agy-sub`, `opencode-sub`) is `starting` here until it showed a page:\n`getAccountLoginScreen` reads its live stage.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "state": {
             "description": "`starting`, `open_url` (open `url`, then send the code), `waiting_code` (the code is with\nthe runner), `storing`, `done` (see `account_id`), `failed` (see `reason`) or `cancelled`.",
@@ -5665,6 +5679,20 @@
             },
             "type": "array"
           },
+          "message": {
+            "description": "Why the last attempt on this screen failed, in plain words (the CLI then goes back and a new\npage follows: use the code from that one).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage": {
+            "description": "What the person does now (API 105), read from this screen: `starting` (the CLI is still\ngetting there, or going back after a failed attempt; a menu it knows is answered for them), `open_url` (open `url` and sign\nin), `enter_code` (the CLI waits for a pasted code; `url`, when shown, is the page that gives\nit) or `finishing` (the CLI says it is signed in). `lines` are for a \"Show details\" view.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "url": {
             "description": "The sign-in page, once it printed one (https on the provider's own hosts).",
             "type": [
@@ -7813,6 +7841,13 @@
             "description": "When the models' list prices were read.",
             "type": [
               "string",
+              "null"
+            ]
+          },
+          "sign_in": {
+            "description": "`false` (API 105): offered for no new sign-in, though accounts it made still work. Only the\nOpenCode login, whose vendors are API-key providers now. Absent: as `login_methods` says.",
+            "type": [
+              "boolean",
               "null"
             ]
           },
@@ -11183,7 +11218,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.105.0"
+    "version": "1.106.0"
   },
   "openapi": "3.1.0",
   "paths": {
