@@ -23,7 +23,7 @@ use crate::preview;
 use crate::snap::handle_at;
 
 /// Screen points a press travels before it is a drag.
-const DRAG_PT: f32 = 3.0;
+pub(crate) const DRAG_PT: f32 = 3.0;
 /// Rubber-band settle speed (1/s): about 250 ms to rest.
 const SETTLE: f32 = 14.0;
 
@@ -164,6 +164,10 @@ impl Host {
             self.stop_follow();
         }
         if let Some(r) = self.text_pointer(phase, x, y, mods) {
+            self.refresh();
+            return r;
+        }
+        if let Some(r) = self.tool_pointer(phase, x, y, mods) {
             self.refresh();
             return r;
         }
@@ -354,13 +358,17 @@ impl Host {
     /// Drop a gesture in progress without writing anything. `true` when there was one.
     pub(crate) fn cancel(&mut self) -> bool {
         let had = self.gesture.take().is_some();
+        let drew = self.tools.clear();
         self.sync_preview();
-        had
+        had || drew
     }
 
     pub fn cursor(&mut self, x: f32, y: f32) -> Result<i32, i32> {
         finite(&[x, y], MAX_COORD)?;
         self.refresh();
+        if let Some(c) = self.tools.cursor() {
+            return Ok(c);
+        }
         if let Some(Gesture::Edit(Edit {
             handle: Some(h), ..
         })) = &self.gesture

@@ -37,19 +37,19 @@ pub(crate) fn seed() -> u64 {
 }
 
 impl Host {
-    fn order_of(&self, id: &str) -> Option<String> {
+    pub(crate) fn order_of(&self, id: &str) -> Option<String> {
         Some(self.model.as_ref()?.nodes.get(id)?.order.clone())
     }
 
     /// World position children of `parent` are placed from (the page's is the world origin).
-    fn origin(&self, parent: &str) -> (f32, f32) {
+    pub(crate) fn origin(&self, parent: &str) -> (f32, f32) {
         match self.rect(parent) {
             Some(r) if Some(parent) != self.page_id().as_deref() => (r.left, r.top),
             _ => (0.0, 0.0),
         }
     }
 
-    fn new_id(&mut self) -> String {
+    pub(crate) fn new_id(&mut self) -> String {
         const A: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
         loop {
             let mut v = self.rng;
@@ -138,7 +138,7 @@ impl Host {
 
     /// The container a drop at world `p` lands in: the deepest frame or component under it, looking through the
     /// carried nodes, else the page.
-    fn drop_target(&self, p: (f32, f32), carried: &[String], page: &str) -> String {
+    pub(crate) fn drop_target(&self, p: (f32, f32), carried: &[String], page: &str) -> String {
         let skip = |id: &str| carried.iter().any(|c| c == id);
         let (Some(r), Some(m)) = (self.renderer.as_ref(), self.model.as_ref()) else {
             return page.to_string();
@@ -155,7 +155,7 @@ impl Host {
     }
 
     /// Snap candidates for nodes placed in `parent`: its other children and itself.
-    fn cands(&self, parent: &str, skip: &[String]) -> Vec<Rect> {
+    pub(crate) fn cands(&self, parent: &str, skip: &[String]) -> Vec<Rect> {
         let mut c: Vec<Rect> = self
             .kids(parent)
             .iter()

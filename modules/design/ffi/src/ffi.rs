@@ -465,6 +465,26 @@ pub extern "C" fn de_pointer(h: u64, phase: u32, x: f32, y: f32, mods: u32) -> i
     with(h, |e| ok(e.pointer(phase, x, y, mods)))
 }
 
+/// Choose the tool: a `DE_TOOL_*` value. A text edit ends, a drag in progress is dropped and a pen path in progress
+/// is finished first. Drawing tools return to `DE_TOOL_SELECT` after one node; the App calls this again for a keyboard
+/// shortcut or a toolbar click, never while `de_text_active`.
+#[unsafe(no_mangle)]
+pub extern "C" fn de_set_tool(h: u64, tool: u32) -> i32 {
+    with(h, |e| ok(e.set_tool(tool)))
+}
+
+/// The current `DE_TOOL_*` (>= 0), or an error code. It changes by itself: back to select after a node is drawn.
+#[unsafe(no_mangle)]
+pub extern "C" fn de_tool(h: u64) -> i32 {
+    with(h, |e| Ok(e.tools.tool as i32))
+}
+
+/// 1 while a text session is open (after a click with the text tool, or `de_text_begin`), else 0.
+#[unsafe(no_mangle)]
+pub extern "C" fn de_text_active(h: u64) -> i32 {
+    with(h, |e| Ok(i32::from(e.text.is_some())))
+}
+
 /// The cursor for view point (x, y): a `DE_CURSOR_*` value (>= 0), or an error code.
 #[unsafe(no_mangle)]
 pub extern "C" fn de_cursor(h: u64, x: f32, y: f32) -> i32 {

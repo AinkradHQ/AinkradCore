@@ -69,6 +69,7 @@ pub struct Host {
     /// Other people and AI sessions (V2-06), the pointer's last world position, follow mode.
     pub(crate) peers: crate::presence::Peers,
     pub(crate) local_cursor: Option<(f32, f32)>,
+    pub(crate) tools: crate::tools::Tools,
     held: usize,
     fonts: usize,
     #[cfg(all(feature = "metal", target_os = "macos"))]
@@ -101,6 +102,7 @@ impl Host {
             text: None,
             peers: Default::default(),
             local_cursor: None,
+            tools: Default::default(),
             held: 0,
             fonts: 0,
             #[cfg(all(feature = "metal", target_os = "macos"))]
@@ -304,19 +306,35 @@ impl Host {
                 Ok(())
             };
         }
+        // a pen path ends on Enter or Escape
+        if self.tools.pen_active() {
+            return match key {
+                DE_KEY_ESCAPE | DE_KEY_ENTER => {
+                    self.pen_finish(false)?;
+                    self.tools.tool = DE_TOOL_SELECT;
+                    Ok(())
+                }
+                _ => Ok(()),
+            };
+        }
         let step = if mods & DE_MOD_SHIFT != 0 { 10.0 } else { 1.0 };
         // a press that has not moved yet is not a gesture to protect; a drag is (keys wait for its end)
         if matches!(self.gesture, Some(crate::interact::Gesture::Press { .. })) {
             self.gesture = None;
         }
-        if key != DE_KEY_ESCAPE && self.gesture.is_some() {
+        if key != DE_KEY_ESCAPE && (self.gesture.is_some() || self.tools.busy()) {
             return Ok(());
         }
         match key {
             DE_KEY_DELETE => self.delete_selection(),
             DE_KEY_ESCAPE => {
                 if !self.cancel() {
-                    self.selection.clear();
+                    // a drawing tool goes back to select first; the selection stays
+                    if self.tools.tool != DE_TOOL_SELECT {
+                        self.tools.tool = DE_TOOL_SELECT;
+                    } else {
+                        self.selection.clear();
+                    }
                 }
                 Ok(())
             }
