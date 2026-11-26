@@ -31,6 +31,7 @@ use sqlx::Row;
 use utoipa::ToSchema;
 
 use crate::apply::{edit_err, mint, open_actor, resolve_temps};
+use crate::compose_system::{self, Brand};
 use crate::docs::{In, doc_id_ok};
 use crate::sync::{Actor, EditError, Registry};
 
@@ -61,6 +62,15 @@ pub struct NewCompose {
     #[serde(default)]
     #[schema(required = false)]
     pub size: Option<ComposeSize>,
+    /// `screens` (default): draw frames. `system`: draw a design system's tokens on a `system` doc (no frames; `count`
+    /// and `size` are ignored; `directions` holds one entry).
+    #[serde(default)]
+    #[schema(required = false)]
+    pub mode: Option<String>,
+    /// With `mode: "system"`: the brand kit to build the palette from.
+    #[serde(default)]
+    #[schema(required = false)]
+    pub brand: Option<Brand>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -332,6 +342,24 @@ fn build_ops(
     (ops, frames)
 }
 
+/// What the AI's answer was: frames to draw, or a design system to write.
+enum Parsed {
+    Screens(Vec<Dir>),
+    System(compose_system::Made),
+}
+
+/// Writes a design system's `token` ops to the doc in one edit (one undo step; nothing partial).
+async fn write_tokens(actor: &Actor, origin: &str, ops: &[Value]) -> Result<(), EditError> {
+    let ops: Vec<design_doc::Op> = serde_json::from_value(Value::Array(ops.to_vec()))
+        .map_err(|e| EditError::Refused(clip(&e.to_string(), 200)))?;
+    actor
+        .edit(origin, |live| {
+            live.apply_ops(&ops).map_err(crate::apply::doc_err)
+        })
+        .await
+        .map(drop)
+}
+
 /// Draws the three directions on the doc's first page, to the right of what is there. The ids of the
 /// three frames, in order.
 async fn draw(
@@ -469,6 +497,25 @@ async fn answer_of(app: &App, session: &str) -> Result<String, sqlx::Error> {
 
 // ---- routes ----------------------------------------------------------------------------------
 
+/// Whether the request draws a design system; refused for an unknown mode, a doc that is not a `system` doc, or a bad
+/// brand kit.
+fn wants_system(req: &NewCompose, kind: Option<&str>) -> Result<bool, ApiError> {
+    let system = match req.mode.as_deref() {
+        None | Some("screens") => false,
+        Some("system") => true,
+        Some(_) => return Err(ApiError::bad_request("mode is screens or system")),
+    };
+    if system && kind != Some("system") {
+        return Err(ApiError::bad_request(
+            "a design system is drawn on a system doc",
+        ));
+    }
+    if let Some(Err(why)) = req.brand.as_ref().map(compose_system::check_brand) {
+        return Err(ApiError::bad_request(why));
+    }
+    Ok(system)
+}
+
 #[utoipa::path(post, path = "/docs/{doc}/compose", operation_id = "designCompose", tag = "design",
     params(("doc" = String, Path, description = "Design id")), request_body = NewCompose,
     responses((status = 200, description = "An AI session is drawing three directions (`drawing`); read it \
@@ -494,6 +541,7 @@ pub(crate) async fn start(
             .bind(&doc)
             .fetch_optional(&app.pool)
             .await?;
+    let kind = row.as_ref().map(|r| r.0.clone());
     match row {
         Some((k, _, _)) if k == "mockup" => return Err(none()),
         None => return Err(none()),
@@ -507,17 +555,23 @@ pub(crate) async fn start(
         }
         Some(_) => {}
     }
+    let system = wants_system(&req, kind.as_deref())?;
     let count = match req.count {
         None | Some(3) => 3,
         Some(1) => 1,
         Some(_) => return Err(ApiError::bad_request("count is 1 or 3")),
     };
     let size = size_of(req.size.as_ref())?;
-    let session = launch(&app, &me.device.id, &prompt(want, count, size)).await?;
+    let ask = if system {
+        compose_system::prompt(want, req.brand.as_ref())
+    } else {
+        prompt(want, count, size)
+    };
+    let session = launch(&app, &me.device.id, &ask).await?;
     let id = format!("dc_{}", &mint()[2..]);
     sqlx::query(
-        "INSERT INTO design_composes (id, doc, session, prompt, state, created_by, count, w, h) \
-         VALUES (?, ?, ?, ?, 'drawing', ?, ?, ?, ?)",
+        "INSERT INTO design_composes (id, doc, session, prompt, state, created_by, count, w, h, mode) \
+         VALUES (?, ?, ?, ?, 'drawing', ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&doc)
@@ -527,6 +581,7 @@ pub(crate) async fn start(
     .bind(count as i64)
     .bind(size.0)
     .bind(size.1)
+    .bind(if system { "system" } else { "screens" })
     .execute(&app.pool)
     .await?;
     Ok(Json(ComposeView {
@@ -597,15 +652,36 @@ pub(crate) async fn get(
         return Ok(Json(row_view(&load().await?.ok_or_else(none)?)?));
     }
     let size = (r.try_get::<f64, _>("w")?, r.try_get::<f64, _>("h")?);
+    let system = r.try_get::<String, _>("mode")? == "system";
+    let count = r.try_get::<i64, _>("count")? as usize;
     let outcome = match s {
         None => Err("the AI session is gone".to_owned()),
         Some(_) => match answer_of(&app, &session).await? {
             a if a.trim().is_empty() => Err("the AI gave no answer".to_owned()),
-            a => parse(&a, r.try_get::<i64, _>("count")? as usize),
+            a if system => compose_system::parse(&a).map(Parsed::System),
+            a => parse(&a, count).map(Parsed::Screens),
         },
     };
     let finish = async {
-        let dirs = outcome?;
+        let dirs = match outcome? {
+            Parsed::Screens(d) => d,
+            Parsed::System(made) => {
+                let lease = open_actor(&app, &reg, &me, &doc)
+                    .await
+                    .map_err(|e| e.message)?;
+                write_tokens(&lease.actor, &format!("session:{session}"), &made.ops)
+                    .await
+                    .map_err(|e| match e {
+                        EditError::Paused => "a person took over this design".to_owned(),
+                        e => edit_err(e).message,
+                    })?;
+                return Ok(vec![Direction {
+                    name: clip(&made.name, 40),
+                    summary: clip(&made.summary, 120),
+                    frame: None,
+                }]);
+            }
+        };
         let lease = open_actor(&app, &reg, &me, &doc)
             .await
             .map_err(|e| e.message)?;
@@ -744,5 +820,32 @@ mod tests {
         assert_eq!(rect["props"]["x"], 1440.0);
         assert_eq!(rect["props"]["w"], 1440.0);
         assert_eq!(rect["props"]["h"], 900.0);
+    }
+
+    #[test]
+    fn a_system_compose_only_runs_on_a_system_doc() {
+        let req = |mode: Option<&str>, brand: Option<Brand>| NewCompose {
+            prompt: "x".into(),
+            count: None,
+            size: None,
+            mode: mode.map(str::to_owned),
+            brand,
+        };
+        assert!(!wants_system(&req(None, None), Some("design")).unwrap());
+        assert!(!wants_system(&req(Some("screens"), None), Some("system")).unwrap());
+        assert!(wants_system(&req(Some("system"), None), Some("system")).unwrap());
+        assert!(wants_system(&req(Some("system"), None), Some("design")).is_err());
+        assert!(wants_system(&req(Some("system"), None), None).is_err());
+        assert!(wants_system(&req(Some("tokens"), None), Some("system")).is_err());
+        let bad = Brand {
+            colors: vec!["red".into()],
+            name: None,
+        };
+        assert!(wants_system(&req(Some("system"), Some(bad)), Some("system")).is_err());
+        let ok = Brand {
+            colors: vec!["#2F7BEF".into()],
+            name: Some("Acme".into()),
+        };
+        assert!(wants_system(&req(Some("system"), Some(ok)), Some("system")).unwrap());
     }
 }

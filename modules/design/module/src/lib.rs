@@ -12,6 +12,7 @@ mod assets;
 mod checks;
 mod collections;
 mod compose;
+mod compose_system;
 mod docs;
 mod fidelity;
 mod package;
@@ -86,6 +87,12 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "0008_design_compose_size",
         up: include_str!("../migrations/0008_design_compose_size.up.sql"),
         down: include_str!("../migrations/0008_design_compose_size.down.sql"),
+    },
+    Migration {
+        version: 9,
+        name: "0009_design_compose_mode",
+        up: include_str!("../migrations/0009_design_compose_mode.up.sql"),
+        down: include_str!("../migrations/0009_design_compose_mode.down.sql"),
     },
 ];
 

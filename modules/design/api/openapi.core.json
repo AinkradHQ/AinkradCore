@@ -2201,6 +2201,26 @@
         ],
         "type": "object"
       },
+      "Brand": {
+        "description": "A brand kit the app sends: its colours (`#rrggbb`) and name.",
+        "properties": {
+          "colors": {
+            "description": "Up to 12 colours, each `#rrggbb`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "The brand's name, up to 60 characters.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "BudgetDeleted": {
         "properties": {
           "deleted": {
@@ -6092,12 +6112,23 @@
       },
       "NewCompose": {
         "properties": {
+          "brand": {
+            "$ref": "#/components/schemas/Brand",
+            "description": "With `mode: \"system\"`: the brand kit to build the palette from."
+          },
           "count": {
             "description": "How many directions to draw: 1 or 3 (default 3).",
             "format": "int32",
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "mode": {
+            "description": "`screens` (default): draw frames. `system`: draw a design system's tokens on a `system` doc (no frames; `count`\nand `size` are ignored; `directions` holds one entry).",
+            "type": [
+              "string",
               "null"
             ]
           },
