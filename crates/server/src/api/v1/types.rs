@@ -390,7 +390,11 @@
 ///    (the harness the Core runs the provider on: a built-in's own, `opencode` for a preset or user definition),
 ///    and for a preset `key_url`, `key_hint` and `default_model`. Presets add `together`, `fireworks` and `vercel`.
 ///    An AI-order entry on a preset that names no model runs its `default_model`.
-pub const API_MINOR: u32 = 107;
+/// 108: design systems (2026-11-26). The design compose takes `mode: "system"` (a `system` doc only) with an optional
+///    `brand` {colors, name}: it writes a design system's tokens and ends `done` with one direction and no frame; an
+///    older Core ignores both fields and draws frames. The design edit batch takes the `token` op
+///    (`{"op":"token","name","value":{kind,day,night}|null}`).
+pub const API_MINOR: u32 = 108;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
