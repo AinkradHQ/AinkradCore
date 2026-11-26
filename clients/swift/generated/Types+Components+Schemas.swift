@@ -13080,7 +13080,8 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/StartConnectionFlow/confirm_identity_change`.
             public var confirmIdentityChange: Swift.Bool?
-            /// Sign in again for this connection: its credential is replaced, nothing else changes.
+            /// Sign in again for this connection: its credential is replaced, nothing else changes (a
+            /// pasted-token connection of the same account becomes a sign-in again).
             ///
             /// - Remark: Generated from `#/components/schemas/StartConnectionFlow/connection`.
             public var connection: Swift.Int64?
@@ -13098,7 +13099,7 @@ extension Components {
             ///
             /// - Parameters:
             ///   - confirmIdentityChange: With `connection` on GitHub: replace the credential even when the sign-in is a different
-            ///   - connection: Sign in again for this connection: its credential is replaced, nothing else changes.
+            ///   - connection: Sign in again for this connection: its credential is replaced, nothing else changes (a
             ///   - kind: `github` or `jira`.
             ///   - label:
             ///   - name: Names the connection it makes; absent, `<kind>-<n>`.

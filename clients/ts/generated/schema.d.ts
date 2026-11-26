@@ -7103,7 +7103,8 @@ export interface components {
             confirm_identity_change?: boolean | null;
             /**
              * Format: int64
-             * @description Sign in again for this connection: its credential is replaced, nothing else changes.
+             * @description Sign in again for this connection: its credential is replaced, nothing else changes (a
+             *     pasted-token connection of the same account becomes a sign-in again).
              */
             connection?: number | null;
             /** @description `github` or `jira`. */
@@ -10255,7 +10256,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description A sign-in begun, held in Core: GitHub's device flow returns `user_code`, `verification_uri` and `interval` (Core polls GitHub itself, so the person can close the window); Atlassian returns `authorize_url` (the Mac app opens it, catches the redirect on 127.0.0.1 and posts `code` and `state` to `connectionFlowCallback`) and `state`. With `connection`, the credential of that connection is replaced (CN5, sign in again); a GitHub sign-in as another account ends `failed` with `different_account` unless `confirm_identity_change` is true. A flow ends in ONE connection. 409 `not_configured` while Ainkrad's app for the kind is not set up (see `listConnectionKinds`), 429 `too_many_flows` (4 waiting per user), 502 when GitHub could not give a code, 400 for a bad name, label or kind, 404 for another workspace's connection */
+            /** @description A sign-in begun, held in Core: GitHub's device flow returns `user_code`, `verification_uri` and `interval` (Core polls GitHub itself, so the person can close the window); Atlassian returns `authorize_url` (the Mac app opens it, catches the redirect on 127.0.0.1 and posts `code` and `state` to `connectionFlowCallback`) and `state`. With `connection`, the credential of that connection is replaced (CN5, sign in again); a GitHub sign-in as another account ends `failed` with `different_account` unless `confirm_identity_change` is true. A `connection` made with a pasted token may sign in too: the sign-in must be the SAME account (else `failed` `different_account`, no override), and the connection becomes `oauth` again, its id, name, label, grants and limits kept. A flow ends in ONE connection. 409 `not_configured` while Ainkrad's app for the kind is not set up (see `listConnectionKinds`), 429 `too_many_flows` (4 waiting per user), 502 when GitHub could not give a code, 400 for a bad name, label or kind, 404 for another workspace's connection */
             200: {
                 headers: {
                     [name: string]: unknown;
