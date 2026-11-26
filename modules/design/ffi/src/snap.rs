@@ -54,6 +54,14 @@ pub fn guides(b: Rect, cands: &[Rect]) -> Vec<Guide> {
     out
 }
 
+/// Snap one point to the candidates' lines (each axis within `tol`).
+pub fn snap_point(p: (f32, f32), cands: &[Rect], tol: f32) -> (f32, f32) {
+    (
+        p.0 + best(&[p.0], cands.iter().flat_map(xs), tol),
+        p.1 + best(&[p.1], cands.iter().flat_map(ys), tol),
+    )
+}
+
 /// Snap a moving box: the correction `(dx, dy)` (each within `tol`) that lines one of its edges or its centre up with
 /// a candidate's, and the guides that then show.
 pub fn snap_move(b: Rect, cands: &[Rect], tol: f32) -> (f32, f32, Vec<Guide>) {

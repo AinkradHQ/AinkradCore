@@ -77,6 +77,9 @@
 
 #define DE_KEY_DOWN 7
 
+// Return / Enter: ends a pen path in progress.
+#define DE_KEY_ENTER 8
+
 // `de_cursor` results.
 #define DE_CURSOR_DEFAULT 0
 
@@ -87,6 +90,34 @@
 #define DE_CURSOR_RESIZE_NWSE 3
 
 #define DE_CURSOR_RESIZE_NESW 4
+
+// Draw tools (frame, rectangle, ellipse, line, pen).
+#define DE_CURSOR_CROSSHAIR 5
+
+// Hand tool: open hand, and closed while dragging.
+#define DE_CURSOR_GRAB 6
+
+#define DE_CURSOR_GRABBING 7
+
+// Text tool: I-beam.
+#define DE_CURSOR_TEXT 8
+
+// `de_set_tool` tools. Drawing tools return to `DE_TOOL_SELECT` after one node (the pen after one path).
+#define DE_TOOL_SELECT 0
+
+#define DE_TOOL_HAND 1
+
+#define DE_TOOL_FRAME 2
+
+#define DE_TOOL_RECT 3
+
+#define DE_TOOL_ELLIPSE 4
+
+#define DE_TOOL_LINE 5
+
+#define DE_TOOL_TEXT 6
+
+#define DE_TOOL_PEN 7
 
 // `de_text_command` (V2-04): what `NSTextInputClient.doCommand(by:)` maps to. `DE_MOD_SHIFT` extends the selection;
 // `DE_MOD_OPTION` moves or deletes by word; `DE_MOD_COMMAND` turns ←/→ into line start/end and ↑/↓ into text
@@ -276,6 +307,18 @@ int32_t de_pointer(uint64_t h,
                    float x,
                    float y,
                    uint32_t mods);
+
+// Choose the tool: a `DE_TOOL_*` value. A text edit ends, a drag in progress is dropped and a pen path in progress
+// is finished first. Drawing tools return to `DE_TOOL_SELECT` after one node; the App calls this again for a keyboard
+// shortcut or a toolbar click, never while `de_text_active`.
+int32_t de_set_tool(uint64_t h,
+                    uint32_t tool);
+
+// The current `DE_TOOL_*` (>= 0), or an error code. It changes by itself: back to select after a node is drawn.
+int32_t de_tool(uint64_t h);
+
+// 1 while a text session is open (after a click with the text tool, or `de_text_begin`), else 0.
+int32_t de_text_active(uint64_t h);
 
 // The cursor for view point (x, y): a `DE_CURSOR_*` value (>= 0), or an error code.
 int32_t de_cursor(uint64_t h, float x, float y);

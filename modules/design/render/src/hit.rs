@@ -2,8 +2,13 @@
 
 use skia_safe::{Contains, Point};
 
+use design_model::NodeType;
+
 use crate::layout::LNode;
 use crate::scene::Renderer;
+
+/// World points a vector's hit box grows by on every side.
+const VECTOR_PAD: f32 = 3.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
@@ -27,7 +32,13 @@ pub(crate) fn hit_node(
     if !n.look.visible || skip(&n.id) {
         return None;
     }
-    let inside = n.rect.contains(Point::new(x, y));
+    // a line has no area: a few points of slack keep a flat vector clickable
+    let inside = if n.ty == NodeType::Vector {
+        n.rect.with_outset((VECTOR_PAD, VECTOR_PAD))
+    } else {
+        n.rect
+    }
+    .contains(Point::new(x, y));
     if n.look.clip && !inside {
         return None;
     }
@@ -61,7 +72,12 @@ impl Renderer {
     pub fn hit_world_skip(&self, x: f32, y: f32, skip: &dyn Fn(&str) -> bool) -> Option<Hit> {
         for b in self.boards.iter().rev() {
             let (lx, ly) = (x - b.origin.x, y - b.origin.y);
-            if !b.laid.bounds.contains(Point::new(lx, ly)) {
+            if !b
+                .laid
+                .bounds
+                .with_outset((VECTOR_PAD, VECTOR_PAD))
+                .contains(Point::new(lx, ly))
+            {
                 continue;
             }
             let mut path = vec![];

@@ -7,12 +7,14 @@ mod edits;
 pub mod ffi;
 pub mod host;
 mod interact;
+mod pen;
 mod presence;
 mod preview;
 mod query;
 mod snap;
 pub mod testing;
 mod text;
+mod tools;
 mod typing;
 
 pub use host::Host;

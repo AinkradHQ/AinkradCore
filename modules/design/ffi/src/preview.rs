@@ -206,16 +206,34 @@ pub fn patch(
             }
             Op::Add {
                 id,
+                ty,
                 parent: Some(p),
                 order,
+                name,
                 props,
-                ..
+                text,
             } => {
                 // a copy's descendants come with its root's clone
                 if copied.contains(p.as_str()) {
                     continue;
                 }
-                let Some(src) = dups.get(id) else { continue };
+                // a new node (drawing tools) carries literal props: it is its own resolved node
+                let Some(src) = dups.get(id) else {
+                    w.attach(
+                        ResolvedNode {
+                            id: id.clone(),
+                            ty: *ty,
+                            name: name.clone(),
+                            props: props.clone(),
+                            text: text.clone(),
+                            component: None,
+                            children: vec![],
+                        },
+                        p,
+                        order,
+                    );
+                    continue;
+                };
                 let Some(sb) = board_of(doc, &base.id, src) else {
                     continue;
                 };

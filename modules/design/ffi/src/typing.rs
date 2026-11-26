@@ -78,9 +78,26 @@ impl Host {
             return Ok(());
         }
         let r = self.text_apply(Session::unmark);
-        self.text = None;
+        let ended = self.text.take();
         self.sync_preview();
         self.refresh();
+        // a text node the text tool made and nobody typed into goes again
+        let fresh = self.tools.fresh_text.take();
+        let empty = |h: &Host, id: &str| {
+            h.model
+                .as_ref()
+                .and_then(|m| m.nodes.get(id))
+                .is_some_and(|n| {
+                    n.ty == NodeType::Text && n.text.as_deref().unwrap_or_default().is_empty()
+                })
+        };
+        if let (Some(f), Some(s)) = (fresh, ended)
+            && f == s.id
+            && empty(self, &f)
+        {
+            self.commit(&[Op::Delete { id: f }], &HashMap::new())?;
+            self.refresh();
+        }
         r
     }
 

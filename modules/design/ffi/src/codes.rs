@@ -46,6 +46,8 @@ pub const DE_KEY_LEFT: u32 = 4;
 pub const DE_KEY_RIGHT: u32 = 5;
 pub const DE_KEY_UP: u32 = 6;
 pub const DE_KEY_DOWN: u32 = 7;
+/// Return / Enter: ends a pen path in progress.
+pub const DE_KEY_ENTER: u32 = 8;
 
 /// `de_cursor` results.
 pub const DE_CURSOR_DEFAULT: i32 = 0;
@@ -53,6 +55,23 @@ pub const DE_CURSOR_RESIZE_NS: i32 = 1;
 pub const DE_CURSOR_RESIZE_EW: i32 = 2;
 pub const DE_CURSOR_RESIZE_NWSE: i32 = 3;
 pub const DE_CURSOR_RESIZE_NESW: i32 = 4;
+/// Draw tools (frame, rectangle, ellipse, line, pen).
+pub const DE_CURSOR_CROSSHAIR: i32 = 5;
+/// Hand tool: open hand, and closed while dragging.
+pub const DE_CURSOR_GRAB: i32 = 6;
+pub const DE_CURSOR_GRABBING: i32 = 7;
+/// Text tool: I-beam.
+pub const DE_CURSOR_TEXT: i32 = 8;
+
+/// `de_set_tool` tools. Drawing tools return to `DE_TOOL_SELECT` after one node (the pen after one path).
+pub const DE_TOOL_SELECT: u32 = 0;
+pub const DE_TOOL_HAND: u32 = 1;
+pub const DE_TOOL_FRAME: u32 = 2;
+pub const DE_TOOL_RECT: u32 = 3;
+pub const DE_TOOL_ELLIPSE: u32 = 4;
+pub const DE_TOOL_LINE: u32 = 5;
+pub const DE_TOOL_TEXT: u32 = 6;
+pub const DE_TOOL_PEN: u32 = 7;
 
 /// `de_text_command` (V2-04): what `NSTextInputClient.doCommand(by:)` maps to. `DE_MOD_SHIFT` extends the selection;
 /// `DE_MOD_OPTION` moves or deletes by word; `DE_MOD_COMMAND` turns ←/→ into line start/end and ↑/↓ into text
