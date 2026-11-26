@@ -2681,6 +2681,23 @@
         ],
         "type": "object"
       },
+      "ComposeSize": {
+        "properties": {
+          "h": {
+            "format": "double",
+            "type": "number"
+          },
+          "w": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "w",
+          "h"
+        ],
+        "type": "object"
+      },
       "ComposeView": {
         "properties": {
           "directions": {
@@ -6087,6 +6104,10 @@
           "prompt": {
             "description": "What to draw, 1 to 1000 characters. To refine a direction, say so here with the changes.",
             "type": "string"
+          },
+          "size": {
+            "$ref": "#/components/schemas/ComposeSize",
+            "description": "The screen size to draw at, each side 200 to 4000 points (default 360 x 630, a phone). To redraw an\nexisting frame, send its size."
           }
         },
         "required": [
