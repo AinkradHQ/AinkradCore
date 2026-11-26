@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use design_model::{NodeType, Theme};
 use skia_safe::{
     AlphaType, BlendMode, BlurStyle, Canvas, Color, Color4f, ColorType, FilterMode, IRect, Image,
-    ImageInfo, MaskFilter, MipmapMode, Paint, PaintStyle, Path, Picture, PictureRecorder, Point,
-    RRect, Rect, SamplingOptions, TileMode,
+    ImageInfo, MaskFilter, MipmapMode, Paint, PaintStyle, Path, PathEffect, PathFillType, Picture,
+    PictureRecorder, Point, RRect, Rect, SamplingOptions, TileMode,
     canvas::SaveLayerRec,
     gradient::{self, Colors, Gradient, Interpolation},
     image_filters,
@@ -15,7 +15,7 @@ use skia_safe::{
 
 use crate::assets::Assets;
 use crate::layout::{LNode, Laid, text_color};
-use crate::look::{Fill, Fit, Look, Material};
+use crate::look::{Align, Fill, Fit, Look, Material};
 
 /// What a picture contains. Chosen per artboard from its on-screen width (spike adjustments 1 and 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -267,20 +267,38 @@ fn draw_node(c: &Canvas, nodes: &[LNode], i: usize, lod: Lod, cx: &mut DrawCx) {
     if !lk.visible {
         return;
     }
-    let layer = lk.opacity < 1.0 || lk.blend != BlendMode::SrcOver;
+    let rotated = lk.rotation != 0.0;
+    if rotated {
+        c.save();
+        c.rotate(
+            lk.rotation,
+            Some(Point::new(n.rect.center_x(), n.rect.center_y())),
+        );
+    }
+    // layer blur below Lod::NoBlur is dropped like the live glass blur (small on screen, costly)
+    let blur = (lk.blur > 0.0 && lod <= Lod::NoBlur)
+        .then(|| image_filters::blur((lk.blur / 2.0, lk.blur / 2.0), TileMode::Decal, None, None))
+        .flatten();
+    let layer = lk.opacity < 1.0 || lk.blend != BlendMode::SrcOver || blur.is_some();
     if layer {
         let mut p = Paint::default();
         p.set_alpha_f(lk.opacity);
         p.set_blend_mode(lk.blend);
+        if let Some(f) = blur {
+            p.set_image_filter(f);
+        }
         let mut b = n.rect;
-        b.outset((200.0, 200.0));
+        b.outset((200.0 + lk.blur * 1.5, 200.0 + lk.blur * 1.5));
         c.save_layer(&SaveLayerRec::default().bounds(&b).paint(&p));
     }
     let rr = shape(n, 0.0);
     if lod <= Lod::NoBlur {
-        for s in &lk.shadows {
+        for s in lk.shadows.iter().filter(|s| !s.inset) {
             draw_shadow(c, n, s, cx);
         }
+    }
+    if lk.backdrop_blur > 0.0 && lod == Lod::Full {
+        backdrop(c, &rr, lk.backdrop_blur / 2.0);
     }
     match n.ty {
         NodeType::Text => {
@@ -312,17 +330,13 @@ fn draw_node(c: &Canvas, nodes: &[LNode], i: usize, lod: Lod, cx: &mut DrawCx) {
                     }
                 }
             }
-            if let Some((col, w)) = lk.stroke {
-                let mut p = paint(col);
-                p.set_style(PaintStyle::Stroke);
-                p.set_stroke_width(w);
-                if n.ty == NodeType::Vector {
-                    if let Some(path) = vector_path(n) {
-                        c.draw_path(&path, &p);
-                    }
-                } else {
-                    c.draw_rrect(shape(n, -w / 2.0), &p);
+            for sh in lk.shadows.iter().filter(|s| s.inset) {
+                if lod <= Lod::NoBlur {
+                    inner_shadow(c, n, sh, &rr);
                 }
+            }
+            for st in &lk.strokes {
+                draw_stroke(c, n, st);
             }
         }
     }
@@ -340,6 +354,78 @@ fn draw_node(c: &Canvas, nodes: &[LNode], i: usize, lod: Lod, cx: &mut DrawCx) {
     if layer {
         c.restore();
     }
+    if rotated {
+        c.restore();
+    }
+}
+
+/// The node's outline as a path: its rounded rect / oval grown by `grow`, or a vector's own path.
+fn outline(n: &LNode, grow: f32) -> Option<Path> {
+    if n.ty == NodeType::Vector {
+        return vector_path(n);
+    }
+    Some(Path::rrect(shape(n, grow), None))
+}
+
+/// One stroke. Inside / centre / outside move the outline by half the width; a vector's path is stroked on its
+/// centre (an open path has no inside).
+fn draw_stroke(c: &Canvas, n: &LNode, st: &crate::look::Stroke) {
+    let w = st.width;
+    let grow = match st.align {
+        Align::Inside => -w / 2.0,
+        Align::Center => 0.0,
+        Align::Outside => w / 2.0,
+    };
+    let mut p = paint(st.color);
+    p.set_style(PaintStyle::Stroke);
+    p.set_stroke_width(w);
+    if !st.dash.is_empty() {
+        let mut d = st.dash.clone();
+        if d.len() % 2 == 1 {
+            d.extend_from_within(..);
+        }
+        p.set_path_effect(PathEffect::dash(&d, 0.0));
+    }
+    if n.ty == NodeType::Vector {
+        if let Some(path) = vector_path(n) {
+            c.draw_path(&path, &p);
+        }
+    } else if st.dash.is_empty() {
+        c.draw_rrect(shape(n, grow), &p);
+    } else if let Some(path) = outline(n, grow) {
+        c.draw_path(&path, &p);
+    }
+}
+
+/// An inner shadow: everything outside the (offset, spread-shrunk) shape, blurred, clipped to the shape.
+fn inner_shadow(c: &Canvas, n: &LNode, s: &crate::look::Shadow, rr: &RRect) {
+    let Some(mut hole) = outline(n, -s.spread) else {
+        return;
+    };
+    hole = hole.with_offset((s.x, s.y));
+    hole.set_fill_type(PathFillType::InverseWinding);
+    c.save();
+    match outline(n, 0.0) {
+        Some(clip) if n.ty == NodeType::Vector => c.clip_path(&clip, None, true),
+        _ => c.clip_rrect(rr, None, true),
+    };
+    let mut p = paint(s.color);
+    if s.blur > 0.0 {
+        p.set_mask_filter(MaskFilter::blur(BlurStyle::Normal, s.blur / 2.0, true));
+    }
+    c.draw_path(&hole, &p);
+    c.restore();
+}
+
+/// Background blur: what is drawn under the shape, blurred, inside the shape.
+fn backdrop(c: &Canvas, rr: &RRect, sigma: f32) {
+    c.save();
+    c.clip_rrect(rr, None, true);
+    if let Some(b) = image_filters::blur((sigma, sigma), TileMode::Clamp, None, None) {
+        c.save_layer(&SaveLayerRec::default().bounds(rr.rect()).backdrop(&b));
+        c.restore();
+    }
+    c.restore();
 }
 
 pub fn record(laid: &Laid, lod: Lod, cx: &mut DrawCx) -> Option<Picture> {

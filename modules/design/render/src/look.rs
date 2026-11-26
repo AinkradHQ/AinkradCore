@@ -37,6 +37,24 @@ pub struct Shadow {
     pub blur: f32,
     pub spread: f32,
     pub color: Color,
+    /// an inner shadow, drawn inside the shape over its fills
+    pub inset: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    Inside,
+    Center,
+    Outside,
+}
+
+#[derive(Debug, Clone)]
+pub struct Stroke {
+    pub color: Color,
+    pub width: f32,
+    pub align: Align,
+    /// on / off lengths (an odd list repeats, as in SVG); empty = solid
+    pub dash: Vec<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,9 +66,14 @@ pub struct Look {
     /// top-left, top-right, bottom-right, bottom-left
     pub radius: [f32; 4],
     pub fills: Vec<Fill>,
-    /// colour, width (drawn inside the box)
-    pub stroke: Option<(Color, f32)>,
+    /// in draw order; inside the box unless aligned otherwise (a vector's path is always stroked on its centre)
+    pub strokes: Vec<Stroke>,
     pub shadows: Vec<Shadow>,
+    /// degrees clockwise about the centre of the node's box
+    pub rotation: f32,
+    /// layer blur and background blur, Skia sigma x 2 (a CSS-like radius)
+    pub blur: f32,
+    pub backdrop_blur: f32,
     pub material: Material,
     pub path: Option<Path>,
     pub image: Option<(String, Fit)>,
@@ -144,6 +167,7 @@ fn shadows(v: Option<&Value>) -> Vec<Shadow> {
                 blur: num(m, "blur").unwrap_or(0.0),
                 spread: num(m, "spread").unwrap_or(0.0),
                 color: m.get("color").and_then(color)?,
+                inset: m.get("inset").and_then(Value::as_bool) == Some(true),
             })
         })
         .collect()
@@ -160,10 +184,36 @@ impl Look {
             Some("lighten") => BlendMode::Lighten,
             _ => BlendMode::SrcOver,
         };
-        let stroke = p.get("stroke").and_then(Value::as_object).and_then(|s| {
-            let w = num(s, "width").unwrap_or(1.0);
-            (w > 0.0).then_some((s.get("color").and_then(color)?, w))
-        });
+        let one = |s: &Map<String, Value>| {
+            let width = num(s, "width").unwrap_or(1.0);
+            let dash: Vec<f32> = s
+                .get("dash")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|d| d.as_f64().map(|d| d as f32))
+                .collect();
+            (width > 0.0).then_some(Stroke {
+                color: s.get("color").and_then(color)?,
+                width,
+                align: match s.get("align").and_then(Value::as_str) {
+                    Some("center") => Align::Center,
+                    Some("outside") => Align::Outside,
+                    _ => Align::Inside,
+                },
+                // an all-zero pattern draws nothing in Skia: solid instead
+                dash: if dash.iter().any(|d| *d > 0.0) {
+                    dash
+                } else {
+                    vec![]
+                },
+            })
+        };
+        let strokes = match p.get("stroke") {
+            Some(Value::Array(a)) => a.iter().filter_map(|s| one(s.as_object()?)).collect(),
+            Some(Value::Object(s)) => one(s).into_iter().collect(),
+            _ => vec![],
+        };
         let image = (n.ty == NodeType::Image)
             .then(|| {
                 let a = p.get("asset")?.as_str()?;
@@ -177,8 +227,11 @@ impl Look {
             clip: p.get("clip").and_then(Value::as_bool).unwrap_or(false),
             radius: radius(p.get("radius")),
             fills: fills(p.get("fill")),
-            stroke,
+            strokes,
             shadows: shadows(p.get("shadow")),
+            rotation: num(p, "rotation").unwrap_or(0.0),
+            blur: num(p, "blur").unwrap_or(0.0).max(0.0),
+            backdrop_blur: num(p, "backdrop_blur").unwrap_or(0.0).max(0.0),
             material: match p.get("material").and_then(Value::as_str) {
                 Some("glass") => Material::Glass,
                 Some("well") => Material::Well,
