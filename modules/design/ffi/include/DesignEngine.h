@@ -296,6 +296,26 @@ int32_t de_set_page(uint64_t h, uint32_t page);
 // Frame every artboard of the page in the view.
 int32_t de_fit(uint64_t h);
 
+// The camera as JSON `{"zoom": z, "pan": [px, py]}`. A document point (x, y), in the absolute page coordinates a
+// top-level frame's `x`/`y` props use, shows at view point `(x * zoom + px, y * zoom + py)`, in the same view-point
+// space `de_pointer` takes (origin top left, y down). Cheap: nothing is laid out or drawn.
+//
+// # Safety
+// See `put`.
+int32_t de_camera(uint64_t h,
+                  uint8_t *out,
+                  size_t cap,
+                  size_t *out_len);
+
+// Move the camera so the document rect (x, y, w, h) fits the view with the margin `de_fit` uses (`w` and `h` > 0).
+// `animate` is accepted for the App's sake: the camera moves at once today, as `de_fit_selection` does.
+int32_t de_fit_rect(uint64_t h,
+                    float x,
+                    float y,
+                    float w,
+                    float height,
+                    int32_t animate);
+
 // Frame the selection (everything when nothing is selected).
 int32_t de_fit_selection(uint64_t h);
 

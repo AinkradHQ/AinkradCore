@@ -448,6 +448,25 @@ pub extern "C" fn de_fit(h: u64) -> i32 {
     })
 }
 
+/// The camera as JSON `{"zoom": z, "pan": [px, py]}`. A document point (x, y), in the absolute page coordinates a
+/// top-level frame's `x`/`y` props use, shows at view point `(x * zoom + px, y * zoom + py)`, in the same view-point
+/// space `de_pointer` takes (origin top left, y down). Cheap: nothing is laid out or drawn.
+///
+/// # Safety
+/// See `put`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_camera(h: u64, out: *mut u8, cap: usize, out_len: *mut usize) -> i32 {
+    with(h, |e| unsafe { put(&e.camera_json(), out, cap, out_len) })
+}
+
+/// Move the camera so the document rect (x, y, w, h) fits the view with the margin `de_fit` uses (`w` and `h` > 0).
+/// `animate` is accepted for the App's sake: the camera moves at once today, as `de_fit_selection` does.
+#[unsafe(no_mangle)]
+pub extern "C" fn de_fit_rect(h: u64, x: f32, y: f32, w: f32, height: f32, animate: i32) -> i32 {
+    let _ = animate;
+    with(h, |e| ok(e.fit_rect(x, y, w, height)))
+}
+
 /// Frame the selection (everything when nothing is selected).
 #[unsafe(no_mangle)]
 pub extern "C" fn de_fit_selection(h: u64) -> i32 {

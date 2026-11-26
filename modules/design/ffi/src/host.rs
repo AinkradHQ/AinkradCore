@@ -281,6 +281,25 @@ impl Host {
         }
     }
 
+    /// Frame document rect (x, y, w, h) in the view with `de_fit`'s margin.
+    pub fn fit_rect(&mut self, x: f32, y: f32, w: f32, h: f32) -> Result<(), i32> {
+        finite(&[x, y, w, h], MAX_COORD)?;
+        if w <= 0.0 || h <= 0.0 {
+            return Err(DE_ERR_ARG);
+        }
+        self.stop_follow();
+        self.settle = None;
+        self.camera
+            .fit(design_render::Rect::from_xywh(x, y, w, h), 0.05);
+        Ok(())
+    }
+
+    /// `{"zoom": z, "pan": [px, py]}`: document (x, y) is at view (x * z + px, y * z + py).
+    pub fn camera_json(&self) -> Vec<u8> {
+        let c = self.camera;
+        format!(r#"{{"zoom":{},"pan":[{},{}]}}"#, c.zoom, c.pan.0, c.pan.1).into_bytes()
+    }
+
     pub fn magnify(&mut self, factor: f32, x: f32, y: f32) -> Result<(), i32> {
         finite(&[x, y], MAX_COORD)?;
         if !(factor.is_finite() && factor > 0.0 && factor <= 100.0) {
