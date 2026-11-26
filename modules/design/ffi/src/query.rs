@@ -10,7 +10,7 @@ use crate::codes::*;
 use crate::host::Host;
 
 impl Host {
-    /// `[{id, type, parent, order, name, hidden}]` for every node (parent = effective parent after cycle cuts).
+    /// `[{id, type, parent, order, name, hidden, locked, rotation}]` for every node (parent = effective parent after cycle cuts).
     /// Ids that are not valid node ids are left out.
     pub fn tree_json(&mut self) -> Vec<u8> {
         #[derive(Serialize)]
@@ -22,6 +22,8 @@ impl Host {
             order: &'a str,
             name: &'a str,
             hidden: bool,
+            locked: bool,
+            rotation: f64,
         }
         self.model();
         let (Some(m), Some(t)) = (&self.model, &self.tree) else {
@@ -38,6 +40,12 @@ impl Host {
                 order: &n.order,
                 name: &n.name,
                 hidden: n.props.get("visible").and_then(Value::as_bool) == Some(false),
+                locked: n.props.get("locked").and_then(Value::as_bool) == Some(true),
+                rotation: n
+                    .props
+                    .get("rotation")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0),
             })
             .collect();
         serde_json::to_vec(&all).unwrap_or_else(|_| b"[]".to_vec())

@@ -166,6 +166,47 @@ pub fn handle_at(b: Rect, x: f32, y: f32) -> Option<u8> {
     })
 }
 
+/// Screen points outside a corner that rotate instead of resize.
+pub(crate) const ROTATE_PT: f32 = 18.0;
+
+/// `p` turned `deg` (clockwise on screen, y down) about `c`.
+pub fn turn(p: (f32, f32), c: (f32, f32), deg: f32) -> (f32, f32) {
+    let (s, k) = deg.to_radians().sin_cos();
+    let (dx, dy) = (p.0 - c.0, p.1 - c.1);
+    (c.0 + dx * k - dy * s, c.1 + dx * s + dy * k)
+}
+
+/// Point (x, y) in the frame of box `b` drawn turned `rot` degrees about its centre.
+fn unturn(b: Rect, rot: f32, x: f32, y: f32) -> (f32, f32) {
+    turn((x, y), (b.center_x(), b.center_y()), -rot)
+}
+
+/// `handle_at` on a box drawn turned `rot` degrees about its centre.
+pub fn handle_at_turned(b: Rect, rot: f32, x: f32, y: f32) -> Option<u8> {
+    let (x, y) = unturn(b, rot, x, y);
+    handle_at(b, x, y)
+}
+
+/// The corner (0 nw, 2 ne, 4 se, 6 sw) whose rotate zone holds screen point (x, y): just outside the box, within
+/// `ROTATE_PT` of the corner (a handle under the point wins; check `handle_at_turned` first).
+pub fn rotate_at(b: Rect, rot: f32, x: f32, y: f32) -> Option<u8> {
+    let (x, y) = unturn(b, rot, x, y);
+    if (b.left..=b.right).contains(&x) && (b.top..=b.bottom).contains(&y) {
+        return None;
+    }
+    let hs = design_render::overlay::handles(b);
+    [0u8, 2, 4, 6].into_iter().find(|i| {
+        let (hx, hy) = hs[*i as usize];
+        (hx - x).hypot(hy - y) <= ROTATE_PT
+    })
+}
+
+/// Degrees into (-180, 180].
+pub fn norm_deg(d: f32) -> f32 {
+    let r = d.rem_euclid(360.0);
+    if r > 180.0 { r - 360.0 } else { r }
+}
+
 /// Where a dragged node lands among auto-layout siblings `kids` (their rects, in order): the number of siblings
 /// whose centre on the main axis is before the pointer.
 // ponytail: main axis only; a wrapping layout inserts by the main-axis centre too (row-aware when wrap matters).
@@ -192,6 +233,24 @@ mod tests {
 
     fn r(x: f32, y: f32, w: f32, h: f32) -> Rect {
         Rect::from_xywh(x, y, w, h)
+    }
+
+    #[test]
+    fn turned_handles_and_rotate_zones() {
+        let b = r(100.0, 100.0, 200.0, 100.0);
+        // upright: the zone is outside the corner, the handle itself resizes
+        assert_eq!(rotate_at(b, 0.0, 90.0, 90.0), Some(0));
+        assert_eq!(rotate_at(b, 0.0, 110.0, 110.0), None);
+        assert_eq!(rotate_at(b, 0.0, 200.0, 80.0), None);
+        // turned 90 degrees: the nw corner (100,100) shows at (250,50) and its handle and zone go with it
+        let nw = turn((100.0, 100.0), (200.0, 150.0), 90.0);
+        assert!((nw.0 - 250.0).abs() < 0.01 && (nw.1 - 50.0).abs() < 0.01);
+        assert_eq!(handle_at_turned(b, 90.0, 250.0, 50.0), Some(0));
+        assert_eq!(rotate_at(b, 90.0, 262.0, 45.0), Some(0));
+        assert_eq!(handle_at_turned(b, 90.0, 100.0, 100.0), None);
+        assert_eq!(norm_deg(190.0), -170.0);
+        assert_eq!(norm_deg(-180.0), 180.0);
+        assert_eq!(norm_deg(360.0), 0.0);
     }
 
     #[test]
