@@ -18,11 +18,9 @@ use serde_json::{Map, Value, json};
 use crate::ffi::*;
 use crate::host::Host;
 use crate::interact::{DRAG_PT, Edit, Gesture};
+use crate::pen::Pen;
 use crate::snap::{SNAP_PT, round2, snap_point};
 use crate::text::Session;
-
-/// Screen points within which a click lands on an anchor.
-const ANCHOR_PT: f32 = 6.0;
 
 pub(crate) struct Draw {
     tool: u32,
@@ -34,18 +32,11 @@ pub(crate) struct Draw {
     id: String,
 }
 
-pub(crate) struct Pen {
-    pts: Vec<(f32, f32)>,
-    rubber: Option<(f32, f32)>,
-    parent: String,
-    id: String,
-}
-
 #[derive(Default)]
 pub(crate) struct Tools {
     pub tool: u32,
     draw: Option<Draw>,
-    pen: Option<Pen>,
+    pub(crate) pen: Option<Pen>,
     /// last view point of a hand drag
     pan: Option<(f32, f32)>,
     /// a text node the text tool made: it goes again when editing ends with no text in it
@@ -77,12 +68,12 @@ impl Tools {
 }
 
 /// A drawn shape in world coordinates; `line` holds a line's two ends.
-struct Geo {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    line: Option<[(f32, f32); 2]>,
+pub(crate) struct Geo {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub line: Option<[(f32, f32); 2]>,
 }
 
 fn sign(v: f32) -> f32 {
@@ -137,13 +128,13 @@ fn geometry(tool: u32, from: (f32, f32), to: Option<(f32, f32)>, shift: bool) ->
     }
 }
 
-fn num(v: f32) -> String {
+pub(crate) fn num(v: f32) -> String {
     // + 0.0: no "-0"
     format!("{}", round2(v) + 0.0)
 }
 
 /// Path data for `pts` relative to `(ox, oy)`.
-fn path_data(pts: &[(f32, f32)], (ox, oy): (f32, f32), closed: bool) -> String {
+pub(crate) fn path_data(pts: &[(f32, f32)], (ox, oy): (f32, f32), closed: bool) -> String {
     let mut s = String::new();
     for (i, p) in pts.iter().enumerate() {
         s += &format!(
@@ -159,15 +150,15 @@ fn path_data(pts: &[(f32, f32)], (ox, oy): (f32, f32), closed: bool) -> String {
     s
 }
 
-fn solid(c: &str) -> Value {
+pub(crate) fn solid(c: &str) -> Value {
     json!([{"type": "solid", "color": c}])
 }
 
-fn stroke() -> Value {
+pub(crate) fn stroke() -> Value {
     json!({"color": "#111111", "width": 2})
 }
 
-fn bounds(pts: &[(f32, f32)]) -> Geo {
+pub(crate) fn bounds(pts: &[(f32, f32)]) -> Geo {
     let f = |g: fn(f32, f32) -> f32, i: usize, s: f32| {
         pts.iter()
             .map(|p| if i == 0 { p.0 } else { p.1 })
@@ -217,7 +208,7 @@ impl Host {
         Ok(())
     }
 
-    fn world_of(&self, x: f32, y: f32) -> (f32, f32) {
+    pub(crate) fn world_of(&self, x: f32, y: f32) -> (f32, f32) {
         self.camera.to_world(x, y)
     }
 
@@ -342,7 +333,7 @@ impl Host {
     }
 
     /// An `add` op for a node whose top-left is world `at`, last among `parent`'s children.
-    fn new_node(
+    pub(crate) fn new_node(
         &self,
         id: String,
         (ty, name): (NodeType, &str),
@@ -369,7 +360,7 @@ impl Host {
     }
 
     /// Show `ops` as the gesture preview (empty: nothing).
-    fn show(&mut self, ops: Vec<Op>) {
+    pub(crate) fn show(&mut self, ops: Vec<Op>) {
         self.gesture = match ops.first() {
             Some(Op::Add { id, .. }) => Some(Gesture::Edit(Edit {
                 handle: None,
@@ -387,7 +378,7 @@ impl Host {
     }
 
     /// Write `op` as one undo step, select the node and go back to the select tool.
-    fn finish_node(&mut self, op: Op) -> Result<(), i32> {
+    pub(crate) fn finish_node(&mut self, op: Op) -> Result<(), i32> {
         let Op::Add { id, .. } = &op else {
             return Ok(());
         };
@@ -418,109 +409,6 @@ impl Host {
         let op = self.draw_op();
         self.tools.draw = None;
         match op {
-            Some(op) => self.finish_node(op),
-            None => Ok(()),
-        }
-    }
-
-    // ---- pen --------------------------------------------------------------------------------------------------------
-
-    fn near(&self, a: (f32, f32), view: (f32, f32)) -> bool {
-        let s = self.camera.to_screen(a.0, a.1);
-        (s.0 - view.0).hypot(s.1 - view.1) <= ANCHOR_PT
-    }
-
-    fn pen_pointer(&mut self, phase: u32, x: f32, y: f32) -> Result<(), i32> {
-        let p = self.world_of(x, y);
-        let p = (p.0.round(), p.1.round());
-        match (phase, self.tools.pen.as_ref()) {
-            (DE_POINTER_DOWN, None) => {
-                let Some(page) = self.page_id() else {
-                    return Ok(());
-                };
-                self.cancel();
-                let parent = self.drop_target(p, &[], &page);
-                let id = self.new_id();
-                self.tools.pen = Some(Pen {
-                    pts: vec![p],
-                    rubber: None,
-                    parent,
-                    id,
-                });
-                Ok(())
-            }
-            (DE_POINTER_DOWN, Some(pen)) => {
-                let (first, last, n) = (pen.pts[0], pen.pts[pen.pts.len() - 1], pen.pts.len());
-                if n >= 3 && self.near(first, (x, y)) {
-                    return self.pen_finish(true);
-                }
-                // a second click on the last anchor (a double-click) ends the path
-                if self.near(last, (x, y)) {
-                    return self.pen_finish(false);
-                }
-                if let Some(pen) = self.tools.pen.as_mut() {
-                    pen.pts.push(p);
-                    pen.rubber = Some(p);
-                }
-                self.pen_show();
-                Ok(())
-            }
-            (DE_POINTER_MOVE, Some(_)) => {
-                if let Some(pen) = self.tools.pen.as_mut() {
-                    pen.rubber = Some(p);
-                }
-                self.pen_show();
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
-
-    /// The vector node for `pts` (open: stroke only; closed: filled too).
-    fn pen_op(&self, pen: &Pen, closed: bool, with: Option<(f32, f32)>) -> Option<Op> {
-        let mut pts = pen.pts.clone();
-        pts.extend(with);
-        let g = bounds(&pts);
-        let mut props = Map::new();
-        props.insert("w".into(), json!(g.w.round()));
-        props.insert("h".into(), json!(g.h.round()));
-        props.insert("path".into(), json!(path_data(&pts, (g.x, g.y), closed)));
-        props.insert("stroke".into(), stroke());
-        props.insert(
-            "fill".into(),
-            if closed { solid("#D9D9D9") } else { json!([]) },
-        );
-        self.new_node(
-            pen.id.clone(),
-            (NodeType::Vector, "Path"),
-            &pen.parent,
-            (g.x, g.y),
-            props,
-        )
-    }
-
-    /// Preview the path with the rubber band to the pointer.
-    fn pen_show(&mut self) {
-        let op = self.tools.pen.as_ref().and_then(|p| {
-            let with = p.rubber.filter(|r| Some(r) != p.pts.last());
-            (p.pts.len() + usize::from(with.is_some()) >= 2)
-                .then(|| self.pen_op(p, false, with))
-                .flatten()
-        });
-        self.show(op.into_iter().collect());
-    }
-
-    /// End the path: written when it has two anchors (three when closed), otherwise dropped. No pen path: nothing.
-    pub(crate) fn pen_finish(&mut self, closed: bool) -> Result<(), i32> {
-        let Some(pen) = self.tools.pen.take() else {
-            return Ok(());
-        };
-        if pen.pts.len() < if closed { 3 } else { 2 } {
-            self.gesture = None;
-            self.sync_preview();
-            return Ok(());
-        }
-        match self.pen_op(&pen, closed, None) {
             Some(op) => self.finish_node(op),
             None => Ok(()),
         }

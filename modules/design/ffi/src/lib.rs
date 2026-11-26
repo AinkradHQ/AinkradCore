@@ -7,6 +7,7 @@ mod edits;
 pub mod ffi;
 pub mod host;
 mod interact;
+mod pen;
 mod presence;
 mod preview;
 mod query;
