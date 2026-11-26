@@ -46,6 +46,10 @@ const MAX_PROMPT: usize = 1000;
 pub struct NewCompose {
     /// What to draw, 1 to 1000 characters. To refine a direction, say so here with the changes.
     pub prompt: String,
+    /// How many directions to draw: 1 or 3 (default 3).
+    #[serde(default)]
+    #[schema(required = false)]
+    pub count: Option<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, ToSchema)]
@@ -119,9 +123,17 @@ struct El {
     align: Option<String>,
 }
 
-pub(crate) fn prompt(user: &str) -> String {
+pub(crate) fn prompt(user: &str, count: usize) -> String {
+    let (draw, rule) = if count == 1 {
+        ("ONE design direction", "exactly 1 direction")
+    } else {
+        (
+            "THREE different design directions",
+            "exactly 3 directions that look clearly different (type, colour, layout)",
+        )
+    };
     format!(
-        "You are a UI designer. Draw THREE different design directions for this request:\n\n\
+        "You are a UI designer. Draw {draw} for this request:\n\n\
          \"{user}\"\n\n\
          Each direction is one phone screen, {FRAME_W} wide and {FRAME_H} tall. Reply with ONLY one JSON \
          object, no prose and no code fence, in this shape:\n\
@@ -129,7 +141,7 @@ pub(crate) fn prompt(user: &str) -> String {
          \"elements\":[{{\"kind\":\"text\",\"x\":24,\"y\":80,\"w\":300,\"text\":\"Hello\",\"size\":34,\
          \"weight\":700,\"align\":\"left\",\"fill\":\"#14213D\"}},{{\"kind\":\"rect\",\"x\":24,\"y\":540,\
          \"w\":312,\"h\":52,\"radius\":14,\"fill\":\"#2F7BEF\"}}]}}]}}\n\
-         Rules: exactly 3 directions that look clearly different (type, colour, layout). `kind` is text, rect \
+         Rules: {rule}. `kind` is text, rect \
          or ellipse. Colours are #rrggbb. Positions are inside the screen. At most {MAX_ELEMENTS} elements \
          each. Put button labels as separate text elements above their rect. Use plain words a normal \
          person understands."
@@ -137,7 +149,7 @@ pub(crate) fn prompt(user: &str) -> String {
 }
 
 /// The first `{` to the last `}` of the answer (a model may still wrap it in a sentence or a fence).
-fn parse(answer: &str) -> Result<Vec<Dir>, String> {
+fn parse(answer: &str, count: usize) -> Result<Vec<Dir>, String> {
     let (a, b) = (answer.find('{'), answer.rfind('}'));
     let (a, b) = match (a, b) {
         (Some(a), Some(b)) if a < b => (a, b),
@@ -145,9 +157,9 @@ fn parse(answer: &str) -> Result<Vec<Dir>, String> {
     };
     let parsed: Answer = serde_json::from_str(&answer[a..=b])
         .map_err(|_| "the AI's answer was not in the expected shape".to_owned())?;
-    if parsed.directions.len() != 3 {
+    if parsed.directions.len() != count {
         return Err(format!(
-            "the AI drew {} directions, not 3",
+            "the AI drew {} directions, not {count}",
             parsed.directions.len()
         ));
     }
@@ -441,17 +453,23 @@ pub(crate) async fn start(
         }
         Some(_) => {}
     }
-    let session = launch(&app, &me.device.id, &prompt(want)).await?;
+    let count = match req.count {
+        None | Some(3) => 3,
+        Some(1) => 1,
+        Some(_) => return Err(ApiError::bad_request("count is 1 or 3")),
+    };
+    let session = launch(&app, &me.device.id, &prompt(want, count)).await?;
     let id = format!("dc_{}", &mint()[2..]);
     sqlx::query(
-        "INSERT INTO design_composes (id, doc, session, prompt, state, created_by) \
-         VALUES (?, ?, ?, ?, 'drawing', ?)",
+        "INSERT INTO design_composes (id, doc, session, prompt, state, created_by, count) \
+         VALUES (?, ?, ?, ?, 'drawing', ?, ?)",
     )
     .bind(&id)
     .bind(&doc)
     .bind(&session)
     .bind(want)
     .bind(format!("person:{}", me.device.id))
+    .bind(count as i64)
     .execute(&app.pool)
     .await?;
     Ok(Json(ComposeView {
@@ -525,7 +543,7 @@ pub(crate) async fn get(
         None => Err("the AI session is gone".to_owned()),
         Some(_) => match answer_of(&app, &session).await? {
             a if a.trim().is_empty() => Err("the AI gave no answer".to_owned()),
-            a => parse(&a),
+            a => parse(&a, r.try_get::<i64, _>("count")? as usize),
         },
     };
     let finish = async {
@@ -573,15 +591,19 @@ mod tests {
     }
 
     #[test]
-    fn needs_exactly_three_directions() {
-        assert_eq!(parse(&answer(3)).unwrap().len(), 3);
-        assert!(parse(&answer(2)).is_err());
-        assert!(parse("no json").is_err());
+    fn needs_exactly_the_asked_directions() {
+        assert_eq!(parse(&answer(3), 3).unwrap().len(), 3);
+        assert!(parse(&answer(2), 3).is_err());
+        assert!(parse("no json", 3).is_err());
+        assert_eq!(parse(&answer(1), 1).unwrap().len(), 1);
+        assert!(parse(&answer(3), 1).is_err());
+        assert!(prompt("x", 1).contains("exactly 1 direction"));
+        assert!(prompt("x", 3).contains("exactly 3 directions"));
     }
 
     #[test]
     fn ops_are_valid_for_the_model() {
-        let dirs = parse(&answer(3)).unwrap();
+        let dirs = parse(&answer(3), 3).unwrap();
         let (ops, frames) = build_ops(&dirs, None, None, 0.0);
         assert_eq!(frames.len(), 3);
         // page + 3 frames + 3 x 2 known elements (the unknown kind is dropped)
