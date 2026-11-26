@@ -4,11 +4,12 @@
 
 use std::collections::BTreeSet;
 
-use design_model::ids::{is_node_id, is_order};
+use design_model::ids::{is_node_id, is_order, is_token_name};
 use design_model::limits::MAX_NODES;
+use design_model::limits::MAX_TOKENS;
 use design_model::tree::forest;
 use design_model::validate::{self, Cx, name_str, text_str};
-use design_model::{Doc, Node, NodeType};
+use design_model::{Doc, Node, NodeType, Token};
 use serde::Deserialize;
 use serde_json::{Map as JMap, Value};
 use yrs::{Any, In, Map, MapPrelim, Out, Text, TextPrelim, Transact, TransactionMut};
@@ -72,6 +73,14 @@ pub enum Op {
     /// Removes the node and its whole subtree.
     Delete {
         id: String,
+    },
+    /// Sets or replaces the design-system token `name` (`value` is `{kind, day, night}`, literals only); `null`
+    /// removes it. The doc crate cannot tell a system doc from a design (the kind lives in the Core's table), so the
+    /// op is accepted on any doc: a design's own tokens are ignored when it is resolved (T11), and the Core's
+    /// compose refuses to write them anywhere but a `system` doc.
+    Token {
+        name: String,
+        value: Value,
     },
 }
 
@@ -205,6 +214,23 @@ fn check(m: &mut Doc, i: usize, op: &Op) -> Result<Planned, Error> {
             let prev = m.nodes.get(id).and_then(|n| n.prev.clone());
             Planned::Move(id.clone(), parent.clone(), order.clone(), clock, prev)
         }
+        Op::Token { name, value } => {
+            if !is_token_name(name) {
+                return Err(refuse(i, "bad token name"));
+            }
+            if value.is_null() {
+                m.tokens.remove(name);
+                return Ok(Planned::Token(name.clone(), None));
+            }
+            let t: Token = serde_json::from_value(value.clone())
+                .map_err(|e| refuse(i, format!("token: {e}")))?;
+            validate::token(&t).map_err(|e| refuse(i, format!("token: {e}")))?;
+            if !m.tokens.contains_key(name) && m.tokens.len() >= MAX_TOKENS {
+                return Err(refuse(i, "too many tokens"));
+            }
+            m.tokens.insert(name.clone(), t.clone());
+            Planned::Token(name.clone(), Some(t))
+        }
         Op::Delete { id } => {
             node(m, i, id)?;
             let kids = forest(m).children;
@@ -287,7 +313,7 @@ impl Live {
             }
             let mut txn = l.doc().transact_mut_with(LOCAL);
             for p in &plan {
-                write(&l.nodes, &mut txn, p);
+                write(&l.nodes, &l.tokens, &mut txn, p);
             }
             drop(txn);
             if typing.is_none() {
@@ -307,6 +333,7 @@ impl Live {
         }
         let copy = crate::new_ydoc();
         let nodes = copy.get_or_insert_map("nodes");
+        let tokens = copy.get_or_insert_map("tokens");
         let state = self
             .doc()
             .transact()
@@ -321,7 +348,7 @@ impl Live {
         drop(txn);
         let mut txn = copy.transact_mut();
         for p in plan {
-            write(&nodes, &mut txn, p);
+            write(&nodes, &tokens, &mut txn, p);
         }
         // a different client id than this replica's: allow for its varint
         txn.encode_update_v1().len() + 64
@@ -332,7 +359,12 @@ impl Live {
     pub fn import(&mut self, d: &Doc) {
         let mut txn = self.doc().transact_mut_with(IMPORT);
         for (id, n) in &d.nodes {
-            write(&self.nodes, &mut txn, &Planned::Add(id.clone(), n.clone()));
+            write(
+                &self.nodes,
+                &self.tokens,
+                &mut txn,
+                &Planned::Add(id.clone(), n.clone()),
+            );
         }
         if let Some(s) = &d.meta.system {
             self.meta.insert(&mut txn, "system", s.as_str());
@@ -361,6 +393,11 @@ fn planned_bytes(p: &Planned) -> usize {
                 + f.as_ref().map_or(0, String::len)
         }
         Planned::Delete(ids) => ids.iter().map(String::len).sum(),
+        Planned::Token(n, t) => {
+            n.len()
+                + t.as_ref()
+                    .map_or(0, |t| serde_json::to_vec(t).map_or(0, |b| b.len()))
+        }
         Planned::Splice(id, _, _, t, _) => id.len() + t.len() + 16,
     }
 }
@@ -374,6 +411,7 @@ enum Planned {
     /// id, parent, order, clock, previous parent.
     Move(String, Option<String>, String, u64, Option<String>),
     Delete(Vec<String>),
+    Token(String, Option<Token>),
     /// id, UTF-16 offset, UTF-16 units removed, inserted text, the whole text after (for a node without a yrs text yet)
     Splice(String, u32, u32, String, String),
 }
@@ -385,8 +423,15 @@ fn node_map(nodes: &yrs::MapRef, txn: &TransactionMut, id: &str) -> Option<yrs::
     }
 }
 
-fn write(nodes: &yrs::MapRef, txn: &mut TransactionMut, p: &Planned) {
+fn write(nodes: &yrs::MapRef, tokens: &yrs::MapRef, txn: &mut TransactionMut, p: &Planned) {
     match p {
+        Planned::Token(name, Some(t)) => {
+            let v = serde_json::to_value(t).unwrap_or(Value::Null);
+            tokens.insert(txn, name.as_str(), json_any(&v));
+        }
+        Planned::Token(name, None) => {
+            tokens.remove(txn, name.as_str());
+        }
         Planned::Add(id, n) => {
             let props: MapPrelim = n
                 .props

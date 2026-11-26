@@ -162,3 +162,57 @@ fn presence_round_trip() {
     a.presence().apply(&u).unwrap();
     assert!(a.presence().peers().as_object().unwrap().is_empty());
 }
+
+#[test]
+fn token_ops_set_replace_remove_undo_and_sync_through_the_gate() {
+    use design_doc::Replica;
+    let mut l = Live::new();
+    let tok = |day: &str, night: &str| json!({"kind": "color", "day": day, "night": night});
+    l.apply_ops(&ops(json!([
+        {"op": "token", "name": "color.primary", "value": tok("#2F7BEF", "#5B9BFF")},
+        {"op": "token", "name": "space.md", "value": {"kind": "space", "day": 16, "night": 16}},
+    ])))
+    .unwrap();
+    let d = l.read();
+    assert_eq!(d.tokens.len(), 2);
+    assert_eq!(d.tokens["color.primary"].day, json!("#2F7BEF"));
+    // replace: one undo step puts the first value back
+    l.apply_ops(&ops(json!([
+        {"op": "token", "name": "color.primary", "value": tok("#111111", "#EEEEEE")},
+    ])))
+    .unwrap();
+    assert_eq!(l.read().tokens["color.primary"].day, json!("#111111"));
+    assert!(l.undo());
+    assert_eq!(l.read().tokens["color.primary"].day, json!("#2F7BEF"));
+    // remove
+    l.apply_ops(&ops(
+        json!([{"op": "token", "name": "space.md", "value": null}]),
+    ))
+    .unwrap();
+    assert_eq!(l.read().tokens.len(), 1);
+    assert!(l.undo());
+    assert_eq!(l.read().tokens.len(), 2);
+    // the Core's replica (the sync gate) accepts the whole thing
+    let mut r = Replica::new();
+    r.apply_remote(&l.outbox(true)).expect("tokens sync");
+    assert_eq!(r.read().unwrap().tokens.len(), 2);
+}
+
+#[test]
+fn bad_token_ops_are_refused_and_write_nothing() {
+    let mut l = Live::new();
+    let bad = [
+        json!({"op": "token", "name": "Color.Primary", "value": {"kind": "color", "day": "#fff", "night": "#000"}}),
+        json!({"op": "token", "name": "color..x", "value": {"kind": "color", "day": "#fff", "night": "#000"}}),
+        json!({"op": "token", "name": "color.x", "value": {"kind": "color", "day": "red", "night": "#000000"}}),
+        json!({"op": "token", "name": "color.x", "value": {"kind": "color", "day": {"token": "color.y"}, "night": "#000000"}}),
+        json!({"op": "token", "name": "space.x", "value": {"kind": "space", "day": -4, "night": 4}}),
+        json!({"op": "token", "name": "color.x", "value": {"kind": "nope", "day": "#fff", "night": "#000"}}),
+        json!({"op": "token", "name": "color.x", "value": {"kind": "color", "day": "#ffffff", "night": "#000000", "extra": 1}}),
+    ];
+    for b in bad {
+        let r = l.apply_ops(&ops(json!([b.clone()])));
+        assert!(matches!(r, Err(Error::Refused(_))), "{b}: {r:?}");
+    }
+    assert!(l.read().tokens.is_empty());
+}
