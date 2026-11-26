@@ -36,8 +36,14 @@ use crate::sync::{Actor, EditError, Registry};
 
 /// The chain the session draws its account from, by agent name (like the Brain's `brain-distil`).
 const AGENT: &str = "design-compose";
+/// The screen a compose draws unless the request gives a size: a phone.
 const FRAME_W: f64 = 360.0;
 const FRAME_H: f64 = 630.0;
+const MIN_SIDE: f64 = 200.0;
+const MAX_SIDE: f64 = 4000.0;
+
+/// The screen size in points, (width, height).
+type Dim = (f64, f64);
 const GAP: f64 = 60.0;
 const MAX_ELEMENTS: usize = 24;
 const MAX_PROMPT: usize = 1000;
@@ -50,6 +56,29 @@ pub struct NewCompose {
     #[serde(default)]
     #[schema(required = false)]
     pub count: Option<u8>,
+    /// The screen size to draw at, each side 200 to 4000 points (default 360 x 630, a phone). To redraw an
+    /// existing frame, send its size.
+    #[serde(default)]
+    #[schema(required = false)]
+    pub size: Option<ComposeSize>,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct ComposeSize {
+    pub w: f64,
+    pub h: f64,
+}
+
+fn size_of(s: Option<&ComposeSize>) -> Result<Dim, ApiError> {
+    let Some(s) = s else {
+        return Ok((FRAME_W, FRAME_H));
+    };
+    let ok = |v: f64| (MIN_SIDE..=MAX_SIDE).contains(&v);
+    if ok(s.w) && ok(s.h) {
+        Ok((s.w, s.h))
+    } else {
+        Err(ApiError::bad_request("size is 200 to 4000 points"))
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, ToSchema)]
@@ -123,7 +152,7 @@ struct El {
     align: Option<String>,
 }
 
-pub(crate) fn prompt(user: &str, count: usize) -> String {
+pub(crate) fn prompt(user: &str, count: usize, (w, h): Dim) -> String {
     let (draw, rule) = if count == 1 {
         ("ONE design direction", "exactly 1 direction")
     } else {
@@ -132,15 +161,34 @@ pub(crate) fn prompt(user: &str, count: usize) -> String {
             "exactly 3 directions that look clearly different (type, colour, layout)",
         )
     };
+    let kind = if w < 600.0 {
+        "phone"
+    } else if w < 1100.0 {
+        "tablet"
+    } else {
+        "desktop"
+    };
+    // the example's coordinates, drawn for a 360 x 630 phone, scaled to this size
+    let (kx, ky) = (w / FRAME_W, h / FRAME_H);
+    let (x, tw, bw) = (
+        (24.0 * kx).round(),
+        (300.0 * kx).round(),
+        (312.0 * kx).round(),
+    );
+    let (ty, by, bh) = (
+        (80.0 * ky).round(),
+        (540.0 * ky).round(),
+        (52.0 * ky).round(),
+    );
     format!(
         "You are a UI designer. Draw {draw} for this request:\n\n\
          \"{user}\"\n\n\
-         Each direction is one phone screen, {FRAME_W} wide and {FRAME_H} tall. Reply with ONLY one JSON \
+         Each direction is one {kind} screen, {w} wide and {h} tall. Lay it out for that size: use the full width. Reply with ONLY one JSON \
          object, no prose and no code fence, in this shape:\n\
          {{\"directions\":[{{\"name\":\"Calm\",\"summary\":\"one short sentence\",\"background\":\"#F5F7FB\",\
-         \"elements\":[{{\"kind\":\"text\",\"x\":24,\"y\":80,\"w\":300,\"text\":\"Hello\",\"size\":34,\
-         \"weight\":700,\"align\":\"left\",\"fill\":\"#14213D\"}},{{\"kind\":\"rect\",\"x\":24,\"y\":540,\
-         \"w\":312,\"h\":52,\"radius\":14,\"fill\":\"#2F7BEF\"}}]}}]}}\n\
+         \"elements\":[{{\"kind\":\"text\",\"x\":{x},\"y\":{ty},\"w\":{tw},\"text\":\"Hello\",\"size\":34,\
+         \"weight\":700,\"align\":\"left\",\"fill\":\"#14213D\"}},{{\"kind\":\"rect\",\"x\":{x},\"y\":{by},\
+         \"w\":{bw},\"h\":{bh},\"radius\":14,\"fill\":\"#2F7BEF\"}}]}}]}}\n\
          Rules: {rule}. `kind` is text, rect \
          or ellipse. Colours are #rrggbb. Positions are inside the screen. At most {MAX_ELEMENTS} elements \
          each. Put button labels as separate text elements above their rect. Use plain words a normal \
@@ -204,6 +252,7 @@ fn build_ops(
     page: Option<&str>,
     last_order: Option<&str>,
     x0: f64,
+    (fw, fh): Dim,
 ) -> (Vec<Value>, Vec<String>) {
     let mut ops = Vec::new();
     let mut frames = Vec::new();
@@ -233,20 +282,20 @@ fn build_ops(
         ops.push(
             json!({"op": "add", "id": id, "type": "frame", "parent": page_ref, "order": o,
             "name": name, "props": {
-                "x": x0 + i as f64 * (FRAME_W + GAP), "y": 0, "w": FRAME_W, "h": FRAME_H,
+                "x": x0 + i as f64 * (fw + GAP), "y": 0, "w": fw, "h": fh,
                 "radius": 24, "clip": true,
                 "fill": solid(&hex(d.background.as_deref(), "#F5F7FB"))}}),
         );
         let els: Vec<&El> = d.elements.iter().take(MAX_ELEMENTS).collect();
         let orders = ids::rebalance(els.len().max(1)).unwrap_or_default();
         for (e, o) in els.iter().zip(orders) {
-            let (x, y) = (num(e.x, 0.0, FRAME_W, 0.0), num(e.y, 0.0, FRAME_H, 0.0));
+            let (x, y) = (num(e.x, 0.0, fw, 0.0), num(e.y, 0.0, fh, 0.0));
             let kind = e.kind.as_str();
             let mut props = json!({"x": x, "y": y});
             let (ty, text, name) = match kind {
                 "text" => {
                     let size = num(e.size, 8.0, 96.0, 16.0);
-                    props["w"] = json!(num(e.w, 8.0, FRAME_W - x, 200.0).max(8.0));
+                    props["w"] = json!(num(e.w, 8.0, fw - x, 200.0).max(8.0));
                     props["h"] = json!((size * 1.3).ceil());
                     props["type"] = json!({"size": size, "weight": e.weight.unwrap_or(400).clamp(100, 900),
                         "align": match e.align.as_deref() { Some(a @ ("center" | "right")) => a, _ => "left" }});
@@ -258,8 +307,8 @@ fn build_ops(
                     )
                 }
                 "ellipse" | "rect" => {
-                    props["w"] = json!(num(e.w, 1.0, FRAME_W, 80.0));
-                    props["h"] = json!(num(e.h, 1.0, FRAME_H, 40.0));
+                    props["w"] = json!(num(e.w, 1.0, fw, 80.0));
+                    props["h"] = json!(num(e.h, 1.0, fh, 40.0));
                     props["fill"] = solid(&hex(e.fill.as_deref(), "#D6E6FF"));
                     if kind == "rect" {
                         props["radius"] = json!(num(e.radius, 0.0, 200.0, 0.0));
@@ -285,7 +334,12 @@ fn build_ops(
 
 /// Draws the three directions on the doc's first page, to the right of what is there. The ids of the
 /// three frames, in order.
-async fn draw(actor: &Actor, origin: &str, dirs: &[Dir]) -> Result<Vec<String>, EditError> {
+async fn draw(
+    actor: &Actor,
+    origin: &str,
+    dirs: &[Dir],
+    size: Dim,
+) -> Result<Vec<String>, EditError> {
     let (frames, _) = actor
         .edit(origin, |live| {
             let doc = live.read();
@@ -308,7 +362,7 @@ async fn draw(actor: &Actor, origin: &str, dirs: &[Dir]) -> Result<Vec<String>, 
                 .map(|n| prop(n, "x") + prop(n, "w"))
                 .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))))
                 .map_or(0.0, |v| v + GAP);
-            let (ops, temps) = build_ops(dirs, page.as_deref(), last, x0);
+            let (ops, temps) = build_ops(dirs, page.as_deref(), last, x0, size);
             let (ops, ids) = resolve_temps(ops, &|id| doc.nodes.contains_key(id), &mut mint)
                 .map_err(EditError::Refused)?;
             let ops: Vec<design_doc::Op> = serde_json::from_value(Value::Array(ops))
@@ -458,11 +512,12 @@ pub(crate) async fn start(
         Some(1) => 1,
         Some(_) => return Err(ApiError::bad_request("count is 1 or 3")),
     };
-    let session = launch(&app, &me.device.id, &prompt(want, count)).await?;
+    let size = size_of(req.size.as_ref())?;
+    let session = launch(&app, &me.device.id, &prompt(want, count, size)).await?;
     let id = format!("dc_{}", &mint()[2..]);
     sqlx::query(
-        "INSERT INTO design_composes (id, doc, session, prompt, state, created_by, count) \
-         VALUES (?, ?, ?, ?, 'drawing', ?, ?)",
+        "INSERT INTO design_composes (id, doc, session, prompt, state, created_by, count, w, h) \
+         VALUES (?, ?, ?, ?, 'drawing', ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&doc)
@@ -470,6 +525,8 @@ pub(crate) async fn start(
     .bind(want)
     .bind(format!("person:{}", me.device.id))
     .bind(count as i64)
+    .bind(size.0)
+    .bind(size.1)
     .execute(&app.pool)
     .await?;
     Ok(Json(ComposeView {
@@ -539,6 +596,7 @@ pub(crate) async fn get(
     if won == 0 {
         return Ok(Json(row_view(&load().await?.ok_or_else(none)?)?));
     }
+    let size = (r.try_get::<f64, _>("w")?, r.try_get::<f64, _>("h")?);
     let outcome = match s {
         None => Err("the AI session is gone".to_owned()),
         Some(_) => match answer_of(&app, &session).await? {
@@ -551,7 +609,7 @@ pub(crate) async fn get(
         let lease = open_actor(&app, &reg, &me, &doc)
             .await
             .map_err(|e| e.message)?;
-        let frames = draw(&lease.actor, &format!("session:{session}"), &dirs)
+        let frames = draw(&lease.actor, &format!("session:{session}"), &dirs, size)
             .await
             .map_err(|e| match e {
                 EditError::Paused => "a person took over this design".to_owned(),
@@ -590,6 +648,8 @@ mod tests {
         )
     }
 
+    const D: Dim = (FRAME_W, FRAME_H);
+
     #[test]
     fn needs_exactly_the_asked_directions() {
         assert_eq!(parse(&answer(3), 3).unwrap().len(), 3);
@@ -597,14 +657,14 @@ mod tests {
         assert!(parse("no json", 3).is_err());
         assert_eq!(parse(&answer(1), 1).unwrap().len(), 1);
         assert!(parse(&answer(3), 1).is_err());
-        assert!(prompt("x", 1).contains("exactly 1 direction"));
-        assert!(prompt("x", 3).contains("exactly 3 directions"));
+        assert!(prompt("x", 1, D).contains("exactly 1 direction"));
+        assert!(prompt("x", 3, D).contains("exactly 3 directions"));
     }
 
     #[test]
     fn ops_are_valid_for_the_model() {
         let dirs = parse(&answer(3), 3).unwrap();
-        let (ops, frames) = build_ops(&dirs, None, None, 0.0);
+        let (ops, frames) = build_ops(&dirs, None, None, 0.0, D);
         assert_eq!(frames.len(), 3);
         // page + 3 frames + 3 x 2 known elements (the unknown kind is dropped)
         assert_eq!(ops.len(), 1 + 3 + 6);
@@ -627,11 +687,62 @@ mod tests {
             }],
             ..Dir::default()
         };
-        let (ops, _) = build_ops(&[d], Some("n_aaaaaaaaaaaa"), Some("a"), 400.0);
+        let (ops, _) = build_ops(&[d], Some("n_aaaaaaaaaaaa"), Some("a"), 400.0, D);
         assert_eq!(ops[0]["props"]["fill"][0]["color"], "#F5F7FB");
         assert_eq!(ops[0]["props"]["x"], 400.0);
         assert_eq!(ops[1]["props"]["x"], FRAME_W);
         assert_eq!(ops[1]["props"]["w"], 80.0);
         assert_eq!(ops[1]["props"]["fill"][0]["color"], "#D6E6FF");
+    }
+
+    #[test]
+    fn sizes_are_checked_and_default_to_a_phone() {
+        assert_eq!(size_of(None).unwrap(), (360.0, 630.0));
+        let sz = |w, h| size_of(Some(&ComposeSize { w, h }));
+        assert_eq!(sz(1440.0, 900.0).unwrap(), (1440.0, 900.0));
+        assert_eq!(sz(200.0, 4000.0).unwrap(), (200.0, 4000.0));
+        for (w, h) in [
+            (199.0, 900.0),
+            (1440.0, 4001.0),
+            (f64::NAN, 900.0),
+            (1440.0, f64::INFINITY),
+            (-5.0, 900.0),
+        ] {
+            assert!(sz(w, h).is_err(), "{w} x {h}");
+        }
+    }
+
+    #[test]
+    fn a_desktop_compose_builds_desktop_frames() {
+        let size = (1440.0, 900.0);
+        let p = prompt("x", 3, size);
+        assert!(
+            p.contains("one desktop screen, 1440 wide and 900 tall"),
+            "{p}"
+        );
+        assert!(p.contains("use the full width"));
+        assert!(p.contains("\"x\":96,") && p.contains("\"w\":1248,"), "{p}");
+        assert!(prompt("x", 3, (800.0, 600.0)).contains("one tablet screen"));
+        assert!(prompt("x", 3, D).contains("one phone screen, 360 wide and 630 tall"));
+        let mut dirs = parse(&answer(3), 3).unwrap();
+        dirs[0].elements[1].x = Some(5000.0);
+        dirs[0].elements[1].w = Some(9000.0);
+        dirs[0].elements[1].h = Some(9000.0);
+        let (ops, _) = build_ops(&dirs, None, None, 0.0, size);
+        let frames: Vec<&Value> = ops.iter().filter(|o| o["type"] == "frame").collect();
+        let xs: Vec<f64> = frames
+            .iter()
+            .map(|f| f["props"]["x"].as_f64().unwrap())
+            .collect();
+        assert_eq!(xs, [0.0, 1500.0, 3000.0]);
+        assert!(
+            frames
+                .iter()
+                .all(|f| f["props"]["w"] == 1440.0 && f["props"]["h"] == 900.0)
+        );
+        let rect = ops.iter().find(|o| o["type"] == "rect").unwrap();
+        assert_eq!(rect["props"]["x"], 1440.0);
+        assert_eq!(rect["props"]["w"], 1440.0);
+        assert_eq!(rect["props"]["h"], 900.0);
     }
 }

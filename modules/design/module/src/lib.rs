@@ -81,6 +81,12 @@ pub static MIGRATIONS: &[Migration] = &[
         up: include_str!("../migrations/0007_design_compose_count.up.sql"),
         down: include_str!("../migrations/0007_design_compose_count.down.sql"),
     },
+    Migration {
+        version: 8,
+        name: "0008_design_compose_size",
+        up: include_str!("../migrations/0008_design_compose_size.up.sql"),
+        down: include_str!("../migrations/0008_design_compose_size.down.sql"),
+    },
 ];
 
 /// T8: 25 MB per asset, 2 GB for the library; both can only be lowered by the person (the upload
