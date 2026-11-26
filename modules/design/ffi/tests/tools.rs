@@ -351,3 +351,69 @@ fn the_hand_pans_and_the_cursor_follows_the_tool() {
     assert_eq!(de_set_tool(h, DE_TOOL_SELECT), DE_OK);
     assert_eq!(de_cursor(h, 5.0, 5.0), DE_CURSOR_DEFAULT);
 }
+
+fn whole(v: &Value) -> bool {
+    v.as_f64().is_some_and(|f| f.fract() == 0.0)
+}
+
+#[test]
+fn drawn_nodes_have_whole_point_geometry_at_an_awkward_zoom() {
+    let h = engine();
+    testing::set_camera(h, 1.24, (37.3, 11.7));
+    let pt = |x: f32, y: f32| (x * 1.24 + 37.3, y * 1.24 + 11.7);
+    let drag = |tool: u32, a: (f32, f32), b: (f32, f32)| {
+        assert_eq!(de_set_tool(h, tool), DE_OK);
+        let (a, b) = (pt(a.0, a.1), pt(b.0, b.1));
+        assert_eq!(de_pointer(h, DE_POINTER_DOWN, a.0, a.1, 0), DE_OK);
+        assert_eq!(de_pointer(h, DE_POINTER_MOVE, b.0, b.1, 0), DE_OK);
+        assert_eq!(de_pointer(h, DE_POINTER_UP, b.0, b.1, 0), DE_OK);
+        created(h)["props"].clone()
+    };
+    for tool in [DE_TOOL_RECT, DE_TOOL_ELLIPSE, DE_TOOL_FRAME, DE_TOOL_LINE] {
+        let p = drag(tool, (601.3, 202.7), (803.9, 335.2));
+        for k in ["x", "y", "w", "h"] {
+            assert!(whole(&p[k]), "tool {tool} {k}: {p}");
+        }
+        if tool == DE_TOOL_LINE {
+            let d = p["path"].as_str().unwrap();
+            assert!(
+                d.split([' ', 'M', 'L'])
+                    .filter(|t| !t.is_empty())
+                    .all(|t| !t.contains('.')),
+                "{d}"
+            );
+        }
+    }
+    // the pen: whole anchors, whole box
+    assert_eq!(de_set_tool(h, DE_TOOL_PEN), DE_OK);
+    for at in [(600.4, 200.6), (700.9, 233.3), (650.5, 300.1)] {
+        let v = pt(at.0, at.1);
+        assert_eq!(de_pointer(h, DE_POINTER_DOWN, v.0, v.1, 0), DE_OK);
+        assert_eq!(de_pointer(h, DE_POINTER_UP, v.0, v.1, 0), DE_OK);
+    }
+    assert_eq!(de_key(h, DE_KEY_ENTER, 0), DE_OK);
+    let p = created(h)["props"].clone();
+    for k in ["x", "y", "w", "h"] {
+        assert!(whole(&p[k]), "{k}: {p}");
+    }
+    assert!(!p["path"].as_str().unwrap().contains('.'), "{p}");
+}
+
+#[test]
+fn a_flat_line_can_be_clicked() {
+    let h = engine();
+    click(h, DE_TOOL_LINE, (700.0, 500.0));
+    let id = selection(h)[0].clone();
+    assert_eq!(num(&node(h, &id)["props"]["h"]), 0.0);
+    assert_eq!(de_key(h, DE_KEY_ESCAPE, 0), DE_OK);
+    assert!(selection(h).is_empty());
+    // 1 point beside the line, and 2 along it
+    assert_eq!(de_set_tool(h, DE_TOOL_SELECT), DE_OK);
+    ptr(h, DE_POINTER_DOWN, (760.0, 501.0), 0);
+    ptr(h, DE_POINTER_UP, (760.0, 501.0), 0);
+    assert_eq!(selection(h), [id]);
+    // far from it: nothing
+    ptr(h, DE_POINTER_DOWN, (760.0, 520.0), 0);
+    ptr(h, DE_POINTER_UP, (760.0, 520.0), 0);
+    assert!(selection(h).is_empty());
+}

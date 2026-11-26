@@ -91,7 +91,9 @@ fn sign(v: f32) -> f32 {
 
 /// The shape for a drag from `from` to `to` (`None` = a click: the default size).
 fn geometry(tool: u32, from: (f32, f32), to: Option<(f32, f32)>, shift: bool) -> Geo {
-    let (dx, dy) = to.map_or((0.0, 0.0), |t| (t.0 - from.0, t.1 - from.1));
+    // whole points: the box and the line's ends sit on integers (ponytail: no grid setting exists to snap to instead)
+    let from = (from.0.round(), from.1.round());
+    let (dx, dy) = to.map_or((0.0, 0.0), |t| (t.0.round() - from.0, t.1.round() - from.1));
     let (dx, dy) = match (tool, to) {
         (DE_TOOL_LINE, None) => (160.0, 0.0),
         (DE_TOOL_LINE, Some(_)) if shift => {
@@ -107,6 +109,7 @@ fn geometry(tool: u32, from: (f32, f32), to: Option<(f32, f32)>, shift: bool) ->
         }
         _ => (dx, dy),
     };
+    let (dx, dy) = (dx.round(), dy.round());
     let (x, y) = (from.0.min(from.0 + dx), from.1.min(from.1 + dy));
     match tool {
         DE_TOOL_LINE => Geo {
@@ -300,8 +303,8 @@ impl Host {
         let (tool, id, parent) = (d.tool, d.id.clone(), d.parent.clone());
         let g = geometry(tool, d.from, d.to, d.shift);
         let mut props = Map::new();
-        props.insert("w".into(), json!(round2(g.w)));
-        props.insert("h".into(), json!(round2(g.h)));
+        props.insert("w".into(), json!(g.w.round()));
+        props.insert("h".into(), json!(g.h.round()));
         let ty = match tool {
             DE_TOOL_FRAME => {
                 props.insert("fill".into(), solid("#FFFFFF"));
@@ -350,8 +353,8 @@ impl Host {
         // in an auto-layout parent the position is the layout's
         if !self.is_flow(parent) {
             let o = self.origin(parent);
-            props.insert("x".into(), json!(round2(at.0 - o.0)));
-            props.insert("y".into(), json!(round2(at.1 - o.1)));
+            props.insert("x".into(), json!((at.0 - o.0).round()));
+            props.insert("y".into(), json!((at.1 - o.1).round()));
         }
         let last = self.kids(parent).last().and_then(|k| self.order_of(k));
         Some(Op::Add {
@@ -429,6 +432,7 @@ impl Host {
 
     fn pen_pointer(&mut self, phase: u32, x: f32, y: f32) -> Result<(), i32> {
         let p = self.world_of(x, y);
+        let p = (p.0.round(), p.1.round());
         match (phase, self.tools.pen.as_ref()) {
             (DE_POINTER_DOWN, None) => {
                 let Some(page) = self.page_id() else {
@@ -478,8 +482,8 @@ impl Host {
         pts.extend(with);
         let g = bounds(&pts);
         let mut props = Map::new();
-        props.insert("w".into(), json!(round2(g.w)));
-        props.insert("h".into(), json!(round2(g.h)));
+        props.insert("w".into(), json!(g.w.round()));
+        props.insert("h".into(), json!(g.h.round()));
         props.insert("path".into(), json!(path_data(&pts, (g.x, g.y), closed)));
         props.insert("stroke".into(), stroke());
         props.insert(
