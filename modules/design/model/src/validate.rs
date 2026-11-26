@@ -252,13 +252,14 @@ fn shadow_value(v: &Value, cx: &mut Cx) -> R {
         return cx.use_ref(n, &[K::Shadow]);
     }
     for s in arr(v, 0, 8)? {
-        let m = obj(s, &["x", "y", "blur", "spread", "color"])?;
+        let m = obj(s, &["x", "y", "blur", "spread", "color", "inset"])?;
         for (k, x) in m {
             at(
                 k,
                 match k.as_str() {
                     "x" | "y" | "spread" => num(x, cx, SIZE, -MAX_COORD, MAX_COORD),
                     "blur" => num(x, cx, SIZE, 0.0, MAX_COORD),
+                    "inset" => boolean(x),
                     _ => color(x, cx),
                 },
             )?;
@@ -286,7 +287,7 @@ pub fn applies(key: &str, ty: NodeType) -> Option<bool> {
     Some(match key {
         "fill" => true,
         "x" | "y" | "w" | "h" | "sizing" | "opacity" | "blend" | "visible" | "link" | "role"
-        | "stroke" | "shadow" => ty != T::Page,
+        | "stroke" | "shadow" | "rotation" | "locked" | "blur" | "backdrop_blur" => ty != T::Page,
         "layout" | "clip" => matches!(ty, T::Frame | T::Component | T::Instance),
         "radius" => matches!(
             ty,
@@ -313,19 +314,13 @@ pub fn prop_value(key: &str, v: &Value, cx: &mut Cx) -> R {
         "layout" => layout(v, cx),
         "clip" | "visible" => boolean(v),
         "fill" => arr(v, 0, 16).and_then(|a| a.iter().try_for_each(|f| fill_item(f, cx))),
-        "stroke" => obj(v, &["color", "width", "role"]).and_then(|m| {
-            for (k, x) in m {
-                at(
-                    k,
-                    match k.as_str() {
-                        "color" => color(x, cx),
-                        "width" => num(x, cx, SIZE, 0.0, 1000.0),
-                        _ => en(x, &["error", "focus", "drop", "checkbox", "chart", "other"]),
-                    },
-                )?;
-            }
-            Ok(())
-        }),
+        "stroke" => match v.as_array() {
+            Some(_) => arr(v, 0, 8).and_then(|a| a.iter().try_for_each(|x| stroke_item(x, cx))),
+            None => stroke_item(v, cx),
+        },
+        "rotation" => num(v, cx, &[], -360.0, 360.0),
+        "locked" => boolean(v),
+        "blur" | "backdrop_blur" => num(v, cx, &[], 0.0, 1000.0),
         "radius" => match v.as_array() {
             Some(a) if a.len() == 4 => a
                 .iter()
@@ -373,6 +368,24 @@ pub fn prop_value(key: &str, v: &Value, cx: &mut Cx) -> R {
         _ => Err("unknown prop".into()),
     };
     at(key, r)
+}
+
+/// One stroke: `{color, width?, role?, align?, dash?}`. `stroke` is one of these or a list of up to 8 (drawn in order).
+fn stroke_item(v: &Value, cx: &mut Cx) -> R {
+    for (k, x) in obj(v, &["color", "width", "role", "align", "dash"])? {
+        at(
+            k,
+            match k.as_str() {
+                "color" => color(x, cx),
+                "width" => num(x, cx, SIZE, 0.0, 1000.0),
+                "align" => en(x, &["inside", "center", "outside"]),
+                "dash" => arr(x, 0, 16)
+                    .and_then(|a| a.iter().try_for_each(|d| num(d, cx, &[], 0.0, 1000.0))),
+                _ => en(x, &["error", "focus", "drop", "checkbox", "chart", "other"]),
+            },
+        )?;
+    }
+    Ok(())
 }
 
 fn layout(v: &Value, cx: &mut Cx) -> R {

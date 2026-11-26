@@ -103,6 +103,9 @@ fn props() -> Vec<(&'static str, &'static str, Value)> {
         ("path", "vector", json!("M0 0 L5 5")),
         ("asset", "image", json!(HASH)),
         ("fit", "image", json!("tile")),
+        ("rotation", "rect", json!(30)),
+        ("blur", "rect", json!(8)),
+        ("backdrop_blur", "rect", json!(8)),
     ]
 }
 #[test]
@@ -131,6 +134,10 @@ fn every_schema_prop_changes_the_export() {
         "fit",
         "component",
         "overrides",
+        "rotation",
+        "blur",
+        "backdrop_blur",
+        // `locked` is an editor prop: it never changes the export
     ];
     for k in all {
         assert!(
