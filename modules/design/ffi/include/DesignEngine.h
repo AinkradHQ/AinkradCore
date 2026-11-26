@@ -365,6 +365,32 @@ int32_t de_magnify(uint64_t h, float factor, float x, float y);
 // `DE_KEY_*` with `DE_MOD_*` bits; unknown keys are ignored.
 int32_t de_key(uint64_t h, uint32_t key, uint32_t mods);
 
+// This document's own tokens (a design-system doc): a JSON array `[{"name", "kind", "day", "night"}]` in name order,
+// the literals as stored (`de_tokens` lists the linked system's, names and kinds only).
+//
+// # Safety
+// See `put`.
+int32_t de_doc_tokens(uint64_t h,
+                      uint8_t *out,
+                      size_t cap,
+                      size_t *out_len);
+
+// Node `node_id` as PNG bytes, rendered by Skia on the CPU (not the Metal surface) at `scale` (1 to 4) in the day or
+// the night theme (`night` non-zero), on a transparent background. Sized like the other readers: `DE_ERR_SMALL_BUFFER`
+// with the length in `*out_len` (it can be megabytes), then call again. `DE_ERR_INVALID` for an unknown node,
+// `DE_ERR_ARG` for a bad scale, `DE_ERR_TOO_LARGE` over 16384 px a side or 64 million pixels.
+//
+// # Safety
+// `node_id..+len` readable; see `put`.
+int32_t de_export_png(uint64_t h,
+                      const uint8_t *node_id,
+                      size_t len,
+                      float scale,
+                      int32_t night,
+                      uint8_t *out,
+                      size_t cap,
+                      size_t *out_len);
+
 // Selected node ids, a JSON array.
 //
 // # Safety

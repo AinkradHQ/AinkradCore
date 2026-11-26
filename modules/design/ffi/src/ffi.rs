@@ -548,6 +548,47 @@ pub extern "C" fn de_key(h: u64, key: u32, mods: u32) -> i32 {
 
 // ---- queries ------------------------------------------------------------------------------------------------------
 
+/// This document's own tokens (a design-system doc): a JSON array `[{"name", "kind", "day", "night"}]` in name order,
+/// the literals as stored (`de_tokens` lists the linked system's, names and kinds only).
+///
+/// # Safety
+/// See `put`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_doc_tokens(
+    h: u64,
+    out: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    with(h, |e| unsafe {
+        put(&e.doc_tokens_json(), out, cap, out_len)
+    })
+}
+
+/// Node `node_id` as PNG bytes, rendered by Skia on the CPU (not the Metal surface) at `scale` (1 to 4) in the day or
+/// the night theme (`night` non-zero), on a transparent background. Sized like the other readers: `DE_ERR_SMALL_BUFFER`
+/// with the length in `*out_len` (it can be megabytes), then call again. `DE_ERR_INVALID` for an unknown node,
+/// `DE_ERR_ARG` for a bad scale, `DE_ERR_TOO_LARGE` over 16384 px a side or 64 million pixels.
+///
+/// # Safety
+/// `node_id..+len` readable; see `put`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn de_export_png(
+    h: u64,
+    node_id: *const u8,
+    len: usize,
+    scale: f32,
+    night: i32,
+    out: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    with(h, |e| unsafe {
+        let id = text(node_id, len, DE_MAX_ID_BYTES)?;
+        put(&e.export_png(id, scale, night != 0)?, out, cap, out_len)
+    })
+}
+
 /// Selected node ids, a JSON array.
 ///
 /// # Safety

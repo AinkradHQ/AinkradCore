@@ -52,7 +52,7 @@ pub struct Host {
     /// The resolved document the renderer last loaded (gesture previews patch its boards).
     pub(crate) resolved: Option<Resolved>,
     pub(crate) camera: Camera,
-    theme: Theme,
+    pub(crate) theme: Theme,
     pub(crate) page: usize,
     pub(crate) selection: Vec<String>,
     pub(crate) renderer: Option<Renderer>,

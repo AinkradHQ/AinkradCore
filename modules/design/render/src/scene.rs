@@ -99,7 +99,7 @@ pub struct Renderer {
     pub stats: Stats,
     theme: Theme,
     pub(crate) boards: Vec<Board>,
-    background: Color,
+    pub(crate) background: Color,
     dirty: Dirty,
     frame: u64,
     assets_epoch: u64,
