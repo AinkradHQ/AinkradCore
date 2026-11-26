@@ -3377,11 +3377,21 @@ export interface components {
             expires_at: components["schemas"]["Timestamp"];
             id: string;
             label: string;
+            /** @description Why it failed, in plain words, when `stage` is `failed`. */
+            message?: string | null;
             provider: string;
             /** @description Why it `failed` or was `cancelled`; provider text passes the redactor. */
             reason?: string | null;
             /** @description The runner doing the sign-in. */
             runner: string;
+            /**
+             * @description What the person does now (API 105): `starting`, `open_url` (open `url` and sign in),
+             *     `enter_code` (paste the code the page gives: `claude-sub`), `finishing` (the code is in or
+             *     the account is being stored), `done` or `failed` (also a cancelled one; see `message`). A
+             *     guided sign-in (`agy-sub`, `opencode-sub`) is `starting` here until it showed a page:
+             *     `getAccountLoginScreen` reads its live stage.
+             */
+            stage?: string | null;
             /**
              * @description `starting`, `open_url` (open `url`, then send the code), `waiting_code` (the code is with
              *     the runner), `storing`, `done` (see `account_id`), `failed` (see `reason`) or `cancelled`.
@@ -5283,6 +5293,18 @@ export interface components {
             code?: string | null;
             /** @description The last lines the sign-in's CLI printed. */
             lines: string[];
+            /**
+             * @description Why the last attempt on this screen failed, in plain words (the CLI then goes back and a new
+             *     page follows: use the code from that one).
+             */
+            message?: string | null;
+            /**
+             * @description What the person does now (API 105), read from this screen: `starting` (the CLI is still
+             *     getting there, or going back after a failed attempt; a menu it knows is answered for them), `open_url` (open `url` and sign
+             *     in), `enter_code` (the CLI waits for a pasted code; `url`, when shown, is the page that gives
+             *     it) or `finishing` (the CLI says it is signed in). `lines` are for a "Show details" view.
+             */
+            stage?: string | null;
             /** @description The sign-in page, once it printed one (https on the provider's own hosts). */
             url?: string | null;
         };
@@ -6082,26 +6104,17 @@ export interface components {
             base_url: string;
             /** @description Read-only: built-ins cannot be edited. */
             builtin?: boolean;
-            /** @description Read-only, a preset's: the model an AI-order entry on it runs when it names none. */
-            default_model?: string | null;
             /** @description `env` and/or `gateway`. */
             delivery: string[];
             /** @description `claude`, `codex` or `agy`. */
             harness: string;
             id: string;
             /**
-             * @description Read-only, a preset's: how its keys usually start (`sk-or-v1-`), a hint for the paste field
-             *     only; a preset key is bound to its account and host, not to this.
-             */
-            key_hint?: string | null;
-            /**
              * @description The shape this provider's keys start with (6 to 16 characters, never a built-in's, such
              *     as `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway
              *     (`delivery` is `["gateway"]`): the broker binds each key to the account's host by it.
              */
             key_prefix?: string | null;
-            /** @description Read-only, a preset's: the vendor's page where a person creates a key. */
-            key_url?: string | null;
             /** @description `paste`. */
             login_methods: string[];
             /**
@@ -6118,11 +6131,10 @@ export interface components {
             /** @description When the models' list prices were read. */
             priced_at?: string | null;
             /**
-             * @description Read-only: the harness the Core runs this provider's AI sessions on, chosen by the Core and
-             *     never by the person (E7-5): a built-in's own, `opencode` for a provider with no harness of
-             *     its own (a preset, a user definition). `harness` above is only the definition's dialect.
+             * @description `false` (API 105): offered for no new sign-in, though accounts it made still work. Only the
+             *     OpenCode login, whose vendors are API-key providers now. Absent: as `login_methods` says.
              */
-            session_harness?: string | null;
+            sign_in?: boolean | null;
             /**
              * @description The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
              *     for a provider whose model list needs no key (OpenRouter's is public: a revoked key would
@@ -7091,7 +7103,8 @@ export interface components {
             confirm_identity_change?: boolean | null;
             /**
              * Format: int64
-             * @description Sign in again for this connection: its credential is replaced, nothing else changes.
+             * @description Sign in again for this connection: its credential is replaced, nothing else changes (a
+             *     pasted-token connection of the same account becomes a sign-in again).
              */
             connection?: number | null;
             /** @description `github` or `jira`. */
@@ -10243,7 +10256,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description A sign-in begun, held in Core: GitHub's device flow returns `user_code`, `verification_uri` and `interval` (Core polls GitHub itself, so the person can close the window); Atlassian returns `authorize_url` (the Mac app opens it, catches the redirect on 127.0.0.1 and posts `code` and `state` to `connectionFlowCallback`) and `state`. With `connection`, the credential of that connection is replaced (CN5, sign in again); a GitHub sign-in as another account ends `failed` with `different_account` unless `confirm_identity_change` is true. A flow ends in ONE connection. 409 `not_configured` while Ainkrad's app for the kind is not set up (see `listConnectionKinds`), 429 `too_many_flows` (4 waiting per user), 502 when GitHub could not give a code, 400 for a bad name, label or kind, 404 for another workspace's connection */
+            /** @description A sign-in begun, held in Core: GitHub's device flow returns `user_code`, `verification_uri` and `interval` (Core polls GitHub itself, so the person can close the window); Atlassian returns `authorize_url` (the Mac app opens it, catches the redirect on 127.0.0.1 and posts `code` and `state` to `connectionFlowCallback`) and `state`. With `connection`, the credential of that connection is replaced (CN5, sign in again); a GitHub sign-in as another account ends `failed` with `different_account` unless `confirm_identity_change` is true. A `connection` made with a pasted token may sign in too: the sign-in must be the SAME account (else `failed` `different_account`, no override), and the connection becomes `oauth` again, its id, name, label, grants and limits kept. A flow ends in ONE connection. 409 `not_configured` while Ainkrad's app for the kind is not set up (see `listConnectionKinds`), 429 `too_many_flows` (4 waiting per user), 502 when GitHub could not give a code, 400 for a bad name, label or kind, 404 for another workspace's connection */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -141,7 +141,10 @@ fn mine(app: &App, me: &Caller, user: i64, id: &str) -> Result<std::sync::Arc<Fl
         catches the redirect on 127.0.0.1 and posts `code` and `state` to \
         `connectionFlowCallback`) and `state`. With `connection`, the credential of that \
         connection is replaced (CN5, sign in again); a GitHub sign-in as another account ends \
-        `failed` with `different_account` unless `confirm_identity_change` is true. A flow ends in ONE connection. 409 \
+        `failed` with `different_account` unless `confirm_identity_change` is true. A \
+        `connection` made with a pasted token may sign in too: the sign-in must be the SAME \
+        account (else `failed` `different_account`, no override), and the connection becomes \
+        `oauth` again, its id, name, label, grants and limits kept. A flow ends in ONE connection. 409 \
         `not_configured` while Ainkrad's app for the kind is not set up (see \
         `listConnectionKinds`), 429 `too_many_flows` (4 waiting per user), 502 when GitHub could \
         not give a code, 400 for a bad name, label or kind, 404 for another workspace's \
@@ -181,9 +184,10 @@ pub async fn start(
     }
     if let Some(id) = b.connection {
         let c = crate::store::connections::get(&app.pool, user, id).await?;
-        if c.kind != d.kind || c.auth_method != "oauth" {
+        // A pasted-token connection may sign in too: it becomes a sign-in again, same account.
+        if c.kind != d.kind || !matches!(c.auth_method.as_str(), "oauth" | "token") {
             return Err(ApiError::bad_request(
-                "only a connection made by signing in is signed in again",
+                "only a connection made by signing in or with a token is signed in again",
             ));
         }
     }

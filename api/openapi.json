@@ -212,6 +212,13 @@
           "label": {
             "type": "string"
           },
+          "message": {
+            "description": "Why it failed, in plain words, when `stage` is `failed`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "provider": {
             "type": "string"
           },
@@ -225,6 +232,13 @@
           "runner": {
             "description": "The runner doing the sign-in.",
             "type": "string"
+          },
+          "stage": {
+            "description": "What the person does now (API 105): `starting`, `open_url` (open `url` and sign in),\n`enter_code` (paste the code the page gives: `claude-sub`), `finishing` (the code is in or\nthe account is being stored), `done` or `failed` (also a cancelled one; see `message`). A\nguided sign-in (`agy-sub`, `opencode-sub`) is `starting` here until it showed a page:\n`getAccountLoginScreen` reads its live stage.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "state": {
             "description": "`starting`, `open_url` (open `url`, then send the code), `waiting_code` (the code is with\nthe runner), `storing`, `done` (see `account_id`), `failed` (see `reason`) or `cancelled`.",
@@ -5063,6 +5077,20 @@
             },
             "type": "array"
           },
+          "message": {
+            "description": "Why the last attempt on this screen failed, in plain words (the CLI then goes back and a new\npage follows: use the code from that one).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage": {
+            "description": "What the person does now (API 105), read from this screen: `starting` (the CLI is still\ngetting there, or going back after a failed attempt; a menu it knows is answered for them), `open_url` (open `url` and sign\nin), `enter_code` (the CLI waits for a pasted code; `url`, when shown, is the page that gives\nit) or `finishing` (the CLI says it is signed in). `lines` are for a \"Show details\" view.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "url": {
             "description": "The sign-in page, once it printed one (https on the provider's own hosts).",
             "type": [
@@ -6984,13 +7012,6 @@
             "description": "Read-only: built-ins cannot be edited.",
             "type": "boolean"
           },
-          "default_model": {
-            "description": "Read-only, a preset's: the model an AI-order entry on it runs when it names none.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "delivery": {
             "description": "`env` and/or `gateway`.",
             "items": {
@@ -7005,22 +7026,8 @@
           "id": {
             "type": "string"
           },
-          "key_hint": {
-            "description": "Read-only, a preset's: how its keys usually start (`sk-or-v1-`), a hint for the paste field\nonly; a preset key is bound to its account and host, not to this.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "key_prefix": {
             "description": "The shape this provider's keys start with (6 to 16 characters, never a built-in's, such\nas `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway\n(`delivery` is `[\"gateway\"]`): the broker binds each key to the account's host by it.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "key_url": {
-            "description": "Read-only, a preset's: the vendor's page where a person creates a key.",
             "type": [
               "string",
               "null"
@@ -7057,10 +7064,10 @@
               "null"
             ]
           },
-          "session_harness": {
-            "description": "Read-only: the harness the Core runs this provider's AI sessions on, chosen by the Core and\nnever by the person (E7-5): a built-in's own, `opencode` for a provider with no harness of\nits own (a preset, a user definition). `harness` above is only the definition's dialect.",
+          "sign_in": {
+            "description": "`false` (API 105): offered for no new sign-in, though accounts it made still work. Only the\nOpenCode login, whose vendors are API-key providers now. Absent: as `login_methods` says.",
             "type": [
-              "string",
+              "boolean",
               "null"
             ]
           },
@@ -9460,7 +9467,7 @@
             ]
           },
           "connection": {
-            "description": "Sign in again for this connection: its credential is replaced, nothing else changes.",
+            "description": "Sign in again for this connection: its credential is replaced, nothing else changes (a\npasted-token connection of the same account becomes a sign-in again).",
             "format": "int64",
             "type": [
               "integer",
@@ -10358,7 +10365,7 @@
       "name": ""
     },
     "title": "Ainkrad Core",
-    "version": "1.105.0"
+    "version": "1.106.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -15238,7 +15245,7 @@
                 }
               }
             },
-            "description": "A sign-in begun, held in Core: GitHub's device flow returns `user_code`, `verification_uri` and `interval` (Core polls GitHub itself, so the person can close the window); Atlassian returns `authorize_url` (the Mac app opens it, catches the redirect on 127.0.0.1 and posts `code` and `state` to `connectionFlowCallback`) and `state`. With `connection`, the credential of that connection is replaced (CN5, sign in again); a GitHub sign-in as another account ends `failed` with `different_account` unless `confirm_identity_change` is true. A flow ends in ONE connection. 409 `not_configured` while Ainkrad's app for the kind is not set up (see `listConnectionKinds`), 429 `too_many_flows` (4 waiting per user), 502 when GitHub could not give a code, 400 for a bad name, label or kind, 404 for another workspace's connection"
+            "description": "A sign-in begun, held in Core: GitHub's device flow returns `user_code`, `verification_uri` and `interval` (Core polls GitHub itself, so the person can close the window); Atlassian returns `authorize_url` (the Mac app opens it, catches the redirect on 127.0.0.1 and posts `code` and `state` to `connectionFlowCallback`) and `state`. With `connection`, the credential of that connection is replaced (CN5, sign in again); a GitHub sign-in as another account ends `failed` with `different_account` unless `confirm_identity_change` is true. A `connection` made with a pasted token may sign in too: the sign-in must be the SAME account (else `failed` `different_account`, no override), and the connection becomes `oauth` again, its id, name, label, grants and limits kept. A flow ends in ONE connection. 409 `not_configured` while Ainkrad's app for the kind is not set up (see `listConnectionKinds`), 429 `too_many_flows` (4 waiting per user), 502 when GitHub could not give a code, 400 for a bad name, label or kind, 404 for another workspace's connection"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"

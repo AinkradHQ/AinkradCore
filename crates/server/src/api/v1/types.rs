@@ -378,11 +378,19 @@
 /// 104: one connection per account (2026-11-25). `replaceConnectionCredential` takes a `token` on an `oauth`
 ///    connection of the same account and switches it to `token` (409 `different_account`, `identity_unknown`);
 ///    `createConnection` and a new sign-in flow refuse an account already connected, 409 `already_connected`.
-/// 105: harness-free API-key providers (E7-3, E7-5; 2026-11-25). `Provider` gains read-only `session_harness`
+/// 105: guided sign-in stages (2026-11-25). `AccountLogin.stage` (`starting|open_url|enter_code|finishing|done|failed`)
+///    and `AccountLogin.message` (plain words, when `failed`); `LoginScreenView.stage` (`starting|open_url|enter_code|
+///    finishing`, read from the screen) and `LoginScreenView.message` (why the last attempt failed); its `url` is the newest
+///    page (a retry prints a new one); `Provider.sign_in` (`false`: the OpenCode login is offered for no new sign-in).
+///    The runner answers Antigravity's login-method menu with Google OAuth itself; any other screen stays the person's.
+/// 106: a sign-in switches back (2026-11-25). `startConnectionFlow` with `connection` takes a `token` connection
+///    too: a sign-in of the same account turns it back into `oauth` (grants kept), another account ends `failed`
+///    `different_account`.
+/// 107: harness-free API-key providers (E7-3, E7-5; 2026-11-25). `Provider` gains read-only `session_harness`
 ///    (the harness the Core runs the provider on: a built-in's own, `opencode` for a preset or user definition),
 ///    and for a preset `key_url`, `key_hint` and `default_model`. Presets add `together`, `fireworks` and `vercel`.
 ///    An AI-order entry on a preset that names no model runs its `default_model`.
-pub const API_MINOR: u32 = 105;
+pub const API_MINOR: u32 = 107;
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

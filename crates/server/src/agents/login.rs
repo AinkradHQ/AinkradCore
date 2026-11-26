@@ -68,6 +68,54 @@ fn guided(provider: &str) -> bool {
     bound_harness(provider).is_some_and(|h| h != "codex")
 }
 
+/// What the person does now, from the login's state (the API's `stage`), and why it failed.
+pub fn stage(l: &Login) -> (&'static str, Option<String>) {
+    let stage = match l.state.as_str() {
+        "open_url" if l.provider == "claude-sub" => "enter_code",
+        "open_url" if l.url.is_none() && guided(&l.provider) => "starting",
+        "open_url" => "open_url",
+        "waiting_code" | "storing" => "finishing",
+        "done" => "done",
+        "failed" | "cancelled" => "failed",
+        _ => "starting",
+    };
+    let message = (stage == "failed").then(|| match (l.state.as_str(), l.reason.as_deref()) {
+        ("cancelled", _) => "The sign-in was cancelled.".to_owned(),
+        (_, Some(why)) if !why.is_empty() => why.to_owned(),
+        _ => "The sign-in did not finish.".to_owned(),
+    });
+    (stage, message)
+}
+
+/// What the person does now on a guided sign-in's screen, and why the last attempt failed:
+/// `finishing` once the CLI says it is signed in; `starting` while an error is the newest thing on
+/// it (the CLI goes back to its menu and a new page follows); `enter_code` while its last lines ask
+/// for a code; `open_url` once it showed a page; else `starting`.
+pub fn screen_stage(s: &LoginScreen) -> (&'static str, Option<String>) {
+    let lower: Vec<String> = s.lines.iter().map(|l| l.to_ascii_lowercase()).collect();
+    let error = lower.iter().rposition(|l| {
+        ["got an error", "invalid_grant", "token exchange failed"]
+            .iter()
+            .any(|e| l.contains(e))
+    });
+    let page = lower.iter().rposition(|l| l.contains("https://"));
+    let asks_code = lower.iter().rev().take(3).any(|l| {
+        !l.contains("://") && l.contains("code") && (l.contains("paste") || l.contains("enter"))
+    });
+    let message = error.map(|e| match lower[e].contains("invalid_grant") {
+        true => "That code didn't match the newest sign-in page. Start again; a new page opens.",
+        false => "That sign-in attempt failed. Start again; a new page opens.",
+    });
+    let stage = match () {
+        _ if ainkrad_proto::v2::signed_in(&s.lines[error.map_or(0, |e| e + 1)..]) => "finishing",
+        _ if error.is_some_and(|e| page.is_none_or(|p| p < e)) => "starting",
+        _ if asks_code => "enter_code",
+        _ if s.url.is_some() => "open_url",
+        _ => "starting",
+    };
+    (stage, message.map(str::to_owned))
+}
+
 /// The hosts a provider's sign-in page may be on.
 fn hosts_of(provider: &str) -> &'static [&'static str] {
     match provider {
@@ -793,7 +841,10 @@ pub async fn cancel(app: &App, caller: &Caller, id: &str) -> Result<Login, Error
 
 #[cfg(test)]
 mod tests {
-    use super::{CODEX_HOSTS, device_code_ok, hosts_of, url_ok, url_ok_for};
+    use super::{
+        CODEX_HOSTS, Login, LoginScreen, device_code_ok, hosts_of, screen_stage, stage, url_ok,
+        url_ok_for,
+    };
 
     #[test]
     fn a_codex_page_is_on_openais_hosts_and_never_claudes_and_the_code_is_plain() {
@@ -819,6 +870,121 @@ mod tests {
         ] {
             assert!(!device_code_ok(bad), "{bad:?}");
         }
+    }
+
+    fn login(provider: &str, state: &str, url: Option<&str>, reason: Option<&str>) -> Login {
+        Login {
+            id: "l_1".into(),
+            provider: provider.into(),
+            label: "x".into(),
+            display_name: None,
+            runner: "r".into(),
+            device: "d".into(),
+            state: state.into(),
+            url: url.map(str::to_owned),
+            code: None,
+            account_id: None,
+            reason: reason.map(str::to_owned),
+            created_at: String::new(),
+            updated_at: String::new(),
+            expires_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn the_stage_follows_the_state_per_harness() {
+        let page = Some("https://accounts.google.com/o");
+        let at = |p: &str, st: &str, url: Option<&str>| stage(&login(p, st, url, None)).0;
+        for p in ["claude-sub", "codex-sub", "agy-sub", "opencode-sub"] {
+            assert_eq!(at(p, "starting", None), "starting");
+            assert_eq!(at(p, "storing", page), "finishing");
+            assert_eq!(at(p, "done", page), "done");
+        }
+        assert_eq!(at("claude-sub", "open_url", page), "enter_code");
+        assert_eq!(at("claude-sub", "waiting_code", page), "finishing");
+        assert_eq!(at("codex-sub", "open_url", page), "open_url");
+        // A guided sign-in handed over on a menu has no page yet.
+        assert_eq!(at("agy-sub", "open_url", None), "starting");
+        assert_eq!(at("agy-sub", "open_url", page), "open_url");
+        let failed = stage(&login(
+            "codex-sub",
+            "failed",
+            None,
+            Some("the sign-in timed out"),
+        ));
+        assert_eq!(failed, ("failed", Some("the sign-in timed out".to_owned())));
+        let cancelled = stage(&login("codex-sub", "cancelled", None, Some("cancelled")));
+        assert_eq!(cancelled.0, "failed");
+        assert_eq!(cancelled.1.as_deref(), Some("The sign-in was cancelled."));
+        assert_eq!(stage(&login("codex-sub", "done", None, None)).1, None);
+    }
+
+    #[test]
+    fn a_guided_screen_reads_as_a_stage() {
+        let screen = |lines: &[&str], url: Option<&str>| LoginScreen {
+            login_id: "l_1".into(),
+            lines: lines.iter().map(|l| (*l).to_owned()).collect(),
+            url: url.map(str::to_owned),
+            code: None,
+        };
+        let stage_of = |s: &LoginScreen| screen_stage(s).0;
+        let page = "https://accounts.google.com/o";
+        let menu = [
+            "Select login method:",
+            "  1. Google OAuth",
+            "  2. Use a Google Cloud project",
+        ];
+        assert_eq!(stage_of(&screen(&menu, None)), "starting");
+        assert_eq!(stage_of(&screen(&["Loading..."], None)), "starting");
+        assert_eq!(
+            stage_of(&screen(&["Open this page:", page], Some(page))),
+            "open_url"
+        );
+        let asks = ["Sign in: https://accounts.google.com/o", "Paste code: "];
+        assert_eq!(stage_of(&screen(&asks, Some(page))), "enter_code");
+        let said = ["Paste code: ", "Successfully signed in as someone"];
+        assert_eq!(stage_of(&screen(&said, Some(page))), "finishing");
+        assert_eq!(
+            stage_of(&screen(&["You are not logged in as anyone"], None)),
+            "starting"
+        );
+    }
+
+    /// agy's real retry screen (2026-11-25): a code from the first page failed `invalid_grant`.
+    #[test]
+    fn a_failed_attempt_goes_back_to_starting_with_a_plain_reason_then_the_new_page() {
+        let first = "https://accounts.google.com/o/oauth2/auth?state=FIRST";
+        let second = "https://accounts.google.com/o/oauth2/auth?state=SECOND";
+        let mut lines = vec![
+            "Select login method:".to_owned(),
+            "  1. Google OAuth".to_owned(),
+            "  2. Use a Google Cloud project".to_owned(),
+            format!("Sign in: {first}"),
+            "Paste code: [redacted]".to_owned(),
+            r#"Got an error: token exchange failed: oauth2: "invalid_grant" "Bad Request""#
+                .to_owned(),
+            "Press any key to go back.".to_owned(),
+        ];
+        let at = |lines: &[String], url: &str| {
+            screen_stage(&LoginScreen {
+                login_id: "l_1".into(),
+                lines: lines.to_vec(),
+                url: Some(url.to_owned()),
+                code: None,
+            })
+        };
+        let plain =
+            "That code didn't match the newest sign-in page. Start again; a new page opens.";
+        assert_eq!(at(&lines, first), ("starting", Some(plain.to_owned())));
+        lines.extend([
+            "Select login method:".to_owned(),
+            "  1. Google OAuth".to_owned(),
+        ]);
+        assert_eq!(at(&lines, first).0, "starting");
+        lines.extend([format!("Sign in: {second}"), "Paste code: ".to_owned()]);
+        assert_eq!(at(&lines, second), ("enter_code", Some(plain.to_owned())));
+        lines.push("Successfully signed in as someone".to_owned());
+        assert_eq!(at(&lines, second).0, "finishing");
     }
 
     /// Userinfo marker, built apart so no source line reads as an email address.

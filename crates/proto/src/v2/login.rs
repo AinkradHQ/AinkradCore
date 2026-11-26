@@ -110,6 +110,23 @@ pub fn agy_input_ok(text: &str) -> bool {
     }
 }
 
+/// Whether a sign-in CLI says, in so many words, that the sign-in worked ("Logged in as ..."). A
+/// TUI like agy's does not exit once signed in, so the runner ends its sign-in on these words; the
+/// Core reads the same words for the `finishing` stage. A line saying "not" never counts.
+pub fn signed_in(lines: &[String]) -> bool {
+    const SAID: [&str; 5] = [
+        "logged in as",
+        "signed in as",
+        "successfully signed in",
+        "successfully logged in",
+        "login successful",
+    ];
+    lines.iter().any(|l| {
+        let l = l.to_ascii_lowercase();
+        !l.contains("not ") && SAID.iter().any(|s| l.contains(s))
+    })
+}
+
 /// Core to runner: one line the user typed into a guided sign-in (a pasted code, or a menu choice),
 /// sent with Enter. A secret: no `Debug` that shows it, never stored, never logged.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

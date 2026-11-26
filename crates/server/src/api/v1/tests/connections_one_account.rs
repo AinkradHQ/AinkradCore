@@ -160,3 +160,77 @@ async fn a_second_connection_for_the_same_account_is_refused() {
     assert_eq!(cx.admin(Method::POST, URI, body).await.0, StatusCode::OK);
     cx.assert_clean().await;
 }
+
+/// Signs in again for connection `id` with `token`, the fake saying `me` (asked twice: the same
+/// account?, then the test); the flow's last view.
+async fn sign_in_again(cx: &Cx, id: i64, token: &str, me: &str) -> Value {
+    cx.gh.push(200, &[], START);
+    cx.gh.push(
+        200,
+        &[],
+        &format!(r#"{{"access_token":"{token}","token_type":"bearer","scope":"repo"}}"#),
+    );
+    cx.gh.push(200, &[], me);
+    cx.gh.push(200, &[], me);
+    let r = start(cx, "github", json!({"connection": id})).await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    let flow = r.1["id"].as_str().unwrap().to_owned();
+    for _ in 0..150 {
+        let v = cx
+            .ok(Method::GET, &format!("{URI}/flows/{flow}"), Value::Null)
+            .await;
+        if v["step"] == "failed" || v["step"] == "connected" {
+            return v;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("the flow never ended");
+}
+
+#[tokio::test]
+async fn a_token_connection_signed_in_again_is_a_sign_in_again_and_keeps_its_grants() {
+    let cx = cx().await;
+    let id = signed_in(&cx).await;
+    let grants = format!("{URI}/{id}/grants");
+    let grant = json!({"grantee_kind": "user", "grantee": "1",
+        "capabilities": ["read_repo"], "limits": {"repos": ["octo/app"]}});
+    cx.ok(Method::PUT, &grants, grant).await;
+    let before = cx.ok(Method::GET, &grants, Value::Null).await;
+    cx.gh.push(200, &[], OCTOCAT);
+    cx.gh.push(200, &[], OCTOCAT);
+    let body = json!({"token": GH_TOKEN2});
+    cx.ok(Method::PUT, &format!("{URI}/{id}/credential"), body)
+        .await;
+    let v = sign_in_again(&cx, id, GH_TOKEN, OCTOCAT).await;
+    assert_eq!(
+        (&v["step"], &v["connection"]),
+        (&json!("connected"), &json!(id)),
+        "{v}"
+    );
+    let c = cx
+        .ok(Method::GET, &format!("{URI}/{id}"), Value::Null)
+        .await;
+    assert_eq!(
+        (&c["auth_method"], &c["name"]),
+        (&json!("oauth"), &json!("github-1"))
+    );
+    assert_eq!(version(&cx, id).await, (GH_TOKEN.to_owned(), 3));
+    assert_eq!(cx.ok(Method::GET, &grants, Value::Null).await, before);
+    assert_eq!(connections(&cx).await.len(), 1);
+    cx.assert_clean().await;
+}
+
+#[tokio::test]
+async fn a_sign_in_of_another_account_does_not_take_over_a_token_connection() {
+    let cx = cx().await;
+    cx.configure().await;
+    let id = cx.github("main").await; // octocat-main
+    let v = sign_in_again(&cx, id, GH_TOKEN2, OCTOCAT).await;
+    assert_eq!(v["error_code"], "different_account", "{v}");
+    let c = cx
+        .ok(Method::GET, &format!("{URI}/{id}"), Value::Null)
+        .await;
+    assert_eq!(c["auth_method"], "token");
+    assert_eq!(version(&cx, id).await, (GH_TOKEN.to_owned(), 1));
+    cx.assert_clean().await;
+}

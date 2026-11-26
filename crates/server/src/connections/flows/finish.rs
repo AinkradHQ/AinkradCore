@@ -46,10 +46,46 @@ pub(super) async fn store(
         now: &now,
     };
     let reg = app.connections.registry();
+    // A sign-in on a pasted-token connection turns it back into a sign-in, for the SAME account
+    // only (no confirmed change: another account is a connection of its own). Fails closed.
+    let token_one = match flow.reconnect {
+        Some(id) => Some(connections::get(&app.pool, flow.user, id).await?),
+        None => None,
+    }
+    .filter(|c| c.auth_method == "token");
+    let to_oauth = token_one.is_some();
+    if let Some(c) = token_one {
+        let Some(old) = c.identity else {
+            return Err(refused(
+                "identity_unknown",
+                "this connection has no recorded account to compare with; test it first",
+            ));
+        };
+        let new = match reg.get(flow.kind) {
+            Some(adapter) => adapter.test(material).await.ok(),
+            None => None,
+        };
+        match new {
+            Some(new) if new.subject == old => {}
+            Some(_) => {
+                return Err(refused(
+                    "different_account",
+                    "that sign-in is for another account than this connection's",
+                ));
+            }
+            None => {
+                return Err(refused(
+                    "identity_unavailable",
+                    "Core could not check which account that sign-in is; try again",
+                ));
+            }
+        }
+    }
     // A GitHub sign-in again must be the same account unless the admin confirmed the change
     // (Atlassian's check is the site's cloud id, in the flow). It fails closed: a lookup that
     // cannot say whose the new sign-in is does not let it through; the person retries.
     if let (Some(id), "github", false) = (flow.reconnect, flow.kind, flow.confirm_identity_change)
+        && !to_oauth
         && let Some(adapter) = reg.get(flow.kind)
         && let Some(old) = connections::get(&app.pool, flow.user, id).await?.identity
     {
@@ -77,6 +113,10 @@ pub(super) async fn store(
             return Err(refused("cancelled", "the sign-in was cancelled"));
         }
         let id = match flow.reconnect {
+            Some(id) if to_oauth => {
+                secret::replace_as(&app.pool, sealer, id, material, "oauth", who).await?;
+                id
+            }
             Some(id) => {
                 secret::replace(&app.pool, sealer, id, material, who).await?;
                 id

@@ -466,6 +466,11 @@ pub struct Provider {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(required = false)]
     pub default_model: Option<String>,
+    /// `false` (API 105): offered for no new sign-in, though accounts it made still work. Only the
+    /// OpenCode login, whose vendors are API-key providers now. Absent: as `login_methods` says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(required = false)]
+    pub sign_in: Option<bool>,
     #[serde(default)]
     pub version: i64,
 }
@@ -477,6 +482,7 @@ impl From<Definition> for Provider {
             .then(|| crate::store::providers::preset_of(&d.id))
             .flatten();
         let session_harness = crate::store::providers::session_harness(&d).to_owned();
+        let sign_in = (d.builtin && d.id == "opencode-sub").then_some(false);
         Self {
             id: d.id,
             name: d.name,
@@ -505,6 +511,7 @@ impl From<Definition> for Provider {
             key_url: preset.map(|p| p.key_url.to_owned()),
             key_hint: preset.and_then(|p| p.key_hint).map(str::to_owned),
             default_model: preset.and_then(|p| p.default_model).map(str::to_owned),
+            sign_in,
             version: d.version,
         }
     }

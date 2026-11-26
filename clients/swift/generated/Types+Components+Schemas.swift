@@ -174,6 +174,10 @@ extension Components {
             public var id: Swift.String
             /// - Remark: Generated from `#/components/schemas/AccountLogin/label`.
             public var label: Swift.String
+            /// Why it failed, in plain words, when `stage` is `failed`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/message`.
+            public var message: Swift.String?
             /// - Remark: Generated from `#/components/schemas/AccountLogin/provider`.
             public var provider: Swift.String
             /// Why it `failed` or was `cancelled`; provider text passes the redactor.
@@ -184,6 +188,14 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AccountLogin/runner`.
             public var runner: Swift.String
+            /// What the person does now (API 105): `starting`, `open_url` (open `url` and sign in),
+            /// `enter_code` (paste the code the page gives: `claude-sub`), `finishing` (the code is in or
+            /// the account is being stored), `done` or `failed` (also a cancelled one; see `message`). A
+            /// guided sign-in (`agy-sub`, `opencode-sub`) is `starting` here until it showed a page:
+            /// `getAccountLoginScreen` reads its live stage.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AccountLogin/stage`.
+            public var stage: Swift.String?
             /// `starting`, `open_url` (open `url`, then send the code), `waiting_code` (the code is with
             /// the runner), `storing`, `done` (see `account_id`), `failed` (see `reason`) or `cancelled`.
             ///
@@ -204,9 +216,11 @@ extension Components {
             ///   - expiresAt: Ten minutes after it began; a sign-in open past it fails.
             ///   - id:
             ///   - label:
+            ///   - message: Why it failed, in plain words, when `stage` is `failed`.
             ///   - provider:
             ///   - reason: Why it `failed` or was `cancelled`; provider text passes the redactor.
             ///   - runner: The runner doing the sign-in.
+            ///   - stage: What the person does now (API 105): `starting`, `open_url` (open `url` and sign in),
             ///   - state: `starting`, `open_url` (open `url`, then send the code), `waiting_code` (the code is with
             ///   - updatedAt:
             ///   - url: The sign-in URL, from `open_url` on.
@@ -217,9 +231,11 @@ extension Components {
                 expiresAt: Components.Schemas.Timestamp,
                 id: Swift.String,
                 label: Swift.String,
+                message: Swift.String? = nil,
                 provider: Swift.String,
                 reason: Swift.String? = nil,
                 runner: Swift.String,
+                stage: Swift.String? = nil,
                 state: Swift.String,
                 updatedAt: Components.Schemas.Timestamp,
                 url: Swift.String? = nil
@@ -230,9 +246,11 @@ extension Components {
                 self.expiresAt = expiresAt
                 self.id = id
                 self.label = label
+                self.message = message
                 self.provider = provider
                 self.reason = reason
                 self.runner = runner
+                self.stage = stage
                 self.state = state
                 self.updatedAt = updatedAt
                 self.url = url
@@ -244,9 +262,11 @@ extension Components {
                 case expiresAt = "expires_at"
                 case id
                 case label
+                case message
                 case provider
                 case reason
                 case runner
+                case stage
                 case state
                 case updatedAt = "updated_at"
                 case url
@@ -6779,6 +6799,18 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/LoginScreenView/lines`.
             public var lines: [Swift.String]
+            /// Why the last attempt on this screen failed, in plain words (the CLI then goes back and a new
+            /// page follows: use the code from that one).
+            ///
+            /// - Remark: Generated from `#/components/schemas/LoginScreenView/message`.
+            public var message: Swift.String?
+            /// What the person does now (API 105), read from this screen: `starting` (the CLI is still
+            /// getting there, or going back after a failed attempt; a menu it knows is answered for them), `open_url` (open `url` and sign
+            /// in), `enter_code` (the CLI waits for a pasted code; `url`, when shown, is the page that gives
+            /// it) or `finishing` (the CLI says it is signed in). `lines` are for a "Show details" view.
+            ///
+            /// - Remark: Generated from `#/components/schemas/LoginScreenView/stage`.
+            public var stage: Swift.String?
             /// The sign-in page, once it printed one (https on the provider's own hosts).
             ///
             /// - Remark: Generated from `#/components/schemas/LoginScreenView/url`.
@@ -6788,19 +6820,27 @@ extension Components {
             /// - Parameters:
             ///   - code: The device code, once it printed one.
             ///   - lines: The last lines the sign-in's CLI printed.
+            ///   - message: Why the last attempt on this screen failed, in plain words (the CLI then goes back and a new
+            ///   - stage: What the person does now (API 105), read from this screen: `starting` (the CLI is still
             ///   - url: The sign-in page, once it printed one (https on the provider's own hosts).
             public init(
                 code: Swift.String? = nil,
                 lines: [Swift.String],
+                message: Swift.String? = nil,
+                stage: Swift.String? = nil,
                 url: Swift.String? = nil
             ) {
                 self.code = code
                 self.lines = lines
+                self.message = message
+                self.stage = stage
                 self.url = url
             }
             public enum CodingKeys: String, CodingKey {
                 case code
                 case lines
+                case message
+                case stage
                 case url
             }
         }
@@ -9491,10 +9531,6 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/builtin`.
             public var builtin: Swift.Bool?
-            /// Read-only, a preset's: the model an AI-order entry on it runs when it names none.
-            ///
-            /// - Remark: Generated from `#/components/schemas/Provider/default_model`.
-            public var defaultModel: Swift.String?
             /// `env` and/or `gateway`.
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/delivery`.
@@ -9505,21 +9541,12 @@ extension Components {
             public var harness: Swift.String
             /// - Remark: Generated from `#/components/schemas/Provider/id`.
             public var id: Swift.String
-            /// Read-only, a preset's: how its keys usually start (`sk-or-v1-`), a hint for the paste field
-            /// only; a preset key is bound to its account and host, not to this.
-            ///
-            /// - Remark: Generated from `#/components/schemas/Provider/key_hint`.
-            public var keyHint: Swift.String?
             /// The shape this provider's keys start with (6 to 16 characters, never a built-in's, such
             /// as `sk-or-v1-`). A definition that sets it holds keys, and then only through the gateway
             /// (`delivery` is `["gateway"]`): the broker binds each key to the account's host by it.
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/key_prefix`.
             public var keyPrefix: Swift.String?
-            /// Read-only, a preset's: the vendor's page where a person creates a key.
-            ///
-            /// - Remark: Generated from `#/components/schemas/Provider/key_url`.
-            public var keyUrl: Swift.String?
             /// `paste`.
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/login_methods`.
@@ -9540,12 +9567,11 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Provider/priced_at`.
             public var pricedAt: Swift.String?
-            /// Read-only: the harness the Core runs this provider's AI sessions on, chosen by the Core and
-            /// never by the person (E7-5): a built-in's own, `opencode` for a provider with no harness of
-            /// its own (a preset, a user definition). `harness` above is only the definition's dialect.
+            /// `false` (API 105): offered for no new sign-in, though accounts it made still work. Only the
+            /// OpenCode login, whose vendors are API-key providers now. Absent: as `login_methods` says.
             ///
-            /// - Remark: Generated from `#/components/schemas/Provider/session_harness`.
-            public var sessionHarness: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/Provider/sign_in`.
+            public var signIn: Swift.Bool?
             /// The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
             /// for a provider whose model list needs no key (OpenRouter's is public: a revoked key would
             /// read as `ok`). A user definition without one cannot be tested: the answer is
@@ -9569,19 +9595,16 @@ extension Components {
             ///   - authVar: The harness's own authentication variable.
             ///   - baseUrl: `https://`, a public DNS name.
             ///   - builtin: Read-only: built-ins cannot be edited.
-            ///   - defaultModel: Read-only, a preset's: the model an AI-order entry on it runs when it names none.
             ///   - delivery: `env` and/or `gateway`.
             ///   - harness: `claude`, `codex` or `agy`.
             ///   - id:
-            ///   - keyHint: Read-only, a preset's: how its keys usually start (`sk-or-v1-`), a hint for the paste field
             ///   - keyPrefix: The shape this provider's keys start with (6 to 16 characters, never a built-in's, such
-            ///   - keyUrl: Read-only, a preset's: the vendor's page where a person creates a key.
             ///   - loginMethods: `paste`.
             ///   - models: Model ids exactly as the provider names them: the gateway compares a request's model with
             ///   - name:
             ///   - preset: A preset provider (OpenRouter, Groq, ...): shipped in code, read-only, the user only
             ///   - pricedAt: When the models' list prices were read.
-            ///   - sessionHarness: Read-only: the harness the Core runs this provider's AI sessions on, chosen by the Core and
+            ///   - signIn: `false` (API 105): offered for no new sign-in, though accounts it made still work. Only the
             ///   - testPath: The authenticated path (under the base URL, such as `/key`) of the one-shot account test,
             ///   - usageParser:
             ///   - version:
@@ -9590,19 +9613,16 @@ extension Components {
                 authVar: Swift.String,
                 baseUrl: Swift.String,
                 builtin: Swift.Bool? = nil,
-                defaultModel: Swift.String? = nil,
                 delivery: [Swift.String],
                 harness: Swift.String,
                 id: Swift.String,
-                keyHint: Swift.String? = nil,
                 keyPrefix: Swift.String? = nil,
-                keyUrl: Swift.String? = nil,
                 loginMethods: [Swift.String],
                 models: [Components.Schemas.ModelPrice],
                 name: Swift.String,
                 preset: Swift.Bool? = nil,
                 pricedAt: Swift.String? = nil,
-                sessionHarness: Swift.String? = nil,
+                signIn: Swift.Bool? = nil,
                 testPath: Swift.String? = nil,
                 usageParser: Swift.String,
                 version: Swift.Int64? = nil,
@@ -9611,19 +9631,16 @@ extension Components {
                 self.authVar = authVar
                 self.baseUrl = baseUrl
                 self.builtin = builtin
-                self.defaultModel = defaultModel
                 self.delivery = delivery
                 self.harness = harness
                 self.id = id
-                self.keyHint = keyHint
                 self.keyPrefix = keyPrefix
-                self.keyUrl = keyUrl
                 self.loginMethods = loginMethods
                 self.models = models
                 self.name = name
                 self.preset = preset
                 self.pricedAt = pricedAt
-                self.sessionHarness = sessionHarness
+                self.signIn = signIn
                 self.testPath = testPath
                 self.usageParser = usageParser
                 self.version = version
@@ -9633,19 +9650,16 @@ extension Components {
                 case authVar = "auth_var"
                 case baseUrl = "base_url"
                 case builtin
-                case defaultModel = "default_model"
                 case delivery
                 case harness
                 case id
-                case keyHint = "key_hint"
                 case keyPrefix = "key_prefix"
-                case keyUrl = "key_url"
                 case loginMethods = "login_methods"
                 case models
                 case name
                 case preset
                 case pricedAt = "priced_at"
-                case sessionHarness = "session_harness"
+                case signIn = "sign_in"
                 case testPath = "test_path"
                 case usageParser = "usage_parser"
                 case version
@@ -13066,7 +13080,8 @@ extension Components {
             ///
             /// - Remark: Generated from `#/components/schemas/StartConnectionFlow/confirm_identity_change`.
             public var confirmIdentityChange: Swift.Bool?
-            /// Sign in again for this connection: its credential is replaced, nothing else changes.
+            /// Sign in again for this connection: its credential is replaced, nothing else changes (a
+            /// pasted-token connection of the same account becomes a sign-in again).
             ///
             /// - Remark: Generated from `#/components/schemas/StartConnectionFlow/connection`.
             public var connection: Swift.Int64?
@@ -13084,7 +13099,7 @@ extension Components {
             ///
             /// - Parameters:
             ///   - confirmIdentityChange: With `connection` on GitHub: replace the credential even when the sign-in is a different
-            ///   - connection: Sign in again for this connection: its credential is replaced, nothing else changes.
+            ///   - connection: Sign in again for this connection: its credential is replaced, nothing else changes (a
             ///   - kind: `github` or `jira`.
             ///   - label:
             ///   - name: Names the connection it makes; absent, `<kind>-<n>`.

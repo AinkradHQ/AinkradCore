@@ -25,6 +25,8 @@ import kotlinx.serialization.Contextual
  *
  * @param lines The last lines the sign-in's CLI printed.
  * @param code The device code, once it printed one.
+ * @param message Why the last attempt on this screen failed, in plain words (the CLI then goes back and a new page follows: use the code from that one).
+ * @param stage What the person does now (API 105), read from this screen: `starting` (the CLI is still getting there, or going back after a failed attempt; a menu it knows is answered for them), `open_url` (open `url` and sign in), `enter_code` (the CLI waits for a pasted code; `url`, when shown, is the page that gives it) or `finishing` (the CLI says it is signed in). `lines` are for a \"Show details\" view.
  * @param url The sign-in page, once it printed one (https on the provider's own hosts).
  */
 @Serializable
@@ -38,6 +40,14 @@ data class LoginScreenView (
     /* The device code, once it printed one. */
     @SerialName(value = "code")
     val code: kotlin.String? = null,
+
+    /* Why the last attempt on this screen failed, in plain words (the CLI then goes back and a new page follows: use the code from that one). */
+    @SerialName(value = "message")
+    val message: kotlin.String? = null,
+
+    /* What the person does now (API 105), read from this screen: `starting` (the CLI is still getting there, or going back after a failed attempt; a menu it knows is answered for them), `open_url` (open `url` and sign in), `enter_code` (the CLI waits for a pasted code; `url`, when shown, is the page that gives it) or `finishing` (the CLI says it is signed in). `lines` are for a \"Show details\" view. */
+    @SerialName(value = "stage")
+    val stage: kotlin.String? = null,
 
     /* The sign-in page, once it printed one (https on the provider's own hosts). */
     @SerialName(value = "url")

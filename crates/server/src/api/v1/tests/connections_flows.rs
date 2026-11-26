@@ -186,9 +186,10 @@ async fn signing_in_again_replaces_the_credential_of_the_same_connection() {
     let conn = until(&cx, &id, "connected").await["connection"]
         .as_i64()
         .unwrap();
-    // A pasted-token connection is not signed in again; a missing or other kind's one is refused.
-    let token = cx.github("pasted").await;
-    for (c, want) in [(token, 400), (conn + 1000, 404)] {
+    // A missing or other kind's connection is refused (a pasted-token one signs in again:
+    // `connections_one_account`).
+    cx.github("pasted").await;
+    for (c, want) in [(conn + 1000, 404)] {
         assert_eq!(
             start(&cx, "github", json!({"connection": c}))
                 .await
