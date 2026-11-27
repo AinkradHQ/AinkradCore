@@ -379,8 +379,12 @@ fn plain_signal(method: &axum::http::Method, path: &str, body: &[u8]) -> bool {
 /// as a known one.
 pub(crate) async fn client_gate(State(app): State<App>, req: Request, next: Next) -> Response {
     // A module's own routes may take the extra query names it declares (`Module::query_names`).
-    let query =
-        |q: &str| query_ok(q) || super::scopes::module_query_ok(&app.modules, req.uri().path(), q);
+    // A preview's query is the running app's own (signed like the rest).
+    let query = |q: &str| {
+        query_ok(q)
+            || super::scopes::module_query_ok(&app.modules, req.uri().path(), q)
+            || super::projects::preview::is_preview(req.uri().path())
+    };
     if let Some((status, code, why)) = refusal(&app, req.uri(), req.headers(), query) {
         tracing::warn!(%status, why, "client request refused");
         return ApiError::new(status, code, why).into_response();

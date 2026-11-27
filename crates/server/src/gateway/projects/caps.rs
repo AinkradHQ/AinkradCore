@@ -47,7 +47,7 @@ pub(super) fn hold<K: Hash + Eq + Clone>(
 
 /// A request's places: its project's and its client's. Kept until the exchange (or the
 /// WebSocket) is over.
-pub(super) struct Permit {
+pub(crate) struct Permit {
     pub(super) _project: Held<i64>,
     pub(super) _client: Option<Held<IpAddr>>,
 }

@@ -255,33 +255,10 @@ async fn proxy(h: Arc<Host>, mut req: Request) -> Result<Response, Response> {
         service,
         port,
     };
-    let io = h.dial.dial(&run.runner, open).map_err(|e| match e {
-        DialError::Busy => busy(),
-        DialError::Unreachable => bad_gateway(),
-    })?;
     let ws = is_websocket(&req);
     let on_client = ws.then(|| hyper::upgrade::on(&mut req));
     let out = outbound(req, &host, client, from_edge, ws);
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(io))
-        .await
-        .map_err(|_| bad_gateway())?;
-    // The exchange holds its places, and ends (body cut short) after BODY_LIFE. An upgrade ends
-    // it at once: the tunnel holds the places from then on.
-    let held = Arc::clone(&permit);
-    tokio::spawn(async move {
-        let _ = tokio::time::timeout(BODY_LIFE, conn.with_upgrades()).await;
-        drop(held);
-    });
-    let mut resp = match tokio::time::timeout(HEAD, sender.send_request(out)).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(_)) => return Err(bad_gateway()),
-        Err(_) => {
-            return Err(page(
-                StatusCode::GATEWAY_TIMEOUT,
-                "The project did not answer",
-            ));
-        }
-    };
+    let mut resp = exchange(&*h.dial, &run.runner, open, out, Arc::clone(&permit)).await?;
     if resp.status() != StatusCode::SWITCHING_PROTOCOLS {
         // Only an answer the project gave as a success or a redirect counts as activity.
         if resp.status().is_success() || resp.status().is_redirection() {
@@ -302,9 +279,76 @@ async fn proxy(h: Arc<Host>, mut req: Request) -> Result<Response, Response> {
     Ok(inbound(resp, true))
 }
 
+/// One request to the run's port: the port stream, HTTP/1.1 over it, the answer's head within
+/// [`HEAD`]. The exchange holds `permit`, and ends (body cut short) after [`BODY_LIFE`]; an
+/// upgrade ends it at once (a tunnel holds the places from then on).
+// The Err is the finished response to send.
+#[allow(clippy::result_large_err)]
+pub(crate) async fn exchange(
+    dial: &dyn Dial,
+    runner: &str,
+    open: PortOpen,
+    out: hyper::Request<Limited<Body>>,
+    permit: Arc<Permit>,
+) -> Result<hyper::Response<hyper::body::Incoming>, Response> {
+    let io = dial.dial(runner, open).map_err(|e| match e {
+        DialError::Busy => busy(),
+        DialError::Unreachable => bad_gateway(),
+    })?;
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(io))
+        .await
+        .map_err(|_| bad_gateway())?;
+    tokio::spawn(async move {
+        let _ = tokio::time::timeout(BODY_LIFE, conn.with_upgrades()).await;
+        drop(permit);
+    });
+    match tokio::time::timeout(HEAD, sender.send_request(out)).await {
+        Ok(Ok(r)) => Ok(r),
+        Ok(Err(_)) => Err(bad_gateway()),
+        Err(_) => Err(page(
+            StatusCode::GATEWAY_TIMEOUT,
+            "The project did not answer",
+        )),
+    }
+}
+
+/// The preview proxy's shared state (`api::v1::projects::preview`): its own in-flight count per
+/// project ([`PER_PROJECT`], as the Host router's), and in tests the dial to use instead of the
+/// hub's.
+#[derive(Default)]
+pub struct Preview {
+    dial: Option<Arc<dyn Dial>>,
+    by_project: Counts<i64>,
+}
+
+impl Preview {
+    /// A preview that dials `dial` instead of the runner hub (tests).
+    pub fn with_dial(dial: Arc<dyn Dial>) -> Self {
+        Self {
+            dial: Some(dial),
+            by_project: Counts::default(),
+        }
+    }
+
+    /// What opens the port streams: the given dial, else the app's runner hub.
+    pub(crate) fn dial(&self, app: &App) -> Arc<dyn Dial> {
+        self.dial
+            .clone()
+            .unwrap_or_else(|| Arc::new(HubDial(Arc::clone(&app.hub))))
+    }
+
+    /// One of the project's [`PER_PROJECT`] places, if one is free.
+    pub(crate) fn hold(&self, project: i64) -> Option<Arc<Permit>> {
+        Some(Arc::new(Permit {
+            _project: hold(&self.by_project, project, PER_PROJECT)?,
+            _client: None,
+        }))
+    }
+}
+
 /// The service and container port a host names: `<slug>-<service>`'s exposed port, or for `<slug>`
 /// the primary one, which is `web`'s exposed port if it has one, else the first service's by name.
-fn target(spec: &RunSpec, service: Option<&str>) -> Option<(String, u16)> {
+pub(crate) fn target(spec: &RunSpec, service: Option<&str>) -> Option<(String, u16)> {
     let exposed = |(name, s): (&String, &run_specs::spec::Service)| {
         let port = s.ports.iter().find(|p| p.expose)?.port;
         Some((name.clone(), port))
@@ -330,7 +374,7 @@ fn is_websocket(req: &Request) -> bool {
 }
 
 /// The request as the project gets it: origin-form, HTTP/1.1, end-to-end headers plus ours.
-fn outbound(
+pub(crate) fn outbound(
     req: Request,
     host: &str,
     client: Option<IpAddr>,
@@ -371,7 +415,7 @@ fn outbound(
 }
 
 /// The project's answer as the client gets it: end-to-end headers, cookies host-only.
-fn inbound(resp: hyper::Response<hyper::body::Incoming>, upgrade: bool) -> Response {
+pub(crate) fn inbound(resp: hyper::Response<hyper::body::Incoming>, upgrade: bool) -> Response {
     let (parts, body) = resp.into_parts();
     // A response's headers name no client: nothing to strip but hop-by-hop and proxy ones.
     let mut headers = forwardable(&parts.headers, true);
@@ -445,7 +489,8 @@ mod client;
 mod dial;
 mod headers;
 mod tunnel;
-use caps::{Counts, Permit, hold};
+pub(crate) use caps::Permit;
+use caps::{Counts, hold};
 use client::client_ip;
 pub use client::edge;
 pub use dial::{Dial, DialError, HubDial};

@@ -53,6 +53,8 @@ fn hop_by_hop_proxy_and_core_headers_are_not_forwarded() {
         ("x-forwarded-for", "203.0.113.44"),
         ("x-real-ip", "203.0.113.44"),
         ("x-ainkrad-session", "s_1"),
+        ("ainkrad-signature", "sig"),
+        ("ainkrad-session", "s_1"),
         ("accept", "text/html"),
         ("cookie", "app=1"),
     ] {

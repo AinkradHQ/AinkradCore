@@ -41,6 +41,8 @@ pub(super) fn forwardable(from: &HeaderMap, from_edge: bool) -> HeaderMap {
             || n == "x-real-ip"
             || n.starts_with("x-forwarded-")
             || n.starts_with("x-ainkrad-")
+            // A signed request's own headers (the preview proxy): they are the device's, not the project's.
+            || n.starts_with("ainkrad-")
             || (!from_edge && client_claim(n));
         if !drop {
             out.append(name.clone(), value.clone());
