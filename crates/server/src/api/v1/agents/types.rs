@@ -263,10 +263,11 @@ pub struct NewAgentSession {
     pub workspace: Option<Value>,
     /// Start the session for a project (P3-02): the Core builds the workspace from the project's
     /// repos (the primary one first, each under its repo name when there are several), the
-    /// runner clones them from the Core's copies, and the project's Brain room, if it has one,
+    /// runner clones them from the Core's copies (a project with no repos gets no workspace: the
+    /// session works in its own empty folder, still tied to the project), and the project's Brain room, if it has one,
     /// is claimed (the room's model policy then applies, so a session with no chain is refused
     /// 403 `claim_refused`). Excludes `workspace` (400). 404 for no such project, 409
-    /// `project_archived`, 409 `project_has_no_repos`, 400 when the caller names a mirror in
+    /// `project_archived`, 400 when the caller names a mirror in
     /// `workspace`: only the Core sets one.
     pub project_id: Option<i64>,
     /// `{"mode": "ask" | "accept_edits" | "sandboxed", "allow": […]}`; default `ask`.

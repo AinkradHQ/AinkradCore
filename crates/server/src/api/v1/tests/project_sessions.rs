@@ -66,10 +66,12 @@ async fn the_core_builds_the_workspace_and_a_client_cannot_name_a_mirror() {
     // Refused before any session exists.
     let none = create(&fx, new(json!({"project_id": 999}))).await;
     assert_eq!(none.0, StatusCode::NOT_FOUND, "{}", none.1);
-    assert_eq!(
-        code(&create(&fx, new(json!({"project_id": id}))).await),
-        (StatusCode::CONFLICT, "project_has_no_repos")
-    );
+    // No repos: a session with no workspace (the runner gives it an empty folder), still tied to
+    // the project (`attach` ran).
+    let bare = create(&fx, new(json!({"project_id": id}))).await;
+    assert_eq!(bare.0, StatusCode::OK, "{}", bare.1);
+    assert_eq!(bare.1["project_id"].as_i64(), Some(id), "{}", bare.1);
+    assert!(bare.1["workspace"].is_null(), "{}", bare.1);
     let ws = json!({"repo": "https://github.com/acme/web.git", "base": "main", "branch": "b"});
     assert_eq!(
         create(&fx, new(json!({"project_id": id, "workspace": ws})))
@@ -116,7 +118,8 @@ async fn the_core_builds_the_workspace_and_a_client_cannot_name_a_mirror() {
     let web = add(&fx, id, "web", "https://github.com/acme/web.git", true).await;
     let w = super::super::agents::project::workspace_for(&fx.app, id)
         .await
-        .unwrap();
+        .unwrap()
+        .expect("a project with repos has a workspace");
     assert_eq!(
         (w["mirror"].as_i64(), w["name"].as_str()),
         (Some(web), Some("web"))
@@ -125,7 +128,8 @@ async fn the_core_builds_the_workspace_and_a_client_cannot_name_a_mirror() {
     let api = add(&fx, id, "api", "https://github.com/acme/api.git", false).await;
     let w = super::super::agents::project::workspace_for(&fx.app, id)
         .await
-        .unwrap();
+        .unwrap()
+        .expect("a project with repos has a workspace");
     assert_eq!(w["name"], "web");
     assert_eq!(w["also"][0]["name"], "api");
     assert_eq!(w["also"][0]["mirror"].as_i64(), Some(api));

@@ -27,8 +27,13 @@ pub(in crate::api::v1) fn no_mirror(workspace: Option<&Value>) -> Result<(), Api
 
 /// The workspace of a new session of `project`: its primary repo first, the rest in `also`, each
 /// cloned from the Core's copy (`mirror`) and checked out on one new session branch. A single
-/// repo is the session folder itself; several are `<folder>/<repo name>`.
-pub(in crate::api::v1) async fn workspace_for(app: &App, project: i64) -> Result<Value, ApiError> {
+/// repo is the session folder itself; several are `<folder>/<repo name>`. A project with no repos
+/// (a docs or research project) has no workspace: the runner gives the session its own empty
+/// folder (`session-<id>`, kept for its life, cleaned with the session), never a client path.
+pub(in crate::api::v1) async fn workspace_for(
+    app: &App,
+    project: i64,
+) -> Result<Option<Value>, ApiError> {
     let mut conn = app.pool.acquire().await?;
     let p = projects::get(&mut conn, project).await?;
     let repos = projects::repos(&mut conn, project).await?;
@@ -55,14 +60,12 @@ pub(in crate::api::v1) async fn workspace_for(app: &App, project: i64) -> Result
         mirror: Some(r.id),
     });
     let Some(mut first) = all.next() else {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "project_has_no_repos",
-            "the project has no repos to work in",
-        ));
+        return Ok(None);
     };
     first.also = all.collect();
-    Ok(serde_json::to_value(first).expect("a workspace serializes"))
+    Ok(Some(
+        serde_json::to_value(first).expect("a workspace serializes"),
+    ))
 }
 
 /// Ties the new, not yet started session `s` to `project`, then lets the modules act for it (the
