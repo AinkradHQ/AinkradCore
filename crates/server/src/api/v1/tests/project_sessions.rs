@@ -66,12 +66,16 @@ async fn the_core_builds_the_workspace_and_a_client_cannot_name_a_mirror() {
     // Refused before any session exists.
     let none = create(&fx, new(json!({"project_id": 999}))).await;
     assert_eq!(none.0, StatusCode::NOT_FOUND, "{}", none.1);
-    // No repos: a session with no workspace (the runner gives it an empty folder), still tied to
-    // the project (`attach` ran).
+    // No repos: no workspace (the runner gives the session its own empty folder), and the request
+    // goes past the workspace step to the runner (offline in this fixture), not 409 as before.
+    assert!(
+        super::super::agents::project::workspace_for(&fx.app, id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     let bare = create(&fx, new(json!({"project_id": id}))).await;
-    assert_eq!(bare.0, StatusCode::OK, "{}", bare.1);
-    assert_eq!(bare.1["project_id"].as_i64(), Some(id), "{}", bare.1);
-    assert!(bare.1["workspace"].is_null(), "{}", bare.1);
+    assert_eq!(code(&bare).1, "runner_offline", "{}", bare.1);
     let ws = json!({"repo": "https://github.com/acme/web.git", "base": "main", "branch": "b"});
     assert_eq!(
         create(&fx, new(json!({"project_id": id, "workspace": ws})))

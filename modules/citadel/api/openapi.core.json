@@ -11542,7 +11542,6 @@
           "idle_minutes",
           "cpu_limit",
           "mem_limit_mb",
-          "kind",
           "repos",
           "created_at",
           "updated_at"

@@ -599,4 +599,3 @@ modules/lore/api/openapi.core.json: removed /paths//api/v1/accounts/{id}/limits/
 
 # Accounts on the Core (API 103): the new `login.export` runner op sits before the `#[serde(other)]` catch-all, which moves
 # down one; no variant is removed, only the position shifts. Delete once the baseline carries the op.
-runner.schema.json: variant #63 removed at /$defs/Command/oneOf

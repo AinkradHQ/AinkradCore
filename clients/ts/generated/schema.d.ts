@@ -6040,7 +6040,7 @@ export interface components {
              * @description What it is: `web` (default), `app` (desktop or mobile), `infra` (infrastructure, an OS) or
              *     `other` (not software) (API 111).
              */
-            kind: string;
+            kind?: string;
             /** Format: int64 */
             mem_limit_mb: number;
             name: string;

@@ -9142,7 +9142,7 @@ extension Components {
             /// `other` (not software) (API 111).
             ///
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/kind`.
-            public var kind: Swift.String
+            public var kind: Swift.String?
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/mem_limit_mb`.
             public var memLimitMb: Swift.Int64
             /// - Remark: Generated from `#/components/schemas/ProjectInfo/name`.
@@ -9207,7 +9207,7 @@ extension Components {
                 id: Swift.Int64,
                 idleMinutes: Swift.Int64,
                 idleNever: Swift.Bool? = nil,
-                kind: Swift.String,
+                kind: Swift.String? = nil,
                 memLimitMb: Swift.Int64,
                 name: Swift.String,
                 repos: [Components.Schemas.ProjectRepo],

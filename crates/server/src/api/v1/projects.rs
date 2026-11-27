@@ -127,6 +127,7 @@ pub struct ProjectInfo {
     pub color: Option<String>,
     /// What it is: `web` (default), `app` (desktop or mobile), `infra` (infrastructure, an OS) or
     /// `other` (not software) (API 111).
+    #[schema(required = false)]
     pub kind: String,
     /// The primary repo first, then by name.
     pub repos: Vec<ProjectRepo>,

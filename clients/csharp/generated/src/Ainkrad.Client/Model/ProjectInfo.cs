@@ -50,7 +50,7 @@ namespace Ainkrad.Client.Model
         /// <param name="id">id (required).</param>
         /// <param name="idleMinutes">idleMinutes (required).</param>
         /// <param name="idleNever">The idle stop is off: the run keeps going while nobody visits..</param>
-        /// <param name="kind">What it is: &#x60;web&#x60; (default), &#x60;app&#x60; (desktop or mobile), &#x60;infra&#x60; (infrastructure, an OS) or &#x60;other&#x60; (not software) (API 111). (required).</param>
+        /// <param name="kind">What it is: &#x60;web&#x60; (default), &#x60;app&#x60; (desktop or mobile), &#x60;infra&#x60; (infrastructure, an OS) or &#x60;other&#x60; (not software) (API 111)..</param>
         /// <param name="memLimitMb">memLimitMb (required).</param>
         /// <param name="name">name (required).</param>
         /// <param name="repos">The primary repo first, then by name. (required).</param>
@@ -73,12 +73,6 @@ namespace Ainkrad.Client.Model
             this.Expose = expose;
             this.Id = id;
             this.IdleMinutes = idleMinutes;
-            // to ensure "kind" is required (not null)
-            if (kind == null)
-            {
-                throw new ArgumentNullException("kind is a required property for ProjectInfo and cannot be null");
-            }
-            this.Kind = kind;
             this.MemLimitMb = memLimitMb;
             // to ensure "name" is required (not null)
             if (name == null)
@@ -115,6 +109,7 @@ namespace Ainkrad.Client.Model
             this.DefaultEnvironment = defaultEnvironment;
             this.FetchIntervalMinutes = fetchIntervalMinutes;
             this.IdleNever = idleNever;
+            this.Kind = kind;
             this.Room = room;
             this.Runner = runner;
         }
@@ -189,7 +184,7 @@ namespace Ainkrad.Client.Model
         /// What it is: &#x60;web&#x60; (default), &#x60;app&#x60; (desktop or mobile), &#x60;infra&#x60; (infrastructure, an OS) or &#x60;other&#x60; (not software) (API 111).
         /// </summary>
         /// <value>What it is: &#x60;web&#x60; (default), &#x60;app&#x60; (desktop or mobile), &#x60;infra&#x60; (infrastructure, an OS) or &#x60;other&#x60; (not software) (API 111).</value>
-        [DataMember(Name = "kind", IsRequired = true, EmitDefaultValue = true)]
+        [DataMember(Name = "kind", EmitDefaultValue = false)]
         public string Kind { get; set; }
 
         /// <summary>
