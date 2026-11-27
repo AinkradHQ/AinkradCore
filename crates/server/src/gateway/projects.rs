@@ -88,6 +88,8 @@ pub const BODY_LIFE: Duration = Duration::from_secs(10 * 60);
 pub const PER_PROJECT: usize = 8;
 /// In flight at once per client address.
 pub const PER_CLIENT: usize = 4;
+/// Preview requests in flight at once per device (a page loads a few sub-resources together).
+pub const PER_DEVICE: usize = 6;
 /// How often an open WebSocket is checked (and its traffic recorded).
 const TICK: Duration = if cfg!(test) {
     Duration::from_millis(200)
@@ -248,6 +250,7 @@ async fn proxy(h: Arc<Host>, mut req: Request) -> Result<Response, Response> {
             Some(ip) => Some(hold(&h.by_client, ip, PER_CLIENT).ok_or_else(busy)?),
             None => None,
         },
+        _device: None,
     });
     let open = PortOpen {
         project: u64::try_from(project.id).unwrap_or(0),
@@ -319,6 +322,7 @@ pub(crate) async fn exchange(
 pub struct Preview {
     dial: Option<Arc<dyn Dial>>,
     by_project: Counts<i64>,
+    by_device: Counts<String>,
 }
 
 impl Preview {
@@ -326,7 +330,7 @@ impl Preview {
     pub fn with_dial(dial: Arc<dyn Dial>) -> Self {
         Self {
             dial: Some(dial),
-            by_project: Counts::default(),
+            ..Self::default()
         }
     }
 
@@ -337,11 +341,14 @@ impl Preview {
             .unwrap_or_else(|| Arc::new(HubDial(Arc::clone(&app.hub))))
     }
 
-    /// One of the project's [`PER_PROJECT`] places, if one is free.
-    pub(crate) fn hold(&self, project: i64) -> Option<Arc<Permit>> {
-        Some(Arc::new(Permit {
-            _project: hold(&self.by_project, project, PER_PROJECT)?,
+    /// One of the device's [`PER_DEVICE`] places and one of the project's [`PER_PROJECT`]; `Err`
+    /// names the cap that is full.
+    pub(crate) fn hold(&self, project: i64, device: &str) -> Result<Arc<Permit>, &'static str> {
+        let device = hold(&self.by_device, device.to_owned(), PER_DEVICE).ok_or("device")?;
+        Ok(Arc::new(Permit {
+            _project: hold(&self.by_project, project, PER_PROJECT).ok_or("project")?,
             _client: None,
+            _device: Some(device),
         }))
     }
 }

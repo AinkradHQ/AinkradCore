@@ -50,4 +50,6 @@ pub(super) fn hold<K: Hash + Eq + Clone>(
 pub(crate) struct Permit {
     pub(super) _project: Held<i64>,
     pub(super) _client: Option<Held<IpAddr>>,
+    /// The preview proxy's per-device place (the device id).
+    pub(super) _device: Option<Held<String>>,
 }

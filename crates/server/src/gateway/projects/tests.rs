@@ -187,3 +187,18 @@ fn a_held_place_comes_back_on_drop_and_empty_keys_go() {
     drop(other);
     assert!(counts.lock().unwrap().is_empty(), "no key is kept at 0");
 }
+
+#[test]
+fn a_preview_holds_places_per_device_and_per_project() {
+    let p = Preview::default();
+    let mine: Vec<_> = (0..PER_DEVICE).map(|_| p.hold(1, "d_a").unwrap()).collect();
+    assert_eq!(p.hold(1, "d_a").err(), Some("device"));
+    let other: Vec<_> = (PER_DEVICE..PER_PROJECT)
+        .map(|_| p.hold(1, "d_b").unwrap())
+        .collect();
+    assert_eq!(p.hold(1, "d_c").err(), Some("project"));
+    // Another project still has room for another device.
+    let elsewhere = p.hold(2, "d_c").unwrap();
+    drop((mine, other, elsewhere));
+    assert!(p.hold(1, "d_a").is_ok(), "places come back");
+}
