@@ -8,7 +8,9 @@
 //! - `admin`: devices, pairing, setting changes, the audit log, the metrics.
 //! - `agent`: sending a runner a command (`POST /api/v1/runners/{id}/noop`).
 //! - Agent sessions (E2-08): `agent`; deciding a tool call `approve`.
-//! - Projects (P1-02): reading is `read`; every write is `admin` and destructive.
+//! - Projects (P1-02): reading is `read`; every write is `admin` (a plain write: those that run code
+//!   need the app unlock, see [`UNLOCKED`]). The preview proxy (API 110): `GET` and `HEAD` are
+//!   `read` (viewing the running app is the point), every other verb `admin`, none a step-up.
 //! - Secrets (E2-07): managing them and granting a lease is `admin` (and destructive); the one
 //!   route a `runner` device may call is redeeming a lease granted to it.
 //! - Fallback chains and their bindings (S7): every route is `admin`; every write is destructive.
@@ -257,7 +259,8 @@ pub const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/mirrors/{repo}/git-receive-pack", "runner"),
     ("GET", "/api/v1/projects/{id}/run", "read"),
     ("GET", "/api/v1/projects/{id}/run/metrics", "read"),
-    // The preview proxy (API 110): reading the running app is `read`, anything that can change it `admin`.
+    // The preview proxy (API 110): viewing the running app is `read` on purpose; any verb that can
+    // change the app's data is `admin`. Plain writes: no step-up (scopes tests, PLAIN).
     ("GET", "/api/v1/projects/{id}/preview/{path}", "read"),
     ("HEAD", "/api/v1/projects/{id}/preview/{path}", "read"),
     ("POST", "/api/v1/projects/{id}/preview/{path}", "admin"),

@@ -540,6 +540,10 @@ pub async fn update_repo(
 ) -> ApiResult<ProjectInfo> {
     let (id, repo) = (num(&id, "project")?, num(&repo, "repo")?);
     let mut conn = app.pool.acquire().await?;
+    // Before any fetch: an archived project's copies are not touched.
+    if store::get(&mut conn, id).await?.state == "archived" {
+        return Err(ApiError::conflict("the project is archived"));
+    }
     let r = store::repos(&mut conn, id)
         .await?
         .into_iter()

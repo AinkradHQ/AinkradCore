@@ -553,4 +553,17 @@ async fn a_repos_branch_changes_to_one_the_copy_holds() {
     )
     .await;
     assert_eq!(r.0, StatusCode::NOT_FOUND);
+    // Archived: refused before any fetch.
+    let archive = format!("/api/v1/projects/{id}/archive");
+    assert_eq!(
+        send(&fx.app, req(Method::POST, &archive, Some(&fx.dev), None))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let r = send(&fx.app, patch("main")).await;
+    assert_eq!(
+        (r.0, r.1["code"].as_str()),
+        (StatusCode::CONFLICT, Some("conflict"))
+    );
 }
