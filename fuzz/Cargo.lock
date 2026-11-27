@@ -91,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core"
-version = "0.10.12"
+version = "0.10.13"
 
 [[package]]
 name = "ainkrad-core-fuzz"
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-core-server"
-version = "0.10.12"
+version = "0.10.13"
 dependencies = [
  "age",
  "ainkrad-core",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-proto"
-version = "0.10.12"
+version = "0.10.13"
 dependencies = [
  "schemars",
  "serde",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-providers"
-version = "0.10.12"
+version = "0.10.13"
 dependencies = [
  "reqwest 0.12.28",
  "serde_json",
@@ -164,14 +164,14 @@ dependencies = [
 
 [[package]]
 name = "ainkrad-sys"
-version = "0.10.12"
+version = "0.10.13"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "ainkrad-term"
-version = "0.10.12"
+version = "0.10.13"
 dependencies = [
  "vt100",
 ]
