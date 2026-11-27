@@ -28,7 +28,6 @@ use crate::sniff::{Class, has_svg_marker, kinds, sniff};
 use crate::{Design, svg};
 
 pub(crate) const MAX_BODY: usize = 25 * 1024 * 1024;
-const LIST_MAX: i64 = 500;
 const SVG_MAX: usize = 2 * 1024 * 1024;
 const MAX_TAGS: usize = 20;
 
@@ -279,6 +278,8 @@ pub(crate) struct ListQuery {
     q: Option<String>,
     project: Option<String>,
     collection: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
 }
 
 #[utoipa::path(get, path = "/assets", operation_id = "designListAssets", tag = "design",
@@ -286,13 +287,16 @@ pub(crate) struct ListQuery {
            ("tag" = Option<String>, Query, description = "Only assets with this tag"),
            ("q" = Option<String>, Query, description = "Name contains this text"),
            ("project" = Option<String>, Query, description = "Only assets related to this project id"),
-           ("collection" = Option<String>, Query, description = "Only members of this collection")),
-    responses((status = 200, description = "Library assets, newest first (at most 500); internal assets (shots, mockup files) are not listed", body = Vec<AssetView>)))]
+           ("collection" = Option<String>, Query, description = "Only members of this collection"),
+           ("limit" = Option<i64>, Query, description = "At most this many, 1 to 500 (default 500)"),
+           ("offset" = Option<i64>, Query, description = "Skip this many first (default 0): the next page is `offset + limit`")),
+    responses((status = 200, description = "Library assets, newest first (a page of at most `limit`; fewer than `limit` means the last page); internal assets (shots, mockup files) are not listed", body = Vec<AssetView>)))]
 pub(crate) async fn list(
     State(app): State<App>,
     q: Result<Query<ListQuery>, QueryRejection>,
 ) -> ApiResult<Vec<AssetView>> {
     let Query(q) = q.map_err(|_| ApiError::bad_request("the query is not valid"))?;
+    let (limit, offset) = crate::docs::page(q.limit, q.offset)?;
     let like = q.q.as_deref().map(|s| {
         format!(
             "%{}%",
@@ -309,14 +313,15 @@ pub(crate) async fn list(
            AND (?3 IS NULL OR name LIKE ?3 ESCAPE '\\') \
            AND (?4 IS NULL OR EXISTS (SELECT 1 FROM design_links l WHERE l.item_kind = 'asset' AND l.item = a.sha256 AND l.project = ?4)) \
            AND (?5 IS NULL OR EXISTS (SELECT 1 FROM design_collection_items c WHERE c.sha256 = a.sha256 AND c.collection = ?5)) \
-         ORDER BY created_at DESC, sha256 LIMIT ?6",
+         ORDER BY created_at DESC, sha256 LIMIT ?6 OFFSET ?7",
     )
     .bind(q.kind)
     .bind(q.tag)
     .bind(like)
     .bind(q.project)
     .bind(q.collection)
-    .bind(LIST_MAX)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(&mut *conn)
     .await?;
     let mut out = Vec::with_capacity(ids.len());
