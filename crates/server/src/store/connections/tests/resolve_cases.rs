@@ -496,3 +496,42 @@ async fn bindings_are_validated_and_limited_per_user() {
             .unwrap()
     );
 }
+
+#[tokio::test]
+async fn an_admin_is_also_a_member_but_not_the_reverse() {
+    let (fx, a, _) = two().await;
+    let admin = |c: &'static str, project: &'static str| Context {
+        role: "admin",
+        resource: Some(("projects", project)),
+        ..cx(c)
+    };
+    // A member grant with limits covers an admin caller, inside the limits only.
+    grant_limited(&fx, a.id, &["acme/*"]).await;
+    assert_eq!(
+        via(&fx, &admin("read_items", "acme/app")).await,
+        Ok((a.id, "only"))
+    );
+    assert_eq!(
+        via(&fx, &admin("read_items", "other/app")).await,
+        Err("resource_denied")
+    );
+    // An admin grant never covers a member.
+    grants::revoke(&fx.pool, a.id, ("role", "member"), w(NOW))
+        .await
+        .unwrap();
+    let limits = grants::Limits::new();
+    let new = grants::NewGrant {
+        grantee_kind: "role",
+        grantee: "admin",
+        capabilities: None,
+        limits: &limits,
+    };
+    grants::set(&fx.pool, &fx.reg, a.id, &new, w(NOW))
+        .await
+        .unwrap();
+    assert_eq!(via(&fx, &cx("read_items")).await, Err("not_granted"));
+    assert_eq!(
+        via(&fx, &admin("read_items", "x")).await,
+        Ok((a.id, "only"))
+    );
+}

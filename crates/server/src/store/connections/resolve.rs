@@ -4,7 +4,8 @@
 //!
 //! **A session never names a connection.** It may use every connection granted to it, several per
 //! kind at once. The candidates for a use are the kind's connections of the caller's workspace
-//! that (1) the caller is GRANTED (a user or role grant, and, in an agent's session, also that
+//! that (1) the caller is GRANTED (a user or role grant, where an admin is also a member, so a `member`
+//! role grant covers an admin caller and an `admin` grant never covers a member; and, in an agent's session, also that
 //! agent's grant: the intersection) with the capability, (2) whose grant limits cover the
 //! resource (a GitHub repo, a Jira project), and (3) are enabled and healthy. One candidate is
 //! used. Several: the kind's default (the workspace binding) if it is among them, else the use is
@@ -97,7 +98,7 @@ fn covers(g: &Grant, cx: &Context<'_>, self_limited: bool) -> Result<(), Miss> {
 fn mine(g: &Grant, cx: &Context<'_>) -> bool {
     match g.grantee_kind.as_str() {
         "user" => g.grantee == cx.user.to_string(),
-        "role" => g.grantee == cx.role,
+        "role" => g.grantee == cx.role || (g.grantee == "member" && cx.role == "admin"),
         _ => false,
     }
 }
