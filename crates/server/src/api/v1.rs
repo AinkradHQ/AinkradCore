@@ -76,7 +76,7 @@ pub use terminals::{
     check_ssh_open, open_ssh, reconcile as reconcile_terminals, sftp_job, sweep as sweep_terminals,
     sweep_loop as terminal_sweep_loop, type_into,
 };
-pub use trace::{ApiError, ApiResult, error_id};
+pub use trace::{ApiError, ApiResult, REFUSAL, error_id};
 pub mod types;
 pub mod websession;
 

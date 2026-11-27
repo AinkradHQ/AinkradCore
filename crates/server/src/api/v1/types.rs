@@ -408,8 +408,11 @@
 ///    (`getProjectRunMetrics`): the last 60 CPU/memory samples per service. `color` on `ProjectInfo`,
 ///    `NewProject` and `UpdateProject` (an app accent name; "" clears). `PATCH
 ///    /projects/{id}/repos/{repo}` (`updateProjectRepo`, {branch}; 409 `not_fetched`). Event
-///    `project.service_crashed` {id, run, service, exit_code, restarts, config, environment}. An
-///    older Core 404s the routes and ignores the fields and the query.
+///    `project.service_crashed` {id, run, service, exit_code, restarts, config, environment}. Every
+///    error the Core itself makes carries `Ainkrad-Refusal: 1` (a project's answer through the
+///    preview or its public link never does). Preview answers: cookie paths and `Location` under
+///    the preview, `Cache-Control: no-store`, a sandbox CSP, `Cross-Origin-Resource-Policy:
+///    same-origin`. An older Core 404s the routes and ignores the fields and the query.
 pub const API_MINOR: u32 = 110;
 
 use serde::{Deserialize, Serialize};
